@@ -1,2 +1,2 @@
-# extropian-harness
-A simple and powerful coding harness
+# machine_code
+A simple, Linux-first coding-agent tool.
