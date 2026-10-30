@@ -1,0 +1,27 @@
+{
+  "name": "machine_code",
+  "version": "0.0.0",
+  "description": "A Linux-first, file-based coding-agent tool optimized for correctness per dollar.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "machine_code": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "machine_code": "node --no-warnings dist/cli.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "smol-toml": "1.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}

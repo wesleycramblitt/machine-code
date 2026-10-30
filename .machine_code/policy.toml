@@ -1,0 +1,12 @@
+# machine_code repo policy (committed). Unknown keys are ignored.
+
+# Excluded from every search, in addition to the built-in set:
+#   .git, .machine_code/local, node_modules, vendor, dist, build, target, .next, coverage, .cache, .venv, venv, __pycache__
+# search_exclude = ["fixtures/large"]
+
+[agents.general]
+# min_context = 32000
+# expected_output_tokens = 2000
+# max_output_tokens = 8000
+# budget_tokens = 200000
+# min_capability = 0
