@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { parse } from "smol-toml";
 import { CORE_COMMANDS } from "./registry.js";
 import type { CommandSpec } from "./registry.js";
+import { referenceCommands } from "./reference.js";
 import type { Layout } from "../paths.js";
 
 export interface ProfileManifest {
@@ -76,5 +77,6 @@ function readToml(file: string): Record<string, unknown> {
 export function allCommands(layout: Layout): Map<string, CommandSpec> {
   const out = new Map<string, CommandSpec>(CORE_COMMANDS);
   for (const [k, v] of loadProfileCommands(layout)) out.set(k, v);
+  for (const [k, v] of referenceCommands(layout)) out.set(k, v);
   return out;
 }

@@ -94,6 +94,14 @@ function cmdInit(): number {
       problems += 1;
     }
   }
+  // Profile dependencies (language servers) — checked, not auto-installed.
+  process.stdout.write("\nProfile dependencies:\n");
+  const servers = [{ name: "typescript-language-server", purpose: "TypeScript LSP (check/rename/semantic search)" }];
+  for (const s of servers) {
+    const found = findOnPath([s.name]);
+    if (found) process.stdout.write(`  ok       ${s.name} (${s.purpose})\n`);
+    else process.stdout.write(`  MISSING  ${s.name} (${s.purpose}) — install: npm i -g ${s.name}\n`);
+  }
 
   mkdirSync(l.localDir, { recursive: true });
   mkdirSync(join(l.home, "catalogue"), { recursive: true });

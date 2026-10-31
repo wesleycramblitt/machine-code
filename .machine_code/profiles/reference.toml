@@ -1,0 +1,14 @@
+# machine_code profile: reference ingestion (M5).
+# Commands are registered programmatically by src/commands/reference.ts.
+
+[commands.search]
+description = "Web search (DuckDuckGo) — returns top result titles/URLs."
+
+[commands.browser]
+description = "Fetch a URL and return its text content."
+
+[commands.pdf-extract]
+description = "Extract text from a PDF via pdftotext."
+
+[commands.index]
+description = "Write a reference bundle to the scoped reference directory."
