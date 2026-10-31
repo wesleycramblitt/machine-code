@@ -597,13 +597,8 @@ async function main(): Promise<void> {
       code = 0;
       break;
     case undefined:
-      if (process.stdin.isTTY) {
-        await runTui();
-        code = 0;
-      } else {
-        process.stdout.write(HELP);
-        code = 0;
-      }
+      await runTui();
+      code = 0;
       break;
     default:
       process.stdout.write(HELP);
