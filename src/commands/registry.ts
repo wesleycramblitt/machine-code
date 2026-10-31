@@ -8,7 +8,7 @@
  * whole group. Mutating core commands (move/copy/delete/replace/rewrite/
  * rename) and check land with Build and LSP in M1.
  */
-import { spawn } from "node:child_process";
+import { runProc } from "../proc.js";
 import { COMMAND_CAP_BYTES, capText } from "../tools/safety.js";
 
 export interface CommandSpec {
@@ -123,93 +123,41 @@ export function describeCommand(name: string): string {
   );
 }
 
-/** Minimal environment: enough for the binary, never provider secrets. */
-function commandEnv(): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH ?? "",
-    HOME: process.env.HOME ?? "",
-    LANG: process.env.LANG ?? "C.UTF-8",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-}
-
-export function runCommand(
+export async function runCommand(
   name: string,
   args: Record<string, unknown>,
   ctx: CommandContext,
 ): Promise<CommandRunResult> {
   const spec = CORE_COMMANDS.get(name);
   if (!spec) {
-    return Promise.resolve({
+    return {
       text: `unknown command: ${name}. Available: ${[...CORE_COMMANDS.keys()].join(", ")}`,
       isError: true,
-    });
+    };
   }
   let argv: string[];
   try {
     argv = spec.args(args);
   } catch (error) {
-    return Promise.resolve({ text: `bad arguments: ${(error as Error).message}`, isError: true });
+    return { text: `bad arguments: ${(error as Error).message}`, isError: true };
   }
-  return new Promise((resolvePromise) => {
-    let child;
-    try {
-      child = spawn(spec.binary, argv, {
-        cwd: ctx.root,
-        env: commandEnv(),
-        stdio: ["ignore", "pipe", "pipe"],
-        // Own process group: timeout kills the group, not just the leader.
-        detached: true,
-      });
-    } catch (error) {
-      resolvePromise({
-        text: `configuration gap: ${spec.binary} is not runnable: ${(error as Error).message}`,
-        isError: true,
-      });
-      return;
-    }
-    const chunks: Buffer[] = [];
-    const errChunks: Buffer[] = [];
-    let settled = false;
-    const settle = (result: CommandRunResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolvePromise(result);
-    };
-    const timer = setTimeout(() => {
-      try {
-        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-      } catch {
-        // already gone
-      }
-      settle({ text: `${spec.name} timed out after ${spec.timeoutMs}ms (process group killed)`, isError: true });
-    }, spec.timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => errChunks.push(chunk));
-    child.on("error", (error: NodeJS.ErrnoException) => {
-      settle({
-        text:
-          error.code === "ENOENT"
-            ? `configuration gap: ${spec.binary} is not installed or not on PATH`
-            : `${spec.name} failed to start: ${error.message}`,
-        isError: true,
-      });
-    });
-    child.on("close", (code) => {
-      const stdout = Buffer.concat(chunks).toString("utf8").trimEnd();
-      const stderr = Buffer.concat(errChunks).toString("utf8").trim();
-      const capped = capText(stdout, COMMAND_CAP_BYTES);
-      if (code !== 0) {
-        settle({
-          text: `${spec.name} exited ${code}: ${stderr || "(no stderr)"}${capped.text ? `\n${capped.text}` : ""}`,
-          isError: true,
-        });
-        return;
-      }
-      settle({ text: capped.text || "(no output)", isError: false });
-    });
+  const result = await runProc(spec.binary, argv, {
+    cwd: ctx.root,
+    timeoutMs: spec.timeoutMs,
+    env: { GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
   });
+  if (result.outcome === "spawn-error") {
+    return { text: `configuration gap: ${result.spawnError}`, isError: true };
+  }
+  if (result.outcome === "timeout") {
+    return { text: `${spec.name} timed out after ${spec.timeoutMs}ms (process group killed)`, isError: true };
+  }
+  const capped = capText(result.stdout.trimEnd(), COMMAND_CAP_BYTES);
+  if (result.code !== 0) {
+    return {
+      text: `${spec.name} exited ${result.code}: ${result.stderr.trim() || "(no stderr)"}${capped.text ? `\n${capped.text}` : ""}`,
+      isError: true,
+    };
+  }
+  return { text: capped.text || "(no output)", isError: false };
 }

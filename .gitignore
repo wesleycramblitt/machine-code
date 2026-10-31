@@ -6,3 +6,4 @@ dist/
 
 # opencode runtime dir
 .opencode/
+.env

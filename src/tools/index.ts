@@ -6,9 +6,9 @@
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { runProc } from "../proc.js";
 import {
   READ_CAP_BYTES,
   SEARCH_CAP_BYTES,
@@ -170,31 +170,25 @@ const SearchParams = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max results (default 200)." })),
 });
 
-function exec(
+async function exec(
   binary: string,
   args: string[],
   cwd: string,
   capBytes: number,
 ): Promise<AgentToolResult<undefined>> {
-  return new Promise((resolvePromise) => {
-    execFile(
-      binary,
-      args,
-      { cwd, timeout: 30_000, maxBuffer: 4 * 1024 * 1024, env: { PATH: process.env.PATH ?? "" } },
-      (error, stdout, stderr) => {
-        if (error && !stdout) {
-          // rg exits 1 for "no matches" — not a tool error.
-          if ((error as { code?: number }).code === 1) {
-            resolvePromise(ok("no matches"));
-            return;
-          }
-          resolvePromise(fail(`${binary} failed: ${stderr.trim() || error.message}`));
-          return;
-        }
-        resolvePromise(ok(capText(stdout.trimEnd(), capBytes).text || "no matches"));
-      },
-    );
-  });
+  const result = await runProc(binary, args, { cwd, timeoutMs: 30_000 });
+  if (result.outcome === "spawn-error") {
+    return fail(`configuration gap: ${result.spawnError}`);
+  }
+  if (result.outcome === "timeout") {
+    return fail(`${binary} timed out after 30s (process group killed)`);
+  }
+  if (result.code !== 0 && result.stdout.length === 0) {
+    // rg/ast-grep exit 1 for "no matches" — not a tool error.
+    if (result.code === 1) return ok("no matches");
+    return fail(`${binary} exited ${result.code}: ${result.stderr.trim() || "(no stderr)"}`);
+  }
+  return ok(capText(result.stdout.trimEnd(), capBytes).text || "no matches");
 }
 
 const SEMANTIC_MODES = new Set(["definition", "references", "symbols", "info"]);
@@ -240,13 +234,19 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           case "yaml": {
             const binary = params.mode === "json" ? "jq" : "yq";
             if (!params.pattern) return fail(`${params.mode} mode requires a query pattern`);
-            return fail(
-              `configuration gap: ${binary} is not installed (install it or disable the query) — named query ${params.pattern} not run`,
-            );
+            if (!params.path) return fail(`${params.mode} mode scopes to one document: pass its path`);
+            const abs = resolveWithin(ctx.root, params.path);
+            assertRegularFile(abs);
+            return await exec(binary, [params.pattern, abs], ctx.root, SEARCH_CAP_BYTES);
           }
           case "structure": {
-            return fail(
-              "configuration gap: ast-grep (sg) is not installed — structural search unavailable",
+            if (!params.pattern) return fail("structure mode requires an ast-grep pattern");
+            // Explicit "." path: without one ast-grep reads stdin and hangs.
+            return await exec(
+              "ast-grep",
+              ["run", "--pattern", params.pattern, "--heading", "always", "."],
+              scope,
+              SEARCH_CAP_BYTES,
             );
           }
           default: {

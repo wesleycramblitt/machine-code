@@ -157,6 +157,8 @@ export interface RefreshResult {
   document: CatalogueDocument;
   file: string;
   warnings: string[];
+  /** Rows removed by curation vetoes. */
+  curatedVetoes: number;
 }
 
 export async function refreshCatalogue(
@@ -200,10 +202,21 @@ export async function refreshCatalogue(
 
   const curation = loadCuration(layout);
   const rows: CatalogueRow[] = [];
+  let curatedVetoes = 0;
 
   for (const model of models) {
     if (isMetaModel(String(model.provider), model.id)) continue;
     const row = rowFromModel(model);
+
+    // A curation veto is a catalogue correction: the row is not a candidate
+    // anywhere. (config.toml vetoes, by contrast, filter at selection time.)
+    const priorVeto =
+      curation.models.get(row.key)?.veto === true ||
+      curation.models.get(row.canonicalID ?? "")?.veto === true;
+    if (priorVeto) {
+      curatedVetoes += 1;
+      continue;
+    }
 
     // OpenRouter metadata overlay (capability truth + release date).
     const meta = row.providerID === "openrouter" ? orModels.get(row.id) : undefined;
@@ -280,7 +293,6 @@ export async function refreshCatalogue(
         row.tokensPerSecond = cur.tokensPerSecond;
         curated.push("tokens_per_second");
       }
-      if (cur.veto === true) curated.push("veto");
       row.provenance.curated = curated;
     }
 
@@ -305,5 +317,5 @@ export async function refreshCatalogue(
   };
   mkdirSync(dirname(layout.catalogueFile), { recursive: true });
   writeFileSync(layout.catalogueFile, JSON.stringify(document, null, 2) + "\n", "utf8");
-  return { document, file: layout.catalogueFile, warnings };
+  return { document, file: layout.catalogueFile, warnings, curatedVetoes };
 }

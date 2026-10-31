@@ -16,6 +16,7 @@ import { generalAgent } from "./agents.js";
 import { runLoop } from "./loop.js";
 import { RunRecorder, listRuns, readRun, type RunStatus } from "./state/runs.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
+import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "./install.js";
 
 const VERSION = "0.0.0";
 
@@ -24,6 +25,8 @@ const HELP = `machine_code ${VERSION}
 Usage:
   machine_code run --mode solo --agent general [--provider <id>] "<question>"
   machine_code init                 Check CLIs, config, and repo layout
+  machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
+                                    Install missing base CLIs (default: pinned static binaries)
   machine_code providers            List providers, key sources, and model counts
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
   machine_code log <run-id>         Print a run's summary and events
@@ -68,35 +71,16 @@ const EXIT: Record<RunStatus, number> = {
 
 /* -------------------------------------------------------------------- init */
 
-const BASE_CLIS: Array<{ names: string[]; purpose: string }> = [
-  { names: ["git"], purpose: "worktrees, branches, status, diff, history" },
-  { names: ["rg"], purpose: "text search and filtered file listing" },
-  { names: ["sg", "ast-grep"], purpose: "structural code search and rewrites" },
-  { names: ["jq"], purpose: "JSON queries" },
-  { names: ["yq"], purpose: "YAML queries" },
-  { names: ["sd"], purpose: "regex-by-default / literal bulk replacement" },
-];
-
-function commandExists(names: string[]): string | null {
-  const pathDirs = (process.env.PATH ?? "").split(":");
-  for (const name of names) {
-    for (const dir of pathDirs) {
-      if (dir && existsSync(join(dir, name))) return name;
-    }
-  }
-  return null;
-}
-
 function cmdInit(): number {
   const l = layout();
   let problems = 0;
   process.stdout.write("machine_code init\n\nBase palette:\n");
   for (const cli of BASE_CLIS) {
-    const found = commandExists(cli.names);
+    const found = findOnPath(cli.binaries);
     if (found) {
-      process.stdout.write(`  ok       ${cli.names[0]} (${cli.purpose})\n`);
+      process.stdout.write(`  ok       ${cli.name} (${cli.purpose})\n`);
     } else {
-      process.stdout.write(`  MISSING  ${cli.names.join("/")} (${cli.purpose}) — configuration gap; install before runs that need it\n`);
+      process.stdout.write(`  MISSING  ${cli.binaries.join("/")} (${cli.purpose}) — run: machine_code install ${cli.name}\n`);
       problems += 1;
     }
   }
@@ -148,9 +132,23 @@ function cmdInit(): number {
     process.stdout.write(`\nno catalogue yet — run: machine_code catalogue refresh\n`);
   }
   if (problems > 0) {
-    process.stdout.write(`\n${problems} base CLI(s) missing; the affected tools report configuration gaps until installed.\n`);
+    process.stdout.write(`\n${problems} base CLI(s) missing; run: machine_code install\n`);
   }
   return 0;
+}
+
+/* ------------------------------------------------------------------ install */
+
+const INSTALL_METHODS: readonly InstallMethod[] = ["download", "pacman", "apt", "dnf", "zypper", "apk", "cargo"];
+
+async function cmdInstall(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const method = (flags.get("method") ?? "download") as InstallMethod;
+  if (!INSTALL_METHODS.includes(method)) {
+    fail(`unknown method ${method}; choose from ${INSTALL_METHODS.join(", ")}`);
+  }
+  const l = layout();
+  return installClis({ method, home: l.home, only: positional.length > 0 ? positional : undefined });
 }
 
 /* --------------------------------------------------------------- providers */
@@ -187,6 +185,9 @@ async function cmdCatalogueRefresh(): Promise<number> {
   }
   process.stdout.write(`catalogue written to ${result.file}\n`);
   process.stdout.write(`generated ${result.document.generatedAt}\n`);
+  if (result.curatedVetoes > 0) {
+    process.stdout.write(`  ${result.curatedVetoes} row(s) removed by curation vetoes\n`);
+  }
   for (const source of result.document.sources) {
     process.stdout.write(`  ${source.id}: ${source.models} models\n`);
   }
@@ -356,6 +357,9 @@ async function main(): Promise<void> {
       break;
     case "init":
       code = cmdInit();
+      break;
+    case "install":
+      code = await cmdInstall(rest);
       break;
     case "providers":
       code = cmdProviders();
