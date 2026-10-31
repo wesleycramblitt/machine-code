@@ -18,6 +18,8 @@ import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef } from "./agents.js";
 import type { MutableModels } from "./models.js";
 import { coreTools } from "./tools/index.js";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { RunRecorder } from "./state/runs.js";
 
 export const MAX_TURNS = 25;
@@ -100,6 +102,30 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let turns = 0;
   let budgetExhausted = false;
   let currentRow: CatalogueRow | null = null;
+  let agent: Agent | undefined;
+
+  // Instance registration + heartbeat + control-file polling (M3).
+  const { registerInstance, heartbeatInstance, unregisterInstance } = await import("./state/instances.js");
+  registerInstance(input.home, input.root);
+  const heartbeatTimer = setInterval(() => heartbeatInstance(input.home), 5_000);
+  let lastControlSeq = 0;
+  const controlTimer = setInterval(() => {
+    const controlFile = join(recorder.dir, "control");
+    try {
+      if (!existsSync(controlFile)) return;
+      const req = JSON.parse(readFileSync(controlFile, "utf8")) as { seq?: number; action?: string };
+      if (typeof req.seq !== "number" || req.seq <= lastControlSeq) return;
+      lastControlSeq = req.seq;
+      if (req.action === "interrupt" || req.action === "cancel") {
+        recorder.event("control", { action: req.action, seq: req.seq });
+        agent?.abort();
+      }
+      const ackFile = join(recorder.dir, "control.ack");
+      writeFileSync(ackFile, JSON.stringify({ seq: req.seq, acked: true, at: new Date().toISOString() }) + "\n", "utf8");
+    } catch {
+      // ignore control-file parse errors
+    }
+  }, 500);
 
   while (true) {
     // Reset per-attempt state.
@@ -112,6 +138,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const first = selectFor(initialChars);
     if ("error" in first) {
       recorder.event("model_select", { error: first.error, rejected: first.rejected });
+      clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
       return { status: "failed", finalText: "", error: first.error };
     }
     currentRow = first.selected;
@@ -119,6 +146,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     if (!firstModel) {
       const error = `catalogue row ${currentRow.key} is not in the provider's runtime catalog; run: machine_code catalogue refresh`;
       recorder.event("model_select", { call: 0, error });
+      clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
       return { status: "failed", finalText: "", error };
     }
     let currentModel = firstModel;
@@ -131,7 +159,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       rejectedCount: first.rejectedCount,
     });
 
-    const agent = new Agent({
+    agent = new Agent({
       initialState: {
         model: currentModel,
         thinkingLevel: "low",
@@ -195,7 +223,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       },
     });
 
-    const onExternalAbort = () => agent.abort();
+    const onExternalAbort = () => agent?.abort();
     input.signal?.addEventListener("abort", onExternalAbort, { once: true });
 
     agent.subscribe(async (event) => {
@@ -309,6 +337,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       await agent.waitForIdle();
     } catch (error) {
       input.signal?.removeEventListener("abort", onExternalAbort);
+      clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
       return { status: "failed", finalText: "", error: (error as Error).message };
     } finally {
       input.signal?.removeEventListener("abort", onExternalAbort);
@@ -352,6 +381,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       }
     }
 
+    clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
     return { status, finalText, error };
   }
 }

@@ -16,6 +16,7 @@ import { loadCatalogue } from "./catalogue/load.js";
 import { orchestrate, type RunMode } from "./orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, type RunStatus } from "./state/runs.js";
 import { loadAvailability } from "./availability.js";
+import { runTui } from "./tui.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "./install.js";
 
@@ -38,6 +39,7 @@ Usage:
   machine_code prune [--days N]     Remove old run dirs (default 7 days)
   machine_code provider disable|enable|cooldown <name>
   machine_code model cooldown clear <id>
+  machine_code tui                 Launch the TUI (default when interactive)
   machine_code version
 `;
 
@@ -491,12 +493,24 @@ async function main(): Promise<void> {
       process.stdout.write(`${VERSION}\n`);
       code = 0;
       break;
+    case "tui":
+      await runTui();
+      code = 0;
+      break;
     case "help":
     case "--help":
     case "-h":
-    case undefined:
       process.stdout.write(HELP);
       code = 0;
+      break;
+    case undefined:
+      if (process.stdin.isTTY) {
+        await runTui();
+        code = 0;
+      } else {
+        process.stdout.write(HELP);
+        code = 0;
+      }
       break;
     default:
       process.stdout.write(HELP);
