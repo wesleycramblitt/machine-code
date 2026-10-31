@@ -10,6 +10,8 @@
 import type { AgentPolicy, MachineConfig } from "./config.js";
 import { estimateCallCost, pricingAt } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
+import type { AvailabilityState } from "./availability.js";
+import { isProviderDisabled, isProviderCooling, isModelCooling, providerNeedsAuth } from "./availability.js";
 
 /** Fixed scoring weights, tuned on evals. */
 export const WEIGHTS = {
@@ -62,6 +64,8 @@ export interface PickInput {
   contextChars: number;
   /** Debug/test hard filter: restrict to one provider. */
   requireProvider?: string;
+  /** Provider/model availability state (M2). */
+  availability?: AvailabilityState;
 }
 
 function normalize(value: number, [low, high]: readonly [number, number]): number {
@@ -96,6 +100,13 @@ function rejectReason(
   if (!input.configuredProviders.has(row.providerID)) return "provider-not-configured";
   if (input.requireProvider && row.providerID !== input.requireProvider) return "provider-filtered";
   if (row.pricing.input < 0 || row.pricing.output < 0) return "invalid-pricing";
+  const avail = input.availability;
+  if (avail) {
+    if (isProviderDisabled(avail, row.providerID)) return "provider-disabled";
+    if (providerNeedsAuth(avail, row.providerID)) return "provider-needs-auth";
+    if (isProviderCooling(avail, row.providerID)) return "provider-cooling";
+    if (isModelCooling(avail, row.key)) return "model-cooling";
+  }
   if (input.policy.toolCall && !row.toolCall) return "no-tool-support";
   if (row.context < input.policy.minContext) return "below-min-context";
   const needed = estimate.inputTokens + estimate.outputTokens;

@@ -14,6 +14,7 @@ import { type MutableModels } from "./models.js";
 import { type CatalogueRow } from "./catalogue/types.js";
 import { RunRecorder, type RunStatus } from "./state/runs.js";
 import { runCommand } from "./commands/registry.js";
+import { loadAvailability } from "./availability.js";
 import { allCommands } from "./commands/profiles.js";
 import { readPacket, type TaskPacket, type PacketMode, parseMode, newPacketId } from "./packet.js";
 import { resolveGates, runGates } from "./verify.js";
@@ -32,7 +33,9 @@ export interface OrchestrateInput {
   agentName: AgentName | undefined;
   request: string;
   root: string;
+  home: string;
   recorder: RunRecorder;
+  availability?: import("./availability.js").AvailabilityState;
   requireProvider?: string;
   signal?: AbortSignal;
 }
@@ -54,6 +57,8 @@ async function singleAgentRun(input: {
   machine: MachineConfig;
   request: string;
   root: string;
+  home: string;
+  availability?: import("./availability.js").AvailabilityState;
   recorder: RunRecorder;
   commands: ReadonlyMap<string, import("./commands/registry.js").CommandSpec>;
   requireProvider?: string;
@@ -68,6 +73,8 @@ async function singleAgentRun(input: {
     machine: input.machine,
     request: input.request,
     root: input.root,
+    home: input.home,
+    availability: input.availability,
     recorder: input.recorder,
     commands: input.commands,
     requireProvider: input.requireProvider,
@@ -88,6 +95,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
   const { layout, machine, policy, mode, request, root, recorder } = input;
   const agents = input.models;
   const commands = allCommands(layout);
+  const home = layout.home;
+  const availability = input.availability ?? loadAvailability(home);
 
   switch (mode) {
     case "solo": {
@@ -111,6 +120,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
         machine,
         request,
         root,
+        home,
+        availability,
         recorder,
         commands,
         requireProvider: input.requireProvider,
@@ -158,6 +169,8 @@ budget_tokens: ${machine.maxOutputTokens ?? 200000}
 
 ${request}`,
         root,
+        home,
+        availability,
         recorder,
         commands,
         requireProvider: input.requireProvider,
@@ -191,6 +204,8 @@ ${request}`,
         machine,
         request: buildRequest,
         root,
+        home,
+        availability,
         recorder,
         commands,
         requireProvider: input.requireProvider,
@@ -238,6 +253,8 @@ ${request}`,
           machine,
           request: `Review this packet and the resulting diff. Approve or reject with concrete evidence citing paths.\n\nPACKET:\n${JSON.stringify(packet, null, 2)}\n\nDIFF:\n${diffResult.text}`,
           root,
+          home,
+          availability,
           recorder,
           commands,
           requireProvider: input.requireProvider,

@@ -14,7 +14,8 @@ import { refreshCatalogue } from "./catalogue/refresh.js";
 import { loadCatalogue } from "./catalogue/load.js";
 // agents resolved inside orchestrate.ts
 import { orchestrate, type RunMode } from "./orchestrate.js";
-import { RunRecorder, listRuns, readRun, type RunStatus } from "./state/runs.js";
+import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, type RunStatus } from "./state/runs.js";
+import { loadAvailability } from "./availability.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "./install.js";
 
@@ -32,7 +33,11 @@ Usage:
   machine_code providers            List providers, key sources, and model counts
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
   machine_code log <run-id>         Print a run's summary and events
-  machine_code status               List runs (full status arrives in M2)
+  machine_code status               List runs across projects
+  machine_code resume <run-id>      Resume an interrupted/failed/blocked run
+  machine_code prune [--days N]     Remove old run dirs (default 7 days)
+  machine_code provider disable|enable|cooldown <name>
+  machine_code model cooldown clear <id>
   machine_code version
 `;
 
@@ -260,7 +265,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       ? agentName
       : undefined;
 
-  const recorder = new RunRecorder(l, { agent: agentNameParsed ?? "general", mode, request });
+  const recorder = new RunRecorder(l, { agent: agentNameParsed ?? "general", mode, request, repoRoot: l.repoRoot });
+  registerProject(l.home, l.repoRoot);
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -281,6 +287,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     models,
     catalogue: catalogueDoc.models,
     configuredProviders,
+    availability: loadAvailability(l.home),
     layout: l,
     machine,
     policy,
@@ -288,6 +295,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     agentName: agentNameParsed,
     request,
     root: l.repoRoot,
+    home: l.home,
     recorder,
     requireProvider,
     signal: abort.signal,
@@ -302,6 +310,47 @@ async function cmdRun(argv: string[]): Promise<number> {
     `\nrun ${summary.id}: ${summary.status} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
   return EXIT[result.status];
+}
+
+/* ----------------------------------------------------------------- provider/model health */
+
+async function cmdProvider(argv: string[]): Promise<number> {
+  const sub = argv[0];
+  const name = argv[1];
+  if (!sub || !name) fail("usage: machine_code provider disable|enable|cooldown clear <name>");
+  const l = layout();
+  const avail = await import("./availability.js");
+  const state = avail.loadAvailability(l.home);
+  if (sub === "disable") {
+    avail.disableProvider(state, name);
+    avail.saveAvailability(l.home, state);
+    process.stdout.write(`provider ${name} disabled (manual re-enable required)\n`);
+  } else if (sub === "enable") {
+    avail.enableProvider(state, name);
+    avail.saveAvailability(l.home, state);
+    process.stdout.write(`provider ${name} enabled; cooldowns cleared\n`);
+  } else if (sub === "cooldown" && argv[2] === "clear") {
+    avail.clearProviderCooldown(state, name);
+    avail.saveAvailability(l.home, state);
+    process.stdout.write(`provider ${name} cooldown cleared\n`);
+  } else {
+    fail("usage: machine_code provider disable|enable|cooldown clear <name>");
+  }
+  return 0;
+}
+
+async function cmdModel(argv: string[]): Promise<number> {
+  if (argv[0] !== "cooldown" || argv[1] !== "clear" || !argv[2]) {
+    fail("usage: machine_code model cooldown clear <id>");
+  }
+  const id = argv[2];
+  const l = layout();
+  const avail = await import("./availability.js");
+  const state = avail.loadAvailability(l.home);
+  avail.clearModelCooldown(state, id);
+  avail.saveAvailability(l.home, state);
+  process.stdout.write(`model ${id} cooldown cleared\n`);
+  return 0;
 }
 
 /* -------------------------------------------------------------------- log */
@@ -342,16 +391,58 @@ function cmdLog(id: string | undefined): number {
 }
 
 function cmdStatus(): number {
-  const runs = listRuns(layout());
+  const l = layout();
+  const runs = listAllRuns(l.home);
   if (runs.length === 0) {
     process.stdout.write("no runs yet\n");
     return 0;
   }
-  for (const s of runs.slice(0, 20)) {
+  for (const s of runs.slice(0, 30)) {
     process.stdout.write(
-      `${s.status.padEnd(12)} ${s.id}  ${s.agent}  ${s.modelCalls} calls  ${s.usage.totalTokens} tok  $${s.cost.actual.toFixed(4)}  ${s.request.slice(0, 60)}\n`,
+      `${s.status.padEnd(12)} ${s.id}  ${s.agent}  ${s.modelCalls} calls  ${s.usage.totalTokens} tok  $${s.cost.actual.toFixed(4)}  ${s.repoRoot}  ${s.request.slice(0, 40)}\n`,
     );
   }
+  return 0;
+}
+
+function cmdResume(id: string | undefined): number {
+  if (!id) fail("resume needs a run id");
+  const l = layout();
+  const run = readRun(l, id);
+  if (!run) {
+    // search other projects
+    for (const project of listProjects(l.home)) {
+      const rl = layout(project);
+      const r = readRun(rl, id);
+      if (r) {
+        process.stdout.write(`run ${id} lives in ${project}; cd there and re-run, or pass --repo ${project}\n`);
+        return 0;
+      }
+    }
+    fail(`no such run: ${id}`);
+  }
+  const s = reconcileRun(run.summary);
+  if (s.status === "running") {
+    process.stdout.write(`run ${id} is still running (pid ${s.pid})\n`);
+    return 0;
+  }
+  process.stdout.write(
+    `run ${id}: ${s.status}\n  request: ${s.request}\n  worktree: ${s.worktree ?? "(none — solo read-only run)"}\n  packet:   ${join(l.localDir, "tasks", (s.id + ".md"))}\n`,
+  );
+  process.stdout.write(
+    `\nTo resume: re-run the original request; the worktree (if any) is preserved at the path above.\n` +
+      `  machine_code run --mode ${s.mode === "solo" ? "solo --agent " + s.agent : s.mode} ${JSON.stringify(s.request)}\n`,
+  );
+  return 0;
+}
+
+function cmdPrune(argv: string[]): number {
+  const { flags } = parseFlags(argv);
+  const days = Number(flags.get("days") ?? "7");
+  if (!Number.isFinite(days) || days < 0) fail("prune --days must be a non-negative number");
+  const l = layout();
+  const { removed, skipped } = pruneRuns(l.home, days);
+  process.stdout.write(`pruned ${removed} run(s) older than ${days} day(s); ${skipped} skipped (active/interrupted/recent).\n`);
   return 0;
 }
 
@@ -382,6 +473,18 @@ async function main(): Promise<void> {
       break;
     case "status":
       code = cmdStatus();
+      break;
+    case "resume":
+      code = cmdResume(rest[0]);
+      break;
+    case "prune":
+      code = cmdPrune(rest);
+      break;
+    case "provider":
+      code = await cmdProvider(rest);
+      break;
+    case "model":
+      code = await cmdModel(rest);
       break;
     case "version":
     case "--version":
