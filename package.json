@@ -13,7 +13,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "machine_code": "node --no-warnings dist/cli.js"
+    "machine_code": "node --no-warnings dist/cli.js",
+    "install:global": "ln -sf \"$(pwd)/dist/cli.js\" \"$(npm prefix -g 2>/dev/null || echo $HOME/.local)/bin/machine_code\" && chmod +x \"$(pwd)/dist/cli.js\""
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.4.0",

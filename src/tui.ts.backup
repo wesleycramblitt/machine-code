@@ -1,0 +1,383 @@
+/**
+ * machine_code — clean TUI
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { layout } from "./paths.js";
+import { listAllRuns, readRun, listProjects, type RunSummary, type RunEvent } from "./state/runs.js";
+import { listInstances } from "./state/instances.js";
+import { loadMachineConfig } from "./config.js";
+import { readSpendSummary } from "./spend.js";
+import { loadAvailability } from "./availability.js";
+
+const ALT = "\x1b[?1049h";
+const ALT_L = "\x1b[?1049l";
+const CLR = "\x1b[2J\x1b[H";
+const HIDE = "\x1b[?25l";
+const SHOW = "\x1b[?25h";
+const B = "\x1b[1m";
+const D = "\x1b[2m";
+const R = "\x1b[0m";
+const C = "\x1b[36m";
+const G = "\x1b[32m";
+const Y = "\x1b[33m";
+const RED = "\x1b[31m";
+const M = "\x1b[35m";
+const BL = "\x1b[34m";
+const GR = "\x1b[90m";
+const W = "\x1b[37m";
+
+type Tab = "runs" | "providers" | "spend" | "settings";
+type View = "list" | "detail" | "newrun";
+
+function stripAnsi(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function trunc(s: string, n: number): string {
+  if (!s) return "";
+  const plain = stripAnsi(s);
+  if (plain.length <= n) return s;
+  // truncate visible chars
+  let out = "";
+  let v = 0;
+  let i = 0;
+  while (i < s.length && v < n - 1) {
+    if (s[i] === "\x1b") {
+      let j = i;
+      while (j < s.length && s[j] !== "m") j++;
+      if (j < s.length) j++;
+      out += s.slice(i, j);
+      i = j;
+      continue;
+    }
+    out += s[i];
+    v++;
+    i++;
+  }
+  return out + "…" + R;
+}
+
+function padRight(s: string, n: number): string {
+  const v = stripAnsi(s).length;
+  if (v >= n) return trunc(s, n);
+  return s + " ".repeat(n - v);
+}
+
+function icon(s: string): string {
+  if (s === "running") return `${C}●${R}`;
+  if (s === "done") return `${G}✓${R}`;
+  if (s === "blocked") return `${Y}◐${R}`;
+  if (s === "failed") return `${RED}✗${R}`;
+  if (s === "interrupted") return `${GR}◯${R}`;
+  return `${GR}○${R}`;
+}
+
+function statusColor(s: string): string {
+  if (s === "running") return C;
+  if (s === "done") return G;
+  if (s === "blocked") return Y;
+  if (s === "failed") return RED;
+  if (s === "interrupted") return GR;
+  return GR;
+}
+
+function ago(iso: string): string {
+  const d = Date.now() - new Date(iso).getTime();
+  const sec = Math.floor(d / 1000);
+  if (sec < 60) return sec + "s";
+  const m = Math.floor(sec / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h";
+  return Math.floor(h / 24) + "d";
+}
+
+function findRun(home: string, id: string): { summary: RunSummary; events: RunEvent[] } | null {
+  for (const p of listProjects(home)) {
+    const r = readRun(layout(p), id);
+    if (r) return r;
+  }
+  return null;
+}
+
+function buildFlat(runs: RunSummary[], cwd: string): RunSummary[] {
+  const groups = new Map<string, RunSummary[]>();
+  for (const r of runs) {
+    const k = r.repoRoot || "unknown";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(r);
+  }
+  const pkeys = [...groups.keys()].sort((a, b) => {
+    if (a === cwd) return -1;
+    if (b === cwd) return 1;
+    return basename(a).localeCompare(basename(b));
+  });
+  const flat: RunSummary[] = [];
+  for (const pk of pkeys) {
+    const arr = groups.get(pk);
+    if (arr) for (const r of arr) flat.push(r);
+  }
+  return flat;
+}
+
+export async function runTui(): Promise<void> {
+  const l = layout();
+  const cwd = process.cwd();
+  mkdirSync(l.localDir, { recursive: true });
+
+  let tab: Tab = "runs";
+  let view: View = "list";
+  let sel = 0;
+  let detScroll = 0;
+
+  const stdin = process.stdin;
+  stdin.setRawMode?.(true);
+  stdin.resume();
+  stdin.setEncoding("utf8");
+  process.stdout.write(ALT + HIDE);
+
+  const cleanup = () => {
+    stdin.setRawMode?.(false);
+    process.stdout.write(SHOW + ALT_L);
+  };
+  process.on("SIGINT", () => { cleanup(); process.exit(130); });
+  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+
+  const interruptRun = (r: RunSummary) => {
+    if (r.status !== "running") return;
+    const dir = join(r.repoRoot, ".machine_code", "local", "runs", r.id);
+    const cf = join(dir, "control");
+    let seq = 1;
+    try {
+      const a = readFileSync(join(dir, "control.ack"), "utf8");
+      const m = a.match(/"seq":\s*(\d+)/);
+      if (m) seq = Number(m[1]) + 1;
+    } catch { }
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(cf, JSON.stringify({ seq, action: "interrupt", from: process.pid }) + "\n", "utf8");
+    } catch { }
+  };
+
+  const draw = () => {
+    const cols = process.stdout.columns || 120;
+    const rows = process.stdout.rows || 40;
+    const runs = listAllRuns(l.home);
+    const flat = buildFlat(runs, cwd);
+    if (sel < 0) sel = 0;
+    if (sel >= flat.length) sel = flat.length === 0 ? 0 : flat.length - 1;
+
+    // rebuild groups for display
+    const groups = new Map<string, RunSummary[]>();
+    for (const r of runs) {
+      const k = r.repoRoot || "unknown";
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(r);
+    }
+    const pkeys = [...groups.keys()].sort((a, b) => {
+      if (a === cwd) return -1;
+      if (b === cwd) return 1;
+      return basename(a).localeCompare(basename(b));
+    });
+
+    let out = CLR;
+    // Header with tabs
+    const tabs: Tab[] = ["runs", "providers", "spend", "settings"];
+    let header = "";
+    for (let i = 0; i < tabs.length; i++) {
+      const t = tabs[i]!;
+      if (tab === t) {
+        header += "\x1b[48;5;245m\x1b[30m\x1b[1m " + (i + 1) + ":" + t + " \x1b[0m ";
+      } else {
+        header += "\x1b[48;5;236m\x1b[37m " + (i + 1) + ":" + t + " \x1b[0m ";
+      }
+    }
+    header += "${D} " + listInstances(l.home).length + " instance" + (listInstances(l.home).length === 1 ? "" : "s") + " • " + flat.length + " run" + (flat.length === 1 ? "" : "s") + "${R}";
+    out += header.padEnd(cols) + "\n";
+    out += "${D}" + "━".repeat(cols) + "${R}\n";
+
+    if (tab === "runs") {
+      if (view === "list") {
+        const leftW = Math.floor(cols * 0.8);
+        const rightW = cols - leftW - 1;
+        out += `${B}${padRight("  PROJECT / RUN", leftW)}${R}│${B}${padRight(" PREVIEW (20%)", rightW)}${R}\n`;
+        out += `${D}${"─".repeat(leftW)}┼${"─".repeat(Math.max(1, rightW))}${R}\n`;
+        let lineCount = 0;
+        const maxLines = Math.max(3, rows - 7);
+        let fi = 0;
+        for (const pk of pkeys) {
+          if (lineCount >= maxLines) break;
+          const isCur = pk === cwd;
+          const pn = basename(pk);
+          const projLine = `${isCur ? C : GR}▸ ${B}${W}${pn}${R}${isCur ? ` ${C}(cwd)${R}` : ""} ${D}${pk}${R}`;
+          out += padRight(projLine, leftW) + "│\n";
+          lineCount++;
+          const arr = groups.get(pk) || [];
+          for (const r of arr) {
+            if (lineCount >= maxLines) break;
+            const selr = fi === sel;
+            const mrk = selr ? `${C}▸${R}` : " ";
+            const ic = icon(r.status);
+            const shortId = r.id.slice(-8);
+            const tm = ago(r.startedAt);
+            const am = `${M}${r.agent}${R}/${r.mode}`;
+            const reqClean = (r.request || "").replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+            const leftContent = `${mrk} ${ic} ${BL}${shortId}${R} ${D}${tm}${R} ${am}  ${W}${reqClean}${R}`;
+            out += padRight(leftContent, leftW) + "│";
+            if (selr) {
+              const rp = trunc(reqClean, Math.max(10, rightW - 2));
+              out += ` ${D}${rp}${R}\n`;
+              out += padRight("", leftW) + "│ " + `${statusColor(r.status)}${B}${r.status.toUpperCase()}${R} • ${G}${r.modelCalls}${R} calls • ${C}${r.usage.totalTokens}${R} tok • ${Y}$${r.cost.actual.toFixed(4)}${R}\n`;
+              out += padRight("", leftW) + "│ " + `${D}[Enter] details  [i] interrupt${R}\n`;
+              lineCount += 2;
+            } else {
+              out += "\n";
+            }
+            lineCount++;
+            fi++;
+          }
+        }
+        while (lineCount < maxLines) {
+          out += padRight("", leftW) + "│\n";
+          lineCount++;
+        }
+        out += `${D}${"─".repeat(leftW)}┴${"─".repeat(Math.max(1, rightW))}${R}\n`;
+        out += `${D}[j/k/↑/↓] navigate  [Enter] details  [i] interrupt  [Tab/1-4] switch  [q] quit${R}`.padEnd(cols) + "\n";
+      } else {
+        const r = flat[sel];
+        if (!r) { view = "list"; draw(); return; }
+        const rd2 = r.repoRoot ? readRun(layout(r.repoRoot), r.id) : null;
+        const rd = rd2 || findRun(l.home, r.id);
+        out += `${B}${icon(r.status)} Run${R} ${BL}${r.id}${R}  ${D}│  ${r.repoRoot}${R}  ${D}│  [Esc/q] back${R}\n`;
+        out += `${D}${"━".repeat(cols)}${R}\n`;
+        if (rd) {
+          const s = rd.summary;
+          out += ` ${statusColor(s.status)}${B}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}/${s.mode}  •  ${G}${s.modelCalls}${R} calls  •  ${C}${s.usage.totalTokens.toLocaleString()}${R} tok  •  ${Y}$${s.cost.actual.toFixed(6)}${R}  •  ${D}pid:${s.pid}${R}\n`;
+          if (s.error) out += ` ${RED}${B}ERROR:${R} ${RED}${s.error}${R}\n`;
+          out += `\n ${B}${W}Request${R}\n`;
+          for (const ln of (s.request || "").split("\n").slice(0, 6)) out += `   ${ln}\n`;
+          out += `\n ${B}${W}Event Stream${R} ${D}(${rd.events.length} events)${R}\n`;
+          out += ` ${D}${"─".repeat(cols - 2)}${R}\n`;
+          const evs = rd.events.slice(Math.max(0, rd.events.length - (rows - 18)));
+          for (const e of evs) {
+            const t = String(e.t).slice(11, 19);
+            const et = String(e.type);
+            if (et === "run_start") out += ` ${GR}${t}${R} ${C}▶${R} ${B}START${R} ${M}${e.agent}${R}/${e.mode}\n`;
+            else if (et === "model_select") {
+              if (e.error) out += ` ${GR}${t}${R} ${RED}▸${R} ${RED}SELECT ERR${R} ${String(e.error).slice(0, 70)}\n`;
+              else out += ` ${GR}${t}${R} ${BL}▸${R} ${D}select${R} ${C}${e.key}${R}\n`;
+            } else if (et === "model_call_end") {
+              const u: any = e.usage || {};
+              out += ` ${GR}${t}${R} ${M}◉${R} ${W}${e.provider}${R}/${e.model} ${statusColor(String(e.stopReason))}${e.stopReason}${R} ${G}${u.totalTokens || 0}${R}tok ${e.cost != null ? Y + "$" + Number(e.cost).toFixed(6) + R : ""}\n`;
+              if (e.error) out += `   ${RED}${String(e.error).slice(0, 90)}${R}\n`;
+            } else if (et === "tool_call") out += ` ${GR}${t}${R} ${Y}⚡${R} tool ${B}${W}${e.tool}${R} ${e.isError ? RED + "ERR" + R : G + "ok" + R}\n`;
+            else if (et === "gates") out += ` ${GR}${t}${R} ${B}⊞${R} gates ${e.passed ? G + B + "PASS" + R : RED + B + "FAIL" + R}\n`;
+            else if (et === "error_classified") out += ` ${GR}${t}${R} ${RED}⚠${R} ${Y}${e.kind}${R}${e.disableProvider ? " " + RED + "[disable]" + R : ""}${e.needsAuth ? " " + Y + "[auth]" + R : ""}\n`;
+            else if (et === "retry") out += ` ${GR}${t}${R} ${Y}↻${R} ${D}retry${R}\n`;
+            else if (et === "control") out += ` ${GR}${t}${R} ${Y}⌘${R} ${D}ctrl:${e.action}${R}\n`;
+            else if (et === "run_end") {
+              const sc = s.status === "done" ? G : RED;
+              out += ` ${GR}${t}${R} ${sc}■${R} ${B}${sc}${String(e.status).toUpperCase()}${R}${e.error ? " " + RED + String(e.error).slice(0, 70) + R : ""}\n`;
+            } else out += ` ${GR}${t}${R} ${D}${et}${R}\n`;
+          }
+        }
+        out += `\n${D}[Esc/q] back  [i] interrupt${R}`.padEnd(cols) + "\n";
+      }
+    } else if (tab === "providers") {
+      out += `${B}${W}Providers${R}\n${D}${"━".repeat(cols)}${R}\n`;
+      try {
+        const avail = loadAvailability(l.home);
+        out += ` ${B}${padRight("Provider", 20)}${R}${padRight("Status", 16)}${R}${padRight("Source", 22)}${R}${padRight("Health", 16)}${R}\n`;
+        out += ` ${D}${"─".repeat(cols - 4)}${R}\n`;
+        const provs = ["openrouter", "opencode-go", "anthropic", "openai", "google", "deepinfra", "sambanova", "groq", "cerebras", "vercel"];
+        for (const p of provs) {
+          const key = p === "openrouter" ? "OPENROUTER_API_KEY" : p === "opencode-go" ? "OPENCODE_API_KEY" : p === "anthropic" ? "ANTHROPIC_API_KEY" : p === "openai" ? "OPENAI_API_KEY" : p === "google" ? "GOOGLE_API_KEY" : "";
+          const cfg = key && process.env[key] ? `${G}✓ configured${R}` : `${GR}✗ not configured${R}`;
+          const ph: any = (avail.providers as any)[p];
+          let h = `${GR}—${R}`;
+          if (ph?.disabled) h = `${RED}✗ disabled${R}`;
+          else if (ph?.needsAuth) h = `${Y}⚠ needs auth${R}`;
+          else if (ph?.cooldownUntil && ph.cooldownUntil > Date.now()) h = `${Y}⏱ cooling${R}`;
+          else if (ph) h = `${G}✓ ok${R}`;
+          const src = key && process.env[key] ? `${C}env:${key}${R}` : `${D}-${R}`;
+          out += ` ${padRight(W + p + R, 20)}${padRight(cfg, 16 + 10)}${padRight(src, 22)}${h}\n`;
+        }
+      } catch (e: any) { out += ` ${RED}${e.message}${R}\n`; }
+      out += `\n${D}[Tab/1-4] switch  [q] quit${R}`.padEnd(cols) + "\n";
+    } else if (tab === "spend") {
+      out += `${B}${W}Spend (machine-wide)${R}\n${D}${"━".repeat(cols)}${R}\n`;
+      try {
+        const s = readSpendSummary(l.home);
+        out += ` ${B}Total:${R} ${Y}$${s.totalActual.toFixed(6)}${R} actual / ${D}$${s.totalEstimated.toFixed(6)} estimated${R}\n\n`;
+        out += ` ${B}${C}By Provider${R}\n`;
+        const ps = Object.entries(s.byProvider).sort((a, b) => b[1].actual - a[1].actual);
+        for (const [k, v] of ps.slice(0, 12)) out += `   ${W}${k}${R}  ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}\n`;
+        out += `\n ${B}${C}By Model${R}\n`;
+        const ms = Object.entries(s.byModel).sort((a, b) => b[1].actual - a[1].actual);
+        for (const [k, v] of ms.slice(0, 14)) out += `   ${W}${k}${R}  ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}\n`;
+        out += `\n ${B}${C}By Day${R}\n`;
+        const ds = Object.entries(s.byDay).sort((a, b) => b[0].localeCompare(a[0]));
+        for (const [k, v] of ds.slice(0, 8)) out += `   ${W}${k}${R}  ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}\n`;
+      } catch (e: any) { out += ` ${RED}${e.message}${R}\n`; }
+      out += `\n${D}[Tab/1-4] switch  [q] quit${R}`.padEnd(cols) + "\n";
+    } else if (tab === "settings") {
+      out += `${B}${W}Settings${R}\n${D}${"━".repeat(cols)}${R}\n`;
+      try {
+        const m = loadMachineConfig(l);
+        out += ` ${B}${C}Machine${R} ${D}~/.machine_code/config.toml${R}\n`;
+        out += `   defaultMode: ${m.defaultMode ? M + m.defaultMode + R : D + "-" + R}   maxOutputTokens: ${m.maxOutputTokens ? C + m.maxOutputTokens + R : D + "-" + R}\n`;
+        out += `   priceCaps: ${Y}in=$${m.priceCaps.input}${R} ${Y}out=$${m.priceCaps.output}${R}   vetoes: ${m.vetoes.length ? RED + m.vetoes.join(", ") + R : D + "-" + R}\n\n`;
+        out += ` ${B}${C}Environment${R}\n`;
+        out += `   OPENROUTER_API_KEY: ${process.env.OPENROUTER_API_KEY ? G + "✓ set" + R : D + "✗ not set" + R}   OPENCODE_API_KEY: ${process.env.OPENCODE_API_KEY ? G + "✓ set" + R : D + "✗ not set" + R}\n`;
+        out += `   ANTHROPIC_API_KEY: ${process.env.ANTHROPIC_API_KEY ? G + "✓ set" + R : D + "✗ not set" + R}   OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? G + "✓ set" + R : D + "✗ not set" + R}\n\n`;
+        out += ` ${B}${C}Paths${R}\n`;
+        out += `   ${D}Home:${R} ${l.home}\n   ${D}Repo:${R} ${l.repoRoot}\n   ${D}Runs:${R} ${l.runsDir}\n`;
+      } catch (e: any) { out += ` ${RED}${e.message}${R}\n`; }
+      out += `\n${D}[Tab/1-4] switch  [q] quit${R}`.padEnd(cols) + "\n";
+    }
+
+    process.stdout.write(out);
+  };
+
+  stdin.on("data", (data: string) => {
+    if (data === "\x1b[A" || data === "k") {
+      if (tab === "runs" && view === "list") {
+        const flat = buildFlat(listAllRuns(l.home), cwd);
+        sel = Math.max(0, sel - 1);
+      } else if (view === "detail") detScroll++;
+    } else if (data === "\x1b[B" || data === "j") {
+      if (tab === "runs" && view === "list") {
+        const flat = buildFlat(listAllRuns(l.home), cwd);
+        if (flat.length === 0) sel = 0;
+        else sel = (sel + 1) % flat.length;
+      } else if (view === "detail") detScroll--;
+    } else if (data === "\t") {
+      const t: Tab[] = ["runs", "providers", "spend", "settings"];
+      tab = t[(t.indexOf(tab) + 1) % t.length]!;
+      view = "list";
+    } else if (data === "1") { tab = "runs"; view = "list"; }
+    else if (data === "2") { tab = "providers"; view = "list"; }
+    else if (data === "3") { tab = "spend"; view = "list"; }
+    else if (data === "4") { tab = "settings"; view = "list"; }
+    else if (data === "\r" || data === "\n") {
+      if (tab === "runs" && view === "list") view = "detail";
+    } else if (data === "\x1b") {
+      if (view === "detail") view = "list";
+      else { cleanup(); process.exit(0); }
+    } else if (data === "q") {
+      if (view === "detail") view = "list";
+      else { cleanup(); process.exit(0); }
+    } else if (data === "i") {
+      if (tab === "runs") {
+        const flat = buildFlat(listAllRuns(l.home), cwd);
+        if (flat[sel]) interruptRun(flat[sel]!);
+      }
+    }
+    draw();
+  });
+
+  draw();
+  setInterval(draw, 1000);
+  await new Promise(() => { });
+}
