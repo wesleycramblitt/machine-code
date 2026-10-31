@@ -28,6 +28,7 @@ export interface RunLoopInput {
   request: string;
   root: string;
   recorder: RunRecorder;
+  commands: ReadonlyMap<string, import("./commands/registry.js").CommandSpec>;
   requireProvider?: string;
   /** External abort (Ctrl-C): aborts the in-flight provider request. */
   signal?: AbortSignal;
@@ -121,7 +122,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       model: currentModel,
       thinkingLevel: "low",
       systemPrompt: input.agent.prompt,
-      tools: coreTools({ root: input.root }, input.agent.tools),
+      tools: coreTools({ root: input.root, commands: input.commands }, input.agent.tools),
     },
     sessionId: recorder.id,
     convertToLlm,

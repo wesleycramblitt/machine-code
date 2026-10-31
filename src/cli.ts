@@ -12,8 +12,8 @@ import { loadMachineConfig, loadPolicy, ConfigError } from "./config.js";
 import { createModelsCollection, availableChatModels, providerStatuses } from "./models.js";
 import { refreshCatalogue } from "./catalogue/refresh.js";
 import { loadCatalogue } from "./catalogue/load.js";
-import { generalAgent } from "./agents.js";
-import { runLoop } from "./loop.js";
+// agents resolved inside orchestrate.ts
+import { orchestrate, type RunMode } from "./orchestrate.js";
 import { RunRecorder, listRuns, readRun, type RunStatus } from "./state/runs.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "./install.js";
@@ -24,6 +24,8 @@ const HELP = `machine_code ${VERSION}
 
 Usage:
   machine_code run --mode solo --agent general [--provider <id>] "<question>"
+  machine_code run --mode direct|verified|redundant "<task>"
+  machine_code run --mode solo --agent sudo "<rare task>"
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
                                     Install missing base CLIs (default: pinned static binaries)
@@ -208,16 +210,12 @@ async function cmdCatalogueRefresh(): Promise<number> {
 
 async function cmdRun(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
-  const mode = flags.get("mode");
+  const modeFlag = flags.get("mode");
   const agentName = flags.get("agent");
   const requireProvider = flags.get("provider");
   const request = positional.join(" ").trim();
 
-  if (mode !== "solo") fail(`M0 supports only --mode solo (packet modes arrive in M1)`);
-  if (agentName !== "general") {
-    fail(`solo mode requires --agent general (architect/build/review arrive in M1; sudo is not available in M0)`);
-  }
-  if (request.length === 0) fail(`run needs a question, e.g. machine_code run --mode solo --agent general "summarize README.md"`);
+  if (request.length === 0) fail(`run needs a question, e.g. machine_code run --mode verified "fix the parser panic"`);
 
   const l = layout();
   let machine;
@@ -252,8 +250,17 @@ async function cmdRun(argv: string[]): Promise<number> {
     catalogueDoc = result.document;
   }
 
-  const recorder = new RunRecorder(l, { agent: "general", mode: "solo", request });
-  const agent = generalAgent(l);
+  const mode: import("./orchestrate.js").RunMode =
+    modeFlag === "solo" || modeFlag === "direct" || modeFlag === "verified" || modeFlag === "redundant"
+      ? modeFlag
+      : "solo";
+
+  const agentNameParsed =
+    agentName === "general" || agentName === "sudo" || agentName === "architect" || agentName === "build" || agentName === "review"
+      ? agentName
+      : undefined;
+
+  const recorder = new RunRecorder(l, { agent: agentNameParsed ?? "general", mode, request });
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -270,13 +277,15 @@ async function cmdRun(argv: string[]): Promise<number> {
   });
 
   process.stderr.write(`run ${recorder.id} (${recorder.dir})\n`);
-  const result = await runLoop({
+  const result = await orchestrate({
     models,
     catalogue: catalogueDoc.models,
     configuredProviders,
-    agent,
-    policy: policy.agents.general!,
+    layout: l,
     machine,
+    policy,
+    mode,
+    agentName: agentNameParsed,
     request,
     root: l.repoRoot,
     recorder,

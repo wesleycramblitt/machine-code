@@ -24,6 +24,8 @@ import { describeCommand, runCommand, type CommandRunResult } from "../commands/
 export interface ToolContext {
   /** Worktree root every path is bound to. */
   root: string;
+  /** Loaded commands (core + profiles). */
+  commands: ReadonlyMap<string, import("../commands/registry.js").CommandSpec>;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -285,7 +287,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
     async execute(_id, params: Static<typeof CommandParams>) {
       try {
         if (params.action === "describe") {
-          return ok(describeCommand(params.name));
+          return ok(describeCommand(params.name, ctx.commands));
         }
         const result: CommandRunResult = await runCommand(params.name, params.args ?? {}, ctx);
         return result.isError ? fail(result.text) : ok(result.text);

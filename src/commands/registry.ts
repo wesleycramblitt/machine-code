@@ -103,12 +103,15 @@ export interface CommandRunResult {
 
 export interface CommandContext {
   root: string;
+  /** Loaded commands (core + profiles). Falls back to CORE_COMMANDS. */
+  commands?: ReadonlyMap<string, CommandSpec>;
 }
 
-export function describeCommand(name: string): string {
-  const spec = CORE_COMMANDS.get(name);
+export function describeCommand(name: string, commands?: ReadonlyMap<string, CommandSpec>): string {
+  const map = commands ?? CORE_COMMANDS;
+  const spec = map.get(name);
   if (!spec) {
-    const known = [...CORE_COMMANDS.keys()].join(", ");
+    const known = [...map.keys()].join(", ");
     throw new Error(`unknown command: ${name}. Available: ${known}`);
   }
   return JSON.stringify(
@@ -128,10 +131,11 @@ export async function runCommand(
   args: Record<string, unknown>,
   ctx: CommandContext,
 ): Promise<CommandRunResult> {
-  const spec = CORE_COMMANDS.get(name);
+  const map = ctx.commands ?? CORE_COMMANDS;
+  const spec = map.get(name);
   if (!spec) {
     return {
-      text: `unknown command: ${name}. Available: ${[...CORE_COMMANDS.keys()].join(", ")}`,
+      text: `unknown command: ${name}. Available: ${[...map.keys()].join(", ")}`,
       isError: true,
     };
   }

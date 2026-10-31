@@ -1,0 +1,25 @@
+# machine_code profile: TypeScript project toolchain.
+
+[commands.build]
+binary = "npm"
+args = ["run", "build"]
+description = "Compile TypeScript to dist/"
+timeout_ms = 120000
+
+[commands.test]
+binary = "npm"
+args = ["run", "test"]
+description = "Run the test suite"
+timeout_ms = 300000
+
+[commands.lint]
+binary = "npx"
+args = ["tsc", "--noEmit"]
+description = "Typecheck without emitting"
+timeout_ms = 120000
+
+[commands.typecheck]
+binary = "npx"
+args = ["tsc", "--noEmit"]
+description = "Typecheck without emitting"
+timeout_ms = 120000
