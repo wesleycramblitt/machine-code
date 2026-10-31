@@ -6,14 +6,19 @@
  * `rows - 4` lines. Because the frame never exceeds the terminal height, the
  * screen never scrolls and the tabs can never be pushed off the top.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { layout } from "./paths.js";
 import { listAllRuns, readRun, listProjects, type RunSummary, type RunEvent } from "./state/runs.js";
 import { listInstances } from "./state/instances.js";
-import { loadMachineConfig } from "./config.js";
+import { loadMachineConfig, loadPolicy, type Policy } from "./config.js";
 import { readSpendSummary } from "./spend.js";
 import { loadAvailability } from "./availability.js";
+import { agentDef, type AgentDef, type AgentName } from "./agents.js";
+import { loadCatalogue } from "./catalogue/load.js";
+import type { CatalogueRow } from "./catalogue/types.js";
 
 const ALT = "\x1b[?1049h";
 const ALT_L = "\x1b[?1049l";
@@ -34,41 +39,21 @@ const BL = "\x1b[34m";
 const GR = "\x1b[90m";
 const W = "\x1b[37m";
 
-// Selected tab: cyan background, black text (the look that was liked).
 const TAB_ON = "\x1b[46m\x1b[30m\x1b[1m";
 const TAB_OFF = "\x1b[40m\x1b[37m";
 
-type Tab = "runs" | "providers" | "spend" | "settings";
+type Tab = "runs" | "agents" | "models" | "providers" | "spend" | "settings";
 type View = "list" | "detail" | "newrun";
 type GroupMode = "directory" | "status";
+type ModelGroup = "provider" | "family";
+
+const TABS: Tab[] = ["runs", "agents", "models", "providers", "spend", "settings"];
+const AGENT_NAMES: AgentName[] = ["general", "architect", "build", "review", "sudo"];
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-/** Word-wrap plain text to `width` visible columns; collapses blank-line runs. */
-function wrapText(s: string, width: number): string[] {
-  const out: string[] = [];
-  let prevBlank = false;
-  for (const raw of s.split("\n")) {
-    const line = raw.replace(/\t/g, "  ").trimEnd();
-    if (line.trim() === "") {
-      if (!prevBlank) out.push("");
-      prevBlank = true;
-      continue;
-    }
-    prevBlank = false;
-    if (line.length <= width) { out.push(line); continue; }
-    let i = 0;
-    while (i < line.length) {
-      out.push(line.slice(i, i + width));
-      i += width;
-    }
-  }
-  return out;
-}
-
-/** Truncate to at most `n` visible columns, ANSI-aware. */
 function trunc(s: string, n: number): string {
   if (n <= 0) return "";
   if (stripAnsi(s).length <= n) return s;
@@ -91,12 +76,33 @@ function trunc(s: string, n: number): string {
   return out + "…" + R;
 }
 
-/** Pad/truncate to exactly `n` visible columns. */
 function fit(s: string, n: number): string {
   const v = stripAnsi(s).length;
   if (v > n) return trunc(s, n);
   if (v < n) return s + " ".repeat(n - v);
   return s;
+}
+
+/** Word-wrap plain text to `width` visible columns; collapses blank-line runs. */
+function wrapText(s: string, width: number): string[] {
+  const out: string[] = [];
+  let prevBlank = false;
+  for (const raw of s.split("\n")) {
+    const line = raw.replace(/\t/g, "  ").trimEnd();
+    if (line.trim() === "") {
+      if (!prevBlank) out.push("");
+      prevBlank = true;
+      continue;
+    }
+    prevBlank = false;
+    if (line.length <= width) { out.push(line); continue; }
+    let i = 0;
+    while (i < line.length) {
+      out.push(line.slice(i, i + width));
+      i += width;
+    }
+  }
+  return out;
 }
 
 function icon(s: string): string {
@@ -170,6 +176,27 @@ function buildFlat(
   return { flat, groups, pkeys };
 }
 
+/** Agent metadata for the agents tab and the new-run screen. */
+const AGENT_META: Record<AgentName, { modes: string[]; blurb: string }> = {
+  general: { modes: ["solo"], blurb: "answers questions; read tool only" },
+  architect: { modes: ["direct", "verified", "redundant"], blurb: "plans packets; runs Architect → Build → gates" },
+  build: { modes: [], blurb: "implements packets; not run directly" },
+  review: { modes: [], blurb: "read-only judge; redundant mode only" },
+  sudo: { modes: ["solo"], blurb: "full permissions; solo only" },
+};
+
+function fmtPrice(p: number): string {
+  if (p >= 10) return `$${p.toFixed(0)}`;
+  if (p >= 1) return `$${p.toFixed(2)}`;
+  return `$${p.toFixed(2)}`;
+}
+
+function fmtCtx(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
+}
+
 export async function runTui(): Promise<void> {
   const l = layout();
   const cwd = process.cwd();
@@ -177,15 +204,18 @@ export async function runTui(): Promise<void> {
 
   let tab: Tab = "runs";
   let view: View = "list";
-  let sel = 0;
-  let listTop = 0;
-  let evScroll = 0;
+  let sel = 0; // selection within the active tab's list
+  let listTop = 0; // scroll for list views
+  let scroll = 0; // scroll for scroll-only views (detail/agents detail/etc.)
   let detSelEvent = 0;
   const expanded = new Set<string>();
   let newrunPrompt = "";
+  let newrunAgent: "general" | "sudo" | "architect" = "architect";
   let newrunMode = "verified";
-  let newrunAgent = "general";
   let groupMode: GroupMode = "directory";
+  let modelGroup: ModelGroup = "provider";
+  let modelsAll = false; // false = configured providers only
+  let modelFilter = ""; // simple substring filter
   const collapsed = new Set<string>();
 
   const stdin = process.stdin;
@@ -222,245 +252,399 @@ export async function runTui(): Promise<void> {
     return rd || findRun(l.home, r.id);
   };
 
-  const selectedRun = (): RunSummary | undefined => {
-    const { flat } = buildFlat(listAllRuns(l.home), cwd, groupMode);
-    return flat[sel];
+  const launchRun = () => {
+    const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+    const args = ["run", "--mode", newrunMode];
+    if (newrunMode === "solo") args.push("--agent", newrunAgent);
+    args.push(newrunPrompt);
+    try {
+      const child = spawn(process.execPath, [cliPath, ...args], {
+        cwd,
+        detached: true,
+        stdio: "ignore",
+        env: process.env,
+      });
+      child.unref();
+    } catch { /* ignore */ }
   };
+
+  /** Generic grouped list builder: returns rows + flat selectable items. */
+  type MRow = { kind: "group"; key: string; text: string } | { kind: "item"; idx: number; text: string };
+  function windowRows(rows: MRow[], flatCount: number, selIdx: number, bodyH: number, top: number): { lines: string[]; top: number } {
+    // Keep selection visible.
+    let selRow = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!;
+      if (r.kind === "item" && r.idx === selIdx) { selRow = i; break; }
+    }
+    let t = top;
+    if (selRow >= 0) {
+      if (selRow < t) t = selRow;
+      if (selRow >= t + bodyH) t = selRow - bodyH + 1;
+    }
+    t = Math.max(0, Math.min(t, Math.max(0, rows.length - bodyH)));
+    const lines = rows.slice(t, t + bodyH).map((r) => r.text);
+    while (lines.length < bodyH) lines.push("");
+    return { lines, top: t };
+  }
 
   const draw = () => {
     const cols = process.stdout.columns || 120;
     const rows = process.stdout.rows || 40;
     const runs = listAllRuns(l.home);
-    const { flat, groups, pkeys } = buildFlat(runs, cwd, groupMode);
     if (sel < 0) sel = 0;
-    if (sel >= flat.length) sel = flat.length === 0 ? 0 : flat.length - 1;
 
     // ---- Header (2 lines) -------------------------------------------------
-    const tabs: Tab[] = ["runs", "providers", "spend", "settings"];
     let tabBar = "";
-    for (let i = 0; i < tabs.length; i++) {
-      const t = tabs[i]!;
+    for (let i = 0; i < TABS.length; i++) {
+      const t = TABS[i]!;
       if (tab === t) tabBar += `${TAB_ON} ${i + 1}:${t} ${R}`;
       else tabBar += `${TAB_OFF} ${i + 1}:${t} ${R}`;
       tabBar += " ";
     }
     const instCount = listInstances(l.home).length;
-    tabBar += `${D}${instCount} instance${instCount === 1 ? "" : "s"} • ${flat.length} run${flat.length === 1 ? "" : "s"}${R}`;
+    tabBar += `${D}${instCount} inst${R}`;
     const header = [fit(tabBar, cols), `${D}${"━".repeat(cols)}${R}`];
 
     // ---- Footer (2 lines) -------------------------------------------------
-    let keys = "";
+    let keys: string;
     if (tab === "runs" && view === "list") {
-      keys = `[n] new run   [g] group: ${groupMode}   [space] fold   [j/k] move   [Enter] open   [i] interrupt   [Tab/1-4] tabs   [q] quit`;
+      keys = `[n] new run   [g] group: ${groupMode}   [space] fold   [j/k] move   [Enter] open   [i] interrupt   [Tab/1-6] tabs   [q] quit`;
     } else if (tab === "runs" && view === "detail") {
-      keys = `[Esc/q] back   [j/k] select event   [space] expand   [i] interrupt`;
-    } else if (tab === "runs" && view === "newrun") {
-      keys = `[m] mode   [a] agent   [Enter] run   [Esc] cancel`;
+      keys = `[Esc/q] back   [j/k] select event   [space] expand`;
+    } else if (view === "newrun") {
+      keys = `[a] agent   [m] mode   [type] prompt   [Enter] launch   [Esc] cancel`;
+    } else if (tab === "agents") {
+      keys = view === "detail"
+        ? `[Esc/q] back   [j/k] scroll`
+        : `[j/k] move   [Enter] details   [Tab/1-6] tabs   [q] quit`;
+    } else if (tab === "models") {
+      keys = `[g] group: ${modelGroup}   [f] ${modelsAll ? "all providers" : "configured only"}   [/] filter${modelFilter ? `: ${modelFilter}` : ""}   [space] fold   [j/k] move   [Tab/1-6] tabs   [q] quit`;
     } else {
-      keys = `[Tab/1-4] switch tab   [q] quit`;
+      keys = `[Tab/1-6] switch tab   [q] quit`;
     }
     const footer = [`${D}${"─".repeat(cols)}${R}`, `${D}${fit(keys, cols)}${R}`];
 
     const bodyH = Math.max(1, rows - header.length - footer.length);
     let body: string[] = [];
 
-    // ---- Runs: list ------------------------------------------------------
-    if (tab === "runs" && view === "list") {
-      type Row = { kind: "group"; key: string; text: string } | { kind: "run"; fi: number; text: string };
-      const rowList: Row[] = [];
+    const avail = loadAvailability(l.home);
+    const isConfigured = (provider: string): boolean => {
+      const envKey =
+        provider === "openrouter" ? "OPENROUTER_API_KEY" :
+        provider === "opencode-go" ? "OPENCODE_API_KEY" :
+        provider === "anthropic" ? "ANTHROPIC_API_KEY" :
+        provider === "openai" ? "OPENAI_API_KEY" :
+        provider === "google" ? "GOOGLE_API_KEY" :
+        provider === "deepinfra" ? "DEEPINFRA_API_KEY" :
+        provider === "sambanova" ? "SAMBANOVA_API_KEY" :
+        provider === "groq" ? "GROQ_API_KEY" :
+        provider === "cerebras" ? "CEREBRAS_API_KEY" : "";
+      return Boolean(envKey && process.env[envKey]);
+    };
+
+    // ---- Runs -------------------------------------------------------------
+    if (tab === "runs") {
+      if (view === "newrun") {
+        const agents: Array<"general" | "sudo" | "architect"> = ["general", "sudo", "architect"];
+        const meta = AGENT_META[newrunAgent];
+        const modes = meta.modes;
+        if (!modes.includes(newrunMode)) newrunMode = modes[0]!;
+        const promptLines = wrapText(newrunPrompt || "(type the task, then press Enter)", Math.max(20, cols - 8));
+        const boxH = Math.max(1, bodyH - 10);
+        body = [
+          ` ${B}${W}New Run${R}`,
+          "",
+          ` ${B}Agent${R}   ${agents.map((a) => (a === newrunAgent ? `${TAB_ON} ${a} ${R}` : `${D}${a}${R}`)).join("  ")}`,
+          ` ${B}Mode${R}    ${modes.length === 0 ? `${D}(none)${R}` : modes.map((m) => (m === newrunMode ? `${TAB_ON} ${m} ${R}` : `${D}${m}${R}`)).join("  ")}`,
+          `           ${D}${meta.blurb}${R}`,
+          "",
+          ` ${B}Prompt${R}`,
+          ` ${D}${"┌" + "─".repeat(Math.max(10, cols - 4)) + "┐"}${R}`,
+        ];
+        for (let i = 0; i < boxH; i++) {
+          const ln = promptLines[i] ?? "";
+          body.push(` ${D}│${R} ${fit(ln, Math.max(10, cols - 8))} ${D}│${R}`);
+        }
+        body.push(` ${D}${"└" + "─".repeat(Math.max(10, cols - 4)) + "┘"}${R}`);
+      } else if (view === "list") {
+        const { flat, groups, pkeys } = buildFlat(runs, cwd, groupMode);
+        if (sel >= flat.length) sel = flat.length === 0 ? 0 : flat.length - 1;
+        type Row = MRow;
+        const rowList: Row[] = [];
+        let fi = 0;
+        for (const pk of pkeys) {
+          const isCollapsed = collapsed.has(pk);
+          if (groupMode === "directory") {
+            const isCur = pk === cwd;
+            const pn = basename(pk);
+            rowList.push({
+              kind: "group",
+              key: pk,
+              text: ` ${isCur ? C : GR}${isCollapsed ? "▸" : "▾"} ${B}${W}${pn}${R}${isCur ? ` ${C}(cwd)${R}` : ""} ${D}${pk} (${groups.get(pk)?.length || 0})${R}`,
+            });
+          } else {
+            const sc = statusColor(pk);
+            rowList.push({
+              kind: "group",
+              key: pk,
+              text: ` ${sc}${isCollapsed ? "▸" : "▾"} ${B}${sc}${pk.toUpperCase()}${R} ${D}(${groups.get(pk)?.length || 0})${R}`,
+            });
+          }
+          if (isCollapsed) continue;
+          for (const r of groups.get(pk) || []) {
+            const selr = fi === sel;
+            const mrk = selr ? `${C}▸${R}` : " ";
+            const reqClean = (r.request || "").replace(/\s+/g, " ").trim();
+            const stats = `${G}${r.modelCalls}${R}c ${C}${r.usage.totalTokens}${R}tok ${Y}$${r.cost.actual.toFixed(4)}${R}`;
+            const availW = Math.max(16, cols - 60);
+            const line = `  ${mrk} ${icon(r.status)} ${BL}${r.id.slice(-8)}${R} ${D}${ago(r.startedAt)}${R}  ${M}${r.agent}${R}/${r.mode}  ${W}${trunc(reqClean, availW)}${R}  ${D}│${R} ${stats}`;
+            rowList.push({ kind: "item", idx: fi, text: selr ? `\x1b[48;5;236m${line}${R}` : line });
+            fi++;
+          }
+        }
+        const w = windowRows(rowList, flat.length, sel, bodyH, listTop);
+        listTop = w.top;
+        body = w.lines;
+      } else if (view === "detail") {
+        const r = buildFlat(runs, cwd, groupMode).flat[sel];
+        if (!r) { view = "list"; return draw(); }
+        const rd = detailFor(r);
+        if (rd) {
+          const s = rd.summary;
+          const ev = rd.events;
+          if (detSelEvent >= ev.length) detSelEvent = Math.max(0, ev.length - 1);
+          const pre: string[] = [];
+          pre.push(` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${D}${s.repoRoot}${R}`);
+          pre.push(` ${statusColor(s.status)}${B}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}/${s.mode}  ${G}${s.modelCalls}${R} calls  ${C}${s.usage.totalTokens.toLocaleString()}${R} tok  ${Y}$${s.cost.actual.toFixed(6)}${R}  ${D}pid ${s.pid}${R}`);
+          if (s.error) pre.push(` ${RED}ERROR: ${s.error}${R}`);
+          pre.push(` ${D}request:${R} ${W}${(s.request || "").replace(/\s+/g, " ").trim()}${R}`);
+          if (s.finalText) pre.push(` ${D}final:${R} ${W}${trunc(s.finalText.replace(/\s+/g, " ").trim(), Math.max(20, cols - 14))}${R}`);
+          pre.push(` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`);
+          const evFlat: string[] = [];
+          const evStart: number[] = [];
+          for (let ei = 0; ei < ev.length; ei++) {
+            evStart[ei] = evFlat.length;
+            const e = ev[ei]!;
+            const t = String(e.t).slice(11, 19);
+            const et = String(e.type);
+            const isSel = ei === detSelEvent;
+            const p = isSel ? `${C}▸${R}` : " ";
+            const exp = expanded.has(`${s.id}:${ei}`);
+            switch (et) {
+              case "run_start":
+                evFlat.push(`${p} ${GR}${t}${R} ${C}▶${R} ${B}start${R} ${M}${e.agent}${R}/${e.mode}`);
+                break;
+              case "model_select":
+                if (e.error) evFlat.push(`${p} ${GR}${t}${R} ${RED}▸ select error${R} ${String(e.error)}`);
+                else {
+                  evFlat.push(`${p} ${GR}${t}${R} ${BL}▸${R} ${D}select${R} ${C}${e.key}${R}`);
+                  if (exp) {
+                    const cands = Array.isArray(e.candidates) ? e.candidates : [];
+                    for (const c of cands.slice(0, 3)) {
+                      const chosen = c.key === e.key ? `${C}${B}✓${R} ` : "  ";
+                      const sc2 = c.score != null ? Number(c.score).toFixed(4) : "?";
+                      const terms = c.terms ? ` cap ${Number(c.terms.capability ?? 0).toFixed(2)} cost ${Number(c.terms.cost ?? 0).toFixed(3)} speed ${Number(c.terms.speed ?? 0).toFixed(2)}` : "";
+                      evFlat.push(`    ${chosen}${D}score ${R}${sc2}${D}${terms}${R}  ${W}${c.key}${R}`);
+                    }
+                    const est: any = e.estimate || {};
+                    if (est.inputTokens != null || est.outputTokens != null) {
+                      evFlat.push(`    ${D}estimate:${R} in≈${est.inputTokens ?? "?"} out=${est.outputTokens ?? "?"}`);
+                    }
+                  }
+                }
+                break;
+              case "model_call_end": {
+                const u: any = e.usage || {};
+                evFlat.push(
+                  `${p} ${GR}${t}${R} ${M}◉${R} ${W}${e.provider}${R}/${e.model} ${statusColor(String(e.stopReason))}${e.stopReason}${R} ${G}${u.totalTokens || 0}${R}tok${e.cost != null ? ` ${Y}$${Number(e.cost).toFixed(6)}${R}` : ""}`,
+                );
+                if (e.error) evFlat.push(`    ${RED}${String(e.error)}${R}`);
+                if (exp) {
+                  evFlat.push(`    ${D}input ${R}${(u.input ?? 0).toLocaleString()}  ${D}output ${R}${(u.output ?? 0).toLocaleString()}  ${D}cache_r ${R}${u.cacheRead ?? 0}  ${D}cache_w ${R}${u.cacheWrite ?? 0}`);
+                  const txt = typeof e.text === "string" ? e.text : "";
+                  if (txt) {
+                    evFlat.push(`    ${D}response:${R}`);
+                    for (const ln of wrapText(txt, Math.max(40, cols - 6))) evFlat.push(`    ${W}${ln}${R}`);
+                  }
+                }
+                break;
+              }
+              case "tool_call_start":
+                evFlat.push(`${p} ${GR}${t}${R} ${Y}⚡${R} ${B}${e.tool}${R} ${D}calling…${R}`);
+                if (exp && e.args) for (const ln of wrapText(JSON.stringify(e.args), Math.max(40, cols - 6))) evFlat.push(`    ${D}args ${R}${ln}`);
+                break;
+              case "tool_call":
+                evFlat.push(`${p} ${GR}${t}${R} ${Y}⚡${R} ${B}${e.tool}${R} ${e.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof e.durationMs === "number" ? ` ${D}${e.durationMs}ms${R}` : ""}`);
+                if (exp) {
+                  const args = e.args ?? (e as any).call?.args;
+                  if (args) for (const ln of wrapText(JSON.stringify(args), Math.max(40, cols - 6))) evFlat.push(`    ${D}args ${R}${ln}`);
+                  const res = e.result;
+                  if (res !== undefined) {
+                    const rs = typeof res === "string" ? res : JSON.stringify(res);
+                    const clean = stripAnsi(rs).replace(/\n+/g, " ").trim();
+                    for (const ln of wrapText(clean, Math.max(40, cols - 6))) evFlat.push(`    ${G}→${R} ${ln}`);
+                  }
+                }
+                break;
+              case "gates":
+                evFlat.push(`${p} ${GR}${t}${R} ${B}⊞ gates${R} ${e.passed ? `${G}PASS${R}` : `${RED}FAIL${R}`}`);
+                if (exp && Array.isArray(e.results)) {
+                  for (const g of e.results as any[]) {
+                    evFlat.push(`    ${g.passed ? G + "✓" : RED + "✗"}${R} ${g.command}`);
+                  }
+                }
+                break;
+              case "error_classified":
+                evFlat.push(`${p} ${GR}${t}${R} ${RED}⚠ ${e.kind}${R}${e.disableProvider ? ` ${RED}[disable provider]${R}` : ""}${e.needsAuth ? ` ${Y}[needs auth]${R}` : ""}`);
+                break;
+              case "retry":
+                evFlat.push(`${p} ${GR}${t}${R} ${Y}↻ retry${R} ${D}from ${e.failedModel}${R}`);
+                break;
+              case "control":
+                evFlat.push(`${p} ${GR}${t}${R} ${Y}⌘ ${e.action}${R}`);
+                break;
+              case "run_end": {
+                const sc = s.status === "done" ? G : s.status === "interrupted" ? GR : RED;
+                evFlat.push(`${p} ${GR}${t}${R} ${sc}■ ${String(e.status).toUpperCase()}${R}${e.error ? ` ${RED}${String(e.error)}${R}` : ""}`);
+                if (exp) {
+                  evFlat.push(`    ${D}tokens ${R}${s.usage.totalTokens.toLocaleString()}  ${D}cost ${R}$${s.cost.actual.toFixed(6)}  ${D}calls ${R}${s.modelCalls}`);
+                  if (s.finalText) {
+                    evFlat.push(`    ${D}final output:${R}`);
+                    for (const ln of wrapText(s.finalText, Math.max(40, cols - 6))) evFlat.push(`    ${W}${ln}${R}`);
+                  }
+                }
+                break;
+              }
+              default:
+                evFlat.push(`${p} ${GR}${t}${R} ${D}${et}${R}`);
+            }
+          }
+          const preLen = pre.length;
+          const viewport = Math.max(1, bodyH - preLen);
+          const maxScroll = Math.max(0, evFlat.length - viewport);
+          const selStart = evStart[detSelEvent] ?? 0;
+          if (selStart < scroll) scroll = selStart;
+          if (selStart >= scroll + viewport) scroll = selStart - viewport + 1;
+          const sc3 = Math.max(0, Math.min(scroll, maxScroll));
+          scroll = sc3;
+          body = [...pre, ...evFlat.slice(sc3, sc3 + viewport)];
+        } else {
+          body = [` ${RED}run not found${R}`];
+        }
+      }
+    }
+
+    // ---- Agents -----------------------------------------------------------
+    else if (tab === "agents") {
+      if (view === "detail") {
+        const name = AGENT_NAMES[Math.min(sel, AGENT_NAMES.length - 1)]!;
+        const def = agentDef(l, name);
+        let policy: Policy | undefined;
+        try { policy = loadPolicy(l); } catch { policy = undefined; }
+        const ap = policy?.agents[name];
+        const meta = AGENT_META[name];
+        const tools = def.tools.join(", ");
+        const lines: string[] = [
+          ` ${B}${M}${name.toUpperCase()}${R} ${D}│ ${meta.blurb}${R}`,
+          "",
+          ` ${B}${C}Tools${R}   ${W}${tools}${R}`,
+          ` ${B}${C}Access${R}  ${def.readonly ? `${G}read-only${R}` : `${Y}can mutate worktree${R}`}`,
+          ` ${B}${C}Modes${R}   ${meta.modes.length ? meta.modes.join(", ") : `${D}(internal only)${R}`}`,
+          "",
+          ` ${B}${C}Policy${R} ${D}(.machine_code/policy.toml)${R}`,
+        ];
+        if (ap) {
+          lines.push(`   min context ${C}${ap.minContext.toLocaleString()}${R}   expected out ${C}${ap.expectedOutputTokens}${R}   min capability ${C}${ap.minCapability}${R}   tool call ${C}${String(ap.toolCall)}${R}`);
+          if (ap.maxOutputTokens != null) lines.push(`   max output ${C}${ap.maxOutputTokens}${R}`);
+          if (ap.budgetTokens != null) lines.push(`   budget ${C}${ap.budgetTokens.toLocaleString()}${R} tokens`);
+        } else {
+          lines.push(`   ${D}(defaults)${R}`);
+        }
+        lines.push("", ` ${B}${C}Prompt${R} ${D}(${def.prompt.split("\n").length} lines)${R}`, ` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`);
+        for (const ln of wrapText(def.prompt, Math.max(40, cols - 4))) lines.push(` ${W}${ln}${R}`);
+        const maxScroll = Math.max(0, lines.length - bodyH);
+        scroll = Math.max(0, Math.min(scroll, maxScroll));
+        body = lines.slice(scroll, scroll + bodyH);
+      } else {
+        let policy: Policy | undefined;
+        try { policy = loadPolicy(l); } catch { policy = undefined; }
+        const rowList: MRow[] = [];
+        for (let i = 0; i < AGENT_NAMES.length; i++) {
+          const name = AGENT_NAMES[i]!;
+          const def = agentDef(l, name);
+          const meta = AGENT_META[name];
+          const ap = policy?.agents[name];
+          const selr = i === sel;
+          const line = ` ${selr ? `${C}▸${R}` : " "} ${B}${M}${name.padEnd(10)}${R} ${def.readonly ? `${G}read-only${R}` : `${Y}mutating${R} `} ${D}${String(def.tools.length)} tools${R}  ${W}${meta.blurb}${R}${ap ? `  ${D}cap≥${ap.minCapability}${R}` : ""}`;
+          rowList.push({ kind: "item", idx: i, text: selr ? `\x1b[48;5;236m${fit(line, cols)}\x1b[0m` : line });
+        }
+        const w = windowRows(rowList, AGENT_NAMES.length, sel, bodyH, listTop);
+        listTop = w.top;
+        body = w.lines;
+      }
+    }
+
+    // ---- Models -----------------------------------------------------------
+    else if (tab === "models") {
+      let doc = loadCatalogue(l.catalogueFile);
+      const all: CatalogueRow[] = doc?.models ?? [];
+      let list = modelsAll ? all : all.filter((m) => isConfigured(m.providerID));
+      if (modelFilter) {
+        const f = modelFilter.toLowerCase();
+        list = list.filter((m) => m.key.toLowerCase().includes(f) || m.name.toLowerCase().includes(f));
+      }
+      const groups = new Map<string, CatalogueRow[]>();
+      for (const m of list) {
+        const k = modelGroup === "provider" ? m.providerID : (m.family || "other");
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k)!.push(m);
+      }
+      const pkeys = [...groups.keys()].sort((a, b) => {
+        const ca = isConfigured(a) ? 0 : 1;
+        const cb = isConfigured(b) ? 0 : 1;
+        if (ca !== cb) return ca - cb;
+        return a.localeCompare(b);
+      });
+      type MItem = { row: CatalogueRow; idx: number };
+      const items: MItem[] = [];
+      const rowList: MRow[] = [];
       let fi = 0;
       for (const pk of pkeys) {
         const isCollapsed = collapsed.has(pk);
-        if (groupMode === "directory") {
-          const isCur = pk === cwd;
-          const pn = basename(pk);
-          const title = ` ${isCur ? C : GR}${isCollapsed ? "▸" : "▾"} ${B}${W}${pn}${R}${isCur ? ` ${C}(cwd)${R}` : ""} ${D}${pk} (${groups.get(pk)?.length || 0})${R}`;
-          rowList.push({ kind: "group", key: pk, text: title });
-        } else {
-          const sc = statusColor(pk);
-          rowList.push({
-            kind: "group",
-            key: pk,
-            text: ` ${sc}${isCollapsed ? "▸" : "▾"} ${B}${sc}${pk.toUpperCase()}${R} ${D}(${groups.get(pk)?.length || 0})${R}`,
-          });
-        }
+        const cfg = isConfigured(pk);
+        rowList.push({
+          kind: "group",
+          key: pk,
+          text: ` ${cfg ? C : GR}${isCollapsed ? "▸" : "▾"} ${B}${W}${pk}${R} ${D}(${groups.get(pk)?.length || 0})${cfg ? ` ${G}configured${R}` : ""}${R}`,
+        });
         if (isCollapsed) continue;
-        for (const r of groups.get(pk) || []) {
+        for (const m of groups.get(pk) || []) {
+          const ph = (avail.models as any)[m.key];
+          const cooling = ph?.cooldownUntil && ph.cooldownUntil > Date.now();
           const selr = fi === sel;
           const mrk = selr ? `${C}▸${R}` : " ";
-          const reqClean = (r.request || "").replace(/\s+/g, " ").trim();
-          const stats = `${G}${r.modelCalls}${R}c ${C}${r.usage.totalTokens}${R}tok ${Y}$${r.cost.actual.toFixed(4)}${R}`;
-          const avail = Math.max(16, cols - 60);
-          const line = `  ${mrk} ${icon(r.status)} ${BL}${r.id.slice(-8)}${R} ${D}${ago(r.startedAt)}${R}  ${M}${r.agent}${R}/${r.mode}  ${W}${trunc(reqClean, avail)}${R}  ${D}│${R} ${stats}`;
-          rowList.push({ kind: "run", fi, text: selr ? `\x1b[48;5;236m${line}${R}` : line });
+          const cap = m.scores?.capability != null ? Number(m.scores.capability).toFixed(1) : "?";
+          const price = `${Y}in ${fmtPrice(m.pricing.input)}${R} ${Y}out ${fmtPrice(m.pricing.output)}${R}`;
+          const status = cooling ? `${Y}⏱${R}` : "";
+          const line = `  ${mrk} ${BL}${trunc(m.name, 34)}${R} ${D}${fmtCtx(m.context)}${R} ${D}cap ${cap}${R} ${price}${status ? " " + status : ""}`;
+          rowList.push({ kind: "item", idx: fi, text: selr ? `\x1b[48;5;236m${fit(line, cols)}\x1b[0m` : line });
+          items.push({ row: m, idx: fi });
           fi++;
         }
       }
-
-      // Keep the selected run row visible.
-      const selRow = rowList.findIndex((r) => r.kind === "run" && r.fi === sel);
-      if (selRow >= 0) {
-        if (selRow < listTop) listTop = selRow;
-        if (selRow >= listTop + bodyH) listTop = selRow - bodyH + 1;
-      }
-      listTop = Math.max(0, Math.min(listTop, Math.max(0, rowList.length - bodyH)));
-      body = rowList.slice(listTop, listTop + bodyH).map((r) => r.text);
+      if (sel >= fi) sel = Math.max(0, fi - 1);
+      const w = windowRows(rowList, fi, sel, bodyH, listTop);
+      listTop = w.top;
+      body = w.lines;
+      // Show details of the selected model in the last line? Keep list-only for now.
+      void items;
     }
 
-    // ---- Runs: detail ----------------------------------------------------
-    else if (tab === "runs" && view === "detail") {
-      const r = flat[sel];
-      if (!r) {
-        view = "list";
-        return draw();
-      }
-      const rd = detailFor(r);
-      if (rd) {
-        const s = rd.summary;
-        const ev = rd.events;
-        if (detSelEvent >= ev.length) detSelEvent = Math.max(0, ev.length - 1);
-
-        // Preamble (fixed): identity + status + request.
-        const pre: string[] = [];
-        pre.push(` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${D}${s.repoRoot}${R}`);
-        pre.push(` ${statusColor(s.status)}${B}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}/${s.mode}  ${G}${s.modelCalls}${R} calls  ${C}${s.usage.totalTokens.toLocaleString()}${R} tok  ${Y}$${s.cost.actual.toFixed(6)}${R}  ${D}pid ${s.pid}${R}`);
-        if (s.error) pre.push(` ${RED}ERROR: ${s.error}${R}`);
-        pre.push(` ${D}request:${R} ${W}${(s.request || "").replace(/\s+/g, " ").trim()}${R}`);
-        pre.push(` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`);
-
-        // Flatten events into lines with per-event start offsets.
-        const evFlat: string[] = [];
-        const evStart: number[] = [];
-        for (let ei = 0; ei < ev.length; ei++) {
-          evStart[ei] = evFlat.length;
-          const e = ev[ei]!;
-          const t = String(e.t).slice(11, 19);
-          const et = String(e.type);
-          const isSel = ei === detSelEvent;
-          const p = isSel ? `${C}▸${R}` : " ";
-          const exp = expanded.has(`${s.id}:${ei}`);
-          switch (et) {
-            case "run_start":
-              evFlat.push(`${p} ${GR}${t}${R} ${C}▶${R} ${B}start${R} ${M}${e.agent}${R}/${e.mode}`);
-              break;
-            case "model_select":
-              if (e.error) evFlat.push(`${p} ${GR}${t}${R} ${RED}▸ select error${R} ${String(e.error)}`);
-              else {
-                evFlat.push(`${p} ${GR}${t}${R} ${BL}▸${R} ${D}select${R} ${C}${e.key}${R}`);
-                if (exp) {
-                  const cands = Array.isArray(e.candidates) ? e.candidates : [];
-                  for (const c of cands.slice(0, 3)) {
-                    const chosen = c.key === e.key ? `${C}${B}✓${R} ` : "  ";
-                    const sc = c.score != null ? Number(c.score).toFixed(4) : "?";
-                    const terms = c.terms ? ` cap ${Number(c.terms.capability ?? 0).toFixed(2)} cost ${Number(c.terms.cost ?? 0).toFixed(3)} speed ${Number(c.terms.speed ?? 0).toFixed(2)}` : "";
-                    evFlat.push(`    ${chosen}${D}score ${R}${sc}${D}${terms}${R}  ${W}${c.key}${R}`);
-                  }
-                  const est: any = e.estimate || {};
-                  if (est.inputTokens != null || est.outputTokens != null) {
-                    evFlat.push(`    ${D}estimate:${R} in≈${est.inputTokens ?? "?"} out=${est.outputTokens ?? "?"}`);
-                  }
-                }
-              }
-              break;
-            case "model_call_end": {
-              const u: any = e.usage || {};
-              evFlat.push(
-                `${p} ${GR}${t}${R} ${M}◉${R} ${W}${e.provider}${R}/${e.model} ${statusColor(String(e.stopReason))}${e.stopReason}${R} ${G}${u.totalTokens || 0}${R}tok${e.cost != null ? ` ${Y}$${Number(e.cost).toFixed(6)}${R}` : ""}`,
-              );
-              if (e.error) evFlat.push(`    ${RED}${String(e.error)}${R}`);
-              if (exp) {
-                const inTok = (u.input ?? 0).toLocaleString();
-                const outTok = (u.output ?? 0).toLocaleString();
-                evFlat.push(`    ${D}input ${R}${inTok}  ${D}output ${R}${outTok}  ${D}cache_r ${R}${u.cacheRead ?? 0}  ${D}cache_w ${R}${u.cacheWrite ?? 0}`);
-                const txt = typeof e.text === "string" ? e.text : "";
-                if (txt) {
-                  evFlat.push(`    ${D}response:${R}`);
-                  for (const ln of wrapText(txt, Math.max(40, cols - 6))) evFlat.push(`    ${W}${ln}${R}`);
-                }
-              }
-              break;
-            }
-            case "tool_call":
-              evFlat.push(`${p} ${GR}${t}${R} ${Y}⚡${R} ${B}${e.tool}${R} ${e.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof e.durationMs === "number" ? ` ${D}${e.durationMs}ms${R}` : ""}`);
-              if (exp) {
-                const args = e.args ?? (e as any).call?.args;
-                if (args) for (const ln of wrapText(JSON.stringify(args), Math.max(40, cols - 6))) evFlat.push(`    ${D}args ${R}${ln}`);
-                const res = e.result;
-                if (res !== undefined) {
-                  const rs = typeof res === "string" ? res : JSON.stringify(res);
-                  const clean = stripAnsi(rs).replace(/\n+/g, " ").trim();
-                  for (const ln of wrapText(clean, Math.max(40, cols - 6))) evFlat.push(`    ${G}→${R} ${ln}`);
-                }
-              }
-              break;
-            case "gates":
-              evFlat.push(`${p} ${GR}${t}${R} ${B}⊞ gates${R} ${e.passed ? `${G}PASS${R}` : `${RED}FAIL${R}`}`);
-              if (exp && Array.isArray(e.results)) {
-                for (const g of e.results as any[]) {
-                  evFlat.push(`    ${g.passed ? G + "✓" : RED + "✗"}${R} ${g.command}`);
-                }
-              }
-              break;
-            case "error_classified":
-              evFlat.push(`${p} ${GR}${t}${R} ${RED}⚠ ${e.kind}${R}${e.disableProvider ? ` ${RED}[disable provider]${R}` : ""}${e.needsAuth ? ` ${Y}[needs auth]${R}` : ""}`);
-              break;
-            case "retry":
-              evFlat.push(`${p} ${GR}${t}${R} ${Y}↻ retry${R} ${D}from ${e.failedModel}${R}`);
-              break;
-            case "control":
-              evFlat.push(`${p} ${GR}${t}${R} ${Y}⌘ ${e.action}${R}`);
-              break;
-            case "run_end": {
-              const sc = s.status === "done" ? G : s.status === "interrupted" ? GR : RED;
-              evFlat.push(`${p} ${GR}${t}${R} ${sc}■ ${String(e.status).toUpperCase()}${R}${e.error ? ` ${RED}${String(e.error)}${R}` : ""}`);
-              if (exp) {
-                evFlat.push(`    ${D}tokens ${R}${s.usage.totalTokens.toLocaleString()}  ${D}cost ${R}$${s.cost.actual.toFixed(6)}  ${D}calls ${R}${s.modelCalls}`);
-                if (s.finalText) {
-                  evFlat.push(`    ${D}final output:${R}`);
-                  for (const ln of s.finalText.split("\n")) evFlat.push(`    ${W}${ln}${R}`);
-                }
-              }
-              break;
-            }
-            default:
-              evFlat.push(`${p} ${GR}${t}${R} ${D}${et}${R}`);
-          }
-        }
-
-        const preLen = pre.length;
-        const viewport = Math.max(1, bodyH - preLen);
-        const maxScroll = Math.max(0, evFlat.length - viewport);
-        const selStart = evStart[detSelEvent] ?? 0;
-        if (selStart < evScroll) evScroll = selStart;
-        if (selStart >= evScroll + viewport) evScroll = selStart - viewport + 1;
-        evScroll = Math.max(0, Math.min(evScroll, maxScroll));
-        body = [...pre, ...evFlat.slice(evScroll, evScroll + viewport)];
-      } else {
-        body = [` ${RED}run not found${R}`];
-      }
-    }
-
-    // ---- Runs: new run ---------------------------------------------------
-    else if (tab === "runs" && view === "newrun") {
-      const modes = ["solo", "direct", "verified", "redundant"];
-      const agents = ["general", "sudo"];
-      body = [
-        ` ${B}${W}New Run${R}`,
-        "",
-        ` ${B}Mode${R}   ${modes.map((m) => (m === newrunMode ? `${TAB_ON} ${m} ${R}` : `${D}${m}${R}`)).join("  ")}`,
-        ` ${B}Agent${R}  ${agents.map((a) => (a === newrunAgent ? `${TAB_ON} ${a} ${R}` : `${D}${a}${R}`)).join("  ")}${newrunMode !== "solo" ? `  ${D}(packet modes use architect/build/review)${R}` : ""}`,
-        "",
-        ` ${B}Prompt${R}`,
-        "",
-        `   ${newrunPrompt ? W + newrunPrompt + R : D + "(type the task, then press Enter)" + R}`,
-      ];
-    }
-
-    // ---- Providers -------------------------------------------------------
+    // ---- Providers --------------------------------------------------------
     else if (tab === "providers") {
-      const avail = loadAvailability(l.home);
       const provs = ["openrouter", "opencode-go", "anthropic", "openai", "google", "deepinfra", "sambanova", "groq", "cerebras", "vercel"];
-      body = [
+      const lines: string[] = [
         ` ${B}${W}Providers${R}`,
         ` ${B}${fit("Provider", 20)}${R}${fit("Configured", 16)}${fit("Health", 18)}${fit("Source", 26)}`,
         ` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`,
@@ -481,57 +665,98 @@ export async function runTui(): Promise<void> {
         else if (ph?.cooldownUntil && ph.cooldownUntil > Date.now()) h = `${Y}cooling${R}`;
         else if (ph) h = `${G}ok${R}`;
         const src = set ? `${D}env:${envKey}${R}` : `${D}-${R}`;
-        body.push(` ${fit(W + p + R, 20)}${fit(cfg, 16)}${fit(h, 18)}${fit(src, 26)}`);
+        lines.push(` ${fit(W + p + R, 20)}${fit(cfg, 16)}${fit(h, 18)}${fit(src, 26)}`);
       }
+      const maxScroll = Math.max(0, lines.length - bodyH);
+      scroll = Math.max(0, Math.min(scroll, maxScroll));
+      body = lines.slice(scroll, scroll + bodyH);
     }
 
-    // ---- Spend -----------------------------------------------------------
+    // ---- Spend ------------------------------------------------------------
     else if (tab === "spend") {
       const s = readSpendSummary(l.home);
-      body = [
+      const lines: string[] = [
         ` ${B}${W}Spend (machine-wide)${R}`,
         ` ${B}actual ${Y}$${s.totalActual.toFixed(6)}${R}   ${D}estimated $${s.totalEstimated.toFixed(6)}${R}`,
         "",
         ` ${B}${C}By provider${R}`,
       ];
       for (const [k, v] of Object.entries(s.byProvider).sort((a: any, b: any) => b[1].actual - a[1].actual)) {
-        body.push(`   ${fit(W + k + R, 28)} ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}`);
+        lines.push(`   ${fit(W + k + R, 28)} ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}`);
       }
-      body.push("", ` ${B}${C}By model${R}`);
+      lines.push("", ` ${B}${C}By model${R}`);
       for (const [k, v] of Object.entries(s.byModel).sort((a: any, b: any) => b[1].actual - a[1].actual).slice(0, 20)) {
-        body.push(`   ${fit(W + k + R, 44)} ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}`);
+        lines.push(`   ${fit(W + k + R, 44)} ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}`);
       }
-      body.push("", ` ${B}${C}By day${R}`);
+      lines.push("", ` ${B}${C}By month${R}`);
+      const byMonth: Record<string, { actual: number; calls: number }> = {};
+      for (const [k, v] of Object.entries(s.byDay)) {
+        const mo = k.slice(0, 7);
+        const cur = byMonth[mo] ?? { actual: 0, calls: 0 };
+        cur.actual += v.actual;
+        cur.calls += v.calls;
+        byMonth[mo] = cur;
+      }
+      for (const [k, v] of Object.entries(byMonth).sort((a, b) => b[0].localeCompare(a[0]))) {
+        lines.push(`   ${W}${k}${R}  ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}`);
+      }
+      lines.push("", ` ${B}${C}By day${R}`);
       for (const [k, v] of Object.entries(s.byDay).sort((a: any, b: any) => b[0].localeCompare(a[0])).slice(0, 10)) {
-        body.push(`   ${W}${k}${R}  ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}`);
+        lines.push(`   ${W}${k}${R}  ${G}${v.calls}${R} calls  ${Y}$${v.actual.toFixed(6)}${R}`);
       }
+      const maxScroll = Math.max(0, lines.length - bodyH);
+      scroll = Math.max(0, Math.min(scroll, maxScroll));
+      body = lines.slice(scroll, scroll + bodyH);
     }
 
-    // ---- Settings --------------------------------------------------------
+    // ---- Settings ---------------------------------------------------------
     else if (tab === "settings") {
       let m;
       try { m = loadMachineConfig(l); } catch { m = undefined; }
-      body = [
+      let policy: Policy | undefined;
+      try { policy = loadPolicy(l); } catch { policy = undefined; }
+      const lines: string[] = [
         ` ${B}${W}Settings${R}`,
         "",
-        ` ${B}${C}Machine${R} ${D}~/.machine_code/config.toml${R}`,
-        m
-          ? `   default mode: ${m.defaultMode ? M + m.defaultMode + R : D + "-" + R}   max output: ${m.maxOutputTokens ? C + m.maxOutputTokens + R : D + "-" + R}`
-          : `   ${RED}config error${R}`,
-        m ? `   price caps: ${Y}in $${m.priceCaps.input}${R} ${Y}out $${m.priceCaps.output}${R}   vetoes: ${m.vetoes.length ? RED + m.vetoes.join(", ") + R : D + "-" + R}` : "",
-        "",
-        ` ${B}${C}Environment${R}`,
-        `   OPENROUTER_API_KEY ${process.env.OPENROUTER_API_KEY ? G + "set" + R : D + "unset" + R}   OPENCODE_API_KEY ${process.env.OPENCODE_API_KEY ? G + "set" + R : D + "unset" + R}`,
-        `   ANTHROPIC_API_KEY  ${process.env.ANTHROPIC_API_KEY ? G + "set" + R : D + "unset" + R}   OPENAI_API_KEY   ${process.env.OPENAI_API_KEY ? G + "set" + R : D + "unset" + R}`,
-        "",
-        ` ${B}${C}Paths${R}`,
-        `   home ${l.home}`,
-        `   repo ${l.repoRoot}`,
-        `   runs ${l.runsDir}`,
+        ` ${B}${C}Machine config${R} ${D}${l.machineConfig}${R}`,
       ];
+      if (m) {
+        lines.push(`   default mode ${m.defaultMode ? M + m.defaultMode + R : D + "-" + R}   max output ${m.maxOutputTokens ? C + m.maxOutputTokens + R : D + "-" + R}`);
+        lines.push(`   price caps ${Y}in $${m.priceCaps.input}${R}/M ${Y}out $${m.priceCaps.output}${R}/M   vetoes ${m.vetoes.length ? RED + m.vetoes.join(", ") + R : D + "-" + R}`);
+        lines.push(`   notify ${m.notify.webhookUrl ? G + "webhook" + R : D + "-" + R} ${m.notify.command ? G + "command" + R : ""}`);
+      } else {
+        lines.push(`   ${RED}config error${R}`);
+      }
+      lines.push("", ` ${B}${C}Repo policy${R} ${D}${l.policyFile}${R}`);
+      if (policy) {
+        for (const name of AGENT_NAMES) {
+          const ap = policy.agents[name];
+          if (ap) lines.push(`   ${M}${name.padEnd(10)}${R} ctx≥${ap.minContext} out≈${ap.expectedOutputTokens} cap≥${ap.minCapability} tools=${String(ap.toolCall)}${ap.budgetTokens ? ` budget=${ap.budgetTokens}` : ""}`);
+        }
+      } else {
+        lines.push(`   ${D}(defaults)${R}`);
+      }
+      lines.push("", ` ${B}${C}Directories${R}`);
+      lines.push(`   home        ${l.home}`);
+      lines.push(`   repo        ${l.repoRoot}`);
+      lines.push(`   repo state  ${l.repoDir}`);
+      lines.push(`   local state ${l.localDir}`);
+      lines.push(`   runs        ${l.runsDir}`);
+      lines.push(`   tasks       ${join(l.repoDir, "tasks")}`);
+      lines.push(`   worktrees   ${join(l.localDir, "worktrees")}`);
+      lines.push(`   catalogue   ${l.catalogueFile}`);
+      lines.push(`   spend       ${join(l.home, "spend.jsonl")}`);
+      lines.push(`   availability ${join(l.home, "availability.json")}`);
+      lines.push(`   references  ${join(l.repoDir, "references")}`);
+      lines.push("", ` ${B}${C}Environment${R}`);
+      lines.push(`   OPENROUTER_API_KEY ${process.env.OPENROUTER_API_KEY ? G + "set" + R : D + "unset" + R}   OPENCODE_API_KEY ${process.env.OPENCODE_API_KEY ? G + "set" + R : D + "unset" + R}`);
+      lines.push(`   ANTHROPIC_API_KEY  ${process.env.ANTHROPIC_API_KEY ? G + "set" + R : D + "unset" + R}   OPENAI_API_KEY   ${process.env.OPENAI_API_KEY ? G + "set" + R : D + "unset" + R}`);
+      const maxScroll = Math.max(0, lines.length - bodyH);
+      scroll = Math.max(0, Math.min(scroll, maxScroll));
+      body = lines.slice(scroll, scroll + bodyH);
     }
 
-    // ---- Compose: exactly `rows` lines, never more -----------------------
+    // ---- Compose: exactly `rows` lines ------------------------------------
     if (body.length > bodyH) body = body.slice(0, bodyH);
     while (body.length < bodyH) body.push("");
     const lines = [...header, ...body, ...footer].slice(0, rows).map((ln) => fit(ln, cols));
@@ -539,27 +764,63 @@ export async function runTui(): Promise<void> {
     process.stdout.write(HOME + lines.join("\n") + CLEAR_BELOW);
   };
 
+  /** Reset per-view scroll state when the view shape changes. */
+  const resetScroll = () => { listTop = 0; scroll = 0; };
+
+  const modelsData = () => {
+    const doc = loadCatalogue(l.catalogueFile);
+    const all: CatalogueRow[] = doc?.models ?? [];
+    let list = modelsAll ? all : all.filter((m) => isConfiguredPub(m.providerID));
+    if (modelFilter) {
+      const f = modelFilter.toLowerCase();
+      list = list.filter((m) => m.key.toLowerCase().includes(f) || m.name.toLowerCase().includes(f));
+    }
+    return list;
+  };
+  const isConfiguredPub = (provider: string): boolean => {
+    const envKey =
+      provider === "openrouter" ? "OPENROUTER_API_KEY" :
+      provider === "opencode-go" ? "OPENCODE_API_KEY" :
+      provider === "anthropic" ? "ANTHROPIC_API_KEY" :
+      provider === "openai" ? "OPENAI_API_KEY" :
+      provider === "google" ? "GOOGLE_API_KEY" :
+      provider === "deepinfra" ? "DEEPINFRA_API_KEY" :
+      provider === "sambanova" ? "SAMBANOVA_API_KEY" :
+      provider === "groq" ? "GROQ_API_KEY" :
+      provider === "cerebras" ? "CEREBRAS_API_KEY" : "";
+    return Boolean(envKey && process.env[envKey]);
+  };
+
   stdin.on("data", (data: string) => {
     // New-run input mode
     if (view === "newrun") {
-      if (data === "\x1b") { view = "list"; draw(); return; }
-      if (data === "\r" || data === "\n") { view = "list"; draw(); return; }
-      if (data === "m") {
-        const modes = ["solo", "direct", "verified", "redundant"];
-        newrunMode = modes[(modes.indexOf(newrunMode) + 1) % modes.length]!;
-        if (newrunMode !== "solo") newrunAgent = "general";
+      if (data === "\x1b") { view = "list"; resetScroll(); draw(); return; }
+      if (data === "\r" || data === "\n") {
+        if (newrunPrompt.trim().length > 0) { launchRun(); view = "list"; newrunPrompt = ""; }
+        resetScroll();
         draw();
         return;
       }
       if (data === "a") {
-        const agents = ["general", "sudo"];
+        const agents: Array<"general" | "sudo" | "architect"> = ["general", "sudo", "architect"];
         newrunAgent = agents[(agents.indexOf(newrunAgent) + 1) % agents.length]!;
+        const modes = AGENT_META[newrunAgent].modes;
+        if (!modes.includes(newrunMode)) newrunMode = modes[0]!;
+        draw();
+        return;
+      }
+      if (data === "m") {
+        const modes = AGENT_META[newrunAgent].modes;
+        if (modes.length > 0) newrunMode = modes[(modes.indexOf(newrunMode) + 1) % modes.length]!;
         draw();
         return;
       }
       if (data === "\x7f" || data === "\b") { newrunPrompt = newrunPrompt.slice(0, -1); draw(); return; }
-      if (data.length === 1 && data.charCodeAt(0) >= 32 && data.charCodeAt(0) < 127) {
+      // Printable input: single keypress or a pasted/batched chunk. Escape
+      // sequences (arrows etc.) start with ESC and are ignored here.
+      if (!data.startsWith("\x1b") && /^[\x20-\x7e]+$/.test(data)) {
         newrunPrompt += data;
+        if (newrunPrompt.length > 4000) newrunPrompt = newrunPrompt.slice(0, 4000);
         draw();
         return;
       }
@@ -569,26 +830,33 @@ export async function runTui(): Promise<void> {
 
     // Tab switching
     if (data === "\t") {
-      const t: Tab[] = ["runs", "providers", "spend", "settings"];
-      tab = t[(t.indexOf(tab) + 1) % t.length]!;
+      tab = TABS[(TABS.indexOf(tab) + 1) % TABS.length]!;
       view = "list";
+      sel = 0;
+      resetScroll();
       draw();
       return;
     }
-    if (data === "1") { tab = "runs"; view = "list"; draw(); return; }
-    if (data === "2") { tab = "providers"; view = "list"; draw(); return; }
-    if (data === "3") { tab = "spend"; view = "list"; draw(); return; }
-    if (data === "4") { tab = "settings"; view = "list"; draw(); return; }
+    const tabNum = Number(data);
+    if (data.length === 1 && tabNum >= 1 && tabNum <= TABS.length) {
+      tab = TABS[tabNum - 1]!;
+      view = "list";
+      sel = 0;
+      resetScroll();
+      draw();
+      return;
+    }
 
     // Quit / back
     if (data === "\x03") { cleanup(); process.exit(0); }
     if (data === "q") {
-      if (tab === "runs" && view === "detail") { view = "list"; draw(); return; }
+      if (tab === "runs" && view === "detail") { view = "list"; resetScroll(); draw(); return; }
+      if (tab === "agents" && view === "detail") { view = "list"; resetScroll(); draw(); return; }
       cleanup();
       process.exit(0);
     }
     if (data === "\x1b") {
-      if (tab === "runs" && view === "detail") { view = "list"; draw(); return; }
+      if (view === "detail") { view = "list"; resetScroll(); draw(); return; }
       cleanup();
       process.exit(0);
     }
@@ -599,18 +867,16 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[A" || data === "k") { sel = (sel - 1 + flat.length) % (flat.length || 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { sel = (sel + 1) % (flat.length || 1); draw(); return; }
       if (data === "\r" || data === "\n") {
-        if (flat[sel]) { view = "detail"; detSelEvent = 0; evScroll = 0; }
+        if (flat[sel]) { view = "detail"; detSelEvent = 0; resetScroll(); }
         draw();
         return;
       }
       if (data === "i") { const r = flat[sel]; if (r) interruptRun(r); draw(); return; }
       if (data === "n") { view = "newrun"; newrunPrompt = ""; draw(); return; }
-      if (data === "g") { groupMode = groupMode === "directory" ? "status" : "directory"; sel = 0; listTop = 0; draw(); return; }
+      if (data === "g") { groupMode = groupMode === "directory" ? "status" : "directory"; sel = 0; resetScroll(); draw(); return; }
       if (data === " ") {
-        const { pkeys } = buildFlat(listAllRuns(l.home), cwd, groupMode);
-        // Find the group the selected run belongs to.
         const r = flat[sel];
-        const key = r ? (groupMode === "directory" ? (r.repoRoot || "unknown") : r.status) : pkeys[0];
+        const key = r ? (groupMode === "directory" ? (r.repoRoot || "unknown") : r.status) : undefined;
         if (key) { if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key); }
         draw();
         return;
@@ -621,7 +887,7 @@ export async function runTui(): Promise<void> {
 
     // Runs detail navigation
     if (tab === "runs" && view === "detail") {
-      const r = selectedRun();
+      const r = buildFlat(listAllRuns(l.home), cwd, groupMode).flat[sel];
       const d = r ? detailFor(r) : null;
       const n = d ? d.events.length : 0;
       if (data === "\x1b[A" || data === "k") { detSelEvent = Math.max(0, detSelEvent - 1); draw(); return; }
@@ -632,11 +898,52 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "i") { if (r) interruptRun(r); draw(); return; }
       draw();
       return;
     }
 
+    // Agents navigation
+    if (tab === "agents") {
+      if (view === "detail") {
+        if (data === "\x1b[A" || data === "k") { scroll = Math.max(0, scroll - 1); draw(); return; }
+        if (data === "\x1b[B" || data === "j") { scroll = scroll + 1; draw(); return; }
+        draw();
+        return;
+      }
+      if (data === "\x1b[A" || data === "k") { sel = (sel - 1 + AGENT_NAMES.length) % AGENT_NAMES.length; draw(); return; }
+      if (data === "\x1b[B" || data === "j") { sel = (sel + 1) % AGENT_NAMES.length; draw(); return; }
+      if (data === "\r" || data === "\n") { view = "detail"; resetScroll(); draw(); return; }
+      draw();
+      return;
+    }
+
+    // Models navigation
+    if (tab === "models") {
+      const list = modelsData();
+      const count = list.length;
+      if (data === "\x1b[A" || data === "k") { sel = (sel - 1 + count) % (count || 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { sel = (sel + 1) % (count || 1); draw(); return; }
+      if (data === "g") { modelGroup = modelGroup === "provider" ? "family" : "provider"; sel = 0; resetScroll(); draw(); return; }
+      if (data === "f") { modelsAll = !modelsAll; sel = 0; resetScroll(); draw(); return; }
+      if (data === "/") {
+        // simple filter: next keypresses append; Enter clears. Minimal v1: cycle nothing.
+        draw();
+        return;
+      }
+      if (data === " ") {
+        const row = list[sel];
+        const key = row ? (modelGroup === "provider" ? row.providerID : (row.family || "other")) : "";
+        if (key) { if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key); }
+        draw();
+        return;
+      }
+      draw();
+      return;
+    }
+
+    // Scroll-only tabs
+    if (data === "\x1b[A" || data === "k") { scroll = Math.max(0, scroll - 1); draw(); return; }
+    if (data === "\x1b[B" || data === "j") { scroll = scroll + 1; draw(); return; }
     draw();
   });
 
