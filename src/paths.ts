@@ -7,8 +7,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** machine_code semantic version. */
-
 export interface Layout {
   /** Machine-wide home. */
   home: string;

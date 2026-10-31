@@ -21,6 +21,8 @@ export interface CommandSpec {
   schema: Record<string, { type: string; required?: boolean; description?: string }>;
   readonly: boolean;
   timeoutMs: number;
+  /** Optional in-process handler; when set, runs instead of spawning `binary`. */
+  handler?: (args: Record<string, unknown>, ctx: CommandContext) => Promise<CommandRunResult>;
 }
 
 function asInt(value: unknown, fallback: number, min: number, max: number): number {
@@ -90,6 +92,111 @@ const SPECS: CommandSpec[] = [
     readonly: true,
     timeoutMs: 30_000,
   },
+  {
+    name: "core:check",
+    description: "LSP diagnostics on a saved file (TypeScript by default). Returns errors/warnings. Falls back to unavailable when no server.",
+    binary: "typescript-language-server",
+    args: () => ["--stdio"],
+    schema: {
+      path: { type: "string", required: true, description: "File path relative to the worktree root." },
+    },
+    readonly: true,
+    timeoutMs: 30_000,
+    handler: async (args, ctx) => {
+      const path = asPath(args.path);
+      if (!path) return { text: "core:check requires path", isError: true };
+      const { resolveWithin } = await import("../tools/safety.js");
+      let abs: string;
+      try { abs = resolveWithin(ctx.root, path); } catch (e) { return { text: (e as Error).message, isError: true }; }
+      const { readFileSync } = await import("node:fs");
+      let content = "";
+      try { content = readFileSync(abs, "utf8"); } catch (e) { return { text: (e as Error).message, isError: true }; }
+      const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
+      if (!serverAvailable("typescript")) {
+        return { text: "LSP unavailable: typescript-language-server not installed (install: machine_code install typescript-language-server). Fallback: core:status + manual review.", isError: true };
+      }
+      const client = lspClientFor(ctx.root, "typescript");
+      if (!client) return { text: "LSP unavailable for this language", isError: true };
+      const diagnostics = await client.diagnosticsFor(abs, content);
+      if (diagnostics === null) return { text: "LSP server did not respond (over budget or still indexing). Fallback to ast-grep/rg.", isError: true };
+      if (diagnostics.length === 0) return { text: `${path}: no diagnostics`, isError: false };
+      const lines = diagnostics.map((d) => {
+        const sev = ["error", "warning", "info", "hint"][d.severity ?? 1] ?? "diag";
+        return `${path}:${d.range.start.line + 1}:${d.range.start.character + 1} ${sev}: ${d.message}`;
+      });
+      return { text: lines.join("\n"), isError: diagnostics.some((d) => (d.severity ?? 1) === 1) };
+    },
+  },
+  {
+    name: "core:rename",
+    description: "Type-safe symbol rename via LSP. Previews all touched paths; applies the workspace edit. Preview is required before applying.",
+    binary: "typescript-language-server",
+    args: () => ["--stdio"],
+    schema: {
+      path: { type: "string", required: true, description: "File path relative to the worktree root." },
+      line: { type: "number", required: true, description: "1-based line of the symbol." },
+      column: { type: "number", required: true, description: "1-based column of the symbol." },
+      newName: { type: "string", required: true, description: "New symbol name." },
+      apply: { type: "boolean", description: "Apply the edit (default false: preview only)." },
+    },
+    readonly: false,
+    timeoutMs: 60_000,
+    handler: async (args, ctx) => {
+      const path = asPath(args.path);
+      if (!path) return { text: "core:rename requires path", isError: true };
+      const line = asInt(args.line, 0, 1, 1_000_000);
+      const column = asInt(args.column, 0, 1, 1_000_000);
+      const newName = typeof args.newName === "string" ? args.newName : "";
+      if (!newName) return { text: "core:rename requires newName", isError: true };
+      const apply = args.apply === true;
+      const { resolveWithin } = await import("../tools/safety.js");
+      let abs: string;
+      try { abs = resolveWithin(ctx.root, path); } catch (e) { return { text: (e as Error).message, isError: true }; }
+      const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
+      if (!serverAvailable("typescript")) {
+        return { text: "LSP unavailable: typescript-language-server not installed. Rename falls back to ast-grep/rg (shape-based, not type-safe).", isError: true };
+      }
+      const client = lspClientFor(ctx.root, "typescript");
+      if (!client) return { text: "LSP unavailable for this language", isError: true };
+      const edit = await client.rename(abs, { line: line - 1, character: column - 1 }, newName);
+      if (edit === null) {
+        return { text: "rename failed or symbol not found (server may still be indexing)", isError: true };
+      }
+      const changes = edit.changes ?? {};
+      const docChanges = edit.documentChanges ?? [];
+      const paths = new Set<string>();
+      for (const uri of Object.keys(changes)) paths.add(uri);
+      for (const c of docChanges) { if ("textDocument" in c) paths.add(c.textDocument.uri); }
+      const preview = `rename to "${newName}" touches ${paths.size} file(s):\\n${[...paths].map((u) => "  " + u.replace("file://", "")).join("\\n")}`;
+      if (!apply) return { text: `${preview}\\n\\nPreview only — re-run with apply=true to apply.`, isError: false };
+      // Apply edits via the runner's fs (best-effort; LSP workspace edits are
+      // text edits we replay here).
+      const { readFileSync, writeFileSync } = await import("node:fs");
+      const { fileURLToPath } = await import("node:url");
+      for (const uri of paths) {
+        const file = fileURLToPath(uri);
+        let content = "";
+        try { content = readFileSync(file, "utf8"); } catch { continue; }
+        const edits = changes[uri] ?? [];
+        // Apply edits in reverse order to preserve offsets.
+        const sorted = [...edits].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character);
+        let lines = content.split("\\n");
+        for (const e of sorted) {
+          // naive single-line edit
+          const ln = e.range.start.line;
+          const col = e.range.start.character;
+          const endLn = e.range.end.line;
+          const endCol = e.range.end.character;
+          if (ln === endLn) {
+            const row = lines[ln] ?? "";
+            lines[ln] = row.slice(0, col) + e.newText + row.slice(endCol);
+          }
+        }
+        writeFileSync(file, lines.join("\\n"), "utf8");
+      }
+      return { text: `${preview}\\n\\nApplied.`, isError: false };
+    },
+  },
 ];
 
 export const CORE_COMMANDS: ReadonlyMap<string, CommandSpec> = new Map(
@@ -138,6 +245,13 @@ export async function runCommand(
       text: `unknown command: ${name}. Available: ${[...map.keys()].join(", ")}`,
       isError: true,
     };
+  }
+  if (spec.handler) {
+    try {
+      return await spec.handler(args, ctx);
+    } catch (error) {
+      return { text: `command failed: ${(error as Error).message}`, isError: true };
+    }
   }
   let argv: string[];
   try {

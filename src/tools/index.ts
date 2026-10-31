@@ -167,8 +167,10 @@ const SearchParams = Type.Object({
     ],
     { description: "Search mode." },
   ),
-  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure." })),
+  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure, symbol name for semantic modes." })),
   path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
+  line: Type.Optional(Type.Number({ description: "1-based line (semantic modes)." })),
+  column: Type.Optional(Type.Number({ description: "1-based column (semantic modes)." })),
   limit: Type.Optional(Type.Number({ description: "Max results (default 200)." })),
 });
 
@@ -253,7 +255,43 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
           default: {
             if (SEMANTIC_MODES.has(params.mode)) {
-              return fail(`semantic search mode "${params.mode}" arrives in M1 (LSP); use text or files`);
+              const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
+              if (!serverAvailable("typescript")) {
+                return fail(`semantic mode "${params.mode}" unavailable: typescript-language-server not installed. Fallback: text or structure.`);
+              }
+              const abs = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
+              const client = lspClientFor(ctx.root, "typescript");
+              if (!client) return fail("LSP unavailable");
+              if (params.mode === "symbols") {
+                const syms = await client.workspaceSymbols(params.pattern ?? "");
+                if (syms === null) return fail("LSP server did not respond");
+                if (syms.length === 0) return ok("no symbols");
+                return ok(syms.map((s) => `${s.location.uri.replace("file://", "")}:${s.location.range.start.line + 1} ${s.kind} ${s.name}`).join("\\n"));
+              }
+              if (!params.path || params.line === undefined || params.column === undefined) {
+                return fail(`semantic mode "${params.mode}" requires path + line + column`);
+              }
+              const pos = { line: params.line - 1, character: params.column - 1 };
+              if (params.mode === "definition") {
+                const locs = await client.definition(abs, pos);
+                if (locs === null) return fail("LSP server did not respond");
+                if (locs.length === 0) return ok("no definition");
+                return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\\n"));
+              }
+              if (params.mode === "references") {
+                const locs = await client.references(abs, pos);
+                if (locs === null) return fail("LSP server did not respond");
+                if (locs.length === 0) return ok("no references");
+                return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\\n"));
+              }
+              if (params.mode === "info") {
+                const hover = await client.hover(abs, pos);
+                if (hover === null) return fail("LSP server did not respond");
+                if (!hover) return ok("no info");
+                const content = typeof hover.contents === "string" ? hover.contents : (hover.contents as { value?: string }).value ?? JSON.stringify(hover.contents);
+                return ok(content);
+              }
+              return fail(`unknown semantic mode: ${params.mode}`);
             }
             return fail(`unknown search mode: ${params.mode}`);
           }
