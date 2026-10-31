@@ -125,6 +125,8 @@ export type RunStatus = "running" | "done" | "blocked" | "failed" | "interrupted
 export interface RunSummary {
   id: string;
   repoRoot: string;
+  /** Queued packet id this run executed, if any. */
+  packetId?: string;
   agent: string;
   mode: string;
   request: string;
@@ -168,7 +170,7 @@ export class RunRecorder {
   private summary: RunSummary;
   private finalized = false;
 
-  constructor(layout: Layout, init: { agent: string; mode: string; request: string; repoRoot: string }) {
+  constructor(layout: Layout, init: { agent: string; mode: string; request: string; repoRoot: string; packetId?: string }) {
     this.id = runId();
     this.dir = join(layout.runsDir, this.id);
     mkdirSync(this.dir, { recursive: true });
@@ -177,6 +179,7 @@ export class RunRecorder {
     this.summary = {
       id: this.id,
       repoRoot: init.repoRoot,
+      packetId: init.packetId,
       agent: init.agent,
       mode: init.mode,
       request: init.request,

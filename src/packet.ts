@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
 
-export type PacketMode = "direct" | "verified" | "redundant";
+export type PacketMode = "solo" | "direct" | "verified" | "redundant";
 
 export interface PacketAcceptance {
   command: string; // named command, e.g. typescript:test
@@ -21,6 +21,7 @@ export interface PacketAcceptance {
 export interface TaskPacket {
   id: string;
   mode: PacketMode;
+  agent?: "general" | "sudo" | "architect" | "build" | "review";
   budget_tokens?: number;
   goal: string;
   context: string[];
@@ -29,7 +30,7 @@ export interface TaskPacket {
 }
 
 export function parseMode(value: string | undefined): PacketMode | undefined {
-  if (value !== "direct" && value !== "verified" && value !== "redundant") return undefined;
+  if (value !== "solo" && value !== "direct" && value !== "verified" && value !== "redundant") return undefined;
   return value;
 }
 

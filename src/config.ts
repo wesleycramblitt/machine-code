@@ -25,6 +25,7 @@ export interface MachineConfig {
   priceCaps: PriceCaps;
   /** Model keys ("provider/id") or canonical ids that must never be selected. */
   vetoes: string[];
+  notify: { webhookUrl?: string; command?: string };
 }
 
 export interface AgentPolicy {
@@ -80,11 +81,16 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
   if (defaultMode !== undefined && !PACKET_MODES.includes(defaultMode as PacketMode)) {
     throw new ConfigError(`machine config: default_mode must be one of ${PACKET_MODES.join(", ")}`);
   }
+  const notifyRaw = (raw.notify ?? {}) as Record<string, unknown>;
   return {
     maxOutputTokens: asNumber(raw.max_output_tokens),
     defaultMode: defaultMode as PacketMode | undefined,
     priceCaps: { input: asNumber(caps.input), output: asNumber(caps.output) },
     vetoes: asStringArray(raw.vetoes),
+    notify: {
+      webhookUrl: typeof notifyRaw.webhook_url === "string" ? notifyRaw.webhook_url : undefined,
+      command: typeof notifyRaw.command === "string" ? notifyRaw.command : undefined,
+    },
   };
 }
 

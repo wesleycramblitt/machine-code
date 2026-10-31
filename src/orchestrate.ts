@@ -4,6 +4,7 @@
  * solo → one General or Sudo invocation (M0).
  * direct/verified/redundant → Architect compiles a packet → Build implements
  * it → runner-owned acceptance gates → (redundant) Review judges.
+ * Queued packets (input.packet) skip Architect and use the packet verbatim.
  *
  * `runLoop` (M0) runs a single agent; this layer chains phases per mode.
  */
@@ -14,10 +15,10 @@ import { type MutableModels } from "./models.js";
 import { type CatalogueRow } from "./catalogue/types.js";
 import { RunRecorder, type RunStatus } from "./state/runs.js";
 import { runCommand } from "./commands/registry.js";
-import { loadAvailability } from "./availability.js";
-import { allCommands } from "./commands/profiles.js";
 import { readPacket, type TaskPacket, type PacketMode, parseMode, newPacketId } from "./packet.js";
 import { resolveGates, runGates } from "./verify.js";
+import { allCommands } from "./commands/profiles.js";
+import { loadAvailability } from "./availability.js";
 import type { Layout } from "./paths.js";
 
 export type RunMode = "solo" | "direct" | "verified" | "redundant";
@@ -35,6 +36,7 @@ export interface OrchestrateInput {
   root: string;
   home: string;
   recorder: RunRecorder;
+  packet?: TaskPacket;
   availability?: import("./availability.js").AvailabilityState;
   requireProvider?: string;
   signal?: AbortSignal;
@@ -133,65 +135,44 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     case "direct":
     case "verified":
     case "redundant": {
-      // Phase 1: Architect compiles the packet.
-      const architect = agentDef(layout, "architect");
-      const archPolicy = policyFor(layout, "architect", policy);
-      const archResult = await singleAgentRun({
-        models: agents,
-        catalogue: input.catalogue,
-        configuredProviders: input.configuredProviders,
-        agent: architect,
-        policy: archPolicy,
-        machine,
-        request: `Compile a task packet for this request. Output ONLY the packet in YAML-frontmatter markdown.
-
-Available commands (use EXACTLY these names; never invent one):
-${[...commands.keys()].map((k) => `- ${k}`).join("\n")}
-
-Format:
----
-id: <${newPacketId(request)}>
-mode: ${mode}
-budget_tokens: ${machine.maxOutputTokens ?? 200000}
----
-
-# Goal
-<one line>
-
-# Context
-- <file paths>
-
-# Constraints
-- <constraints>
-
-# Acceptance
-- <command-name> [with key = value, ...]
-
-${request}`,
-        root,
-        home,
-        availability,
-        recorder,
-        commands,
-        requireProvider: input.requireProvider,
-        signal: input.signal,
-      });
-      if (archResult.status !== "done") {
-        return {
-          status: archResult.status,
-          finalText: archResult.finalText,
-          error: archResult.error ?? "Architect planning failed",
-          runId: recorder.id,
-        };
+      let packet: TaskPacket;
+      if (input.packet) {
+        packet = input.packet;
+      } else {
+        const architect = agentDef(layout, "architect");
+        const archPolicy = policyFor(layout, "architect", policy);
+        const archResult = await singleAgentRun({
+          models: agents,
+          catalogue: input.catalogue,
+          configuredProviders: input.configuredProviders,
+          agent: architect,
+          policy: archPolicy,
+          machine,
+          request: `Compile a task packet for this request. Output ONLY the packet in YAML-frontmatter markdown:\n\n---\nid: <${newPacketId(request)}>\nmode: ${mode}\nbudget_tokens: ${machine.maxOutputTokens ?? 200000}\n---\n\n# Goal\n<one line>\n\n# Context\n- <file paths>\n\n# Constraints\n- <constraints>\n\n# Acceptance\n- <named command with typed args>\n\n${request}`,
+          root,
+          home,
+          availability,
+          recorder,
+          commands,
+          requireProvider: input.requireProvider,
+          signal: input.signal,
+        });
+        if (archResult.status !== "done") {
+          return {
+            status: archResult.status,
+            finalText: archResult.finalText,
+            error: archResult.error ?? "Architect planning failed",
+            runId: recorder.id,
+          };
+        }
+        packet = parsePacket(archResult.finalText, mode as PacketMode, newPacketId(request));
+        recorder.event("packet_compiled", {
+          id: packet.id,
+          mode: packet.mode,
+          acceptance: packet.acceptance.length,
+        });
       }
-      const packet = parsePacket(archResult.finalText, mode as PacketMode, newPacketId(request));
-      recorder.event("packet_compiled", {
-        id: packet.id,
-        mode: packet.mode,
-        acceptance: packet.acceptance.length,
-      });
 
-      // Phase 2: Build implements the packet.
       const build = agentDef(layout, "build");
       const buildPolicy = policyFor(layout, "build", policy);
       const buildRequest = `Implement this task packet exactly:\n\n${JSON.stringify(packet, null, 2)}\n\nAcceptance commands must pass. If the packet is wrong or a gate cannot run, report blocked with evidence.`;
@@ -221,7 +202,6 @@ ${request}`,
         };
       }
 
-      // Phase 3: runner-owned acceptance gates.
       const gates = resolveGates(packet);
       const gateOutcome = await runGates(gates, { root, commands });
       recorder.event("gates", {
@@ -239,11 +219,10 @@ ${request}`,
         };
       }
 
-      // Phase 4: Review (redundant only).
       if (mode === "redundant") {
         const review = agentDef(layout, "review");
         const reviewPolicy = policyFor(layout, "review", policy);
-        const diffResult = await runCommand("core:diff", {}, { root });
+        const diffResult = await runCommand("core:diff", {}, { root, commands });
         const reviewResult = await singleAgentRun({
           models: agents,
           catalogue: input.catalogue,
@@ -291,9 +270,7 @@ ${request}`,
   }
 }
 
-/** Parse "command-name with key = value, ..." into a typed acceptance entry. */
 function parseAcceptance(item: string): { command: string; args: Record<string, unknown> } {
-  // Strip backticks and leading/trailing punctuation.
   let cleaned = item.replace(/`/g, "").trim();
   const withMatch = cleaned.match(/^(.+?)\s+with\s+(.+)$/i);
   let command = cleaned;
@@ -302,10 +279,8 @@ function parseAcceptance(item: string): { command: string; args: Record<string, 
     command = (withMatch[1] ?? "").trim();
     argsStr = (withMatch[2] ?? "").trim();
   }
-  // command may be followed by args inline: "cmd key=value key2=value2"
   const parts = command.split(/\s+/);
   if (parts.length > 1) {
-    // treat trailing "key=value" pairs as args too
     const cmdParts: string[] = [];
     const extra: string[] = [];
     for (const p of parts) {
@@ -316,7 +291,6 @@ function parseAcceptance(item: string): { command: string; args: Record<string, 
     argsStr = [argsStr, ...extra].filter(Boolean).join(", ");
   }
   const args: Record<string, unknown> = {};
-  // Parse "key = value" or key=value pairs, values quoted or bare.
   const re = /(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(argsStr)) !== null) {
@@ -373,10 +347,8 @@ function parsePacket(text: string, fallbackMode: PacketMode, fallbackId: string)
       const item = line.slice(2).trim();
       if (section === "context") context.push(item);
       else if (section === "constraints") constraints.push(item);
-      else if (section === "acceptance") {
-        const parsed = parseAcceptance(item);
-        acceptance.push(parsed);
-      } else if (section === "goal" && !goal) goal = item;
+      else if (section === "acceptance") acceptance.push(parseAcceptance(item));
+      else if (section === "goal" && !goal) goal = item;
     } else if (section === "goal" && line && !goal) {
       goal = line;
     }

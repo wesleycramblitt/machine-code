@@ -40,6 +40,7 @@ Usage:
   machine_code provider disable|enable|cooldown <name>
   machine_code model cooldown clear <id>
   machine_code tui                 Launch the TUI (default when interactive)
+  machine_code queue               Process committed packets in .machine_code/tasks/
   machine_code version
 `;
 
@@ -307,6 +308,21 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (result.finalText.trim().length > 0) {
     process.stdout.write(`${result.finalText}\n`);
   }
+  // One-way notification on terminal state (M4).
+  if (machine.notify.webhookUrl || machine.notify.command) {
+    const { notify } = await import("./notify.js");
+    await notify(machine.notify, {
+      event: "run_terminal",
+      status: result.status,
+      runId: recorder.id,
+      repoRoot: l.repoRoot,
+      agent: agentNameParsed ?? "general",
+      request,
+      tokens: recorder.current.usage.totalTokens,
+      cost: recorder.current.cost.actual,
+      error: result.error,
+    }).catch(() => undefined);
+  }
   const summary = recorder.current;
   process.stderr.write(
     `\nrun ${summary.id}: ${summary.status} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
@@ -353,6 +369,72 @@ async function cmdModel(argv: string[]): Promise<number> {
   avail.saveAvailability(l.home, state);
   process.stdout.write(`model ${id} cooldown cleared\n`);
   return 0;
+}
+
+/* -------------------------------------------------------------------- queue */
+
+async function cmdQueue(): Promise<number> {
+  const l = layout();
+  let machine;
+  let policy;
+  try {
+    machine = loadMachineConfig(l);
+    policy = loadPolicy(l);
+  } catch (error) {
+    if (error instanceof ConfigError) fail(error.message);
+    throw error;
+  }
+  const models = createModelsCollection();
+  const statuses = providerStatuses(models);
+  const configuredProviders = new Set(statuses.filter((s) => s.configured).map((s) => s.id));
+  if (configuredProviders.size === 0) fail("no configured providers");
+
+  let catalogueDoc = loadCatalogue(l.catalogueFile);
+  if (!catalogueDoc) {
+    const { models: available, warnings } = await availableChatModels(models);
+    for (const warning of warnings) process.stderr.write(`warning: ${warning}\n`);
+    const result = await refreshCatalogue(l, [...available], { openRouterKey: process.env.OPENROUTER_API_KEY });
+    for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
+    catalogueDoc = result.document;
+  }
+
+  const { listQueuedPackets, runQueue } = await import("./queue.js");
+  const packets = listQueuedPackets(l);
+  if (packets.length === 0) {
+    process.stdout.write("no queued packets in .machine_code/tasks/\n");
+    return 0;
+  }
+  process.stdout.write(`queue: ${packets.length} packet(s)\n`);
+  const progress = await runQueue(l, async (packet) => {
+    const recorder = new RunRecorder(l, { agent: packet.agent ?? (packet.mode === "solo" ? "general" : "architect"), mode: packet.mode, request: packet.goal, repoRoot: l.repoRoot, packetId: packet.id });
+    registerProject(l.home, l.repoRoot);
+    const abort = new AbortController();
+    const result = await orchestrate({
+      models,
+      catalogue: catalogueDoc.models,
+      configuredProviders,
+      availability: loadAvailability(l.home),
+      layout: l,
+      machine,
+      policy,
+      mode: packet.mode as import("./orchestrate.js").RunMode,
+      agentName: packet.agent ?? (packet.mode === "solo" ? "general" : undefined),
+      request: packet.goal,
+      root: l.repoRoot,
+      home: l.home,
+      recorder,
+      packet,
+      signal: abort.signal,
+    });
+    recorder.finalize(result.status, result.error);
+    return { status: result.status, runId: recorder.id };
+  }, (p) => {
+    process.stdout.write(`  ${p.status.padEnd(12)} ${p.packet.id}\n`);
+  });
+  const done = progress.filter((p) => p.status === "done").length;
+  const skipped = progress.filter((p) => p.status === "skipped").length;
+  process.stdout.write(`\nqueue finished: ${done} done, ${skipped} skipped, ${progress.length - done - skipped} not done\n`);
+  return progress.some((p) => p.status !== "done" && p.status !== "skipped") ? 1 : 0;
 }
 
 /* -------------------------------------------------------------------- log */
@@ -487,6 +569,9 @@ async function main(): Promise<void> {
       break;
     case "model":
       code = await cmdModel(rest);
+      break;
+    case "queue":
+      code = await cmdQueue();
       break;
     case "version":
     case "--version":
