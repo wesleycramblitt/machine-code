@@ -247,6 +247,7 @@ export function readRun(layout: Layout, id: string): { summary: RunSummary; even
   const summaryFile = join(dir, "run.json");
   if (!existsSync(summaryFile)) return null;
   const summary = JSON.parse(readFileSync(summaryFile, "utf8")) as RunSummary;
+  if (!summary.repoRoot) summary.repoRoot = layout.repoRoot;
   const eventsFile = join(dir, "events.jsonl");
   const events: RunEvent[] = existsSync(eventsFile)
     ? readFileSync(eventsFile, "utf8")

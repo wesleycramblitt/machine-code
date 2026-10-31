@@ -26,6 +26,10 @@ const HOME = "\x1b[H";
 const CLEAR_BELOW = "\x1b[J";
 const HIDE = "\x1b[?25l";
 const SHOW = "\x1b[?25h";
+// Synchronized output: terminals that support it paint the frame atomically,
+// which removes the flicker of full-screen repaints. Others ignore it.
+const SYNC_ON = "\x1b[?2026h";
+const SYNC_OFF = "\x1b[?2026l";
 
 const B = "\x1b[1m";
 const D = "\x1b[2m";
@@ -52,6 +56,17 @@ const AGENT_NAMES: AgentName[] = ["general", "architect", "build", "review", "su
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/**
+ * Collapse anything that would emit an extra physical line (or break the
+ * cursor) into harmless characters. ESC is preserved so ANSI colours survive.
+ */
+function sanitizeLine(s: string): string {
+  return s
+    .replace(/\r/g, "")
+    .replace(/\n/g, " ")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]/g, "");
 }
 
 function trunc(s: string, n: number): string {
@@ -226,7 +241,7 @@ export async function runTui(): Promise<void> {
 
   const cleanup = () => {
     stdin.setRawMode?.(false);
-    process.stdout.write(SHOW + ALT_L);
+    process.stdout.write(SYNC_OFF + SHOW + ALT_L);
   };
   process.on("SIGINT", () => { cleanup(); process.exit(130); });
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
@@ -289,7 +304,11 @@ export async function runTui(): Promise<void> {
   }
 
   const draw = () => {
-    const cols = process.stdout.columns || 120;
+    // Deliberately leave the final column unused. Writing exactly `columns`
+    // cells leaves the terminal in "pending wrap" state, and the newline that
+    // follows then scrolls the whole screen up by a line — which pushed the
+    // tabs and the run summary off the top on every repaint.
+    const cols = Math.max(1, (process.stdout.columns || 120) - 1);
     const rows = process.stdout.rows || 40;
     const runs = listAllRuns(l.home);
     if (sel < 0) sel = 0;
@@ -307,26 +326,12 @@ export async function runTui(): Promise<void> {
     const header = [fit(tabBar, cols), `${D}${"━".repeat(cols)}${R}`];
 
     // ---- Footer (2 lines) -------------------------------------------------
-    let keys: string;
-    if (tab === "runs" && view === "list") {
-      keys = `[n] new run   [g] group: ${groupMode}   [space] fold   [j/k] move   [Enter] open   [i] interrupt   [Tab/1-6] tabs   [q] quit`;
-    } else if (tab === "runs" && view === "detail") {
-      keys = `[Esc/q] back   [j/k] select event   [space] expand`;
-    } else if (view === "newrun") {
-      keys = `[a] agent   [m] mode   [type] prompt   [Enter] launch   [Esc] cancel`;
-    } else if (tab === "agents") {
-      keys = view === "detail"
-        ? `[Esc/q] back   [j/k] scroll`
-        : `[j/k] move   [Enter] details   [Tab/1-6] tabs   [q] quit`;
-    } else if (tab === "models") {
-      keys = `[g] group: ${modelGroup}   [f] ${modelsAll ? "all providers" : "configured only"}   [/] filter${modelFilter ? `: ${modelFilter}` : ""}   [space] fold   [j/k] move   [Tab/1-6] tabs   [q] quit`;
-    } else {
-      keys = `[Tab/1-6] switch tab   [q] quit`;
-    }
-    const footer = [`${D}${"─".repeat(cols)}${R}`, `${D}${fit(keys, cols)}${R}`];
-
-    const bodyH = Math.max(1, rows - header.length - footer.length);
+    // Built after the body so it can carry view-specific progress (e.g. the
+    // selected event index). Its height is constant, which is what bodyH
+    // depends on.
+    const bodyH = Math.max(1, rows - 4);
     let body: string[] = [];
+    let detInfo = "";
 
     const avail = loadAvailability(l.home);
     const isConfigured = (provider: string): boolean => {
@@ -415,12 +420,12 @@ export async function runTui(): Promise<void> {
           const ev = rd.events;
           if (detSelEvent >= ev.length) detSelEvent = Math.max(0, ev.length - 1);
           const pre: string[] = [];
-          pre.push(` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${D}${s.repoRoot}${R}`);
+          pre.push(` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${D}${s.repoRoot || r.repoRoot || "?"}${R}`);
           pre.push(` ${statusColor(s.status)}${B}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}/${s.mode}  ${G}${s.modelCalls}${R} calls  ${C}${s.usage.totalTokens.toLocaleString()}${R} tok  ${Y}$${s.cost.actual.toFixed(6)}${R}  ${D}pid ${s.pid}${R}`);
           if (s.error) pre.push(` ${RED}ERROR: ${s.error}${R}`);
           pre.push(` ${D}request:${R} ${W}${(s.request || "").replace(/\s+/g, " ").trim()}${R}`);
           if (s.finalText) pre.push(` ${D}final:${R} ${W}${trunc(s.finalText.replace(/\s+/g, " ").trim(), Math.max(20, cols - 14))}${R}`);
-          pre.push(` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`);
+          pre.push(` ${D}${"─".repeat(10)} events ${"─".repeat(Math.max(0, cols - 20))}${R}`);
           const evFlat: string[] = [];
           const evStart: number[] = [];
           for (let ei = 0; ei < ev.length; ei++) {
@@ -520,15 +525,22 @@ export async function runTui(): Promise<void> {
                 evFlat.push(`${p} ${GR}${t}${R} ${D}${et}${R}`);
             }
           }
-          const preLen = pre.length;
-          const viewport = Math.max(1, bodyH - preLen);
+          // The summary block is pinned: only the event stream scrolls. Keep at
+          // least two summary lines and at least one event row visible.
+          const shownPre = pre.slice(0, Math.max(2, Math.min(pre.length, bodyH - 2)));
+          const viewport = Math.max(1, bodyH - shownPre.length);
           const maxScroll = Math.max(0, evFlat.length - viewport);
           const selStart = evStart[detSelEvent] ?? 0;
           if (selStart < scroll) scroll = selStart;
           if (selStart >= scroll + viewport) scroll = selStart - viewport + 1;
           const sc3 = Math.max(0, Math.min(scroll, maxScroll));
           scroll = sc3;
-          body = [...pre, ...evFlat.slice(sc3, sc3 + viewport)];
+          const lastEv = Math.min(evFlat.length, sc3 + viewport);
+          detInfo =
+            ev.length === 0
+              ? "no events"
+              : `event ${detSelEvent + 1}/${ev.length}   rows ${sc3 + 1}-${lastEv}/${evFlat.length}`;
+          body = [...shownPre, ...evFlat.slice(sc3, sc3 + viewport)];
         } else {
           body = [` ${RED}run not found${R}`];
         }
@@ -756,12 +768,34 @@ export async function runTui(): Promise<void> {
       body = lines.slice(scroll, scroll + bodyH);
     }
 
+    // ---- Footer (2 lines) -------------------------------------------------
+    let keys: string;
+    if (tab === "runs" && view === "detail") {
+      keys = `[Esc/q] back   [j/k] select event   [space] expand${detInfo ? `   ${detInfo}` : ""}`;
+    } else if (view === "newrun") {
+      keys = `[a] agent   [m] mode   [type] prompt   [Enter] launch   [Esc] cancel`;
+    } else if (tab === "runs") {
+      keys = `[n] new run   [g] group: ${groupMode}   [space] fold   [j/k] move   [Enter] open   [i] interrupt   [Tab/1-6] tabs   [q] quit`;
+    } else if (tab === "agents") {
+      keys = view === "detail"
+        ? `[Esc/q] back   [j/k] scroll`
+        : `[j/k] move   [Enter] details   [Tab/1-6] tabs   [q] quit`;
+    } else if (tab === "models") {
+      keys = `[g] group: ${modelGroup}   [f] ${modelsAll ? "all providers" : "configured only"}   [/] filter${modelFilter ? `: ${modelFilter}` : ""}   [space] fold   [j/k] move   [Tab/1-6] tabs   [q] quit`;
+    } else {
+      keys = `[Tab/1-6] switch tab   [q] quit`;
+    }
+    const footer = [`${D}${"─".repeat(cols)}${R}`, `${D}${fit(keys, cols)}${R}`];
+
     // ---- Compose: exactly `rows` lines ------------------------------------
+    // Anything longer than the terminal height makes the terminal scroll, so
+    // clip here and never emit a stray newline (see sanitizeLine).
     if (body.length > bodyH) body = body.slice(0, bodyH);
     while (body.length < bodyH) body.push("");
-    const lines = [...header, ...body, ...footer].slice(0, rows).map((ln) => fit(ln, cols));
-    while (lines.length < rows) lines.push(" ".repeat(cols));
-    process.stdout.write(HOME + lines.join("\n") + CLEAR_BELOW);
+    const frame = [...header, ...body, ...footer].slice(0, rows);
+    while (frame.length < rows) frame.push("");
+    const lines = frame.map((ln) => fit(sanitizeLine(ln), cols));
+    process.stdout.write(SYNC_ON + HOME + lines.join("\n") + CLEAR_BELOW + SYNC_OFF);
   };
 
   /** Reset per-view scroll state when the view shape changes. */
