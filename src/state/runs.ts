@@ -143,6 +143,8 @@ export interface RunSummary {
   cost: { actual: number; estimated: number };
   modelCalls: number;
   error?: string;
+  /** Final assistant text, capped; shown in the TUI run detail. */
+  finalText?: string;
 }
 
 export interface RunEvent {
@@ -217,12 +219,15 @@ export class RunRecorder {
     this.writeSummary();
   }
 
-  finalize(status: RunStatus, error?: string): void {
+  finalize(status: RunStatus, error?: string, finalText?: string): void {
     if (this.finalized) return;
     this.finalized = true;
     this.summary.status = status;
     this.summary.endedAt = new Date().toISOString();
     if (error) this.summary.error = error;
+    if (finalText && finalText.trim().length > 0) {
+      this.summary.finalText = finalText.length > 8000 ? finalText.slice(0, 8000) + "\n…[truncated]" : finalText;
+    }
     this.writeSummary();
     const line: RunEvent = { t: new Date().toISOString(), type: "run_end", status, ...(error ? { error } : {}) };
     appendFileSync(this.eventsFile, JSON.stringify(line) + "\n", "utf8");

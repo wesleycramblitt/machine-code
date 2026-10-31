@@ -312,7 +312,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     signal: abort.signal,
   });
 
-  recorder.finalize(result.status, result.error);
+  recorder.finalize(result.status, result.error, result.finalText);
   if (result.finalText.trim().length > 0) {
     process.stdout.write(`${result.finalText}\n`);
   }
@@ -434,7 +434,7 @@ async function cmdQueue(): Promise<number> {
       packet,
       signal: abort.signal,
     });
-    recorder.finalize(result.status, result.error);
+    recorder.finalize(result.status, result.error, result.finalText);
     return { status: result.status, runId: recorder.id };
   }, (p) => {
     process.stdout.write(`  ${p.status.padEnd(12)} ${p.packet.id}\n`);
