@@ -7,12 +7,17 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
 import type { Api, Model, MutableModels } from "@earendil-works/pi-ai";
+import { EXTRA_PROVIDERS } from "./models/providers.js";
 
 export type { Api, Model, MutableModels };
 export type ChatModel = Model<Api>;
 
 export function createModelsCollection(): MutableModels {
-  return builtinModels();
+  const models = builtinModels();
+  for (const provider of EXTRA_PROVIDERS) {
+    models.setProvider(provider);
+  }
+  return models;
 }
 
 /**
