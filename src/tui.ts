@@ -46,6 +46,28 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+/** Word-wrap plain text to `width` visible columns; collapses blank-line runs. */
+function wrapText(s: string, width: number): string[] {
+  const out: string[] = [];
+  let prevBlank = false;
+  for (const raw of s.split("\n")) {
+    const line = raw.replace(/\t/g, "  ").trimEnd();
+    if (line.trim() === "") {
+      if (!prevBlank) out.push("");
+      prevBlank = true;
+      continue;
+    }
+    prevBlank = false;
+    if (line.length <= width) { out.push(line); continue; }
+    let i = 0;
+    while (i < line.length) {
+      out.push(line.slice(i, i + width));
+      i += width;
+    }
+  }
+  return out;
+}
+
 /** Truncate to at most `n` visible columns, ANSI-aware. */
 function trunc(s: string, n: number): string {
   if (n <= 0) return "";
@@ -323,7 +345,22 @@ export async function runTui(): Promise<void> {
               break;
             case "model_select":
               if (e.error) evFlat.push(`${p} ${GR}${t}${R} ${RED}▸ select error${R} ${String(e.error)}`);
-              else evFlat.push(`${p} ${GR}${t}${R} ${BL}▸${R} ${D}select${R} ${C}${e.key}${R}`);
+              else {
+                evFlat.push(`${p} ${GR}${t}${R} ${BL}▸${R} ${D}select${R} ${C}${e.key}${R}`);
+                if (exp) {
+                  const cands = Array.isArray(e.candidates) ? e.candidates : [];
+                  for (const c of cands.slice(0, 3)) {
+                    const chosen = c.key === e.key ? `${C}${B}✓${R} ` : "  ";
+                    const sc = c.score != null ? Number(c.score).toFixed(4) : "?";
+                    const terms = c.terms ? ` cap ${Number(c.terms.capability ?? 0).toFixed(2)} cost ${Number(c.terms.cost ?? 0).toFixed(3)} speed ${Number(c.terms.speed ?? 0).toFixed(2)}` : "";
+                    evFlat.push(`    ${chosen}${D}score ${R}${sc}${D}${terms}${R}  ${W}${c.key}${R}`);
+                  }
+                  const est: any = e.estimate || {};
+                  if (est.inputTokens != null || est.outputTokens != null) {
+                    evFlat.push(`    ${D}estimate:${R} in≈${est.inputTokens ?? "?"} out=${est.outputTokens ?? "?"}`);
+                  }
+                }
+              }
               break;
             case "model_call_end": {
               const u: any = e.usage || {};
@@ -335,15 +372,26 @@ export async function runTui(): Promise<void> {
                 const inTok = (u.input ?? 0).toLocaleString();
                 const outTok = (u.output ?? 0).toLocaleString();
                 evFlat.push(`    ${D}input ${R}${inTok}  ${D}output ${R}${outTok}  ${D}cache_r ${R}${u.cacheRead ?? 0}  ${D}cache_w ${R}${u.cacheWrite ?? 0}`);
-                if (e.text) {
-                  for (const ln of String(e.text).split("\n")) evFlat.push(`    ${W}${ln}${R}`);
+                const txt = typeof e.text === "string" ? e.text : "";
+                if (txt) {
+                  evFlat.push(`    ${D}response:${R}`);
+                  for (const ln of wrapText(txt, Math.max(40, cols - 6))) evFlat.push(`    ${W}${ln}${R}`);
                 }
               }
               break;
             }
             case "tool_call":
               evFlat.push(`${p} ${GR}${t}${R} ${Y}⚡${R} ${B}${e.tool}${R} ${e.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof e.durationMs === "number" ? ` ${D}${e.durationMs}ms${R}` : ""}`);
-              if (exp && e.args) for (const ln of JSON.stringify(e.args, null, 2).split("\n")) evFlat.push(`    ${D}${ln}${R}`);
+              if (exp) {
+                const args = e.args ?? (e as any).call?.args;
+                if (args) for (const ln of wrapText(JSON.stringify(args), Math.max(40, cols - 6))) evFlat.push(`    ${D}args ${R}${ln}`);
+                const res = e.result;
+                if (res !== undefined) {
+                  const rs = typeof res === "string" ? res : JSON.stringify(res);
+                  const clean = stripAnsi(rs).replace(/\n+/g, " ").trim();
+                  for (const ln of wrapText(clean, Math.max(40, cols - 6))) evFlat.push(`    ${G}→${R} ${ln}`);
+                }
+              }
               break;
             case "gates":
               evFlat.push(`${p} ${GR}${t}${R} ${B}⊞ gates${R} ${e.passed ? `${G}PASS${R}` : `${RED}FAIL${R}`}`);

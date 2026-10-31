@@ -24,6 +24,18 @@ import type { RunRecorder } from "./state/runs.js";
 
 export const MAX_TURNS = 25;
 
+/** Cap a JSON value for the event log: 2 KiB string budget, shallow-safe. */
+function capJson(value: unknown): unknown {
+  try {
+    const s = JSON.stringify(value);
+    if (s === undefined) return String(value).slice(0, 256);
+    if (s.length <= 2048) return value;
+    return { truncated: true, preview: s.slice(0, 2048) + "…" };
+  } catch {
+    return String(value).slice(0, 256);
+  }
+}
+
 export interface RunLoopInput {
   models: MutableModels;
   catalogue: readonly CatalogueRow[];
@@ -234,6 +246,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             lastAssistant = message;
             const usage = message.usage ?? zeroUsage;
             const actual = usage.cost?.total;
+            // Record the assistant's text output for this turn (for the TUI).
+            const turnText = message.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .map((c) => c.text)
+              .join("\n");
             recorder.event("model_call_end", {
               provider: message.provider,
               model: message.model,
@@ -248,6 +265,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               cost: typeof actual === "number" && Number.isFinite(actual) ? actual : null,
               durationMs: message.durationMs ?? null,
               ...(message.errorMessage ? { error: message.errorMessage } : {}),
+              ...(turnText ? { text: turnText.length > 4000 ? turnText.slice(0, 4000) + "\n…[truncated]" : turnText } : {}),
             });
             const estimatedCost = estimateCallCost(currentRow!.pricing, usage.input, Math.max(usage.output, policy.expectedOutputTokens));
             recorder.recordCall(
@@ -319,11 +337,21 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
           break;
         }
+        case "tool_execution_start": {
+          recorder.event("tool_call_start", {
+            toolCallId: event.toolCallId,
+            tool: event.toolName,
+            ...(event.args !== undefined ? { args: capJson(event.args) } : {}),
+          });
+          break;
+        }
         case "tool_execution_end": {
           recorder.event("tool_call", {
+            toolCallId: event.toolCallId,
             tool: event.toolName,
             isError: event.isError,
             durationMs: event.durationMs ?? null,
+            ...(event.result !== undefined ? { result: capJson(event.result) } : {}),
           });
           break;
         }
