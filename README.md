@@ -112,6 +112,22 @@ tab_active_bg = "#58a6ff"
 tab_active_fg = "#0d1117"
 ```
 
+### Local models
+
+Ollama is a first-class, keyless provider. With the daemon running on its default
+port, refresh once and the local chat models appear beside remote models:
+
+```bash
+node dist/cli.js catalogue refresh
+node dist/cli.js models --provider ollama
+node dist/cli.js run --agent general --provider ollama \
+  --model ollama/qwen3.5:9b "summarize the README"
+```
+
+Local models are zero-price rows in the catalogue. Embedding-only Ollama models
+are excluded, while completion/vision/tool/reasoning capabilities come from
+Ollama's `/api/show` metadata.
+
 Data lives in folders under `data/`: providers in `data/providers/<id>.toml`,
 agent roles (with prompts) in `data/agents/<role>.toml`, presets in
 `data/presets.toml`, and benchmark seeds in `data/benchmarks.json`.

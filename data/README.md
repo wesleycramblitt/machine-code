@@ -6,7 +6,8 @@ under `.machine_code/agents/<role>.md`.
 
 | Path | Purpose |
 |---|---|
-| `providers/<id>.toml` | One provider: env keys, endpoint, funding, billing. |
+| `providers/<id>.toml` | One provider: env keys, endpoint, discovery mode, funding, billing. |
+| `providers/ollama.toml` | Local keyless Ollama provider (`discovery = "ollama"`). |
 | `agents/<role>.toml` | One role: inline prompt, tools, permissions, weights, and its orchestration `modes`; empty modes means single-agent. |
 | `presets.toml` | Behavior presets (`plan`, `orchestrate`, `implement`, ...). |
 | `defaults.toml` | Built-in selector defaults. |

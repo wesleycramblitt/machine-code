@@ -25,6 +25,74 @@ export interface OpenAiCompatibleOptions {
   name: string;
   baseUrl: string;
   envKeys: string[];
+  /** Local/keyless endpoint: auth always resolves and no API key is required. */
+  keyless?: boolean;
+  /** Ollama needs its native /api tags/show APIs for context and capabilities. */
+  kind?: "openai-compatible" | "ollama";
+}
+
+function localAuth(name: string) {
+  return {
+    name: `${name} (local)`,
+    resolve: async () => ({ auth: { apiKey: "local" }, source: "local" }),
+  };
+}
+
+function ollamaRoot(baseUrl: string): string {
+  return baseUrl.replace(/\/v1\/?$/, "");
+}
+
+async function fetchOllamaModels(
+  baseUrl: string,
+  signal?: AbortSignal,
+): Promise<Model<"openai-completions">[]> {
+  const root = ollamaRoot(baseUrl);
+  const tagsResponse = await fetch(`${root}/api/tags`, { signal, headers: { accept: "application/json" } });
+  if (!tagsResponse.ok) return [];
+  const tags = (await tagsResponse.json()) as { models?: Array<{ name?: string; model?: string }> };
+  const names = (tags.models ?? [])
+    .map((entry) => entry.name ?? entry.model)
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+  const results = await Promise.all(names.map(async (name): Promise<Model<"openai-completions"> | null> => {
+    try {
+      const shown = await fetch(`${root}/api/show`, {
+        method: "POST",
+        signal,
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ model: name }),
+      });
+      if (!shown.ok) return null;
+      const info = (await shown.json()) as {
+        capabilities?: string[];
+        model_info?: Record<string, unknown>;
+        details?: { family?: string };
+      };
+      const capabilities = info.capabilities ?? [];
+      if (!capabilities.includes("completion")) return null;
+      const modelInfo = info.model_info ?? {};
+      const context = Object.entries(modelInfo)
+        .find(([key]) => key.endsWith(".context_length"))?.[1];
+      const contextWindow = Number.isFinite(Number(context)) && Number(context) > 0
+        ? Number(context)
+        : 8192;
+      return {
+        id: name,
+        provider: "ollama" as import("@earendil-works/pi-ai").ProviderId,
+        baseUrl,
+        name,
+        api: "openai-completions",
+        type: "chat",
+        reasoning: capabilities.includes("thinking"),
+        contextWindow,
+        maxTokens: Math.min(contextWindow, 8192),
+        input: capabilities.includes("vision") ? ["text", "image"] : ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+    } catch {
+      return null;
+    }
+  }));
+  return results.filter((model): model is Model<"openai-completions"> => model !== null);
 }
 
 /** Builds a provider whose model list comes from GET <baseUrl>/models. */
@@ -36,9 +104,18 @@ export function openAiCompatibleProvider(options: OpenAiCompatibleOptions): Prov
     id,
     name,
     baseUrl,
-    auth: { apiKey: envApiKeyAuth(`${name} API key`, envKeys) },
+    auth: { apiKey: options.keyless ? localAuth(name) : envApiKeyAuth(`${name} API key`, envKeys) },
     models: [],
     fetchModels: async (context) => {
+      if (options.kind === "ollama") {
+        try {
+          const models = await fetchOllamaModels(context.baseUrl ?? baseUrl, context.signal);
+          await context.publish({ update: () => { dynamicModels = models; } });
+          return models;
+        } catch {
+          return currentModels();
+        }
+      }
       const url = `${context.baseUrl ?? baseUrl}/models`;
       try {
         const r = await fetch(url, {

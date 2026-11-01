@@ -47,7 +47,7 @@ import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifact
 import { artifactPeek } from "./context/preview.js";
 import { changesFor, childRuns, readContextManifest, thinkingChunks, touchedPaths } from "./report/run.js";
 import { buildSettings, settingsFileFor } from "./tui/settings.js";
-import { fundedProviderIds, packageDataDir } from "./data.js";
+import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./data.js";
 import { runTui } from "./tui.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "./install.js";
@@ -74,6 +74,19 @@ async function loadRuntime(l: ReturnType<typeof layout>): Promise<Runtime> {
     throw error;
   }
   const models = createModelsCollection();
+  const definitions = loadProviderDefinitions();
+  const dynamicProviders = Object.entries(definitions)
+    .filter(([, def]) => def.discovery === "openai-compatible" || def.discovery === "ollama")
+    .map(([id]) => id);
+  if (dynamicProviders.length > 0) {
+    const refreshed = await models.refresh({ allowNetwork: true, providers: dynamicProviders });
+    for (const [id, error] of refreshed.errors) {
+      const def = definitions[id];
+      if (def?.discovery === "ollama") {
+        process.stderr.write(`warning: ollama model discovery failed: ${error.message}\n`);
+      }
+    }
+  }
   const statuses = providerStatuses(models);
   const configuredProviders = new Set(statuses.filter((s) => s.configured).map((s) => s.id));
   if (configuredProviders.size === 0) {

@@ -1,0 +1,17 @@
+# machine_code provider: ollama
+# Machine override: ~/.machine_code/data/providers/ollama.toml
+#
+# Local, keyless OpenAI-compatible endpoint. Models are discovered from the
+# local Ollama daemon; embeddings are filtered out by the provider shim.
+
+id = "ollama"
+name = "Ollama"
+env_keys = []
+discovery = "ollama"
+keyless = true
+base_url = "http://127.0.0.1:11434/v1"
+funded = false
+modes = ["local"]
+
+[billing]
+kind = "free"

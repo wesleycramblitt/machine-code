@@ -19,13 +19,15 @@ export function createModelsCollection(): MutableModels {
   const models = builtinModels();
   const definitions = loadProviderDefinitions();
   for (const [id, def] of Object.entries(definitions)) {
-    if (def.discovery === "openai-compatible" && def.baseUrl) {
+    if ((def.discovery === "openai-compatible" || def.discovery === "ollama") && def.baseUrl) {
       models.setProvider(
         openAiCompatibleProvider({
           id,
           name: def.name ?? id,
           baseUrl: def.baseUrl,
           envKeys: def.envKeys,
+          keyless: def.keyless === true || def.discovery === "ollama",
+          kind: def.discovery === "ollama" ? "ollama" : "openai-compatible",
         }),
       );
     }
@@ -55,7 +57,8 @@ export function providerStatuses(models: MutableModels): ProviderStatus[] {
       const def = definitions[provider.id];
       const envKeys = def?.envKeys ?? [];
       const source = envKeys.find((key) => !!process.env[key]);
-      const configured = getEnvApiKey(provider.id) !== undefined || source !== undefined;
+      const local = def?.discovery === "ollama" || def?.keyless === true;
+      const configured = local || getEnvApiKey(provider.id) !== undefined || source !== undefined;
       let modelCount = 0;
       try {
         modelCount = provider.getModels().length;
@@ -67,7 +70,7 @@ export function providerStatuses(models: MutableModels): ProviderStatus[] {
         name: def?.name ?? provider.name,
         envKeys,
         configured,
-        ...(configured && source ? { source } : {}),
+        ...(configured ? { source: local ? "local" : source } : {}),
         funded: def?.funded === true,
         modelCount,
       };

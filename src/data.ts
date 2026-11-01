@@ -74,8 +74,10 @@ export interface ProviderBilling {
 export interface ProviderDefinition {
   name?: string;
   envKeys: string[];
-  discovery?: "pi-ai" | "openai-compatible";
+  discovery?: "pi-ai" | "openai-compatible" | "ollama";
   baseUrl?: string;
+  /** Keyless local provider (for example Ollama on localhost). */
+  keyless?: boolean;
   /** Paid rows usable without a machine override. */
   funded?: boolean;
   /** Billing/access modes: usage, subscription, free. */
@@ -91,6 +93,7 @@ interface RawProvider {
   env_keys?: unknown;
   discovery?: unknown;
   base_url?: unknown;
+  keyless?: unknown;
   funded?: unknown;
   modes?: unknown;
   cost_multiplier?: unknown;
@@ -109,8 +112,13 @@ function providerDefinition(value: RawProvider): ProviderDefinition {
   return {
     ...(typeof value.name === "string" ? { name: value.name } : {}),
     envKeys,
-    ...(value.discovery === "openai-compatible" ? { discovery: "openai-compatible" as const } : {}),
+    ...(value.discovery === "openai-compatible"
+      ? { discovery: "openai-compatible" as const }
+      : value.discovery === "ollama"
+        ? { discovery: "ollama" as const }
+        : {}),
     ...(typeof value.base_url === "string" ? { baseUrl: value.base_url } : {}),
+    ...(typeof value.keyless === "boolean" ? { keyless: value.keyless } : {}),
     ...(typeof value.funded === "boolean" ? { funded: value.funded } : {}),
     ...(Array.isArray(value.modes)
       ? { modes: value.modes.filter((v): v is string => typeof v === "string") }
