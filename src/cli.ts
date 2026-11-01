@@ -34,7 +34,7 @@ import { resolveGates, runGates } from "./verify.js";
 import { allCommands } from "./commands/profiles.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
-import { parseIssueRef, type IssueRef } from "./issues/provider.js";
+import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved } from "./issues/reserved.js";
 import { resolveRunTarget } from "./issues/work.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
@@ -42,7 +42,7 @@ import { loadAvailability } from "./availability.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
-import { buildWorkIndex, type WorkRow } from "./tui/work.js";
+import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
 import { artifactPeek } from "./context/preview.js";
 import { changesFor, childRuns, readContextManifest, thinkingChunks, touchedPaths } from "./report/run.js";
@@ -136,8 +136,8 @@ Usage:
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
-  machine_code runs [--group issues|project|status|agent] [--filter ...] [--text Q]
-                                    Hierarchical work view with untracked runs
+  machine_code runs [--group gh-issue|status|overall] [--filter ...] [--text Q]
+                                    Run hierarchy grouped by repo/issue or status
   machine_code show <run-id>        Rich run detail: model, ask, context, changes, children
                                     [--events] [--thinking] [--changes] [--context] [--json]
   machine_code context <run-id>     Print the run context manifest
@@ -1385,7 +1385,7 @@ function cmdLog(id: string | undefined): number {
 }
 
 function cmdStatus(): number {
-  return cmdRuns(["--group", "status"]);
+  return cmdRuns(["--group", "overall"]);
 }
 
 /** Find a run by id in this repo first, then across registered projects. */
@@ -2064,7 +2064,7 @@ async function cmdWorktree(argv: string[]): Promise<number> {
 }
 
 
-/* ------------------------------------------------------------ work / runs */
+/* ----------------------------------------------------------------- runs */
 
 function visibleWidth(value: string): number {
   return value.replace(/\x1b\[[0-9;]*m/g, "").length;
@@ -2119,8 +2119,14 @@ function modeSuffix(mode: string | undefined): string {
   return mode ? `/${mode}` : "";
 }
 
-function rowText(row: WorkRow, width: number): string {
+function rowText(row: RunRow, width: number, group: RunGroup): string {
   const indent = "  ".repeat(row.depth);
+  if (row.kind === "repo") {
+    const fold = row.collapsed ? "▸" : "▾";
+    const head = `${fold} ${row.label} (${row.count})`;
+    const tail = width < 100 ? "" : `  ${row.repoRoot}`;
+    return cell(head, Math.max(24, width - visibleWidth(tail))) + tail;
+  }
   if (row.kind === "section") {
     return `${indent}${row.collapsed ? "▸" : "▾"} ${row.label} (${row.count})`;
   }
@@ -2137,18 +2143,37 @@ function rowText(row: WorkRow, width: number): string {
   const run = row.run;
   const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
   const ask = run.status === "awaiting_input" ? " ASK" : "";
-  const head = `${indent}${runGlyph(run.status)} ${run.id.slice(-8)} ${run.agent}${modeSuffix(run.mode)}${ask}${pr}`;
+  const repo = group === "overall" ? ` [${repoLabel(run.repoRoot)}]` : "";
+  const head = `${indent}${runGlyph(run.status)} ${run.id.slice(-8)} ${run.agent}${modeSuffix(run.mode)}${ask}${pr}${repo}`;
   const tail = ` ${fmtTokens(run.usage.totalTokens)}tok ${fmtMoney(run.cost.actual)} ${run.request.replace(/\s+/g, " ").slice(0, width < 100 ? 28 : 60)}`;
   return cell(head, Math.max(24, width - visibleWidth(tail))) + tail;
+}
+
+function parseRunGroup(value: string): RunGroup | null {
+  switch (value.toLowerCase()) {
+    case "gh":
+    case "gh-issue":
+    case "issue":
+    case "issues":
+    case "project":
+      return "gh-issue";
+    case "status":
+      return "status";
+    case "overall":
+    case "all":
+    case "all-status":
+    case "machine":
+      return "overall";
+    default:
+      return null;
+  }
 }
 
 function cmdRuns(argv: string[]): number {
   const { flags } = parseFlags(argv);
   const l = layout();
-  const group = flags.get("group") ?? "issues";
-  if (!["issues", "project", "status", "agent"].includes(group)) {
-    fail("--group must be issues|project|status|agent");
-  }
+  const group = parseRunGroup(flags.get("group") ?? "gh-issue");
+  if (!group) fail("--group must be gh-issue|status|overall");
   const filter = (flags.get("filter") ?? "all") as RunFilter;
   if (!["all", "active", "awaiting", "paused", "completed"].includes(filter)) {
     fail("--filter must be all|active|awaiting|paused|completed");
@@ -2157,78 +2182,48 @@ function cmdRuns(argv: string[]): number {
   const attention = flags.has("attention");
   const projectFilter = flags.get("project");
   const allRuns = listAllRuns(l.home);
-  const projects = [...new Set(allRuns.map((r) => r.repoRoot).filter(Boolean))]
-    .filter((p) => !projectFilter || p === projectFilter)
-    .sort((a, b) => (a === l.repoRoot ? -1 : b === l.repoRoot ? 1 : a.localeCompare(b)));
+  const selected = projectFilter ? allRuns.filter((run) => run.repoRoot === projectFilter) : allRuns;
+  const runs = filterRuns(selected, filter);
+
+  const issuesByRepo = new Map<string, readonly Issue[]>();
+  for (const repoRoot of new Set([l.repoRoot, ...runs.map(repoOf)])) {
+    if (!repoRoot) continue;
+    const cache = readIssueCache(layout(repoRoot));
+    if (cache) issuesByRepo.set(repoRoot, cache.issues);
+  }
+
+  const index = buildRunIndex({
+    runs,
+    issuesByRepo,
+    group,
+    text,
+    attentionOnly: attention,
+    preferredRepo: l.repoRoot,
+  });
 
   if (flags.has("json")) {
-    const out: unknown[] = [];
-    for (const project of projects) {
-      const runs = filterRuns(allRuns.filter((r) => r.repoRoot === project), filter);
-      const cache = readIssueCache(layout(project));
-      const index = buildWorkIndex({
-        issues: cache?.issues ?? [],
-        runs,
-        text,
-        attentionOnly: attention,
-      });
-      out.push({
-        project,
-        issues: cache?.issues.length ?? 0,
-        rows: index.rows.map((row) =>
-          row.kind === "run"
-            ? { kind: row.kind, depth: row.depth, run: row.run }
-            : row.kind === "issue"
-              ? { kind: row.kind, depth: row.depth, issue: row.issue, rollup: row.rollup }
-              : { kind: row.kind, depth: row.depth, label: row.label, count: row.count },
-        ),
-      });
-    }
-    process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
-    return 0;
-  }
-
-  if (group === "status" || group === "agent") {
-    const keyOf = (run: RunSummary) => (group === "status" ? run.status : run.agent);
-    const grouped = new Map<string, RunSummary[]>();
-    for (const run of filterRuns(allRuns, filter)) {
-      if (projectFilter && run.repoRoot !== projectFilter) continue;
-      if (text && !`${run.id} ${run.agent} ${run.mode} ${run.request}`.toLowerCase().includes(text.toLowerCase())) continue;
-      const key = keyOf(run);
-      const list = grouped.get(key) ?? [];
-      list.push(run);
-      grouped.set(key, list);
-    }
-    for (const [key, runs] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-      process.stdout.write(`${key} (${runs.length})\n`);
-      for (const run of sortRuns(runs, "activity")) {
-        process.stdout.write(`  ${runGlyph(run.status)} ${run.id}  ${run.agent}${modeSuffix(run.mode)}  ${fmtTokens(run.usage.totalTokens)}tok  ${fmtMoney(run.cost.actual)}  ${run.request.slice(0, 60)}\n`);
+    const rows = index.rows.map((row) => {
+      if (row.kind === "repo") {
+        return { kind: row.kind, depth: row.depth, repoRoot: row.repoRoot, label: row.label, count: row.count };
       }
-    }
+      if (row.kind === "section") {
+        return { kind: row.kind, depth: row.depth, id: row.id, label: row.label, count: row.count };
+      }
+      if (row.kind === "issue") {
+        return { kind: row.kind, depth: row.depth, issue: row.issue, rollup: row.rollup };
+      }
+      return { kind: row.kind, depth: row.depth, run: row.run };
+    });
+    process.stdout.write(`${JSON.stringify({ group, count: index.runs.length, rows }, null, 2)}\n`);
     return 0;
   }
 
-  const width = process.stdout.columns || 120;
-  let printed = 0;
-  for (const project of group === "project" || flags.has("all") ? projects : [l.repoRoot]) {
-    const runs = filterRuns(allRuns.filter((r) => r.repoRoot === project), filter);
-    if (runs.length === 0 && !existsSync(join(project, ".machine_code"))) continue;
-    const cache = readIssueCache(layout(project));
-    const index = buildWorkIndex({
-      issues: cache?.issues ?? [],
-      runs,
-      text,
-      attentionOnly: attention,
-    });
-    if (index.rows.length === 0) continue;
-    if (group === "project" || flags.has("all") || projects.length > 1) {
-      process.stdout.write(`${project === l.repoRoot ? "▸" : " "} ${project}\n`);
-    }
-    if (!cache) process.stdout.write(`  (no issue cache; showing untracked runs — press r in the TUI or run init)\n`);
-    for (const row of index.rows) process.stdout.write(`  ${rowText(row, width)}\n`);
-    printed += 1;
+  if (index.rows.length === 0) {
+    process.stdout.write("no runs or issues\n");
+    return 0;
   }
-  if (printed === 0) process.stdout.write("no runs or issues\n");
+  const width = process.stdout.columns || 120;
+  for (const row of index.rows) process.stdout.write(`  ${rowText(row, width, group)}\n`);
   return 0;
 }
 

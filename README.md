@@ -147,10 +147,19 @@ candidates. Minimums are layered in `~/.machine_code/config.toml` and
 `.machine_code/policy.toml`; see `machine_code policy [role]` and
 `machine_code policy edit`.
 
-### Work pages and modes
+### Runs pages and modes
 
-`machine_code runs` is the scriptable version of the TUI's Work page: it nests
-Epic → Feature → Task → runs and keeps runs with no issue under Untracked.
+`machine_code runs` is the scriptable version of the TUI's Runs page. The
+default `--group gh-issue` groups by repository, then by the Epic → Feature →
+Task issue hierarchy, with runs that have no issue under Untracked and runs
+whose cached issue is missing under Orphaned issue.
+
+`--group status` keeps repository headings but groups each repository's runs by
+run status with no issue tree. `--group overall` drops repository headings
+entirely and groups every run on the machine by status, so blocked, failed, and
+running work is visible at a glance. `machine_code status` is shorthand for the
+overall view. In the TUI, `g` cycles GH issue → Status → Overall status.
+
 `machine_code show <run-id>` exposes the same overview, context, changes,
 children, and event stream as the run detail screen. `machine_code spend` and
 `machine_code models` cover the catalogue and cost views without the TUI.

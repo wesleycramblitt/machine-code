@@ -1,7 +1,7 @@
 /**
  * machine_code — TUI.
  *
- * Five durable pages (work, runs, models, spend, settings) plus focused
+ * Four durable pages (runs, models, spend, settings) plus focused
  * detail/composer screens. The frame contract is unchanged: exactly `rows`
  * lines, two header lines, two footer lines, content clipped to the middle.
  *
@@ -14,19 +14,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { listAllRuns, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
+import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { readIssueCache, writeIssueCache } from "./issues/cache.js";
 import type { Issue, IssueRef } from "./issues/provider.js";
+import { filterRuns, headerCounts, sortRuns, type RunFilter } from "./tui/status.js";
 import {
-  buildIssueTree,
-  filterRuns,
-  headerCounts,
-  sortRuns,
-  type RunFilter,
-  type SortKey,
-} from "./tui/status.js";
-import { buildWorkIndex, type WorkRow } from "./tui/work.js";
+  RUN_GROUPS,
+  RUN_GROUP_LABELS,
+  buildRunIndex,
+  repoLabel,
+  repoOf,
+  type RunGroup,
+  type RunRow,
+} from "./tui/runs.js";
 import { selectableLines } from "./tui/scroll.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
@@ -117,13 +118,13 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
   };
 }
 
-type Page = "work" | "runs" | "models" | "spend" | "settings";
+type Page = "runs" | "models" | "spend" | "settings";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "help";
 type RunSection = "overview" | "timeline" | "thinking" | "changes" | "children" | "context";
-type WorkFilter = RunFilter | "attention";
+type RunListFilter = RunFilter | "attention";
 
 const TABS: Array<{ id: Page; label: string; key: string }> = [
-  { id: "work", label: "Work", key: "1" },
+  { id: "runs", label: "Runs", key: "1" },
   { id: "models", label: "Models", key: "2" },
   { id: "spend", label: "Spend", key: "3" },
   { id: "settings", label: "Settings", key: "4" },
@@ -437,20 +438,15 @@ export async function runTui(): Promise<void> {
   const cwd = l.repoRoot;
   mkdirSync(l.localDir, { recursive: true });
 
-  let page: Page = "work";
+  let page: Page = "runs";
   let screen: Screen = "list";
-  let workFilter: WorkFilter = "all";
-  let workText = "";
-  let workSel = 0;
-  let workScroll = 0;
-  let workAttention = false;
-  const collapsed = new Set<string>();
-
-  let runsFilter: RunFilter = "all";
-  let runsSort: SortKey = "activity";
-  let runsGroup: "status" | "project" | "agent" | "issue" = "status";
+  let runsFilter: RunListFilter = "all";
+  let runsText = "";
+  let runsGroup: RunGroup = "gh-issue";
   let runsSel = 0;
   let runsScroll = 0;
+  let runsAttention = false;
+  const collapsed = new Set<string>();
 
   let modelText = "";
   let modelGroup: "provider" | "family" | "none" = "provider";
@@ -471,9 +467,9 @@ export async function runTui(): Promise<void> {
 
   let selectedIssueKey: string | null = null;
   let selectedRunId: string | null = null;
+  let issueCachesByRepo = new Map<string, readonly Issue[]>();
   let issueRunSel = 0;
   let issueScroll = 0;
-  let runsText = "";
   let runSection: RunSection = "overview";
   let runScroll = 0;
   let eventSel = 0;
@@ -498,6 +494,7 @@ export async function runTui(): Promise<void> {
     floors: "role",
     prompt: "",
   };
+  let newRunRepo = l.repoRoot;
   let issuePick: "newrun" | null = null;
   let issuePickSel = 0;
   let issuePickText = "";
@@ -551,34 +548,72 @@ export async function runTui(): Promise<void> {
     return null;
   };
 
+  const collectIssueCaches = (runs: readonly RunSummary[]): Map<string, readonly Issue[]> => {
+    const repos = new Set<string>([l.repoRoot, ...listProjects(l.home), ...runs.map(repoOf)]);
+    const caches = new Map<string, readonly Issue[]>();
+    for (const repoRoot of repos) {
+      if (!repoRoot) continue;
+      const cache = readIssueCache(layout(repoRoot));
+      if (cache) caches.set(repoRoot, cache.issues);
+    }
+    return caches;
+  };
+
+  const issueRepoOf = (ref: IssueRef | undefined): string | undefined => {
+    if (!ref) return undefined;
+    const key = refKey(ref);
+    for (const [repoRoot, issues] of issueCachesByRepo) {
+      if (issues.some((issue) => refKey(issue.ref) === key)) return repoRoot;
+    }
+    return undefined;
+  };
+
   const selectedIssue = (): Issue | undefined => {
-    const cache = readIssueCache(l);
-    if (!cache || !selectedIssueKey) return undefined;
-    return cache.issues.find((issue) => refKey(issue.ref) === selectedIssueKey);
+    if (!selectedIssueKey) return undefined;
+    for (const issues of issueCachesByRepo.values()) {
+      const issue = issues.find((candidate) => refKey(candidate.ref) === selectedIssueKey);
+      if (issue) return issue;
+    }
+    return undefined;
   };
 
   const issueByRef = (ref: IssueRef | undefined): Issue | undefined => {
     if (!ref) return undefined;
-    const cache = readIssueCache(l);
-    return cache?.issues.find((issue) => refKey(issue.ref) === refKey(ref));
+    for (const issues of issueCachesByRepo.values()) {
+      const issue = issues.find((candidate) => refKey(candidate.ref) === refKey(ref));
+      if (issue) return issue;
+    }
+    return undefined;
   };
 
-  const refreshIssues = async () => {
+  const refreshIssues = async (scope: "current" | "all" = "current") => {
     if (issueRefreshing) return;
     issueRefreshing = true;
     issueRefreshAt = Date.now();
+    const repoRoots = scope === "all" ? [...new Set([l.repoRoot, ...listProjects(l.home)])] : [l.repoRoot];
+    let refreshed = 0;
+    let unavailable = 0;
     try {
       const { createIssueProvider } = await import("./issues/index.js");
-      const bundle = await createIssueProvider(l, loadMachineConfig(l));
-      if (bundle.provider.kind === "none") {
-        issueStatus = bundle.reason ? `unavailable: ${bundle.reason}` : "unavailable";
-        return;
+      for (const repoRoot of repoRoots) {
+        const repoLayout = layout(repoRoot);
+        try {
+          const bundle = await createIssueProvider(repoLayout, loadMachineConfig(repoLayout));
+          if (bundle.provider.kind === "none") {
+            unavailable += 1;
+            continue;
+          }
+          const issues = await bundle.provider.list({ state: "all", limit: 300 });
+          writeIssueCache(repoLayout, bundle.repo ?? "", issues);
+          refreshed += 1;
+        } catch {
+          unavailable += 1;
+        }
       }
-      const issues = await bundle.provider.list({ state: "all", limit: 300 });
-      writeIssueCache(l, bundle.repo ?? "", issues);
-      issueStatus = `fresh ${ago(new Date().toISOString())}`;
-    } catch {
-      issueStatus = "stale";
+      issueStatus = unavailable > 0
+        ? `fresh ${refreshed} repo(s), ${unavailable} unavailable`
+        : `fresh ${refreshed} repo(s)`;
+      if (scope === "all") notify(issueStatus);
     } finally {
       issueRefreshing = false;
     }
@@ -615,11 +650,11 @@ export async function runTui(): Promise<void> {
     if (status !== null) notify(status === 0 ? `edited ${basename(file)}` : `editor exited ${status}`);
   };
 
-  const launch = (args: string[]) => {
+  const launch = (args: string[], repoRoot = l.repoRoot) => {
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
     try {
       const child = spawn(process.execPath, [cliPath, ...args], {
-        cwd: l.repoRoot,
+        cwd: repoRoot,
         detached: true,
         stdio: "ignore",
         env: process.env,
@@ -655,8 +690,9 @@ export async function runTui(): Promise<void> {
 
   newrun = defaultNewRun();
 
-  const startNewRun = (issue?: IssueRef) => {
+  const startNewRun = (issue?: IssueRef, repoRoot = l.repoRoot) => {
     const previous = newrun;
+    newRunRepo = repoRoot;
     newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
@@ -721,8 +757,8 @@ export async function runTui(): Promise<void> {
     newrun.floors = floors[(floors.indexOf(newrun.floors) + 1) % floors.length]!;
   };
 
-  const effectivePolicy = (): Policy | undefined => {
-    try { return loadPolicy(l); } catch { return undefined; }
+  const effectivePolicy = (repoRoot = l.repoRoot): Policy | undefined => {
+    try { return loadPolicy(layout(repoRoot)); } catch { return undefined; }
   };
 
   const modelPreview = (): {
@@ -733,11 +769,12 @@ export async function runTui(): Promise<void> {
     error?: string;
     policy?: Policy;
   } => {
-    const policy = effectivePolicy();
-    const machine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
-    const catalogue = loadCatalogue(l.catalogueFile);
-    const cache = readIssueCache(l);
-    const context = previewContext(l, cache?.issues ?? [], newrun.issue, newrun.prompt);
+    const newRunLayout = layout(newRunRepo);
+    const policy = effectivePolicy(newRunRepo);
+    const machine = (() => { try { return loadMachineConfig(newRunLayout); } catch { return undefined; } })();
+    const catalogue = loadCatalogue(newRunLayout.catalogueFile);
+    const cache = readIssueCache(newRunLayout);
+    const context = previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, newrun.prompt);
     if (!policy || !machine || !catalogue) return { context, error: "configuration/catalogue unavailable" };
     const ap = policy.agents[newrun.agent];
     if (!ap) return { context, error: `unknown agent ${newrun.agent}` };
@@ -801,7 +838,7 @@ export async function runTui(): Promise<void> {
     if (newrun.floors === "off") {
       args.push("--min-axes", "reasoning=0,code=0,agentic=0,general=0");
     } else if (newrun.floors === "strict") {
-      const policy = effectivePolicy();
+      const policy = effectivePolicy(newRunRepo);
       const ap = policy?.agents[newrun.agent];
       const floors = CAPABILITY_AXES.map((axis) => {
         const current = ap?.minAxes?.[axis] ?? ap?.minFit ?? 6;
@@ -820,16 +857,16 @@ export async function runTui(): Promise<void> {
   const submitNewRun = () => {
     const args = buildNewRunArgs();
     if (!args) return;
-    if (launch(args)) {
+    if (launch(args, newRunRepo)) {
       notify("run started; opening it when the record appears");
       screen = "list";
-      page = "work";
+      page = "runs";
       selectedRunId = null;
     }
   };
 
-  const answerRun = (run: WorkRow | RunSummary | undefined) => {
-    const summary = "run" in (run ?? {}) ? (run as WorkRow & { run: RunSummary }).run : (run as RunSummary | undefined);
+  const answerRun = (run: RunRow | RunSummary | undefined) => {
+    const summary = "run" in (run ?? {}) ? (run as RunRow & { run: RunSummary }).run : (run as RunSummary | undefined);
     if (!summary) return;
     const detail = findRunDetail(summary.id);
     if (!detail) { notify("run record not found"); return; }
@@ -872,16 +909,16 @@ export async function runTui(): Promise<void> {
     if (launch(args)) {
       notify("correction queued; opening the child run when it appears");
       screen = "list";
-      page = "work";
+      page = "runs";
     }
   };
 
-  const approveSelected = (issue: Issue | undefined, run: RunSummary | undefined) => {
+  const approveSelected = (issue: Issue | undefined, run: RunSummary | undefined, repoRoot = l.repoRoot) => {
     const target = run?.prNumber && run.prState === "open" ? run.prNumber : issue?.ref.number;
     if (!target) { notify("nothing to approve"); return; }
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
     const child = spawn(process.execPath, [cliPath, "approve", String(target)], {
-      cwd: l.repoRoot,
+      cwd: repoRoot,
       detached: true,
       stdio: "ignore",
       env: process.env,
@@ -902,15 +939,13 @@ export async function runTui(): Promise<void> {
   };
 
   const searchSeed = (): string => {
-    if (page === "work") return workText;
     if (page === "runs") return runsText;
     if (page === "models") return modelText;
     return searchText;
   };
 
   const applySearch = () => {
-    if (page === "work") workText = searchText;
-    else if (page === "runs") runsText = searchText;
+    if (page === "runs") runsText = searchText;
     else if (page === "models") modelText = searchText;
     searchMode = false;
   };
@@ -955,7 +990,8 @@ export async function runTui(): Promise<void> {
     const footerReserve = cols < 50 ? 7 : cols < 70 ? 6 : cols < 90 ? 5 : cols < 110 ? 4 : 3;
     const allRuns = listAllRuns(l.home);
     const cache = readIssueCache(l);
-    const issues = cache?.issues ?? [];
+    issueCachesByRepo = collectIssueCaches(allRuns);
+    const issues = issueCachesByRepo.get(l.repoRoot) ?? cache?.issues ?? [];
     const counts = headerCounts(allRuns);
     const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
     const theme = resolveTheme(settingsMachine?.theme);
@@ -988,7 +1024,7 @@ export async function runTui(): Promise<void> {
         selectedRunId = fresh.id;
         runSection = "overview";
         screen = "run";
-        page = "work";
+        page = "runs";
         pendingRunAt = 0;
         notify(`opened new run ${fresh.id.slice(-8)}`);
       } else if (Date.now() - pendingRunAt > 15_000) {
@@ -996,23 +1032,20 @@ export async function runTui(): Promise<void> {
       }
     }
 
-    const work = buildWorkIndex({
-      issues,
-      runs: workAttention || workFilter !== "all" ? filterRuns(allRuns, workFilter === "attention" ? "all" : workFilter) : allRuns,
+    const filteredRuns = runsFilter === "all" || runsFilter === "attention"
+      ? allRuns
+      : filterRuns(allRuns, runsFilter);
+    const runIndex = buildRunIndex({
+      runs: filteredRuns,
+      issuesByRepo: issueCachesByRepo,
+      group: runsGroup,
       collapsed,
-      text: workText,
-      attentionOnly: workAttention,
+      text: runsText,
+      attentionOnly: runsAttention || runsFilter === "attention",
+      preferredRepo: l.repoRoot,
     });
-    if (workSel >= work.selectable.length) workSel = Math.max(0, work.selectable.length - 1);
-    const workRow = work.selectable[workSel];
-
-    const runs = sortRuns(
-      filterRuns(allRuns, runsFilter).filter((run) =>
-        !runsText || `${run.id} ${run.agent} ${run.mode} ${run.request} ${run.status}`.toLowerCase().includes(runsText.toLowerCase()),
-      ),
-      runsSort,
-    );
-    if (runsSel >= runs.length) runsSel = Math.max(0, runs.length - 1);
+    if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
+    const selectedRow = runIndex.selectable[runsSel];
 
     const catalogue = loadCatalogue(l.catalogueFile);
     const catalogueRows = catalogue?.models ?? [];
@@ -1042,25 +1075,27 @@ export async function runTui(): Promise<void> {
       return [...lines, ...Array.from({ length: bodyH - lines.length }, () => "")];
     };
 
-    /* ------------------------------------------------------------- work */
-    if (page === "work" && screen === "list") {
+    /* ------------------------------------------------------------- runs */
+    if (page === "runs" && screen === "list") {
       const lines: string[] = [];
-      if (!cache) {
-        lines.push(` ${Y}No issue cache yet.${R} ${D}Runs without issues are still listed below; press r to refresh when gh is available.${R}`);
-        lines.push("");
-      } else if (cache.issues.length === 0) {
-        lines.push(` ${D}No GitHub issues cached.${R}`);
+      const repoCount = new Set(runIndex.runs.map(repoOf)).size;
+      if (runsGroup === "gh-issue" && issueCachesByRepo.size === 0) {
+        lines.push(` ${Y}No issue cache yet.${R} ${D}Runs without issues are listed under Untracked; press r to refresh when gh is available.${R}`);
         lines.push("");
       }
-      const selectedId = workRow?.id;
+      const selectedId = selectedRow?.id;
       const rowStart = lines.length;
-      let flatIndex = -1;
-      for (const row of work.rows) {
+      for (const row of runIndex.rows) {
         const isSelected = row.id === selectedId;
-        if (row.kind !== "section") flatIndex++;
         const indent = "  ".repeat(row.depth);
+        if (row.kind === "repo") {
+          const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
+          lines.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
+          continue;
+        }
         if (row.kind === "section") {
-          const text = ` ${indent}${B}${theme.sectionFg}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
+          const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : row.tone === "issues" ? C : GR;
+          const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
           lines.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
           continue;
         }
@@ -1069,9 +1104,9 @@ export async function runTui(): Promise<void> {
           const pct = roll.pct === undefined ? `${D}—${R}` : `${progress(roll.pct, narrow ? 4 : 6)} ${String(roll.pct).padStart(3)}%`;
           const badge = row.issue.reserved ? `${M}[P&R]${R} ` : "";
           const pr = roll.prState ? ` ${Y}PR ${roll.prState}${R}` : "";
-          const runsText = narrow ? `${roll.runsTotal}r` : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`;
+          const runCount = narrow ? `${roll.runsTotal}r` : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`;
           const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${healthIcon(roll.health)} ${BL}#${row.issue.ref.number}${R} ${D}${row.issue.kind}${R} ${badge}${B}${W}${row.issue.title}${R}`;
-          const right = `${pct}  ${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R} ${runsText}${pr}  ${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`;
+          const right = `${pct}  ${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R} ${runCount}${pr}  ${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`;
           const text = ` ${narrow ? trunc(left, Math.max(18, cols - 16)) + " " + right : pad(left, Math.max(30, cols - visible(right) - 2)) + right}`;
           lines.push(selected(text, isSelected));
           continue;
@@ -1080,25 +1115,26 @@ export async function runTui(): Promise<void> {
         const ask = run.status === "awaiting_input" ? ` ${Y}ASK${R}` : "";
         const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
         const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${ask}${pr}`;
-        const context = narrow ? "" : `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}`;
+        const repoTag = runsGroup === "overall" ? ` ${D}[${repoLabel(run.repoRoot)}]${R}` : "";
+        const context = narrow ? "" : `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}${repoTag}`;
         const right = `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
         const text = ` ${narrow ? trunc(left + context, Math.max(16, cols - 18)) + " " + right : pad(left, Math.max(30, cols - visible(right) - visible(context) - 2)) + context + right}`;
         lines.push(selected(text, isSelected));
       }
-      if (work.rows.length === 0) {
+      if (runIndex.rows.length === 0) {
         lines.push("");
-        lines.push(` ${D}Nothing here yet. Press ${C}n${R}${D} to start a run.${R}`);
+        lines.push(` ${D}No runs here yet. Press ${C}n${R}${D} to start one.${R}`);
       }
       const selectedLine = (() => {
         let line = rowStart;
-        for (const row of work.rows) {
+        for (const row of runIndex.rows) {
           if (row.id === selectedId) return line;
           line++;
         }
         return rowStart;
       })();
-      const windowed = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), workScroll, bodyH);
-      workScroll = windowed.scroll;
+      const windowed = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), runsScroll, bodyH);
+      runsScroll = windowed.scroll;
       body = clipBody(windowed.lines);
       actions = narrow
         ? joinCommands([
@@ -1115,97 +1151,23 @@ export async function runTui(): Promise<void> {
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
             command("/", "Search", undefined, BL),
-            command("g", "Filter", workFilter, M, C),
-            command("r", "Refresh", undefined, GR),
+            command("g", "Group", RUN_GROUP_LABELS[runsGroup], Y, C),
+            command("f", "Filter", runsFilter, M, C),
             command("?", "Help", undefined, GR),
           ]);
-      secondary = `${D}${work.selectable.length} item(s) · ${work.attention} need attention · ${issueStatus}${workText ? ` · filter “${workText}”` : ""}${workAttention ? " · attention only" : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
-    }
-
-    /* ------------------------------------------------------------- runs */
-    else if (page === "runs" && screen === "list") {
-      const rg: string = runsGroup;
-      const lines: string[] = [];
-      if (runs.length === 0) lines.push(` ${D}No runs. Press n to start one.${R}`);
-      if (rg === "issue") {
-        const index = buildWorkIndex({ issues, runs, collapsed, text: runsText });
-        const selectedRun = runs[runsSel]?.id;
-        for (const row of index.rows) {
-          if (row.kind === "run") {
-            const isSelected = row.run.id === selectedRun;
-            const left = `${"  ".repeat(row.depth)}${icon(row.run.status)} ${D}${runIdFromEvent(row.run)}${R} ${M}${row.run.agent}${R}${row.run.mode ? `/${row.run.mode}` : ""}`;
-            const right = `${D}${fmtTokens(row.run.usage.totalTokens)} tok · ${fmtMoney(row.run.cost.actual)}${R} ${row.run.request.replace(/\s+/g, " ").slice(0, 40)}`;
-            lines.push(selected(` ${pad(left, Math.max(24, cols - visible(right) - 2))}${right}`, isSelected));
-          } else if (row.kind === "issue") {
-            lines.push(` ${"  ".repeat(row.depth)}${healthIcon(row.rollup.health)} ${BL}#${row.issue.ref.number}${R} ${row.issue.title}`);
-          } else {
-            lines.push(` ${"  ".repeat(row.depth)}${B}${row.label}${R} ${D}(${row.count})${R}`);
-          }
-        }
-        if (runsSel >= 0 && runs[runsSel]) {
-          // The work tree's row order is the selection source here.
-          const target = index.byRunId.get(runs[runsSel]!.id);
-          if (target) {
-            const lineIndex = lines.findIndex((line) => line.includes(runIdFromEvent(target.run)));
-            if (lineIndex >= 0 && lineIndex < bodyH) lines[lineIndex] = selected(lines[lineIndex]!, true);
-            const w = selectableLines(lines, Math.max(0, lineIndex), runsScroll, bodyH);
-            runsScroll = w.scroll;
-            body = clipBody(w.lines);
-          } else {
-            body = clipBody(lines);
-          }
-        } else {
-          body = clipBody(lines);
-        }
-      } else {
-        const groups = new Map<string, RunSummary[]>();
-        for (const run of runs) {
-          const key = rg === "project" ? run.repoRoot || "unknown" : rg === "agent" ? run.agent : run.status;
-          const list = groups.get(key) ?? [];
-          list.push(run);
-          groups.set(key, list);
-        }
-        const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
-        const flat: RunSummary[] = [];
-        let selectedLine = 0;
-        for (const key of keys) {
-          lines.push(` ${B}${W}${rg === "status" ? key.toUpperCase() : key}${R} ${D}(${groups.get(key)?.length ?? 0})${R}`);
-          for (const run of groups.get(key) ?? []) {
-            const idx = flat.length;
-            const isSelected = idx === runsSel;
-            if (isSelected) selectedLine = lines.length;
-            const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
-            const left = `   ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${pr}`;
-            const right = `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
-            const request = narrow ? "" : `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 55)}${R}`;
-            lines.push(selected(` ${narrow ? trunc(left + request, cols - 18) + " " + right : pad(left, Math.max(28, cols - visible(right) - visible(request) - 2)) + request + right}`, isSelected));
-            flat.push(run);
-          }
-        }
-        const w = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), runsScroll, bodyH);
-        runsScroll = w.scroll;
-        body = clipBody(w.lines);
-      }
-      actions = joinCommands([
-        command("n", "New", undefined, C),
-        command("Enter", "Open", undefined, G),
-        command("g", "Group", runsGroup, Y, C),
-        command("f", "Filter", runsFilter, M, C),
-        command("s", "Sort", runsSort, BL, C),
-        command("/", "Search", undefined, GR),
-        command("?", "Help", undefined, GR),
-      ]);
-      secondary = `${D}${runs.length} run(s) · ${counts.active} active · ${counts.awaiting} awaiting${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+      secondary = `${D}${runIndex.runs.length} run(s) · ${repoCount} repo(s) · ${counts.active} active · ${counts.awaiting} awaiting · ${runIndex.attention} need attention${runsText ? ` · filter “${runsText}”` : ""}${runsAttention || runsFilter === "attention" ? " · attention only" : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
     /* ------------------------------------------------------------ issue */
-    else if (page === "work" && screen === "issue") {
+    else if (page === "runs" && screen === "issue") {
       const issue = selectedIssue();
       if (!issue) {
         screen = "list";
         return draw();
       }
-      const preview = previewContext(l, issues, issue.ref);
+      const issueRoot = issueRepoOf(issue.ref) ?? l.repoRoot;
+      const repoIssues = issueCachesByRepo.get(issueRoot) ?? issues;
+      const preview = previewContext(layout(issueRoot), repoIssues, issue.ref);
       const issueRuns = sortRuns(allRuns.filter((run) => refKey(run.issue) === refKey(issue.ref)), "activity");
       const ancestors: Issue[] = [];
       let parentRef = issue.parent;
@@ -1570,7 +1532,7 @@ export async function runTui(): Promise<void> {
     }
 
     /* ------------------------------------------------------------- run */
-    else if (page === "work" && screen === "run") {
+    else if (page === "runs" && screen === "run") {
       const detail = runDetailData();
       if (!detail) {
         body = [` ${RED}Run ${selectedRunId ?? "?"} no longer exists.${R}`];
@@ -1837,8 +1799,8 @@ export async function runTui(): Promise<void> {
         `   ${W}Enter${R}      open / start       ${W}Space${R}    fold or expand`,
         `   ${W}/${R}          search              ${W}q / Esc${R}  back or quit`,
         "",
-        ` ${Y}Work${R}`,
-        `   ${W}n${R} new run    ${W}N${R} untracked run    ${W}g${R} filter    ${W}r${R} refresh cache`,
+        ` ${Y}Runs${R}`,
+        `   ${W}n${R} new run    ${W}N${R} untracked run    ${W}g${R} group    ${W}f${R} filter    ${W}r${R} refresh cache`,
         "",
         ` ${M}Run detail${R}`,
         `   ${W}h/l${R} section   ${W}space${R}/${W}Enter${R} expand   ${W}a${R} answer   ${W}i${R} interrupt   ${W}c${R} correct   ${W}p${R} approve   ${W}o${R} open`,
@@ -1847,7 +1809,8 @@ export async function runTui(): Promise<void> {
         `   ${W}a${R} agent   ${W}t${R} tier   ${W}i${R} issue   ${W}e${R}/p prompt edit   ${W}s${R} settings   ${W}Enter${R} start   ${W}Esc${R} cancel`,
         `   In the prompt: ${W}Enter${R} newline · ${W}Esc${R} or ${W}jk${R} leaves insert mode.`,
         "",
-        ` ${D}Work groups runs by Epic → Feature → Task; runs with no issue stay in Untracked.${R}`,
+        ` ${D}GH issue groups by repository, then the Epic → Feature → Task tree and Untracked.${R}`,
+        ` ${D}g cycles GH issue → Status (per repo) → Overall status (machine-wide).${R}`,
         ` ${D}Screen: ${screen} · cwd: ${cwd}${R}`,
       ];
       body = clipBody(lines);
@@ -1910,7 +1873,7 @@ export async function runTui(): Promise<void> {
   };
 
   const pickerIssues = (): Issue[] => {
-    const cache = readIssueCache(l);
+    const cache = readIssueCache(layout(newRunRepo));
     if (!cache) return [];
     if (!issuePickText.trim()) return cache.issues;
     const q = issuePickText.toLowerCase();
@@ -2062,150 +2025,119 @@ export async function runTui(): Promise<void> {
 
     if (data === "q") {
       if (screen !== "list") { screen = "list"; draw(); return; }
-      if (page !== "work") { page = "work"; draw(); return; }
+      if (page !== "runs") { page = "runs"; draw(); return; }
       cleanup();
       process.exit(0);
     }
     if (data === "\x1b") {
       if (screen !== "list") { screen = "list"; draw(); return; }
-      if (page !== "work") { page = "work"; draw(); return; }
+      if (page !== "runs") { page = "runs"; draw(); return; }
       cleanup();
       process.exit(0);
     }
 
-    /* --------------------------------------------------------- work keys */
-    if (page === "work" && screen === "list") {
-      const work = buildWorkIndex({
-        issues: readIssueCache(l)?.issues ?? [],
-        runs: workAttention || workFilter !== "all" ? filterRuns(listAllRuns(l.home), workFilter === "attention" ? "all" : workFilter) : listAllRuns(l.home),
+    /* --------------------------------------------------------- runs keys */
+    if (page === "runs" && screen === "list") {
+      const allRuns = listAllRuns(l.home);
+      issueCachesByRepo = collectIssueCaches(allRuns);
+      const filtered = runsFilter === "all" || runsFilter === "attention" ? allRuns : filterRuns(allRuns, runsFilter);
+      const index = buildRunIndex({
+        runs: filtered,
+        issuesByRepo: issueCachesByRepo,
+        group: runsGroup,
         collapsed,
-        text: workText,
-        attentionOnly: workAttention,
+        text: runsText,
+        attentionOnly: runsAttention || runsFilter === "attention",
+        preferredRepo: l.repoRoot,
       });
-      if (data === "\x1b[A" || data === "k") { workSel = Math.max(0, workSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { workSel = Math.min(Math.max(0, work.selectable.length - 1), workSel + 1); draw(); return; }
-      if (data === "G") { workSel = Math.max(0, work.selectable.length - 1); draw(); return; }
-      const toggleFold = (row: WorkRow | undefined): boolean => {
-        // A run is a leaf; space on it folds the parent issue/section instead.
+      const repoForRow = (row: RunRow | undefined): string => {
+        if (!row) return l.repoRoot;
+        if (row.kind === "repo") return row.repoRoot;
+        if (row.kind === "run") return repoOf(row.run);
+        if (row.kind === "issue") return issueRepoOf(row.issue.ref) ?? l.repoRoot;
+        for (let i = index.rows.indexOf(row); i >= 0; i--) {
+          const candidate = index.rows[i]!;
+          if (candidate.kind === "repo") return candidate.repoRoot;
+        }
+        return l.repoRoot;
+      };
+      if (data === "\x1b[A" || data === "k") { runsSel = Math.max(0, runsSel - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { runsSel = Math.min(Math.max(0, index.selectable.length - 1), runsSel + 1); draw(); return; }
+      if (data === "G") { runsSel = Math.max(0, index.selectable.length - 1); draw(); return; }
+      const toggleFold = (row: RunRow | undefined): boolean => {
+        // A run is a leaf; space on it folds the parent issue/section/repo.
         const target = row?.kind === "run" && row.parent
-          ? work.rows.find((candidate) => candidate.id === row.parent)
+          ? index.rows.find((candidate) => candidate.id === row.parent)
           : row;
-        if (target?.kind !== "issue" && target?.kind !== "section") return false;
+        if (target?.kind !== "issue" && target?.kind !== "section" && target?.kind !== "repo") return false;
         if (!target.collapsible) return false;
         if (collapsed.has(target.id)) collapsed.delete(target.id);
         else collapsed.add(target.id);
+        const targetIndex = index.rows.findIndex((candidate) => candidate.id === target.id);
+        if (targetIndex >= 0) runsSel = targetIndex;
         return true;
       };
       if (data === "\r" || data === "\n") {
-        const row = work.selectable[workSel];
-        if (row?.kind === "section") { toggleFold(row); draw(); return; }
+        const row = index.selectable[runsSel];
+        if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); draw(); return; }
         if (row?.kind === "issue") { selectedIssueKey = refKey(row.issue.ref); issueRunSel = 0; issueScroll = 0; screen = "issue"; }
         else if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
         draw();
         return;
       }
       if (data === " ") {
-        toggleFold(work.selectable[workSel]);
+        toggleFold(index.selectable[runsSel]);
         draw();
         return;
       }
       if (data === "n") {
-        const row = work.selectable[workSel];
+        const row = index.selectable[runsSel];
         const issue = row?.kind === "issue" ? row.issue.ref : row?.kind === "run" ? row.run.issue : undefined;
-        startNewRun(issue);
+        startNewRun(issue, repoForRow(row));
         draw();
         return;
       }
-      if (data === "N") { startNewRun(); draw(); return; }
-      if (data === "!") { workAttention = !workAttention; workSel = 0; draw(); return; }
-      if (data === "f" || data === "g") {
-        const filters: WorkFilter[] = ["all", "active", "awaiting", "paused", "completed", "attention"];
-        workFilter = filters[(filters.indexOf(workFilter) + 1) % filters.length]!;
-        workAttention = workFilter === "attention";
-        workSel = 0;
-        draw();
-        return;
-      }
-      if (data === "/") { searchMode = true; searchText = searchSeed(); draw(); return; }
-      if (data === "r") { void refreshIssues(); draw(); return; }
-      draw();
-      return;
-    }
-
-    /* --------------------------------------------------------- runs keys */
-    if (page === "runs" && screen === "list") {
-      const list = sortRuns(
-        filterRuns(listAllRuns(l.home), runsFilter).filter((run) =>
-          !runsText || `${run.id} ${run.agent} ${run.mode} ${run.request} ${run.status}`.toLowerCase().includes(runsText.toLowerCase()),
-        ),
-        runsSort,
-      );
-      if (data === "\x1b[A" || data === "k") { runsSel = Math.max(0, runsSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { runsSel = Math.min(Math.max(0, list.length - 1), runsSel + 1); draw(); return; }
-      if (data === "G") { runsSel = Math.max(0, list.length - 1); draw(); return; }
-      if (data === "\r" || data === "\n") {
-        const run = list[runsSel];
-        if (run) {
-          selectedRunId = run.id;
-          runSection = "overview";
-          runScroll = 0;
-          page = "work";
-          screen = "run";
-        }
-        draw();
-        return;
-      }
-      if (data === "n") {
-        const run = list[runsSel];
-        startNewRun(run?.issue);
-        draw();
-        return;
-      }
+      if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
+      if (data === "!") { runsAttention = !runsAttention; runsSel = 0; draw(); return; }
       if (data === "g") {
-        const groups: Array<"status" | "project" | "agent" | "issue"> = ["status", "project", "agent", "issue"];
-        runsGroup = groups[(groups.indexOf(runsGroup) + 1) % groups.length]!;
+        runsGroup = RUN_GROUPS[(RUN_GROUPS.indexOf(runsGroup) + 1) % RUN_GROUPS.length]!;
         runsSel = 0;
+        runsScroll = 0;
         draw();
         return;
       }
       if (data === "f") {
-        const filters: RunFilter[] = ["all", "active", "awaiting", "paused", "completed"];
+        const filters: RunListFilter[] = ["all", "active", "awaiting", "paused", "completed", "attention"];
         runsFilter = filters[(filters.indexOf(runsFilter) + 1) % filters.length]!;
+        runsAttention = runsFilter === "attention";
         runsSel = 0;
         draw();
         return;
       }
-      if (data === "s") {
-        const sorts: SortKey[] = ["activity", "number", "severity", "cost"];
-        runsSort = sorts[(sorts.indexOf(runsSort) + 1) % sorts.length]!;
-        runsSel = 0;
-        draw();
-        return;
-      }
-      if (data === "\t") { page = "models"; screen = "list"; draw(); return; }
       if (data === "/") { searchMode = true; searchText = searchSeed(); draw(); return; }
-      if (data === "r") { draw(); return; }
+      if (data === "r") { void refreshIssues("all"); draw(); return; }
       draw();
       return;
     }
 
     /* -------------------------------------------------------- issue keys */
-    if (page === "work" && screen === "issue") {
+    if (page === "runs" && screen === "issue") {
       const issue = selectedIssue();
       if (!issue) { screen = "list"; draw(); return; }
+      const issueRoot = issueRepoOf(issue.ref) ?? l.repoRoot;
       const issueRuns = sortRuns(listAllRuns(l.home).filter((run) => refKey(run.issue) === refKey(issue.ref)), "activity");
       if (data === "\x1b[A" || data === "k") { issueRunSel = Math.max(0, issueRunSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { issueRunSel = Math.min(Math.max(0, issueRuns.length - 1), issueRunSel + 1); draw(); return; }
       if (data === "\r" || data === "\n") { const run = issueRuns[issueRunSel]; if (run) { selectedRunId = run.id; runSection = "overview"; screen = "run"; } draw(); return; }
-      if (data === "n") { startNewRun(issue.ref); draw(); return; }
-      if (data === "p") { approveSelected(issue, undefined); draw(); return; }
+      if (data === "n") { startNewRun(issue.ref, issueRoot); draw(); return; }
+      if (data === "p") { approveSelected(issue, undefined, issueRoot); draw(); return; }
       if (data === "o") { openUrl(issue.url); draw(); return; }
       draw();
       return;
     }
 
     /* --------------------------------------------------------- run keys */
-    if (page === "work" && screen === "run") {
+    if (page === "runs" && screen === "run") {
       const detail = runDetailData();
       if (!detail) { screen = "list"; draw(); return; }
       const n = detail.events.length;
@@ -2245,7 +2177,7 @@ export async function runTui(): Promise<void> {
       if (data === "a") { answerRun(detail.summary); draw(); return; }
       if (data === "i") { interrupt(detail.summary); draw(); return; }
       if (data === "c") { startCorrect(detail.summary); draw(); return; }
-      if (data === "p") { approveSelected(issueByRef(detail.summary.issue), detail.summary); draw(); return; }
+      if (data === "p") { approveSelected(issueByRef(detail.summary.issue), detail.summary, detail.summary.repoRoot); draw(); return; }
       if (data === "o") { openUrl(issueByRef(detail.summary.issue)?.url ?? detail.summary.prUrl); draw(); return; }
       if (data === "\r" || data === "\n") {
         if (runSection === "timeline") toggleEvent();
