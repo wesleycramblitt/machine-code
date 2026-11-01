@@ -1,0 +1,6 @@
+# machine_code provider: xai
+# Machine override: ~/.machine_code/data/providers/xai.toml
+
+id = "xai"
+env_keys = ["XAI_API_KEY"]
+modes = ["usage"]

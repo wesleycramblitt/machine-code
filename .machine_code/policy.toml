@@ -7,8 +7,8 @@
 # Capability policy (0-10, hard floors).
 #
 # `min_capability` is a hard filter on the composite score. `[agents.<role>.axes]`
-# adds hard per-axis floors; `[agents.<role>.weights]` sets how the selector
-# trades the four catalogue axes for that role (they are normalized). Models
+# adds hard per-axis floors. Role axis weights come from data/agents/<role>.toml;
+# `[agents.<role>.weights]` here or in machine config can override them. Models
 # that pass are scored with the weighted mix, so a materially better model can
 # beat a cheaper one; close models are decided by cost/speed/headroom.
 #
@@ -22,11 +22,6 @@ min_capability = 7.4
 reasoning = 7.2
 code = 6.0
 agentic = 6.0
-[agents.general.weights]
-reasoning = 0.30
-code = 0.30
-agentic = 0.25
-general = 0.15
 
 [agents.architect]
 min_capability = 7.6
@@ -34,11 +29,6 @@ min_capability = 7.6
 reasoning = 7.5
 agentic = 6.8
 code = 5.5
-[agents.architect.weights]
-reasoning = 0.40
-agentic = 0.30
-code = 0.15
-general = 0.15
 
 [agents.build]
 min_capability = 7.6
@@ -46,11 +36,6 @@ min_capability = 7.6
 reasoning = 7.2
 code = 6.0
 agentic = 6.5
-[agents.build.weights]
-code = 0.40
-agentic = 0.35
-reasoning = 0.15
-general = 0.10
 
 [agents.review]
 min_capability = 7.7
@@ -58,11 +43,6 @@ min_capability = 7.7
 reasoning = 7.5
 code = 6.0
 agentic = 6.5
-[agents.review.weights]
-reasoning = 0.35
-code = 0.35
-agentic = 0.20
-general = 0.10
 
 [agents.sudo]
 min_capability = 7.8
@@ -70,8 +50,3 @@ min_capability = 7.8
 reasoning = 8.0
 agentic = 7.5
 code = 6.0
-[agents.sudo.weights]
-agentic = 0.40
-code = 0.30
-reasoning = 0.20
-general = 0.10

@@ -1,16 +1,25 @@
 /**
- * machine_code — agent definitions loaded from data/agents.toml.
+ * machine_code — agent definitions loaded from data/agents/*.toml.
  *
- * Roles, tools, read-only flags, TUI modes, blurbs, prompt files, and role
- * presets are data. A repo can still override one prompt with
- * .machine_code/agents/<name>.md; a machine can override the whole table with
- * ~/.machine_code/data/agents.toml.
+ * Each role is one file (role metadata, weights, capabilities, and prompt).
+ * Presets live in data/presets.toml. A repo can still override one prompt with
+ * .machine_code/agents/<name>.md; a machine can replace one role with
+ * ~/.machine_code/data/agents/<name>.toml. Legacy single-table
+ * ~/.machine_code/data/agents.toml is still read for compatibility.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, join } from "node:path";
 import type { CoreToolName } from "./tools/index.js";
 import type { Layout } from "./paths.js";
-import { dataPath, loadTomlData } from "./data.js";
+import {
+  dataPath,
+  listTomlFiles,
+  machineDataDir,
+  machineDataSubdir,
+  packageDataDir,
+  readTomlFile,
+  shippedDataDir,
+} from "./data.js";
 
 export type AgentName = string;
 
@@ -27,6 +36,8 @@ export interface AgentDef {
 }
 
 interface RoleData {
+  name?: unknown;
+  order?: unknown;
   prompt?: unknown;
   tools?: unknown;
   readonly?: unknown;
@@ -38,25 +49,73 @@ interface RoleData {
 }
 
 interface AgentsData {
-  roles?: Record<string, RoleData>;
-  presets?: Record<string, Record<string, unknown>>;
-}
-
-function agentsData(): AgentsData {
-  return loadTomlData<AgentsData>("agents.toml");
+  roles: Record<string, RoleData>;
+  presets: Record<string, Record<string, unknown>>;
 }
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
+function roleFile(file: string): [string, RoleData] {
+  const role = readTomlFile<RoleData>(file);
+  const name = typeof role.name === "string" && role.name ? role.name : basename(file, ".toml");
+  return [name, role];
+}
+
+function legacyAgents(file: string): AgentsData | null {
+  if (!existsSync(file)) return null;
+  return readTomlFile<AgentsData>(file);
+}
+
+function loadRoles(): Record<string, RoleData> {
+  const roles: Record<string, RoleData> = {};
+  const shipped = listTomlFiles(shippedDataDir("agents"));
+  if (shipped.length > 0) {
+    for (const file of shipped) {
+      const [name, role] = roleFile(file);
+      roles[name] = role;
+    }
+  } else {
+    const legacy = legacyAgents(join(packageDataDir(), "agents.toml"));
+    if (legacy) Object.assign(roles, legacy.roles ?? {});
+  }
+
+  for (const file of listTomlFiles(machineDataSubdir("agents"))) {
+    const [name, role] = roleFile(file);
+    roles[name] = role;
+  }
+  const machineLegacy = legacyAgents(join(machineDataDir(), "agents.toml"));
+  if (machineLegacy) Object.assign(roles, machineLegacy.roles ?? {});
+  return roles;
+}
+
+function loadPresets(): Record<string, Record<string, unknown>> {
+  const file = dataPath("presets.toml");
+  if (existsSync(file)) return readTomlFile<Record<string, Record<string, unknown>>>(file);
+  const machineLegacy = legacyAgents(join(machineDataDir(), "agents.toml"));
+  if (machineLegacy?.presets) return machineLegacy.presets;
+  return legacyAgents(join(packageDataDir(), "agents.toml"))?.presets ?? {};
+}
+
+function agentsData(): AgentsData {
+  return { roles: loadRoles(), presets: loadPresets() };
+}
+
 function roleData(name: string): RoleData {
-  const role = agentsData().roles?.[name];
-  if (!role) throw new Error(`agents.toml: unknown role "${name}"`);
+  const role = agentsData().roles[name];
+  if (!role) throw new Error(`data/agents: unknown role "${name}"`);
   return role;
 }
 
-export const AGENT_NAMES: readonly string[] = Object.keys(agentsData().roles ?? {});
+function roleOrder(role: RoleData): number {
+  const n = Number(role.order);
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+export const AGENT_NAMES: readonly string[] = Object.entries(agentsData().roles)
+  .sort(([a, ra], [b, rb]) => roleOrder(ra) - roleOrder(rb) || (a < b ? -1 : 1))
+  .map(([name]) => name);
 
 export const AGENT_META: Record<string, { modes: string[]; blurb: string }> = Object.fromEntries(
   AGENT_NAMES.map((name) => {
@@ -66,7 +125,7 @@ export const AGENT_META: Record<string, { modes: string[]; blurb: string }> = Ob
 );
 
 export function presetData(): Record<string, Record<string, unknown>> {
-  return agentsData().presets ?? {};
+  return agentsData().presets;
 }
 
 export function roleCapabilities(name: AgentName): string[] {
@@ -88,17 +147,11 @@ export function rolePreset(name: AgentName): string {
   return typeof role.preset === "string" ? role.preset : "assistant";
 }
 
-function promptFromData(ref: string): string {
-  const file = join(dirname(dataPath("agents.toml")), ref);
-  return existsSync(file) ? readFileSync(file, "utf8") : "";
-}
-
 function agentPrompt(layout: Layout, name: AgentName): string {
   const override = join(layout.repoDir, "agents", `${name}.md`);
   if (existsSync(override)) return readFileSync(override, "utf8");
   const role = roleData(name);
-  const ref = typeof role.prompt === "string" ? role.prompt : `prompts/${name}.md`;
-  return promptFromData(ref);
+  return typeof role.prompt === "string" ? role.prompt : "";
 }
 
 export function agentDef(layout: Layout, name: AgentName): AgentDef {

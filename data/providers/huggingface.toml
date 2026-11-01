@@ -1,0 +1,6 @@
+# machine_code provider: huggingface
+# Machine override: ~/.machine_code/data/providers/huggingface.toml
+
+id = "huggingface"
+env_keys = ["HF_TOKEN"]
+modes = ["usage"]

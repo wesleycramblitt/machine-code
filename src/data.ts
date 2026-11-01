@@ -1,13 +1,14 @@
 /**
  * machine_code — shipped data files with machine overrides.
  *
- * Base data lives in <package>/data. A user can override any file by placing it
- * in ~/.machine_code/data/<name>. Generated state (catalogue, availability,
- * spend) stays outside this directory.
+ * Base data lives in <package>/data. A user can override a file by placing the
+ * same relative path under ~/.machine_code/data/, or add per-role/per-provider
+ * files under the corresponding folder. Generated state (catalogue,
+ * availability, spend) stays outside this directory.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "smol-toml";
 
@@ -27,13 +28,33 @@ export function dataPath(name: string): string {
   return join(packageDataDir(), name);
 }
 
-export function loadTomlData<T>(name: string): T {
-  const file = dataPath(name);
+export function readTomlFile<T>(file: string): T {
   const raw = parse(readFileSync(file, "utf8")) as unknown;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`data/${name} must contain a TOML table`);
+    throw new Error(`${file} must contain a TOML table`);
   }
   return raw as T;
+}
+
+export function loadTomlData<T>(name: string): T {
+  return readTomlFile<T>(dataPath(name));
+}
+
+/** Sorted .toml files directly under a data folder; missing folder = empty. */
+export function listTomlFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".toml"))
+    .map((entry) => join(dir, entry.name))
+    .sort();
+}
+
+export function shippedDataDir(name: string): string {
+  return join(packageDataDir(), name);
+}
+
+export function machineDataSubdir(name: string): string {
+  return join(machineDataDir(), name);
 }
 
 export function loadTextData(name: string): string | null {
@@ -65,6 +86,7 @@ export interface ProviderDefinition {
 }
 
 interface RawProvider {
+  id?: unknown;
   name?: unknown;
   env_keys?: unknown;
   discovery?: unknown;
@@ -77,45 +99,79 @@ interface RawProvider {
 
 let providerCache: Record<string, ProviderDefinition> | null = null;
 
+function providerDefinition(value: RawProvider): ProviderDefinition {
+  const envKeys = Array.isArray(value.env_keys)
+    ? value.env_keys.filter((v): v is string => typeof v === "string")
+    : [];
+  const billingRaw = (value.billing ?? {}) as Record<string, unknown>;
+  const monthlyUsd = Number(billingRaw.monthly_usd);
+  const includedUsd = Number(billingRaw.included_usd);
+  return {
+    ...(typeof value.name === "string" ? { name: value.name } : {}),
+    envKeys,
+    ...(value.discovery === "openai-compatible" ? { discovery: "openai-compatible" as const } : {}),
+    ...(typeof value.base_url === "string" ? { baseUrl: value.base_url } : {}),
+    ...(typeof value.funded === "boolean" ? { funded: value.funded } : {}),
+    ...(Array.isArray(value.modes)
+      ? { modes: value.modes.filter((v): v is string => typeof v === "string") }
+      : {}),
+    ...(typeof value.cost_multiplier === "number" && value.cost_multiplier >= 0
+      ? { costMultiplier: value.cost_multiplier }
+      : {}),
+    ...(typeof billingRaw.kind === "string"
+      ? {
+          billing: {
+            kind: billingRaw.kind,
+            ...(Number.isFinite(monthlyUsd) ? { monthlyUsd } : {}),
+            ...(Number.isFinite(includedUsd) ? { includedUsd } : {}),
+            ...(typeof billingRaw.fallback === "string" ? { fallback: billingRaw.fallback } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Load one provider file. File name is the id unless the file sets `id`. */
+function loadProviderFile(file: string): [string, ProviderDefinition] {
+  const raw = readTomlFile<RawProvider>(file);
+  const id = typeof raw.id === "string" && raw.id ? raw.id : basename(file, ".toml");
+  return [id, providerDefinition(raw)];
+}
+
+/** Legacy single-table providers.toml; used only if no provider folder exists. */
+function loadProviderLegacy(file: string): Record<string, ProviderDefinition> {
+  if (!existsSync(file)) return {};
+  const raw = readTomlFile<{ providers?: Record<string, RawProvider> }>(file);
+  return Object.fromEntries(
+    Object.entries(raw.providers ?? {}).map(([id, value]) => [id, providerDefinition(value)]),
+  );
+}
+
 export function loadProviderDefinitions(): Record<string, ProviderDefinition> {
   if (providerCache) return providerCache;
-  const raw = loadTomlData<{ providers?: Record<string, RawProvider> }>("providers.toml");
   const defs: Record<string, ProviderDefinition> = {};
-  for (const [id, value] of Object.entries(raw.providers ?? {})) {
-    const envKeys = Array.isArray(value.env_keys)
-      ? value.env_keys.filter((v): v is string => typeof v === "string")
-      : [];
-    const billingRaw = (value.billing ?? {}) as Record<string, unknown>;
-    const monthlyUsd = Number(billingRaw.monthly_usd);
-    const includedUsd = Number(billingRaw.included_usd);
-    defs[id] = {
-      ...(typeof value.name === "string" ? { name: value.name } : {}),
-      envKeys,
-      ...(value.discovery === "openai-compatible" ? { discovery: "openai-compatible" as const } : {}),
-      ...(typeof value.base_url === "string" ? { baseUrl: value.base_url } : {}),
-      ...(typeof value.funded === "boolean" ? { funded: value.funded } : {}),
-      ...(Array.isArray(value.modes)
-        ? { modes: value.modes.filter((v): v is string => typeof v === "string") }
-        : {}),
-      ...(typeof value.cost_multiplier === "number" && value.cost_multiplier >= 0
-        ? { costMultiplier: value.cost_multiplier }
-        : {}),
-      ...(typeof billingRaw.kind === "string"
-        ? {
-            billing: {
-              kind: billingRaw.kind,
-              ...(Number.isFinite(monthlyUsd) ? { monthlyUsd } : {}),
-              ...(Number.isFinite(includedUsd) ? { includedUsd } : {}),
-              ...(typeof billingRaw.fallback === "string" ? { fallback: billingRaw.fallback } : {}),
-            },
-          }
-        : {}),
-    };
+  const shippedDir = shippedDataDir("providers");
+  const shippedFiles = listTomlFiles(shippedDir);
+  if (shippedFiles.length > 0) {
+    for (const file of shippedFiles) {
+      const [id, def] = loadProviderFile(file);
+      defs[id] = def;
+    }
+  } else {
+    Object.assign(defs, loadProviderLegacy(join(packageDataDir(), "providers.toml")));
   }
+
+  // Machine overrides are per-provider files; a legacy machine providers.toml
+  // still wins for compatibility.
+  for (const file of listTomlFiles(machineDataSubdir("providers"))) {
+    const [id, def] = loadProviderFile(file);
+    defs[id] = def;
+  }
+  Object.assign(defs, loadProviderLegacy(join(machineDataDir(), "providers.toml")));
+
   providerCache = defs;
   return defs;
 }
-
 /** Providers with funding for paid rows (machine config overrides data). */
 export function fundedProviderIds(provided: Record<string, { funded?: boolean }>): Set<string> {
   const defs = loadProviderDefinitions();

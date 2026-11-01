@@ -1,0 +1,6 @@
+# machine_code provider: qwen-token-plan-individual
+# Machine override: ~/.machine_code/data/providers/qwen-token-plan-individual.toml
+
+id = "qwen-token-plan-individual"
+env_keys = ["QWEN_TOKEN_PLAN_API_KEY"]
+modes = ["usage"]

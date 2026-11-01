@@ -5,7 +5,7 @@
  * M0: init, providers, catalogue refresh, run (solo general), log, status.
  * The TUI becomes the default command in M3.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,7 @@ import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY, AGENT
 import { createModelsCollection, availableChatModels, providerStatuses } from "./models.js";
 import { refreshCatalogue } from "./catalogue/refresh.js";
 import { loadCatalogue } from "./catalogue/load.js";
-import { serializeModelsSnapshot } from "./catalogue/snapshot.js";
+import { snapshotFiles } from "./catalogue/snapshot.js";
 import { pick, axisWeights } from "./select.js";
 import { CAPABILITY_AXES } from "./config.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
@@ -108,8 +108,8 @@ Usage:
   machine_code models --agent <role> Dry-run selection (--context-chars N, --min-capability N,
                                     --min-axes code=6.5, --tier free|paid, --model pin)
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
-                                    [--snapshot] also update data/models.toml
-  machine_code catalogue snapshot   Write the committed data/models.toml snapshot [path]
+                                    [--snapshot] also update data/models + data/offers
+  machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
   machine_code log <run-id>         Print a run's summary and events
   machine_code status               List runs across projects
   machine_code resume <run-id>      Resume an interrupted/paused/awaiting run [--recreate]
@@ -636,20 +636,29 @@ function cmdModels(argv: string[]): number {
 
 /* --------------------------------------------------------------- catalogue */
 
-function writeModelSnapshot(document: CatalogueDocument, pathArg?: string): string {
-  const target = pathArg ? resolve(pathArg) : join(packageDataDir(), "models.toml");
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, serializeModelsSnapshot(document), "utf8");
-  return target;
+function writeModelSnapshot(document: CatalogueDocument, rootArg?: string): { modelsDir: string; offersDir: string; files: number } {
+  const root = rootArg ? resolve(rootArg) : packageDataDir();
+  const modelsDir = join(root, "models");
+  const offersDir = join(root, "offers");
+  rmSync(modelsDir, { recursive: true, force: true });
+  rmSync(offersDir, { recursive: true, force: true });
+  const files = snapshotFiles(document);
+  for (const file of files) {
+    const target = join(root, file.path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, file.content, "utf8");
+  }
+  return { modelsDir, offersDir, files: files.length };
 }
 
 function cmdCatalogueSnapshot(pathArg?: string): number {
   const l = layout();
   const document = loadCatalogue(l.catalogueFile);
   if (!document) fail(`no catalogue at ${l.catalogueFile} — run: machine_code catalogue refresh`);
-  const target = writeModelSnapshot(document, pathArg);
-  process.stdout.write(`model snapshot written to ${target}\n`);
-  process.stdout.write(`  ${document.models.length} models\n`);
+  const written = writeModelSnapshot(document, pathArg);
+  process.stdout.write(`model snapshot written to ${written.modelsDir}\n`);
+  process.stdout.write(`provider offers written to ${written.offersDir}\n`);
+  process.stdout.write(`  ${document.models.length} offers in ${written.files} files\n`);
   return 0;
 }
 
@@ -669,8 +678,8 @@ async function cmdCatalogueRefresh(snapshot = false): Promise<number> {
   process.stdout.write(`catalogue written to ${result.file}\n`);
   process.stdout.write(`generated ${result.document.generatedAt}\n`);
   if (snapshot) {
-    const target = writeModelSnapshot(result.document);
-    process.stdout.write(`model snapshot written to ${target}\n`);
+    const written = writeModelSnapshot(result.document);
+    process.stdout.write(`model snapshot written to ${written.modelsDir} + ${written.offersDir}\n`);
   }
   if (result.curatedVetoes > 0) {
     process.stdout.write(`  ${result.curatedVetoes} row(s) removed by curation vetoes\n`);

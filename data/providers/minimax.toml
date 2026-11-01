@@ -1,0 +1,6 @@
+# machine_code provider: minimax
+# Machine override: ~/.machine_code/data/providers/minimax.toml
+
+id = "minimax"
+env_keys = ["MINIMAX_API_KEY"]
+modes = ["usage"]

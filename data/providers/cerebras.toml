@@ -1,0 +1,6 @@
+# machine_code provider: cerebras
+# Machine override: ~/.machine_code/data/providers/cerebras.toml
+
+id = "cerebras"
+env_keys = ["CEREBRAS_API_KEY"]
+modes = ["usage"]

@@ -1,0 +1,6 @@
+# machine_code provider: cloudflare-ai-gateway
+# Machine override: ~/.machine_code/data/providers/cloudflare-ai-gateway.toml
+
+id = "cloudflare-ai-gateway"
+env_keys = ["CLOUDFLARE_API_KEY"]
+modes = ["usage"]

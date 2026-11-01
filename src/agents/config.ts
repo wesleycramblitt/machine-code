@@ -55,12 +55,12 @@ function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig
   };
 }
 
-/** Behavior presets from data/agents.toml. */
+/** Behavior presets from data/presets.toml. */
 export const PRESETS: Record<string, AgentConfig> = Object.fromEntries(
   Object.entries(presetData()).map(([name, raw]) => [name, presetFromData(name, raw)]),
 );
 
-/** Role default presets from data/agents.toml. */
+/** Role default presets from data/agents/<role>.toml. */
 export const ROLE_PRESET: Record<string, PresetName> = Object.fromEntries(
   AGENT_NAMES.map((name) => [name, rolePreset(name)]),
 );

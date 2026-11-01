@@ -1,0 +1,13 @@
+# machine_code provider: deepinfra
+# Machine override: ~/.machine_code/data/providers/deepinfra.toml
+
+id = "deepinfra"
+name = "DeepInfra"
+env_keys = ["DEEPINFRA_API_KEY"]
+funded = false
+modes = ["usage"]
+discovery = "openai-compatible"
+base_url = "https://api.deepinfra.com/v1/openai"
+
+[billing]
+kind = "usage"

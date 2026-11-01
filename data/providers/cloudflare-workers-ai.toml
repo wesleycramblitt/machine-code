@@ -1,0 +1,6 @@
+# machine_code provider: cloudflare-workers-ai
+# Machine override: ~/.machine_code/data/providers/cloudflare-workers-ai.toml
+
+id = "cloudflare-workers-ai"
+env_keys = ["CLOUDFLARE_API_KEY"]
+modes = ["usage"]

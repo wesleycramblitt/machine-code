@@ -1,0 +1,10 @@
+# machine_code provider: nvidia
+# Machine override: ~/.machine_code/data/providers/nvidia.toml
+
+id = "nvidia"
+name = "NVIDIA"
+env_keys = ["NVIDIA_API_KEY"]
+modes = ["free"]
+
+[billing]
+kind = "free_tier"

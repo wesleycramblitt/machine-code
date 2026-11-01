@@ -4,7 +4,7 @@
  * All pi-ai types flow through here; the rest of the app depends on this file,
  * not on pi-ai directly, so an upstream upgrade has one blast radius.
  * Provider ids, env keys, funding defaults, and OpenAI-compatible endpoints
- * come from data/providers.toml (machine override: ~/.machine_code/data/).
+ * come from data/providers/<id>.toml (machine override: ~/.machine_code/data/providers/).
  */
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { getEnvApiKey } from "@earendil-works/pi-ai/compat";

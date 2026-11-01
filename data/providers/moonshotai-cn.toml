@@ -1,0 +1,6 @@
+# machine_code provider: moonshotai-cn
+# Machine override: ~/.machine_code/data/providers/moonshotai-cn.toml
+
+id = "moonshotai-cn"
+env_keys = ["MOONSHOT_API_KEY"]
+modes = ["usage"]

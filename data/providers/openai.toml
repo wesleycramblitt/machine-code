@@ -1,0 +1,6 @@
+# machine_code provider: openai
+# Machine override: ~/.machine_code/data/providers/openai.toml
+
+id = "openai"
+env_keys = ["OPENAI_API_KEY"]
+modes = ["usage"]

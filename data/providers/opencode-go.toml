@@ -1,0 +1,15 @@
+# machine_code provider: opencode-go
+# Machine override: ~/.machine_code/data/providers/opencode-go.toml
+
+id = "opencode-go"
+name = "OpenCode Go"
+env_keys = ["OPENCODE_API_KEY"]
+funded = true
+modes = ["subscription", "usage"]
+cost_multiplier = 0.5
+
+[billing]
+kind = "subscription"
+monthly_usd = 10
+included_usd = 60
+fallback = "opencode"

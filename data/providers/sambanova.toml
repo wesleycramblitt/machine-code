@@ -1,0 +1,13 @@
+# machine_code provider: sambanova
+# Machine override: ~/.machine_code/data/providers/sambanova.toml
+
+id = "sambanova"
+name = "SambaNova"
+env_keys = ["SAMBANOVA_API_KEY"]
+funded = false
+modes = ["usage"]
+discovery = "openai-compatible"
+base_url = "https://api.sambanova.ai/v1"
+
+[billing]
+kind = "usage"

@@ -1,0 +1,6 @@
+# machine_code provider: xiaomi-token-plan-sgp
+# Machine override: ~/.machine_code/data/providers/xiaomi-token-plan-sgp.toml
+
+id = "xiaomi-token-plan-sgp"
+env_keys = ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"]
+modes = ["usage"]

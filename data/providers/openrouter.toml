@@ -1,0 +1,11 @@
+# machine_code provider: openrouter
+# Machine override: ~/.machine_code/data/providers/openrouter.toml
+
+id = "openrouter"
+name = "OpenRouter"
+env_keys = ["OPENROUTER_API_KEY"]
+funded = true
+modes = ["usage"]
+
+[billing]
+kind = "usage"

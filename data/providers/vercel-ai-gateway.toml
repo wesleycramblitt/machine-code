@@ -1,0 +1,6 @@
+# machine_code provider: vercel-ai-gateway
+# Machine override: ~/.machine_code/data/providers/vercel-ai-gateway.toml
+
+id = "vercel-ai-gateway"
+env_keys = ["AI_GATEWAY_API_KEY"]
+modes = ["usage"]

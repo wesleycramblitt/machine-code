@@ -1,0 +1,6 @@
+# machine_code provider: zai
+# Machine override: ~/.machine_code/data/providers/zai.toml
+
+id = "zai"
+env_keys = ["ZAI_API_KEY"]
+modes = ["usage"]

@@ -1,0 +1,6 @@
+# machine_code provider: typesafe
+# Machine override: ~/.machine_code/data/providers/typesafe.toml
+
+id = "typesafe"
+env_keys = ["TYPESAFE_API_KEY"]
+modes = ["usage"]

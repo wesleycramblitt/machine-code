@@ -2,7 +2,7 @@
  * machine_code — generic OpenAI-compatible provider shim.
  *
  * Provider definitions (id, name, base URL, env keys) live in
- * data/providers.toml. This module only knows how to fetch their model list
+ * data/providers/<id>.toml. This module only knows how to fetch their model list
  * and translate metadata; it contains no provider-specific constants.
  */
 import {

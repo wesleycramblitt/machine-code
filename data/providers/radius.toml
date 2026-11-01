@@ -1,0 +1,6 @@
+# machine_code provider: radius
+# Machine override: ~/.machine_code/data/providers/radius.toml
+
+id = "radius"
+env_keys = ["RADIUS_API_KEY"]
+modes = ["usage"]

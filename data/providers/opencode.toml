@@ -1,0 +1,11 @@
+# machine_code provider: opencode
+# Machine override: ~/.machine_code/data/providers/opencode.toml
+
+id = "opencode"
+name = "OpenCode"
+env_keys = ["OPENCODE_API_KEY"]
+funded = true
+modes = ["usage"]
+
+[billing]
+kind = "usage"

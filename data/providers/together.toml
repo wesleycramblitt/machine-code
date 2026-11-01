@@ -1,0 +1,6 @@
+# machine_code provider: together
+# Machine override: ~/.machine_code/data/providers/together.toml
+
+id = "together"
+env_keys = ["TOGETHER_API_KEY"]
+modes = ["usage"]

@@ -5,10 +5,11 @@
 # win last. Keys are a catalogue key ("provider/id") or a canonical id.
 # Removing a property falls back to generated data.
 #
-# Starting point: copy an entry from the generated data/models.toml snapshot.
-# A model key (e.g. "openai/gpt-6-luna-pro") overrides every provider offer;
-# an offer key (e.g. "openrouter/openai/gpt-6-luna-pro") overrides one offer.
-# Keep the key exactly as it appears in the snapshot.
+# Starting point: copy an entry from data/models/<owner>.toml or
+# data/offers/<provider>/<owner>.toml. A model key (e.g.
+# "openai/gpt-6-luna-pro") overrides every provider offer; an offer key (e.g.
+# "openrouter/openai/gpt-6-luna-pro") overrides one offer. Keep the key exactly
+# as it appears in the snapshot.
 #
 # [models."openrouter/openai/gpt-6-luna-pro"]
 # reasoning = 9.3

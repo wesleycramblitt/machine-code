@@ -1,0 +1,6 @@
+# machine_code provider: xiaomi-token-plan-ams
+# Machine override: ~/.machine_code/data/providers/xiaomi-token-plan-ams.toml
+
+id = "xiaomi-token-plan-ams"
+env_keys = ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"]
+modes = ["usage"]

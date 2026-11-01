@@ -50,7 +50,7 @@ node dist/cli.js policy                      # effective floors/weights + files
 node dist/cli.js policy edit                 # edit ~/.machine_code/config.toml
 node dist/cli.js policy edit --repo          # edit .machine_code/policy.toml
 node dist/cli.js catalogue refresh           # after adding provider keys
-node dist/cli.js catalogue snapshot          # update committed data/models.toml
+node dist/cli.js catalogue snapshot          # update committed data/models + data/offers
 
 # worktrees, inspection
 node dist/cli.js worktree list
@@ -60,11 +60,12 @@ node dist/cli.js tui                  # default when run with no command
 ```
 
 Selection is per call and multi-dimensional: each catalogue row carries
-`reasoning`, `code`, `agentic`, and `general` scores. `.machine_code/policy.toml`
-sets a hard composite floor plus optional per-axis floors and role weights; the
-selector hard-filters, then trades weighted capability against cost, speed, and
-context headroom. `machine_code models --agent <role>` shows exactly what would
-be chosen.
+`reasoning`, `code`, `agentic`, and `general` scores. Role weights live in
+`data/agents/<role>.toml`; `.machine_code/policy.toml` sets a hard composite
+floor, optional per-axis floors, and can override weights. The selector
+hard-filters, then trades weighted capability against cost, speed, and context
+headroom. `machine_code models --agent <role>` shows exactly what would be
+chosen.
 
 Selection has two tiers in `~/.machine_code/config.toml`:
 
@@ -81,19 +82,22 @@ funded = true
 unfunded providers are excluded. `free` only admits zero-price rows.
 `--tier` overrides it per run.
 
-Model/provider/benchmark data lives in `data/` and regenerates
+Data lives in folders under `data/`: providers in `data/providers/<id>.toml`,
+agent roles (with prompts) in `data/agents/<role>.toml`, presets in
+`data/presets.toml`, and benchmark seeds in `data/benchmarks.json`.
+`machine_code catalogue refresh` regenerates
 `~/.machine_code/catalogue/models.json`, which contains providers (env keys,
-funding, billing modes, price ranges) and every model's capabilities, supported
-modes, pricing, capability axes, and per-axis provenance. Hand-authored
-capability/pricing corrections go in `data/model-overrides.toml`;
-`data/models.toml` is the generated, committed catalogue snapshot (refresh it
-with `machine_code catalogue snapshot`). It is normalized: capabilities and
-scores live once per canonical model, while provider offers carry pricing,
-free status, and differing context/max-output limits. `kind`/`coding` marks
-chat models versus image/video/audio/guard models, which the selector rejects
-as coding candidates. Agents, presets, weights, capabilities, and prompts live
-in `data/agents.toml` and
-`data/prompts/`. Minimums are layered in `~/.machine_code/config.toml` and
+funding, billing modes, price ranges) and every model's capabilities, kind,
+supported modes, pricing, capability axes, and per-axis provenance.
+Hand-authored capability/pricing corrections go in `data/model-overrides.toml`.
+The committed catalogue snapshot is split into canonical model files
+(`data/models/<owner>.toml`) and provider offer files
+(`data/offers/<provider>/<owner>.toml`); refresh it with
+`machine_code catalogue snapshot`. Capabilities and scores live once per
+canonical model; offers carry pricing, free status, and differing
+context/max-output limits. `kind`/`coding` marks chat models versus
+image/video/audio/guard models, which the selector rejects as coding
+candidates. Minimums are layered in `~/.machine_code/config.toml` and
 `.machine_code/policy.toml`; see `machine_code policy [role]` and
 `machine_code policy edit`.
 

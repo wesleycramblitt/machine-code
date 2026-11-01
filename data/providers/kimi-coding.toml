@@ -1,0 +1,6 @@
+# machine_code provider: kimi-coding
+# Machine override: ~/.machine_code/data/providers/kimi-coding.toml
+
+id = "kimi-coding"
+env_keys = ["KIMI_API_KEY"]
+modes = ["usage"]

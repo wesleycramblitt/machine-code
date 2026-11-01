@@ -249,10 +249,10 @@ cost_multiplier = 0.5    # 2x cheaper than list (quota discount)
 funded = true
 ```
 
-Defaults come from `data/providers.toml`; `openrouter`, `opencode`, and
+Defaults come from `data/providers/<id>.toml`; `openrouter`, `opencode`, and
 `opencode-go` ship funded. Override per run with `--tier free|paid`. The
 catalogue (`~/.machine_code/catalogue/models.json`) is generated from
-`data/providers.toml`, `data/benchmarks.json`, provider metadata, and curation,
+`data/providers/`, `data/benchmarks.json`, provider metadata, and curation,
 and contains the full provider table plus every model's pricing, context,
 axes, and capability score. That is the single runtime data file. Each model row carries explicit
 `capabilities` (reasoning/toolCall/image, input/output modalities, context,
@@ -263,16 +263,17 @@ a metadata prior, or an authored override. Provider entries carry billing
 `modes` (usage/subscription/free), `billing` details ($10/$60 OpenCode Go
 quota), default `costMultiplier`, model counts, and price ranges.
 
-`data/models.toml` is a generated, committed snapshot of the current catalogue
-(`machine_code catalogue snapshot`, or `catalogue refresh --snapshot`). It is
-normalized: capabilities, modes, scores, and benchmarks appear once per
-canonical model; provider offers carry pricing/free and only the fields that
-differ (context/max-output limits, modes, capability gaps). `score_sources`
-lists only non-metadata axes; an absent axis means the metadata prior. It is
-the readable starting point for reviewing model capabilities, modes, and
-prices; it is regenerated, not authoritative. Hand-authored
-capability/pricing corrections go in `data/model-overrides.toml` (machine
-override: `~/.machine_code/data/model-overrides.toml`) and win last.
+`data/models/<owner>.toml` and `data/offers/<provider>/<owner>.toml` are the
+generated, committed snapshot of the current catalogue (`machine_code
+catalogue snapshot`, or `catalogue refresh --snapshot`). It is normalized:
+capabilities, modes, scores, and benchmarks appear once per canonical model;
+provider offers carry pricing/free and only the fields that differ
+(context/max-output limits, modes, capability gaps). `score_sources` lists
+only non-metadata axes; an absent axis means the metadata prior. It is the
+readable starting point for reviewing model capabilities, modes, and prices;
+it is regenerated, not authoritative. Hand-authored capability/pricing
+corrections go in `data/model-overrides.toml` (machine override:
+`~/.machine_code/data/model-overrides.toml`) and win last.
 
 ### Minimums and overrides
 
@@ -296,13 +297,13 @@ machine_code policy edit [--repo]
 
 ### Agents and presets as data
 
-`data/agents.toml` defines roles (prompt file, tools, read-only flag, TUI modes,
-blurb, default preset) and behavior presets. Prompts live in
-`data/prompts/*.md`. Machine override: `~/.machine_code/data/agents.toml`;
-repo prompt override: `.machine_code/agents/<role>.md`. Capability gating stays
-in the harness, not the data file.
+`data/agents/<role>.toml` defines one role (inline prompt, tools, read-only
+flag, TUI modes, blurb, default preset, capabilities, and score weights).
+Behavior presets live in `data/presets.toml`. Machine override:
+`~/.machine_code/data/agents/<role>.toml` or `presets.toml`; repo prompt
+override: `.machine_code/agents/<role>.md`. Capability gating stays in the
+harness, not the data files.
 
-### Provider notes
 ### Provider notes
 
 - **DeepInfra** is an OpenAI-compatible shim; `/v1/openai/models` metadata

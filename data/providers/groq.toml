@@ -1,0 +1,7 @@
+# machine_code provider: groq
+# Machine override: ~/.machine_code/data/providers/groq.toml
+
+id = "groq"
+name = "Groq"
+env_keys = ["GROQ_API_KEY"]
+modes = ["usage"]

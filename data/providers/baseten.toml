@@ -1,0 +1,6 @@
+# machine_code provider: baseten
+# Machine override: ~/.machine_code/data/providers/baseten.toml
+
+id = "baseten"
+env_keys = ["BASETEN_API_KEY"]
+modes = ["usage"]

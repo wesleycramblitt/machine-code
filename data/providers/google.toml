@@ -1,0 +1,7 @@
+# machine_code provider: google
+# Machine override: ~/.machine_code/data/providers/google.toml
+
+id = "google"
+name = "Google"
+env_keys = ["GEMINI_API_KEY"]
+modes = ["usage"]

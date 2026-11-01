@@ -1,0 +1,6 @@
+# machine_code provider: deepseek
+# Machine override: ~/.machine_code/data/providers/deepseek.toml
+
+id = "deepseek"
+env_keys = ["DEEPSEEK_API_KEY"]
+modes = ["usage"]
