@@ -2291,7 +2291,16 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "a") { modelsAll = !modelsAll; modelSel = 0; draw(); return; }
-      if (data === "f") { modelsFree = !modelsFree; modelSel = 0; draw(); return; }
+      if (data === "f") {
+        modelsFree = !modelsFree;
+        // Free offers usually live on providers without paid credentials. Show
+        // the whole catalogue while filtering by price, then the user can
+        // press a to narrow back to configured providers.
+        if (modelsFree) modelsAll = true;
+        modelSel = 0;
+        draw();
+        return;
+      }
       if (data === "c") { modelsCoding = !modelsCoding; modelSel = 0; draw(); return; }
       if (data === "g") {
         const values: Array<"provider" | "family" | "none"> = ["provider", "family", "none"];

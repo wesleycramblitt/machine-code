@@ -561,7 +561,9 @@ function cmdModels(argv: string[]): number {
   const query = (positional[0] ?? flags.get("filter") ?? "").toLowerCase();
   const all = flags.has("all");
 
-  let rows = doc.models.filter((m) => all || configured.has(m.providerID));
+  // A free-only query is a catalogue question, not a configured-provider
+  // question: surface free offers from every provider.
+  let rows = doc.models.filter((m) => all || flags.has("free") || configured.has(m.providerID));
   if (provider) rows = rows.filter((m) => m.providerID === provider);
   const family = flags.get("family");
   const sortFlag = (flags.get("sort") ?? "capability") as ModelSort;
