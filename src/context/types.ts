@@ -13,8 +13,10 @@ export type ContextKind =
   | "task"
   | "packet"
   | "knowledge"
+  | "file"
   | "skill"
   | "tool"
+  | "script"
   | "parent-run";
 
 export type ContextOrigin = "inherited" | "explicit" | "discovered";

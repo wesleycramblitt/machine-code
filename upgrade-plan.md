@@ -3,7 +3,9 @@
 > Refined against repository `e4eb220` (2026-10-31). Complements `plan.md`
 > (the shipped v1/M0–M5 baseline); it does not replace it.
 >
-> **Status: design only.** No implementation in this pass.
+> **Status: design + implementation; revised 2026-11-01.** Orchestration modes
+> are now per-role data (`modes` + `default_mode`), not a global enum. A role
+> with empty modes runs alone; `solo` is no longer a mode value.
 >
 > All architectural decisions are resolved. Residual implementation choices are
 > listed in §15.
@@ -19,18 +21,20 @@
 | 4 — issues, hierarchy, reserved | **core done** | provider + gh + null, reserved ensure/audit/duplicates, Task-only association, `issue` CLI, issue tool; TUI cache deferred to Phase 7 |
 | 5 — PR pipeline, approval | **done** | `pr` provider/tool, runner publish (Task→Feature), Feature PR with temporary integration worktree, squash merges, human approval queue |
 | 6 — context assembly | **done** | priority bands, hierarchy + explicit refs, dedupe, budget, provenance manifest, prompt injection for run/queue/children |
-| 7 — TUI status surfaces | **core done** | issue tree (default, cache-backed) with rollups/badges, header counts, filters/sort, awaiting filter, detail metadata; dedicated awaiting queue view + activity feed + search pending |
-| 8 — completion/hardening | **core done** | acceptance verdicts (`accept`), parent closure requires closed children + acceptance, reserved close/reopen cascade; remaining: opt-in real-GitHub integration test, activity feed/search |
+| 7 — TUI status surfaces | **done** | five-page TUI, issue-primary work tree with untracked runs, new-run composer with model/context preview, run sections (overview/timeline/thinking/changes/children/context), search/filter, spend, settings/artifact browser |
+| 8 — completion/hardening | **core done** | acceptance verdicts (`accept`), parent closure requires closed children + acceptance, reserved close/reopen cascade; remaining: opt-in real-GitHub integration test |
 
-Current test suite: 123 tests (`npm test`).
+Current test suite: 134 tests (`npm test`).
 
 ## Settled decisions
 
 - Follow-up input is the `ask` tool; it stays within the same run.
 - Worktree isolation is a prerequisite and lands before run forking.
 - There is **no** `PLAN`/`BUILD`/`FULL` workflow abstraction.
-- `direct`/`verified`/`redundant` are **verification levels**, not execution
-  chains. `solo` is a delegation alias: the agent cannot spawn children.
+- `direct`/`verified`/`redundant` are **orchestration modes declared by the
+  selected role**. Architect owns them (`default_mode = "verified"`); General,
+  Build, Review, and Sudo have empty mode lists and run alone. There is no
+  global `solo` mode or TypeScript mode union.
 - Agent configuration is explicit, with presets and per-field overrides.
 - Every Epic has one reserved `Feature 0: Planning & Review`; every Feature has
   one reserved `Task 0: Planning & Review`. They are real GitHub issues.
@@ -213,19 +217,18 @@ amended to nine.
 - `ask` is registered only when `ask=true` and ambiguity is not `autonomous`.
 - Prompts explain policy; prompts are not the enforcement boundary.
 
-### 2.7 Legacy run-mode aliases
+### 2.7 Role-owned orchestration modes
 
-| Legacy flag | Meaning |
-|---|---|
-| `--mode solo` | `delegate=false`, `verification=direct`. |
-| `--mode direct` | `verification=direct`; delegation from agent config. |
-| `--mode verified` | `verification=verified`; delegation from agent config. |
-| `--mode redundant` | `verification=redundant`; runner-spawned Review if needed. |
+| Role | Modes | Meaning |
+|---|---|---|
+| General, Build, Review, Sudo | none | single-agent invocation |
+| Architect | `direct` | compile a packet; Build implements; gates |
+| Architect | `verified` (default) | direct + focused tests |
+| Architect | `redundant` | verified + independent Review |
 
-`run --mode verified` with the default Architect still behaves like today:
-`architect.orchestrate` + `delegate=true` + verified. `run --agent build
---mode verified` runs Build directly with tests/gates. `solo` no longer means
-“general/sudo only”; it means “this agent cannot spawn children.”
+`--mode` is validated against the selected role's `modes` array. Omitting it
+selects `default_mode` if the role declares one, otherwise the role runs alone.
+A single-agent packet omits `mode`. There is no `solo` value to pass.
 
 ### 2.8 Prompt composition
 
@@ -457,7 +460,7 @@ export interface RunSummary {
   ambiguity: "strict" | "precise" | "adaptive" | "autonomous";
   capabilities: string[];
 
-  mode?: "solo" | "direct" | "verified" | "redundant"; // legacy display alias
+  mode?: string;                    // role-declared; absent = single agent
   issue?: IssueRef;                // Task only
   packetId?: string;
   request: string;
@@ -746,7 +749,7 @@ Human approval flow:
 
 ```
 machine_code run [--agent <role>] [--preset <name>]
-                [--mode solo|direct|verified|redundant]
+                [--mode <mode declared by that role>]
                 [--delegate true|false]
                 [--verify direct|verified|redundant]
                 [--issues required|optional|disabled]
@@ -772,13 +775,13 @@ machine_code context <run-id>
 
 Compatibility:
 
-- `run --mode solo` → `delegate=false`, `verification=direct`.
-- `run --mode direct|verified|redundant` → sets verification; delegation from
-  config.
-- `run --mode verified` with the default Architect still delegates.
-- `run --agent build --mode verified` runs Build directly.
-- `--issue` must resolve to a Task; Epic/Feature input is resolved only for
-  planning/review, and rejected for Build.
+- `run --agent architect --mode direct|verified|redundant` selects the
+  Architect's data-declared orchestration mode.
+- `run --agent build` (no mode) runs Build alone; Build declares no modes.
+- `run --agent general` and `run --agent sudo` are single-agent runs.
+- `--issue` resolves to a Task. With `--auto-issue`, selecting an Epic creates
+  its Feature → Task chain (or reuses exact-title open children). Planning/
+  review roles resolve to the reserved Task 0.
 - Human approval is required unless the issue metadata explicitly sets
   `approval=agent`.
 
@@ -806,12 +809,17 @@ transcript.
 
 ```markdown
 <!-- mc:context
-{"packets":["20261031-thermal"],"knowledge":["knowledge/thermal.md"],"skills":["reference"],"tools":["scripts/bench.sh"]}
+{"packets":["20261031-thermal"],"files":["src/parser.ts"],
+ "knowledge":["knowledge/thermal.md"],"skills":["reference"],
+ "tools":["bench"],"scripts":["release-check"]}
 -->
 ```
 
-Issues reference artifacts; they do not duplicate them. Issue bodies stay
-concise: scope, status, acceptance criteria, dependencies, approval, references.
+Issues reference artifacts; they do not duplicate them. References cascade
+Task → Feature → Epic (nearest wins), so a Feature can declare the files/tools
+that all of its Tasks inherit. Issue bodies stay concise: scope, status,
+acceptance criteria, dependencies, approval, references. Tools live in
+`.machine_code/tools/<name>.toml`; plain scripts under `.machine_code/scripts/`.
 
 ### 5.3 Assembly
 
@@ -826,7 +834,8 @@ concise: scope, status, acceptance criteria, dependencies, approval, references.
 8. Write `context.json`; render labelled blocks.
 
 Default total: 24,000 chars. Caps: packet 8 KiB, Task 6 KiB, Feature 4 KiB, Epic
-3 KiB, knowledge 6 KiB, project plan/index 2 KiB, skills/tools 1 KiB.
+3 KiB, files/knowledge 8 KiB each, referenced skill 4 KiB, referenced
+tool/script 3 KiB, project plan/index 2 KiB.
 
 ### 5.4 Artifact versioning
 
@@ -1323,8 +1332,8 @@ project default. `disabled` never constructs a provider.
 
 | Conflict | Resolution |
 |---|---|
-| Existing modes conflate execution and verification | Split into `delegate` + `verification`; keep `--mode` aliases |
-| `solo` restricted to general/sudo | `solo` now means `delegate=false`; any eligible role may use it |
+| Existing modes conflate execution and verification | Split into role-owned orchestration `modes` + `verification` overrides |
+| `solo` hardcoded | Removed; a role with empty `modes` runs alone |
 | Architect is read-only | Gains `artifact:write`, issue, and (orchestrate) PR capabilities; still no `code:write` |
 | `task` is a stub | Repurposed as delegation; child roles depend on parent role |
 | No worktrees | Worktrees per run; branches per issue |
@@ -1520,8 +1529,10 @@ providers; no network/`gh` in the default suite.
   - `mode` maps to `delegate`/`verification` defaults;
   - missing `approval` → `human`;
   - missing `lastActivityAt` → `startedAt`/`endedAt`.
-- `run --mode solo|direct|verified|redundant` remains accepted as aliases.
-- `solo` now permits any eligible role; old general/sudo behavior unchanged.
+- `--mode` is accepted only when the selected role declares it. `solo` is
+  rejected with a hint to omit `--mode`; old runs with `mode: "solo"` remain
+  readable as display-only legacy data.
+- Single-agent queued packets may omit `mode`.
 - `task` becomes real; it only spawns when `delegate=true` and `run:spawn`.
 - Legacy `.md` packets remain readable.
 - Existing control file/ack remain valid; new actions additive.

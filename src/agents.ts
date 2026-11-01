@@ -23,14 +23,23 @@ import {
 
 export type AgentName = string;
 
+export interface AgentModeConfig {
+  verification?: string;
+  review?: boolean;
+}
+
 export interface AgentDef {
   name: AgentName;
   prompt: string;
   tools: readonly CoreToolName[];
   /** Mutating the worktree. Read-only agents cannot complete mutating tasks. */
   readonly: boolean;
-  /** Run modes the TUI offers for this role. */
+  /** Orchestration modes this role offers. Empty means a single-agent run. */
   modes: readonly string[];
+  /** Mode selected when the human does not choose one. */
+  defaultMode?: string;
+  /** Per-mode coordinator behavior from the role file. */
+  modeConfig: Record<string, AgentModeConfig>;
   blurb: string;
   preset: string;
 }
@@ -42,6 +51,8 @@ interface RoleData {
   tools?: unknown;
   readonly?: unknown;
   modes?: unknown;
+  default_mode?: unknown;
+  mode?: unknown;
   blurb?: unknown;
   preset?: unknown;
   capabilities?: unknown;
@@ -154,14 +165,33 @@ function agentPrompt(layout: Layout, name: AgentName): string {
   return typeof role.prompt === "string" ? role.prompt : "";
 }
 
+function modeConfigs(role: RoleData, modes: readonly string[]): Record<string, AgentModeConfig> {
+  const raw = role.mode;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, AgentModeConfig> = {};
+  for (const [mode, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!modes.includes(mode) || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    const v = value as Record<string, unknown>;
+    out[mode] = {
+      ...(typeof v.verification === "string" ? { verification: v.verification } : {}),
+      ...(typeof v.review === "boolean" ? { review: v.review } : {}),
+    };
+  }
+  return out;
+}
+
 export function agentDef(layout: Layout, name: AgentName): AgentDef {
   const role = roleData(name);
+  const modes = strings(role.modes);
+  const defaultModeRaw = typeof role.default_mode === "string" ? role.default_mode : undefined;
   return {
     name,
     prompt: agentPrompt(layout, name),
     tools: strings(role.tools) as CoreToolName[],
     readonly: role.readonly === true,
-    modes: strings(role.modes),
+    modes,
+    defaultMode: defaultModeRaw && modes.includes(defaultModeRaw) ? defaultModeRaw : undefined,
+    modeConfig: modeConfigs(role, modes),
     blurb: typeof role.blurb === "string" ? role.blurb : "",
     preset: typeof role.preset === "string" ? role.preset : "assistant",
   };

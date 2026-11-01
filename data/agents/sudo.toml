@@ -13,7 +13,7 @@ Rules:
 '''
 tools = ["read", "write", "edit", "search", "command", "task", "ask", "issue", "pr"]
 readonly = false
-modes = ["solo"]
+modes = []
 blurb = "full permissions; solo only"
 preset = "unrestricted"
 capabilities = ["code:read", "context:inherit", "code:write", "artifact:write", "issue:read", "pr:read", "pr:create", "pr:merge", "review:write"]

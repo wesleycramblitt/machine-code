@@ -4,8 +4,9 @@
  * Four separate axes (never conflated):
  *   role        — identity: general | architect | build | review | sudo
  *   config      — behavior: delegate / verification / issues / ask / approval
- *   run mode    — legacy CLI aliases (solo|direct|verified|redundant) that map
- *                 onto delegate + verification
+ *   mode        — orchestration mode declared by the role (for example
+ *                 architect: direct | verified | redundant); a role with no
+ *                 modes runs alone, so there is no special "solo" value
  *   ambiguity   — clarification policy; independent of everything above
  *
  * Enforcement lives in the harness (capability filtering, tool gating), not in
@@ -79,15 +80,12 @@ export interface ResolveInput {
   machineOverrides?: AgentConfigOverrides;
   /** Run-level explicit overrides (CLI flags). */
   runOverrides?: Partial<AgentConfig>;
-  /** Legacy --mode alias applied as overrides. */
-  legacyMode?: "solo" | "direct" | "verified" | "redundant";
 }
 
 /**
  * Precedence: run flag → repo policy → machine config → preset → built-in.
- * The legacy mode alias applies FIRST (it is the weakest, coarsest signal):
- * solo ⇒ delegate=false + verification=direct; direct/verified/redundant set
- * verification. Explicit fields then override per-field.
+ * Orchestration mode is not a behavior override; it is selected separately
+ * from the role's `modes` list and drives the coordinator/subagent chain.
  */
 export function resolveAgentConfig(input: ResolveInput): AgentConfig {
   const presetName = pickPreset(input);
@@ -101,13 +99,6 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     ambiguity: "precise",
   };
   const config: AgentConfig = { ...base };
-
-  if (input.legacyMode === "solo") {
-    config.delegate = false;
-    config.verification = "direct";
-  } else if (input.legacyMode) {
-    config.verification = input.legacyMode;
-  }
 
   const layers: Array<AgentConfigOverrides | undefined> = [
     machineOverridesToConfig(input.machineOverrides),
@@ -258,7 +249,6 @@ export function resolveAgent(
     agentPolicy?: AgentPolicy;
     machineOverrides?: AgentConfigOverrides;
     runOverrides?: Partial<AgentConfig>;
-    legacyMode?: "solo" | "direct" | "verified" | "redundant";
   } = {},
 ): ResolvedAgent {
   const def = agentDef(layout, role);
@@ -267,7 +257,6 @@ export function resolveAgent(
     agentPolicy: opts.agentPolicy,
     machineOverrides: opts.machineOverrides,
     runOverrides: opts.runOverrides,
-    legacyMode: opts.legacyMode,
   });
   const capabilities = capabilitiesFor(role, config);
   const capSet = new Set<string>(capabilities);

@@ -10,7 +10,7 @@
  * auth failures, and refusals do not retry.
  */
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Context, Message, Usage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Usage } from "@earendil-works/pi-ai";
 import { effectiveOutputCeiling, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
 import { pick, providerMultiplier } from "./select.js";
@@ -293,8 +293,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       },
       sessionId: recorder.id,
       convertToLlm,
-      streamFn: (model, context, options) =>
-        input.models.stream(model, context as Context, {
+      streamFn: (model, context, options) => {
+        const source = input.models.stream(model, context as Context, {
           ...options,
           maxTokens:
             ceiling === undefined
@@ -306,7 +306,47 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             userAgent: { custom: "machine_code/0.0.0" },
             attribution: { name: "machine_code", url: "https://github.com/extropian/machine-code" },
           },
-        }),
+        });
+        // Mirror text/thinking deltas into the event log so the run detail
+        // screen can show live reasoning without a second provider stream.
+        const wrapped = createAssistantMessageEventStream();
+        const call = callIndex;
+        let text = "";
+        let thinking = "";
+        let lastFlush = Date.now();
+        const flush = (): void => {
+          if (text) {
+            recorder.event("model_delta", { call, kind: "text", text });
+            text = "";
+          }
+          if (thinking) {
+            recorder.event("model_delta", { call, kind: "thinking", text: thinking });
+            thinking = "";
+          }
+          lastFlush = Date.now();
+        };
+        void (async () => {
+          try {
+            for await (const event of source) {
+              if (event.type === "text_delta") {
+                text += event.delta;
+              } else if (event.type === "thinking_delta") {
+                thinking += event.delta;
+              }
+              if (text.length >= 160 || thinking.length >= 160 || Date.now() - lastFlush >= 250) flush();
+              if (event.type === "text_end" || event.type === "thinking_end" || event.type === "done" || event.type === "error") flush();
+              wrapped.push(event as AssistantMessageEvent);
+            }
+            const result = await source.result();
+            flush();
+            wrapped.end(result);
+          } catch {
+            flush();
+            wrapped.end();
+          }
+        })();
+        return wrapped;
+      },
       prepareRequest: ({ context }) => {
         const chars =
           contextChars(context.messages) +
@@ -365,6 +405,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               .map((c) => c.text)
               .join("\n");
             recorder.event("model_call_end", {
+              call: callIndex,
               provider: message.provider,
               model: message.model,
               stopReason: message.stopReason,

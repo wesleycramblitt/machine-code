@@ -17,6 +17,7 @@ import {
   PRESETS,
 } from "../dist/agents/config.js";
 import { capabilitiesFor, hasCapability } from "../dist/policy/capabilities.js";
+import { agentDef } from "../dist/agents.js";
 import { taskTool } from "../dist/tools/task.js";
 import { RunRecorder } from "../dist/state/runs.js";
 
@@ -95,15 +96,30 @@ test("override precedence: run flag > repo policy > machine > preset", () => {
   );
 });
 
-test("legacy --mode aliases map onto delegate + verification", () => {
-  const solo = resolveAgentConfig({ role: "architect", legacyMode: "solo" });
-  assert.equal(solo.delegate, false);
-  assert.equal(solo.verification, "direct");
-  const verified = resolveAgentConfig({ role: "build", legacyMode: "verified" });
+test("verification is an explicit agent override, not a global mode", () => {
+  const verified = resolveAgentConfig({ role: "build", runOverrides: { verification: "verified" } });
   assert.equal(verified.verification, "verified");
-  assert.equal(verified.delegate, false, "build cannot delegate regardless of mode");
-  const redundant = resolveAgentConfig({ role: "build", legacyMode: "redundant" });
+  assert.equal(verified.delegate, false, "build cannot delegate regardless of verification");
+  const redundant = resolveAgentConfig({ role: "build", runOverrides: { verification: "redundant" } });
   assert.equal(redundant.verification, "redundant");
+});
+
+
+test("roles own their mode vocabulary and default mode", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-modes-"));
+  try {
+    const layout = fakeLayout(root);
+    assert.deepEqual(agentDef(layout, "general").modes, []);
+    assert.deepEqual(agentDef(layout, "sudo").modes, []);
+    assert.deepEqual(agentDef(layout, "build").modes, []);
+    const architect = agentDef(layout, "architect");
+    assert.deepEqual(architect.modes, ["direct", "verified", "redundant"]);
+    assert.equal(architect.defaultMode, "verified");
+    assert.deepEqual(architect.modeConfig.verified, { verification: "verified", review: false });
+    assert.deepEqual(architect.modeConfig.redundant, { verification: "redundant", review: true });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("ask is disabled in autonomous mode regardless of the ask flag", () => {
@@ -210,7 +226,7 @@ test("composed prompt states config, verification, ambiguity, and capabilities",
 
 function taskCtx(root, overrides = {}) {
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "architect", mode: "solo", request: "parent", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "parent", repoRoot: root });
   return {
     recorder,
     ctx: {

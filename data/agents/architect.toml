@@ -16,6 +16,7 @@ Rules:
 tools = ["read", "search", "task", "command", "ask", "issue", "pr"]
 readonly = true
 modes = ["direct", "verified", "redundant"]
+default_mode = "verified"
 blurb = "plans packets; runner chains Architect → Build → gates"
 preset = "orchestrate"
 capabilities = ["code:read", "context:inherit", "artifact:write", "issue:read", "pr:read"]
@@ -25,3 +26,17 @@ reasoning = 0.4
 agentic = 0.3
 code = 0.15
 general = 0.15
+
+# Mode behavior is data, not a TypeScript rule. The runner uses these fields
+# to configure Build and decide whether Review runs.
+[mode.direct]
+verification = "direct"
+review = false
+
+[mode.verified]
+verification = "verified"
+review = false
+
+[mode.redundant]
+verification = "redundant"
+review = true

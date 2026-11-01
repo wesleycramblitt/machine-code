@@ -1,9 +1,10 @@
 /**
  * machine_code — mode orchestration.
  *
- * solo → one General or Sudo invocation (M0).
- * direct/verified/redundant → Architect compiles a packet → Build implements
- * it → runner-owned acceptance gates → (redundant) Review judges.
+ * An agent with no configured modes runs alone.
+ * direct/verified/redundant → the selected orchestrator compiles a packet →
+ * Build implements it → runner-owned acceptance gates → (redundant) Review
+ * judges. Which modes exist, and the default, come from data/agents/*.toml.
  * Queued packets (input.packet) skip Architect and use the packet verbatim.
  *
  * `runLoop` (M0) runs a single agent; this layer chains phases per mode.
@@ -23,7 +24,8 @@ import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
 import type { Layout } from "./paths.js";
 
-export type RunMode = "solo" | "direct" | "verified" | "redundant";
+/** Run modes are strings from agent config, not a global TypeScript union. */
+export type RunMode = string;
 
 export interface OrchestrateInput {
   models: MutableModels;
@@ -32,7 +34,8 @@ export interface OrchestrateInput {
   layout: Layout;
   machine: MachineConfig;
   policy: Policy;
-  mode: RunMode;
+  /** Omitted when the selected agent has no orchestration modes. */
+  mode?: RunMode;
   agentName: AgentName | undefined;
   request: string;
   /** Main repository root: run state, spend, instances. */
@@ -136,67 +139,84 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     return null;
   };
 
-  switch (mode) {
-    case "solo": {
-      const name = input.agentName ?? "general";
-      if (name !== "general" && name !== "sudo" && name !== "architect") {
-        return {
-          status: "failed",
-          finalText: "",
-          error: `solo mode requires --agent general, sudo, or architect (planning with delegate=false)`,
-          runId: recorder.id,
-        };
-      }
-      const resolved = resolveAgent(layout, name, {
-        agentPolicy: policy.agents[name],
-        machineOverrides: machine.agents[name],
-        runOverrides: input.agentOverrides,
-      });
-      recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
-      const gate = await issueGate(resolved.config);
-      if (gate) return { status: "blocked", finalText: "", error: gate, runId: recorder.id };
-      const agentPolicy = policyFor(layout, name, policy);
-      const result = await singleAgentRun({
-        models: agents,
-        catalogue: input.catalogue,
-        configuredProviders: input.configuredProviders,
-        agent: resolved.def,
-        agentConfig: resolved.config,
-        agentCapabilities: resolved.capabilities,
-        policy: agentPolicy,
-        fullPolicy: policy,
-        layout,
-        machine,
-        request,
-        root,
-        toolRoot,
-        home,
-        availability,
-        recorder,
-        commands,
-        requireProvider: input.requireProvider,
-        requireModel: input.requireModel,
-        contextText: input.contextText,
-        signal: input.signal,
-      });
-      return { ...result, runId: recorder.id };
-    }
+  const selectedName = input.agentName ?? (mode ? "architect" : "general");
+  const selectedDef = agentDef(layout, selectedName);
+  const configuredMode = selectedDef.modes.length > 0
+    ? mode ?? selectedDef.defaultMode ?? selectedDef.modes[0]
+    : undefined;
+  if (!configuredMode) {
+    const name = selectedName;
+    const resolved = resolveAgent(layout, name, {
+      agentPolicy: policy.agents[name],
+      machineOverrides: machine.agents[name],
+      runOverrides: input.agentOverrides,
+    });
+    recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
+    const gate = await issueGate(resolved.config);
+    if (gate) return { status: "blocked", finalText: "", error: gate, runId: recorder.id };
+    const agentPolicy = policyFor(layout, name, policy);
+    const result = await singleAgentRun({
+      models: agents,
+      catalogue: input.catalogue,
+      configuredProviders: input.configuredProviders,
+      agent: resolved.def,
+      agentConfig: resolved.config,
+      agentCapabilities: resolved.capabilities,
+      policy: agentPolicy,
+      fullPolicy: policy,
+      layout,
+      machine,
+      request,
+      root,
+      toolRoot,
+      home,
+      availability,
+      recorder,
+      commands,
+      requireProvider: input.requireProvider,
+      requireModel: input.requireModel,
+      contextText: input.contextText,
+      signal: input.signal,
+    });
+    return { ...result, runId: recorder.id };
+  }
 
-    case "direct":
-    case "verified":
-    case "redundant": {
+  if (!selectedDef.modes.includes(configuredMode)) {
+    return {
+      status: "failed",
+      finalText: "",
+      error: `agent ${selectedName} does not offer mode "${configuredMode}" (available: ${selectedDef.modes.join(", ") || "none"})`,
+      runId: recorder.id,
+    };
+  }
+
+  const modeConfig = selectedDef.modeConfig[configuredMode];
+  if (!modeConfig) {
+    return {
+      status: "failed",
+      finalText: "",
+      error: `mode "${configuredMode}" has no data configuration in agent ${selectedName}`,
+      runId: recorder.id,
+    };
+  }
+  const modeVerification: Verification =
+    modeConfig.verification === "direct" || modeConfig.verification === "redundant" || modeConfig.verification === "verified"
+      ? modeConfig.verification
+      : "verified";
+
+  {
       let packet: TaskPacket;
       if (input.packet) {
         packet = input.packet;
       } else {
         // The chain architect plans only (delegate=false): the RUNNER chains
         // to Build; the architect never spawns.
-        const resolvedArch = resolveAgent(layout, "architect", {
-          agentPolicy: policy.agents.architect,
-          machineOverrides: machine.agents.architect,
+        const resolvedArch = resolveAgent(layout, selectedName, {
+          agentPolicy: policy.agents[selectedName],
+          machineOverrides: machine.agents[selectedName],
           runOverrides: { ...(input.agentOverrides ?? {}), delegate: false, preset: "plan" as const },
         });
-        const archPolicy = policyFor(layout, "architect", policy);
+        const archPolicy = policyFor(layout, selectedName, policy);
         const archResult = await singleAgentRun({
           models: agents,
           catalogue: input.catalogue,
@@ -208,7 +228,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
           fullPolicy: policy,
           layout,
           machine,
-          request: `Compile a task packet for this request. Output ONLY the packet in YAML-frontmatter markdown:\n\n---\nid: <${newPacketId(request)}>\nmode: ${mode}\nbudget_tokens: ${machine.maxOutputTokens ?? 200000}\n---\n\n# Goal\n<one line>\n\n# Context\n- <file paths>\n\n# Constraints\n- <constraints>\n\n# Acceptance\n- <named command with typed args>\n\n${request}`,
+          request: `Compile a task packet for this request. Output ONLY the packet in YAML-frontmatter markdown:\n\n---\nid: <${newPacketId(request)}>\nmode: ${configuredMode}\nbudget_tokens: ${machine.maxOutputTokens ?? 200000}\n---\n\n# Goal\n<one line>\n\n# Context\n- <file paths>\n\n# Constraints\n- <constraints>\n\n# Acceptance\n- <named command with typed args>\n\n${request}`,
           root,
           toolRoot,
           home,
@@ -228,7 +248,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
             runId: recorder.id,
           };
         }
-        packet = parsePacket(archResult.finalText, mode as PacketMode, newPacketId(request));
+        packet = parsePacket(archResult.finalText, configuredMode, newPacketId(request));
         recorder.event("packet_compiled", {
           id: packet.id,
           mode: packet.mode,
@@ -243,7 +263,9 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       const resolvedBuild = resolveAgent(layout, "build", {
         agentPolicy: policy.agents.build,
         machineOverrides: machine.agents.build,
-        runOverrides: { verification: mode as Verification, ...input.agentOverrides },
+        // The selected mode owns subagent verification; a generic --verify
+      // override must not silently turn direct into verified.
+      runOverrides: { ...input.agentOverrides, verification: modeVerification },
       });
       recorder.recordConfig({ ...resolvedBuild.config, capabilities: resolvedBuild.capabilities });
       const buildGate = await issueGate(resolvedBuild.config);
@@ -300,7 +322,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
         };
       }
 
-      if (mode === "redundant") {
+      if (modeConfig.review) {
         const resolvedReview = resolveAgent(layout, "review", {
           agentPolicy: policy.agents.review,
           machineOverrides: machine.agents.review,
@@ -383,7 +405,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
         runId: recorder.id,
       };
     }
-  }
 }
 
 function parseAcceptance(item: string): { command: string; args: Record<string, unknown> } {

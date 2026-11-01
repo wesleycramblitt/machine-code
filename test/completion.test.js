@@ -109,7 +109,7 @@ test("completion requires closed deliverable children and acceptance evidence", 
     assert.equal(noAcceptance.ok, false);
     assert.match(noAcceptance.reason, /acceptance/);
 
-    const recorder = new RunRecorder(layout, { agent: "review", mode: "solo", request: "review", repoRoot: root, issue: feature.ref });
+    const recorder = new RunRecorder(layout, { agent: "review", mode: "", request: "review", repoRoot: root, issue: feature.ref });
     recorder.event("acceptance_verified", { issue: 20, by: "human", criteria: [] });
     recorder.finalize("completed");
     assert.equal((await acceptanceEvidence(layout, feature.ref)).verified, true);

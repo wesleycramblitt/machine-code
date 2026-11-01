@@ -1,0 +1,197 @@
+/**
+ * machine_code — synchronous context preview for the TUI.
+ *
+ * This is deliberately not `assembleContext`: the draw path must never block
+ * on gh or a slow filesystem. It derives the same cascade from the cached
+ * issue hierarchy and caps file reads, which is enough to show what a run will
+ * inherit before it starts.
+ */
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
+import type { Layout } from "../paths.js";
+import type { Issue, IssueRef } from "../issues/provider.js";
+import { artifactExists, artifactPath, listArtifacts, resolveArtifact, type ArtifactDef } from "../artifacts/registry.js";
+import { parseArtifactReferences } from "./references.js";
+
+export interface PreviewSource {
+  kind: "issue" | "file" | "knowledge" | "skill" | "tool" | "script" | "project";
+  ref: string;
+  origin: "explicit" | "inherited";
+  depth: number;
+  chars: number;
+  exists: boolean;
+  note?: string;
+}
+
+export interface ContextPreview {
+  chars: number;
+  promptChars: number;
+  sources: PreviewSource[];
+  issueChain: Issue[];
+  artifacts: {
+    files: string[];
+    knowledge: string[];
+    skills: string[];
+    tools: ArtifactDef[];
+    scripts: ArtifactDef[];
+  };
+  warnings: string[];
+}
+
+const FILE_CAP = 8 * 1024;
+const ARTIFACT_CAP = 3 * 1024;
+const SKILL_CAP = 4 * 1024;
+
+function keyOf(ref: IssueRef): string {
+  return `${ref.repo}#${ref.number}`;
+}
+
+function capFor(file: string, cap: number): number {
+  try {
+    return Math.min(cap, statSync(file).size);
+  } catch {
+    return 0;
+  }
+}
+
+function skillPath(layout: Layout, name: string): string | null {
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;
+  for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
+    const file = join(dir, "SKILL.md");
+    if (existsSync(file)) return file;
+  }
+  return null;
+}
+
+/** Build the exact hierarchy chain (nearest first) from a cached issue list. */
+export function issueChain(issues: readonly Issue[], ref?: IssueRef): Issue[] {
+  if (!ref) return [];
+  const map = new Map(issues.map((issue) => [keyOf(issue.ref), issue]));
+  const chain: Issue[] = [];
+  let current = map.get(keyOf(ref));
+  const seen = new Set<string>();
+  while (current && !seen.has(keyOf(current.ref)) && chain.length < 5) {
+    chain.push(current);
+    seen.add(keyOf(current.ref));
+    current = current.parent ? map.get(keyOf(current.parent)) : undefined;
+  }
+  return chain;
+}
+
+export function previewContext(
+  layout: Layout,
+  issues: readonly Issue[],
+  ref?: IssueRef,
+  prompt = "",
+): ContextPreview {
+  const chain = issueChain(issues, ref);
+  const sources: PreviewSource[] = [];
+  const warnings: string[] = [];
+  const files: string[] = [];
+  const knowledge: string[] = [];
+  const skills: string[] = [];
+  const tools: ArtifactDef[] = [];
+  const scripts: ArtifactDef[] = [];
+  let chars = 0;
+
+  for (let depth = 0; depth < chain.length; depth++) {
+    const issue = chain[depth]!;
+    const origin = depth === 0 ? "explicit" : "inherited";
+    const bodyChars = Math.min(6 * 1024, issue.body.length + issue.title.length + issue.acceptance.join(" ").length);
+    chars += bodyChars;
+    sources.push({ kind: "issue", ref: `#${issue.ref.number} ${issue.title}`, origin, depth, chars: bodyChars, exists: true });
+    const refs = parseArtifactReferences(issue.body);
+    for (const path of refs.files) {
+      if (files.includes(path)) continue;
+      files.push(path);
+      const root = resolve(layout.repoRoot);
+      const abs = resolve(root, path);
+      const inside = abs === root || abs.startsWith(root + sep);
+      const exists = inside && existsSync(abs);
+      const size = exists ? capFor(abs, FILE_CAP) : 0;
+      chars += size;
+      sources.push({ kind: "file", ref: path, origin, depth, chars: size, exists });
+      if (!exists) warnings.push(`file ${path} is missing`);
+    }
+    for (const path of refs.knowledge) {
+      if (knowledge.includes(path)) continue;
+      knowledge.push(path);
+      const root = resolve(layout.repoRoot);
+      const abs = resolve(root, path);
+      const inside = abs === root || abs.startsWith(root + sep);
+      const exists = inside && existsSync(abs);
+      const size = exists ? capFor(abs, FILE_CAP) : 0;
+      chars += size;
+      sources.push({ kind: "knowledge", ref: path, origin, depth, chars: size, exists });
+      if (!exists) warnings.push(`knowledge ${path} is missing`);
+    }
+    for (const name of refs.skills) {
+      if (skills.includes(name)) continue;
+      skills.push(name);
+      const path = skillPath(layout, name);
+      const size = path ? capFor(path, SKILL_CAP) : 0;
+      chars += size;
+      sources.push({ kind: "skill", ref: name, origin, depth, chars: size, exists: Boolean(path) });
+      if (!path) warnings.push(`skill ${name} is missing`);
+    }
+    for (const [list, target, kind] of [
+      [refs.tools, tools, "tool"],
+      [refs.scripts, scripts, "script"],
+    ] as const) {
+      for (const name of list) {
+        if (target.some((artifact) => artifact.name === name)) continue;
+        const artifact = resolveArtifact(layout, name);
+        if (!artifact) {
+          warnings.push(`${kind} ${name} is missing`);
+          sources.push({ kind, ref: name, origin, depth, chars: 0, exists: false });
+          continue;
+        }
+        target.push(artifact);
+        const path = artifactPath(layout, artifact);
+        const size = path ? Math.min(ARTIFACT_CAP, artifact.description.length + 160) : 0;
+        chars += size;
+        sources.push({
+          kind,
+          ref: artifact.name,
+          origin,
+          depth,
+          chars: size,
+          exists: artifactExists(layout, artifact),
+          note: artifact.description || undefined,
+        });
+      }
+    }
+  }
+
+  const planPath = [".machine_code/plan.md", "plan.md"].map((p) => join(layout.repoRoot, p)).find((p) => existsSync(p));
+  if (planPath) {
+    const size = Math.min(2 * 1024, statSync(planPath).size);
+    chars += size;
+    sources.push({ kind: "project", ref: planPath.replace(`${layout.repoRoot}/`, ""), origin: "inherited", depth: 3, chars: size, exists: true });
+  }
+
+  return {
+    chars,
+    promptChars: prompt.length,
+    sources,
+    issueChain: chain,
+    artifacts: { files, knowledge, skills, tools, scripts },
+    warnings,
+  };
+}
+
+/** Cheap index for the artifact browser. */
+export function artifactPreview(layout: Layout): ArtifactDef[] {
+  return listArtifacts(layout);
+}
+
+/** Read a small slice only when the user explicitly opens an artifact. */
+export function artifactPeek(layout: Layout, artifact: ArtifactDef, cap = 4 * 1024): string {
+  const path = artifactPath(layout, artifact);
+  if (!path || !existsSync(path)) return "(missing)";
+  try {
+    return readFileSync(path, "utf8").slice(0, cap);
+  } catch {
+    return "(unreadable)";
+  }
+}

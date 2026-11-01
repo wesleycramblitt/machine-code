@@ -93,8 +93,8 @@ test("artifact reference + skill front-matter parsers", () => {
   const refs = parseArtifactReferences(
     '<!-- mc:context {"packets":["p1"],"knowledge":["knowledge/a.md"],"skills":["reference"],"tools":["scripts/x.sh"],"junk":1} -->',
   );
-  assert.deepEqual(refs, { packets: ["p1"], knowledge: ["knowledge/a.md"], skills: ["reference"], tools: ["scripts/x.sh"] });
-  assert.deepEqual(parseArtifactReferences("none"), { packets: [], knowledge: [], skills: [], tools: [] });
+  assert.deepEqual(refs, { packets: ["p1"], files: [], knowledge: ["knowledge/a.md"], skills: ["reference"], tools: ["scripts/x.sh"], scripts: [] });
+  assert.deepEqual(parseArtifactReferences("none"), { packets: [], files: [], knowledge: [], skills: [], tools: [], scripts: [] });
   const skill = parseSkillFrontMatter("---\nname: reference\ndescription: research\n---\n# body", "x");
   assert.deepEqual(skill, { name: "reference", description: "research", path: "x" });
 });
@@ -225,6 +225,43 @@ test("project plan and skill descriptions are included last", async () => {
     assert.ok(kinds.includes("skill"));
     assert.match(bundle.text, /Project plan/);
     assert.match(bundle.text, /reference: research and curation/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact references cascade Task → Feature → Epic, including files/tools/scripts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-artifacts-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, ".machine_code", "tools"), { recursive: true });
+    mkdirSync(join(root, ".machine_code", "scripts"), { recursive: true });
+    writeFileSync(join(root, "src", "thermal.ts"), "export const thermal = 1;\n", "utf8");
+    writeFileSync(
+      join(root, ".machine_code", "tools", "bench.toml"),
+      'name = "bench"\ndescription = "fast benchmark"\ncommand = ".machine_code/scripts/bench-run.sh"\n',
+      "utf8",
+    );
+    writeFileSync(join(root, ".machine_code", "scripts", "release-check.sh"), "#!/usr/bin/env bash\n# release guard\n", "utf8");
+    writeFileSync(join(root, ".machine_code", "scripts", "bench-run.sh"), "#!/usr/bin/env bash\n# bench runner\n", "utf8");
+    const provider = hierarchyProvider();
+    provider.map.get(20).body = '<!-- mc:context {"files":["src/thermal.ts"],"tools":["bench"],"scripts":["release-check"]} -->';
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      provider,
+      issue: { provider: "github", repo: "o/r", number: 31 },
+    });
+    const kinds = bundle.sources.map((source) => source.kind);
+    assert.ok(kinds.includes("file"));
+    assert.ok(kinds.includes("tool"));
+    assert.ok(kinds.includes("script"));
+    const file = bundle.sources.find((source) => source.kind === "file");
+    assert.equal(file.origin, "inherited");
+    assert.equal(file.depth, 1);
+    assert.match(bundle.text, /export const thermal/);
+    assert.match(bundle.text, /fast benchmark/);
+    assert.match(bundle.text, /release guard/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

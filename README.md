@@ -17,14 +17,14 @@ node dist/cli.js catalogue refresh
 ## Usage
 ```
 # read-only question
-node dist/cli.js run --mode solo --agent general "summarize README.md"
+node dist/cli.js run --agent general "summarize README.md"
 
 # implementation run in an isolated worktree on a Task branch
-node dist/cli.js run --mode verified --issue 31 "implement the thermal model"
+node dist/cli.js run --agent architect --mode verified --issue 31 "implement the thermal model"
 
 # agent configuration (preset + explicit overrides)
-node dist/cli.js run --mode solo --agent architect --preset orchestrate \
-  --delegate true --verify verified --ambiguity precise "plan the release"
+node dist/cli.js run --agent architect --mode verified --preset orchestrate \
+  --delegate true --ambiguity precise "plan the release"
 
 # follow-ups, pause/fork, resume after a crash
 node dist/cli.js respond <run-id> "use leapfrog"
@@ -54,8 +54,10 @@ node dist/cli.js catalogue snapshot          # update committed data/models + da
 
 # worktrees, inspection
 node dist/cli.js worktree list
-node dist/cli.js status
-node dist/cli.js log <run-id>
+node dist/cli.js runs                 # Epic → Feature → Task → runs + untracked
+node dist/cli.js show <run-id>        # overview/context/changes/children/events
+node dist/cli.js spend --days 30
+node dist/cli.js tools
 node dist/cli.js tui                  # default when run with no command
 ```
 
@@ -101,6 +103,38 @@ image/video/audio/guard models, which the selector rejects as coding
 candidates. Minimums are layered in `~/.machine_code/config.toml` and
 `.machine_code/policy.toml`; see `machine_code policy [role]` and
 `machine_code policy edit`.
+
+### Work pages and modes
+
+`machine_code runs` is the scriptable version of the TUI's Work page: it nests
+Epic → Feature → Task → runs and keeps runs with no issue under Untracked.
+`machine_code show <run-id>` exposes the same overview, context, changes,
+children, and event stream as the run detail screen. `machine_code spend` and
+`machine_code models` cover the catalogue and cost views without the TUI.
+
+Run modes belong to the selected agent. The Architect declares `direct`,
+`verified`, and `redundant` (default `verified`) plus the per-mode
+`verification`/`review` behavior in `data/agents/architect.toml`. A role with
+no modes runs alone, so `solo` is never passed. This keeps the
+coordinator/subagent chain data-driven instead of hardcoding a global mode
+enum.
+
+### Issue context and reusable tools
+
+An issue can declare a compact context block; the harness merges Task →
+Feature → Epic, nearest first:
+
+```markdown
+<!-- mc:context
+{"files":["src/parser.ts"],"knowledge":["knowledge/parser.md"],
+ "skills":["reference"],"tools":["bench"],"scripts":["release-check"]}
+-->
+```
+
+Tools live in `.machine_code/tools/<name>.toml`, scripts under
+`.machine_code/scripts/`. `machine_code tools new <name>` scaffolds both.
+The new-run composer previews exactly which files, tools, scripts, and issues
+the selected run will inherit before it starts.
 
 Prompted runs: every run has a stable id, an append-only event log, a
 transcript checkpoint, and (when it mutates code) its own worktree and branch.

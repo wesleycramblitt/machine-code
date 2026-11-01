@@ -41,47 +41,144 @@ export function appendSpendRecord(home: string, record: SpendRecord): void {
   appendFileSync(spendFile(home), capped + "\n", "utf8");
 }
 
+export interface SpendBucket {
+  actual: number;
+  estimated: number;
+  calls: number;
+  /** Billable token volume. */
+  tokens: number;
+  /** Tokens billed at zero actual cost (free models/quotas). */
+  freeTokens: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 export interface SpendSummary {
   totalActual: number;
   totalEstimated: number;
-  byProvider: Record<string, { actual: number; estimated: number; calls: number }>;
-  byModel: Record<string, { actual: number; estimated: number; calls: number }>;
-  byDay: Record<string, { actual: number; estimated: number; calls: number }>;
-  byProject: Record<string, { actual: number; estimated: number; calls: number }>;
+  totalTokens: number;
+  freeTokens: number;
+  byProvider: Record<string, SpendBucket>;
+  byModel: Record<string, SpendBucket>;
+  byAgent: Record<string, SpendBucket>;
+  byDay: Record<string, SpendBucket>;
+  byProject: Record<string, SpendBucket>;
 }
 
-export function readSpendSummary(home: string): SpendSummary {
+export interface SpendQuery {
+  /** Include records whose UTC day is within the last N days. */
+  days?: number;
+  provider?: string;
+  model?: string;
+  agent?: string;
+  project?: string;
+}
+
+function emptyBucket(): SpendBucket {
+  return { actual: 0, estimated: 0, calls: 0, tokens: 0, freeTokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+}
+
+function add(bucket: SpendBucket, rec: SpendRecord): void {
+  const actual = rec.cost.actual ?? 0;
+  const tokens = rec.usage.totalTokens || rec.usage.input + rec.usage.output + rec.usage.cacheRead + rec.usage.cacheWrite;
+  const free = actual === 0 && (rec.cost.actual !== null || rec.cost.estimated === 0);
+  bucket.actual += actual;
+  bucket.estimated += rec.cost.estimated;
+  bucket.calls += 1;
+  bucket.tokens += tokens;
+  bucket.freeTokens += free ? tokens : 0;
+  bucket.input += rec.usage.input;
+  bucket.output += rec.usage.output;
+  bucket.cacheRead += rec.usage.cacheRead;
+  bucket.cacheWrite += rec.usage.cacheWrite;
+}
+
+function matches(rec: SpendRecord, query: SpendQuery): boolean {
+  if (query.provider && rec.provider !== query.provider) return false;
+  if (query.agent && rec.agent !== query.agent) return false;
+  if (query.project && rec.repoRoot !== query.project) return false;
+  if (query.model && !(rec.model === query.model || `${rec.provider}/${rec.model}` === query.model)) return false;
+  if (query.days !== undefined) {
+    const cutoff = Date.now() - query.days * 24 * 60 * 60 * 1000;
+    const t = new Date(rec.t).getTime();
+    if (!Number.isFinite(t) || t < cutoff) return false;
+  }
+  return true;
+}
+
+export function readSpendRecords(home: string): SpendRecord[] {
+  const file = spendFile(home);
+  if (!existsSync(file)) return [];
+  const out: SpendRecord[] = [];
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line) as SpendRecord);
+    } catch {
+      // skip a partial/corrupt append; never fail the whole view
+    }
+  }
+  return out;
+}
+
+export function summarizeSpend(records: readonly SpendRecord[]): SpendSummary {
   const summary: SpendSummary = {
     totalActual: 0,
     totalEstimated: 0,
+    totalTokens: 0,
+    freeTokens: 0,
     byProvider: {},
     byModel: {},
+    byAgent: {},
     byDay: {},
     byProject: {},
   };
-  const file = spendFile(home);
-  if (!existsSync(file)) return summary;
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    if (!line.trim()) continue;
-    let rec: SpendRecord;
-    try { rec = JSON.parse(line) as SpendRecord; } catch { continue; }
+  for (const rec of records) {
     const actual = rec.cost.actual ?? 0;
-    const estimated = rec.cost.estimated;
+    const tokens = rec.usage.totalTokens || rec.usage.input + rec.usage.output + rec.usage.cacheRead + rec.usage.cacheWrite;
+    const free = actual === 0 && (rec.cost.actual !== null || rec.cost.estimated === 0);
     summary.totalActual += actual;
-    summary.totalEstimated += estimated;
+    summary.totalEstimated += rec.cost.estimated;
+    summary.totalTokens += tokens;
+    summary.freeTokens += free ? tokens : 0;
     const day = rec.t.slice(0, 10);
     for (const [bucket, key] of [
       [summary.byProvider, rec.provider],
       [summary.byModel, `${rec.provider}/${rec.model}`],
+      [summary.byAgent, rec.agent || "unknown"],
       [summary.byDay, day],
       [summary.byProject, rec.repoRoot],
-    ] as Array<[Record<string, { actual: number; estimated: number; calls: number }>, string]>) {
-      const entry = bucket[key] ?? { actual: 0, estimated: 0, calls: 0 };
-      entry.actual += actual;
-      entry.estimated += estimated;
-      entry.calls += 1;
+    ] as Array<[Record<string, SpendBucket>, string]>) {
+      const entry = bucket[key] ?? emptyBucket();
+      add(entry, rec);
       bucket[key] = entry;
     }
   }
   return summary;
+}
+
+/** Read and optionally filter the ledger. */
+export function readSpendSummary(home: string, query: SpendQuery = {}): SpendSummary {
+  return summarizeSpend(readSpendRecords(home).filter((rec) => matches(rec, query)));
+}
+
+/** Chronological daily totals, with missing days filled so charts stay stable. */
+export function spendDays(summary: SpendSummary, days: number): Array<{ day: string; bucket: SpendBucket }> {
+  const out: Array<{ day: string; bucket: SpendBucket }> = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+    const day = d.toISOString().slice(0, 10);
+    out.push({ day, bucket: summary.byDay[day] ?? emptyBucket() });
+  }
+  return out;
+}
+
+/** A compact Unicode bar for spend/cost visualizations. */
+export function spendBar(value: number, max: number, width: number): string {
+  if (width <= 0) return "";
+  if (max <= 0 || value <= 0) return " ".repeat(width);
+  const filled = Math.max(1, Math.round((value / max) * width));
+  return "█".repeat(Math.min(width, filled)).padEnd(width, " ");
 }

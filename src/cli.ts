@@ -2,7 +2,7 @@
 /**
  * machine_code — CLI.
  *
- * M0: init, providers, catalogue refresh, run (solo general), log, status.
+ * M0: init, providers, catalogue refresh, run, log, status.
  * The TUI becomes the default command in M3.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -14,17 +14,18 @@ import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY, AGENT
 import { createModelsCollection, availableChatModels, providerStatuses } from "./models.js";
 import { refreshCatalogue } from "./catalogue/refresh.js";
 import { loadCatalogue } from "./catalogue/load.js";
+import { filterModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import { snapshotFiles } from "./catalogue/snapshot.js";
 import { pick, axisWeights } from "./select.js";
 import { CAPABILITY_AXES } from "./config.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 // agents resolved inside orchestrate.ts
 import { orchestrate, type RunMode } from "./orchestrate.js";
-import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, type RunStatus } from "./state/runs.js";
+import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, type RunStatus, type RunSummary } from "./state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "./state/question.js";
 import { loadTranscript, repairResumeTail } from "./state/transcript.js";
 import { packetPath, readPacket } from "./packet.js";
-import { type AgentName } from "./agents.js";
+import { agentDef, type AgentName } from "./agents.js";
 import { resolveAgent, type AgentConfig } from "./agents/config.js";
 import { runLoop, type RunLoopResult } from "./loop.js";
 import { policyFor, type OrchestrateResult } from "./orchestrate.js";
@@ -33,9 +34,18 @@ import { allCommands } from "./commands/profiles.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
 import { parseIssueRef, type IssueRef } from "./issues/provider.js";
-import { ensureEpicReserved, ensureFeatureReserved, resolvePlanningAnchor, validateRunIssue } from "./issues/reserved.js";
+import { ensureEpicReserved, ensureFeatureReserved } from "./issues/reserved.js";
+import { resolveRunTarget } from "./issues/work.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
 import { loadAvailability } from "./availability.js";
+import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
+import { readIssueCache } from "./issues/cache.js";
+import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
+import { buildWorkIndex, type WorkRow } from "./tui/work.js";
+import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
+import { artifactPeek } from "./context/preview.js";
+import { changesFor, childRuns, readContextManifest, thinkingChunks, touchedPaths } from "./report/run.js";
+import { buildSettings, settingsFileFor } from "./tui/settings.js";
 import { fundedProviderIds, packageDataDir } from "./data.js";
 import { runTui } from "./tui.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
@@ -85,24 +95,26 @@ const VERSION = "0.0.0";
 const HELP = `machine_code ${VERSION}
 
 Usage:
-  machine_code run --mode solo --agent general [--provider <id>] [--model <key>] "<question>"
-  machine_code run --mode direct|verified|redundant "<task>"
-  machine_code run --mode solo --agent sudo "<rare task>"
+  machine_code run --agent general [--provider <id>] [--model <key>] "<question>"
+  machine_code run --agent architect [--mode direct|verified|redundant] "<task>" [--issue <n> [--auto-issue]]
+  machine_code run --agent sudo "<rare task>"
                                     Mutating runs use an isolated worktree:
-                                    [--issue <n>] [--issue-type task|feature]
+                                    [--issue <n>] [--auto-issue] [--issue-type task|feature]
                                     [--feature <n>] [--base <ref>]
                                     Agent config overrides:
                                     [--preset plan|orchestrate|implement|review|assistant|unrestricted]
                                     [--delegate true|false] [--verify direct|verified|redundant]
                                     [--issues required|optional|disabled] [--ask true|false]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
+                                    [--mode <agent mode>] (roles declare their own modes)
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
                                     Install missing base CLIs (default: pinned static binaries)
   machine_code providers            List providers, key sources, and model counts
-  machine_code models [filter]      Inspect the catalogue (--all, --provider, --min-cap, --axes, --json)
+  machine_code models [filter]      Inspect the catalogue (--all, --provider, --family, --free,
+                                    --coding, --tool, --min-cap, --axis, --sort, --axes, --json)
   machine_code policy [role]        Show effective capability policy (--json)
   machine_code policy edit [--repo] Edit machine defaults or repo overrides
   machine_code models --agent <role> Dry-run selection (--context-chars N, --min-fit N,
@@ -110,6 +122,18 @@ Usage:
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
+  machine_code runs [--group issues|project|status|agent] [--filter ...] [--text Q]
+                                    Hierarchical work view with untracked runs
+  machine_code show <run-id>        Rich run detail: model, ask, context, changes, children
+                                    [--events] [--thinking] [--changes] [--context] [--json]
+  machine_code context <run-id>     Print the run context manifest
+  machine_code spend [--days N] [--by provider|model|day|agent] [--json]
+  machine_code tools [tool|script]  List repo/machine tools and scripts
+  machine_code tools new <name>     Create an executable script + manifest
+  machine_code tools add <name>     Add a reusable tool manifest
+  machine_code tools show <name>    Show manifest and script
+  machine_code config [paths|show|edit [machine|repo|file]]
+  machine_code correct <run-id> "<correction>"  Interrupt and fork a corrective run
   machine_code log <run-id>         Print a run's summary and events
   machine_code status               List runs across projects
   machine_code resume <run-id>      Resume an interrupted/paused/awaiting run [--recreate]
@@ -129,6 +153,7 @@ Usage:
   machine_code pr list|status <n>   Inspect pull requests
   machine_code provider disable|enable <name>
   machine_code provider cooldown <name> [minutes] | cooldown clear <name>
+  machine_code model show <key|name>   Inspect axes, offers, providers for a model
   machine_code model cooldown clear <id>
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code queue               Process committed packets in .machine_code/tasks/
@@ -143,10 +168,20 @@ function fail(message: string, code = 1): never {
 /** Flags that are switches: bare `--name` is true and never consumes the next arg. */
 const BOOLEAN_FLAGS = new Set([
   "all",
+  "attention",
+  "auto-issue",
   "axes",
+  "changes",
+  "context",
+  "events",
+  "full",
+  "thinking",
   "delete-branch",
   "direct-exec",
   "force",
+  "free",
+  "coding",
+  "tool",
   "inherit-worktree",
   "json",
   "recreate",
@@ -414,6 +449,10 @@ function cmdPolicy(argv: string[]): number {
           providers: machine.providers,
           builtIn: DEFAULT_AGENT_POLICY,
           agents: policy.agents,
+          modes: Object.fromEntries(AGENT_NAMES.map((name) => {
+            const def = agentDef(l, name);
+            return [name, { modes: def.modes, default: def.defaultMode ?? null, config: def.modeConfig }];
+          })),
           files: { machine: l.machineConfig, repo: l.policyFile },
         },
         null,
@@ -451,6 +490,8 @@ function cmdPolicy(argv: string[]): number {
     const weights = CAPABILITY_AXES.map((axis) => `${axis} ${effectiveWeights[axis].toFixed(2)}`).join("  ");
     process.stdout.write(`\n[${name}]\n`);
     process.stdout.write(`  min_fit ${ap.minFit}   min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
+    const def = agentDef(l, name);
+    process.stdout.write(`  modes ${def.modes.length ? `${def.modes.join(", ")}${def.defaultMode ? ` (default ${def.defaultMode})` : ""}` : "single-agent"}\n`);
     process.stdout.write(`  axes ${floors || "(none)"}\n`);
     process.stdout.write(`  weights ${weights}${ap.axisWeights ? "" : " (role defaults)"}\n`);
   }
@@ -522,15 +563,21 @@ function cmdModels(argv: string[]): number {
 
   let rows = doc.models.filter((m) => all || configured.has(m.providerID));
   if (provider) rows = rows.filter((m) => m.providerID === provider);
-  if (minCap !== undefined) rows = rows.filter((m) => m.scores.capability >= minCap);
-  if (query) {
-    rows = rows.filter(
-      (m) => m.key.toLowerCase().includes(query) || m.name.toLowerCase().includes(query),
-    );
-  }
-  rows = [...rows].sort(
-    (a, b) => b.scores.capability - a.scores.capability || (a.key < b.key ? -1 : 1),
-  );
+  const family = flags.get("family");
+  const sortFlag = (flags.get("sort") ?? "capability") as ModelSort;
+  const sorts: ModelSort[] = ["capability", "fit", "reasoning", "code", "agentic", "general", "context", "price-in", "price-out", "name"];
+  if (!sorts.includes(sortFlag)) fail(`--sort must be one of ${sorts.join(", ")}`);
+  const axisFloor = flags.get("axis") ? parseAxisOverrides(flags.get("axis")!) : {};
+  rows = filterModels(rows, {
+    text: query,
+    minCapability: minCap !== undefined && Number.isFinite(minCap) ? minCap : undefined,
+    families: family ? [family] : undefined,
+    freeOnly: flags.has("free"),
+    codingOnly: flags.has("coding"),
+    toolCall: flags.has("tool"),
+    minAxes: axisFloor,
+    sort: sortFlag,
+  });
 
   if (flags.has("json")) {
     process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
@@ -630,8 +677,9 @@ function cmdModels(argv: string[]): number {
   process.stdout.write(
     `${rows.length} model(s)  tier ${machine.selection.tier}  funded: ${funded.join(", ") || "(none)"}  ` +
       `${all ? "all providers" : `configured: ${[...configured].join(", ") || "(none)"}`}` +
-      `${provider ? `  provider ${provider}` : ""}${minCap !== undefined ? `  cap >= ${minCap}` : ""}` +
-      `${query ? `  filter "${query}"` : ""}\n`,
+      `${provider ? `  provider ${provider}` : ""}${family ? `  family ${family}` : ""}${minCap !== undefined ? `  cap >= ${minCap}` : ""}` +
+      `${flags.has("free") ? "  free" : ""}${flags.has("coding") ? "  coding" : ""}${flags.has("tool") ? "  tools" : ""}` +
+      `${query ? `  filter "${query}"` : ""}  sort ${sortFlag}\n`,
   );
   process.stdout.write("   cap  key                                                        context  T/R/I       in $/M       out $/M\n");
   const limit = flags.has("limit") ? Number(flags.get("limit")) : 25;
@@ -732,7 +780,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   const baseFlag = flags.get("base");
   const request = positional.join(" ").trim();
 
-  if (request.length === 0) fail(`run needs a question, e.g. machine_code run --mode verified "fix the parser panic"`);
+  if (request.length === 0) fail(`run needs a question, e.g. machine_code run --agent architect --mode verified "fix the parser panic"`);
   if (issueTypeFlag !== "task" && issueTypeFlag !== "feature") fail(`--issue-type must be task or feature`);
 
   let issueNumber: number | undefined;
@@ -823,15 +871,22 @@ async function cmdRun(argv: string[]): Promise<number> {
     fail(`provider "${requireProvider}" is not configured`);
   }
 
-  const mode: import("./orchestrate.js").RunMode =
-    modeFlag === "solo" || modeFlag === "direct" || modeFlag === "verified" || modeFlag === "redundant"
-      ? modeFlag
-      : "solo";
-
-  const agentNameParsed =
-    agentName === "general" || agentName === "sudo" || agentName === "architect" || agentName === "build" || agentName === "review"
-      ? agentName
-      : undefined;
+  // The agent's data file owns the mode vocabulary. No global mode list is
+  // hardcoded here: a role with no modes simply runs alone (there is no
+  // special "solo" value), and a role with modes may declare a default.
+  const agentNameParsed = (agentName as AgentName | undefined) ?? (modeFlag ? "architect" : "general");
+  const selectedDef = agentDef(l, agentNameParsed);
+  if (modeFlag !== undefined) {
+    if (!selectedDef.modes.includes(modeFlag)) {
+      const hint = selectedDef.modes.length === 0
+        ? `agent ${agentNameParsed} runs alone; omit --mode`
+        : `choose one of ${selectedDef.modes.join(", ")}`;
+      fail(`agent ${agentNameParsed} does not offer mode "${modeFlag}" (${hint})`);
+    }
+  }
+  const mode: string | undefined =
+    modeFlag ??
+    (selectedDef.modes.length > 0 ? selectedDef.defaultMode ?? selectedDef.modes[0] : undefined);
 
   // Fork lineage: resolve the parent before the recorder exists so the child
   // is born with its lineage (never patched in after the fact).
@@ -844,8 +899,8 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   const recorder = new RunRecorder(l, {
-    agent: agentNameParsed ?? "general",
-    mode,
+    agent: agentNameParsed,
+    mode: mode ?? "",
     request,
     repoRoot: l.repoRoot,
     ...(parentRun
@@ -872,30 +927,45 @@ async function cmdRun(argv: string[]): Promise<number> {
       process.stderr.write(`warning: issue tracking unavailable (${bundle.reason ?? "unknown"}); --issue ignored for association\n`);
     } else {
       const rawRef = parseIssueRef(issueFlag, bundle.repo, "github");
-      const role = agentNameParsed ?? (mode === "solo" ? "general" : "architect");
-      let resolvedIssue;
-      if (role === "architect" || role === "review") {
-        const anchor = await resolvePlanningAnchor(bundle.provider, rawRef);
-        resolvedIssue = await bundle.provider.get(anchor);
-      } else {
-        resolvedIssue = await validateRunIssue(bundle.provider, rawRef, { allowReserved: role === "sudo" });
+      const role = agentNameParsed;
+      let resolved;
+      try {
+        resolved = await resolveRunTarget({
+          provider: bundle.provider,
+          ref: rawRef,
+          request,
+          agent: role,
+          autoCreate: flags.has("auto-issue"),
+          reserved: { runCounts: new Map(), autoCloseEmpty: true },
+        });
+      } catch (error) {
+        if (error instanceof Error && "code" in error) fail((error as { message: string }).message);
+        throw error;
       }
-      if (!resolvedIssue) fail(`issue not found: ${issueFlag}`);
+      const resolvedIssue = resolved.issue;
       issueRef = resolvedIssue.ref;
       issueNumber = resolvedIssue.ref.number;
       if (featureNumber === undefined && resolvedIssue.parent?.number) featureNumber = resolvedIssue.parent.number;
       recorder.patchSummary({ issue: issueRef });
       recorder.event("issue_linked", { issue: resolvedIssue.ref.number, kind: resolvedIssue.kind, source: "cli" });
+      for (const created of resolved.created) {
+        recorder.event("issue_created", {
+          issue: created.ref.number,
+          kind: created.kind,
+          parent: created.parent?.number,
+          auto: true,
+        });
+      }
     }
   }
 
   // Mutating runs work in an isolated worktree on an issue branch; read-only
-  // runs (solo general, planning) stay on the main tree.
-  // Review never creates a worktree; it reads the build worktree it inspects.
+  // roles stay on the main tree. A configured orchestration mode always runs
+  // through Build, and review only reads the worktree it inspects.
   const mutating =
     agentNameParsed === "review"
       ? false
-      : mode !== "solo" || agentNameParsed === "sudo" || agentNameParsed === "build";
+      : mode !== undefined || agentNameParsed === "sudo" || agentNameParsed === "build";
   let toolRoot = l.repoRoot;
   if (mutating) {
     try {
@@ -1000,7 +1070,6 @@ async function cmdRun(argv: string[]): Promise<number> {
       agentPolicy: policy.agents[role],
       machineOverrides: machine.agents[role],
       runOverrides: agentOverrides,
-      legacyMode: mode === "solo" ? undefined : mode,
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
     if (role === "review") {
@@ -1139,8 +1208,27 @@ async function cmdProvider(argv: string[]): Promise<number> {
 }
 
 async function cmdModel(argv: string[]): Promise<number> {
+  if (argv[0] === "show") {
+    const query = argv[1];
+    if (!query) fail("usage: machine_code model show <key|name>");
+    const l = layout();
+    const doc = loadCatalogue(l.catalogueFile);
+    if (!doc) fail("no catalogue; run machine_code catalogue refresh");
+    const rows = filterModels(doc.models, { text: query, sort: "capability" });
+    const row = rows[0];
+    if (!row) fail(`no model matches "${query}"`);
+    printModelRow(row);
+    process.stdout.write(`  provider ${row.providerID}  family ${row.family}  kind ${row.kind}  coding ${row.coding ? "yes" : "no"}\n`);
+    process.stdout.write(`  axes ${CAPABILITY_AXES.map((axis) => `${axis} ${row.scores[axis].toFixed(2)}`).join("  ")}\n`);
+    process.stdout.write(`  modes ${row.modes.join(", ") || "-"}  tools ${row.toolCall ? "yes" : "no"}  free ${row.free ? "yes" : "no"}\n`);
+    process.stdout.write(`  offers\n`);
+    for (const offer of siblingOffers(doc.models, row).sort((a, b) => a.pricing.input - b.pricing.input)) {
+      process.stdout.write(`    ${offer.providerID.padEnd(18)} in $${offer.pricing.input}/M out $${offer.pricing.output}/M  ctx ${fmtCtx(offer.context)}${offer.free ? "  free" : ""}\n`);
+    }
+    return 0;
+  }
   if (argv[0] !== "cooldown" || argv[1] !== "clear" || !argv[2]) {
-    fail("usage: machine_code model cooldown clear <id>");
+    fail("usage: machine_code model show <key|name> | model cooldown clear <id>");
   }
   const id = argv[2];
   const l = layout();
@@ -1168,12 +1256,13 @@ async function cmdQueue(argv: string[]): Promise<number> {
   }
   process.stdout.write(`queue: ${packets.length} packet(s)\n`);
   const progress = await runQueue(l, async (packet) => {
-    const recorder = new RunRecorder(l, { agent: packet.agent ?? (packet.mode === "solo" ? "general" : "architect"), mode: packet.mode, request: packet.goal, repoRoot: l.repoRoot, packetId: packet.id });
+    const packetAgent = packet.agent ?? (packet.mode ? "architect" : "general");
+    const recorder = new RunRecorder(l, { agent: packetAgent, mode: packet.mode ?? "", request: packet.goal, repoRoot: l.repoRoot, packetId: packet.id });
     registerProject(l.home, l.repoRoot);
     const abort = new AbortController();
     // Queued packets always carry their packet id, so the worktree gets the
     // snapshot materialized for Build to read.
-    const mutating = packet.mode !== "solo" || packet.agent === "sudo";
+    const mutating = packet.mode !== undefined || packet.agent === "sudo" || packet.agent === "build";
     let toolRoot = l.repoRoot;
     if (mutating) {
       try {
@@ -1217,7 +1306,7 @@ async function cmdQueue(argv: string[]): Promise<number> {
       machine,
       policy,
       mode: packet.mode as import("./orchestrate.js").RunMode,
-      agentName: packet.agent ?? (packet.mode === "solo" ? "general" : undefined),
+      agentName: packet.agent ?? (packet.mode ? undefined : "general"),
       request: packet.goal,
       root: l.repoRoot,
       toolRoot,
@@ -1253,6 +1342,9 @@ function fmtEvent(event: Record<string, unknown>): string {
   } else if (type === "model_call_end") {
     const u = rest.usage as { totalTokens: number };
     detail = `${rest.provider}/${rest.model}  ${rest.stopReason}  ${u.totalTokens} tok  $${typeof rest.cost === "number" ? rest.cost.toFixed(6) : "?"}`;
+  } else if (type === "model_delta") {
+    const text = typeof rest.text === "string" ? rest.text.replace(/\s+/g, " ").slice(0, 60) : "";
+    detail = `${rest.kind ?? "text"} ${text}`;
   } else if (type === "tool_call") {
     detail = `${rest.tool}  ${rest.isError ? "ERROR" : "ok"}`;
   } else if (type === "run_end") {
@@ -1267,7 +1359,7 @@ function cmdLog(id: string | undefined): number {
   if (!run) fail(`no such run: ${id}`);
   const s = run.summary;
   process.stdout.write(
-    `run ${s.id}  ${s.status}\n  agent ${s.agent}  mode ${s.mode}\n  started ${s.startedAt}${s.endedAt ? `  ended ${s.endedAt}` : ""}\n  request: ${s.request}\n` +
+    `run ${s.id}  ${s.status}\n  agent ${s.agent}  mode ${s.mode || "-"}\n  started ${s.startedAt}${s.endedAt ? `  ended ${s.endedAt}` : ""}\n  request: ${s.request}\n` +
       `  calls ${s.modelCalls}  turns ${s.turns}  tokens ${s.usage.totalTokens}  cost $${s.cost.actual.toFixed(6)} actual / $${s.cost.estimated.toFixed(6)} estimated\n`,
   );
   if (s.error) process.stdout.write(`  error: ${s.error}\n`);
@@ -1277,18 +1369,7 @@ function cmdLog(id: string | undefined): number {
 }
 
 function cmdStatus(): number {
-  const l = layout();
-  const runs = listAllRuns(l.home);
-  if (runs.length === 0) {
-    process.stdout.write("no runs yet\n");
-    return 0;
-  }
-  for (const s of runs.slice(0, 30)) {
-    process.stdout.write(
-      `${s.status.padEnd(12)} ${s.id}  ${s.agent}  ${s.modelCalls} calls  ${s.usage.totalTokens} tok  $${s.cost.actual.toFixed(4)}  ${s.repoRoot}  ${s.request.slice(0, 40)}\n`,
-    );
-  }
-  return 0;
+  return cmdRuns(["--group", "status"]);
 }
 
 /** Find a run by id in this repo first, then across registered projects. */
@@ -1300,6 +1381,19 @@ function findRunAnywhere(home: string, id: string): { layout: ReturnType<typeof 
     const rl = layout(project);
     const r = readRun(rl, id);
     if (r) return { layout: rl, run: r };
+  }
+  // Convenience: accept a unique id suffix (the TUI shows the last 8 chars).
+  if (id.length >= 4) {
+    const matches = listAllRuns(home).filter((run) => run.id.endsWith(id) || run.id.includes(id));
+    if (matches.length === 1) {
+      const match = matches[0]!;
+      const rl = layout(match.repoRoot);
+      const r = readRun(rl, match.id);
+      if (r) return { layout: rl, run: r };
+    }
+    if (matches.length > 1) {
+      process.stderr.write(`machine_code: run id "${id}" is ambiguous: ${matches.slice(0, 4).map((run) => run.id).join(", ")}\n`);
+    }
   }
   return null;
 }
@@ -1536,7 +1630,7 @@ async function cmdPr(argv: string[]): Promise<number> {
       .map((command) => ({ command }));
     const recorder = new RunRecorder(l, {
       agent: "architect",
-      mode: "solo",
+      mode: "",
       request: `publish feature #${n}`,
       repoRoot: l.repoRoot,
     });
@@ -1692,6 +1786,9 @@ async function cmdFork(argv: string[]): Promise<number> {
     "run",
     "--parent",
     parent.id,
+    "--agent",
+    parent.agent,
+    ...(parent.mode ? ["--mode", parent.mode] : []),
     ...(flags.has("inherit-worktree") && parent.worktree ? ["--inherit-worktree"] : []),
     objective,
   ];
@@ -1950,6 +2047,523 @@ async function cmdWorktree(argv: string[]): Promise<number> {
   fail("usage: machine_code worktree list | remove <run-id>");
 }
 
+
+/* ------------------------------------------------------------ work / runs */
+
+function visibleWidth(value: string): number {
+  return value.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+function cell(value: string, width: number): string {
+  const v = visibleWidth(value);
+  if (v > width) return value.slice(0, Math.max(0, width - 1)) + "…";
+  return value + " ".repeat(width - v);
+}
+
+function healthGlyph(health: string): string {
+  switch (health) {
+    case "attention": return "✗";
+    case "blocked": return "⊘";
+    case "awaiting-human": return "?";
+    case "paused": return "⏸";
+    case "review": return "◎";
+    case "stalled": return "◌";
+    case "done": return "✓";
+    default: return "●";
+  }
+}
+
+function runGlyph(status: string): string {
+  switch (status) {
+    case "running": return "●";
+    case "awaiting_input": return "?";
+    case "paused": return "⏸";
+    case "interrupted": return "◯";
+    case "blocked": return "⊘";
+    case "failed": return "✗";
+    case "completed": return "✓";
+    case "cancelled": return "⃠";
+    default: return "○";
+  }
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+function fmtMoney(n: number): string {
+  if (n >= 10) return `$${n.toFixed(2)}`;
+  if (n >= 1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(4)}`;
+}
+
+function modeSuffix(mode: string | undefined): string {
+  return mode ? `/${mode}` : "";
+}
+
+function rowText(row: WorkRow, width: number): string {
+  const indent = "  ".repeat(row.depth);
+  if (row.kind === "section") {
+    return `${indent}${row.collapsed ? "▸" : "▾"} ${row.label} (${row.count})`;
+  }
+  if (row.kind === "issue") {
+    const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
+    const pct = row.rollup.pct === undefined ? "—" : `${row.rollup.pct}%`;
+    const badge = row.issue.reserved ? " [P&R]" : "";
+    const runs = row.rollup.runsTotal > 0 ? `runs ${row.rollup.runsTotal}` : "runs 0";
+    const head = `${indent}${fold} ${healthGlyph(row.rollup.health)} #${row.issue.ref.number} ${row.issue.kind}${badge} ${row.issue.title}`;
+    const tail = `  ${pct} ${row.rollup.tasksClosed}/${row.rollup.tasksTotal} · ${runs}${row.rollup.runsActive ? ` (${row.rollup.runsActive})` : ""} · ${fmtMoney(row.rollup.cost)}`;
+    if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
+    return cell(head, width - visibleWidth(tail)) + tail;
+  }
+  const run = row.run;
+  const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
+  const ask = run.status === "awaiting_input" ? " ASK" : "";
+  const head = `${indent}${runGlyph(run.status)} ${run.id.slice(-8)} ${run.agent}${modeSuffix(run.mode)}${ask}${pr}`;
+  const tail = ` ${fmtTokens(run.usage.totalTokens)}tok ${fmtMoney(run.cost.actual)} ${run.request.replace(/\s+/g, " ").slice(0, width < 100 ? 28 : 60)}`;
+  return cell(head, Math.max(24, width - visibleWidth(tail))) + tail;
+}
+
+function cmdRuns(argv: string[]): number {
+  const { flags } = parseFlags(argv);
+  const l = layout();
+  const group = flags.get("group") ?? "issues";
+  if (!["issues", "project", "status", "agent"].includes(group)) {
+    fail("--group must be issues|project|status|agent");
+  }
+  const filter = (flags.get("filter") ?? "all") as RunFilter;
+  if (!["all", "active", "awaiting", "paused", "completed"].includes(filter)) {
+    fail("--filter must be all|active|awaiting|paused|completed");
+  }
+  const text = flags.get("text") ?? flags.get("q");
+  const attention = flags.has("attention");
+  const projectFilter = flags.get("project");
+  const allRuns = listAllRuns(l.home);
+  const projects = [...new Set(allRuns.map((r) => r.repoRoot).filter(Boolean))]
+    .filter((p) => !projectFilter || p === projectFilter)
+    .sort((a, b) => (a === l.repoRoot ? -1 : b === l.repoRoot ? 1 : a.localeCompare(b)));
+
+  if (flags.has("json")) {
+    const out: unknown[] = [];
+    for (const project of projects) {
+      const runs = filterRuns(allRuns.filter((r) => r.repoRoot === project), filter);
+      const cache = readIssueCache(layout(project));
+      const index = buildWorkIndex({
+        issues: cache?.issues ?? [],
+        runs,
+        text,
+        attentionOnly: attention,
+      });
+      out.push({
+        project,
+        issues: cache?.issues.length ?? 0,
+        rows: index.rows.map((row) =>
+          row.kind === "run"
+            ? { kind: row.kind, depth: row.depth, run: row.run }
+            : row.kind === "issue"
+              ? { kind: row.kind, depth: row.depth, issue: row.issue, rollup: row.rollup }
+              : { kind: row.kind, depth: row.depth, label: row.label, count: row.count },
+        ),
+      });
+    }
+    process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    return 0;
+  }
+
+  if (group === "status" || group === "agent") {
+    const keyOf = (run: RunSummary) => (group === "status" ? run.status : run.agent);
+    const grouped = new Map<string, RunSummary[]>();
+    for (const run of filterRuns(allRuns, filter)) {
+      if (projectFilter && run.repoRoot !== projectFilter) continue;
+      if (text && !`${run.id} ${run.agent} ${run.mode} ${run.request}`.toLowerCase().includes(text.toLowerCase())) continue;
+      const key = keyOf(run);
+      const list = grouped.get(key) ?? [];
+      list.push(run);
+      grouped.set(key, list);
+    }
+    for (const [key, runs] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      process.stdout.write(`${key} (${runs.length})\n`);
+      for (const run of sortRuns(runs, "activity")) {
+        process.stdout.write(`  ${runGlyph(run.status)} ${run.id}  ${run.agent}${modeSuffix(run.mode)}  ${fmtTokens(run.usage.totalTokens)}tok  ${fmtMoney(run.cost.actual)}  ${run.request.slice(0, 60)}\n`);
+      }
+    }
+    return 0;
+  }
+
+  const width = process.stdout.columns || 120;
+  let printed = 0;
+  for (const project of group === "project" || flags.has("all") ? projects : [l.repoRoot]) {
+    const runs = filterRuns(allRuns.filter((r) => r.repoRoot === project), filter);
+    if (runs.length === 0 && !existsSync(join(project, ".machine_code"))) continue;
+    const cache = readIssueCache(layout(project));
+    const index = buildWorkIndex({
+      issues: cache?.issues ?? [],
+      runs,
+      text,
+      attentionOnly: attention,
+    });
+    if (index.rows.length === 0) continue;
+    if (group === "project" || flags.has("all") || projects.length > 1) {
+      process.stdout.write(`${project === l.repoRoot ? "▸" : " "} ${project}\n`);
+    }
+    if (!cache) process.stdout.write(`  (no issue cache; showing untracked runs — press r in the TUI or run init)\n`);
+    for (const row of index.rows) process.stdout.write(`  ${rowText(row, width)}\n`);
+    printed += 1;
+  }
+  if (printed === 0) process.stdout.write("no runs or issues\n");
+  return 0;
+}
+
+/* ------------------------------------------------------------------- show */
+
+function cmdShow(argv: string[]): number {
+  const { flags, positional } = parseFlags(argv);
+  const id = positional[0];
+  if (!id) fail("show needs a run id");
+  const found = findRunAnywhere(layout().home, id);
+  if (!found) fail(`no such run: ${id}`);
+  const run = found.run;
+  const s = reconcileRun(run.summary);
+  const runDir = join(found.layout.runsDir, s.id);
+  const context = readContextManifest(runDir);
+  const allRuns = listAllRuns(found.layout.home);
+  const children = childRuns(allRuns, s.id);
+  const thinking = thinkingChunks(run.events);
+  const touched = touchedPaths(run.events);
+  const changes = s.worktree ? changesFor(s.worktree) : null;
+  const pending = latestUnansweredQuestion(
+    run.events.filter((event) => event.type === "question") as Array<{ questionId?: string; text?: string }>,
+    readInbox(runDir),
+  );
+  const lastModel = [...run.events].reverse().find((event) => event.type === "model_select" && !event.error);
+  const lastActivity = [...run.events].reverse().find((event) => event.type === "tool_call_start" || event.type === "model_call_end");
+
+  if (flags.has("json")) {
+    process.stdout.write(
+      `${JSON.stringify({
+        summary: s,
+        context,
+        children,
+        thinking,
+        touched,
+        changes,
+        pendingQuestion: pending ?? null,
+        lastModel: lastModel?.key ?? null,
+        lastActivity: lastActivity ?? null,
+      }, null, 2)}\n`,
+    );
+    return 0;
+  }
+
+  process.stdout.write(`${runGlyph(s.status)} ${s.id}  ${s.status.toUpperCase()}  ${s.agent}${modeSuffix(s.mode)}\n`);
+  process.stdout.write(`  ${s.repoRoot}\n`);
+  process.stdout.write(`  request  ${s.request.replace(/\s+/g, " ")}\n`);
+  process.stdout.write(`  model    ${String(lastModel?.key ?? "(not selected yet)")}\n`);
+  process.stdout.write(`  spend    ${s.modelCalls} calls  ${fmtTokens(s.usage.totalTokens)} tok  ${fmtMoney(s.cost.actual)} actual / ${fmtMoney(s.cost.estimated)} estimated\n`);
+  if (s.issue) process.stdout.write(`  issue    #${s.issue.number}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
+  if (s.parentRunId) process.stdout.write(`  parent   ${s.parentRunId}\n`);
+  if (s.worktree) process.stdout.write(`  worktree ${s.worktree}\n`);
+  if (s.error) process.stdout.write(`  error    ${s.error}\n`);
+  if (pending) process.stdout.write(`  \x1b[33m? AWAITING INPUT\x1b[0m ${pending.text ?? ""}\n`);
+
+  if (context) {
+    process.stdout.write(`\ncontext ${context.chars.toLocaleString()} chars, ${context.sources.length} source(s)\n`);
+    for (const source of context.sources.slice(0, flags.has("context") ? 100 : 12)) {
+      process.stdout.write(`  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(6)}b ${source.origin.padEnd(9)} ${source.ref}${source.warning ? `  (${source.warning})` : ""}\n`);
+    }
+    if (!flags.has("context") && context.sources.length > 12) process.stdout.write(`  … ${context.sources.length - 12} more (--context)\n`);
+  }
+
+  if (touched.length > 0) {
+    process.stdout.write(`\nchanged paths\n`);
+    for (const path of touched) process.stdout.write(`  ${path}\n`);
+  }
+
+  if (thinking.length > 0) {
+    process.stdout.write(`\nlatest response\n`);
+    const chunks = flags.has("thinking") ? thinking : thinking.slice(-1);
+    for (const chunk of chunks) {
+      for (const line of chunk.text.split("\n").slice(0, flags.has("thinking") ? 200 : 12)) process.stdout.write(`  ${line}\n`);
+    }
+  }
+
+  if (changes) {
+    process.stdout.write(`\nchanges\n`);
+    if (changes.error) process.stdout.write(`  ${changes.error}\n`);
+    if (changes.status) process.stdout.write(changes.status.split("\n").map((line) => `  ${line}`).join("\n") + "\n");
+    if (changes.diffStat) process.stdout.write(changes.diffStat.split("\n").map((line) => `  ${line}`).join("\n") + "\n");
+    if (changes.recent) process.stdout.write(`  recent commits:\n${changes.recent.split("\n").map((line) => `    ${line}`).join("\n")}\n`);
+  }
+
+  if (children.length > 0) {
+    process.stdout.write(`\nchildren (${children.length})\n`);
+    for (const child of children) {
+      process.stdout.write(`  ${runGlyph(child.status)} ${child.id}  ${child.agent}${modeSuffix(child.mode)}  ${fmtMoney(child.cost.actual)}  ${child.request.slice(0, 60)}\n`);
+    }
+  }
+
+  const events = flags.has("events") || flags.has("full") ? run.events : run.events.slice(-12);
+  process.stdout.write(`\nevents${events.length < run.events.length ? ` (last ${events.length} of ${run.events.length})` : ""}\n`);
+  if (events.length === 0) process.stdout.write("  no events\n");
+  for (const event of events) process.stdout.write(fmtEvent(event as Record<string, unknown>) + "\n");
+  if (!flags.has("events") && !flags.has("full") && run.events.length > 12) process.stdout.write(`  … ${run.events.length - 12} more (--events)\n`);
+  return 0;
+}
+
+function cmdContext(argv: string[]): number {
+  const id = argv.find((arg) => !arg.startsWith("--"));
+  if (!id) fail("context needs a run id");
+  const found = findRunAnywhere(layout().home, id);
+  if (!found) fail(`no such run: ${id}`);
+  const manifest = readContextManifest(join(found.layout.runsDir, found.run.summary.id));
+  if (!manifest) {
+    process.stdout.write("no context manifest recorded for this run\n");
+    return 0;
+  }
+  process.stdout.write(`context ${manifest.chars.toLocaleString()} chars  ${manifest.sources.length} source(s)\n`);
+  for (const source of manifest.sources) {
+    process.stdout.write(
+      `  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(7)}b ${source.origin.padEnd(9)} ${source.ref}${source.truncated ? " [truncated]" : ""}${source.warning ? ` (${source.warning})` : ""}\n`,
+    );
+  }
+  return 0;
+}
+
+/* ------------------------------------------------------------------ spend */
+
+function printSpendBucket(label: string, bucket: SpendBucket): void {
+  const perMillion = bucket.tokens > 0 ? bucket.actual / (bucket.tokens / 1_000_000) : 0;
+  process.stdout.write(
+    `  ${cell(label, 42)} ${String(bucket.calls).padStart(5)} calls  ${fmtTokens(bucket.tokens).padStart(7)} tok  ${fmtTokens(bucket.freeTokens).padStart(7)} free  ${fmtMoney(bucket.actual)}  ${perMillion > 0 ? `${fmtMoney(perMillion)}/Mtok` : ""}\n`,
+  );
+}
+
+function cmdSpend(argv: string[]): number {
+  const { flags } = parseFlags(argv);
+  const days = flags.has("days") ? Number(flags.get("days")) : 30;
+  if (!Number.isFinite(days) || days < 0) fail("--days needs a non-negative number");
+  const summary = readSpendSummary(layout().home, {
+    days: days > 0 ? days : undefined,
+    provider: flags.get("provider"),
+    model: flags.get("model"),
+    agent: flags.get("agent"),
+    project: flags.get("project"),
+  });
+  if (flags.has("json")) {
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+    return 0;
+  }
+  process.stdout.write(`spend (${days ? `last ${days} days` : "all time"})\n`);
+  process.stdout.write(`  actual ${fmtMoney(summary.totalActual)}   estimated ${fmtMoney(summary.totalEstimated)}   tokens ${fmtTokens(summary.totalTokens)}   free ${fmtTokens(summary.freeTokens)}\n`);
+  const by = flags.get("by") ?? "provider";
+  if (by === "provider") {
+    process.stdout.write(`\nby provider\n`);
+    for (const [key, bucket] of Object.entries(summary.byProvider).sort((a, b) => b[1].actual - a[1].actual)) printSpendBucket(key, bucket);
+  } else if (by === "model") {
+    process.stdout.write(`\nby model\n`);
+    for (const [key, bucket] of Object.entries(summary.byModel).sort((a, b) => b[1].actual - a[1].actual).slice(0, 50)) printSpendBucket(key, bucket);
+  } else if (by === "agent") {
+    process.stdout.write(`\nby agent\n`);
+    for (const [key, bucket] of Object.entries(summary.byAgent).sort((a, b) => b[1].actual - a[1].actual)) printSpendBucket(key, bucket);
+  } else if (by === "day") {
+    process.stdout.write(`\nby day\n`);
+    const series = spendDays(summary, Math.min(days || 30, 90));
+    const max = Math.max(0, ...series.map((entry) => entry.bucket.actual));
+    for (const { day, bucket } of series) {
+      process.stdout.write(`  ${day} ${spendBar(bucket.actual, max, 24)} ${fmtMoney(bucket.actual)}  ${fmtTokens(bucket.tokens)} tok  ${fmtTokens(bucket.freeTokens)} free\n`);
+    }
+  } else {
+    fail("--by must be provider|model|day|agent");
+  }
+  return 0;
+}
+
+/* ------------------------------------------------------------- tools/config */
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function cmdTools(argv: string[]): number {
+  const { flags, positional } = parseFlags(argv);
+  const l = layout();
+  const sub = positional[0];
+
+  if (sub === "add" || sub === "new") {
+    const name = positional[1];
+    if (!name || !/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+      fail("usage: machine_code tools add <name> [--description D] [--command C] [--tags a,b] [--kind tool|script]");
+    }
+    const kind = flags.get("kind") === "script" ? "script" : "tool";
+    if (sub === "new") {
+      const lang = flags.get("lang") ?? "sh";
+      if (!/^[a-z0-9]+$/i.test(lang)) fail("--lang must be a simple extension, e.g. sh|js|py");
+      const dir = join(l.repoDir, "scripts");
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, `${name}.${lang}`);
+      if (existsSync(file)) fail(`script already exists: ${file}`);
+      const body = lang === "sh"
+        ? `#!/usr/bin/env bash\n# ${flags.get("description") ?? name}\nset -euo pipefail\n\n# arguments: $@\n`
+        : `# ${flags.get("description") ?? name}\n`;
+      writeFileSync(file, body, { encoding: "utf8", mode: 0o755 });
+      const rel = file.slice(l.repoRoot.length + 1);
+      const manifest = join(l.repoDir, "tools", `${name}.toml`);
+      mkdirSync(join(l.repoDir, "tools"), { recursive: true });
+      writeFileSync(
+        manifest,
+        [
+          `name = ${tomlString(name)}`,
+          `kind = "script"`,
+          `description = ${tomlString(flags.get("description") ?? name)}`,
+          `command = ${tomlString(rel)}`,
+          `tags = ${JSON.stringify((flags.get("tags") ?? "script").split(",").map((tag) => tag.trim()).filter(Boolean))}`,
+          "readonly = true",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      process.stdout.write(`created ${rel}\nmanifest ${manifest.slice(l.repoRoot.length + 1)}\n`);
+      return 0;
+    }
+    const dir = join(l.repoDir, "tools");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${name}.toml`);
+    if (existsSync(file) && !flags.has("force")) fail(`tool already exists: ${file} (--force to replace)`);
+    const command = flags.get("command") ?? flags.get("script");
+    const tags = (flags.get("tags") ?? "").split(",").map((tag) => tag.trim()).filter(Boolean);
+    writeFileSync(
+      file,
+      [
+        `name = ${tomlString(name)}`,
+        `kind = ${tomlString(kind)}`,
+        `description = ${tomlString(flags.get("description") ?? name)}`,
+        ...(command ? [`command = ${tomlString(command)}`] : []),
+        `tags = ${JSON.stringify(tags)}`,
+        `readonly = ${flags.get("readonly") === "false" ? "false" : "true"}`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    process.stdout.write(`created ${file.slice(l.repoRoot.length + 1)}\nreference it from an issue with: mc:context {"tools":["${name}"]}\n`);
+    return 0;
+  }
+
+  if (sub === "show") {
+    const name = positional[1];
+    if (!name) fail("usage: machine_code tools show <name>");
+    const artifact = resolveArtifact(l, name);
+    if (!artifact) fail(`no such tool/script: ${name}`);
+    process.stdout.write(`${artifact.kind} ${artifact.name}\n${artifactSummary(artifact)}\nsource ${artifact.source}\n`);
+    if (artifactExists(l, artifact)) {
+      process.stdout.write(`\n${artifactPeek(l, artifact)}\n`);
+    }
+    return 0;
+  }
+
+  const kind = flags.get("kind") ?? (sub === "tool" || sub === "script" ? sub : undefined);
+  let artifacts = listArtifacts(l);
+  if (kind) artifacts = artifacts.filter((artifact) => artifact.kind === kind);
+  if (flags.has("json")) {
+    process.stdout.write(`${JSON.stringify(artifacts, null, 2)}\n`);
+    return 0;
+  }
+  if (artifacts.length === 0) {
+    process.stdout.write("no repo tools/scripts. Add .machine_code/tools/<name>.toml or .machine_code/scripts/<name>.\n");
+    process.stdout.write("  machine_code tools new <name>        # script + manifest\n  machine_code tools add <name> --command 'scripts/x.sh'\n");
+    return 0;
+  }
+  for (const artifact of artifacts) {
+    process.stdout.write(`${artifact.kind.padEnd(7)} ${artifact.name.padEnd(24)} ${artifact.description || "(no description)"}\n`);
+    process.stdout.write(`        ${artifact.command ?? artifact.path ?? "-"}  ${artifact.origin} ${artifact.source}${artifact.tags.length ? `  [${artifact.tags.join(", ")}]` : ""}\n`);
+  }
+  return 0;
+}
+
+function cmdConfig(argv: string[]): number {
+  const { flags, positional } = parseFlags(argv);
+  const sub = positional[0] ?? "show";
+  const l = layout();
+  let machine;
+  let policy;
+  try { machine = loadMachineConfig(l); } catch { machine = undefined; }
+  try { policy = loadPolicy(l); } catch { policy = undefined; }
+  const rows = buildSettings(l, machine, policy);
+  if (sub === "paths") {
+    for (const row of rows.filter((entry) => entry.section === "paths")) process.stdout.write(`${row.label.padEnd(18)} ${row.value}\n`);
+    return 0;
+  }
+  if (sub === "show" || sub === "list") {
+    if (flags.has("json")) {
+      process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+      return 0;
+    }
+    let section = "";
+    for (const row of rows) {
+      if (row.section !== section) {
+        section = row.section;
+        process.stdout.write(`\n${section.toUpperCase()}\n`);
+      }
+      process.stdout.write(`  ${row.label.padEnd(28)} ${row.value}${row.detail ? `  (${row.detail})` : ""}\n`);
+      if (row.file) process.stdout.write(`  ${"".padEnd(28)} ${row.file}\n`);
+    }
+    return 0;
+  }
+  if (sub === "edit") {
+    const targetArg = positional[1] ?? "machine";
+    const target =
+      targetArg === "machine" ? l.machineConfig :
+      targetArg === "repo" ? l.policyFile :
+      targetArg === "catalogue" ? l.catalogueFile :
+      targetArg === "tools" ? join(l.repoDir, "tools") :
+      targetArg === "scripts" ? join(l.repoDir, "scripts") :
+      resolve(targetArg);
+    const editor = process.env.EDITOR || process.env.VISUAL;
+    if (!editor) {
+      process.stdout.write(`${target}\n`);
+      return 0;
+    }
+    const result = spawnSync(`${editor}`, [target], { stdio: "inherit", shell: false });
+    return result.status ?? 0;
+  }
+  fail("usage: machine_code config [paths|show|edit [machine|repo|catalogue|tools|scripts|path]]");
+}
+
+/* --------------------------------------------------------------- correction */
+
+async function cmdCorrect(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const id = positional[0];
+  const correction = positional.slice(1).join(" ").trim();
+  if (!id || !correction) fail('usage: machine_code correct <run-id> "<correction>"');
+  const found = findRunAnywhere(layout().home, id);
+  if (!found) fail(`no such run: ${id}`);
+  const parent = reconcileRun(found.run.summary);
+  if (parent.status === "running") {
+    const seq = sendControl(parent.repoRoot, parent.id, "interrupt", { correction: true });
+    const acked = await waitForControlAck(parent.repoRoot, parent.id, seq, 2_000);
+    if (!acked) process.stderr.write(`warning: ${parent.id} did not ack interrupt within 2s; corrective run starts anyway\n`);
+  }
+  const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+  const args = ["run", "--parent", parent.id];
+  if (parent.worktree && existsSync(parent.worktree)) args.push("--inherit-worktree");
+  if (parent.issue) args.push("--issue", String(parent.issue.number), "--auto-issue");
+  args.push("--agent", parent.agent);
+  if (parent.mode) args.push("--mode", parent.mode);
+  if (flags.get("tier")) args.push("--tier", flags.get("tier")!);
+  args.push(correction);
+  const child = spawn(process.execPath, [cliPath, ...args], {
+    cwd: parent.repoRoot,
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
+  child.unref();
+  process.stdout.write(`correcting ${parent.id} with a fresh run; context and worktree are inherited\n`);
+  return 0;
+}
+
 /* -------------------------------------------------------------------- main */
 
 async function main(): Promise<void> {
@@ -1982,6 +2596,28 @@ async function main(): Promise<void> {
       } else {
         fail("usage: machine_code catalogue refresh [--snapshot] | snapshot [path]");
       }
+      break;
+    case "runs":
+      code = cmdRuns(rest);
+      break;
+    case "show":
+      code = cmdShow(rest);
+      break;
+    case "context":
+      code = cmdContext(rest);
+      break;
+    case "spend":
+      code = cmdSpend(rest);
+      break;
+    case "tools":
+      code = cmdTools(rest);
+      break;
+    case "config":
+    case "settings":
+      code = cmdConfig(rest);
+      break;
+    case "correct":
+      code = await cmdCorrect(rest);
       break;
     case "log":
       code = cmdLog(rest[0]);

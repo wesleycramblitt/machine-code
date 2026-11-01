@@ -30,7 +30,7 @@ test("migrateRunSummary upgrades a v1 record in memory without touching disk", (
     id: "20261031-045443-jcvl",
     repoRoot: "/repo",
     agent: "sudo",
-    mode: "solo",
+    mode: "",
     request: "What is 2+2?",
     status: "done",
     pid: 123,
@@ -91,7 +91,7 @@ test("RunRecorder writes v2 summary atomically and tracks lifecycle state", () =
   const layout = fakeLayout(root);
   const recorder = new RunRecorder(layout, {
     agent: "general",
-    mode: "solo",
+    mode: "",
     request: "test request",
     repoRoot: root,
   });
@@ -148,7 +148,7 @@ test("finalize refuses non-terminal statuses and defers to setStatus", () => {
   const layout = fakeLayout(root);
   const recorder = new RunRecorder(layout, {
     agent: "general",
-    mode: "solo",
+    mode: "",
     request: "r",
     repoRoot: root,
   });
@@ -172,7 +172,7 @@ test("readRun/listRuns migrate legacy v1 run.json files on read", () => {
       id: "20261030-120000-aaaa",
       repoRoot: root,
       agent: "general",
-      mode: "solo",
+      mode: "",
       request: "old run",
       status: "done",
       pid: 999999,
@@ -204,7 +204,7 @@ test("reconcileRun marks dead-owner running/created runs interrupted, keeps paus
     id: "r1",
     repoRoot: "/repo",
     agent: "general",
-    mode: "solo",
+    mode: "",
     request: "r",
     pid: 999999999, // not alive
     startedAt: new Date().toISOString(),
@@ -228,13 +228,13 @@ test("prune skips active runs and removes old terminal ones", async () => {
   registerProject(layout.home, root);
   const active = new RunRecorder(layout, {
     agent: "general",
-    mode: "solo",
+    mode: "",
     request: "keep me",
     repoRoot: root,
   });
   const old = new RunRecorder(layout, {
     agent: "general",
-    mode: "solo",
+    mode: "",
     request: "remove me",
     repoRoot: root,
   });

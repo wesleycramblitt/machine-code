@@ -14,7 +14,8 @@ import { dirname, join } from "node:path";
 import type { Layout } from "./paths.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 
-export type PacketMode = "solo" | "direct" | "verified" | "redundant";
+/** Modes are declared by the selected agent; single-agent packets omit mode. */
+export type PacketMode = string;
 
 export interface PacketAcceptance {
   command: string; // named command, e.g. typescript:test
@@ -23,7 +24,8 @@ export interface PacketAcceptance {
 
 export interface TaskPacket {
   id: string;
-  mode: PacketMode;
+  /** Omitted for a single-agent packet. */
+  mode?: PacketMode;
   agent?: "general" | "sudo" | "architect" | "build" | "review";
   budget_tokens?: number;
   goal: string;
@@ -33,8 +35,8 @@ export interface TaskPacket {
 }
 
 export function parseMode(value: string | undefined): PacketMode | undefined {
-  if (value !== "solo" && value !== "direct" && value !== "verified" && value !== "redundant") return undefined;
-  return value;
+  const mode = value?.trim();
+  return mode ? mode : undefined;
 }
 
 /** Committed, canonical packet file. */
@@ -50,7 +52,7 @@ export function localPacketPath(layout: Layout, id: string): string {
 function parsePacketDoc(text: string): TaskPacket | null {
   try {
     const doc = JSON.parse(text) as TaskPacket;
-    if (!doc || typeof doc !== "object" || !doc.id || !doc.mode || !doc.goal) return null;
+    if (!doc || typeof doc !== "object" || !doc.id || !doc.goal) return null;
     return doc;
   } catch {
     return null;

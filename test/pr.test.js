@@ -180,7 +180,7 @@ test("maybePublish skips run-scoped branches (no Task/Feature pair)", async () =
   const { root, repo } = tempRepoWithOrigin();
   try {
     const layout = fakeLayout(repo);
-    const recorder = new RunRecorder(layout, { agent: "sudo", mode: "solo", request: "r", repoRoot: repo });
+    const recorder = new RunRecorder(layout, { agent: "sudo", mode: "", request: "r", repoRoot: repo });
     const spec = await createWorktree({ layout, runId: recorder.id, kind: "run" });
     recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch });
     const prs = new FakePrProvider();
@@ -197,7 +197,7 @@ test("maybePublish skips run-scoped branches (no Task/Feature pair)", async () =
 function toolCtx(capabilities, approval, prs) {
   const root = mkdtempSync(join(tmpdir(), "mc-prt-"));
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "architect", mode: "solo", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "r", repoRoot: root });
   return { recorder, root, ctx: { provider: prs, capabilities, recorder, defaultApproval: approval } };
 }
 
@@ -296,7 +296,7 @@ test("feature PR is blocked while deliverable tasks are open", async () => {
   const { root, repo } = tempRepoWithOrigin();
   try {
     const layout = fakeLayout(repo);
-    const recorder = new RunRecorder(layout, { agent: "architect", mode: "solo", request: "publish", repoRoot: repo });
+    const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "publish", repoRoot: repo });
     const issues = new FakeIssueGraph(featureIssue(), [taskIssue(31, "closed"), taskIssue(32, "open")]);
     const prs = new FakePrProvider();
     const result = await publishFeature({ layout, machine: MACHINE, recorder, feature: issues.feature.ref, issues, prs });
@@ -313,7 +313,7 @@ test("feature PR runs integration gates, pushes the branch, and opens to main", 
   try {
     const layout = fakeLayout(repo);
     git(repo, ["branch", "mc/feature/20", "main"]);
-    const recorder = new RunRecorder(layout, { agent: "architect", mode: "solo", request: "publish", repoRoot: repo });
+    const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "publish", repoRoot: repo });
     const issues = new FakeIssueGraph(featureIssue("human"), [taskIssue(31, "closed"), taskIssue(32, "closed")]);
     const prs = new FakePrProvider();
     const result = await publishFeature({
@@ -343,7 +343,7 @@ test("feature PR blocks when an integration gate fails and merges with agent app
   try {
     const layout = fakeLayout(repo);
     git(repo, ["branch", "mc/feature/20", "main"]);
-    const recorder = new RunRecorder(layout, { agent: "architect", mode: "solo", request: "publish", repoRoot: repo });
+    const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "publish", repoRoot: repo });
     const issues = new FakeIssueGraph(featureIssue("agent"), [taskIssue(31, "closed")]);
     const prs = new FakePrProvider();
 

@@ -14,7 +14,7 @@ Rules:
 '''
 tools = ["read", "ask"]
 readonly = true
-modes = ["solo"]
+modes = []
 blurb = "answers questions; read tool only"
 preset = "assistant"
 capabilities = ["code:read", "context:inherit"]

@@ -214,7 +214,7 @@ test("waitForAnswer resolves when the answer lands and rejects on abort", async 
 test("askTool suspends, records the question, and returns the inbox answer", async () => {
   const root = tempDir("ask");
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "general", mode: "solo", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "general", mode: "", request: "r", repoRoot: root });
   let questionId = null;
   try {
     // The loop provides the suspension hook; it checkpoints the transcript
@@ -258,7 +258,7 @@ test("askTool suspends, records the question, and returns the inbox answer", asy
 test("askTool returns an error result when the wait is aborted", async () => {
   const root = tempDir("ask-abort");
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "general", mode: "solo", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "general", mode: "", request: "r", repoRoot: root });
   try {
     const controller = new AbortController();
     const tool = askTool({ runDir: recorder.dir, recorder });
@@ -278,7 +278,7 @@ test("RunRecorder records fork lineage and can be reopened for resume", () => {
   const root = tempDir("lineage");
   const layout = fakeLayout(root);
   try {
-    const parent = new RunRecorder(layout, { agent: "architect", mode: "solo", request: "parent", repoRoot: root });
+    const parent = new RunRecorder(layout, { agent: "architect", mode: "", request: "parent", repoRoot: root });
     parent.finalize("completed");
 
     const child = new RunRecorder(layout, {
@@ -310,7 +310,7 @@ test("RunRecorder records fork lineage and can be reopened for resume", () => {
 test("sendControl writes a sequenced request and bumps from the ack", () => {
   const root = tempDir("control");
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "general", mode: "solo", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "general", mode: "", request: "r", repoRoot: root });
   try {
     const seq1 = sendControl(root, recorder.id, "pause");
     assert.equal(seq1, 1);

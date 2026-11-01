@@ -24,6 +24,7 @@ import type { MachineConfig } from "../config.js";
 import type { Issue, IssueProvider, IssueRef } from "../issues/provider.js";
 import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
+import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
 import { parseArtifactReferences, parseSkillFrontMatter } from "./references.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
@@ -115,6 +116,16 @@ function skillMetas(layout: Layout): Array<{ name: string; description: string }
   return [...out.values()];
 }
 
+function skillBody(layout: Layout, name: string): { path: string; text: string } | null {
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;
+  for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
+    const file = join(dir, "SKILL.md");
+    if (!existsSync(file)) continue;
+    return { path: file, text: readFileSync(file, "utf8") };
+  }
+  return null;
+}
+
 export async function assembleContext(input: AssembleInput): Promise<ContextBundle> {
   const { layout, machine } = input;
   const budget = Math.max(1024, input.budgetChars ?? machine.context.maxChars ?? DEFAULT_CONTEXT_BUDGET);
@@ -124,31 +135,118 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const packetIds = new Set<string>();
   if (input.packetId) packetIds.add(input.packetId);
 
-  // Issue hierarchy + explicit references.
+  // Issue hierarchy + explicit references. Artifacts cascade Task → Feature →
+  // Epic; nearest declarations win, and every block keeps its true origin.
   let current: Issue | undefined;
   const ancestors: Issue[] = [];
   if (input.provider && input.issue) {
     current = (await input.provider.get(input.issue)) ?? undefined;
     if (current) {
       ancestors.push(...(await input.provider.hierarchy(current.ref)));
-      const refs = parseArtifactReferences(current.body);
-      for (const id of refs.packets) packetIds.add(id);
-      for (const path of refs.knowledge) {
-        const abs = withinRepo(layout.repoRoot, path);
-        if (!abs || !existsSync(abs)) {
-          pending.push({
-            kind: "knowledge",
-            origin: "explicit",
-            ref: path,
-            body: "",
-            cap: 0,
-            band: 5,
-            warning: "referenced knowledge file is missing or outside the repo",
-          });
-          continue;
+
+      const chain = [current, ...ancestors].slice(0, 3);
+      const seenRefs = new Set<string>();
+      for (let depth = 0; depth < chain.length; depth++) {
+        const issue = chain[depth]!;
+        const origin: ContextOrigin = depth === 0 ? "explicit" : "inherited";
+        const band = 2 + depth;
+        const refs = parseArtifactReferences(issue.body);
+        for (const id of refs.packets) {
+          const key = `packet:${id}`;
+          if (!seenRefs.has(key)) {
+            seenRefs.add(key);
+            packetIds.add(id);
+          }
         }
-        const read = readFileCapped(abs, 6 * KIB);
-        if (read) pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, cap: 6 * KIB, band: 5 });
+
+        const addFile = (path: string, kind: "file" | "knowledge"): void => {
+          const key = `${kind}:${path}`;
+          if (seenRefs.has(key)) return;
+          seenRefs.add(key);
+          const abs = withinRepo(layout.repoRoot, path);
+          if (!abs || !existsSync(abs)) {
+            pending.push({
+              kind,
+              origin,
+              ref: path,
+              depth,
+              body: "",
+              cap: 0,
+              band,
+              warning: `referenced ${kind} is missing or outside the repo`,
+            });
+            return;
+          }
+          const read = readFileCapped(abs, 8 * KIB);
+          if (read) pending.push({ kind, origin, ref: path, depth, body: read.text, cap: 8 * KIB, band });
+        };
+
+        for (const path of refs.files) addFile(path, "file");
+        for (const path of refs.knowledge) addFile(path, "knowledge");
+
+        for (const name of refs.skills) {
+          const key = `skill:${name}`;
+          if (seenRefs.has(key)) continue;
+          seenRefs.add(key);
+          const skill = skillBody(layout, name);
+          if (!skill) {
+            pending.push({
+              kind: "skill",
+              origin,
+              ref: name,
+              depth,
+              body: "",
+              cap: 0,
+              band,
+              warning: `referenced skill "${name}" was not found`,
+            });
+            continue;
+          }
+          pending.push({
+            kind: "skill",
+            origin,
+            ref: name,
+            depth,
+            body: skill.text,
+            cap: 4 * KIB,
+            band,
+          });
+        }
+
+        for (const [list, kind] of [
+          [refs.tools, "tool"],
+          [refs.scripts, "script"],
+        ] as const) {
+          for (const ref of list) {
+            const key = `${kind}:${ref}`;
+            if (seenRefs.has(key)) continue;
+            seenRefs.add(key);
+            const artifact = resolveArtifact(layout, ref);
+            if (!artifact || !artifactExists(layout, artifact)) {
+              pending.push({
+                kind,
+                origin,
+                ref,
+                depth,
+                body: "",
+                cap: 0,
+                band,
+                warning: `referenced ${kind} "${ref}" was not found`,
+              });
+              continue;
+            }
+            const path = artifactPath(layout, artifact);
+            const content = path ? readFileCapped(path, 2 * KIB) : null;
+            const body = [
+              artifactSummary(artifact),
+              path ? `path: ${path}` : "",
+              content?.text ? `\n${content.text}` : "",
+            ]
+              .filter(Boolean)
+              .join("\n");
+            pending.push({ kind, origin, ref: artifact.name, depth, body, cap: 3 * KIB, band });
+          }
+        }
       }
     }
   }

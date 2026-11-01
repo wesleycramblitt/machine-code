@@ -42,7 +42,7 @@ Exactly six core tools:
 | `read`, `write`, `edit` | Bounded file access; `edit` requires a unique exact match. |
 | `search` | Read-only search in ten modes: map, files, text, structure, JSON, YAML, definition, references, workspace symbols, hover/info. |
 | `command` | Describe or run one named typed command from core, repo/global manifests, profiles, or gates. |
-| `task` | Spawn a bounded fresh-context child; available to Architect and Build, and to Sudo in solo mode. |
+| `task` | Spawn a bounded fresh-context child; available to Architect and Build, and to Sudo in a single-agent run. |
 
 The six-CLI base palette is `git` (worktrees/history/diffs), `rg` (text and file listing), `ast-grep` (`sg`, syntax-shape search/rewrites), `jq` (JSON), `yq` (YAML), and `sd` (regex-by-default/literal with `-l` replacement). Edit precision: LSP for symbol rename, `ast-grep` for syntax shapes, `sd` for text. `rg` covers `grep`/`find`/`fd`; other exclusions include `sed`/`awk`/`perl`, `ctags`, tree-sitter CLI, `comby`, `jscodeshift`/`ts-morph`, `semgrep`, `scip`/`lsif`, presentation/interactive tools, profilers, watchers, and GNU `parallel`.
 
@@ -66,22 +66,22 @@ Skills provide instructions, not tools. Prompts list skill names/descriptions; f
 
 Five agents have separate prompts, requirements, and allowlists in `policy.toml`:
 
-- **General:** general questions; only `read`, no search, commands, tasks, or writes. `solo` only.
-- **Architect:** explores and compiles an immutable packet (goal, paths, constraints, named gates); does not implement. Read/search/task and read-only core commands only, except scoped reference commands during reference work. Never solo.
+- **General:** general questions; only `read`, no search, commands, tasks, or writes. A single-agent role (empty `modes`).
+- **Architect:** explores and compiles an immutable packet (goal, paths, constraints, named gates); does not implement. Read/search/task and read-only core commands only, except scoped reference commands during reference work. Owns `modes = ["direct", "verified", "redundant"]` with `default_mode = "verified"`.
 - **Build:** code-specific implementation of one packet; cannot re-plan or change packet acceptance commands. It has the file tools and configured mutating/profile commands. `direct` adds no tests; `verified` and `redundant` author focused tests.
 - **Review:** fresh, read-only assessment of packet conformance, acceptance coverage, and completion. Read/search/read-only commands only; runs only in `redundant`.
-- **Sudo:** explicit rare `solo` agent with all configured repo/global/profile/MCP permissions and core tools. It bypasses Architect, Build, and Review, but still uses worktrees, typed commands, and runner gates for mutations. It does not get arbitrary shell or host-root access.
+- **Sudo:** explicit rare single-agent role with all configured repo/global/profile/MCP permissions and core tools. It bypasses Architect, Build, and Review, but still uses worktrees, typed commands, and runner gates for mutations. It does not get arbitrary shell or host-root access.
 
-`solo` requires `--agent general` or `--agent sudo`. Other modes always run Architect → Build; `--agent` is invalid with them. `plan:on/off` does not exist: planning is intrinsic to Architect. General needs no packet; a Sudo request is its packet.
+Modes are declared by the selected agent, not by a global TypeScript enum. A role with no modes runs alone; there is no `solo` value to select. The Architect declares `direct`, `verified`, and `redundant` and defaults to `verified`. The mode selects the coordinator/subagent chain and is validated against that role's data file.
 
-| Mode | Flow |
-|---|---|
-| `solo` | One General or Sudo invocation. |
-| `direct` | Architect → Build without new tests → runner gates. |
-| `verified` | Architect → Build with focused tests → runner gates. Default packet mode. |
-| `redundant` | `verified` plus a separate Review invocation; completion requires approval. |
+| Role | Modes | Flow |
+|---|---|---|
+| General / Sudo | none | one invocation |
+| Architect | `direct` | Architect → Build without new tests → runner gates |
+| Architect | `verified` | Architect → Build with focused tests → runner gates (default) |
+| Architect | `redundant` | `verified` plus a separate Review invocation; approval required |
 
-Packets may lower, never raise, the configured token budget. Examples: `machine_code run --mode solo --agent general "summarize README.md"`; `machine_code run --mode verified "fix the parser panic"`; `machine_code run --mode solo --agent sudo "update release metadata"`.
+Packets may lower, never raise, the configured token budget. Examples: `machine_code run --agent general "summarize README.md"`; `machine_code run --agent architect --mode verified "fix the parser panic"`; `machine_code run --agent sudo "update release metadata"`.
 
 ### Context, execution, and verification
 
@@ -103,7 +103,7 @@ Machine state is `~/.machine_code/` (override `MACHINE_CODE_HOME`); repo policy 
 
 `config.toml` reloads atomically before each model call. Repo policy/manifests are snapshotted from the task's base commit. Each run has one writer; spend is the only intentionally shared append-only ledger. Secrets never go in files.
 
-`machine_code` runs in the foreground or TUI; use tmux for persistence. No daemon/socket/network listener. Instances register PID/heartbeat. TUI lists runs across instances and sends sequenced control requests through per-run files. A dead owner is reported `interrupted`; stale command groups are terminated, but runs are never restarted automatically. `status`, `log`, `resume`, and `prune` read/write file state; pruning never removes active/interrupted runs. TUI shows runs/events, providers/health, spend, and settings; only machine defaults (mode, output ceiling, price caps) are editable there. Notifications (M4) are one-way email/webhook on terminal states.
+`machine_code` runs in the foreground or TUI; use tmux for persistence. No daemon/socket/network listener. Instances register PID/heartbeat. TUI lists runs across instances and sends sequenced control requests through per-run files. A dead owner is reported `interrupted`; stale command groups are terminated, but runs are never restarted automatically. `status`, `log`, `resume`, and `prune` read/write file state; pruning never removes active/interrupted runs. TUI shows the work hierarchy, run detail sections, model explorer, spend, and settings; every setting points at its true file and opens it in `$EDITOR` rather than hiding a partial form. Notifications (M4) are one-way email/webhook on terminal states.
 
 Queue packets are committed files processed in filename order. Completed packets are skipped; interrupted/blocked/failed work stops the queue until explicit resume/requeue. Packets remain immutable and each starts from the current base branch.
 
@@ -118,7 +118,7 @@ budget_tokens: 150000
 # goal, context paths, constraints, acceptance command names/typed args
 ```
 
-Queued packets live in `.machine_code/tasks/`. `direct`, `verified`, and `redundant` imply Architect then Build; a solo packet names `agent: sudo` (General is not for queued implementation).
+Queued packets live in `.machine_code/tasks/`. `direct`, `verified`, and `redundant` imply Architect then Build; a single-agent packet omits `mode` and names its `agent` (for example `agent: sudo`).
 
 ## 4. Build order
 
@@ -163,9 +163,9 @@ sections above:
 - **Agent configuration is separate from run modes.** Roles (general, architect,
   build, review, sudo) carry explicit config: `delegate`, `verification`
   (`direct|verified|redundant`), `issues` (`required|optional|disabled`), `ask`,
-  `approval` (`human|agent`), `ambiguity`. `--mode solo/direct/verified/redundant`
-  remains as compatibility aliases; `solo` means "this agent cannot spawn
-  children".
+  `approval` (`human|agent`), `ambiguity`. Run modes live in each role's
+  `modes` array; an empty array means the role runs alone, so `solo` is not a
+  separate value.
 - **Worktrees are real.** Mutating runs work in
   `.machine_code/local/worktrees/<run-id>` on `mc/task/<n>` (or `mc/run/<id>`),
   based on `mc/feature/<n>`; tools, commands, gates, and LSP run there. Branches

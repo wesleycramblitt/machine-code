@@ -26,6 +26,7 @@ import {
 } from "../dist/issues/reserved.js";
 import { issueTool } from "../dist/tools/issues.js";
 import { RunRecorder } from "../dist/state/runs.js";
+import { resolveRunTarget } from "../dist/issues/work.js";
 
 class FakeProvider {
   constructor() {
@@ -262,7 +263,7 @@ function toolCtx(provider, capabilities, root) {
     policyFile: "",
     runsDir: join(root, ".machine_code", "local", "runs"),
   };
-  const recorder = new RunRecorder(layout, { agent: "architect", mode: "solo", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "r", repoRoot: root });
   return { recorder, layout, ctx: { provider, repo: "o/r", capabilities, recorder, layout, defaultApproval: "human" } };
 }
 
@@ -322,7 +323,7 @@ test("issue close respects approval: human requests, agent closes", async () => 
     const { ctx, layout } = toolCtx(p, ["issue:read", "issue:close"], root);
     // Acceptance evidence is required before closure.
     for (const target of [humanIssue, agentIssue]) {
-      const rec = new RunRecorder(layout, { agent: "review", mode: "solo", request: "review", repoRoot: root, issue: target.ref });
+      const rec = new RunRecorder(layout, { agent: "review", mode: "", request: "review", repoRoot: root, issue: target.ref });
       rec.event("acceptance_verified", { issue: target.ref.number, by: "human", criteria: [] });
       rec.finalize("completed");
     }
@@ -335,4 +336,30 @@ test("issue close respects approval: human requests, agent closes", async () => 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("auto-issue fills Epic → Feature → Task and reuses exact open children", async () => {
+  const provider = new FakeProvider();
+  const epic = provider.addRaw({ kind: "epic", title: "Propulsion" });
+  const first = await resolveRunTarget({
+    provider,
+    ref: epic.ref,
+    request: "Implement the thermal model",
+    agent: "build",
+    autoCreate: true,
+  });
+  assert.equal(first.issue.kind, "task");
+  assert.equal(first.created.length, 2, "a feature and a task were created");
+  assert.equal(first.issue.parent.number, first.created[0].ref.number);
+  assert.equal(first.created[0].parent.number, epic.ref.number);
+
+  const second = await resolveRunTarget({
+    provider,
+    ref: epic.ref,
+    request: "Implement the thermal model",
+    agent: "build",
+    autoCreate: true,
+  });
+  assert.equal(second.issue.ref.number, first.issue.ref.number);
+  assert.equal(second.created.length, 0, "the exact-title open task is reused");
 });

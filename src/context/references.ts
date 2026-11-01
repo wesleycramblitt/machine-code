@@ -4,20 +4,32 @@
  * Issues stay concise and point at repository artifacts:
  *
  *   <!-- mc:context
- *   {"packets":["20261031-thermal"],"knowledge":["knowledge/thermal.md"],
- *    "skills":["reference"],"tools":["scripts/bench.sh"]}
+ *   {"packets":["20261031-thermal"],"files":["src/parser.ts"],
+ *    "knowledge":["knowledge/thermal.md"],"skills":["reference"],
+ *    "tools":["bench"],"scripts":["release-check"]}
  *   -->
  *
- * Unknown keys are ignored; missing paths become manifest warnings.
+ * `knowledge` remains an alias for reference material; `files` names source
+ * files that matter to the issue. Unknown keys are ignored; missing paths
+ * become manifest warnings.
  */
 export interface ArtifactReferences {
   packets: string[];
+  files: string[];
   knowledge: string[];
   skills: string[];
   tools: string[];
+  scripts: string[];
 }
 
-const EMPTY: ArtifactReferences = { packets: [], knowledge: [], skills: [], tools: [] };
+const EMPTY: ArtifactReferences = {
+  packets: [],
+  files: [],
+  knowledge: [],
+  skills: [],
+  tools: [],
+  scripts: [],
+};
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -30,9 +42,11 @@ export function parseArtifactReferences(body: string): ArtifactReferences {
     const raw = JSON.parse(match[1]!.trim()) as Record<string, unknown>;
     return {
       packets: strings(raw.packets),
+      files: strings(raw.files),
       knowledge: strings(raw.knowledge),
       skills: strings(raw.skills),
       tools: strings(raw.tools),
+      scripts: strings(raw.scripts),
     };
   } catch {
     return { ...EMPTY };
