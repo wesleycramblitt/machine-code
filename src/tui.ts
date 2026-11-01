@@ -1084,22 +1084,19 @@ export async function runTui(): Promise<void> {
         lines.push("");
       }
       const selectedId = selectedRow?.id;
-      const rowStart = lines.length;
+      let selectedEndLine = lines.length;
       for (const row of runIndex.rows) {
         const isSelected = row.id === selectedId;
         const indent = "  ".repeat(row.depth);
+        const rendered: string[] = [];
         if (row.kind === "repo") {
           const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
-          lines.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
-          continue;
-        }
-        if (row.kind === "section") {
+          rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
+        } else if (row.kind === "section") {
           const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : row.tone === "issues" ? C : GR;
           const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
-          lines.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
-          continue;
-        }
-        if (row.kind === "issue") {
+          rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
+        } else if (row.kind === "issue") {
           const roll = row.rollup;
           const pct = roll.pct === undefined ? `${D}—${R}` : `${progress(roll.pct, narrow ? 4 : 6)} ${String(roll.pct).padStart(3)}%`;
           const badge = row.issue.reserved ? `${M}[P&R]${R} ` : "";
@@ -1108,32 +1105,36 @@ export async function runTui(): Promise<void> {
           const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${healthIcon(roll.health)} ${BL}#${row.issue.ref.number}${R} ${D}${row.issue.kind}${R} ${badge}${B}${W}${row.issue.title}${R}`;
           const right = `${pct}  ${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R} ${runCount}${pr}  ${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`;
           const text = ` ${narrow ? trunc(left, Math.max(18, cols - 16)) + " " + right : pad(left, Math.max(30, cols - visible(right) - 2)) + right}`;
-          lines.push(selected(text, isSelected));
-          continue;
+          rendered.push(selected(text, isSelected));
+        } else {
+          const run = row.run;
+          const ask = run.status === "awaiting_input" ? ` ${Y}ASK${R}` : "";
+          const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
+          const repoTag = runsGroup === "overall" ? ` ${D}[${repoLabel(run.repoRoot)}]${R}` : "";
+          const right = `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
+          if (narrow) {
+            const identity = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R}${ask}${pr}`;
+            rendered.push(selected(` ${trunc(identity, Math.max(12, cols - visible(right) - 2))} ${right}`, isSelected));
+            const agent = `${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}`;
+            const request = run.request.replace(/\s+/g, " ").slice(0, 60);
+            const detail = `${agent} ${D}${request}${R}`;
+            rendered.push(selected(` ${indent}      ${trunc(detail, Math.max(12, cols - indent.length - 8))}`, isSelected));
+          } else {
+            const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}${ask}${pr}`;
+            const context = `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}`;
+            rendered.push(selected(` ${pad(left, Math.max(30, cols - visible(right) - visible(context) - 2))}${context}${right}`, isSelected));
+          }
         }
-        const run = row.run;
-        const ask = run.status === "awaiting_input" ? ` ${Y}ASK${R}` : "";
-        const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
-        const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${ask}${pr}`;
-        const repoTag = runsGroup === "overall" ? ` ${D}[${repoLabel(run.repoRoot)}]${R}` : "";
-        const context = narrow ? "" : `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}${repoTag}`;
-        const right = `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
-        const text = ` ${narrow ? trunc(left + context, Math.max(16, cols - 18)) + " " + right : pad(left, Math.max(30, cols - visible(right) - visible(context) - 2)) + context + right}`;
-        lines.push(selected(text, isSelected));
+        if (isSelected) {
+          selectedEndLine = lines.length + rendered.length - 1;
+        }
+        lines.push(...rendered);
       }
       if (runIndex.rows.length === 0) {
         lines.push("");
         lines.push(` ${D}No runs here yet. Press ${C}n${R}${D} to start one.${R}`);
       }
-      const selectedLine = (() => {
-        let line = rowStart;
-        for (const row of runIndex.rows) {
-          if (row.id === selectedId) return line;
-          line++;
-        }
-        return rowStart;
-      })();
-      const windowed = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), runsScroll, bodyH);
+      const windowed = selectableLines(lines, Math.min(selectedEndLine, Math.max(0, lines.length - 1)), runsScroll, bodyH);
       runsScroll = windowed.scroll;
       body = clipBody(windowed.lines);
       actions = narrow
