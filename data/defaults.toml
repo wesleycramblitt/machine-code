@@ -1,0 +1,6 @@
+# Built-in selector defaults. Machine [selection] and repo [agents.*] override.
+[policy]
+min_capability = 7.0
+min_context = 32000
+expected_output_tokens = 2000
+tool_call = true

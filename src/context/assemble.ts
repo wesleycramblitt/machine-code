@@ -1,0 +1,319 @@
+/**
+ * machine_code — context assembly.
+ *
+ * Resolves, in priority order, then dedupes and budgets:
+ *   1 explicit packet            (8 KiB)
+ *   2 current Task               (6 KiB)
+ *   3 parent Feature             (4 KiB)
+ *   4 parent Epic                (3 KiB)
+ *   5 explicit knowledge files   (6 KiB total)
+ *   6 parent run summary         (2 KiB)
+ *   7 project plan / knowledge index (2 KiB)
+ *   8 skill descriptions / tools (1 KiB)
+ *
+ * Every block is labelled with its source and origin; context.json records the
+ * manifest (hash, bytes, truncation, warnings) so the model's context is
+ * traceable. Nothing is preloaded that was not asked for by the run or an
+ * ancestor.
+ */
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { Layout } from "../paths.js";
+import type { MachineConfig } from "../config.js";
+import type { Issue, IssueProvider, IssueRef } from "../issues/provider.js";
+import { readPacket } from "../packet.js";
+import { allCommands } from "../commands/profiles.js";
+import { parseArtifactReferences, parseSkillFrontMatter } from "./references.js";
+import {
+  DEFAULT_CONTEXT_BUDGET,
+  type ContextBundle,
+  type ContextKind,
+  type ContextOrigin,
+  type ContextSource,
+} from "./types.js";
+
+const KIB = 1024;
+
+interface Pending {
+  kind: ContextKind;
+  origin: ContextOrigin;
+  ref: string;
+  depth?: number;
+  body: string;
+  cap: number;
+  band: number;
+  warning?: string;
+}
+
+export interface AssembleInput {
+  layout: Layout;
+  machine: MachineConfig;
+  provider?: IssueProvider;
+  issue?: IssueRef;
+  packetId?: string;
+  /** Parent run, for selected context inheritance (summary only). */
+  parentRun?: { id: string; request: string; finalText?: string };
+  /** Override the configured character budget. */
+  budgetChars?: number;
+}
+
+function sha1(text: string): string {
+  return createHash("sha1").update(text).digest("hex");
+}
+
+function clip(text: string, cap: number): { body: string; truncated: boolean } {
+  if (text.length <= cap) return { body: text, truncated: false };
+  return { body: text.slice(0, cap).replace(/\s+$/, "") + "\n…[truncated]", truncated: true };
+}
+
+function withinRepo(root: string, path: string): string | null {
+  if (isAbsolute(path)) return null;
+  const abs = resolve(root, path);
+  const base = resolve(root);
+  if (abs !== base && !abs.startsWith(base + sep)) return null;
+  return abs;
+}
+
+function renderIssue(issue: Issue): string {
+  const lines = [
+    `title: ${issue.title}`,
+    `state: ${issue.state}  kind: ${issue.kind}  ref: ${issue.ref.repo}#${issue.ref.number}`,
+  ];
+  if (issue.labels.length > 0) lines.push(`labels: ${issue.labels.join(", ")}`);
+  if (issue.acceptance.length > 0) lines.push("acceptance:", ...issue.acceptance.map((a) => `- ${a}`));
+  if (issue.body.trim()) lines.push("", issue.body.trim());
+  return lines.join("\n");
+}
+
+function readFileCapped(file: string, cap: number): { text: string; warning?: string } | null {
+  try {
+    const raw = readFileSync(file, "utf8");
+    return { text: raw.slice(0, cap) };
+  } catch {
+    return null;
+  }
+}
+
+function skillMetas(layout: Layout): Array<{ name: string; description: string }> {
+  const out = new Map<string, { name: string; description: string }>();
+  for (const dir of [join(layout.home, "skills"), join(layout.repoDir, "skills")]) {
+    if (!existsSync(dir)) continue;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const file = join(dir, name, "SKILL.md");
+      if (!existsSync(file)) continue;
+      const meta = parseSkillFrontMatter(readFileSync(file, "utf8"), file);
+      if (meta && !out.has(meta.name)) out.set(meta.name, { name: meta.name, description: meta.description });
+    }
+  }
+  return [...out.values()];
+}
+
+export async function assembleContext(input: AssembleInput): Promise<ContextBundle> {
+  const { layout, machine } = input;
+  const budget = Math.max(1024, input.budgetChars ?? machine.context.maxChars ?? DEFAULT_CONTEXT_BUDGET);
+  const pending: Pending[] = [];
+
+  // Explicit packet (runner-provided or issue-referenced).
+  const packetIds = new Set<string>();
+  if (input.packetId) packetIds.add(input.packetId);
+
+  // Issue hierarchy + explicit references.
+  let current: Issue | undefined;
+  const ancestors: Issue[] = [];
+  if (input.provider && input.issue) {
+    current = (await input.provider.get(input.issue)) ?? undefined;
+    if (current) {
+      ancestors.push(...(await input.provider.hierarchy(current.ref)));
+      const refs = parseArtifactReferences(current.body);
+      for (const id of refs.packets) packetIds.add(id);
+      for (const path of refs.knowledge) {
+        const abs = withinRepo(layout.repoRoot, path);
+        if (!abs || !existsSync(abs)) {
+          pending.push({
+            kind: "knowledge",
+            origin: "explicit",
+            ref: path,
+            body: "",
+            cap: 0,
+            band: 5,
+            warning: "referenced knowledge file is missing or outside the repo",
+          });
+          continue;
+        }
+        const read = readFileCapped(abs, 6 * KIB);
+        if (read) pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, cap: 6 * KIB, band: 5 });
+      }
+    }
+  }
+
+  // Task / Feature / Epic blocks (task first, then nearest ancestor).
+  if (current) {
+    pending.push({
+      kind: "task",
+      origin: "explicit",
+      ref: `${current.ref.repo}#${current.ref.number}`,
+      depth: 0,
+      body: renderIssue(current),
+      cap: 6 * KIB,
+      band: 2,
+    });
+    let depth = 1;
+    for (const ancestor of ancestors) {
+      const kind: ContextKind = depth === 1 ? "feature" : "epic";
+      pending.push({
+        kind,
+        origin: "inherited",
+        ref: `${ancestor.ref.repo}#${ancestor.ref.number}`,
+        depth,
+        body: renderIssue(ancestor),
+        cap: kind === "feature" ? 4 * KIB : 3 * KIB,
+        band: kind === "feature" ? 3 : 4,
+      });
+      depth += 1;
+      if (depth > 2) break;
+    }
+  }
+
+  // Packets.
+  for (const id of packetIds) {
+    const packet = readPacket(layout, id);
+    if (!packet) {
+      pending.push({ kind: "packet", origin: "explicit", ref: id, body: "", cap: 0, band: 1, warning: "packet not found" });
+      continue;
+    }
+    pending.push({
+      kind: "packet",
+      origin: "explicit",
+      ref: packet.id,
+      body: JSON.stringify(packet, null, 2),
+      cap: 8 * KIB,
+      band: 1,
+    });
+  }
+
+  // Parent run summary.
+  if (input.parentRun) {
+    const text = [
+      `parent run: ${input.parentRun.id}`,
+      `objective: ${input.parentRun.request.slice(0, 800)}`,
+      input.parentRun.finalText ? `result: ${input.parentRun.finalText.slice(0, 1200)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    pending.push({ kind: "parent-run", origin: "inherited", ref: input.parentRun.id, body: text, cap: 2 * KIB, band: 6 });
+  }
+
+  // Project plan + knowledge index.
+  const planCandidates = [machine.context.planFile, ".machine_code/plan.md", "plan.md"].filter(Boolean);
+  const planPath = planCandidates.find((p) => {
+    const abs = withinRepo(layout.repoRoot, p!);
+    return Boolean(abs && existsSync(abs));
+  });
+  if (planPath) {
+    const abs = withinRepo(layout.repoRoot, planPath)!;
+    const read = readFileCapped(abs, 2 * KIB);
+    if (read) pending.push({ kind: "project", origin: "inherited", ref: planPath, body: read.text, cap: 2 * KIB, band: 7 });
+  }
+  if (machine.context.knowledgeIndex) {
+    const abs = withinRepo(layout.repoRoot, machine.context.knowledgeIndex);
+    if (abs && existsSync(abs)) {
+      const read = readFileCapped(abs, 2 * KIB);
+      if (read) {
+        pending.push({
+          kind: "project",
+          origin: "inherited",
+          ref: machine.context.knowledgeIndex,
+          body: read.text,
+          cap: 2 * KIB,
+          band: 7,
+        });
+      }
+    }
+  }
+
+  // Skills (descriptions only) + tool/command names.
+  const skills = skillMetas(layout);
+  if (skills.length > 0) {
+    const text = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+    pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, body: text, cap: 1 * KIB, band: 8 });
+  }
+  try {
+    const commands = [...allCommands(layout).keys()].sort();
+    if (commands.length > 0) {
+      pending.push({
+        kind: "tool",
+        origin: "explicit",
+        ref: `${commands.length} commands`,
+        body: commands.join(", "),
+        cap: 1 * KIB,
+        band: 8,
+      });
+    }
+  } catch {
+    // profiles unavailable — skip
+  }
+
+  // Dedupe by (kind, ref) and content hash; keep the earliest (highest priority).
+  const seen = new Set<string>();
+  const selected: Pending[] = [];
+  for (const item of pending.sort((a, b) => a.band - b.band || (a.depth ?? 0) - (b.depth ?? 0))) {
+    const key = `${item.kind}:${item.ref}`;
+    const hash = sha1(item.body);
+    if (seen.has(key) || seen.has(`h:${hash}`)) continue;
+    seen.add(key);
+    seen.add(`h:${hash}`);
+    selected.push(item);
+  }
+
+  // Budget + render.
+  const sources: ContextSource[] = [];
+  const blocks: string[] = [];
+  let used = 0;
+  for (const item of selected) {
+    if (item.warning && item.body === "") {
+      sources.push({ kind: item.kind, origin: item.origin, ref: item.ref, depth: item.depth, bytes: 0, hash: "", truncated: false, warning: item.warning });
+      continue;
+    }
+    const remaining = budget - used;
+    if (remaining <= 0) break;
+    const allowed = Math.min(item.cap, remaining);
+    const clipped = clip(item.body, allowed);
+    if (clipped.body.trim().length === 0) continue;
+    used += clipped.body.length;
+    const attrs = [
+      `kind="${item.kind}"`,
+      `source="${item.ref.replace(/"/g, "'")}"`,
+      `origin="${item.origin}"`,
+      ...(item.depth !== undefined ? [`depth="${item.depth}"`] : []),
+    ];
+    blocks.push(`<context-block ${attrs.join(" ")}>\n${clipped.body}\n</context-block>`);
+    sources.push({
+      kind: item.kind,
+      origin: item.origin,
+      ref: item.ref,
+      depth: item.depth,
+      bytes: clipped.body.length,
+      hash: sha1(clipped.body),
+      truncated: clipped.truncated,
+    });
+  }
+
+  const text =
+    blocks.length === 0
+      ? ""
+      : [
+          "<context>",
+          "Assembled context for this run. Each block is labelled with its source and origin (explicit, inherited).",
+          ...blocks,
+          "</context>",
+        ].join("\n");
+
+  return { text, sources, chars: text.length };
+}

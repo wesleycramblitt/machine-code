@@ -11,15 +11,18 @@
  */
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Context, Message, Usage } from "@earendil-works/pi-ai";
-import { effectiveOutputCeiling, type MachineConfig, type AgentPolicy } from "./config.js";
+import { effectiveOutputCeiling, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
-import { pick } from "./select.js";
+import { pick, providerMultiplier } from "./select.js";
+import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
-import type { AgentDef } from "./agents.js";
+import type { AgentDef, AgentName } from "./agents.js";
 import type { MutableModels } from "./models.js";
 import { coreTools } from "./tools/index.js";
+import type { AgentConfig } from "./agents/config.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Layout } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
 
 export const MAX_TURNS = 25;
@@ -44,17 +47,34 @@ export interface RunLoopInput {
   policy: AgentPolicy;
   machine: MachineConfig;
   request: string;
+  /** Main repository root: run state, spend, instances. */
   root: string;
+  /** Worktree root for tools/commands when the run mutates code (default: root). */
+  toolRoot?: string;
   home: string;
   availability?: import("./availability.js").AvailabilityState;
   recorder: RunRecorder;
   commands: ReadonlyMap<string, import("./commands/registry.js").CommandSpec>;
   requireProvider?: string;
+  /** Pin model selection to one catalogue key/id (debug or policy). */
+  requireModel?: string;
+  /** Layout + full policy: enable the task tool (delegation). */
+  layout?: Layout;
+  fullPolicy?: Policy;
+  /** The resolved agent config for this run (snapshot for children). */
+  agentConfig?: AgentConfig;
+  /** The resolved capability list for this run. */
+  agentCapabilities?: string[];
   signal?: AbortSignal;
+  /** Resume support: reconstructed transcript; start with continue() not prompt(). */
+  initialMessages?: import("@earendil-works/pi-agent-core").AgentMessage[];
+  startMode?: "prompt" | "continue";
+  /** Assembled context block prepended to the first prompt. */
+  contextText?: string;
 }
 
 export interface RunLoopResult {
-  status: "done" | "blocked" | "failed" | "interrupted";
+  status: "completed" | "blocked" | "failed" | "interrupted" | "paused" | "cancelled";
   finalText: string;
   error?: string;
 }
@@ -87,6 +107,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const policy = input.policy;
   const ceiling = effectiveOutputCeiling(policy, input.machine);
   const configuredProviders = input.configuredProviders;
+  const fundedProviders = fundedProviderIds(input.machine.providers);
 
   const selectFor = (chars: number) =>
     pick({
@@ -96,8 +117,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       catalogue: input.catalogue,
       configuredProviders,
       availability: input.availability,
+      fundedProviders,
       contextChars: chars,
       requireProvider: input.requireProvider,
+      requireModel: input.requireModel,
     });
 
   const initialChars = input.agent.prompt.length + input.request.length + 2_000;
@@ -121,6 +144,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   registerInstance(input.home, input.root);
   const heartbeatTimer = setInterval(() => heartbeatInstance(input.home), 5_000);
   let lastControlSeq = 0;
+  let pauseRequested = false;
+  let cancelRequested = false;
   const controlTimer = setInterval(() => {
     const controlFile = join(recorder.dir, "control");
     try {
@@ -128,8 +153,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       const req = JSON.parse(readFileSync(controlFile, "utf8")) as { seq?: number; action?: string };
       if (typeof req.seq !== "number" || req.seq <= lastControlSeq) return;
       lastControlSeq = req.seq;
-      if (req.action === "interrupt" || req.action === "cancel") {
-        recorder.event("control", { action: req.action, seq: req.seq });
+      recorder.event("control", { action: req.action, seq: req.seq });
+      if (req.action === "interrupt") {
+        agent?.abort();
+      } else if (req.action === "cancel") {
+        cancelRequested = true;
+        agent?.abort();
+      } else if (req.action === "pause") {
+        pauseRequested = true;
+        recorder.setStatus("paused", "pause_requested");
         agent?.abort();
       }
       const ackFile = join(recorder.dir, "control.ack");
@@ -171,12 +203,93 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       rejectedCount: first.rejectedCount,
     });
 
+    // The ask tool needs a suspension hook that checkpoints the transcript
+    // while the pending ask tool call is the transcript tail.
+    const { saveTranscript } = await import("./state/transcript.js");
+    const checkpoint = (): void => {
+      try {
+        saveTranscript(recorder.dir, {
+          agent: input.agent.name,
+          request: input.request,
+          messages: agent?.state.messages ?? [],
+        });
+      } catch {
+        // checkpoint failure must not break the run
+      }
+    };
+    const askContext = {
+      runDir: recorder.dir,
+      recorder,
+      suspend: checkpoint,
+    };
+    const taskContext =
+      input.layout && input.fullPolicy && input.agent.tools.includes("task")
+        ? {
+            layout: input.layout,
+            recorder,
+            parentRole: input.agent.name,
+            parentCapabilities: input.agentCapabilities ?? [],
+            parentConfig: input.agentConfig,
+            machine: input.machine,
+            policy: input.fullPolicy,
+            models: input.models,
+            catalogue: input.catalogue,
+            configuredProviders: input.configuredProviders,
+            commands: input.commands,
+            root: input.root,
+            toolRoot: input.toolRoot ?? input.root,
+            home: input.home,
+            requireModel: input.requireModel,
+            signal: input.signal,
+          }
+        : undefined;
+
+    // Issue tool: constructed lazily per attempt (provider calls are cheap and
+    // cached by the factory's gh availability check).
+    let issueContext: import("./tools/issues.js").IssueToolContext | undefined;
+    if (input.layout && input.agent.tools.includes("issue")) {
+      const { createIssueProvider } = await import("./issues/index.js");
+      const bundle = await createIssueProvider(input.layout, input.machine);
+      issueContext = {
+        provider: bundle.provider,
+        repo: bundle.repo,
+        capabilities: input.agentCapabilities ?? [],
+        recorder,
+        layout: input.layout,
+        defaultApproval: input.agentConfig?.approval ?? "human",
+      };
+    }
+
+    // PR tool: read/create/merge are capability- and approval-gated.
+    let prContext: import("./tools/pr.js").PrToolContext | undefined;
+    if (input.layout && input.agent.tools.includes("pr")) {
+      const { createPrProviderFor } = await import("./pr/factory.js");
+      const bundle = await createPrProviderFor(input.layout);
+      prContext = {
+        provider: bundle.provider,
+        capabilities: input.agentCapabilities ?? [],
+        recorder,
+        defaultApproval: input.agentConfig?.approval ?? "human",
+      };
+    }
+
     agent = new Agent({
       initialState: {
         model: currentModel,
         thinkingLevel: "low",
         systemPrompt: input.agent.prompt,
-        tools: coreTools({ root: input.root, commands: input.commands }, input.agent.tools),
+        tools: coreTools(
+          {
+            root: input.toolRoot ?? input.root,
+            commands: input.commands,
+            ask: askContext,
+            task: taskContext,
+            issues: issueContext,
+            prs: prContext,
+          },
+          input.agent.tools,
+        ),
+        ...(input.initialMessages && input.initialMessages.length > 0 ? { messages: input.initialMessages } : {}),
       },
       sessionId: recorder.id,
       convertToLlm,
@@ -267,7 +380,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               ...(message.errorMessage ? { error: message.errorMessage } : {}),
               ...(turnText ? { text: turnText.length > 4000 ? turnText.slice(0, 4000) + "\n…[truncated]" : turnText } : {}),
             });
-            const estimatedCost = estimateCallCost(currentRow!.pricing, usage.input, Math.max(usage.output, policy.expectedOutputTokens));
+            const estimatedCost =
+              estimateCallCost(currentRow!.pricing, usage.input, Math.max(usage.output, policy.expectedOutputTokens)) *
+              providerMultiplier(input.machine, currentRow!.providerID);
             recorder.recordCall(
               {
                 input: usage.input,
@@ -279,6 +394,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               typeof actual === "number" && Number.isFinite(actual) ? actual : null,
               estimatedCost,
             );
+            // Transcript checkpoint at the turn boundary: assistant message
+            // plus all tool results are in state here.
+            checkpoint();
+            recorder.event("checkpoint", { turn: turns, messages: agent?.state.messages.length ?? 0 });
             try {
               const { appendSpendRecord } = await import("./spend.js");
               appendSpendRecord(input.home, {
@@ -308,15 +427,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             // Error classification + availability update (M2).
             if (message.stopReason === "error" && message.errorMessage) {
               try {
-                const { classifyError, loadAvailability, saveAvailability, coolModel, coolProvider, disableProvider, markNeedsAuth } = await import("./availability.js");
+                const { classifyError, applyClassification, loadAvailability, saveAvailability } = await import("./availability.js");
                 const classified = classifyError(new Error(message.errorMessage));
                 const state = loadAvailability(input.home);
                 const provider = message.provider;
                 const key = `${provider}/${message.model}`;
-                if (classified.disableProvider) disableProvider(state, provider);
-                if (classified.needsAuth) markNeedsAuth(state, provider);
-                if (classified.target === "model" && classified.cooldownMs > 0) coolModel(state, key, classified.cooldownMs);
-                if (classified.target === "provider" && classified.cooldownMs > 0) coolProvider(state, provider, classified.cooldownMs);
+                applyClassification(state, provider, key, classified);
                 saveAvailability(input.home, state);
                 // mirror into the in-memory state used by this run
                 if (input.availability) {
@@ -361,7 +477,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     });
 
     try {
-      await agent.prompt(input.request);
+      if (input.startMode === "continue") {
+        // Resume: the reconstructed transcript tail is already continuable.
+        await agent.continue();
+      } else {
+        const promptText = input.contextText ? `${input.contextText}\n\n${input.request}` : input.request;
+        await agent.prompt(promptText);
+      }
       await agent.waitForIdle();
     } catch (error) {
       input.signal?.removeEventListener("abort", onExternalAbort);
@@ -374,9 +496,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const la2 = lastAssistant as AssistantMessage | undefined;
     const finalText = assistantText(la2);
     const stop = la2?.stopReason;
-    let status: RunLoopResult["status"] = "done";
+    let status: RunLoopResult["status"] = "completed";
     let error: string | undefined;
-    if (input.signal?.aborted) {
+    if (cancelRequested) {
+      status = "cancelled";
+    } else if (pauseRequested) {
+      status = "paused";
+    } else if (input.signal?.aborted) {
       status = "interrupted";
     } else if (budgetExhausted) {
       status = "blocked";
@@ -395,14 +521,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         const { classifyError, loadAvailability } = await import("./availability.js");
         const classified = classifyError(new Error(la.errorMessage));
         if (classified.retryable) {
-          const state = loadAvailability(input.home);
-          const key = `${la.provider}/${la.model}`;
-          const cooled = state.models[key]?.cooldownUntil && state.models[key]!.cooldownUntil! > Date.now();
-          if (cooled) {
-            retried = true;
-            recorder.event("retry", { failedModel: key, kind: classified.kind });
-            continue; // retry with a fresh agent; cooled model is now excluded
-          }
+          retried = true;
+          recorder.event("retry", { failedModel: `${la.provider}/${la.model}`, kind: classified.kind });
+          continue; // retry with a fresh agent; the cooled target is now excluded
         }
       } catch {
         // fall through to return

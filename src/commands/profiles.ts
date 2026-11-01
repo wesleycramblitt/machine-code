@@ -19,6 +19,37 @@ export interface ProfileManifest {
   commands: Map<string, CommandSpec>;
 }
 
+/**
+ * Dependency directories to symlink into fresh worktrees, declared per profile
+ * as `[worktree] links = ["node_modules"]`. Paths must be repo-relative.
+ */
+export function loadWorktreeLinks(layout: Layout): string[] {
+  const out: string[] = [];
+  const dirs = [join(layout.home, "profiles"), join(layout.repoDir, "profiles")];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isFile() && e.name.endsWith(".toml"))
+        .map((e) => e.name);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const raw = readToml(join(dir, name));
+      const wt = raw.worktree as Record<string, unknown> | undefined;
+      if (!wt || typeof wt !== "object") continue;
+      const links = wt.links;
+      if (!Array.isArray(links)) continue;
+      for (const link of links) {
+        if (typeof link === "string" && link.length > 0 && !out.includes(link)) out.push(link);
+      }
+    }
+  }
+  return out;
+}
+
 export function loadProfileCommands(layout: Layout): Map<string, CommandSpec> {
   const commands = new Map<string, CommandSpec>();
   const dirs = [join(layout.home, "profiles"), join(layout.repoDir, "profiles")];

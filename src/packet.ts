@@ -1,15 +1,18 @@
 /**
- * machine_code — task packet.
+ * machine_code — task packets.
  *
  * The unit of work, context, and verification. Architect compiles one; the
- * runner saves it as an immutable snapshot before Build implements it. Human
-   -authored packets live in .machine_code/tasks/ and are processed in filename
-   order by the queue (M4).
+ * runner saves it as an immutable snapshot before Build implements it.
  *
+ * Canonical packets are committed JSON at .machine_code/tasks/<id>.json.
+ * Legacy .md files that contain JSON remain readable. Ephemeral one-shot
+ * snapshots live in .machine_code/local/tasks/ (gitignored). One resolver
+ * serves orchestrate, queue, CLI, and TUI.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Layout } from "./paths.js";
+import { writeJsonAtomic } from "./state/run-schema.js";
 
 export type PacketMode = "solo" | "direct" | "verified" | "redundant";
 
@@ -34,49 +37,97 @@ export function parseMode(value: string | undefined): PacketMode | undefined {
   return value;
 }
 
+/** Committed, canonical packet file. */
 export function packetPath(layout: Layout, id: string): string {
-  return join(layout.localDir, "tasks", `${id}.md`);
+  return join(layout.repoDir, "tasks", `${id}.json`);
 }
 
-export function readPacket(layout: Layout, id: string): TaskPacket | null {
-  const file = packetPath(layout, id);
-  if (!existsSync(file)) return null;
+/** Gitignored, ephemeral packet snapshot. */
+export function localPacketPath(layout: Layout, id: string): string {
+  return join(layout.localDir, "tasks", `${id}.json`);
+}
+
+function parsePacketDoc(text: string): TaskPacket | null {
   try {
-    const doc = JSON.parse(readFileSync(file, "utf8")) as TaskPacket;
-    if (!doc.id || !doc.mode || !doc.goal) return null;
+    const doc = JSON.parse(text) as TaskPacket;
+    if (!doc || typeof doc !== "object" || !doc.id || !doc.mode || !doc.goal) return null;
     return doc;
   } catch {
     return null;
   }
 }
 
-export function writePacket(layout: Layout, packet: TaskPacket): string {
-  const dir = join(layout.localDir, "tasks");
-  mkdirSync(dir, { recursive: true });
-  const file = packetPath(layout, packet.id);
-  writeFileSync(file, JSON.stringify(packet, null, 2) + "\n", "utf8");
+/**
+ * Resolve one packet by id. Search order: committed .json, committed legacy
+ * .md, local .json, local legacy .md. Committed wins on id collisions.
+ */
+export function readPacket(layout: Layout, id: string): TaskPacket | null {
+  const candidates = [
+    packetPath(layout, id),
+    join(layout.repoDir, "tasks", `${id}.md`),
+    localPacketPath(layout, id),
+    join(layout.localDir, "tasks", `${id}.md`),
+  ];
+  for (const file of candidates) {
+    if (!existsSync(file)) continue;
+    const packet = parsePacketDoc(readFileSync(file, "utf8"));
+    if (packet) return packet;
+  }
+  return null;
+}
+
+/**
+ * Write a packet as canonical JSON. Default target is the committed tasks
+ * directory; `local: true` writes an ephemeral snapshot instead. Atomic.
+ */
+export function writePacket(layout: Layout, packet: TaskPacket, opts: { local?: boolean } = {}): string {
+  const file = opts.local ? localPacketPath(layout, packet.id) : packetPath(layout, packet.id);
+  mkdirSync(dirname(file), { recursive: true });
+  writeJsonAtomic(file, packet);
   return file;
 }
 
-export function listPackets(layout: Layout): TaskPacket[] {
-  const dir = join(layout.localDir, "tasks");
+function listPacketDir(dir: string): TaskPacket[] {
   if (!existsSync(dir)) return [];
-  const entries = require_readdir(dir).filter((e) => e.endsWith(".md"));
-  const out: TaskPacket[] = [];
-  for (const name of entries) {
-    const p = readPacket(layout, name.slice(0, -3));
-    if (p) out.push(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith(".json") || n.endsWith(".md"));
+  } catch {
+    return [];
   }
-  out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const out: TaskPacket[] = [];
+  for (const name of names) {
+    try {
+      const packet = parsePacketDoc(readFileSync(join(dir, name), "utf8"));
+      if (packet) out.push(packet);
+    } catch {
+      // unreadable — skip
+    }
+  }
   return out;
 }
 
-import { readdirSync } from "node:fs";
+/** All packets visible to this repo: committed first, then local snapshots. */
+export function listPackets(layout: Layout): TaskPacket[] {
+  const all = [
+    ...listPacketDir(join(layout.repoDir, "tasks")),
+    ...listPacketDir(join(layout.localDir, "tasks")),
+  ];
+  const seen = new Set<string>();
+  const out: TaskPacket[] = [];
+  for (const packet of all) {
+    if (seen.has(packet.id)) continue;
+    seen.add(packet.id);
+    out.push(packet);
+  }
+  return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
 
-function require_readdir(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile())
-    .map((e) => e.name);
+/** Committed packets only — the queue's processing set. */
+export function listCommittedPackets(layout: Layout): TaskPacket[] {
+  return listPacketDir(join(layout.repoDir, "tasks")).sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
 }
 
 export function newPacketId(request: string): string {

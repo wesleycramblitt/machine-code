@@ -25,6 +25,10 @@ export interface OpenRouterModelMeta {
   maxOutput: number;
   canonicalID: string;
   capabilities: { reasoning: boolean; toolCall: boolean; image: boolean };
+  inputModalities: string[];
+  outputModalities: string[];
+  supportedParameters: string[];
+  moderated: boolean;
   pricing: Pricing;
 }
 
@@ -39,7 +43,7 @@ interface OpenRouterModel {
     output_modalities?: string[];
     tokenizer?: string;
   };
-  top_provider?: { context_length?: number; max_completion_tokens?: number };
+  top_provider?: { context_length?: number; max_completion_tokens?: number; is_moderated?: boolean };
   pricing?: {
     prompt?: string | number;
     completion?: string | number;
@@ -130,6 +134,10 @@ export function parseOpenRouterModels(payload: unknown): Map<string, OpenRouterM
         toolCall: params.has("tools") || params.has("tool_choice"),
         image: input.includes("image"),
       },
+      inputModalities: input,
+      outputModalities: output,
+      supportedParameters: [...params],
+      moderated: model.top_provider?.is_moderated === true,
       pricing: openRouterPricing(model),
     });
   }

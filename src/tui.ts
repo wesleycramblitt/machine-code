@@ -12,11 +12,23 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout } from "./paths.js";
 import { listAllRuns, readRun, listProjects, type RunSummary, type RunEvent } from "./state/runs.js";
+import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
+import { readIssueCache, writeIssueCache } from "./issues/cache.js";
+import {
+  buildIssueTree,
+  filterRuns,
+  sortRuns,
+  headerCounts,
+  type IssueRollup,
+  type RunFilter,
+  type SortKey,
+} from "./tui/status.js";
 import { listInstances } from "./state/instances.js";
-import { loadMachineConfig, loadPolicy, type Policy } from "./config.js";
+import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, type Policy } from "./config.js";
+import { axisWeights } from "./select.js";
 import { readSpendSummary } from "./spend.js";
 import { loadAvailability } from "./availability.js";
-import { agentDef, type AgentDef, type AgentName } from "./agents.js";
+import { AGENT_META, AGENT_NAMES, agentDef, type AgentDef, type AgentName } from "./agents.js";
 import { loadCatalogue } from "./catalogue/load.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 
@@ -47,12 +59,12 @@ const TAB_ON = "\x1b[46m\x1b[30m\x1b[1m";
 const TAB_OFF = "\x1b[40m\x1b[37m";
 
 type Tab = "runs" | "agents" | "models" | "providers" | "spend" | "settings";
-type View = "list" | "detail" | "newrun";
-type GroupMode = "directory" | "status";
+type View = "list" | "detail" | "newrun" | "answer";
+type GroupMode = "issues" | "directory" | "status";
 type ModelGroup = "provider" | "family";
 
 const TABS: Tab[] = ["runs", "agents", "models", "providers", "spend", "settings"];
-const AGENT_NAMES: AgentName[] = ["general", "architect", "build", "review", "sudo"];
+const NEW_RUN_AGENTS = AGENT_NAMES.filter((name) => (AGENT_META[name]?.modes.length ?? 0) > 0);
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -122,20 +134,33 @@ function wrapText(s: string, width: number): string[] {
 
 function icon(s: string): string {
   if (s === "running") return `${C}●${R}`;
-  if (s === "done") return `${G}✓${R}`;
-  if (s === "blocked") return `${Y}◐${R}`;
+  if (s === "done" || s === "completed") return `${G}✓${R}`;
+  if (s === "awaiting_input") return `${Y}?${R}`;
+  if (s === "paused") return `${Y}⏸${R}`;
+  if (s === "blocked") return `${Y}⊘${R}`;
   if (s === "failed") return `${RED}✗${R}`;
+  if (s === "cancelled") return `${GR}⃠${R}`;
   if (s === "interrupted") return `${GR}◯${R}`;
   return `${GR}○${R}`;
 }
 
 function statusColor(s: string): string {
   if (s === "running") return C;
-  if (s === "done") return G;
-  if (s === "blocked") return Y;
+  if (s === "done" || s === "completed") return G;
+  if (s === "awaiting_input" || s === "paused" || s === "blocked") return Y;
   if (s === "failed") return RED;
-  if (s === "interrupted") return GR;
   return GR;
+}
+
+function healthIcon(h: string): string {
+  if (h === "done") return `${G}✓${R}`;
+  if (h === "attention") return `${RED}✗${R}`;
+  if (h === "blocked") return `${Y}⊘${R}`;
+  if (h === "awaiting-human") return `${Y}?${R}`;
+  if (h === "paused") return `${Y}⏸${R}`;
+  if (h === "review") return `${M}◎${R}`;
+  if (h === "stalled") return `${GR}◌${R}`;
+  return `${G}●${R}`;
 }
 
 function ago(iso: string): string {
@@ -176,7 +201,17 @@ function buildFlat(
       return basename(a).localeCompare(basename(b));
     });
   } else {
-    const order = ["running", "blocked", "failed", "interrupted", "done"];
+    const order = [
+      "running",
+      "awaiting_input",
+      "blocked",
+      "paused",
+      "failed",
+      "interrupted",
+      "created",
+      "completed",
+      "cancelled",
+    ];
     for (const r of runs) {
       if (!groups.has(r.status)) groups.set(r.status, []);
       groups.get(r.status)!.push(r);
@@ -190,15 +225,6 @@ function buildFlat(
   }
   return { flat, groups, pkeys };
 }
-
-/** Agent metadata for the agents tab and the new-run screen. */
-const AGENT_META: Record<AgentName, { modes: string[]; blurb: string }> = {
-  general: { modes: ["solo"], blurb: "answers questions; read tool only" },
-  architect: { modes: ["direct", "verified", "redundant"], blurb: "plans packets; runs Architect → Build → gates" },
-  build: { modes: [], blurb: "implements packets; not run directly" },
-  review: { modes: [], blurb: "read-only judge; redundant mode only" },
-  sudo: { modes: ["solo"], blurb: "full permissions; solo only" },
-};
 
 function fmtPrice(p: number): string {
   if (p >= 10) return `$${p.toFixed(0)}`;
@@ -225,9 +251,15 @@ export async function runTui(): Promise<void> {
   let detSelEvent = 0;
   const expanded = new Set<string>();
   let newrunPrompt = "";
-  let newrunAgent: "general" | "sudo" | "architect" = "architect";
+  let newrunAgent: string = "architect";
   let newrunMode = "verified";
-  let groupMode: GroupMode = "directory";
+  let newrunTier: "free" | "paid" = "paid";
+  let answering: { run: RunSummary; questionId: string } | null = null;
+  let answerText = "";
+  let groupMode: GroupMode = "issues";
+  let filter: RunFilter = "all";
+  let sortKey: SortKey = "activity";
+  let listRunsCache: RunSummary[] = [];
   let modelGroup: ModelGroup = "provider";
   let modelsAll = false; // false = configured providers only
   let modelFilter = ""; // simple substring filter
@@ -269,7 +301,7 @@ export async function runTui(): Promise<void> {
 
   const launchRun = () => {
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-    const args = ["run", "--mode", newrunMode];
+    const args = ["run", "--mode", newrunMode, "--tier", newrunTier];
     if (newrunMode === "solo") args.push("--agent", newrunAgent);
     args.push(newrunPrompt);
     try {
@@ -281,6 +313,32 @@ export async function runTui(): Promise<void> {
       });
       child.unref();
     } catch { /* ignore */ }
+  };
+
+  const refreshIssues = async () => {
+    try {
+      const { createIssueProvider } = await import("./issues/index.js");
+      const bundle = await createIssueProvider(l, loadMachineConfig(l));
+      if (bundle.provider.kind === "none") return;
+      const issues = await bundle.provider.list({ state: "all", limit: 200 });
+      writeIssueCache(l, bundle.repo ?? "", issues);
+    } catch {
+      // cache refresh is best-effort; the TUI keeps the old cache
+    }
+  };
+
+  const groupKeysForRun = (r: RunSummary): string[] => {
+    const cache = readIssueCache(l);
+    if (!cache || !r.issue) return [];
+    const byKey = new Map(cache.issues.map((i) => [`${i.ref.repo}#${i.ref.number}`, i]));
+    const keys: string[] = [];
+    let cur = byKey.get(`${r.issue.repo}#${r.issue.number}`);
+    while (cur) {
+      const prefix = cur.kind === "epic" ? "e" : cur.kind === "feature" ? "f" : "t";
+      keys.push(`${prefix}${cur.ref.number}`);
+      cur = cur.parent ? byKey.get(`${cur.parent.repo}#${cur.parent.number}`) : undefined;
+    }
+    return keys;
   };
 
   /** Generic grouped list builder: returns rows + flat selectable items. */
@@ -310,7 +368,8 @@ export async function runTui(): Promise<void> {
     // tabs and the run summary off the top on every repaint.
     const cols = Math.max(1, (process.stdout.columns || 120) - 1);
     const rows = process.stdout.rows || 40;
-    const runs = listAllRuns(l.home);
+    const allRuns = listAllRuns(l.home);
+    const runs = sortRuns(filterRuns(allRuns, filter), sortKey);
     if (sel < 0) sel = 0;
 
     // ---- Header (2 lines) -------------------------------------------------
@@ -322,8 +381,13 @@ export async function runTui(): Promise<void> {
       tabBar += " ";
     }
     const instCount = listInstances(l.home).length;
+    const counts = headerCounts(allRuns);
+    const cache = readIssueCache(l);
+    const cacheAge = cache ? `${ago(cache.fetchedAt)}` : "none";
     tabBar += `${D}${instCount} inst${R}`;
-    const header = [fit(tabBar, cols), `${D}${"━".repeat(cols)}${R}`];
+    const summaryLine =
+      `${D}runs ${R}${C}${counts.active}${R}${D} active · ${R}${Y}${counts.awaiting}${R}${D} awaiting · ${R}${Y}${counts.paused}${R}${D} paused · ${R}${Y}${counts.blocked}${R}${D} blocked · ${R}${G}${counts.completed}${R}${D} done  |  PRs ${R}${Y}${counts.openPrs}${R}${D} open  |  approvals ${R}${Y}${counts.approvals}${R}${D}  |  issues ${R}${cacheAge}${D}  |  $${counts.spend.toFixed(2)}${R}`;
+    const header = [fit(tabBar, cols), fit(summaryLine, cols)];
 
     // ---- Footer (2 lines) -------------------------------------------------
     // Built after the body so it can carry view-specific progress (e.g. the
@@ -350,9 +414,25 @@ export async function runTui(): Promise<void> {
 
     // ---- Runs -------------------------------------------------------------
     if (tab === "runs") {
-      if (view === "newrun") {
-        const agents: Array<"general" | "sudo" | "architect"> = ["general", "sudo", "architect"];
-        const meta = AGENT_META[newrunAgent];
+      if (view === "answer" && answering) {
+        const lines = wrapText(answerText || "(type the answer, then press Enter)", Math.max(20, cols - 8));
+        body = [
+          ` ${B}${W}Answer run ${answering.run.id.slice(-8)}${R}`,
+          "",
+          ` ${D}question ${answering.questionId.slice(0, 8)}${R}`,
+          "",
+          ` ${B}Answer${R}`,
+          ` ${D}${"┌" + "─".repeat(Math.max(10, cols - 4)) + "┐"}${R}`,
+        ];
+        const boxH = Math.max(1, bodyH - 6);
+        for (let i = 0; i < boxH; i++) {
+          const ln = lines[i] ?? "";
+          body.push(` ${D}│${R} ${fit(ln, Math.max(10, cols - 8))} ${D}│${R}`);
+        }
+        body.push(` ${D}${"└" + "─".repeat(Math.max(10, cols - 4)) + "┘"}${R}`);
+      } else if (view === "newrun") {
+        const agents = NEW_RUN_AGENTS;
+        const meta = AGENT_META[newrunAgent] ?? { modes: [], blurb: "" };
         const modes = meta.modes;
         if (!modes.includes(newrunMode)) newrunMode = modes[0]!;
         const promptLines = wrapText(newrunPrompt || "(type the task, then press Enter)", Math.max(20, cols - 8));
@@ -362,6 +442,7 @@ export async function runTui(): Promise<void> {
           "",
           ` ${B}Agent${R}   ${agents.map((a) => (a === newrunAgent ? `${TAB_ON} ${a} ${R}` : `${D}${a}${R}`)).join("  ")}`,
           ` ${B}Mode${R}    ${modes.length === 0 ? `${D}(none)${R}` : modes.map((m) => (m === newrunMode ? `${TAB_ON} ${m} ${R}` : `${D}${m}${R}`)).join("  ")}`,
+          ` ${B}Tier${R}    ${newrunTier === "paid" ? `${TAB_ON} paid ${R}` : `${D}paid${R}`}  ${newrunTier === "free" ? `${TAB_ON} free ${R}` : `${D}free${R}`}`,
           `           ${D}${meta.blurb}${R}`,
           "",
           ` ${B}Prompt${R}`,
@@ -373,44 +454,114 @@ export async function runTui(): Promise<void> {
         }
         body.push(` ${D}${"└" + "─".repeat(Math.max(10, cols - 4)) + "┘"}${R}`);
       } else if (view === "list") {
-        const { flat, groups, pkeys } = buildFlat(runs, cwd, groupMode);
-        if (sel >= flat.length) sel = flat.length === 0 ? 0 : flat.length - 1;
+        const issueCache = readIssueCache(l);
+        const effectiveGroup: GroupMode =
+          groupMode === "issues" && (!issueCache || issueCache.issues.length === 0) ? "directory" : groupMode;
         type Row = MRow;
         const rowList: Row[] = [];
+        const flatRuns: RunSummary[] = [];
         let fi = 0;
-        for (const pk of pkeys) {
-          const isCollapsed = collapsed.has(pk);
-          if (groupMode === "directory") {
-            const isCur = pk === cwd;
-            const pn = basename(pk);
+
+        const pushRun = (r: RunSummary, prefix: string) => {
+          const selr = fi === sel;
+          const mrk = selr ? `${C}▸${R}` : " ";
+          const reqClean = (r.request || "").replace(/\s+/g, " ").trim();
+          const stats = `${G}${r.modelCalls}${R}c ${C}${r.usage.totalTokens}${R}tok ${Y}$${r.cost.actual.toFixed(4)}${R}`;
+          const pr = r.prNumber ? ` ${D}PR #${r.prNumber} ${r.prState ?? ""}${R}` : "";
+          const availW = Math.max(12, cols - 76);
+          const line = `${prefix}${mrk} ${icon(r.status)} ${BL}${r.id.slice(-8)}${R} ${D}${ago(r.lastActivityAt ?? r.startedAt)}${R}  ${M}${r.agent}${R}/${r.mode}  ${W}${trunc(reqClean, availW)}${R}${pr}  ${D}│${R} ${stats}`;
+          rowList.push({ kind: "item", idx: fi, text: selr ? `\x1b[48;5;236m${line}${R}` : line });
+          flatRuns.push(r);
+          fi++;
+        };
+
+        const pct = (roll: IssueRollup) => (roll.pct === undefined ? `${D}—${R}` : `${roll.pct}%`);
+        const rollStats = (roll: IssueRollup) =>
+          `${healthIcon(roll.health)} ${pct(roll)} ${D}tasks ${roll.tasksClosed}/${roll.tasksTotal} · runs ${roll.runsTotal}${roll.runsActive ? `(${roll.runsActive})` : ""} · $${roll.cost.toFixed(2)}${roll.lastActivity ? ` · ${ago(roll.lastActivity)}` : ""}${R}`;
+        const badge = (issue: typeof issueCache extends null ? never : NonNullable<typeof issueCache>["issues"][number]) =>
+          issue.reserved || issue.labels.some((x) => x.startsWith("mc:reserved")) ? `${M}[P&R]${R} ` : "";
+
+        if (effectiveGroup === "issues" && issueCache) {
+          const tree = buildIssueTree(issueCache.issues, runs);
+          for (const node of tree.epics) {
+            const eKey = `e${node.epic.ref.number}`;
             rowList.push({
               kind: "group",
-              key: pk,
-              text: ` ${isCur ? C : GR}${isCollapsed ? "▸" : "▾"} ${B}${W}${pn}${R}${isCur ? ` ${C}(cwd)${R}` : ""} ${D}${pk} (${groups.get(pk)?.length || 0})${R}`,
+              key: eKey,
+              text: ` ${C}${collapsed.has(eKey) ? "▸" : "▾"} ${B}${W}Epic #${node.epic.ref.number} — ${node.epic.title}${R}  ${rollStats(node.rollup)}`,
             });
-          } else {
-            const sc = statusColor(pk);
-            rowList.push({
-              kind: "group",
-              key: pk,
-              text: ` ${sc}${isCollapsed ? "▸" : "▾"} ${B}${sc}${pk.toUpperCase()}${R} ${D}(${groups.get(pk)?.length || 0})${R}`,
-            });
+            if (collapsed.has(eKey)) continue;
+            for (const fnode of node.features) {
+              const fKey = `f${fnode.feature.ref.number}`;
+              const branch = fnode.rollup.branch ? ` ${D}${fnode.rollup.branch}${R}` : "";
+              const pr = fnode.rollup.prState ? ` ${Y}PR ${fnode.rollup.prState}${R}` : "";
+              rowList.push({
+                kind: "group",
+                key: fKey,
+                text: `   ${C}${collapsed.has(fKey) ? "▸" : "▾"} ${B}${W}${badge(fnode.feature)}Feature #${fnode.feature.ref.number} — ${fnode.feature.title}${R}${branch}${pr}  ${rollStats(fnode.rollup)}`,
+              });
+              if (collapsed.has(fKey)) continue;
+              for (const tnode of fnode.tasks) {
+                const tKey = `t${tnode.task.ref.number}`;
+                rowList.push({
+                  kind: "group",
+                  key: tKey,
+                  text: `     ${C}${collapsed.has(tKey) ? "▸" : "▾"} ${B}${W}${badge(tnode.task)}Task #${tnode.task.ref.number} — ${tnode.task.title}${R}  ${rollStats(tnode.rollup)}`,
+                });
+                if (collapsed.has(tKey)) continue;
+                for (const r of tnode.runs) pushRun(r, "       ");
+              }
+              for (const r of fnode.runs) pushRun(r, "     ");
+            }
+            for (const r of node.runs) pushRun(r, "   ");
           }
-          if (isCollapsed) continue;
-          for (const r of groups.get(pk) || []) {
-            const selr = fi === sel;
-            const mrk = selr ? `${C}▸${R}` : " ";
-            const reqClean = (r.request || "").replace(/\s+/g, " ").trim();
-            const stats = `${G}${r.modelCalls}${R}c ${C}${r.usage.totalTokens}${R}tok ${Y}$${r.cost.actual.toFixed(4)}${R}`;
-            const availW = Math.max(16, cols - 60);
-            const line = `  ${mrk} ${icon(r.status)} ${BL}${r.id.slice(-8)}${R} ${D}${ago(r.startedAt)}${R}  ${M}${r.agent}${R}/${r.mode}  ${W}${trunc(reqClean, availW)}${R}  ${D}│${R} ${stats}`;
-            rowList.push({ kind: "item", idx: fi, text: selr ? `\x1b[48;5;236m${line}${R}` : line });
-            fi++;
+          const section = (label: string, list: RunSummary[], prefix: string) => {
+            if (list.length === 0) return;
+            const key = `sec:${label}`;
+            rowList.push({ kind: "group", key, text: ` ${B}${W}${label}${R} ${D}(${list.length})${R}` });
+            if (collapsed.has(key)) return;
+            for (const r of list) pushRun(r, prefix);
+          };
+          section("Planning", tree.planning, "   ");
+          section("Untracked", tree.untracked, "   ");
+          section("Orphaned issue", tree.orphaned, "   ");
+          if (rowList.length === 0) {
+            rowList.push({ kind: "group", key: "empty", text: ` ${D}no issues or runs yet${R}` });
+          }
+        } else {
+          const { flat, groups, pkeys } = buildFlat(runs, cwd, effectiveGroup === "issues" ? "directory" : effectiveGroup);
+          for (const pk of pkeys) {
+            const isCollapsed = collapsed.has(pk);
+            if (effectiveGroup === "directory") {
+              const isCur = pk === cwd;
+              const pn = basename(pk);
+              rowList.push({
+                kind: "group",
+                key: pk,
+                text: ` ${isCur ? C : GR}${isCollapsed ? "▸" : "▾"} ${B}${W}${pn}${R}${isCur ? ` ${C}(cwd)${R}` : ""} ${D}${pk} (${groups.get(pk)?.length || 0})${R}`,
+              });
+            } else {
+              const sc = statusColor(pk);
+              rowList.push({
+                kind: "group",
+                key: pk,
+                text: ` ${sc}${isCollapsed ? "▸" : "▾"} ${B}${sc}${pk.toUpperCase()}${R} ${D}(${groups.get(pk)?.length || 0})${R}`,
+              });
+            }
+            if (isCollapsed) continue;
+            for (const r of groups.get(pk) || []) pushRun(r, "  ");
+          }
+          if (flat.length === 0) {
+            rowList.push({ kind: "group", key: "empty", text: ` ${D}no runs yet — press n${R}` });
           }
         }
-        const w = windowRows(rowList, flat.length, sel, bodyH, listTop);
+
+        if (sel >= flatRuns.length) sel = flatRuns.length === 0 ? 0 : flatRuns.length - 1;
+        const w = windowRows(rowList, flatRuns.length, sel, bodyH, listTop);
         listTop = w.top;
         body = w.lines;
+        // Expose the flattened run order for key handling this frame.
+        listRunsCache = flatRuns;
       } else if (view === "detail") {
         const r = buildFlat(runs, cwd, groupMode).flat[sel];
         if (!r) { view = "list"; return draw(); }
@@ -422,7 +573,22 @@ export async function runTui(): Promise<void> {
           const pre: string[] = [];
           pre.push(` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${D}${s.repoRoot || r.repoRoot || "?"}${R}`);
           pre.push(` ${statusColor(s.status)}${B}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}/${s.mode}  ${G}${s.modelCalls}${R} calls  ${C}${s.usage.totalTokens.toLocaleString()}${R} tok  ${Y}$${s.cost.actual.toFixed(6)}${R}  ${D}pid ${s.pid}${R}`);
+          const meta: string[] = [];
+          if (s.issue) meta.push(`issue #${s.issue.number}`);
+          if (s.branch) meta.push(`branch ${s.branch}`);
+          if (s.prNumber) meta.push(`PR #${s.prNumber} ${s.prState ?? ""}`.trim());
+          if (s.parentRunId) meta.push(`parent ${s.parentRunId.slice(-8)}`);
+          if (meta.length) pre.push(` ${D}${meta.join(" · ")}${R}`);
           if (s.error) pre.push(` ${RED}ERROR: ${s.error}${R}`);
+          if (s.status === "awaiting_input") {
+            const runDir = join(s.repoRoot || r.repoRoot, ".machine_code", "local", "runs", s.id);
+            const pending = latestUnansweredQuestion(
+              ev.filter((e) => e.type === "question") as Array<{ questionId?: string; text?: string }>,
+              readInbox(runDir),
+            );
+            if (pending?.text) pre.push(` ${Y}? AWAITING INPUT${R} ${W}${pending.text}${R}`);
+            else pre.push(` ${Y}? AWAITING INPUT${R} ${D}(no pending question recorded)${R}`);
+          }
           pre.push(` ${D}request:${R} ${W}${(s.request || "").replace(/\s+/g, " ").trim()}${R}`);
           if (s.finalText) pre.push(` ${D}final:${R} ${W}${trunc(s.finalText.replace(/\s+/g, " ").trim(), Math.max(20, cols - 14))}${R}`);
           pre.push(` ${D}${"─".repeat(10)} events ${"─".repeat(Math.max(0, cols - 20))}${R}`);
@@ -510,7 +676,7 @@ export async function runTui(): Promise<void> {
                 evFlat.push(`${p} ${GR}${t}${R} ${Y}⌘ ${e.action}${R}`);
                 break;
               case "run_end": {
-                const sc = s.status === "done" ? G : s.status === "interrupted" ? GR : RED;
+                const sc = s.status === "completed" ? G : s.status === "interrupted" ? GR : RED;
                 evFlat.push(`${p} ${GR}${t}${R} ${sc}■ ${String(e.status).toUpperCase()}${R}${e.error ? ` ${RED}${String(e.error)}${R}` : ""}`);
                 if (exp) {
                   evFlat.push(`    ${D}tokens ${R}${s.usage.totalTokens.toLocaleString()}  ${D}cost ${R}$${s.cost.actual.toFixed(6)}  ${D}calls ${R}${s.modelCalls}`);
@@ -555,7 +721,7 @@ export async function runTui(): Promise<void> {
         let policy: Policy | undefined;
         try { policy = loadPolicy(l); } catch { policy = undefined; }
         const ap = policy?.agents[name];
-        const meta = AGENT_META[name];
+        const meta = AGENT_META[name] ?? { modes: [], blurb: "" };
         const tools = def.tools.join(", ");
         const lines: string[] = [
           ` ${B}${M}${name.toUpperCase()}${R} ${D}│ ${meta.blurb}${R}`,
@@ -570,6 +736,12 @@ export async function runTui(): Promise<void> {
           lines.push(`   min context ${C}${ap.minContext.toLocaleString()}${R}   expected out ${C}${ap.expectedOutputTokens}${R}   min capability ${C}${ap.minCapability}${R}   tool call ${C}${String(ap.toolCall)}${R}`);
           if (ap.maxOutputTokens != null) lines.push(`   max output ${C}${ap.maxOutputTokens}${R}`);
           if (ap.budgetTokens != null) lines.push(`   budget ${C}${ap.budgetTokens.toLocaleString()}${R} tokens`);
+          const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
+            .map((axis) => `${axis}≥${ap.minAxes![axis]}`)
+            .join("  ");
+          lines.push(`   axes      ${floors ? `${C}${floors}${R}` : `${D}(no axis floors)${R}`}`);
+          const w = axisWeights(name, ap);
+          lines.push(`   weights   ${D}${CAPABILITY_AXES.map((axis) => `${axis} ${w[axis].toFixed(2)}`).join("  ")}${R}`);
         } else {
           lines.push(`   ${D}(defaults)${R}`);
         }
@@ -585,7 +757,7 @@ export async function runTui(): Promise<void> {
         for (let i = 0; i < AGENT_NAMES.length; i++) {
           const name = AGENT_NAMES[i]!;
           const def = agentDef(l, name);
-          const meta = AGENT_META[name];
+          const meta = AGENT_META[name] ?? { modes: [], blurb: "" };
           const ap = policy?.agents[name];
           const selr = i === sel;
           const line = ` ${selr ? `${C}▸${R}` : " "} ${B}${M}${name.padEnd(10)}${R} ${def.readonly ? `${G}read-only${R}` : `${Y}mutating${R} `} ${D}${String(def.tools.length)} tools${R}  ${W}${meta.blurb}${R}${ap ? `  ${D}cap≥${ap.minCapability}${R}` : ""}`;
@@ -733,7 +905,9 @@ export async function runTui(): Promise<void> {
         ` ${B}${C}Machine config${R} ${D}${l.machineConfig}${R}`,
       ];
       if (m) {
-        lines.push(`   default mode ${m.defaultMode ? M + m.defaultMode + R : D + "-" + R}   max output ${m.maxOutputTokens ? C + m.maxOutputTokens + R : D + "-" + R}`);
+        lines.push(`   selection ${C}${m.selection.tier}${R}   default mode ${m.defaultMode ? M + m.defaultMode + R : D + "-" + R}   max output ${m.maxOutputTokens ? C + m.maxOutputTokens + R : D + "-" + R}`);
+        const mult = Object.entries(m.providers).filter(([, v]) => v.costMultiplier !== undefined);
+        if (mult.length > 0) lines.push(`   multipliers ${D}${mult.map(([id, v]) => `${id} ×${v.costMultiplier}`).join("  ")}${R}`);
         lines.push(`   price caps ${Y}in $${m.priceCaps.input}${R}/M ${Y}out $${m.priceCaps.output}${R}/M   vetoes ${m.vetoes.length ? RED + m.vetoes.join(", ") + R : D + "-" + R}`);
         lines.push(`   notify ${m.notify.webhookUrl ? G + "webhook" + R : D + "-" + R} ${m.notify.command ? G + "command" + R : ""}`);
       } else {
@@ -743,7 +917,16 @@ export async function runTui(): Promise<void> {
       if (policy) {
         for (const name of AGENT_NAMES) {
           const ap = policy.agents[name];
-          if (ap) lines.push(`   ${M}${name.padEnd(10)}${R} ctx≥${ap.minContext} out≈${ap.expectedOutputTokens} cap≥${ap.minCapability} tools=${String(ap.toolCall)}${ap.budgetTokens ? ` budget=${ap.budgetTokens}` : ""}`);
+          if (ap) {
+            const w = axisWeights(name, ap);
+            const topAxes = CAPABILITY_AXES.map((axis) => [axis, w[axis]] as const)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 2)
+              .map(([axis, value]) => `${axis} ${value.toFixed(2)}`)
+              .join(", ");
+            lines.push(`   ${M}${name.padEnd(10)}${R} ctx≥${ap.minContext} out≈${ap.expectedOutputTokens} cap≥${ap.minCapability} tools=${String(ap.toolCall)}${ap.budgetTokens ? ` budget=${ap.budgetTokens}` : ""}`);
+            lines.push(`   ${D}${"".padEnd(10)} weights ${topAxes}${ap.minAxes ? `  floors ${CAPABILITY_AXES.filter((a) => (ap.minAxes![a] ?? 0) > 0).map((a) => `${a}≥${ap.minAxes![a]}`).join(" ")}` : ""}${R}`);
+          }
         }
       } else {
         lines.push(`   ${D}(defaults)${R}`);
@@ -771,11 +954,13 @@ export async function runTui(): Promise<void> {
     // ---- Footer (2 lines) -------------------------------------------------
     let keys: string;
     if (tab === "runs" && view === "detail") {
-      keys = `[Esc/q] back   [j/k] select event   [space] expand${detInfo ? `   ${detInfo}` : ""}`;
+      const r2 = buildFlat(runs, cwd, groupMode).flat[sel];
+      const answerable = r2 ? detailFor(r2)?.summary.status === "awaiting_input" : false;
+      keys = `[Esc/q] back   [j/k] select event   [space] expand${answerable ? "   [a] answer" : ""}${detInfo ? `   ${detInfo}` : ""}`;
     } else if (view === "newrun") {
-      keys = `[a] agent   [m] mode   [type] prompt   [Enter] launch   [Esc] cancel`;
+      keys = `[a] agent   [m] mode   [t] tier:${newrunTier}   [type] prompt   [Enter] launch   [Esc] cancel`;
     } else if (tab === "runs") {
-      keys = `[n] new run   [g] group: ${groupMode}   [space] fold   [j/k] move   [Enter] open   [i] interrupt   [Tab/1-6] tabs   [q] quit`;
+      keys = `[n] new  [f] filter:${filter}  [s] sort:${sortKey}  [g] group:${groupMode}  [space] fold  [j/k] move  [Enter] open  [i] interrupt  [r] issues  [Tab/1-6] tabs  [q] quit`;
     } else if (tab === "agents") {
       keys = view === "detail"
         ? `[Esc/q] back   [j/k] scroll`
@@ -825,7 +1010,38 @@ export async function runTui(): Promise<void> {
     return Boolean(envKey && process.env[envKey]);
   };
 
+  void refreshIssues();
+  setInterval(() => void refreshIssues(), 30_000);
+
   stdin.on("data", (data: string) => {
+    // Answer input mode
+    if (view === "answer" && answering) {
+      if (data === "\x1b") { view = "detail"; answering = null; answerText = ""; resetScroll(); draw(); return; }
+      if (data === "\r" || data === "\n") {
+        if (answerText.trim().length > 0) {
+          const runDir = join(answering.run.repoRoot, ".machine_code", "local", "runs", answering.run.id);
+          try {
+            appendInbox(runDir, { questionId: answering.questionId, kind: "answer", text: answerText, source: "tui" });
+          } catch { /* ignore */ }
+        }
+        answering = null;
+        answerText = "";
+        view = "detail";
+        resetScroll();
+        draw();
+        return;
+      }
+      if (data === "\x7f" || data === "\b") { answerText = answerText.slice(0, -1); draw(); return; }
+      if (!data.startsWith("\x1b") && /^[\x20-\x7e]+$/.test(data)) {
+        answerText += data;
+        if (answerText.length > 4000) answerText = answerText.slice(0, 4000);
+        draw();
+        return;
+      }
+      draw();
+      return;
+    }
+
     // New-run input mode
     if (view === "newrun") {
       if (data === "\x1b") { view = "list"; resetScroll(); draw(); return; }
@@ -836,19 +1052,20 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "a") {
-        const agents: Array<"general" | "sudo" | "architect"> = ["general", "sudo", "architect"];
+        const agents = NEW_RUN_AGENTS;
         newrunAgent = agents[(agents.indexOf(newrunAgent) + 1) % agents.length]!;
-        const modes = AGENT_META[newrunAgent].modes;
+        const modes = AGENT_META[newrunAgent]?.modes ?? [];
         if (!modes.includes(newrunMode)) newrunMode = modes[0]!;
         draw();
         return;
       }
       if (data === "m") {
-        const modes = AGENT_META[newrunAgent].modes;
+        const modes = AGENT_META[newrunAgent]?.modes ?? [];
         if (modes.length > 0) newrunMode = modes[(modes.indexOf(newrunMode) + 1) % modes.length]!;
         draw();
         return;
       }
+      if (data === "t") { newrunTier = newrunTier === "paid" ? "free" : "paid"; draw(); return; }
       if (data === "\x7f" || data === "\b") { newrunPrompt = newrunPrompt.slice(0, -1); draw(); return; }
       // Printable input: single keypress or a pasted/batched chunk. Escape
       // sequences (arrows etc.) start with ESC and are ignored here.
@@ -897,7 +1114,7 @@ export async function runTui(): Promise<void> {
 
     // Runs list navigation
     if (tab === "runs" && view === "list") {
-      const { flat } = buildFlat(listAllRuns(l.home), cwd, groupMode);
+      const flat = listRunsCache;
       if (data === "\x1b[A" || data === "k") { sel = (sel - 1 + flat.length) % (flat.length || 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { sel = (sel + 1) % (flat.length || 1); draw(); return; }
       if (data === "\r" || data === "\n") {
@@ -907,11 +1124,39 @@ export async function runTui(): Promise<void> {
       }
       if (data === "i") { const r = flat[sel]; if (r) interruptRun(r); draw(); return; }
       if (data === "n") { view = "newrun"; newrunPrompt = ""; draw(); return; }
-      if (data === "g") { groupMode = groupMode === "directory" ? "status" : "directory"; sel = 0; resetScroll(); draw(); return; }
+      if (data === "g") {
+        const modes: GroupMode[] = ["issues", "directory", "status"];
+        groupMode = modes[(modes.indexOf(groupMode) + 1) % modes.length]!;
+        sel = 0;
+        resetScroll();
+        draw();
+        return;
+      }
+      if (data === "f") {
+        const filters: RunFilter[] = ["all", "active", "awaiting", "paused", "completed"];
+        filter = filters[(filters.indexOf(filter) + 1) % filters.length]!;
+        sel = 0;
+        resetScroll();
+        draw();
+        return;
+      }
+      if (data === "s") {
+        const sorts: SortKey[] = ["activity", "number", "severity", "cost"];
+        sortKey = sorts[(sorts.indexOf(sortKey) + 1) % sorts.length]!;
+        sel = 0;
+        draw();
+        return;
+      }
+      if (data === "r") { void refreshIssues(); draw(); return; }
       if (data === " ") {
         const r = flat[sel];
-        const key = r ? (groupMode === "directory" ? (r.repoRoot || "unknown") : r.status) : undefined;
-        if (key) { if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key); }
+        if (r) {
+          const keys = groupMode === "issues"
+            ? groupKeysForRun(r)
+            : [groupMode === "directory" ? (r.repoRoot || "unknown") : r.status];
+          const key = keys[0];
+          if (key) { if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key); }
+        }
         draw();
         return;
       }
@@ -921,11 +1166,25 @@ export async function runTui(): Promise<void> {
 
     // Runs detail navigation
     if (tab === "runs" && view === "detail") {
-      const r = buildFlat(listAllRuns(l.home), cwd, groupMode).flat[sel];
+      const r = listRunsCache[sel] ?? buildFlat(listAllRuns(l.home), cwd, "directory").flat[sel];
       const d = r ? detailFor(r) : null;
       const n = d ? d.events.length : 0;
       if (data === "\x1b[A" || data === "k") { detSelEvent = Math.max(0, detSelEvent - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { detSelEvent = Math.min(Math.max(0, n - 1), detSelEvent + 1); draw(); return; }
+      if (data === "a" && d && d.summary.status === "awaiting_input" && r) {
+        const runDir = join(d.summary.repoRoot || r.repoRoot, ".machine_code", "local", "runs", r.id);
+        const pending = latestUnansweredQuestion(
+          d.events.filter((e) => e.type === "question") as Array<{ questionId?: string }>,
+          readInbox(runDir),
+        );
+        if (pending?.questionId) {
+          answering = { run: r, questionId: pending.questionId };
+          answerText = "";
+          view = "answer";
+        }
+        draw();
+        return;
+      }
       if (data === " " && r) {
         const key = `${r.id}:${detSelEvent}`;
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);

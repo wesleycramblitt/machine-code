@@ -11,14 +11,16 @@
 import { runLoop, type RunLoopInput, type RunLoopResult } from "./loop.js";
 import { type MachineConfig, type Policy, type AgentPolicy } from "./config.js";
 import { generalAgent, agentDef, type AgentDef, type AgentName } from "./agents.js";
+import { resolveAgent, type AgentConfig, type Verification } from "./agents/config.js";
 import { type MutableModels } from "./models.js";
 import { type CatalogueRow } from "./catalogue/types.js";
 import { RunRecorder, type RunStatus } from "./state/runs.js";
 import { runCommand } from "./commands/registry.js";
-import { readPacket, type TaskPacket, type PacketMode, parseMode, newPacketId } from "./packet.js";
+import { readPacket, writePacket, packetPath, type TaskPacket, type PacketMode, parseMode, newPacketId } from "./packet.js";
 import { resolveGates, runGates } from "./verify.js";
 import { allCommands } from "./commands/profiles.js";
 import { loadAvailability } from "./availability.js";
+import { commitWorktree } from "./worktree.js";
 import type { Layout } from "./paths.js";
 
 export type RunMode = "solo" | "direct" | "verified" | "redundant";
@@ -33,12 +35,22 @@ export interface OrchestrateInput {
   mode: RunMode;
   agentName: AgentName | undefined;
   request: string;
+  /** Main repository root: run state, spend, instances. */
   root: string;
+  /** Worktree root for tools/commands/gates when the run mutates code. */
+  toolRoot?: string;
+  /** Numeric issue the run is associated with (Phase 4 adds provider validation). */
+  issueNumber?: number;
   home: string;
   recorder: RunRecorder;
   packet?: TaskPacket;
   availability?: import("./availability.js").AvailabilityState;
   requireProvider?: string;
+  requireModel?: string;
+  /** Run-level agent configuration overrides (CLI flags). */
+  agentOverrides?: Partial<AgentConfig>;
+  /** Assembled context block prepended to each phase's first prompt. */
+  contextText?: string;
   signal?: AbortSignal;
 }
 
@@ -55,15 +67,22 @@ async function singleAgentRun(input: {
   catalogue: readonly CatalogueRow[];
   configuredProviders: ReadonlySet<string>;
   agent: AgentDef;
+  agentConfig?: AgentConfig;
+  agentCapabilities?: string[];
   policy: AgentPolicy;
+  fullPolicy: Policy;
+  layout: Layout;
   machine: MachineConfig;
   request: string;
   root: string;
+  toolRoot?: string;
   home: string;
   availability?: import("./availability.js").AvailabilityState;
   recorder: RunRecorder;
   commands: ReadonlyMap<string, import("./commands/registry.js").CommandSpec>;
   requireProvider?: string;
+  requireModel?: string;
+  contextText?: string;
   signal?: AbortSignal;
 }): Promise<RunLoopResult> {
   return runLoop({
@@ -71,62 +90,98 @@ async function singleAgentRun(input: {
     catalogue: input.catalogue,
     configuredProviders: input.configuredProviders,
     agent: input.agent,
+    agentConfig: input.agentConfig,
+    agentCapabilities: input.agentCapabilities,
     policy: input.policy,
+    layout: input.layout,
+    fullPolicy: input.fullPolicy,
     machine: input.machine,
     request: input.request,
     root: input.root,
+    toolRoot: input.toolRoot,
     home: input.home,
     availability: input.availability,
     recorder: input.recorder,
     commands: input.commands,
     requireProvider: input.requireProvider,
+    requireModel: input.requireModel,
+    contextText: input.contextText,
     signal: input.signal,
   });
 }
 
-function policyFor(layout: Layout, name: AgentName, policy: Policy): AgentPolicy {
+export function policyFor(layout: Layout, name: AgentName, policy: Policy): AgentPolicy {
   return policy.agents[name] ?? {
     minContext: 32_000,
     expectedOutputTokens: 2_000,
-    minCapability: 6,
+    minCapability: 7,
     toolCall: name !== "general",
   };
 }
 
 export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateResult> {
   const { layout, machine, policy, mode, request, root, recorder } = input;
+  const toolRoot = input.toolRoot ?? root;
   const agents = input.models;
   const commands = allCommands(layout);
   const home = layout.home;
   const availability = input.availability ?? loadAvailability(home);
 
+  // Issue-tracking policy gate: `required` fails before the first model call.
+  let issueBundle: Awaited<ReturnType<typeof import("./issues/index.js").createIssueProvider>> | undefined;
+  const issueGate = async (config: AgentConfig): Promise<string | null> => {
+    if (config.issues !== "required") return null;
+    if (!issueBundle) {
+      const { createIssueProvider } = await import("./issues/index.js");
+      issueBundle = await createIssueProvider(layout, machine);
+    }
+    if (issueBundle.provider.kind === "none") {
+      return `issue tracking is required but unavailable: ${issueBundle.reason ?? "unknown reason"}`;
+    }
+    return null;
+  };
+
   switch (mode) {
     case "solo": {
       const name = input.agentName ?? "general";
-      if (name !== "general" && name !== "sudo") {
+      if (name !== "general" && name !== "sudo" && name !== "architect") {
         return {
           status: "failed",
           finalText: "",
-          error: `solo mode requires --agent general or --agent sudo`,
+          error: `solo mode requires --agent general, sudo, or architect (planning with delegate=false)`,
           runId: recorder.id,
         };
       }
-      const def = agentDef(layout, name);
+      const resolved = resolveAgent(layout, name, {
+        agentPolicy: policy.agents[name],
+        machineOverrides: machine.agents[name],
+        runOverrides: input.agentOverrides,
+      });
+      recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
+      const gate = await issueGate(resolved.config);
+      if (gate) return { status: "blocked", finalText: "", error: gate, runId: recorder.id };
       const agentPolicy = policyFor(layout, name, policy);
       const result = await singleAgentRun({
         models: agents,
         catalogue: input.catalogue,
         configuredProviders: input.configuredProviders,
-        agent: def,
+        agent: resolved.def,
+        agentConfig: resolved.config,
+        agentCapabilities: resolved.capabilities,
         policy: agentPolicy,
+        fullPolicy: policy,
+        layout,
         machine,
         request,
         root,
+        toolRoot,
         home,
         availability,
         recorder,
         commands,
         requireProvider: input.requireProvider,
+        requireModel: input.requireModel,
+        contextText: input.contextText,
         signal: input.signal,
       });
       return { ...result, runId: recorder.id };
@@ -139,25 +194,38 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       if (input.packet) {
         packet = input.packet;
       } else {
-        const architect = agentDef(layout, "architect");
+        // The chain architect plans only (delegate=false): the RUNNER chains
+        // to Build; the architect never spawns.
+        const resolvedArch = resolveAgent(layout, "architect", {
+          agentPolicy: policy.agents.architect,
+          machineOverrides: machine.agents.architect,
+          runOverrides: { ...(input.agentOverrides ?? {}), delegate: false, preset: "plan" as const },
+        });
         const archPolicy = policyFor(layout, "architect", policy);
         const archResult = await singleAgentRun({
           models: agents,
           catalogue: input.catalogue,
           configuredProviders: input.configuredProviders,
-          agent: architect,
+          agent: resolvedArch.def,
+          agentConfig: resolvedArch.config,
+          agentCapabilities: resolvedArch.capabilities,
           policy: archPolicy,
+          fullPolicy: policy,
+          layout,
           machine,
           request: `Compile a task packet for this request. Output ONLY the packet in YAML-frontmatter markdown:\n\n---\nid: <${newPacketId(request)}>\nmode: ${mode}\nbudget_tokens: ${machine.maxOutputTokens ?? 200000}\n---\n\n# Goal\n<one line>\n\n# Context\n- <file paths>\n\n# Constraints\n- <constraints>\n\n# Acceptance\n- <named command with typed args>\n\n${request}`,
           root,
+          toolRoot,
           home,
           availability,
           recorder,
           commands,
           requireProvider: input.requireProvider,
+          requireModel: input.requireModel,
+          contextText: input.contextText,
           signal: input.signal,
         });
-        if (archResult.status !== "done") {
+        if (archResult.status !== "completed") {
           return {
             status: archResult.status,
             finalText: archResult.finalText,
@@ -171,25 +239,43 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
           mode: packet.mode,
           acceptance: packet.acceptance.length,
         });
+        // Runner-owned persistence: the compiled packet must exist on disk
+        // before Build starts, not only inside the Architect's final text.
+        const packetFile = writePacket(layout, packet);
+        recorder.event("packet_persisted", { id: packet.id, path: packetFile });
       }
 
-      const build = agentDef(layout, "build");
+      const resolvedBuild = resolveAgent(layout, "build", {
+        agentPolicy: policy.agents.build,
+        machineOverrides: machine.agents.build,
+        runOverrides: { verification: mode as Verification, ...input.agentOverrides },
+      });
+      recorder.recordConfig({ ...resolvedBuild.config, capabilities: resolvedBuild.capabilities });
+      const buildGate = await issueGate(resolvedBuild.config);
+      if (buildGate) return { status: "blocked", finalText: "", error: buildGate, runId: recorder.id };
       const buildPolicy = policyFor(layout, "build", policy);
       const buildRequest = `Implement this task packet exactly:\n\n${JSON.stringify(packet, null, 2)}\n\nAcceptance commands must pass. If the packet is wrong or a gate cannot run, report blocked with evidence.`;
       const buildResult = await singleAgentRun({
         models: agents,
         catalogue: input.catalogue,
         configuredProviders: input.configuredProviders,
-        agent: build,
+        agent: resolvedBuild.def,
+        agentConfig: resolvedBuild.config,
+        agentCapabilities: resolvedBuild.capabilities,
         policy: buildPolicy,
+        fullPolicy: policy,
+        layout,
         machine,
         request: buildRequest,
         root,
+        toolRoot,
         home,
         availability,
         recorder,
         commands,
         requireProvider: input.requireProvider,
+        requireModel: input.requireModel,
+        contextText: input.contextText,
         signal: input.signal,
       });
       if (buildResult.status === "failed" || buildResult.status === "interrupted") {
@@ -203,7 +289,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       }
 
       const gates = resolveGates(packet);
-      const gateOutcome = await runGates(gates, { root, commands });
+      const gateOutcome = await runGates(gates, { root: toolRoot, commands });
       recorder.event("gates", {
         packet: packet.id,
         passed: gateOutcome.passed,
@@ -220,26 +306,37 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       }
 
       if (mode === "redundant") {
-        const review = agentDef(layout, "review");
+        const resolvedReview = resolveAgent(layout, "review", {
+          agentPolicy: policy.agents.review,
+          machineOverrides: machine.agents.review,
+          runOverrides: input.agentOverrides,
+        });
         const reviewPolicy = policyFor(layout, "review", policy);
-        const diffResult = await runCommand("core:diff", {}, { root, commands });
+        const diffResult = await runCommand("core:diff", {}, { root: toolRoot, commands });
         const reviewResult = await singleAgentRun({
           models: agents,
           catalogue: input.catalogue,
           configuredProviders: input.configuredProviders,
-          agent: review,
+          agent: resolvedReview.def,
+          agentConfig: resolvedReview.config,
+          agentCapabilities: resolvedReview.capabilities,
           policy: reviewPolicy,
+          fullPolicy: policy,
+          layout,
           machine,
           request: `Review this packet and the resulting diff. Approve or reject with concrete evidence citing paths.\n\nPACKET:\n${JSON.stringify(packet, null, 2)}\n\nDIFF:\n${diffResult.text}`,
           root,
+          toolRoot,
           home,
           availability,
           recorder,
           commands,
           requireProvider: input.requireProvider,
+          requireModel: input.requireModel,
+          contextText: input.contextText,
           signal: input.signal,
         });
-        if (reviewResult.status !== "done") {
+        if (reviewResult.status !== "completed") {
           return {
             status: reviewResult.status,
             finalText: reviewResult.finalText,
@@ -260,8 +357,32 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
         }
       }
 
+      // Runner-owned commit: after gates and review pass, the worktree's
+      // changes are committed to the run's branch.
+      if (toolRoot !== root) {
+        const message =
+          `mc(${packet.id}): ${packet.goal}\n\n` +
+          `run: ${recorder.id}\n` +
+          `packet: ${packet.id}` +
+          (input.issueNumber ? `\nissue: ${input.issueNumber}` : "");
+        const { sha } = await commitWorktree({ path: toolRoot, message });
+        if (sha) {
+          recorder.patchSummary({ commit: sha });
+          recorder.event("commit_created", { sha, branch: recorder.current.branch, packet: packet.id });
+        }
+        // Publish: push the branch and open the Task PR (Feature branch base).
+        const { maybePublish } = await import("./pr/publish.js");
+        await maybePublish({
+          layout,
+          machine,
+          recorder,
+          defaultApproval: resolvedBuild.config.approval,
+          title: `Task: ${packet.goal}`,
+        });
+      }
+
       return {
-        status: "done",
+        status: "completed",
         finalText: buildResult.finalText,
         packet,
         runId: recorder.id,

@@ -28,10 +28,10 @@ Linux only; TypeScript on Node 22+. Use exact lockfile pins for `@earendil-works
 
 - **Credentials/catalogue:** use `pi-ai`'s standard environment variables; never store keys in files. `machine_code providers` reports configured providers and key sources. `machine_code catalogue refresh` combines provider metadata, OpenRouter benchmarks, run measurements, and dated curation into `~/.machine_code/catalogue/models.json`; retain provenance with precedence generated → benchmark → measured → curated.
 - **Config:** machine `config.toml` sets rate caps, vetoes, default `max_output_tokens`, and default packet mode; it may also set project-path price overrides. Repo `policy.toml` sets per-agent requirements and may override the output ceiling. Agent override wins over machine default; the effective value is capped by the selected model's maximum. If neither config sets a value, use that model maximum. The ceiling is distinct from total `budget_tokens` and the selector's fixed expected-output estimate. Reject settings below the expected-output value. Price caps are per-million-token rates, evaluated at the context-length tier used; committed repo policy cannot set money.
-- **Selection:** every call runs `pick(agent, requirements, state)`. Estimate input as current-context characters ÷ 4 and output as a fixed value per agent. Hard-filter credentials, tool support, context/output capacity, minimum context, caps, vetoes, and availability; then score capability shortfall, estimated cost, speed, and context headroom. Fixed weights are tuned on evals; ties go to lexicographically smaller model ID. No stickiness or automatic model escalation after a failed gate.
+- **Selection:** every call runs `pick(agent, requirements, state)`. Estimate input as current-context characters ÷ 4 and output as a fixed value per agent. Hard-filter credentials, tool support, context/output capacity, minimum context, caps, vetoes, and availability; also hard-filter the composite capability floor and any per-axis floors. Then score the role-weighted axis mix (capability quality), estimated cost, speed, and context headroom. Fixed weights are tuned on evals; ties go to lexicographically smaller model ID. No stickiness or automatic model escalation after a failed gate.
 - **Fallback and health:** after a retryable provider error, cool the target and try at most one next-best eligible model; select and log each attempt separately. Do not execute tool calls until a valid response arrives. Insufficient funds disables a provider until manual re-enable. Temporary failures cool models/providers on `1m → 5m → 30m → 2h → 12h → 1d → 7d → 30d`, honoring longer `Retry-After` up to 30 days; success resets the tier. Auth failures become `needs-auth`; context/parameter incompatibility excludes the model for the current run; refusals get no fallback; malformed or unknown errors are logged safely and cool the model at the first tier. Availability is shared in `availability.json` under a lock.
 - **Accounting:** log every selection, estimate, filter summary, and candidate scores to per-run `events.jsonl`. Append one ≤4 KiB record per provider attempt to machine-wide `spend.jsonl`, linked by unique call ID; report actual and estimated spend separately by day, project, provider, and model. CLI/TUI expose provider enable/disable and cooldown-clear actions. Catalogue refresh does not clear health state.
-- Copy only the pure scoring, calibration, and OpenRouter parsing functions from `model-selector`; do not import from OpenCode config or port its `free|cheap|local|power` tiers.
+- Copy only the pure scoring, calibration, and OpenRouter parsing functions from `model-selector`; do not import from OpenCode config or port its tier model; selection has only free/paid here.
 
 ### Tools, profiles, and search
 
@@ -150,3 +150,165 @@ Use 12 workspace tasks (4 fixes, 3 features, 3 refactors, 2 test additions), one
 - [Goose](https://github.com/aaif-goose/goose): interoperability reference; avoid hidden model calls and monolithic orchestration.
 - [OpenHands SDK](https://github.com/OpenHands/software-agent-sdk): isolation/event-log reference, not a stack to adopt.
 - `mini-swe-agent`: small benchmark control arm, not a base.
+
+## 7. Upgrade addendum (2026-10-31)
+
+The harness has been extended beyond this v1 plan. `upgrade-plan.md` is the
+authoritative design for the upgrade; the deltas that matter when reading the
+sections above:
+
+- **Nine core tools**, not six: `read`, `write`, `edit`, `search`, `command`,
+  `task` (real delegation), `ask` (suspend for user input), `issue` (GitHub),
+  `pr` (pull requests). `task` is no longer a stub.
+- **Agent configuration is separate from run modes.** Roles (general, architect,
+  build, review, sudo) carry explicit config: `delegate`, `verification`
+  (`direct|verified|redundant`), `issues` (`required|optional|disabled`), `ask`,
+  `approval` (`human|agent`), `ambiguity`. `--mode solo/direct/verified/redundant`
+  remains as compatibility aliases; `solo` means "this agent cannot spawn
+  children".
+- **Worktrees are real.** Mutating runs work in
+  `.machine_code/local/worktrees/<run-id>` on `mc/task/<n>` (or `mc/run/<id>`),
+  based on `mc/feature/<n>`; tools, commands, gates, and LSP run there. Branches
+  belong to issues; worktrees belong to runs.
+- **Runs persist beyond the process.** `transcript.json` checkpoints plus an
+  `inbox.jsonl` make awaiting-input, pause/fork, and resume-after-restart work;
+  the `ask` tool suspends a run without creating a new one.
+- **GitHub issues are the work index.** Every Epic gets one reserved
+  `Feature 0: Planning & Review`; every Feature gets one reserved
+  `Task 0: Planning & Review`. Runs attach to Tasks only; Epic/Feature planning
+  resolves to the reserved Task 0. Duplicate empty reserved issues are closed.
+- **Context is assembled per run** from the Task→Feature→Epic hierarchy, explicit
+  packet/knowledge/skill references, the project plan, and the parent run, with
+  a provenance manifest (`context.json`) and a character budget.
+- **PRs are runner-owned.** After gates/review the runner commits the worktree,
+  pushes the branch, and opens a Task PR into the Feature branch; after all
+  deliverable tasks close, `pr feature <n>` runs integration gates and opens the
+  Feature PR to main. Approval defaults to human (TUI/CLI approve), with
+  per-issue opt-in agent merges; squash merges.
+- **TUI**: issue-tree grouping with rollups/health, header counts, filters/sort,
+  awaiting-human filtering, issue cache, and run detail metadata.
+
+### Model selection
+
+Capability is multi-dimensional, not a single scalar. Each catalogue row has
+four calibrated axes — `reasoning`, `code`, `agentic`, `general` — plus a
+composite `capability`. Repo policy sets, per role:
+
+```toml
+[agents.build]
+min_capability = 7.3        # hard filter on the composite (0-10)
+[agents.build.axes]         # optional hard per-axis floors
+reasoning = 6.0
+code = 5.5
+agentic = 6.0
+[agents.build.weights]      # role-weighted mix, normalized
+code = 0.40
+agentic = 0.35
+reasoning = 0.15
+general = 0.10
+```
+
+Every call hard-filters models below `min_capability` or any axis floor, then
+scores `0.5 × capability-quality + 0.25 × cost + 0.10 × speed + 0.15 × headroom`
+(ascending). Capability-quality is the role-weighted axis fit converted to a
+penalty, so a materially better model outranks a cheaper one; close models are
+decided by cost. Defaults: balanced role weights, composite floor 7.
+
+Inspect and dry-run the selector without spending tokens:
+
+```
+machine_code models                       # configured providers, capability-sorted
+machine_code models --all --json          # every row
+machine_code models --agent build         # hard filters + selected model + top candidates
+machine_code models --agent review --min-capability 7.6 --context-chars 48000
+```
+
+`--model <catalogue-key>` (or an id suffix) still pins one model. Provider
+note: pin with e.g. `--model opencode-go/glm-5.3-flash`.
+
+### Tiers, funding, and data files
+
+Selection has exactly two tiers:
+
+```toml
+[selection]
+tier = "paid"            # free | paid
+```
+
+- `paid` — every row that passes the capability/context floors is eligible,
+  including zero-price rows. The best fit wins; a free model can win outright.
+  Paid rows from providers without funding are rejected as
+  `unfunded-provider`; free rows bypass the funding check.
+- `free` — only zero-price rows are eligible.
+
+Provider funding and billing adjustments live in machine config:
+
+```toml
+[providers.opencode-go]
+cost_multiplier = 0.5    # 2x cheaper than list (quota discount)
+funded = true
+```
+
+Defaults come from `data/providers.toml`; `openrouter`, `opencode`, and
+`opencode-go` ship funded. Override per run with `--tier free|paid`. The
+catalogue (`~/.machine_code/catalogue/models.json`) is generated from
+`data/providers.toml`, `data/benchmarks.json`, provider metadata, and curation,
+and contains the full provider table plus every model's pricing, context,
+axes, and capability score. That is the single runtime data file. Each model row carries explicit
+`capabilities` (reasoning/toolCall/image, input/output modalities, context,
+max output), `modes` (reasoning, tools, vision, structured-output, ...),
+`pricing` (including tier bands), `scores` (four axes + composite), and
+`provenance.scoreSources` telling you whether each axis came from a benchmark,
+a metadata prior, or an authored override. Provider entries carry billing
+`modes` (usage/subscription/free), `billing` details ($10/$60 OpenCode Go
+quota), default `costMultiplier`, model counts, and price ranges.
+
+`data/models.toml` is a generated, committed snapshot of the current catalogue
+(`machine_code catalogue snapshot`, or `catalogue refresh --snapshot`). It is
+normalized: capabilities, modes, scores, and benchmarks appear once per
+canonical model; provider offers carry pricing/free and only the fields that
+differ (context/max-output limits, modes, capability gaps). `score_sources`
+lists only non-metadata axes; an absent axis means the metadata prior. It is
+the readable starting point for reviewing model capabilities, modes, and
+prices; it is regenerated, not authoritative. Hand-authored
+capability/pricing corrections go in `data/model-overrides.toml` (machine
+override: `~/.machine_code/data/model-overrides.toml`) and win last.
+
+### Minimums and overrides
+
+Precedence (lowest → highest): built-in defaults → machine `[selection]` →
+machine `[agents.<role>]` → repo `.machine_code/policy.toml` `[agents.<role>]`.
+Axis tables merge per axis.
+
+Experiment per run without editing files:
+
+```bash
+machine_code run --tier free --min-capability 7.0 --min-axes code=6.5,agentic=7 ...
+machine_code models --agent build --min-capability 7.8 --min-axes reasoning=7.5
+```
+
+Inspect/edit the effective policy:
+
+```bash
+machine_code policy [role] [--json]
+machine_code policy edit [--repo]
+```
+
+### Agents and presets as data
+
+`data/agents.toml` defines roles (prompt file, tools, read-only flag, TUI modes,
+blurb, default preset) and behavior presets. Prompts live in
+`data/prompts/*.md`. Machine override: `~/.machine_code/data/agents.toml`;
+repo prompt override: `.machine_code/agents/<role>.md`. Capability gating stays
+in the harness, not the data file.
+
+### Provider notes
+### Provider notes
+
+- **DeepInfra** is an OpenAI-compatible shim; `/v1/openai/models` metadata
+  supplies pricing, context, max output, and chat filtering.
+- **NVIDIA** models are zero-price in the generated catalog and are retained as
+  `free` rows: selectable in both tiers; free-only selection uses `--tier free`.
+- **OpenCode Go** is discounted via `cost_multiplier`; rate-limit errors cool
+  the model/provider on the tier schedule (1m → 5m → 30m → …), and a provider
+  cooldown makes the next call re-pick another provider.

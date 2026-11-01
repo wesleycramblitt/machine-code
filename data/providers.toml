@@ -1,0 +1,200 @@
+[providers.ant-ling]
+env_keys = ["ANT_LING_API_KEY"]
+modes = ["usage"]
+
+[providers.anthropic]
+env_keys = ["ANTHROPIC_API_KEY"]
+modes = ["usage"]
+
+[providers.openai]
+env_keys = ["OPENAI_API_KEY"]
+modes = ["usage"]
+
+[providers.azure]
+env_keys = ["AZURE_OPENAI_API_KEY"]
+modes = ["usage"]
+
+[providers.nvidia]
+name = "NVIDIA"
+env_keys = ["NVIDIA_API_KEY"]
+modes = ["free"]
+[providers.nvidia.billing]
+kind = "free_tier"
+
+[providers.deepseek]
+env_keys = ["DEEPSEEK_API_KEY"]
+modes = ["usage"]
+
+[providers.google]
+name = "Google"
+env_keys = ["GEMINI_API_KEY"]
+modes = ["usage"]
+
+[providers.google-vertex]
+env_keys = ["GOOGLE_CLOUD_API_KEY"]
+modes = ["usage"]
+
+[providers.groq]
+name = "Groq"
+env_keys = ["GROQ_API_KEY"]
+modes = ["usage"]
+
+[providers.cerebras]
+env_keys = ["CEREBRAS_API_KEY"]
+modes = ["usage"]
+
+[providers.xai]
+env_keys = ["XAI_API_KEY"]
+modes = ["usage"]
+
+[providers.typesafe]
+env_keys = ["TYPESAFE_API_KEY"]
+modes = ["usage"]
+
+[providers.radius]
+env_keys = ["RADIUS_API_KEY"]
+modes = ["usage"]
+
+[providers.openrouter]
+name = "OpenRouter"
+env_keys = ["OPENROUTER_API_KEY"]
+funded = true
+modes = ["usage"]
+[providers.openrouter.billing]
+kind = "usage"
+
+[providers.vercel-ai-gateway]
+env_keys = ["AI_GATEWAY_API_KEY"]
+modes = ["usage"]
+
+[providers.zai]
+env_keys = ["ZAI_API_KEY"]
+modes = ["usage"]
+
+[providers.zai-coding-cn]
+env_keys = ["ZAI_CODING_CN_API_KEY"]
+modes = ["usage"]
+
+[providers.mistral]
+env_keys = ["MISTRAL_API_KEY"]
+modes = ["usage"]
+
+[providers.minimax]
+env_keys = ["MINIMAX_API_KEY"]
+modes = ["usage"]
+
+[providers.minimax-cn]
+env_keys = ["MINIMAX_CN_API_KEY"]
+modes = ["usage"]
+
+[providers.moonshotai]
+env_keys = ["MOONSHOT_API_KEY"]
+modes = ["usage"]
+
+[providers.moonshotai-cn]
+env_keys = ["MOONSHOT_API_KEY"]
+modes = ["usage"]
+
+[providers.huggingface]
+env_keys = ["HF_TOKEN"]
+modes = ["usage"]
+
+[providers.fireworks]
+env_keys = ["FIREWORKS_API_KEY"]
+modes = ["usage"]
+
+[providers.together]
+env_keys = ["TOGETHER_API_KEY"]
+modes = ["usage"]
+
+[providers.baseten]
+env_keys = ["BASETEN_API_KEY"]
+modes = ["usage"]
+
+[providers.opencode]
+name = "OpenCode"
+env_keys = ["OPENCODE_API_KEY"]
+funded = true
+modes = ["usage"]
+[providers.opencode.billing]
+kind = "usage"
+
+[providers.opencode-go]
+name = "OpenCode Go"
+env_keys = ["OPENCODE_API_KEY"]
+funded = true
+modes = ["subscription", "usage"]
+cost_multiplier = 0.5
+[providers.opencode-go.billing]
+kind = "subscription"
+monthly_usd = 10
+included_usd = 60
+fallback = "opencode"
+
+[providers.kimi-coding]
+env_keys = ["KIMI_API_KEY"]
+modes = ["usage"]
+
+[providers.meta]
+env_keys = ["META_API_KEY"]
+modes = ["usage"]
+
+[providers.cloudflare-workers-ai]
+env_keys = ["CLOUDFLARE_API_KEY"]
+modes = ["usage"]
+
+[providers.cloudflare-ai-gateway]
+env_keys = ["CLOUDFLARE_API_KEY"]
+modes = ["usage"]
+
+[providers.xiaomi]
+env_keys = ["XIAOMI_API_KEY"]
+modes = ["usage"]
+
+[providers.xiaomi-token-plan-cn]
+env_keys = ["XIAOMI_TOKEN_PLAN_CN_API_KEY"]
+modes = ["usage"]
+
+[providers.xiaomi-token-plan-ams]
+env_keys = ["XIAOMI_TOKEN_PLAN_AMS_API_KEY"]
+modes = ["usage"]
+
+[providers.xiaomi-token-plan-sgp]
+env_keys = ["XIAOMI_TOKEN_PLAN_SGP_API_KEY"]
+modes = ["usage"]
+
+[providers.github-copilot]
+env_keys = ["COPILOT_GITHUB_TOKEN"]
+modes = ["usage"]
+
+[providers.qwen-token-plan]
+env_keys = ["QWEN_TOKEN_PLAN_API_KEY"]
+modes = ["usage"]
+
+[providers.qwen-token-plan-cn]
+env_keys = ["QWEN_TOKEN_PLAN_CN_API_KEY"]
+modes = ["usage"]
+
+[providers.qwen-token-plan-individual]
+env_keys = ["QWEN_TOKEN_PLAN_API_KEY"]
+modes = ["usage"]
+
+[providers.deepinfra]
+name = "DeepInfra"
+env_keys = ["DEEPINFRA_API_KEY"]
+discovery = "openai-compatible"
+base_url = "https://api.deepinfra.com/v1/openai"
+funded = false
+modes = ["usage"]
+[providers.deepinfra.billing]
+kind = "usage"
+
+[providers.sambanova]
+name = "SambaNova"
+env_keys = ["SAMBANOVA_API_KEY"]
+discovery = "openai-compatible"
+base_url = "https://api.sambanova.ai/v1"
+funded = false
+modes = ["usage"]
+[providers.sambanova.billing]
+kind = "usage"

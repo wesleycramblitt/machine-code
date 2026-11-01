@@ -173,14 +173,42 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     return { kind: "auth", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: true };
   }
   // Rate limit (model or provider)
-  if (code === 429 || msg.includes("rate limit") || msg.includes("too many requests")) {
-    const isProvider = msg.includes("provider") || msg.includes("organization");
+  if (
+    code === 429 ||
+    /\b429\b/.test(msg) ||
+    msg.includes("rate limit") ||
+    msg.includes("rate_limit") ||
+    msg.includes("too many requests") ||
+    msg.includes("resource exhausted") ||
+    msg.includes("requests per") ||
+    msg.includes("tokens per")
+  ) {
+    const isProvider =
+      msg.includes("provider") ||
+      msg.includes("organization") ||
+      msg.includes("account") ||
+      msg.includes("quota") ||
+      msg.includes("monthly") ||
+      msg.includes("plan limit");
     return {
       kind: isProvider ? "rate-limit-provider" : "rate-limit-model",
       message: msg,
       retryable: true,
       cooldownMs: 0, // caller applies tier schedule
       target: isProvider ? "provider" : "model",
+      disableProvider: false,
+      needsAuth: false,
+    };
+  }
+  // End-of-life / gone model: cool it for a week and let the one bounded
+  // retry pick another model.
+  if (code === 410 || /\b410\b/.test(msg) || msg.includes("end of life") || msg.includes("no longer available")) {
+    return {
+      kind: "missing-model",
+      message: msg,
+      retryable: true,
+      cooldownMs: 7 * 24 * 60 * 60_000,
+      target: "model",
       disableProvider: false,
       needsAuth: false,
     };
@@ -210,6 +238,27 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     return { kind: "malformed", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
   }
   return { kind: "unknown", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
+}
+
+/**
+ * Apply a classified error to availability state. Rate-limit/quota errors
+ * carry cooldownMs 0 to mean "use the tier schedule", so retryable errors are
+ * cooled even without a Retry-After hint.
+ */
+export function applyClassification(
+  state: AvailabilityState,
+  providerId: string,
+  modelKey: string,
+  classified: ClassifiedError,
+): void {
+  if (classified.disableProvider) disableProvider(state, providerId);
+  if (classified.needsAuth) markNeedsAuth(state, providerId);
+  if (!(classified.cooldownMs > 0 || classified.retryable)) return;
+  if (classified.target === "model") {
+    coolModel(state, modelKey, classified.cooldownMs || undefined);
+  } else if (classified.target === "provider") {
+    coolProvider(state, providerId, classified.cooldownMs || undefined);
+  }
 }
 
 /** Parse Retry-After header value (seconds or HTTP date) into ms. */

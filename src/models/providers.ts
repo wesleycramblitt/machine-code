@@ -1,13 +1,9 @@
 /**
- * machine_code — extra provider shims.
+ * machine_code — generic OpenAI-compatible provider shim.
  *
- * pi-ai v1.4.0 does not ship DeepInfra or SambaNova. Both are OpenAI-compatible
- * chat endpoints, so they go through pi-ai's `createProvider` with
- * `openAICompletionsApi()` — no custom request code. Model lists come from each
- * provider's OpenAI-compatible `GET /v1/models` when its key is configured;
- * without a key the provider is simply unconfigured (no models, no selection).
- *
- * Keys come from environment variables only.
+ * Provider definitions (id, name, base URL, env keys) live in
+ * data/providers.toml. This module only knows how to fetch their model list
+ * and translate metadata; it contains no provider-specific constants.
  */
 import {
   createProvider,
@@ -17,22 +13,30 @@ import {
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 
-type ChatModelEntry = { id: string; [key: string]: unknown };
+type ChatModelEntry = { id?: unknown; name?: unknown; metadata?: unknown; [key: string]: unknown };
 
 function chatModels(payload: unknown): ChatModelEntry[] {
   const data = (payload as { data?: unknown })?.data;
   return Array.isArray(data) ? (data as ChatModelEntry[]) : [];
 }
 
-/** Builds a dynamic model list from a provider's OpenAI-compatible /models endpoint. */
-function buildProvider(baseUrl: string, providerId: string, name: string): Provider {
+export interface OpenAiCompatibleOptions {
+  id: string;
+  name: string;
+  baseUrl: string;
+  envKeys: string[];
+}
+
+/** Builds a provider whose model list comes from GET <baseUrl>/models. */
+export function openAiCompatibleProvider(options: OpenAiCompatibleOptions): Provider {
+  const { id, name, baseUrl, envKeys } = options;
   let dynamicModels: Model<"openai-completions">[] = [];
   const currentModels = () => [...dynamicModels];
   return createProvider({
-    id: providerId,
+    id,
     name,
     baseUrl,
-    auth: { apiKey: envApiKeyAuth(`${name} API key`, [providerId.toUpperCase() + "_API_KEY"]) },
+    auth: { apiKey: envApiKeyAuth(`${name} API key`, envKeys) },
     models: [],
     fetchModels: async (context) => {
       const url = `${context.baseUrl ?? baseUrl}/models`;
@@ -43,22 +47,41 @@ function buildProvider(baseUrl: string, providerId: string, name: string): Provi
         });
         if (!r.ok) return [];
         const parsed = chatModels(await r.json());
-        const models = parsed.map((m): Model<"openai-completions"> => {
-          const id = typeof m.id === "string" ? m.id : "";
-          return {
-            id,
-            provider: providerId as import("@earendil-works/pi-ai").ProviderId,
-            baseUrl: context.baseUrl ?? baseUrl,
-            name: typeof m.name === "string" ? m.name : id,
-            api: "openai-completions",
-            type: "chat",
-            reasoning: false,
-            contextWindow: 0,
-            maxTokens: 0,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          };
-        });
+        const models = parsed
+          .filter((m) => {
+            const meta = (m.metadata ?? {}) as Record<string, unknown>;
+            const tags = Array.isArray(meta.tags) ? (meta.tags as string[]) : [];
+            return tags.length === 0 || tags.includes("chat") || tags.includes("text");
+          })
+          .map((m): Model<"openai-completions"> => {
+            const modelId = typeof m.id === "string" ? m.id : "";
+            const meta = (m.metadata ?? {}) as Record<string, unknown>;
+            const tags = Array.isArray(meta.tags) ? (meta.tags as string[]) : [];
+            const pricing = (meta.pricing ?? {}) as Record<string, unknown>;
+            const num = (v: unknown) => {
+              const n = typeof v === "number" ? v : Number(v);
+              return Number.isFinite(n) && n >= 0 ? n : 0;
+            };
+            const vision = tags.includes("vision") || tags.includes("image");
+            return {
+              id: modelId,
+              provider: id as import("@earendil-works/pi-ai").ProviderId,
+              baseUrl: context.baseUrl ?? baseUrl,
+              name: typeof m.name === "string" ? m.name : modelId,
+              api: "openai-completions",
+              type: "chat",
+              reasoning: tags.includes("reasoning"),
+              contextWindow: num(meta.context_length),
+              maxTokens: num(meta.max_tokens),
+              input: vision ? ["text", "image"] : ["text"],
+              cost: {
+                input: num(pricing.input_tokens),
+                output: num(pricing.output_tokens),
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+            };
+          });
         await context.publish({
           update: () => {
             dynamicModels = models;
@@ -66,25 +89,9 @@ function buildProvider(baseUrl: string, providerId: string, name: string): Provi
         });
         return models;
       } catch {
-        // leave the previous list in place on failure
-        return [];
+        return currentModels().length > 0 ? currentModels() : [];
       }
     },
     api: { "openai-completions": openAICompletionsApi() },
   });
 }
-
-/** DeepInfra — OpenAI-compatible at https://api.deepinfra.com/v1/openai. */
-export function deepinfraProvider(): Provider {
-  return buildProvider("https://api.deepinfra.com/v1/openai", "deepinfra", "DeepInfra");
-}
-
-/** SambaNova — OpenAI-compatible at https://api.sambanova.ai/v1. */
-export function sambanovaProvider(): Provider {
-  return buildProvider("https://api.sambanova.ai/v1", "sambanova", "SambaNova");
-}
-
-export const EXTRA_PROVIDERS: readonly Provider[] = [
-  deepinfraProvider(),
-  sambanovaProvider(),
-];

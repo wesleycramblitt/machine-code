@@ -9,6 +9,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parse } from "smol-toml";
 import type { Layout } from "./paths.js";
+import { AGENT_NAMES } from "./agents.js";
+import { loadTomlData } from "./data.js";
 
 export interface PriceCaps {
   /** $ per 1M input tokens. */
@@ -19,14 +21,59 @@ export interface PriceCaps {
 
 export type PacketMode = "direct" | "verified" | "redundant";
 
+/** Free-tier only, or the best eligible model regardless of price. */
+export type SelectionTier = "free" | "paid";
+export const SELECTION_TIERS: readonly SelectionTier[] = ["free", "paid"];
+
+export interface ProviderCost {
+  /** Billed cost for this provider as a fraction of list price (1 = list). */
+  costMultiplier?: number;
+  /** Has funding/credit for paid calls. Free rows are usable regardless. */
+  funded?: boolean;
+}
+
 export interface MachineConfig {
   maxOutputTokens?: number;
   defaultMode?: PacketMode;
+  /** Selection tier ([selection]). */
+  selection: { tier: SelectionTier };
+  /** Per-provider billing adjustments ([providers.<id>]). */
+  providers: Record<string, ProviderCost>;
   priceCaps: PriceCaps;
   /** Model keys ("provider/id") or canonical ids that must never be selected. */
   vetoes: string[];
   notify: { webhookUrl?: string; command?: string };
+  /** Worktree/branch defaults. */
+  git: { baseBranch?: string };
+  /** Machine-level agent configuration overrides ([agents.<role>]). */
+  agents: Record<string, AgentConfigOverrides>;
+  /** GitHub issue integration ([issues]). */
+  issues: {
+    provider: "github" | "none";
+    policy: "required" | "optional" | "disabled";
+    cacheTtlSeconds: number;
+  };
+  /** Context assembly ([context]). */
+  context: {
+    maxChars: number;
+    planFile?: string;
+    knowledgeIndex?: string;
+  };
 }
+
+/** Only the Phase 3 configuration fields; token/capability policy stays repo-side. */
+export interface AgentConfigOverrides {
+  preset?: string;
+  delegate?: boolean;
+  verification?: string;
+  issues?: string;
+  ask?: boolean;
+  approval?: string;
+  ambiguity?: string;
+}
+
+export type CapabilityAxis = "reasoning" | "code" | "agentic" | "general";
+export const CAPABILITY_AXES: readonly CapabilityAxis[] = ["reasoning", "code", "agentic", "general"];
 
 export interface AgentPolicy {
   minContext: number;
@@ -36,10 +83,29 @@ export interface AgentPolicy {
   maxOutputTokens?: number;
   /** Total token budget for one run of this agent. */
   budgetTokens?: number;
-  /** Minimum catalogue capability score (0-10); 0 disables the floor. */
+  /** Minimum composite catalogue capability score (0-10); hard filter. 0 disables it. */
   minCapability: number;
+  /** Hard per-axis floors (0-10); omitted axes have no floor. */
+  minAxes?: Partial<Record<CapabilityAxis, number>>;
+  /** Role-weighted axis mix; missing axes fall back to the role defaults and are normalized. */
+  axisWeights?: Partial<Record<CapabilityAxis, number>>;
   /** Whether the agent calls tools (drives the tool-support hard filter). */
   toolCall: boolean;
+  /* ---- agent configuration (Phase 3); absent = preset defaults ---- */
+  /** Named preset: plan | orchestrate | implement | review | assistant | unrestricted. */
+  preset?: string;
+  /** May the agent call `task` to spawn child runs. */
+  delegate?: boolean;
+  /** Verification level: direct | verified | redundant. */
+  verification?: string;
+  /** Issue tracking: required | optional | disabled. */
+  issues?: string;
+  /** May the agent use the ask tool. */
+  ask?: boolean;
+  /** Default approval mode for issues it plans/delegates: human | agent. */
+  approval?: string;
+  /** Ambiguity mode: strict | precise | adaptive | autonomous. */
+  ambiguity?: string;
 }
 
 export interface Policy {
@@ -82,48 +148,155 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     throw new ConfigError(`machine config: default_mode must be one of ${PACKET_MODES.join(", ")}`);
   }
   const notifyRaw = (raw.notify ?? {}) as Record<string, unknown>;
+  const gitRaw = (raw.git ?? {}) as Record<string, unknown>;
+  const selectionRaw = (raw.selection ?? {}) as Record<string, unknown>;
+  const tierRaw =
+    typeof selectionRaw.tier === "string"
+      ? selectionRaw.tier
+      : selectionRaw.mode === "free"
+        ? "free"
+        : "paid";
+  if (!SELECTION_TIERS.includes(tierRaw as SelectionTier)) {
+    throw new ConfigError(`machine config: selection.tier must be one of ${SELECTION_TIERS.join(", ")}`);
+  }
+  const providersRaw = (raw.providers ?? {}) as Record<string, unknown>;
+  const providers: Record<string, ProviderCost> = {};
+  for (const [id, value] of Object.entries(providersRaw)) {
+    const v = (value ?? {}) as Record<string, unknown>;
+    const multiplier = asNumber(v.cost_multiplier);
+    if (multiplier !== undefined) {
+      if (multiplier < 0) throw new ConfigError(`machine config: providers.${id}.cost_multiplier must be >= 0`);
+    }
+    const funded = typeof v.funded === "boolean" ? v.funded : undefined;
+    if (multiplier !== undefined || funded !== undefined) {
+      providers[id] = { ...(multiplier !== undefined ? { costMultiplier: multiplier } : {}), ...(funded !== undefined ? { funded } : {}) };
+    }
+  }
+  const agentsRaw = (raw.agents ?? {}) as Record<string, unknown>;
+  const agents: Record<string, AgentConfigOverrides> = {};
+  for (const [role, value] of Object.entries(agentsRaw)) {
+    const r = (value ?? {}) as Record<string, unknown>;
+    agents[role] = {
+      preset: typeof r.preset === "string" ? r.preset : typeof r.config_mode === "string" ? r.config_mode : undefined,
+      delegate: typeof r.delegate === "boolean" ? r.delegate : undefined,
+      verification: typeof r.verification === "string" ? r.verification : undefined,
+      issues: typeof r.issues === "string" ? r.issues : typeof r.issue_tracking === "string" ? r.issue_tracking : undefined,
+      ask: typeof r.ask === "boolean" ? r.ask : undefined,
+      approval: typeof r.approval === "string" ? r.approval : undefined,
+      ambiguity: typeof r.ambiguity === "string" ? r.ambiguity : undefined,
+    };
+  }
+  const issuesRaw = (raw.issues ?? {}) as Record<string, unknown>;
+  const issuePolicy =
+    issuesRaw.policy === "required" || issuesRaw.policy === "disabled" || issuesRaw.policy === "optional"
+      ? issuesRaw.policy
+      : "optional";
+  const issueTtl = asNumber(issuesRaw.cache_ttl_seconds);
+  const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
   return {
     maxOutputTokens: asNumber(raw.max_output_tokens),
     defaultMode: defaultMode as PacketMode | undefined,
+    selection: { tier: tierRaw as SelectionTier },
+    providers,
     priceCaps: { input: asNumber(caps.input), output: asNumber(caps.output) },
     vetoes: asStringArray(raw.vetoes),
     notify: {
       webhookUrl: typeof notifyRaw.webhook_url === "string" ? notifyRaw.webhook_url : undefined,
       command: typeof notifyRaw.command === "string" ? notifyRaw.command : undefined,
     },
+    git: {
+      baseBranch: typeof gitRaw.base_branch === "string" ? gitRaw.base_branch : undefined,
+    },
+    agents,
+    issues: {
+      provider: issuesRaw.provider === "none" ? "none" : "github",
+      policy: issuePolicy,
+      cacheTtlSeconds: issueTtl ?? 30,
+    },
+    context: {
+      maxChars: asNumber(contextRaw.max_chars) ?? 24_000,
+      planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
+      knowledgeIndex: typeof contextRaw.knowledge_index === "string" ? contextRaw.knowledge_index : undefined,
+    },
   };
 }
 
-const DEFAULT_AGENT_POLICY: AgentPolicy = {
-  minContext: 32_000,
-  expectedOutputTokens: 2_000,
-  // Default quality floor: mid-tier capability (0-10 catalogue scale), so the
-  // cheapest *adequate* model wins rather than the cheapest row in the
-  // catalogue. Bottom-tier models ignore tool instructions too often.
-  // Override per agent in policy.toml.
-  minCapability: 6,
-  toolCall: true,
+const policyDefaults = loadTomlData<{ policy?: Record<string, unknown> }>("defaults.toml").policy ?? {};
+
+export const DEFAULT_AGENT_POLICY: AgentPolicy = {
+  minContext: asNumber(policyDefaults.min_context) ?? 32_000,
+  expectedOutputTokens: asNumber(policyDefaults.expected_output_tokens) ?? 2_000,
+  minCapability: asNumber(policyDefaults.min_capability) ?? 7,
+  toolCall: typeof policyDefaults.tool_call === "boolean" ? policyDefaults.tool_call : true,
 };
 
-function agentPolicy(value: unknown): AgentPolicy {
+function asAxisMap(value: unknown, label: string): Partial<Record<CapabilityAxis, number>> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ConfigError(`${label} must be a TOML table of axis = number`);
+  }
+  const out: Partial<Record<CapabilityAxis, number>> = {};
+  for (const axis of CAPABILITY_AXES) {
+    const raw = (value as Record<string, unknown>)[axis];
+    if (raw === undefined) continue;
+    const n = asNumber(raw);
+    if (n === undefined || n < 0 || n > 10) {
+      throw new ConfigError(`${label}.${axis} must be a number in 0-10`);
+    }
+    out[axis] = n;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Apply a policy layer over `base`. Precedence (lowest → highest):
+ * built-in defaults → machine `[selection]` → machine `[agents.<role>]` →
+ * repo `.machine_code/policy.toml` `[agents.<role>]`.
+ */
+/** Per-axis merge: a layer overrides only the axes it names. */
+function mergeAxes<T extends Partial<Record<CapabilityAxis, number>> | undefined>(
+  base: T,
+  override: Partial<Record<CapabilityAxis, number>> | undefined,
+): T {
+  if (override === undefined) return base;
+  return { ...(base ?? {}), ...override } as T;
+}
+
+function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_AGENT_POLICY): AgentPolicy {
   const raw = (value ?? {}) as Record<string, unknown>;
   return {
-    minContext: asNumber(raw.min_context) ?? DEFAULT_AGENT_POLICY.minContext,
-    expectedOutputTokens:
-      asNumber(raw.expected_output_tokens) ?? DEFAULT_AGENT_POLICY.expectedOutputTokens,
-    maxOutputTokens: asNumber(raw.max_output_tokens),
-    budgetTokens: asNumber(raw.budget_tokens),
-    minCapability: asNumber(raw.min_capability) ?? DEFAULT_AGENT_POLICY.minCapability,
-    toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : DEFAULT_AGENT_POLICY.toolCall,
+    minContext: asNumber(raw.min_context) ?? base.minContext,
+    expectedOutputTokens: asNumber(raw.expected_output_tokens) ?? base.expectedOutputTokens,
+    maxOutputTokens: asNumber(raw.max_output_tokens) ?? base.maxOutputTokens,
+    budgetTokens: asNumber(raw.budget_tokens) ?? base.budgetTokens,
+    minCapability: asNumber(raw.min_capability) ?? base.minCapability,
+    minAxes: mergeAxes(base.minAxes, asAxisMap(raw.axes, `${label}.axes`)),
+    axisWeights: mergeAxes(base.axisWeights, asAxisMap(raw.weights, `${label}.weights`)),
+    toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : base.toolCall,
+    preset: typeof raw.preset === "string" ? raw.preset : typeof raw.config_mode === "string" ? raw.config_mode : base.preset,
+    delegate: typeof raw.delegate === "boolean" ? raw.delegate : base.delegate,
+    verification: typeof raw.verification === "string" ? raw.verification : base.verification,
+    issues: typeof raw.issues === "string" ? raw.issues : typeof raw.issue_tracking === "string" ? raw.issue_tracking : base.issues,
+    ask: typeof raw.ask === "boolean" ? raw.ask : base.ask,
+    approval: typeof raw.approval === "string" ? raw.approval : base.approval,
+    ambiguity: typeof raw.ambiguity === "string" ? raw.ambiguity : base.ambiguity,
   };
 }
 
+export { AGENT_NAMES };
+
 export function loadPolicy(layout: Layout): Policy {
-  const raw = readToml(layout.policyFile, "repo policy");
-  const agentsRaw = (raw.agents ?? {}) as Record<string, unknown>;
+  const machineRaw = readToml(layout.machineConfig, "machine config");
+  const selectionRaw = (machineRaw.selection ?? {}) as Record<string, unknown>;
+  const machineAgents = (machineRaw.agents ?? {}) as Record<string, unknown>;
+  const repoRaw = readToml(layout.policyFile, "repo policy");
+  const repoAgents = (repoRaw.agents ?? {}) as Record<string, unknown>;
+
   const agents: Record<string, AgentPolicy> = {};
-  for (const name of ["general", "architect", "build", "review", "sudo"]) {
-    agents[name] = agentPolicy(agentsRaw[name]);
+  for (const name of AGENT_NAMES) {
+    const global = agentPolicy(selectionRaw, "selection");
+    const machine = agentPolicy(machineAgents[name], `agents.${name}`, global);
+    agents[name] = agentPolicy(repoAgents[name], `agents.${name}`, machine);
   }
   return { agents };
 }

@@ -1,0 +1,290 @@
+/**
+ * machine_code — the `issue` tool: structured, capability-gated issue access.
+ *
+ * One tool with an action enum keeps the tool surface small while enforcing
+ * hierarchy and reserved-issue invariants in the harness:
+ *   - create Epic    → ensures Feature 0 + Task 0
+ *   - create Feature → ensures Task 0 (and the parent Epic's chain)
+ *   - create Task    → ensures the parent Feature's Task 0 first
+ *   - link           → Feature→Epic and Task→Feature only
+ *   - close          → acceptance + approval policy (human requests approval)
+ *   - ensure         → repairs missing/duplicate reserved issues
+ *
+ * Reads are issue:read; writes issue:write; linking/ensure need
+ * issue:hierarchy:write; closure needs issue:close.
+ */
+import { Type, type Static } from "typebox";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import {
+  IssueError,
+  parseIssueRef,
+  type Issue,
+  type IssueProvider,
+  type IssueRef,
+} from "../issues/provider.js";
+import {
+  ensureEpicReserved,
+  ensureFeatureReserved,
+  isReserved,
+  isReservedTask,
+  runCountsFrom,
+} from "../issues/reserved.js";
+import { checkCompletion, cascadeReserved } from "../issues/completion.js";
+import type { Layout } from "../paths.js";
+import type { RunRecorder } from "../state/runs.js";
+
+export interface IssueToolContext {
+  provider: IssueProvider;
+  /** Default repo for bare issue numbers. */
+  repo?: string;
+  capabilities: readonly string[];
+  recorder: RunRecorder;
+  /** Needed for acceptance-evidence lookup in this repo's runs. */
+  layout: Layout;
+  /** Approval default for deliverables created by this run. */
+  defaultApproval: "human" | "agent";
+}
+
+const IssueParams = Type.Object({
+  action: Type.Union(
+    [
+      Type.Literal("list"),
+      Type.Literal("view"),
+      Type.Literal("tree"),
+      Type.Literal("create"),
+      Type.Literal("edit"),
+      Type.Literal("close"),
+      Type.Literal("link"),
+      Type.Literal("ensure"),
+    ],
+    { description: "Issue operation." },
+  ),
+  issue: Type.Optional(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." })),
+  parent: Type.Optional(Type.String({ description: "Parent ref (link/create)." })),
+  kind: Type.Optional(
+    Type.Union([Type.Literal("epic"), Type.Literal("feature"), Type.Literal("task")], {
+      description: "Issue kind for create.",
+    }),
+  ),
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
+  labels: Type.Optional(Type.Array(Type.String())),
+  state: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")])),
+  reason: Type.Optional(Type.String({ description: "Close reason (close)." })),
+  depth: Type.Optional(Type.Number({ description: "Tree depth (default 2)." })),
+});
+
+function ok(text: string): AgentToolResult<undefined> {
+  return { content: [{ type: "text", text }], details: undefined };
+}
+
+function fail(text: string): AgentToolResult<undefined> {
+  return { content: [{ type: "text", text }], details: undefined, isError: true };
+}
+
+function line(issue: Issue): string {
+  const bits = [`#${issue.ref.number}`, issue.kind, issue.state, issue.title];
+  if (isReserved(issue)) bits.push("[reserved]");
+  if (issue.parent) bits.push(`parent=#${issue.parent.number}`);
+  if (issue.approval) bits.push(`approval=${issue.approval}`);
+  if (issue.blockedBy.length > 0) bits.push(`blocked-by=${issue.blockedBy.map((b) => `#${b.number}`).join(",")}`);
+  return bits.join(" ");
+}
+
+export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> {
+  const require = (cap: string): void => {
+    if (!ctx.capabilities.includes(cap)) {
+      throw new IssueError("capability_missing", `issue tool action requires ${cap}`);
+    }
+  };
+  const ref = (value: string | undefined, label: string): IssueRef => {
+    if (!value) throw new IssueError("argument_missing", `${label} is required`);
+    return parseIssueRef(value, ctx.repo, ctx.provider.kind);
+  };
+  const counts = () => runCountsFrom(requireRuns(ctx.recorder));
+
+  return {
+    name: "issue",
+    label: "issue",
+    description:
+      "Structured GitHub issue access. list/view/tree read; create/edit write; link sets parent-child (Feature→Epic, Task→Feature); " +
+      "ensure maintains the reserved Feature 0 / Task 0 anchors; close follows the per-issue approval policy.",
+    parameters: IssueParams,
+    async execute(_id, params: Static<typeof IssueParams>) {
+      try {
+        return await run(params);
+      } catch (error) {
+        if (error instanceof IssueError) return fail(`${error.code}: ${error.message}`);
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+    },
+  };
+
+  async function run(params: Static<typeof IssueParams>): Promise<AgentToolResult<undefined>> {
+    switch (params.action) {
+      case "list": {
+        require("issue:read");
+        const issues = await ctx.provider.list({ state: params.state ?? "all", limit: 100 });
+        return ok(issues.length === 0 ? "no issues" : issues.map(line).join("\n"));
+      }
+      case "view": {
+        require("issue:read");
+        const issue = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!issue) return fail(`issue not found: ${params.issue}`);
+        return ok(`${line(issue)}\n${issue.body.slice(0, 4000)}`);
+      }
+      case "tree": {
+        require("issue:read");
+        const root = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!root) return fail(`issue not found: ${params.issue}`);
+        const depth = Math.max(0, Math.min(5, Math.floor(params.depth ?? 2)));
+        const lines = [line(root)];
+        const walk = async (issue: Issue, level: number): Promise<void> => {
+          if (level >= depth) return;
+          for (const child of await ctx.provider.children(issue.ref)) {
+            lines.push(`${"  ".repeat(level + 1)}${line(child)}`);
+            await walk(child, level + 1);
+          }
+        };
+        await walk(root, 0);
+        return ok(lines.join("\n"));
+      }
+      case "create": {
+        require("issue:write");
+        if (!params.kind) return fail("create requires kind (epic|feature|task)");
+        if (!params.title) return fail("create requires title");
+        const body = withApproval(params.body ?? "", ctx.defaultApproval);
+        const parent = params.parent ? ref(params.parent, "parent") : undefined;
+        if (params.kind === "task") {
+          if (!parent) return fail("creating a Task requires parent (its Feature)");
+          const parentIssue = await ctx.provider.get(parent);
+          if (!parentIssue) return fail(`parent not found: ${params.parent}`);
+          if (parentIssue.kind !== "feature") return fail(`a Task's parent must be a Feature (got ${parentIssue.kind})`);
+          // Repair the parent chain before adding a deliverable.
+          if (parentIssue.kind === "feature") await ensureFeatureReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
+        }
+        if (params.kind === "feature") {
+          if (!parent) return fail("creating a Feature requires parent (its Epic)");
+          const parentIssue = await ctx.provider.get(parent);
+          if (!parentIssue) return fail(`parent not found: ${params.parent}`);
+          if (parentIssue.kind !== "epic") return fail(`a Feature's parent must be an Epic (got ${parentIssue.kind})`);
+          await ensureEpicReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
+        }
+        const created = await ctx.provider.create({
+          title: params.title,
+          body,
+          kind: params.kind,
+          parent,
+          labels: params.labels,
+        });
+        ctx.recorder.event("issue_created", { number: created.ref.number, kind: created.kind, parent: parent?.number });
+        let note = "";
+        if (created.kind === "epic") {
+          const reserved = await ensureEpicReserved(ctx.provider, created.ref, { runCounts: counts() });
+          note = `\nreserved: Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}`;
+        } else if (created.kind === "feature") {
+          const task0 = await ensureFeatureReserved(ctx.provider, created.ref, { runCounts: counts() });
+          note = `\nreserved: Task 0 #${task0.ref.number}`;
+        }
+        return ok(`created #${created.ref.number} (${created.kind}): ${created.title}${note}`);
+      }
+      case "edit": {
+        require("issue:write");
+        const target = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!target) return fail(`issue not found: ${params.issue}`);
+        if (target.reserved && params.title !== undefined) {
+          return fail("reserved issues cannot be retitled (their identity is the reserved role)");
+        }
+        const updated = await ctx.provider.update(target.ref, {
+          ...(params.title !== undefined ? { title: params.title } : {}),
+          ...(params.body !== undefined ? { body: params.body } : {}),
+          ...(params.labels !== undefined ? { labels: params.labels } : {}),
+        });
+        return ok(`updated #${updated.ref.number}: ${updated.title}`);
+      }
+      case "close": {
+        require("issue:close");
+        const target = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!target) return fail(`issue not found: ${params.issue}`);
+        const completion = await checkCompletion(ctx.provider, ctx.layout, target);
+        if (!completion.ok) return fail(`cannot close #${target.ref.number}: ${completion.reason}`);
+        const approval = target.approval ?? ctx.defaultApproval;
+        if (approval === "human") {
+          ctx.recorder.event("approval_requested", {
+            issue: target.ref.number,
+            action: "close",
+            reason: params.reason ?? "issue closure",
+          });
+          return ok(
+            `close requested for #${target.ref.number}; approval is human — a human must approve with "machine_code approve ${target.ref.number}"`,
+          );
+        }
+        await ctx.provider.close(target.ref, params.reason ?? "completed");
+        const cascaded = await cascadeReserved(ctx.provider, target, "close");
+        ctx.recorder.event("issue_closed", {
+          issue: target.ref.number,
+          by: ctx.recorder.id,
+          reason: params.reason,
+          cascaded,
+        });
+        return ok(`closed #${target.ref.number}${cascaded.length ? ` (reserved: ${cascaded.map((n) => `#${n}`).join(", ")})` : ""}`);
+      }
+      case "link": {
+        require("issue:hierarchy:write");
+        const child = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!child) return fail(`issue not found: ${params.issue}`);
+        if (!params.parent) return fail("link requires parent");
+        const parent = await ctx.provider.get(ref(params.parent, "parent"));
+        if (!parent) return fail(`parent not found: ${params.parent}`);
+        if (!(child.kind === "feature" && parent.kind === "epic") && !(child.kind === "task" && parent.kind === "feature")) {
+          return fail(`invalid hierarchy: ${child.kind} cannot be a child of ${parent.kind} (Feature→Epic, Task→Feature)`);
+        }
+        if (child.kind === "task") await ensureFeatureReserved(ctx.provider, parent.ref, { runCounts: counts() });
+        if (child.kind === "feature") await ensureEpicReserved(ctx.provider, parent.ref, { runCounts: counts() });
+        await ctx.provider.linkParent(child.ref, parent.ref);
+        ctx.recorder.event("issue_linked", { issue: child.ref.number, parent: parent.ref.number });
+        return ok(`linked #${child.ref.number} (${child.kind}) under #${parent.ref.number} (${parent.kind})`);
+      }
+      case "ensure": {
+        require("issue:hierarchy:write");
+        const target = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!target) return fail(`issue not found: ${params.issue}`);
+        if (target.kind === "epic") {
+          const reserved = await ensureEpicReserved(ctx.provider, target.ref, { runCounts: counts() });
+          return ok(
+            `epic #${target.ref.number}: Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}`,
+          );
+        }
+        if (target.kind === "feature") {
+          const task0 = await ensureFeatureReserved(ctx.provider, target.ref, { runCounts: counts() });
+          return ok(`feature #${target.ref.number}: Task 0 #${task0.ref.number}`);
+        }
+        if (target.parent) {
+          const parent = await ctx.provider.get(target.parent);
+          if (parent?.kind === "feature") {
+            const task0 = await ensureFeatureReserved(ctx.provider, parent.ref, { runCounts: counts() });
+            return ok(`task #${target.ref.number}: parent Task 0 #${task0.ref.number}`);
+          }
+        }
+        return ok(`task #${target.ref.number}: no reserved hierarchy to ensure`);
+      }
+      default:
+        return fail(`unknown issue action: ${String((params as { action?: unknown }).action)}`);
+    }
+  }
+}
+
+function withApproval(body: string, mode: "human" | "agent"): string {
+  if (/<!--\s*mc:approval/.test(body)) return body;
+  return `${body.replace(/\s+$/, "")}\n\n<!-- mc:approval {"mode":"${mode}"} -->\n`;
+}
+
+/**
+ * Run counts for reserved-duplicate decisions. The issue tool only knows its
+ * own run, so callers pass a provider-backed count when available.
+ */
+function requireRuns(recorder: RunRecorder): Array<{ issue?: IssueRef }> {
+  return [{ issue: recorder.current.issue }];
+}
+
+export { isReservedTask };

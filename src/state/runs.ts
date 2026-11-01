@@ -3,11 +3,24 @@
  *
  * One writer per run (the owning process). run.json is the summary other
  * processes read; events.jsonl is the detail. Both are plain JSON, readable
- * without any tool — including after a SIGINT.
+ * without any tool — including after a SIGINT. run.json is written atomically
+ * (temp + rename); events.jsonl is append-only and never rewritten.
  */
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
+import {
+  SCHEMA_VERSION,
+  isActiveStatus,
+  isTerminalStatus,
+  migrateRunSummary,
+  writeJsonAtomic,
+  type RunStatus,
+  type RunSummary,
+} from "./run-schema.js";
+
+export { SCHEMA_VERSION, isActiveStatus, isTerminalStatus, normalizeStatus } from "./run-schema.js";
+export type { RunCost, RunStatus, RunSummary, RunUsage } from "./run-schema.js";
 
 const PROJECTS_FILE = (home: string) => join(home, "projects.jsonl");
 
@@ -41,11 +54,65 @@ export function isPidAlive(pid: number): boolean {
   return existsSync(`/proc/${pid}`);
 }
 
-/** Reconcile a run: if status is "running" but the owner is dead, mark interrupted. */
+/**
+ * Send a sequenced control request to a run (interrupt/cancel/pause). The
+ * owning process polls `control` every 500 ms and acks to `control.ack`.
+ */
+export function sendControl(
+  repoRoot: string,
+  runId: string,
+  action: "interrupt" | "cancel" | "pause",
+  data: Record<string, unknown> = {},
+): number {
+  const dir = join(repoRoot, ".machine_code", "local", "runs", runId);
+  mkdirSync(dir, { recursive: true });
+  let seq = 1;
+  const ackFile = join(dir, "control.ack");
+  try {
+    const ack = JSON.parse(readFileSync(ackFile, "utf8")) as { seq?: number };
+    if (typeof ack.seq === "number") seq = ack.seq + 1;
+  } catch {
+    // no ack yet
+  }
+  writeFileSync(join(dir, "control"), JSON.stringify({ seq, action, from: process.pid, ...data }) + "\n", "utf8");
+  return seq;
+}
+
+/** Wait (bounded) for the run to ack a control sequence. */
+export async function waitForControlAck(
+  repoRoot: string,
+  runId: string,
+  seq: number,
+  timeoutMs = 2_000,
+): Promise<boolean> {
+  const ackFile = join(repoRoot, ".machine_code", "local", "runs", runId, "control.ack");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const ack = JSON.parse(readFileSync(ackFile, "utf8")) as { seq?: number };
+      if (typeof ack.seq === "number" && ack.seq >= seq) return true;
+    } catch {
+      // not yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+/**
+ * Reconcile a run: if it still holds an execution slot (running/created) but
+ * the owner is dead, mark interrupted. Paused/awaiting_input runs survive
+ * owner death by design.
+ */
 export function reconcileRun(summary: RunSummary): RunSummary {
-  if (summary.status === "running" && !isPidAlive(summary.pid)) {
+  if (
+    (summary.status === "running" || summary.status === "created") &&
+    !isPidAlive(summary.pid)
+  ) {
     summary.status = "interrupted";
-    summary.endedAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    summary.endedAt = now;
+    summary.lastActivityAt = now;
   }
   return summary;
 }
@@ -63,7 +130,8 @@ export function listAllRuns(home: string): RunSummary[] {
       for (const entry of entries) {
         const summaryFile = join(runsDir, entry, "run.json");
         try {
-          const summary = JSON.parse(readFileSync(summaryFile, "utf8")) as RunSummary;
+          const summary = migrateRunSummary(JSON.parse(readFileSync(summaryFile, "utf8")));
+          if (!summary) continue;
           if (!summary.repoRoot) summary.repoRoot = project;
           out.push(reconcileRun(summary));
         } catch {
@@ -77,7 +145,7 @@ export function listAllRuns(home: string): RunSummary[] {
   return out.sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
 }
 
-/** Prune runs older than `days` days, skipping active/interrupted runs. */
+/** Prune runs older than `days` days, skipping any active/interrupted run. */
 export function pruneRuns(home: string, days: number): { removed: number; skipped: number } {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   let removed = 0;
@@ -94,11 +162,11 @@ export function pruneRuns(home: string, days: number): { removed: number; skippe
         const summaryFile = join(dir, "run.json");
         let summary: RunSummary | null = null;
         try {
-          summary = JSON.parse(readFileSync(summaryFile, "utf8")) as RunSummary;
+          summary = migrateRunSummary(JSON.parse(readFileSync(summaryFile, "utf8")));
         } catch {
           // no summary — remove as stale
         }
-        if (summary && (summary.status === "running" || summary.status === "interrupted")) {
+        if (summary && isActiveStatus(summary.status)) {
           skipped += 1;
           continue;
         }
@@ -118,33 +186,6 @@ export function pruneRuns(home: string, days: number): { removed: number; skippe
     }
   }
   return { removed, skipped };
-}
-
-export type RunStatus = "running" | "done" | "blocked" | "failed" | "interrupted";
-
-export interface RunSummary {
-  id: string;
-  repoRoot: string;
-  /** Queued packet id this run executed, if any. */
-  packetId?: string;
-  agent: string;
-  mode: string;
-  request: string;
-  status: RunStatus;
-  pid: number;
-  startedAt: string;
-  endedAt?: string;
-  /** Worktree path if the run mutated files. */
-  worktree?: string;
-  /** Prior run this one resumed from. */
-  resumedFrom?: string;
-  turns: number;
-  usage: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number };
-  cost: { actual: number; estimated: number };
-  modelCalls: number;
-  error?: string;
-  /** Final assistant text, capped; shown in the TUI run detail. */
-  finalText?: string;
 }
 
 export interface RunEvent {
@@ -172,13 +213,55 @@ export class RunRecorder {
   private summary: RunSummary;
   private finalized = false;
 
-  constructor(layout: Layout, init: { agent: string; mode: string; request: string; repoRoot: string; packetId?: string }) {
+  constructor(
+    layout: Layout,
+    init: {
+      agent: string;
+      mode: string;
+      request: string;
+      repoRoot: string;
+      packetId?: string;
+      parentRunId?: string;
+      rootRunId?: string;
+      forkReason?: "user_interrupt" | "manual" | "resume";
+      preset?: string;
+      delegate?: boolean;
+      verification?: string;
+      issues?: string;
+      ask?: boolean;
+      approval?: string;
+      ambiguity?: string;
+      capabilities?: string[];
+      issue?: import("../issues/provider.js").IssueRef;
+    },
+    existing?: RunSummary,
+  ) {
+    if (existing) {
+      // Reopen an existing run (resume): same id, same dir, new owner process.
+      this.id = existing.id;
+      this.dir = join(layout.runsDir, this.id);
+      this.summaryFile = join(this.dir, "run.json");
+      this.eventsFile = join(this.dir, "events.jsonl");
+      this.summary = existing;
+      this.finalized = false;
+      // Consume any stale control request: it was already handled by the
+      // previous owner (e.g. the pause that preceded this resume). Without
+      // this, the new process would replay it on its first poll.
+      try {
+        rmSync(join(this.dir, "control"), { force: true });
+      } catch {
+        // ignore
+      }
+      return;
+    }
     this.id = runId();
     this.dir = join(layout.runsDir, this.id);
     mkdirSync(this.dir, { recursive: true });
     this.summaryFile = join(this.dir, "run.json");
     this.eventsFile = join(this.dir, "events.jsonl");
+    const now = new Date().toISOString();
     this.summary = {
+      schemaVersion: SCHEMA_VERSION,
       id: this.id,
       repoRoot: init.repoRoot,
       packetId: init.packetId,
@@ -187,20 +270,56 @@ export class RunRecorder {
       request: init.request,
       status: "running",
       pid: process.pid,
-      startedAt: new Date().toISOString(),
+      startedAt: now,
+      lastActivityAt: now,
       turns: 0,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
       cost: { actual: 0, estimated: 0 },
       modelCalls: 0,
+      ...(init.parentRunId ? { parentRunId: init.parentRunId } : {}),
+      ...(init.rootRunId ? { rootRunId: init.rootRunId } : {}),
+      ...(init.forkReason ? { forkReason: init.forkReason } : {}),
+      ...(init.preset !== undefined ? { preset: init.preset } : {}),
+      ...(init.delegate !== undefined ? { delegate: init.delegate } : {}),
+      ...(init.verification !== undefined ? { verification: init.verification } : {}),
+      ...(init.issues !== undefined ? { issues: init.issues } : {}),
+      ...(init.ask !== undefined ? { ask: init.ask } : {}),
+      ...(init.approval !== undefined ? { approval: init.approval } : {}),
+      ...(init.ambiguity !== undefined ? { ambiguity: init.ambiguity } : {}),
+      ...(init.capabilities !== undefined ? { capabilities: init.capabilities } : {}),
+      ...(init.issue !== undefined ? { issue: init.issue } : {}),
     };
     this.writeSummary();
-    this.event("run_start", { agent: init.agent, mode: init.mode, request: init.request });
+    this.event("run_start", {
+      agent: init.agent,
+      mode: init.mode,
+      request: init.request,
+      ...(init.parentRunId ? { parentRunId: init.parentRunId } : {}),
+    });
+  }
+
+  /** Reopen an existing (non-terminal) run in a new owner process. */
+  static reopen(layout: Layout, summary: RunSummary): RunRecorder {
+    return new RunRecorder(layout, { agent: summary.agent, mode: summary.mode, request: summary.request, repoRoot: summary.repoRoot }, summary);
   }
 
   event(type: string, data: Record<string, unknown> = {}): void {
     if (this.finalized && type !== "run_end") return;
-    const line: RunEvent = { t: new Date().toISOString(), type, ...data };
+    const now = new Date().toISOString();
+    const line: RunEvent = { t: now, type, ...data };
     appendFileSync(this.eventsFile, JSON.stringify(line) + "\n", "utf8");
+    this.summary.lastActivityAt = now;
+    this.writeSummary();
+  }
+
+  /** Transition the run's lifecycle state; records a run_state event. */
+  setStatus(status: RunStatus, reason?: string): void {
+    if (this.finalized || this.summary.status === status) return;
+    const from = this.summary.status;
+    this.summary.status = status;
+    this.summary.lastActivityAt = new Date().toISOString();
+    this.writeSummary();
+    this.event("run_state", { from, to: status, ...(reason ? { reason } : {}) });
   }
 
   recordCall(usage: RunSummary["usage"], costTotal: number | null, estimatedCost: number): void {
@@ -216,29 +335,63 @@ export class RunRecorder {
       this.summary.cost.estimated += estimatedCost;
     }
     this.summary.turns += 1;
+    this.summary.lastActivityAt = new Date().toISOString();
     this.writeSummary();
   }
 
+  /** Terminal transition only; awaiting_input/paused go through setStatus. */
   finalize(status: RunStatus, error?: string, finalText?: string): void {
     if (this.finalized) return;
+    if (!isTerminalStatus(status)) {
+      this.setStatus(status);
+      return;
+    }
     this.finalized = true;
     this.summary.status = status;
     this.summary.endedAt = new Date().toISOString();
+    this.summary.lastActivityAt = this.summary.endedAt;
     if (error) this.summary.error = error;
     if (finalText && finalText.trim().length > 0) {
       this.summary.finalText = finalText.length > 8000 ? finalText.slice(0, 8000) + "\n…[truncated]" : finalText;
     }
     this.writeSummary();
-    const line: RunEvent = { t: new Date().toISOString(), type: "run_end", status, ...(error ? { error } : {}) };
+    const line: RunEvent = { t: this.summary.endedAt, type: "run_end", status, ...(error ? { error } : {}) };
     appendFileSync(this.eventsFile, JSON.stringify(line) + "\n", "utf8");
+  }
+
+  /** Record the resolved agent configuration/capabilities for this run. */
+  recordConfig(config: {
+    preset?: string;
+    delegate?: boolean;
+    verification?: string;
+    issues?: string;
+    ask?: boolean;
+    approval?: string;
+    ambiguity?: string;
+    capabilities?: string[];
+  }): void {
+    Object.assign(this.summary, config);
+    this.writeSummary();
+    this.event("agent_config", { ...config });
   }
 
   get current(): RunSummary {
     return { ...this.summary };
   }
 
+  /** Patch writer-owned metadata (VCS fields + owner pid; no event). */
+  patchSummary(
+    fields: Partial<
+      Pick<RunSummary, "worktree" | "worktreeOwnerRunId" | "branch" | "baseBranch" | "baseRef" | "commit" | "pid" | "issue" | "prNumber" | "prUrl" | "prState">
+    >,
+  ): void {
+    Object.assign(this.summary, fields);
+    this.summary.lastActivityAt = new Date().toISOString();
+    this.writeSummary();
+  }
+
   private writeSummary(): void {
-    writeFileSync(this.summaryFile, JSON.stringify(this.summary, null, 2) + "\n", "utf8");
+    writeJsonAtomic(this.summaryFile, this.summary);
   }
 }
 
@@ -246,7 +399,8 @@ export function readRun(layout: Layout, id: string): { summary: RunSummary; even
   const dir = join(layout.runsDir, id);
   const summaryFile = join(dir, "run.json");
   if (!existsSync(summaryFile)) return null;
-  const summary = JSON.parse(readFileSync(summaryFile, "utf8")) as RunSummary;
+  const summary = migrateRunSummary(JSON.parse(readFileSync(summaryFile, "utf8")));
+  if (!summary) return null;
   if (!summary.repoRoot) summary.repoRoot = layout.repoRoot;
   const eventsFile = join(dir, "events.jsonl");
   const events: RunEvent[] = existsSync(eventsFile)
@@ -272,7 +426,8 @@ export function listRuns(layout: Layout): RunSummary[] {
   for (const entry of entries) {
     const summaryFile = join(layout.runsDir, entry, "run.json");
     try {
-      out.push(JSON.parse(readFileSync(summaryFile, "utf8")) as RunSummary);
+      const summary = migrateRunSummary(JSON.parse(readFileSync(summaryFile, "utf8")));
+      if (summary) out.push(summary);
     } catch {
       // partial run dir — skip
     }

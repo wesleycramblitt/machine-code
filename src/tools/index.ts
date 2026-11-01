@@ -20,12 +20,24 @@ import {
   resolveWithin,
 } from "./safety.js";
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
+import { askTool, type AskContext } from "./ask.js";
+import { taskTool, type TaskContext } from "./task.js";
+import { issueTool, type IssueToolContext } from "./issues.js";
+import { prTool, type PrToolContext } from "./pr.js";
 
 export interface ToolContext {
   /** Worktree root every path is bound to. */
   root: string;
   /** Loaded commands (core + profiles). */
   commands: ReadonlyMap<string, import("../commands/registry.js").CommandSpec>;
+  /** When provided, the `ask` tool is live (suspends the run for input). */
+  ask?: AskContext;
+  /** When provided, the `task` tool is live (capability-gated delegation). */
+  task?: TaskContext;
+  /** When provided, the `issue` tool is live (capability-gated issue access). */
+  issues?: IssueToolContext;
+  /** When provided, the `pr` tool is live (capability-gated PR access). */
+  prs?: PrToolContext;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -338,25 +350,79 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
 
 /* -------------------------------------------------------------------- task */
 
-const TaskParams = Type.Object({
+const TaskUnavailableParams = Type.Object({
   task: Type.String({ description: "Bounded child-task description." }),
 });
 
-export function taskTool(_ctx: ToolContext): AgentTool<typeof TaskParams> {
+function taskUnavailable(): AgentTool<typeof TaskUnavailableParams> {
   return {
     name: "task",
     label: "task",
     description: "Spawn a bounded child task in a fresh context.",
-    parameters: TaskParams,
+    parameters: TaskUnavailableParams,
     async execute() {
-      return fail("task is not enabled in M0; it spawns child agent runs from M1");
+      return fail("task delegation is not wired up in this run (no run context available)");
+    },
+  };
+}
+
+/* --------------------------------------------------------------------- ask */
+
+const AskUnavailableParams = Type.Object({
+  question: Type.String({ description: "The clarification needed." }),
+});
+
+function askUnavailable(): AgentTool<typeof AskUnavailableParams> {
+  return {
+    name: "ask",
+    label: "ask",
+    description: "Ask the user a clarifying question and wait for the answer.",
+    parameters: AskUnavailableParams,
+    async execute() {
+      return fail("ask is not wired up in this run (no run context available)");
+    },
+  };
+}
+
+/* ------------------------------------------------------------------- issue */
+
+const IssueUnavailableParams = Type.Object({
+  action: Type.String({ description: "Issue operation." }),
+});
+
+function issueUnavailable(): AgentTool<typeof IssueUnavailableParams> {
+  return {
+    name: "issue",
+    label: "issue",
+    description: "Structured GitHub issue access.",
+    parameters: IssueUnavailableParams,
+    async execute() {
+      return fail("issue tracking is not available in this run (disabled, no GitHub remote, or gh unauthenticated)");
+    },
+  };
+}
+
+/* ---------------------------------------------------------------------- pr */
+
+const PrUnavailableParams = Type.Object({
+  action: Type.String({ description: "PR operation." }),
+});
+
+function prUnavailable(): AgentTool<typeof PrUnavailableParams> {
+  return {
+    name: "pr",
+    label: "pr",
+    description: "Pull-request access.",
+    parameters: PrUnavailableParams,
+    async execute() {
+      return fail("pull requests are not available in this run (no GitHub remote, or gh unauthenticated)");
     },
   };
 }
 
 /* ------------------------------------------------------------------ all */
 
-export type CoreToolName = "read" | "write" | "edit" | "search" | "command" | "task";
+export type CoreToolName = "read" | "write" | "edit" | "search" | "command" | "task" | "ask" | "issue" | "pr";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
   const all: Record<CoreToolName, AgentTool> = {
@@ -365,7 +431,10 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     edit: editTool(ctx),
     search: searchTool(ctx),
     command: commandTool(ctx),
-    task: taskTool(ctx),
+    task: ctx.task ? taskTool(ctx.task) : taskUnavailable(),
+    ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
+    issue: ctx.issues ? issueTool(ctx.issues) : issueUnavailable(),
+    pr: ctx.prs ? prTool(ctx.prs) : prUnavailable(),
   };
   return allowed.map((name) => all[name]);
 }
