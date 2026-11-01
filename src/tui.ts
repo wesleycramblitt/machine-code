@@ -66,8 +66,9 @@ const BL = "\x1b[34m";
 const GR = "\x1b[90m";
 const W = "\x1b[37m";
 const BG = "\x1b[48;5;236m";
+const HEADER_BG = "\x1b[48;5;234m";
+const FOOTER_BG = "\x1b[48;5;234m";
 const TAB_ON = "\x1b[46m\x1b[30m\x1b[1m";
-const TAB_OFF = "\x1b[40m\x1b[37m";
 
 type Page = "work" | "runs" | "models" | "spend" | "settings";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "help";
@@ -337,6 +338,28 @@ function wrapCommands(text: string, width: number): string[] {
 function wrapPlain(text: string, width: number): string[] {
   if (!text) return [];
   return wrapText(stripAnsi(text), width).map((line) => `${D}${line}${R}`);
+}
+
+/** Wrap pre-styled tokens with a caller-controlled visual gap. */
+function wrapTokenList(tokens: readonly string[], width: number, gap: string): string[] {
+  const lines: string[] = [];
+  let current = "";
+  for (const token of tokens) {
+    const candidate = current ? `${current}${gap}${token}` : token;
+    if (current && visible(candidate) > width) {
+      lines.push(current);
+      current = token;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.map((line) => (visible(line) > width ? trunc(line, width) : line));
+}
+
+/** Keep a full-width bar's background through embedded style resets. */
+function background(value: string, tone: string): string {
+  return `${tone}${value.replaceAll(R, `${R}${tone}`)}${R}`;
 }
 
 function selected(value: string, isSelected: boolean): string {
@@ -867,11 +890,11 @@ export async function runTui(): Promise<void> {
 
     const tabTokens = TABS.map((tab) =>
       tab.id === page
-        ? `${TAB_ON} ${tab.key}:${tab.label} ${R}`
-        : `${TAB_OFF} ${tab.key}:${tab.label} ${R}`,
+        ? `${TAB_ON}${tab.key}:${tab.label}${R}`
+        : `${D}${tab.key}:${tab.label}${R}`,
     );
     const header = [
-      ...wrapCommands(joinCommands(tabTokens), cols),
+      ...wrapTokenList(tabTokens, cols, " "),
       narrow
         ? `${C}●${counts.active}${R} ${Y}?${counts.awaiting}${R} ${M}⚑${counts.approvals}${R} ${Y}PR${counts.openPrs}${R} ${G}$${todaySpend.toFixed(2)}${R}`
         : `${C}●${R} ${counts.active} running  ${Y}?${R} ${counts.awaiting} awaiting  ${Y}⏸${R} ${counts.paused} paused  ${M}⚑${R} ${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}  ${Y}PR${R} ${counts.openPrs} open  ${G}$${todaySpend.toFixed(2)}${R} today  ${D}issues ${cache ? ago(cache.fetchedAt) : "none"}${R}`,
@@ -1116,6 +1139,7 @@ export async function runTui(): Promise<void> {
         parentRef = parent.parent;
       }
       const lines: string[] = [];
+      lines.push(` ${command("Esc", "Back to Work", undefined, GR)}  ${B}${C}Issue Details${R} ${D}#${issue.ref.number} ${trunc(issue.title, Math.max(10, cols - 42))}${R}`);
       lines.push(` ${healthIcon(issue.state === "closed" ? "done" : "on-track")} ${BL}#${issue.ref.number}${R} ${B}${W}${issue.title}${R} ${D}${issue.kind} · ${issue.state}${R}${issue.reserved ? ` ${M}[P&R]${R}` : ""}`);
       if (ancestors.length) lines.push(` ${D}${ancestors.reverse().map((parent) => `#${parent.ref.number} ${parent.title}`).join("  ←  ")}${R}`);
       lines.push(` ${D}${issue.labels.join(" · ") || "no labels"}${R}`);
@@ -1189,7 +1213,13 @@ export async function runTui(): Promise<void> {
         : "";
       const contextLine = ` ${C}Context${R} ${W}~${fmtTokens(ctx.chars + ctx.promptChars)} chars${R} ${D}/ ~${fmtTokens(Math.ceil((ctx.chars + ctx.promptChars) / 4))} input tokens · ${ctx.artifacts.files.length} files · ${ctx.artifacts.tools.length} tools · ${ctx.artifacts.scripts.length} scripts · ${ctx.artifacts.skills.length} skills${R}`;
       const chainLine = ` ${BL}Hierarchy${R} ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "untracked · no issue context"}${R}`;
-      const summary = [modelLine, modelMeta, contextLine, chainLine].filter(Boolean);
+      const summary = [
+        ` ${command("Esc", "Back", undefined, GR)}  ${B}${C}New Run${R} ${D}${trunc(cwd, Math.max(10, cols - 30))}${R}`,
+        modelLine,
+        modelMeta,
+        contextLine,
+        chainLine,
+      ].filter(Boolean);
       if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
 
       const boxWidth = Math.max(20, cols - 4);
@@ -1226,7 +1256,7 @@ export async function runTui(): Promise<void> {
       if (issuePick === "newrun") {
         const list = pickerIssues();
         if (issuePickSel >= list.length) issuePickSel = Math.max(0, list.length - 1);
-        const picker: string[] = [` ${B}${W}Link an issue${R} ${D}(type to filter; Enter selects; Esc closes)${R}`, ""];
+        const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link an issue${R} ${D}(type to filter; Enter selects)${R}`, ""];
         for (let i = 0; i < list.length; i++) {
           const issue = list[i]!;
           const indent = issue.kind === "epic" ? "" : issue.kind === "feature" ? "  " : "    ";
@@ -1265,7 +1295,7 @@ export async function runTui(): Promise<void> {
           floors: floorText,
         };
         const lines: string[] = [
-          ` ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
+          ` ${command("Esc", "Back", undefined, GR)}  ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
           ` ${D}${cwd}${R}`,
           "",
         ];
@@ -1317,6 +1347,7 @@ export async function runTui(): Promise<void> {
       const weights = policyWeightsFor(newrun.agent);
       const offers = siblingOffers(catalogueRows, model);
       const lines: string[] = [
+        ` ${command("Esc", "Back to Models", undefined, GR)}  ${B}${C}Model Details${R} ${D}${trunc(model.key, Math.max(10, cols - 44))}${R}`,
         ` ${B}${W}${model.name}${R} ${D}${model.key}${R}`,
         ` ${D}${model.providerID} · ${model.kind} · ${model.coding ? "coding" : "non-coding"} · ${model.modes.join(", ") || "plain chat"}${R}`,
         "",
@@ -1481,13 +1512,21 @@ export async function runTui(): Promise<void> {
         const children = childRuns(allRuns, s.id);
         const thinking = thinkingChunks(ev);
         const touched = touchedPaths(ev);
-        const sectionBar = RUN_SECTIONS.map((section, index) =>
-          `${section === runSection ? `${TAB_ON} ${index + 1}${RUN_SECTION_LABEL[section]} ${R}` : `${D}${index + 1}${RUN_SECTION_LABEL[section]}${R}`}`,
-        ).join(" ");
+        const sectionBar = wrapTokenList(
+          RUN_SECTIONS.map((section) =>
+            section === runSection
+              ? `${TAB_ON}${RUN_SECTION_LABEL[section]}${R}`
+              : `${D}${RUN_SECTION_LABEL[section]}${R}`,
+          ),
+          cols - 2,
+          " ",
+        );
+        const subHeader = ` ${command("Esc", "Back to Runs", undefined, GR)}  ${B}${C}Run Details${R} ${D}${s.id.slice(-8)} ${trunc(s.request.replace(/\s+/g, " "), Math.max(12, cols - 42))}${R}`;
         const lines: string[] = [
+          subHeader,
           ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}${s.mode ? `/${s.mode}` : ""}  ${G}${s.modelCalls}${R} call(s)  ${C}${fmtTokens(s.usage.totalTokens)}${R} tok  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${ago(s.lastActivityAt)}${R}`,
           ` ${D}${trunc(s.repoRoot, narrow ? cols - 8 : Math.floor(cols / 2))}  ${s.issue ? `#${s.issue.number}  ` : ""}${s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}  ` : ""}${s.worktree ? "worktree" : "read-only"}${R}`,
-          ` ${sectionBar}`,
+          ...sectionBar.map((line) => ` ${line}`),
           ` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`,
         ];
         if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
@@ -1649,7 +1688,7 @@ export async function runTui(): Promise<void> {
         }
         const answerable = s.status === "awaiting_input" && Boolean(pending?.questionId);
         actions = joinCommands([
-          command("1-6", "Section", undefined, C),
+          command("h/l", "Section", RUN_SECTION_LABEL[runSection], C, Y),
           command("j/k", runSection === "timeline" ? "Event" : "Scroll", undefined, M),
           answerable ? command("a", "Answer", undefined, G) : "",
           command("i", "Interrupt", undefined, RED),
@@ -1673,7 +1712,7 @@ export async function runTui(): Promise<void> {
         : null;
       const width = Math.max(20, cols - 8);
       const lines = [
-        ` ${B}${W}Answer run ${selectedRunId?.slice(-8) ?? "?"}${R}`,
+        ` ${command("Esc", "Back to Run", undefined, GR)}  ${B}${C}Answer Run${R} ${D}${selectedRunId?.slice(-8) ?? "?"}${R}`,
         "",
         ` ${Y}?${R} ${W}${pending?.text ?? "(question text not recorded)"}${R}`,
         "",
@@ -1697,7 +1736,7 @@ export async function runTui(): Promise<void> {
       const detail = runDetailData();
       const width = Math.max(20, cols - 8);
       const lines = [
-        ` ${B}${W}Correct ${selectedRunId?.slice(-8) ?? "?"}${R}`,
+        ` ${command("Esc", "Back to Run", undefined, GR)}  ${B}${C}Correct Run${R} ${D}${selectedRunId?.slice(-8) ?? "?"}${R}`,
         "",
         ` ${D}This interrupts the current run and starts a fresh child with the parent's issue,${R}`,
         ` ${D}context, and worktree changes. The new run sees only the correction, not the old transcript.${R}`,
@@ -1722,7 +1761,7 @@ export async function runTui(): Promise<void> {
     /* ------------------------------------------------------------- help */
     else if (screen === "help") {
       const lines = [
-        ` ${B}${W}Keyboard${R}`,
+        ` ${command("Esc", "Back", undefined, GR)}  ${B}${C}Help${R}`,
         "",
         ` ${C}Navigation${R}`,
         `   ${W}1-5 / Tab${R}  switch page        ${W}j/k${R}      move or scroll`,
@@ -1733,7 +1772,7 @@ export async function runTui(): Promise<void> {
         `   ${W}n${R} new run    ${W}N${R} untracked run    ${W}g${R} filter    ${W}r${R} refresh cache`,
         "",
         ` ${M}Run detail${R}`,
-        `   ${W}1-6${R} section   ${W}a${R} answer   ${W}i${R} interrupt   ${W}c${R} correct   ${W}p${R} approve   ${W}o${R} open`,
+        `   ${W}h/l${R} section   ${W}space${R}/${W}Enter${R} expand   ${W}a${R} answer   ${W}i${R} interrupt   ${W}c${R} correct   ${W}p${R} approve   ${W}o${R} open`,
         "",
         ` ${G}New run${R}`,
         `   ${W}a${R} agent   ${W}t${R} tier   ${W}i${R} issue   ${W}e${R}/p prompt edit   ${W}s${R} settings   ${W}Enter${R} start   ${W}Esc${R} cancel`,
@@ -1773,7 +1812,14 @@ export async function runTui(): Promise<void> {
     while (body.length < bodySpace) body.push("");
     const frame = [...header, ...body, ...footer];
     while (frame.length < rows) frame.push("");
-    const output = frame.slice(0, rows).map((line) => fit(sanitizeLine(line), cols));
+    const headerCount = header.length;
+    const footerStart = headerCount + body.length;
+    const output = frame.slice(0, rows).map((line, index) => {
+      const fitted = fit(sanitizeLine(line), cols);
+      if (index < headerCount) return background(fitted, HEADER_BG);
+      if (index >= footerStart) return background(fitted, FOOTER_BG);
+      return fitted;
+    });
     process.stdout.write(SYNC_ON + HOME + output.join("\n") + CLEAR_BELOW + SYNC_OFF);
   };
 
@@ -1962,10 +2008,14 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[B" || data === "j") { workSel = Math.min(Math.max(0, work.selectable.length - 1), workSel + 1); draw(); return; }
       if (data === "G") { workSel = Math.max(0, work.selectable.length - 1); draw(); return; }
       const toggleFold = (row: WorkRow | undefined): boolean => {
-        if (row?.kind !== "issue" && row?.kind !== "section") return false;
-        if (!row.collapsible) return false;
-        if (collapsed.has(row.id)) collapsed.delete(row.id);
-        else collapsed.add(row.id);
+        // A run is a leaf; space on it folds the parent issue/section instead.
+        const target = row?.kind === "run" && row.parent
+          ? work.rows.find((candidate) => candidate.id === row.parent)
+          : row;
+        if (target?.kind !== "issue" && target?.kind !== "section") return false;
+        if (!target.collapsible) return false;
+        if (collapsed.has(target.id)) collapsed.delete(target.id);
+        else collapsed.add(target.id);
         return true;
       };
       if (data === "\r" || data === "\n") {
@@ -2097,35 +2147,31 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "1" || data === "2" || data === "3" || data === "4" || data === "5" || data === "6") {
-        runSection = RUN_SECTIONS[Number(data) - 1]!;
+      const moveSection = (delta: number) => {
+        const index = RUN_SECTIONS.indexOf(runSection);
+        runSection = RUN_SECTIONS[(index + delta + RUN_SECTIONS.length) % RUN_SECTIONS.length]!;
         runScroll = 0;
         eventScroll = 0;
         thinkingFollow = true;
         draw();
-        return;
-      }
-      if (data === "]" || data === "[") {
-        const index = RUN_SECTIONS.indexOf(runSection);
-        runSection = RUN_SECTIONS[(index + (data === "]" ? 1 : RUN_SECTIONS.length - 1)) % RUN_SECTIONS.length]!;
-        draw();
-        return;
-      }
-      if (data === " ") {
-        if (runSection === "timeline") {
-          const key = `${detail.summary.id}:${eventSel}`;
-          if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
-        }
-        draw();
-        return;
-      }
+      };
+      if (data === "h" || data === "\x1b[D") { moveSection(-1); return; }
+      if (data === "l" || data === "\x1b[C") { moveSection(1); return; }
+      if (data === "]" || data === "[") { moveSection(data === "]" ? 1 : -1); return; }
+      const toggleEvent = () => {
+        if (runSection !== "timeline") return;
+        const key = `${detail.summary.id}:${eventSel}`;
+        if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+      };
+      if (data === " ") { toggleEvent(); draw(); return; }
       if (data === "a") { answerRun(detail.summary); draw(); return; }
       if (data === "i") { interrupt(detail.summary); draw(); return; }
       if (data === "c") { startCorrect(detail.summary); draw(); return; }
       if (data === "p") { approveSelected(issueByRef(detail.summary.issue), detail.summary); draw(); return; }
       if (data === "o") { openUrl(issueByRef(detail.summary.issue)?.url ?? detail.summary.prUrl); draw(); return; }
       if (data === "\r" || data === "\n") {
-        if (runSection === "children") {
+        if (runSection === "timeline") toggleEvent();
+        else if (runSection === "children") {
           const child = childRuns(listAllRuns(l.home), detail.summary.id)[childSel];
           if (child) { selectedRunId = child.id; runSection = "overview"; screen = "run"; }
         }
