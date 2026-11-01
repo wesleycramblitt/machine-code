@@ -92,6 +92,18 @@ const RUN_SECTION_LABEL: Record<RunSection, string> = {
   context: "Context",
 };
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
+const NEW_RUN_SETTING_FIELDS = [
+  "mode",
+  "preset",
+  "verification",
+  "issues",
+  "ask",
+  "approval",
+  "ambiguity",
+  "minFit",
+  "floors",
+] as const;
+type NewRunSettingField = (typeof NEW_RUN_SETTING_FIELDS)[number];
 
 interface NewRunState {
   agent: string;
@@ -283,8 +295,48 @@ function progress(value: number | undefined, width: number): string {
   return `${G}${"█".repeat(filled)}${D}${"░".repeat(Math.max(0, width - filled))}${R}`;
 }
 
-function hot(key: string, label: string, active = false): string {
-  return `${active ? `${TAB_ON} ${key} ${R}` : `${C}[${key}]${R}`} ${active ? `${B}${label}${R}` : `${D}${label}${R}`}`;
+/**
+ * One footer command: `Label[key]: Value`.
+ * Label and key share a tone so adjacent commands stay visually distinct;
+ * the value gets its own state color.
+ */
+function command(
+  key: string,
+  label: string,
+  value?: string,
+  tone: string = C,
+  valueTone: string = W,
+): string {
+  const head = `${tone}${label}${R}${D}[${R}${B}${tone}${key}${R}${D}]${R}`;
+  return value === undefined || value === "" ? head : `${head}${D}:${R} ${B}${valueTone}${value}${R}`;
+}
+
+function joinCommands(items: Array<string | false | undefined | null>): string {
+  return items.filter((item): item is string => Boolean(item)).join("  ");
+}
+
+/** Wrap command tokens on double-space boundaries, preserving ANSI styling. */
+function wrapCommands(text: string, width: number): string[] {
+  const tokens = text.split(/\s{2,}/).map((token) => token.trim()).filter(Boolean);
+  if (tokens.length === 0) return [];
+  const lines: string[] = [];
+  let current = "";
+  for (const token of tokens) {
+    const candidate = current ? `${current}  ${token}` : token;
+    if (current && visible(candidate) > width) {
+      lines.push(current);
+      current = token;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.map((line) => (visible(line) > width ? trunc(line, width) : line));
+}
+
+function wrapPlain(text: string, width: number): string[] {
+  if (!text) return [];
+  return wrapText(stripAnsi(text), width).map((line) => `${D}${line}${R}`);
 }
 
 function selected(value: string, isSelected: boolean): string {
@@ -380,6 +432,12 @@ export async function runTui(): Promise<void> {
   let issuePick: "newrun" | null = null;
   let issuePickSel = 0;
   let issuePickText = "";
+  /** New-run prompt is modal: navigation keys are disabled while true. */
+  let newRunInsert = false;
+  let newRunPendingJ = false;
+  /** Advanced, rarely-touched new-run options live behind [s]. */
+  let newRunSettings = false;
+  let newRunSettingsSel = 0;
   let answerText = "";
   let answerQuestionId = "";
   let correctText = "";
@@ -540,6 +598,10 @@ export async function runTui(): Promise<void> {
     const def = agentDef(l, newrun.agent);
     newrun.mode = def.defaultMode ?? def.modes[0] ?? "";
     newrun.preset = def.preset;
+    newRunInsert = false;
+    newRunPendingJ = false;
+    newRunSettings = false;
+    newRunSettingsSel = 0;
     screen = "newrun";
   };
 
@@ -550,6 +612,44 @@ export async function runTui(): Promise<void> {
     const modes = def.modes;
     newrun.mode = modes.includes(newrun.mode) ? newrun.mode : (def.defaultMode ?? modes[0] ?? "");
     newrun.preset = def.preset;
+  };
+
+  const cycleNewRunSetting = (field: NewRunSettingField) => {
+    if (field === "mode") {
+      const modes = AGENT_META[newrun.agent]?.modes ?? [];
+      if (modes.length) newrun.mode = modes[(modes.indexOf(newrun.mode) + 1) % modes.length]!;
+      else notify("this agent runs alone; no mode to choose");
+      return;
+    }
+    if (field === "preset") {
+      const presets = ["plan", "orchestrate", "implement", "review", "assistant", "unrestricted"];
+      newrun.preset = presets[(presets.indexOf(newrun.preset) + 1) % presets.length]!;
+      return;
+    }
+    if (field === "verification") {
+      const values: NewRunState["verification"][] = ["direct", "verified", "redundant"];
+      newrun.verification = values[(values.indexOf(newrun.verification) + 1) % values.length]!;
+      return;
+    }
+    if (field === "issues") {
+      const values: NewRunState["issues"][] = ["required", "optional", "disabled"];
+      newrun.issues = values[(values.indexOf(newrun.issues) + 1) % values.length]!;
+      return;
+    }
+    if (field === "ask") { newrun.ask = !newrun.ask; return; }
+    if (field === "approval") { newrun.approval = newrun.approval === "human" ? "agent" : "human"; return; }
+    if (field === "ambiguity") {
+      const values: NewRunState["ambiguity"][] = ["strict", "precise", "adaptive", "autonomous"];
+      newrun.ambiguity = values[(values.indexOf(newrun.ambiguity) + 1) % values.length]!;
+      return;
+    }
+    if (field === "minFit") {
+      const values: Array<number | null | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 8.5, 0];
+      newrun.minFit = values[(values.findIndex((value) => value === newrun.minFit) + 1) % values.length];
+      return;
+    }
+    const floors: NewRunState["floors"][] = ["role", "strict", "off"];
+    newrun.floors = floors[(floors.indexOf(newrun.floors) + 1) % floors.length]!;
   };
 
   const effectivePolicy = (): Policy | undefined => {
@@ -752,9 +852,8 @@ export async function runTui(): Promise<void> {
     const cols = Math.max(20, (process.stdout.columns || 120) - 1);
     const rows = Math.max(6, process.stdout.rows || 40);
     const narrow = cols < 84;
-    const medium = cols < 120;
     const short = rows < 24;
-    const bodyH = Math.max(1, rows - 4);
+    const footerReserve = cols < 50 ? 6 : cols < 70 ? 5 : cols < 90 ? 4 : cols < 110 ? 3 : 2;
     const allRuns = listAllRuns(l.home);
     const cache = readIssueCache(l);
     const issues = cache?.issues ?? [];
@@ -765,6 +864,19 @@ export async function runTui(): Promise<void> {
     }
     const todaySpend = spendToday;
     if (toast && Date.now() - toastAt > 8_000) toast = "";
+
+    const tabTokens = TABS.map((tab) =>
+      tab.id === page
+        ? `${TAB_ON} ${tab.key}:${tab.label} ${R}`
+        : `${TAB_OFF} ${tab.key}:${tab.label} ${R}`,
+    );
+    const header = [
+      ...wrapCommands(joinCommands(tabTokens), cols),
+      narrow
+        ? `${C}●${counts.active}${R} ${Y}?${counts.awaiting}${R} ${M}⚑${counts.approvals}${R} ${Y}PR${counts.openPrs}${R} ${G}$${todaySpend.toFixed(2)}${R}`
+        : `${C}●${R} ${counts.active} running  ${Y}?${R} ${counts.awaiting} awaiting  ${Y}⏸${R} ${counts.paused} paused  ${M}⚑${R} ${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}  ${Y}PR${R} ${counts.openPrs} open  ${G}$${todaySpend.toFixed(2)}${R} today  ${D}issues ${cache ? ago(cache.fetchedAt) : "none"}${R}`,
+    ];
+    const bodyH = Math.max(1, rows - header.length - footerReserve);
 
     // Resolve a newly launched run as soon as its record is visible.
     if (pendingRunAt > 0) {
@@ -820,19 +932,6 @@ export async function runTui(): Promise<void> {
     const settingsPolicy = effectivePolicy();
     const settingsRows = buildSettings(l, settingsMachine, settingsPolicy);
     if (settingsSel >= settingsRows.length) settingsSel = Math.max(0, settingsRows.length - 1);
-
-    const headerTabs = (() => {
-      if (narrow) return `${TAB_ON} ${page.toUpperCase()} ${R} ${D}${TABS.findIndex((tab) => tab.id === page) + 1}/${TABS.length}${R}`;
-      return TABS.map((tab, index) => `${tab.id === page ? `${TAB_ON} ${tab.key}:${tab.label} ${R}` : `${TAB_OFF} ${tab.key}:${tab.label} ${R}`}`).join(" ");
-    })();
-    const cacheAge = cache ? ago(cache.fetchedAt) : "none";
-    const kpis = narrow
-      ? `${C}●${counts.active}${R} ${Y}?${counts.awaiting}${R} ${M}⚑${counts.approvals}${R} ${Y}PR${counts.openPrs}${R} ${G}$${todaySpend.toFixed(2)}${R}`
-      : `${C}●${R} ${counts.active} running  ${Y}?${R} ${counts.awaiting} awaiting  ${Y}⏸${R} ${counts.paused} paused  ${M}⚑${R} ${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}  ${Y}PR${R} ${counts.openPrs} open  ${G}$${todaySpend.toFixed(2)}${R} today  ${D}issues ${cacheAge}${R}`;
-    const header = [
-      fit(`${B}${W}machine_code${R}  ${headerTabs}${narrow ? "" : `  ${D}${basename(cwd)}${R}`}`, cols),
-      fit(` ${kpis}`, cols),
-    ];
 
     let body: string[] = [];
     let actions = "";
@@ -902,8 +1001,24 @@ export async function runTui(): Promise<void> {
       workScroll = windowed.scroll;
       body = clipBody(windowed.lines);
       actions = narrow
-        ? `${hot("n", "New")} ${hot("Enter", "Open")} ${hot("j/k", "Move")} ${hot("a", "Answer")} ${hot("c", "Correct")} ${hot("?", "Help")}`
-        : `${hot("n", "New run")} ${hot("Enter", "Open")} ${hot("space", "Fold")} ${hot("j/k", "Move")} ${hot("a", "Answer")} ${hot("i", "Interrupt")} ${hot("c", "Correct")} ${hot("!", "Attention", workAttention)} ${hot("/", "Search")} ${hot("g", "Filter")} ${hot("r", "Refresh")} ${hot("?", "Help")}`;
+        ? joinCommands([
+            command("n", "New", undefined, C),
+            command("Enter", "Open", undefined, G),
+            command("space", "Fold", undefined, Y),
+            command("j/k", "Move", undefined, M),
+            command("/", "Search", undefined, BL),
+            command("?", "Help", undefined, GR),
+          ])
+        : joinCommands([
+            command("n", "New run", undefined, C),
+            command("Enter", "Open", undefined, G),
+            command("space", "Fold", undefined, Y),
+            command("j/k", "Move", undefined, M),
+            command("/", "Search", undefined, BL),
+            command("g", "Filter", workFilter, M, C),
+            command("r", "Refresh", undefined, GR),
+            command("?", "Help", undefined, GR),
+          ]);
       secondary = `${D}${work.selectable.length} item(s) · ${work.attention} need attention · ${issueStatus}${workText ? ` · filter “${workText}”` : ""}${workAttention ? " · attention only" : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
@@ -971,7 +1086,15 @@ export async function runTui(): Promise<void> {
         runsScroll = w.scroll;
         body = clipBody(w.lines);
       }
-      actions = `${hot("n", "New")} ${hot("Enter", "Open")} ${hot("a", "Answer")} ${hot("i", "Interrupt")} ${hot("c", "Correct")} ${hot("g", `Group: ${runsGroup}`)} ${hot("f", `Filter: ${runsFilter}`)} ${hot("s", `Sort: ${runsSort}`)} ${hot("/", "Search")} ${hot("?", "Help")}`;
+      actions = joinCommands([
+        command("n", "New", undefined, C),
+        command("Enter", "Open", undefined, G),
+        command("g", "Group", runsGroup, Y, C),
+        command("f", "Filter", runsFilter, M, C),
+        command("s", "Sort", runsSort, BL, C),
+        command("/", "Search", undefined, GR),
+        command("?", "Help", undefined, GR),
+      ]);
       secondary = `${D}${runs.length} run(s) · ${counts.active} active · ${counts.awaiting} awaiting${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
@@ -1027,7 +1150,14 @@ export async function runTui(): Promise<void> {
       const w = selectableLines(lines, Math.max(0, runStart + issueRunSel), issueScroll, bodyH);
       issueScroll = w.scroll;
       body = clipBody(w.lines);
-      actions = `${hot("n", "New run here")} ${hot("Enter", "Open run")} ${hot("j/k", "Select run")} ${hot("p", "Approve")} ${hot("o", "Open")} ${hot("Esc", "Back")}`;
+      actions = joinCommands([
+        command("n", "New run", undefined, C),
+        command("Enter", "Open", undefined, G),
+        command("j/k", "Select", undefined, M),
+        command("p", "Approve", undefined, Y),
+        command("o", "Open URL", undefined, BL),
+        command("Esc", "Back", undefined, GR),
+      ]);
       secondary = `${D}${issue.kind} #${issue.ref.number} · ${issueRuns.length} run(s) · ${preview.chars.toLocaleString()} context chars${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
@@ -1035,64 +1165,64 @@ export async function runTui(): Promise<void> {
     else if (screen === "newrun") {
       const preview = modelPreview();
       const ctx = preview.context;
-      const policy = preview.policy;
-      const ap = policy?.agents[newrun.agent];
+      const ap = preview.policy?.agents[newrun.agent];
       const def = agentDef(l, newrun.agent);
       const issueChain = ctx.issueChain;
       const issueObj = newrun.issue ? issueByRef(newrun.issue) : undefined;
-      const issueLabel = newrun.issue
-        ? `#${newrun.issue.number} ${issueChain.find((issue) => refKey(issue.ref) === refKey(newrun.issue))?.title ?? issueObj?.title ?? ""}${issueObj && issueObj.kind !== "task" && (newrun.agent === "build" || newrun.agent === "sudo") ? ` (${issueObj.kind} → creates task)` : ""}`
-        : "none (untracked)";
-      const field = (key: string, label: string, value: string, active = false) => `${hot(key, label, active)} ${B}${W}${value}${R}`;
+      const issueValue = newrun.issue ? `#${newrun.issue.number} ${issueObj?.kind ?? ""}`.trim() : "untracked";
+      const displayAgent = newrun.agent ? `${newrun.agent[0]!.toUpperCase()}${newrun.agent.slice(1)}` : newrun.agent;
+      const displayTier = newrun.tier === "free" ? "Free" : "Paid";
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
       const fitText = newrun.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(newrun.minFit);
-      const left: string[] = [
-        ` ${B}${W}New run${R} ${D}· ${cwd}${R}`,
-        "",
-        ` ${field("a", "Agent", newrun.agent, true)}`,
-        ` ${field("m", "Mode", newrun.mode || "single")}  ${field("p", "Preset", newrun.preset)}`,
-        ` ${field("v", "Verify", newrun.verification)}  ${field("t", "Tier", newrun.tier)}`,
-        ` ${field("g", "Issues", newrun.issues)}  ${field("k", "Ask", newrun.ask ? "on" : "off")}`,
-        ` ${field("y", "Approval", newrun.approval)}  ${field("u", "Ambiguity", newrun.ambiguity)}`,
-        ` ${field("f", "Min fit", fitText)}  ${field("x", "Floors", floorText)}`,
-        ` ${field("i", "Issue", issueLabel, true)}`,
-        "",
-        ` ${B}${C}Model${R} ${preview.error ? `${RED}${preview.error}${R}` : `${C}${preview.model?.key ?? "?"}${R} ${D}fit ${preview.fit?.toFixed(2) ?? "?"} · ${preview.estimate ? fmtMoney(((preview.estimate as { inputTokens: number }).inputTokens * (preview.model?.pricing.input ?? 0) + (preview.estimate as { outputTokens: number }).outputTokens * (preview.model?.pricing.output ?? 0)) / 1_000_000) : "?"}${R}`}`,
-        ` ${D}${preview.model ? `${preview.model.kind} · ctx ${fmtContext(preview.model.context)} · in $${preview.model.pricing.input}/M out $${preview.model.pricing.output}/M` : ""}${R}`,
-        ` ${B}${C}Context${R} ${D}~${fmtTokens(ctx.chars + ctx.promptChars)} chars / ~${fmtTokens(Math.ceil((ctx.chars + ctx.promptChars) / 4))} input tokens${R}`,
-        ` ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "no issue context"}${R}`,
-        ` ${D}${ctx.artifacts.files.length} files · ${ctx.artifacts.tools.length} tools · ${ctx.artifacts.scripts.length} scripts · ${ctx.artifacts.skills.length} skills${R}`,
-      ];
-      const contextWindow = Math.max(4, bodyH - (narrow ? 14 : 2));
-      const right: string[] = [];
-      if (!narrow) {
-        right.push(` ${B}${C}Will inherit${R}`);
-        const shown = ctx.sources.slice(0, contextWindow);
-        for (const source of shown) {
-          right.push(`  ${source.exists ? G + "✓" : Y + "?"}${R} ${D}${source.kind.padEnd(9)}${R} ${W}${trunc(source.ref, Math.max(12, cols / 2 - 8))}${R} ${D}${fmtTokens(source.chars)}${R}`);
-        }
-        if (ctx.sources.length > shown.length) right.push(`  ${D}… ${ctx.sources.length - shown.length} more${R}`);
-        if (ctx.warnings.length) right.push(`  ${Y}${ctx.warnings[0]}${R}`);
-        right.push("");
-        right.push(` ${B}${C}Cwd${R} ${W}${trunc(cwd, Math.max(10, cols / 2 - 8))}${R}`);
+      const estimateCost = preview.estimate
+        ? fmtMoney(
+            ((preview.estimate as { inputTokens: number }).inputTokens * (preview.model?.pricing.input ?? 0) +
+              (preview.estimate as { outputTokens: number }).outputTokens * (preview.model?.pricing.output ?? 0)) /
+              1_000_000,
+          )
+        : "?";
+      const modelLine = preview.error
+        ? ` ${M}Model${R} ${RED}${preview.error}${R}`
+        : ` ${M}Model${R} ${B}${C}${preview.model?.key ?? "?"}${R} ${D}fit ${preview.fit?.toFixed(2) ?? "?"} · ${estimateCost}${R}`;
+      const modelMeta = preview.model
+        ? ` ${D}${preview.model.kind} · ctx ${fmtContext(preview.model.context)} · in $${preview.model.pricing.input}/M out $${preview.model.pricing.output}/M${R}`
+        : "";
+      const contextLine = ` ${C}Context${R} ${W}~${fmtTokens(ctx.chars + ctx.promptChars)} chars${R} ${D}/ ~${fmtTokens(Math.ceil((ctx.chars + ctx.promptChars) / 4))} input tokens · ${ctx.artifacts.files.length} files · ${ctx.artifacts.tools.length} tools · ${ctx.artifacts.scripts.length} scripts · ${ctx.artifacts.skills.length} skills${R}`;
+      const chainLine = ` ${BL}Hierarchy${R} ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "untracked · no issue context"}${R}`;
+      const summary = [modelLine, modelMeta, contextLine, chainLine].filter(Boolean);
+      if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
+
+      const boxWidth = Math.max(20, cols - 4);
+      const inner = Math.max(12, boxWidth - 2);
+      const promptText = newrun.prompt || (newRunInsert ? "" : "Press e to type the task");
+      const promptLines = wrapText(promptText, Math.max(8, inner - 3));
+      if (newRunInsert) {
+        if (promptLines.length === 0) promptLines.push("▌");
+        else promptLines[promptLines.length - 1] = `${promptLines[promptLines.length - 1]}▌`;
       }
-      const promptWidth = narrow ? cols - 4 : Math.max(24, Math.floor(cols * 0.55) - 3);
-      const promptLines = wrapText(newrun.prompt || "(type the task — Enter starts, Esc cancels)", promptWidth - 2);
+      const availableForPrompt = Math.max(3, bodyH - summary.length - 6);
+      const promptHeight = Math.max(3, Math.min(16, availableForPrompt, Math.floor(bodyH * 0.5)));
+      const shownPrompt = promptLines.slice(-promptHeight);
       const promptBox = [
-        ` ${D}┌${"─".repeat(Math.max(8, promptWidth))}┐${R}`,
-        ...promptLines.slice(-Math.max(1, Math.min(promptLines.length, short ? 3 : 5))).map((line) => ` ${D}│${R} ${W}${fit(line, promptWidth - 2)}${R} ${D}│${R}`),
-        ` ${D}└${"─".repeat(Math.max(8, promptWidth))}┘${R}`,
+        ` ${D}┌${"─".repeat(inner)}┐${R}`,
+        ...shownPrompt.map((line) => ` ${D}│${R} ${W}${fit(line, inner - 2)}${R} ${D}│${R}`),
+        ...Array.from({ length: Math.max(0, promptHeight - shownPrompt.length) }, () => ` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`),
+        ` ${D}└${"─".repeat(inner)}┘${R}`,
       ];
-      const combined: string[] = [];
-      if (!narrow) {
-        const leftWidth = Math.max(30, Math.floor(cols * 0.55));
-        const maxHeight = Math.max(left.length, right.length);
-        for (let i = 0; i < maxHeight; i++) {
-          combined.push(`${pad(left[i] ?? "", leftWidth)}${right[i] ?? ""}`);
+
+      const sources: string[] = [];
+      const sourceRoom = Math.max(0, bodyH - summary.length - promptBox.length - 2);
+      if (sourceRoom > 1 && ctx.sources.length > 0) {
+        sources.push(` ${B}${C}Will inherit${R} ${D}· ${ctx.sources.length} source(s)${R}`);
+        const toneFor = (kind: string): string =>
+          kind === "issue" || kind === "task" || kind === "feature" || kind === "epic" ? Y :
+          kind === "tool" ? M : kind === "script" ? BL : kind === "skill" ? G : C;
+        for (const source of ctx.sources.slice(0, Math.max(0, sourceRoom - 1))) {
+          const tone = toneFor(source.kind);
+          sources.push(`  ${source.exists ? G + "✓" : Y + "?"}${R} ${tone}${source.kind.padEnd(9)}${R} ${W}${trunc(source.ref, Math.max(12, cols - 30))}${R} ${D}${fmtTokens(source.chars)}${R}`);
         }
-      } else {
-        combined.push(...left);
       }
+
       if (issuePick === "newrun") {
         const list = pickerIssues();
         if (issuePickSel >= list.length) issuePickSel = Math.max(0, list.length - 1);
@@ -1105,17 +1235,75 @@ export async function runTui(): Promise<void> {
         }
         picker.push("", ` ${D}filter: ${issuePickText || "(all)"}${R}`);
         body = clipBody(picker.slice(0, bodyH));
-        actions = `${hot("Enter", "Select")} ${hot("j/k", "Move")} ${hot("Esc", "Close")}`;
+        actions = joinCommands([
+          command("Enter", "Select", undefined, G),
+          command("j/k", "Move", undefined, M),
+          command("Esc", "Close", undefined, GR),
+        ]);
         secondary = `${D}${list.length} issue(s)${issuePickText ? ` · “${issuePickText}”` : ""}${R}`;
+      } else if (newRunSettings) {
+        const labels: Record<NewRunSettingField, string> = {
+          mode: "Mode",
+          preset: "Preset",
+          verification: "Verify",
+          issues: "GH issues",
+          ask: "Ask",
+          approval: "Approval",
+          ambiguity: "Ambiguity",
+          minFit: "Min fit",
+          floors: "Floors",
+        };
+        const values: Record<NewRunSettingField, string> = {
+          mode: newrun.mode || "single",
+          preset: newrun.preset,
+          verification: newrun.verification,
+          issues: newrun.issues,
+          ask: newrun.ask ? "on" : "off",
+          approval: newrun.approval,
+          ambiguity: newrun.ambiguity,
+          minFit: fitText,
+          floors: floorText,
+        };
+        const lines: string[] = [
+          ` ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
+          ` ${D}${cwd}${R}`,
+          "",
+        ];
+        for (let i = 0; i < NEW_RUN_SETTING_FIELDS.length; i++) {
+          const field = NEW_RUN_SETTING_FIELDS[i]!;
+          const value = values[field];
+          const tone = i % 2 === 0 ? C : M;
+          const line = `  ${pad(labels[field], 12)} ${tone}${B}${value}${R}`;
+          lines.push(selected(line, i === newRunSettingsSel));
+        }
+        lines.push("", ` ${D}Rarely changed options live here; the main screen stays compact.${R}`);
+        body = clipBody(lines);
+        actions = joinCommands([
+          command("j/k", "Move", undefined, M),
+          command("Enter", "Change", undefined, G),
+          command("Esc", "Close", undefined, GR),
+        ]);
+        secondary = `${D}${NEW_RUN_SETTING_FIELDS.length} option(s) · changes apply to this run only${R}`;
       } else {
-        const topHeight = Math.max(0, bodyH - promptBox.length);
-        body = clipBody([...combined.slice(0, topHeight), ...promptBox]);
-        actions = narrow
-        ? `${hot("a", "Agent")} ${hot("m", "Mode")} ${hot("t", "Tier")} ${hot("i", "Issue")} ${hot("Enter", "Start")} ${hot("Esc", "Cancel")}`
-        : `${hot("a", "Agent")} ${hot("m", "Mode")} ${hot("p", "Preset")} ${hot("v", "Verify")} ${hot("t", "Tier")} ${hot("i", "Issue")}`;
-        secondary = narrow
-          ? `${D}${def.blurb}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`
-          : `${hot("g", "Issues")} ${hot("k", "Ask")} ${hot("y", "Approval")} ${hot("u", "Ambiguity")} ${hot("f", "Fit")} ${hot("x", "Floors")} ${hot("Enter", "Start")} ${hot("Esc", "Cancel")}${toast ? `  · ${Y}${toast}${R}` : ""}`;
+        body = clipBody([...summary, "", ...promptBox, ...(sources.length ? ["", ...sources] : [])]);
+        actions = newRunInsert
+          ? joinCommands([
+              command("Esc/jk", "Done", undefined, Y),
+              command("Enter", "Newline", undefined, G),
+              command("Backspace", "Delete", undefined, M),
+            ])
+          : joinCommands([
+              command("a", "Agent", displayAgent, C, M),
+              command("t", "Tier", displayTier, Y, newrun.tier === "free" ? G : Y),
+              command("i", "Issue", issueValue, BL, newrun.issue ? C : GR),
+              command("e", "Prompt", newRunInsert ? "editing" : "edit", G, newRunInsert ? Y : W),
+              command("s", "Settings", undefined, M),
+              command("Enter", "Start", undefined, G),
+              command("Esc", "Cancel", undefined, GR),
+            ]);
+        secondary = newRunInsert
+          ? `${Y}Insert mode${R} ${D}· all key commands disabled · Esc or jk exits${R}${toast ? ` · ${Y}${toast}${R}` : ""}`
+          : `${D}${def.blurb}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
       }
     }
 
@@ -1151,7 +1339,12 @@ export async function runTui(): Promise<void> {
       const w = selectableLines(lines, 0, modelScroll, bodyH);
       modelScroll = w.scroll;
       body = clipBody(w.lines);
-      actions = `${hot("Esc", "Back")} ${hot("j/k", "Scroll")} ${hot("p", "Copy key")} ${hot("o", "Open provider")}`;
+      actions = joinCommands([
+        command("Esc", "Back", undefined, GR),
+        command("j/k", "Scroll", undefined, M),
+        command("p", "Copy key", undefined, C),
+        command("o", "Provider", undefined, BL),
+      ]);
       secondary = `${D}${model.key}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
@@ -1183,7 +1376,16 @@ export async function runTui(): Promise<void> {
       const w = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), modelScroll, bodyH);
       modelScroll = w.scroll;
       body = clipBody(w.lines);
-      actions = `${hot("Enter", "Details")} ${hot("/", "Search")} ${hot("a", modelsAll ? "All" : "Configured", modelsAll)} ${hot("f", "Free", modelsFree)} ${hot("c", "Coding", modelsCoding)} ${hot("g", `Group: ${modelGroup}`)} ${hot("s", `Sort: ${modelSort}`)} ${hot("j/k", "Move")}`;
+      actions = joinCommands([
+        command("Enter", "Details", undefined, G),
+        command("/", "Search", undefined, BL),
+        command("a", "Providers", modelsAll ? "all" : "configured", C, modelsAll ? Y : C),
+        command("f", "Free", modelsFree ? "only" : "all", M, modelsFree ? G : GR),
+        command("c", "Coding", modelsCoding ? "only" : "all", Y, modelsCoding ? G : GR),
+        command("g", "Group", modelGroup, BL, C),
+        command("s", "Sort", modelSort, GR, C),
+        command("j/k", "Move", undefined, GR),
+      ]);
       secondary = `${D}${modelRows.length} model(s)${modelText ? ` · “${modelText}”` : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
@@ -1217,7 +1419,12 @@ export async function runTui(): Promise<void> {
       const w = selectableLines(lines, 0, spendScroll, bodyH);
       spendScroll = w.scroll;
       body = clipBody(w.lines);
-      actions = `${hot("g", `By: ${spendBy}`)} ${hot("d", `Range: ${spendDaysWindow === 0 ? "all" : `${spendDaysWindow}d`}`)} ${hot("j/k", "Scroll")} ${hot("r", "Refresh")}`;
+      actions = joinCommands([
+        command("g", "Group", spendBy, C, G),
+        command("d", "Range", spendDaysWindow === 0 ? "all" : `${spendDaysWindow}d`, Y, C),
+        command("j/k", "Scroll", undefined, M),
+        command("r", "Refresh", undefined, GR),
+      ]);
       secondary = `${D}ledger ${join(l.home, "spend.jsonl")}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
@@ -1246,7 +1453,14 @@ export async function runTui(): Promise<void> {
       settingsScroll = w.scroll;
       body = clipBody(w.lines);
       const row = visibleRows[Math.min(settingsSel, visibleRows.length - 1)];
-      actions = `${hot("j/k", "Select")} ${hot("e", "Edit file")} ${hot("o", "Reveal path")} ${hot("p", "Policy")} ${hot("c", "Config")} ${hot("r", "Reload")}`;
+      actions = joinCommands([
+        command("j/k", "Select", undefined, M),
+        command("e", "Edit file", undefined, G),
+        command("o", "Reveal", undefined, BL),
+        command("p", "Policy", undefined, Y),
+        command("c", "Config", undefined, C),
+        command("r", "Reload", undefined, GR),
+      ]);
       secondary = row ? `${D}${row.label} · ${settingsFileFor(l, row) ?? "(no file)"}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "";
     }
 
@@ -1255,7 +1469,7 @@ export async function runTui(): Promise<void> {
       const detail = runDetailData();
       if (!detail) {
         body = [` ${RED}Run ${selectedRunId ?? "?"} no longer exists.${R}`];
-        actions = `${hot("Esc", "Back")}`;
+        actions = command("Esc", "Back", undefined, GR);
       } else {
         const s = detail.summary;
         const ev = detail.events;
@@ -1434,7 +1648,16 @@ export async function runTui(): Promise<void> {
           body = clipBody(lines);
         }
         const answerable = s.status === "awaiting_input" && Boolean(pending?.questionId);
-        actions = `${hot("1-6", "Section")} ${hot("j/k", runSection === "timeline" ? "Event" : runSection === "thinking" ? "Scroll" : "Scroll")} ${hot("space", "Expand")} ${answerable ? hot("a", "Answer") : ""} ${hot("i", "Interrupt")} ${hot("c", "Correct")} ${hot("p", "Approve")} ${hot("o", "Open PR/issue")} ${hot("Esc", "Back")}`;
+        actions = joinCommands([
+          command("1-6", "Section", undefined, C),
+          command("j/k", runSection === "timeline" ? "Event" : "Scroll", undefined, M),
+          answerable ? command("a", "Answer", undefined, G) : "",
+          command("i", "Interrupt", undefined, RED),
+          command("c", "Correct", undefined, Y),
+          command("p", "Approve", undefined, M),
+          command("o", "Open", undefined, BL),
+          command("Esc", "Back", undefined, GR),
+        ]);
         secondary = `${D}${s.id} · ${children.length} child run(s) · ${thinking.length} response(s)${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
       }
     }
@@ -1462,7 +1685,10 @@ export async function runTui(): Promise<void> {
       for (let i = 0; i < boxHeight; i++) lines.push(` ${D}│${R} ${W}${fit(wrapped[i] ?? "", width - 2)}${R} ${D}│${R}`);
       lines.push(` ${D}└${"─".repeat(width)}┘${R}`);
       body = clipBody(lines);
-      actions = `${hot("Enter", "Send")} ${hot("Esc", "Cancel")}`;
+      actions = joinCommands([
+        command("Enter", "Send", undefined, G),
+        command("Esc", "Cancel", undefined, GR),
+      ]);
       secondary = `${D}answers are appended to the run inbox and picked up without replaying the transcript${R}`;
     }
 
@@ -1485,7 +1711,11 @@ export async function runTui(): Promise<void> {
       lines.push(` ${D}└${"─".repeat(width)}┘${R}`);
       if (detail) lines.push(` ${D}parent ${detail.summary.id} · ${detail.summary.worktree ? "inheriting worktree" : "no worktree"}${R}`);
       body = clipBody(lines);
-      actions = `${hot("Enter", "Start corrected run")} ${hot("Esc", "Cancel")} ${hot("i", "Interrupt only")}`;
+      actions = joinCommands([
+        command("Enter", "Start run", undefined, G),
+        command("Esc", "Cancel", undefined, GR),
+        command("i", "Interrupt", undefined, RED),
+      ]);
       secondary = `${D}Esc returns to the run; use i when you only want to stop it${R}`;
     }
 
@@ -1494,42 +1724,56 @@ export async function runTui(): Promise<void> {
       const lines = [
         ` ${B}${W}Keyboard${R}`,
         "",
-        ` ${C}1-5 / Tab${R}   switch page          ${C}j/k${R}     move or scroll`,
-        ` ${C}Enter${R}       open / start        ${C}Space${R}   fold or expand`,
-        ` ${C}n${R}           new run             ${C}N${R}       new untracked run`,
-        ` ${C}a${R}           answer an ask       ${C}i${R}       interrupt a run`,
-        ` ${C}c${R}           correct via new run ${C}p${R}       approve a PR/issue`,
-        ` ${C}/${R}           search this page    ${C}!${R}       attention-only work view`,
-        ` ${C}g${R}           cycle grouping      ${C}f${R}       cycle filter`,
-        ` ${C}s${R}           cycle sort          ${C}r${R}       refresh issue cache`,
-        ` ${C}e${R}           edit setting file   ${C}o${R}       open URL/path`,
-        ` ${C}q / Esc${R}     back or quit        ${C}?${R}       this help`,
+        ` ${C}Navigation${R}`,
+        `   ${W}1-5 / Tab${R}  switch page        ${W}j/k${R}      move or scroll`,
+        `   ${W}Enter${R}      open / start       ${W}Space${R}    fold or expand`,
+        `   ${W}/${R}          search              ${W}q / Esc${R}  back or quit`,
         "",
-        ` ${D}The work page is Epic → Feature → Task → runs. “Untracked” holds runs`,
-        ` with no issue. Selecting an Epic/Feature and pressing n creates the`,
-        ` missing Feature/Task when the run starts.${R}`,
+        ` ${Y}Work${R}`,
+        `   ${W}n${R} new run    ${W}N${R} untracked run    ${W}g${R} filter    ${W}r${R} refresh cache`,
         "",
-        ` ${D}Work pages: ${page} · screen: ${screen} · cwd: ${cwd}${R}`,
+        ` ${M}Run detail${R}`,
+        `   ${W}1-6${R} section   ${W}a${R} answer   ${W}i${R} interrupt   ${W}c${R} correct   ${W}p${R} approve   ${W}o${R} open`,
+        "",
+        ` ${G}New run${R}`,
+        `   ${W}a${R} agent   ${W}t${R} tier   ${W}i${R} issue   ${W}e${R}/p prompt edit   ${W}s${R} settings   ${W}Enter${R} start   ${W}Esc${R} cancel`,
+        `   In the prompt: ${W}Enter${R} newline · ${W}Esc${R} or ${W}jk${R} leaves insert mode.`,
+        "",
+        ` ${D}Work is Epic → Feature → Task → runs. Runs with no issue stay in Untracked.${R}`,
+        ` ${D}Screen: ${screen} · cwd: ${cwd}${R}`,
       ];
       body = clipBody(lines);
-      actions = `${hot("Esc", "Back")} ${hot("q", "Back")}`;
-      secondary = `${D}machine_code ${process.env.npm_package_version ?? ""}${R}`;
+      actions = joinCommands([
+        command("Esc", "Back", undefined, GR),
+        command("q", "Back", undefined, GR),
+      ]);
+      secondary = `${D}${process.env.npm_package_version ? `v${process.env.npm_package_version}` : ""}${R}`;
     }
 
     /* ------------------------------------------------------------ compose */
     if (searchMode) {
-      actions = `${B}${C}Search${R} ${W}${searchText}▌${R}`;
-      secondary = `${D}[Enter] apply  [Esc] cancel  · ${page}${R}`;
+      actions = joinCommands([
+        command("/", "Search", searchText || "…", C, W),
+        command("Enter", "Apply", undefined, G),
+        command("Esc", "Cancel", undefined, GR),
+      ]);
+      secondary = `${D}filters ${page} · type to edit${R}`;
     }
-    const finalFooter = [
-      fit(actions || `${hot("1-5", "Pages")} ${hot("?", "Help")} ${hot("q", "Quit")}`, cols),
-      fit(secondary || "", cols),
+    const defaultActions = joinCommands([
+      command("1-5", "Pages", undefined, C),
+      command("?", "Help", undefined, BL),
+      command("q", "Quit", undefined, GR),
+    ]);
+    const footer = [
+      ...wrapCommands(actions || defaultActions, cols),
+      ...wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1),
     ];
-    while (body.length < bodyH) body.push("");
-    if (body.length > bodyH) body = body.slice(0, bodyH);
-    const frame = [...header, ...body, ...finalFooter].slice(0, rows);
+    const bodySpace = Math.max(0, rows - header.length - footer.length);
+    body = body.slice(0, bodySpace);
+    while (body.length < bodySpace) body.push("");
+    const frame = [...header, ...body, ...footer];
     while (frame.length < rows) frame.push("");
-    const output = frame.map((line) => fit(sanitizeLine(line), cols));
+    const output = frame.slice(0, rows).map((line) => fit(sanitizeLine(line), cols));
     process.stdout.write(SYNC_ON + HOME + output.join("\n") + CLEAR_BELOW + SYNC_OFF);
   };
 
@@ -1608,65 +1852,52 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
+      if (newRunSettings) {
+        if (data === "\x1b" || data === "s") { newRunSettings = false; draw(); return; }
+        if (data === "\x1b[A" || data === "k") { newRunSettingsSel = Math.max(0, newRunSettingsSel - 1); draw(); return; }
+        if (data === "\x1b[B" || data === "j") {
+          newRunSettingsSel = Math.min(NEW_RUN_SETTING_FIELDS.length - 1, newRunSettingsSel + 1);
+          draw();
+          return;
+        }
+        if (data === "\r" || data === "\n" || data === " ") {
+          cycleNewRunSetting(NEW_RUN_SETTING_FIELDS[newRunSettingsSel]!);
+          draw();
+          return;
+        }
+        draw();
+        return;
+      }
+      if (newRunInsert) {
+        if (data === "\x1b" || data === "jk") { newRunInsert = false; newRunPendingJ = false; draw(); return; }
+        if ((newRunPendingJ || newrun.prompt.endsWith("j")) && data === "k") {
+          newrun.prompt = newrun.prompt.slice(0, -1);
+          newRunPendingJ = false;
+          newRunInsert = false;
+          draw();
+          return;
+        }
+        newRunPendingJ = false;
+        if (data === "j") newRunPendingJ = true;
+        if (data === "\r" || data === "\n") {
+          newrun.prompt += "\n";
+        } else if (data === "\x7f" || data === "\b") {
+          newrun.prompt = newrun.prompt.slice(0, -1);
+        } else if (!data.startsWith("\x1b")) {
+          newrun.prompt += printable(data);
+          if (newrun.prompt.length > 12_000) newrun.prompt = newrun.prompt.slice(0, 12_000);
+        }
+        draw();
+        return;
+      }
       if (data === "\x1b") { screen = "list"; draw(); return; }
       if (data === "\r" || data === "\n") { submitNewRun(); draw(); return; }
       if (data === "a") { cycleAgent(); draw(); return; }
-      if (data === "m") {
-        const modes = AGENT_META[newrun.agent]?.modes ?? [];
-        if (modes.length) newrun.mode = modes[(modes.indexOf(newrun.mode) + 1) % modes.length]!;
-        else notify("this agent runs alone; no mode to choose");
-        draw();
-        return;
-      }
-      if (data === "p") {
-        const presets = ["plan", "orchestrate", "implement", "review", "assistant", "unrestricted"];
-        newrun.preset = presets[(presets.indexOf(newrun.preset) + 1) % presets.length]!;
-        draw();
-        return;
-      }
-      if (data === "v") {
-        const values: NewRunState["verification"][] = ["direct", "verified", "redundant"];
-        newrun.verification = values[(values.indexOf(newrun.verification) + 1) % values.length]!;
-        draw();
-        return;
-      }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
-      if (data === "g") {
-        const values: NewRunState["issues"][] = ["required", "optional", "disabled"];
-        newrun.issues = values[(values.indexOf(newrun.issues) + 1) % values.length]!;
-        draw();
-        return;
-      }
-      if (data === "k") { newrun.ask = !newrun.ask; draw(); return; }
-      if (data === "y") { newrun.approval = newrun.approval === "human" ? "agent" : "human"; draw(); return; }
-      if (data === "u") {
-        const values: NewRunState["ambiguity"][] = ["strict", "precise", "adaptive", "autonomous"];
-        newrun.ambiguity = values[(values.indexOf(newrun.ambiguity) + 1) % values.length]!;
-        draw();
-        return;
-      }
-      if (data === "f") {
-        const values: Array<number | null | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 8.5, 0];
-        const index = values.findIndex((value) => value === newrun.minFit);
-        newrun.minFit = values[(index + 1) % values.length];
-        draw();
-        return;
-      }
-      if (data === "x") {
-        const values: NewRunState["floors"][] = ["role", "strict", "off"];
-        newrun.floors = values[(values.indexOf(newrun.floors) + 1) % values.length]!;
-        draw();
-        return;
-      }
       if (data === "i") { startIssuePicker(); draw(); return; }
+      if (data === "s") { newRunSettings = true; newRunSettingsSel = 0; draw(); return; }
+      if (data === "e" || data === "p") { newRunInsert = true; newRunPendingJ = false; draw(); return; }
       if (data === "X" && newrun.issue) { newrun.issue = undefined; draw(); return; }
-      if (data === "\x7f" || data === "\b") { newrun.prompt = newrun.prompt.slice(0, -1); draw(); return; }
-      if (!data.startsWith("\x1b")) {
-        newrun.prompt += printable(data);
-        if (newrun.prompt.length > 12_000) newrun.prompt = newrun.prompt.slice(0, 12_000);
-        draw();
-        return;
-      }
       draw();
       return;
     }
@@ -1758,43 +1989,6 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "N") { startNewRun(); draw(); return; }
-      if (data === "a") {
-        const row = work.selectable[workSel];
-        if (row?.kind === "run") answerRun(row);
-        else if (row?.kind === "issue") {
-          const run = listAllRuns(l.home).find((candidate) => refKey(candidate.issue) === refKey(row.issue.ref) && candidate.status === "awaiting_input");
-          if (run) answerRun(run); else notify("no awaiting run under this issue");
-        }
-        draw();
-        return;
-      }
-      if (data === "i") {
-        const row = work.selectable[workSel];
-        if (row?.kind === "run") interrupt(row.run); else notify("select a run to interrupt");
-        draw();
-        return;
-      }
-      if (data === "c") {
-        const row = work.selectable[workSel];
-        if (row?.kind === "run") startCorrect(row.run); else notify("select a run to correct");
-        draw();
-        return;
-      }
-      if (data === "p") {
-        const row = work.selectable[workSel];
-        const issue = row?.kind === "issue" ? row.issue : row?.kind === "run" ? issueByRef(row.run.issue) : undefined;
-        const run = row?.kind === "run" ? row.run : undefined;
-        approveSelected(issue, run);
-        draw();
-        return;
-      }
-      if (data === "o") {
-        const row = work.selectable[workSel];
-        const issue = row?.kind === "issue" ? row.issue : row?.kind === "run" ? issueByRef(row.run.issue) : undefined;
-        openUrl(issue?.url ?? (row?.kind === "run" ? row.run.prUrl : undefined));
-        draw();
-        return;
-      }
       if (data === "!") { workAttention = !workAttention; workSel = 0; draw(); return; }
       if (data === "f" || data === "g") {
         const filters: WorkFilter[] = ["all", "active", "awaiting", "paused", "completed", "attention"];
@@ -1839,9 +2033,6 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "a") { answerRun(list[runsSel]); draw(); return; }
-      if (data === "i") { interrupt(list[runsSel]); draw(); return; }
-      if (data === "c") { startCorrect(list[runsSel]); draw(); return; }
       if (data === "g") {
         const groups: Array<"status" | "project" | "agent" | "issue"> = ["status", "project", "agent", "issue"];
         runsGroup = groups[(groups.indexOf(runsGroup) + 1) % groups.length]!;
