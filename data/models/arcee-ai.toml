@@ -19,23 +19,20 @@ output = [ "text" ]
 
 [models."arcee-ai/trinity-large-thinking".scores]
 reasoning = 6.36
-code = 2.14
+code = 3.14
 agentic = 0.15
-general = 0.76
-capability = 2.7
+general = 5.2
+capability = 3.5
 
 [models."arcee-ai/trinity-large-thinking".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."arcee-ai/trinity-large-thinking".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 25.8
-liveCodeBench = 25.8
-tauBench = 1
-terminalBench = 1
-lmarena = 1135
+codingIndex = 25.8
+agenticIndex = 1
+designArena = 1135
 
 [models."arcee-ai/trinity-large-thinking".provenance]
 benchmark = "OpenRouter/artificial-analysis"

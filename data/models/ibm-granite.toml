@@ -21,10 +21,10 @@ output = [ "text" ]
 
 [models."ibm-granite/granite-4-2-8b".scores]
 reasoning = 6.87
-code = 1.91
+code = 2.76
 agentic = 3.18
 general = 5.54
-capability = 3.9
+capability = 4.1
 
 [models."ibm-granite/granite-4-2-8b".score_sources]
 reasoning = "benchmark"
@@ -33,11 +33,10 @@ agentic = "benchmark"
 
 [models."ibm-granite/granite-4-2-8b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 22.4
-liveCodeBench = 22.4
-tauBench = 58.3
-terminalBench = 1.3
+codingIndex = 22.4
+agenticIndex = 1.3
 gpqa = 65.7
+tauBench = 58.3
 
 [models."ibm-granite/granite-4-2-8b".provenance]
 benchmark = "OpenRouter/artificial-analysis"

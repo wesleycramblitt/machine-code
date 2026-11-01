@@ -81,12 +81,19 @@ export function scoresFromBenchmarks(
   b: Benchmarks,
   fallback?: AxisScores,
 ): AxisScores {
-  const axis = (columns: Array<number | undefined>, fallbackValue: number) => {
+  const axis = (
+    columns: Array<number | undefined>,
+    fallbackValue: number,
+    compositeIndex?: number,
+  ) => {
     const values = columns.filter(
       (v): v is number => v !== undefined && Number.isFinite(v),
     );
-    if (values.length === 0) return fallbackValue;
-    return values.reduce((sum, v) => sum + v, 0) / values.length;
+    if (compositeIndex !== undefined && Number.isFinite(compositeIndex)) {
+      values.push(calibrateBenchmark(compositeIndex));
+    }
+    if (values.length > 0) return values.reduce((sum, v) => sum + v, 0) / values.length;
+    return fallbackValue;
   };
 
   const f = fallback ?? { reasoning: 0, code: 0, agentic: 0, general: 0 };
@@ -98,6 +105,7 @@ export function scoresFromBenchmarks(
       b.math === undefined ? undefined : calibrateBenchmark(b.math),
     ],
     f.reasoning,
+    b.intelligenceIndex,
   );
   const code = axis(
     [
@@ -106,6 +114,7 @@ export function scoresFromBenchmarks(
       b.liveCodeBench === undefined ? undefined : calibrateBenchmark(b.liveCodeBench),
     ],
     f.code,
+    b.codingIndex,
   );
   const agentic = axis(
     [
@@ -114,6 +123,7 @@ export function scoresFromBenchmarks(
       b.osworld === undefined ? undefined : calibrateBenchmark(b.osworld),
     ],
     f.agentic,
+    b.agenticIndex,
   );
   const general = axis(
     [
@@ -122,6 +132,7 @@ export function scoresFromBenchmarks(
       b.ifeval === undefined ? undefined : calibrateBenchmark(b.ifeval),
     ],
     f.general,
+    b.intelligenceIndex,
   );
 
   return {

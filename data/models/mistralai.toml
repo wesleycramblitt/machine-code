@@ -48,15 +48,12 @@ output = [ "text" ]
 reasoning = 5.37
 code = 5.44
 agentic = 6.42
-general = 0
-capability = 5.2
-
-[models."mistralai/codestral-2508".score_sources]
-general = "benchmark"
+general = 5.65
+capability = 5.8
 
 [models."mistralai/codestral-2508".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1017
+designArena = 1017
 
 [models."mistralai/codestral-2508".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -81,10 +78,10 @@ output = [ "text" ]
 
 [models."mistralai/devstral-2512".scores]
 reasoning = 5.52
-code = 2.6
+code = 3.72
 agentic = 0.35
 general = 5.79
-capability = 3.3
+capability = 3.6
 
 [models."mistralai/devstral-2512".score_sources]
 code = "benchmark"
@@ -92,10 +89,8 @@ agentic = "benchmark"
 
 [models."mistralai/devstral-2512".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 31.3
-liveCodeBench = 31.3
-tauBench = 2.3
-terminalBench = 2.3
+codingIndex = 31.3
+agenticIndex = 2.3
 
 [models."mistralai/devstral-2512".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -120,23 +115,20 @@ output = [ "text" ]
 
 [models."mistralai/ministral-14b-2512".scores]
 reasoning = 5.52
-code = 1.35
+code = 1.94
 agentic = 0.17
-general = 0
-capability = 2.3
+general = 6.12
+capability = 3.1
 
 [models."mistralai/ministral-14b-2512".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."mistralai/ministral-14b-2512".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 14.4
-liveCodeBench = 14.4
-tauBench = 1.1
-terminalBench = 1.1
-lmarena = 1081
+codingIndex = 14.4
+agenticIndex = 1.1
+designArena = 1081
 
 [models."mistralai/ministral-14b-2512".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -161,23 +153,20 @@ output = [ "text" ]
 
 [models."mistralai/ministral-3b-2512".scores]
 reasoning = 5.49
-code = 0.52
+code = 0.72
 agentic = 0.12
-general = 0
-capability = 1.7
+general = 6.1
+capability = 2.4
 
 [models."mistralai/ministral-3b-2512".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."mistralai/ministral-3b-2512".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 4.8
-liveCodeBench = 4.8
-tauBench = 0.8
-terminalBench = 0.8
-lmarena = 1026
+codingIndex = 4.8
+agenticIndex = 0.8
+designArena = 1026
 
 [models."mistralai/ministral-3b-2512".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -202,23 +191,20 @@ output = [ "text" ]
 
 [models."mistralai/ministral-8b-2512".scores]
 reasoning = 5.52
-code = 1
+code = 1.46
 agentic = 0.09
-general = 0
-capability = 2.1
+general = 6.12
+capability = 2.9
 
 [models."mistralai/ministral-8b-2512".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."mistralai/ministral-8b-2512".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 9.7
-liveCodeBench = 9.7
-tauBench = 0.6
-terminalBench = 0.6
-lmarena = 1063
+codingIndex = 9.7
+agenticIndex = 0.6
+designArena = 1063
 
 [models."mistralai/ministral-8b-2512".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -322,23 +308,20 @@ output = [ "text" ]
 
 [models."mistralai/mistral-large-2512".scores]
 reasoning = 5.51
-code = 1.72
+code = 2.51
 agentic = 0.15
-general = 1.35
-capability = 2.5
+general = 6.12
+capability = 3.2
 
 [models."mistralai/mistral-large-2512".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."mistralai/mistral-large-2512".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 20.1
-liveCodeBench = 20.1
-tauBench = 1
-terminalBench = 1
-lmarena = 1162
+codingIndex = 20.1
+agenticIndex = 1
+designArena = 1162
 
 [models."mistralai/mistral-large-2512".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -365,8 +348,8 @@ output = [ "text" ]
 reasoning = 3.16
 code = 6.09
 agentic = 6.75
-general = 3.48
-capability = 5.8
+general = 3.16
+capability = 5.7
 
 [models."mistralai/mistral-large-4-0".score_sources]
 reasoning = "benchmark"
@@ -374,9 +357,8 @@ general = "benchmark"
 
 [models."mistralai/mistral-large-4-0".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 26
-gpqa = 26
-lmarena = 1275
+intelligenceIndex = 26
+designArena = 1275
 
 [models."mistralai/mistral-large-4-0".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -403,15 +385,12 @@ output = [ "text" ]
 reasoning = 4.52
 code = 4.54
 agentic = 5.87
-general = 0
-capability = 4.3
-
-[models."mistralai/mistral-medium-3".score_sources]
-general = "benchmark"
+general = 5.28
+capability = 4.9
 
 [models."mistralai/mistral-medium-3".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1081
+designArena = 1081
 
 [models."mistralai/mistral-medium-3".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -436,23 +415,20 @@ output = [ "text" ]
 
 [models."mistralai/mistral-medium-3-1".scores]
 reasoning = 4.63
-code = 1.8
+code = 2.56
 agentic = 0.29
-general = 0.96
-capability = 2
+general = 5.38
+capability = 2.7
 
 [models."mistralai/mistral-medium-3-1".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."mistralai/mistral-medium-3-1".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 20.5
-liveCodeBench = 20.5
-tauBench = 1.9
-terminalBench = 1.9
-lmarena = 1144
+codingIndex = 20.5
+agenticIndex = 1.9
+designArena = 1144
 
 [models."mistralai/mistral-medium-3-1".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -477,10 +453,10 @@ output = [ "text" ]
 
 [models."mistralai/mistral-medium-3-5".scores]
 reasoning = 6.49
-code = 3.76
+code = 5.12
 agentic = 1.05
 general = 5.66
-capability = 4
+capability = 4.4
 
 [models."mistralai/mistral-medium-3-5".score_sources]
 code = "benchmark"
@@ -488,10 +464,8 @@ agentic = "benchmark"
 
 [models."mistralai/mistral-medium-3-5".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 46.9
-liveCodeBench = 46.9
-tauBench = 7
-terminalBench = 7
+codingIndex = 46.9
+agenticIndex = 7
 
 [models."mistralai/mistral-medium-3-5".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -596,11 +570,11 @@ input = [ "text", "image" ]
 output = [ "text" ]
 
 [models."mistralai/mistral-small-2603".scores]
-reasoning = 8.05
-code = 2.19
+reasoning = 4.35
+code = 3.23
 agentic = 2.58
 general = 0.65
-capability = 3.8
+capability = 3.3
 
 [models."mistralai/mistral-small-2603".score_sources]
 reasoning = "benchmark"
@@ -610,12 +584,11 @@ general = "benchmark"
 
 [models."mistralai/mistral-small-2603".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 4.3
+intelligenceIndex = 4.3
+codingIndex = 26.6
+agenticIndex = 0.8
 gpqa = 75.8
-sweBench = 26.6
-liveCodeBench = 26.6
 tauBench = 46
-terminalBench = 0.8
 
 [models."mistralai/mistral-small-2603".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -669,15 +642,12 @@ output = [ "text" ]
 reasoning = 4.34
 code = 4.33
 agentic = 5.77
-general = 0
-capability = 4.5
-
-[models."mistralai/mistral-small-3-2-24b-instruct-2506".score_sources]
-general = "benchmark"
+general = 5.17
+capability = 5.1
 
 [models."mistralai/mistral-small-3-2-24b-instruct-2506".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 929
+designArena = 929
 
 [models."mistralai/mistral-small-3-2-24b-instruct-2506".provenance]
 benchmark = "OpenRouter/design-arena"

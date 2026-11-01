@@ -50,18 +50,16 @@ output = [ "text" ]
 reasoning = 6.27
 code = 4.46
 agentic = 6.09
-general = 2.07
-capability = 5.3
+general = 5.51
+capability = 5.7
 
 [models."stepfun/step-3-7-flash".score_sources]
 code = "benchmark"
-general = "benchmark"
 
 [models."stepfun/step-3-7-flash".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 39.6
-liveCodeBench = 39.6
-lmarena = 1195
+codingIndex = 39.6
+designArena = 1195
 
 [models."stepfun/step-3-7-flash".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -97,8 +95,7 @@ general = "benchmark"
 
 [models."stepfun/step-5-preview".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 28.5
-gpqa = 28.5
+intelligenceIndex = 28.5
 
 [models."stepfun/step-5-preview".provenance]
 benchmark = "OpenRouter/artificial-analysis"

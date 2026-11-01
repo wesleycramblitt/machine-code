@@ -97,7 +97,15 @@ function isMetaModel(providerID: string, id: string): boolean {
 
 function canonicalFor(providerID: string, id: string): string | null {
   if (providerID === "openrouter") return normalizeOpenRouterSlug(id);
-  if (id.includes("/")) return id;
+  if (id.includes("/")) {
+    // Direct providers often append a date to the owner-qualified id
+    // (DeepSeek-V4-Flash-0731, claude-...-20241022). Benchmark rows key the
+    // base model; fold a trailing date only, never arbitrary version text.
+    return id
+      .replace(/-(?:19|20)\d{6}$/, "")
+      .replace(/-(?:0[1-9]|1[0-2])\d{2}$/, "")
+      .replace(/-(?:19|20)\d{2}$/, "");
+  }
   return null; // tail-matching in benchmarksFor covers bare ids
 }
 
@@ -352,10 +360,10 @@ export async function refreshCatalogue(
     });
     const axes = bench ? scoresFromBenchmarks(bench, metadataScores) : metadataScores;
     const axisFields = {
-      reasoning: ["aime", "gpqa", "math"],
-      code: ["sweBench", "terminalBench", "liveCodeBench"],
-      agentic: ["tauBench", "terminalBench", "osworld"],
-      general: ["mmluPro", "lmarena", "ifeval"],
+      reasoning: ["aime", "gpqa", "math", "intelligenceIndex"],
+      code: ["sweBench", "terminalBench", "liveCodeBench", "codingIndex"],
+      agentic: ["tauBench", "terminalBench", "osworld", "agenticIndex"],
+      general: ["mmluPro", "lmarena", "ifeval", "intelligenceIndex"],
     } as const;
     const scoreSources = Object.fromEntries(
       (Object.keys(axisFields) as Array<keyof typeof axisFields>).map((axis) => [

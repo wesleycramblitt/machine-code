@@ -23,15 +23,12 @@ output = [ "text" ]
 reasoning = 6.57
 code = 5.7
 agentic = 6.31
-general = 1.74
-capability = 5.7
-
-[models."tencent/hy3".score_sources]
-general = "benchmark"
+general = 5.39
+capability = 6.1
 
 [models."tencent/hy3".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1180
+designArena = 1180
 
 [models."tencent/hy3".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -56,10 +53,10 @@ output = [ "text" ]
 
 [models."tencent/hy3-preview".scores]
 reasoning = 6.48
-code = 5.11
+code = 6.19
 agentic = 2.95
 general = 5.31
-capability = 4.9
+capability = 5.2
 
 [models."tencent/hy3-preview".score_sources]
 code = "benchmark"
@@ -67,10 +64,8 @@ agentic = "benchmark"
 
 [models."tencent/hy3-preview".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 58.8
-liveCodeBench = 58.8
-tauBench = 24.1
-terminalBench = 24.1
+codingIndex = 58.8
+agenticIndex = 24.1
 
 [models."tencent/hy3-preview".provenance]
 benchmark = "OpenRouter/artificial-analysis"

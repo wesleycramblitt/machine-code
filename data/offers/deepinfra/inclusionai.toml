@@ -17,10 +17,10 @@ cache_write = 0
 
 [offers."deepinfra/inclusionAI/Ling-3.0-flash".scores]
 reasoning = 7.94
-code = 4.44
+code = 5.45
 agentic = 4.8
 general = 5.21
-capability = 5.3
+capability = 5.5
 
 [offers."deepinfra/inclusionAI/Ling-3.0-flash-VL"]
 model = "inclusionai/ling-3-0-flash-vl"

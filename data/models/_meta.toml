@@ -4,7 +4,7 @@
 
 [meta]
 version = 2
-generated_at = "2026-11-01T17:20:07.271Z"
-model_count = 394
+generated_at = "2026-11-01T17:44:09.874Z"
+model_count = 392
 offer_count = 554
 note = "score_sources lists non-metadata axes only; absent = metadata prior"

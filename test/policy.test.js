@@ -33,6 +33,7 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
       "",
       "[agents.build]",
       "min_capability = 7.4",
+      "min_fit = 7.1",
       "[agents.build.axes]",
       "code = 6.1",
       "",
@@ -43,6 +44,7 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
     [
       "[agents.build]",
       "min_capability = 7.6",
+      "min_fit = 7.2",
       "[agents.build.axes]",
       "code = 6.3",
       "",
@@ -60,9 +62,12 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
     assert.deepEqual(policy.agents.general.axisWeights, { reasoning: 0.4 });
 
     assert.equal(policy.agents.build.minCapability, 7.6, "repo wins on the composite");
+    assert.equal(policy.agents.build.minFit, 7.2, "repo wins on the role-weighted floor");
     assert.deepEqual(policy.agents.build.minAxes, { reasoning: 7, code: 6.3 }, "axes merge per axis");
     assert.equal(policy.agents.review.minCapability, 7.2, "global default applies to unnamed roles");
-    assert.equal(DEFAULT_AGENT_POLICY.minCapability, 7);
+    assert.equal(policy.agents.general.minFit, 6, "min_fit falls back to the built-in default");
+    assert.equal(DEFAULT_AGENT_POLICY.minCapability, 0);
+    assert.equal(DEFAULT_AGENT_POLICY.minFit, 6);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

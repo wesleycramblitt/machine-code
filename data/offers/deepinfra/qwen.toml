@@ -185,10 +185,10 @@ output = [ "text" ]
 
 [offers."deepinfra/Qwen/Qwen3.7-Max".scores]
 reasoning = 9.45
-code = 5.53
+code = 6.9
 agentic = 5.17
-general = 3.83
-capability = 6.2
+general = 5.64
+capability = 6.7
 
 [offers."deepinfra/Qwen/Qwen3.8-27B"]
 model = "qwen/qwen3-8-27b"
@@ -211,11 +211,11 @@ input = [ "text", "image" ]
 output = [ "text" ]
 
 [offers."deepinfra/Qwen/Qwen3.8-27B".scores]
-reasoning = 8.75
-code = 6.41
+reasoning = 5.63
+code = 7.11
 agentic = 6.65
 general = 2.51
-capability = 6.6
+capability = 6.1
 
 [offers."deepinfra/Qwen/Qwen3.8-Flash"]
 model = "qwen/qwen3-8-flash"
@@ -265,10 +265,10 @@ output = [ "text" ]
 
 [offers."deepinfra/Qwen/Qwen3.8-Max".scores]
 reasoning = 5.71
-code = 7.39
+code = 8.11
 agentic = 5.94
-general = 5.46
-capability = 6.3
+general = 5.71
+capability = 6.5
 
 [offers."deepinfra/Qwen/Qwen3-Next-80B-A3B-Instruct"]
 model = "qwen/qwen3-next-80b-a3b-instruct"

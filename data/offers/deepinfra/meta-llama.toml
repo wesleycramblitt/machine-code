@@ -39,10 +39,10 @@ cache_write = 0
 
 [offers."deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct".scores]
 reasoning = 4.92
-code = 0.85
+code = 1.23
 agentic = 0.08
-general = 0
-capability = 2.1
+general = 5.58
+capability = 2.8
 
 [offers."deepinfra/meta-llama/Llama-Guard-4-12B"]
 model = "meta-llama/llama-guard-4-12b"

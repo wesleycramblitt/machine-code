@@ -110,8 +110,7 @@ agentic = "benchmark"
 
 [models."meta-llama/llama-3-1-8b-instruct".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 5.4
-liveCodeBench = 5.4
+codingIndex = 5.4
 gpqa = 28
 tauBench = 22.2
 
@@ -150,8 +149,7 @@ agentic = "benchmark"
 
 [models."meta-llama/llama-3-3-70b-instruct".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 11.9
-liveCodeBench = 11.9
+codingIndex = 11.9
 gpqa = 47.6
 tauBench = 32.8
 
@@ -178,25 +176,23 @@ output = [ "text" ]
 
 [models."meta-llama/llama-4-maverick-17b-128e-instruct".scores]
 reasoning = 6.96
-code = 1.45
+code = 2.13
 agentic = 2.42
-general = 0
-capability = 3.6
+general = 5.61
+capability = 4.4
 
 [models."meta-llama/llama-4-maverick-17b-128e-instruct".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."meta-llama/llama-4-maverick-17b-128e-instruct".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 16.3
-liveCodeBench = 16.3
-tauBench = 42.7
-terminalBench = 0.6
-lmarena = 898
+codingIndex = 16.3
+agenticIndex = 0.6
+designArena = 898
 gpqa = 66.6
+tauBench = 42.7
 
 [models."meta-llama/llama-4-maverick-17b-128e-instruct".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -221,23 +217,20 @@ output = [ "text" ]
 
 [models."meta-llama/llama-4-scout-17b-16e-instruct".scores]
 reasoning = 5.13
-code = 0.85
+code = 1.23
 agentic = 0.08
-general = 0
-capability = 2.4
+general = 5.75
+capability = 3.1
 
 [models."meta-llama/llama-4-scout-17b-16e-instruct".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."meta-llama/llama-4-scout-17b-16e-instruct".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 8.2
-liveCodeBench = 8.2
-tauBench = 0.5
-terminalBench = 0.5
-lmarena = 896
+codingIndex = 8.2
+agenticIndex = 0.5
+designArena = 896
 
 [models."meta-llama/llama-4-scout-17b-16e-instruct".provenance]
 benchmark = "OpenRouter/artificial-analysis"

@@ -50,15 +50,12 @@ output = [ "text" ]
 reasoning = 6.11
 code = 5.26
 agentic = 5.97
-general = 0.89
-capability = 5.2
-
-[models."minimax/minimax-m2".score_sources]
-general = "benchmark"
+general = 5
+capability = 5.6
 
 [models."minimax/minimax-m2".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1141
+designArena = 1141
 
 [models."minimax/minimax-m2".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -85,15 +82,12 @@ output = [ "text" ]
 reasoning = 6.18
 code = 5.32
 agentic = 6.02
-general = 2.57
-capability = 5.4
-
-[models."minimax/minimax-m2-1".score_sources]
-general = "benchmark"
+general = 5.06
+capability = 5.7
 
 [models."minimax/minimax-m2-1".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1218
+designArena = 1218
 
 [models."minimax/minimax-m2-1".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -120,17 +114,16 @@ output = [ "text" ]
 reasoning = 8.7
 code = 5.38
 agentic = 6.88
-general = 2.65
-capability = 6.2
+general = 5.11
+capability = 6.5
 
 [models."minimax/minimax-m2-5".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."minimax/minimax-m2-5".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1222
+designArena = 1222
 gpqa = 81.2
 tauBench = 65.8
 
@@ -157,25 +150,23 @@ output = [ "text" ]
 
 [models."minimax/minimax-m2-7".scores]
 reasoning = 9.01
-code = 4.43
+code = 5.63
 agentic = 4.74
-general = 3.07
-capability = 5.4
+general = 5.15
+capability = 6
 
 [models."minimax/minimax-m2-7".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."minimax/minimax-m2-7".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 52.6
-liveCodeBench = 52.6
-tauBench = 71.1
-terminalBench = 15.3
-lmarena = 1241
+codingIndex = 52.6
+agenticIndex = 15.3
+designArena = 1241
 gpqa = 85.1
+tauBench = 71.1
 
 [models."minimax/minimax-m2-7".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -199,11 +190,11 @@ input = [ "text", "image", "video" ]
 output = [ "text" ]
 
 [models."minimax/minimax-m3".scores]
-reasoning = 9.42
-code = 5.3
+reasoning = 5.9
+code = 6.17
 agentic = 5.74
-general = 2.88
-capability = 6.5
+general = 2.37
+capability = 6
 
 [models."minimax/minimax-m3".score_sources]
 reasoning = "benchmark"
@@ -213,13 +204,12 @@ general = "benchmark"
 
 [models."minimax/minimax-m3".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 18.7
+intelligenceIndex = 18.7
+codingIndex = 58.6
+agenticIndex = 29.5
+designArena = 1256
 gpqa = 90.3
-sweBench = 58.6
-liveCodeBench = 58.6
 tauBench = 74.8
-terminalBench = 29.5
-lmarena = 1256
 
 [models."minimax/minimax-m3".provenance]
 benchmark = "OpenRouter/artificial-analysis"

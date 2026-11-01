@@ -48,6 +48,13 @@ image = true
 input = [ "text", "image" ]
 output = [ "text" ]
 
+[offers."opencode/gemini-3.5-flash".scores]
+reasoning = 9.54
+code = 7.31
+agentic = 5.41
+general = 5.64
+capability = 7.3
+
 [offers."opencode/gemini-3.5-flash-lite"]
 model = "google/gemini-3-5-flash-lite"
 provider = "opencode"
@@ -105,6 +112,13 @@ tool_call = true
 image = true
 input = [ "text", "image" ]
 output = [ "text" ]
+
+[offers."opencode/gemini-3.7-flash".scores]
+reasoning = 9.63
+code = 8.09
+agentic = 6.23
+general = 5.72
+capability = 7.8
 
 [offers."opencode/gemini-3.8-flash"]
 model = "google/gemini-3-8-flash"

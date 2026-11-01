@@ -6,47 +6,55 @@
 
 # Capability policy (0-10, hard floors).
 #
-# `min_capability` is a hard filter on the composite score. `[agents.<role>.axes]`
-# adds hard per-axis floors. Role axis weights come from data/agents/<role>.toml;
-# `[agents.<role>.weights]` here or in machine config can override them. Models
-# that pass are scored with the weighted mix, so a materially better model can
-# beat a cheaper one; close models are decided by cost/speed/headroom.
+# `min_fit` is the primary hard gate: the role-weighted mix of the four axes.
+# `[agents.<role>.axes]` adds explicit per-axis floors; every role names all
+# four axes so a build agent is judged mostly on code/agentic while an
+# architect is judged mostly on reasoning/agentic. `min_capability` is only a
+# neutral safety floor and is 0 by default. Role axis weights come from
+# data/agents/<role>.toml; `[agents.<role>.weights]` can override them. Models
+# that pass are scored with the same weighted mix, so a materially better model
+# can beat a cheaper one; close models are decided by cost/speed/headroom.
 #
-# Strictness here is deliberate: ~29 / 21 / 19 / 14 / 4 candidates survive for
+# Strictness here is deliberate: ~24 / 33 / 17 / 13 / 4 candidates survive for
 # general / architect / build / review / sudo against the 2026-11-01 catalogue.
-# Tune with: machine_code models --agent <role> [--min-capability N]
+# Tune with: machine_code models --agent <role> [--min-fit N]
 
 [agents.general]
-min_capability = 7.4
+min_fit = 7.4
 [agents.general.axes]
 reasoning = 7.2
 code = 6.0
 agentic = 6.0
+general = 6.0
 
 [agents.architect]
-min_capability = 7.6
+min_fit = 7.6
 [agents.architect.axes]
 reasoning = 7.5
 agentic = 6.8
 code = 5.5
+general = 5.0
 
 [agents.build]
-min_capability = 7.6
+min_fit = 7.0
 [agents.build.axes]
-reasoning = 7.2
-code = 6.0
+code = 6.5
 agentic = 6.5
+reasoning = 5.5
+general = 3.0
 
 [agents.review]
-min_capability = 7.7
+min_fit = 7.7
 [agents.review.axes]
 reasoning = 7.5
 code = 6.0
 agentic = 6.5
+general = 5.5
 
 [agents.sudo]
-min_capability = 7.8
+min_fit = 7.8
 [agents.sudo.axes]
 reasoning = 8.0
 agentic = 7.5
 code = 6.0
+general = 5.5

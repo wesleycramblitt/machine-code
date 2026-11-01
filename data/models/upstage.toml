@@ -23,15 +23,12 @@ output = [ "text" ]
 reasoning = 6.61
 code = 5.71
 agentic = 6.38
-general = 1.17
-capability = 6
-
-[models."upstage/solar-mini4".score_sources]
-general = "benchmark"
+general = 5.46
+capability = 6.5
 
 [models."upstage/solar-mini4".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1154
+designArena = 1154
 
 [models."upstage/solar-mini4".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -54,10 +51,10 @@ output = [ "text" ]
 
 [models."upstage/solar-pro-3".scores]
 reasoning = 6.37
-code = 1.48
+code = 2.12
 agentic = 0.21
 general = 5.17
-capability = 2.7
+capability = 2.9
 
 [models."upstage/solar-pro-3".score_sources]
 code = "benchmark"
@@ -65,10 +62,8 @@ agentic = "benchmark"
 
 [models."upstage/solar-pro-3".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 16.2
-liveCodeBench = 16.2
-tauBench = 1.4
-terminalBench = 1.4
+codingIndex = 16.2
+agenticIndex = 1.4
 
 [models."upstage/solar-pro-3".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -95,8 +90,8 @@ output = [ "text" ]
 reasoning = 3.4
 code = 5.64
 agentic = 6.69
-general = 2.57
-capability = 5.6
+general = 3.4
+capability = 5.7
 
 [models."upstage/solar-pro4".score_sources]
 reasoning = "benchmark"
@@ -105,11 +100,9 @@ general = "benchmark"
 
 [models."upstage/solar-pro4".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 28.2
-gpqa = 28.2
-sweBench = 52.7
-liveCodeBench = 52.7
-lmarena = 1180
+intelligenceIndex = 28.2
+codingIndex = 52.7
+designArena = 1180
 
 [models."upstage/solar-pro4".provenance]
 benchmark = "OpenRouter/artificial-analysis"

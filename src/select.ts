@@ -8,10 +8,10 @@
  * stickiness, no learned estimates. Every pick is logged by the caller.
  *
  * Capability is multi-dimensional. A row carries four axis scores
- * (reasoning, code, agentic, general); `pick` hard-filters on the composite
- * `minCapability` plus optional per-axis floors, then scores the role-weighted
- * axis mix so a better model always beats a cheaper worse one when the gap is
- * large enough. There is no single "capability number" shortcut.
+ * (reasoning, code, agentic, general); `pick` hard-filters on the role-weighted
+ * `minFit` (the primary gate), an optional neutral `minCapability` safety floor,
+ * and optional per-axis floors. It then scores the same role-weighted axis mix
+ * so a better model beats a cheaper worse one when the gap is large enough.
  */
 import type { AgentPolicy, CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
 import { CAPABILITY_AXES } from "./config.js";
@@ -187,6 +187,7 @@ function rejectReason(
   row: CatalogueRow,
   input: PickInput,
   estimate: PickEstimate,
+  weights: AxisWeights,
 ): string | null {
   if (!input.configuredProviders.has(row.providerID)) return "provider-not-configured";
   if (input.requireProvider && row.providerID !== input.requireProvider) return "provider-filtered";
@@ -205,6 +206,9 @@ function rejectReason(
   if (tier === "free" && !isFreeRow(row)) return "not-free";
   if (tier === "paid" && !isFreeRow(row)) {
     if (input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
+  }
+  if (input.policy.minFit > 0 && capabilityFit(row.scores, weights) < input.policy.minFit) {
+    return "below-min-fit";
   }
   if (input.policy.minCapability > 0 && row.scores.capability < input.policy.minCapability) {
     return "below-min-capability";
@@ -231,9 +235,10 @@ export function scoreCandidate(
   row: CatalogueRow,
   input: PickInput,
   estimate: PickEstimate,
+  roleWeightsInput?: AxisWeights,
 ): CandidateScore {
   const estimatedCost = effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, input.machine);
-  const weights = axisWeights(input.agent, input.policy);
+  const weights = roleWeightsInput ?? axisWeights(input.agent, input.policy);
   const fit = capabilityFit(row.scores, weights);
   // Lower is better: a role-fit of 10 scores 0, a fit of 6 scores 0.4. This
   // keeps a gradient above the floor instead of treating every eligible model
@@ -265,18 +270,19 @@ export function scoreCandidate(
 
 export function pick(input: PickInput): PickResult | { error: string; rejected: RejectedCandidate[] } {
   const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens);
+  const weights = axisWeights(input.agent, input.policy);
   const candidates: Array<{ row: CatalogueRow; scored: CandidateScore }> = [];
   const rejected: RejectedCandidate[] = [];
   const rejectedByReason: Record<string, number> = {};
 
   for (const row of input.catalogue) {
-    const reason = rejectReason(row, input, estimate);
+    const reason = rejectReason(row, input, estimate, weights);
     if (reason) {
       rejected.push({ key: row.key, reason });
       rejectedByReason[reason] = (rejectedByReason[reason] ?? 0) + 1;
       continue;
     }
-    candidates.push({ row, scored: scoreCandidate(row, input, estimate) });
+    candidates.push({ row, scored: scoreCandidate(row, input, estimate, weights) });
   }
 
   if (candidates.length === 0) {

@@ -98,17 +98,16 @@ output = [ "text" ]
 reasoning = 7.66
 code = 4.98
 agentic = 6
-general = 0.74
-capability = 5.9
+general = 5.18
+capability = 6.4
 
 [models."google/gemini-2-5-flash".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-2-5-flash".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1134
+designArena = 1134
 gpqa = 72.8
 tauBench = 56.7
 
@@ -172,25 +171,23 @@ output = [ "text" ]
 
 [models."google/gemini-2-5-pro".scores]
 reasoning = 8.81
-code = 2.68
+code = 3.9
 agentic = 3.18
-general = 2.65
-capability = 4.9
+general = 5.53
+capability = 5.5
 
 [models."google/gemini-2-5-pro".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-2-5-pro".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 33.3
-liveCodeBench = 33.3
-tauBench = 58
-terminalBench = 1.6
-lmarena = 1222
+codingIndex = 33.3
+agenticIndex = 1.6
+designArena = 1222
 gpqa = 82.6
+tauBench = 58
 
 [models."google/gemini-2-5-pro".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -433,23 +430,20 @@ output = [ "text" ]
 
 [models."google/gemini-3-1-flash-lite-preview".scores]
 reasoning = 6.34
-code = 2.76
+code = 4.02
 agentic = 0.24
-general = 1.39
-capability = 3.3
+general = 5.56
+capability = 4.1
 
 [models."google/gemini-3-1-flash-lite-preview".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-3-1-flash-lite-preview".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 34.7
-liveCodeBench = 34.7
-tauBench = 1.6
-terminalBench = 1.6
-lmarena = 1164
+codingIndex = 34.7
+agenticIndex = 1.6
+designArena = 1164
 
 [models."google/gemini-3-1-flash-lite-preview".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -474,25 +468,23 @@ output = [ "text" ]
 
 [models."google/gemini-3-1-pro-preview".scores]
 reasoning = 9.67
-code = 5.2
+code = 7.18
 agentic = 4.72
-general = 3.98
-capability = 6.4
+general = 5.9
+capability = 7.1
 
 [models."google/gemini-3-1-pro-preview".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-3-1-pro-preview".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 68.8
-liveCodeBench = 68.8
-tauBench = 77
-terminalBench = 8.2
-lmarena = 1283
+codingIndex = 68.8
+agenticIndex = 8.2
+designArena = 1283
 gpqa = 94.5
+tauBench = 77
 
 [models."google/gemini-3-1-pro-preview".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -544,25 +536,23 @@ output = [ "text" ]
 
 [models."google/gemini-3-5-flash".scores]
 reasoning = 9.54
-code = 5.93
+code = 7.31
 agentic = 5.41
-general = 3.63
-capability = 6.7
+general = 5.63
+capability = 7.3
 
 [models."google/gemini-3-5-flash".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-3-5-flash".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 70.1
-liveCodeBench = 70.1
-tauBench = 72.7
-terminalBench = 26
-lmarena = 1267
+codingIndex = 70.1
+agenticIndex = 26
+designArena = 1267
 gpqa = 92.3
+tauBench = 72.7
 
 [models."google/gemini-3-5-flash".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -586,11 +576,11 @@ input = [ "text", "image", "video", "file", "audio" ]
 output = [ "text" ]
 
 [models."google/gemini-3-5-flash-lite".scores]
-reasoning = 8.95
-code = 4.2
+reasoning = 5.31
+code = 5.34
 agentic = 5.16
 general = 1.67
-capability = 5.8
+capability = 5.3
 
 [models."google/gemini-3-5-flash-lite".score_sources]
 reasoning = "benchmark"
@@ -600,12 +590,11 @@ general = "benchmark"
 
 [models."google/gemini-3-5-flash-lite".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 11.7
+intelligenceIndex = 11.7
+codingIndex = 49.3
+agenticIndex = 14.3
 gpqa = 84.4
-sweBench = 49.3
-liveCodeBench = 49.3
 tauBench = 78.3
-terminalBench = 14.3
 
 [models."google/gemini-3-5-flash-lite".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -630,25 +619,23 @@ output = [ "text" ]
 
 [models."google/gemini-3-6-flash".scores]
 reasoning = 9.57
-code = 5.98
+code = 7.22
 agentic = 5.74
-general = 4.33
-capability = 6.9
+general = 5.7
+capability = 7.4
 
 [models."google/gemini-3-6-flash".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-3-6-flash".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 69.2
-liveCodeBench = 69.2
-tauBench = 75.3
-terminalBench = 29
-lmarena = 1299
+codingIndex = 69.2
+agenticIndex = 29
+designArena = 1299
 gpqa = 92.8
+tauBench = 75.3
 
 [models."google/gemini-3-6-flash".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -673,25 +660,23 @@ output = [ "text" ]
 
 [models."google/gemini-3-7-flash".scores]
 reasoning = 9.63
-code = 6.75
+code = 8.09
 agentic = 6.23
-general = 4.76
-capability = 7.3
+general = 5.71
+capability = 7.8
 
 [models."google/gemini-3-7-flash".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-3-7-flash".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 76.1
-liveCodeBench = 76.1
-tauBench = 78.3
-terminalBench = 35.2
-lmarena = 1319
+codingIndex = 76.1
+agenticIndex = 35.2
+designArena = 1319
 gpqa = 93.9
+tauBench = 78.3
 
 [models."google/gemini-3-7-flash".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -715,11 +700,11 @@ input = [ "text", "image", "video", "file", "audio" ]
 output = [ "text" ]
 
 [models."google/gemini-3-8-flash".scores]
-reasoning = 9.74
-code = 6.92
+reasoning = 6.7
+code = 8.12
 agentic = 5.99
-general = 4.15
-capability = 7.3
+general = 3.65
+capability = 6.9
 
 [models."google/gemini-3-8-flash".score_sources]
 reasoning = "benchmark"
@@ -729,13 +714,12 @@ general = "benchmark"
 
 [models."google/gemini-3-8-flash".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 30.5
+intelligenceIndex = 30.5
+codingIndex = 76.3
+agenticIndex = 40.2
+designArena = 1314
 gpqa = 95.6
-sweBench = 76.3
-liveCodeBench = 76.3
 tauBench = 71.3
-terminalBench = 40.2
-lmarena = 1314
 
 [models."google/gemini-3-8-flash".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -762,17 +746,16 @@ output = [ "text" ]
 reasoning = 9.28
 code = 5.34
 agentic = 7.73
-general = 2.04
-capability = 7
+general = 5.48
+capability = 7.4
 
 [models."google/gemini-3-flash-preview".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."google/gemini-3-flash-preview".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1194
+designArena = 1194
 gpqa = 88.5
 tauBench = 73.3
 
@@ -902,11 +885,11 @@ input = [ "text", "image", "audio", "file", "video" ]
 output = [ "text" ]
 
 [models."google/gemini-4-argon".scores]
-reasoning = 9.79
+reasoning = 7.62
 code = 6.1
 agentic = 8.43
-general = 5.67
-capability = 8
+general = 5.44
+capability = 7.5
 
 [models."google/gemini-4-argon".score_sources]
 reasoning = "benchmark"
@@ -915,9 +898,9 @@ general = "benchmark"
 
 [models."google/gemini-4-argon".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 50.4
+intelligenceIndex = 50.4
+designArena = 1371
 gpqa = 96.5
-lmarena = 1371
 tauBench = 78.7
 
 [models."google/gemini-4-argon".provenance]
@@ -995,10 +978,10 @@ output = [ "text" ]
 
 [models."google/gemma-3-12b-it".scores]
 reasoning = 4.32
-code = 0.59
+code = 0.87
 agentic = 2.62
 general = 5.22
-capability = 2.8
+capability = 2.9
 
 [models."google/gemma-3-12b-it".score_sources]
 reasoning = "benchmark"
@@ -1007,11 +990,10 @@ agentic = "benchmark"
 
 [models."google/gemma-3-12b-it".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 5.8
-liveCodeBench = 5.8
-tauBench = 48
-terminalBench = 0.1
+codingIndex = 5.8
+agenticIndex = 0.1
 gpqa = 38
+tauBench = 48
 
 [models."google/gemma-3-12b-it".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1036,10 +1018,10 @@ output = [ "text" ]
 
 [models."google/gemma-3-27b-it".scores]
 reasoning = 4.45
-code = 1.01
+code = 1.51
 agentic = 0.02
 general = 5.22
-capability = 2.1
+capability = 2.3
 
 [models."google/gemma-3-27b-it".score_sources]
 code = "benchmark"
@@ -1047,10 +1029,8 @@ agentic = "benchmark"
 
 [models."google/gemma-3-27b-it".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 10.1
-liveCodeBench = 10.1
-tauBench = 0.1
-terminalBench = 0.1
+codingIndex = 10.1
+agenticIndex = 0.1
 
 [models."google/gemma-3-27b-it".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1086,8 +1066,7 @@ code = "benchmark"
 
 [models."google/gemma-3-4b-it".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 2.7
-liveCodeBench = 2.7
+codingIndex = 2.7
 gpqa = 27.1
 
 [models."google/gemma-3-4b-it".provenance]
@@ -1113,10 +1092,10 @@ output = [ "text" ]
 
 [models."google/gemma-4-26b-a4b-it".scores]
 reasoning = 7.38
-code = 3.1
+code = 4.44
 agentic = 3.8
 general = 5.76
-capability = 4.9
+capability = 5.2
 
 [models."google/gemma-4-26b-a4b-it".score_sources]
 reasoning = "benchmark"
@@ -1125,11 +1104,10 @@ agentic = "benchmark"
 
 [models."google/gemma-4-26b-a4b-it".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 39.3
-liveCodeBench = 39.3
-tauBench = 68.7
-terminalBench = 2.9
+codingIndex = 39.3
+agenticIndex = 2.9
 gpqa = 70.6
+tauBench = 68.7
 
 [models."google/gemma-4-26b-a4b-it".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1204,10 +1182,10 @@ output = [ "text" ]
 
 [models."google/gemma-4-31b-it".scores]
 reasoning = 8.74
-code = 3.42
+code = 4.81
 agentic = 4.31
 general = 5.75
-capability = 5.4
+capability = 5.8
 
 [models."google/gemma-4-31b-it".score_sources]
 reasoning = "benchmark"
@@ -1216,11 +1194,10 @@ agentic = "benchmark"
 
 [models."google/gemma-4-31b-it".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 43.4
-liveCodeBench = 43.4
-tauBench = 75.3
-terminalBench = 4.2
+codingIndex = 43.4
+agenticIndex = 4.2
 gpqa = 81.7
+tauBench = 75.3
 
 [models."google/gemma-4-31b-it".provenance]
 benchmark = "OpenRouter/artificial-analysis"

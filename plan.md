@@ -28,7 +28,7 @@ Linux only; TypeScript on Node 22+. Use exact lockfile pins for `@earendil-works
 
 - **Credentials/catalogue:** use `pi-ai`'s standard environment variables; never store keys in files. `machine_code providers` reports configured providers and key sources. `machine_code catalogue refresh` combines provider metadata, OpenRouter benchmarks, run measurements, and dated curation into `~/.machine_code/catalogue/models.json`; retain provenance with precedence generated → benchmark → measured → curated.
 - **Config:** machine `config.toml` sets rate caps, vetoes, default `max_output_tokens`, and default packet mode; it may also set project-path price overrides. Repo `policy.toml` sets per-agent requirements and may override the output ceiling. Agent override wins over machine default; the effective value is capped by the selected model's maximum. If neither config sets a value, use that model maximum. The ceiling is distinct from total `budget_tokens` and the selector's fixed expected-output estimate. Reject settings below the expected-output value. Price caps are per-million-token rates, evaluated at the context-length tier used; committed repo policy cannot set money.
-- **Selection:** every call runs `pick(agent, requirements, state)`. Estimate input as current-context characters ÷ 4 and output as a fixed value per agent. Hard-filter credentials, tool support, context/output capacity, minimum context, caps, vetoes, and availability; also hard-filter the composite capability floor and any per-axis floors. Then score the role-weighted axis mix (capability quality), estimated cost, speed, and context headroom. Fixed weights are tuned on evals; ties go to lexicographically smaller model ID. No stickiness or automatic model escalation after a failed gate.
+- **Selection:** every call runs `pick(agent, requirements, state)`. Estimate input as current-context characters ÷ 4 and output as a fixed value per agent. Hard-filter credentials, tool support, context/output capacity, minimum context, caps, vetoes, and availability; also hard-filter the role-weighted capability floor (`min_fit`), optional neutral composite floor, and any per-axis floors. Then score the role-weighted axis mix (capability quality), estimated cost, speed, and context headroom. Fixed weights are tuned on evals; ties go to lexicographically smaller model ID. No stickiness or automatic model escalation after a failed gate.
 - **Fallback and health:** after a retryable provider error, cool the target and try at most one next-best eligible model; select and log each attempt separately. Do not execute tool calls until a valid response arrives. Insufficient funds disables a provider until manual re-enable. Temporary failures cool models/providers on `1m → 5m → 30m → 2h → 12h → 1d → 7d → 30d`, honoring longer `Retry-After` up to 30 days; success resets the tier. Auth failures become `needs-auth`; context/parameter incompatibility excludes the model for the current run; refusals get no fallback; malformed or unknown errors are logged safely and cool the model at the first tier. Availability is shared in `availability.json` under a lock.
 - **Accounting:** log every selection, estimate, filter summary, and candidate scores to per-run `events.jsonl`. Append one ≤4 KiB record per provider attempt to machine-wide `spend.jsonl`, linked by unique call ID; report actual and estimated spend separately by day, project, provider, and model. CLI/TUI expose provider enable/disable and cooldown-clear actions. Catalogue refresh does not clear health state.
 - Copy only the pure scoring, calibration, and OpenRouter parsing functions from `model-selector`; do not import from OpenCode config or port its tier model; selection has only free/paid here.
@@ -196,23 +196,27 @@ composite `capability`. Repo policy sets, per role:
 
 ```toml
 [agents.build]
-min_capability = 7.3        # hard filter on the composite (0-10)
-[agents.build.axes]         # optional hard per-axis floors
-reasoning = 6.0
-code = 5.5
-agentic = 6.0
-[agents.build.weights]      # role-weighted mix, normalized
+min_fit = 7.0              # role-weighted hard floor (0-10)
+min_capability = 0         # optional neutral safety floor
+[agents.build.axes]        # explicit hard per-axis floors
+reasoning = 5.5
+code = 6.5
+agentic = 6.5
+general = 3.0
+[agents.build.weights]     # role-weighted mix, normalized
 code = 0.40
 agentic = 0.35
 reasoning = 0.15
 general = 0.10
 ```
 
-Every call hard-filters models below `min_capability` or any axis floor, then
-scores `0.5 × capability-quality + 0.25 × cost + 0.10 × speed + 0.15 × headroom`
-(ascending). Capability-quality is the role-weighted axis fit converted to a
-penalty, so a materially better model outranks a cheaper one; close models are
-decided by cost. Defaults: balanced role weights, composite floor 7.
+Every call hard-filters models below `min_fit`, the optional neutral
+`min_capability`, or any axis floor, then scores `0.5 × capability-quality +
+0.25 × cost + 0.10 × speed + 0.15 × headroom` (ascending). Capability-quality
+is the role-weighted axis fit converted to a penalty, so a materially better
+model outranks a cheaper one; close models are decided by cost. Defaults:
+role weights from `data/agents/<role>.toml`, `min_fit = 6`, neutral composite
+floor disabled (0).
 
 Inspect and dry-run the selector without spending tokens:
 
@@ -220,7 +224,7 @@ Inspect and dry-run the selector without spending tokens:
 machine_code models                       # configured providers, capability-sorted
 machine_code models --all --json          # every row
 machine_code models --agent build         # hard filters + selected model + top candidates
-machine_code models --agent review --min-capability 7.6 --context-chars 48000
+machine_code models --agent review --min-fit 7.6 --context-chars 48000
 ```
 
 `--model <catalogue-key>` (or an id suffix) still pins one model. Provider
@@ -284,8 +288,8 @@ Axis tables merge per axis.
 Experiment per run without editing files:
 
 ```bash
-machine_code run --tier free --min-capability 7.0 --min-axes code=6.5,agentic=7 ...
-machine_code models --agent build --min-capability 7.8 --min-axes reasoning=7.5
+machine_code run --tier free --min-fit 7.0 --min-axes code=6.5,agentic=7 ...
+machine_code models --agent build --min-fit 7.6 --min-axes reasoning=6.5
 ```
 
 Inspect/edit the effective policy:
@@ -303,6 +307,15 @@ Behavior presets live in `data/presets.toml`. Machine override:
 `~/.machine_code/data/agents/<role>.toml` or `presets.toml`; repo prompt
 override: `.machine_code/agents/<role>.md`. Capability gating stays in the
 harness, not the data files.
+
+### Benchmark provenance
+
+Direct benchmark results (GPQA, tau-bench, SWE-bench, etc.) and Artificial
+Analysis composite indices are stored separately. A composite index feeds its
+axis once; it is never copied into several component columns. Design Arena Elo
+is kept as `designArena` and is not treated as LMArena. Direct provider ids with
+a trailing date (`DeepSeek-V4-Flash-0731`, `claude-...-20241022`) resolve to the
+base canonical model before benchmark lookup.
 
 ### Provider notes
 

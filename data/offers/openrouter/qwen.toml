@@ -215,8 +215,8 @@ cache_write = 0
 reasoning = 6.82
 code = 5.96
 agentic = 6.61
-general = 1.89
-capability = 6.3
+general = 5.89
+capability = 6.7
 
 [offers."openrouter/qwen/qwen3.5-plus-20260420"]
 model = "qwen/qwen3-5-plus"

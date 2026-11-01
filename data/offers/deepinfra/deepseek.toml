@@ -3,10 +3,9 @@
 # Capabilities live once per canonical model; offers carry pricing and differences.
 
 [offers."deepinfra/deepseek-ai/DeepSeek-R1-0528"]
-model = "deepseek/deepseek-r1-0528"
+model = "deepseek/deepseek-r1"
 provider = "deepinfra"
 id = "deepseek-ai/DeepSeek-R1-0528"
-modes = [ "reasoning", "tools" ]
 
 [offers."deepinfra/deepseek-ai/DeepSeek-R1-0528".pricing]
 input = 0.5
@@ -57,9 +56,10 @@ cache_read = 0
 cache_write = 0
 
 [offers."deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"]
-model = "deepseek/deepseek-v4-1-flash-1017"
+model = "deepseek/deepseek-v4-1-flash"
 provider = "deepinfra"
 id = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+modes = [ "reasoning", "tools", "vision" ]
 
 [offers."deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017".pricing]
 input = 0.2
@@ -80,9 +80,10 @@ cache_read = 0
 cache_write = 0
 
 [offers."deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731"]
-model = "deepseek/deepseek-v4-flash-0731"
+model = "deepseek/deepseek-v4-flash"
 provider = "deepinfra"
 id = "deepseek-ai/DeepSeek-V4-Flash-0731"
+modes = [ "reasoning", "tools" ]
 
 [offers."deepinfra/deepseek-ai/DeepSeek-V4-Flash-0731".pricing]
 input = 0.060000000000000005
@@ -122,12 +123,20 @@ input = [ "text" ]
 output = [ "text" ]
 
 [offers."deepinfra/deepseek-ai/DeepSeek-V4-Pro-0813"]
-model = "deepseek/deepseek-v4-pro-0813"
+model = "deepseek/deepseek-v4-pro"
 provider = "deepinfra"
 id = "deepseek-ai/DeepSeek-V4-Pro-0813"
+modes = [ "tools" ]
 
 [offers."deepinfra/deepseek-ai/DeepSeek-V4-Pro-0813".pricing]
 input = 1.2999999999999998
 output = 2.5999999999999996
 cache_read = 0
 cache_write = 0
+
+[offers."deepinfra/deepseek-ai/DeepSeek-V4-Pro-0813".capabilities]
+reasoning = false
+tool_call = true
+image = false
+input = [ "text" ]
+output = [ "text" ]

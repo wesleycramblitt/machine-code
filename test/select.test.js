@@ -97,6 +97,21 @@ test("non-coding models (image/video/audio/guard) are rejected", () => {
   assert.ok(result.rejected.some((r) => r.key === "p/image" && r.reason === "non-coding-model"));
 });
 
+test("min_fit is role-weighted: build favors code/agentic over general/reasoning", () => {
+  const policy = {
+    ...basePolicy,
+    minCapability: 0,
+    minFit: 7.2,
+    minAxes: { code: 6.5, agentic: 6.5, reasoning: 5.5, general: 3 },
+  };
+  const specialist = row("p/specialist", { scores: axes(5.5, 8.5, 8.5, 3.5) });
+  const generalist = row("p/generalist", { scores: axes(8, 6.5, 6.5, 6) });
+  const result = pickOne([specialist, generalist], policy, { agent: "build" });
+  assert.ok(!("error" in result));
+  assert.equal(result.selected.key, "p/specialist");
+  assert.ok(result.rejected.some((r) => r.key === "p/generalist" && r.reason === "below-min-fit"));
+});
+
 test("per-axis floors reject spiky models even when the composite passes", () => {
   const spiky = row("p/spiky", { scores: axes(9.5, 4.5, 9, 9) }); // composite ok, code weak
   const balanced = row("p/balanced", { scores: axes(8, 8, 8, 8) });
@@ -216,7 +231,8 @@ test("policy.toml parses axis floors and weights, and rejects out-of-range value
     assert.equal(policy.agents.build.minCapability, 7.3);
     assert.deepEqual(policy.agents.build.minAxes, { code: 6, agentic: 5.5 });
     assert.deepEqual(policy.agents.build.axisWeights, { code: 0.6, reasoning: 0.4 });
-    assert.equal(policy.agents.general.minCapability, 7, "unspecified agents use the default floor");
+    assert.equal(policy.agents.general.minCapability, 0, "neutral floor defaults to off");
+    assert.equal(policy.agents.general.minFit, 6, "role-weighted floor uses the default");
 
     writeFileSync(file, "[agents.build.axes]\ncode = 11\n");
     assert.throws(() => loadPolicy({ policyFile: file }), ConfigError);

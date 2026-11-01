@@ -171,15 +171,12 @@ output = [ "text" ]
 reasoning = 6.54
 code = 5.75
 agentic = 6.22
-general = 0
-capability = 5.2
-
-[models."nvidia/llama-3-1-nemotron-ultra-253b-v1".score_sources]
-general = "benchmark"
+general = 5.29
+capability = 5.8
 
 [models."nvidia/llama-3-1-nemotron-ultra-253b-v1".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1061
+designArena = 1061
 
 [models."nvidia/llama-3-1-nemotron-ultra-253b-v1".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -228,11 +225,11 @@ input = [ "text" ]
 output = [ "text" ]
 
 [models."nvidia/nemotron-3-5-lightning".scores]
-reasoning = 7.35
-code = 2.34
+reasoning = 4.09
+code = 3.25
 agentic = 3.69
 general = 0.83
-capability = 4.1
+capability = 3.6
 
 [models."nvidia/nemotron-3-5-lightning".score_sources]
 reasoning = "benchmark"
@@ -242,12 +239,11 @@ general = "benchmark"
 
 [models."nvidia/nemotron-3-5-lightning".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 5.5
+intelligenceIndex = 5.5
+codingIndex = 26.8
+agenticIndex = 3.5
 gpqa = 70.4
-sweBench = 26.8
-liveCodeBench = 26.8
 tauBench = 65.6
-terminalBench = 3.5
 
 [models."nvidia/nemotron-3-5-lightning".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -271,11 +267,11 @@ input = [ "text", "image", "video" ]
 output = [ "text" ]
 
 [models."nvidia/nemotron-3-5-super-vl".scores]
-reasoning = 9.14
+reasoning = 5.5
 code = 5.95
 agentic = 7.68
-general = 1.64
-capability = 7.1
+general = 1.86
+capability = 6.3
 
 [models."nvidia/nemotron-3-5-super-vl".score_sources]
 reasoning = "benchmark"
@@ -284,9 +280,9 @@ general = "benchmark"
 
 [models."nvidia/nemotron-3-5-super-vl".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 13.6
+intelligenceIndex = 13.6
+designArena = 1165
 gpqa = 86.8
-lmarena = 1165
 tauBench = 72.9
 
 [models."nvidia/nemotron-3-5-super-vl".provenance]
@@ -312,10 +308,10 @@ output = [ "text" ]
 
 [models."nvidia/nemotron-3-nano-30b-a3b".scores]
 reasoning = 6.59
-code = 1.34
+code = 1.94
 agentic = 2.86
 general = 4.89
-capability = 3.8
+capability = 4
 
 [models."nvidia/nemotron-3-nano-30b-a3b".score_sources]
 reasoning = "benchmark"
@@ -324,11 +320,10 @@ agentic = "benchmark"
 
 [models."nvidia/nemotron-3-nano-30b-a3b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 14.4
-liveCodeBench = 14.4
-tauBench = 51.8
-terminalBench = 1
+codingIndex = 14.4
+agenticIndex = 1
 gpqa = 62.9
+tauBench = 51.8
 
 [models."nvidia/nemotron-3-nano-30b-a3b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -363,8 +358,7 @@ code = "benchmark"
 
 [models."nvidia/nemotron-3-nano-omni-30b-a3b-reasoning".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 13.8
-liveCodeBench = 13.8
+codingIndex = 13.8
 
 [models."nvidia/nemotron-3-nano-omni-30b-a3b-reasoning".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -389,10 +383,10 @@ output = [ "text" ]
 
 [models."nvidia/nemotron-3-super-120b-a12b".scores]
 reasoning = 6.6
-code = 2.95
+code = 4.29
 agentic = 0.26
 general = 5.4
-capability = 3.9
+capability = 4.2
 
 [models."nvidia/nemotron-3-super-120b-a12b".score_sources]
 code = "benchmark"
@@ -400,10 +394,8 @@ agentic = "benchmark"
 
 [models."nvidia/nemotron-3-super-120b-a12b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 37.7
-liveCodeBench = 37.7
-tauBench = 1.7
-terminalBench = 1.7
+codingIndex = 37.7
+agenticIndex = 1.7
 
 [models."nvidia/nemotron-3-super-120b-a12b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -427,11 +419,11 @@ input = [ "text" ]
 output = [ "text" ]
 
 [models."nvidia/nemotron-3-ultra-550b-a55b".scores]
-reasoning = 8.7
-code = 4.4
+reasoning = 5.19
+code = 5.34
 agentic = 5.04
-general = 1.33
-capability = 5.8
+general = 1.68
+capability = 5.3
 
 [models."nvidia/nemotron-3-ultra-550b-a55b".score_sources]
 reasoning = "benchmark"
@@ -441,13 +433,12 @@ general = "benchmark"
 
 [models."nvidia/nemotron-3-ultra-550b-a55b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 11.8
+intelligenceIndex = 11.8
+codingIndex = 49.3
+agenticIndex = 20.1
+designArena = 1145
 gpqa = 81.2
-sweBench = 49.3
-liveCodeBench = 49.3
 tauBench = 72
-terminalBench = 20.1
-lmarena = 1145
 
 [models."nvidia/nemotron-3-ultra-550b-a55b".provenance]
 benchmark = "OpenRouter/artificial-analysis"

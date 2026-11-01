@@ -21,10 +21,10 @@ output = [ "text" ]
 
 [models."meituan/longcat-2-0".scores]
 reasoning = 6.6
-code = 3.95
+code = 4.98
 agentic = 1.9
 general = 5.41
-capability = 4.7
+capability = 4.9
 
 [models."meituan/longcat-2-0".score_sources]
 code = "benchmark"
@@ -32,10 +32,8 @@ agentic = "benchmark"
 
 [models."meituan/longcat-2-0".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 45.3
-liveCodeBench = 45.3
-tauBench = 14
-terminalBench = 14
+codingIndex = 45.3
+agenticIndex = 14
 
 [models."meituan/longcat-2-0".provenance]
 benchmark = "OpenRouter/artificial-analysis"

@@ -31,8 +31,7 @@ code = "benchmark"
 
 [models."amazon/nova-2-lite-v1".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 23
-liveCodeBench = 23
+codingIndex = 23
 
 [models."amazon/nova-2-lite-v1".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -123,15 +122,12 @@ output = [ "text" ]
 reasoning = 4.62
 code = 4.56
 agentic = 6.16
-general = 0
-capability = 5.1
-
-[models."amazon/nova-premier-v1".score_sources]
-general = "benchmark"
+general = 5.36
+capability = 5.7
 
 [models."amazon/nova-premier-v1".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 835
+designArena = 835
 
 [models."amazon/nova-premier-v1".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -158,15 +154,12 @@ output = [ "text" ]
 reasoning = 4.34
 code = 4.37
 agentic = 5.79
-general = 0
-capability = 4.6
-
-[models."amazon/nova-pro-v1".score_sources]
-general = "benchmark"
+general = 5.09
+capability = 5.2
 
 [models."amazon/nova-pro-v1".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 794
+designArena = 794
 
 [models."amazon/nova-pro-v1".provenance]
 benchmark = "OpenRouter/design-arena"

@@ -16,7 +16,7 @@ cache_write = 0
 
 [offers."openrouter/meituan/longcat-2.0".scores]
 reasoning = 6.61
-code = 3.95
+code = 4.98
 agentic = 1.9
 general = 5.42
-capability = 4.7
+capability = 4.9

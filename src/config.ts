@@ -83,8 +83,10 @@ export interface AgentPolicy {
   maxOutputTokens?: number;
   /** Total token budget for one run of this agent. */
   budgetTokens?: number;
-  /** Minimum composite catalogue capability score (0-10); hard filter. 0 disables it. */
+  /** Neutral composite capability floor (0-10); broad safety only. 0 disables it. */
   minCapability: number;
+  /** Role-weighted capability floor (0-10); the primary per-role quality gate. */
+  minFit: number;
   /** Hard per-axis floors (0-10); omitted axes have no floor. */
   minAxes?: Partial<Record<CapabilityAxis, number>>;
   /** Role-weighted axis mix; missing axes fall back to the role defaults and are normalized. */
@@ -226,7 +228,8 @@ const policyDefaults = loadTomlData<{ policy?: Record<string, unknown> }>("defau
 export const DEFAULT_AGENT_POLICY: AgentPolicy = {
   minContext: asNumber(policyDefaults.min_context) ?? 32_000,
   expectedOutputTokens: asNumber(policyDefaults.expected_output_tokens) ?? 2_000,
-  minCapability: asNumber(policyDefaults.min_capability) ?? 7,
+  minCapability: asNumber(policyDefaults.min_capability) ?? 0,
+  minFit: asNumber(policyDefaults.min_fit) ?? 6,
   toolCall: typeof policyDefaults.tool_call === "boolean" ? policyDefaults.tool_call : true,
 };
 
@@ -270,6 +273,7 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     maxOutputTokens: asNumber(raw.max_output_tokens) ?? base.maxOutputTokens,
     budgetTokens: asNumber(raw.budget_tokens) ?? base.budgetTokens,
     minCapability: asNumber(raw.min_capability) ?? base.minCapability,
+    minFit: asNumber(raw.min_fit) ?? base.minFit,
     minAxes: mergeAxes(base.minAxes, asAxisMap(raw.axes, `${label}.axes`)),
     axisWeights: mergeAxes(base.axisWeights, asAxisMap(raw.weights, `${label}.weights`)),
     toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : base.toolCall,

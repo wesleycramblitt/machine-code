@@ -61,11 +61,12 @@ node dist/cli.js tui                  # default when run with no command
 
 Selection is per call and multi-dimensional: each catalogue row carries
 `reasoning`, `code`, `agentic`, and `general` scores. Role weights live in
-`data/agents/<role>.toml`; `.machine_code/policy.toml` sets a hard composite
-floor, optional per-axis floors, and can override weights. The selector
+`data/agents/<role>.toml`; `.machine_code/policy.toml` sets a role-weighted
+`min_fit`, explicit per-axis floors, and can override weights. The selector
 hard-filters, then trades weighted capability against cost, speed, and context
-headroom. `machine_code models --agent <role>` shows exactly what would be
-chosen.
+headroom. A build agent is therefore judged mainly on code/agentic, while an
+architect is judged mainly on reasoning/agentic. `machine_code models --agent
+<role>` shows exactly what would be chosen.
 
 Selection has two tiers in `~/.machine_code/config.toml`:
 

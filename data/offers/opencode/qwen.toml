@@ -26,8 +26,8 @@ output = [ "text" ]
 reasoning = 6.74
 code = 5.91
 agentic = 6.42
-general = 1.89
-capability = 5.9
+general = 5.84
+capability = 6.3
 
 [offers."opencode/qwen3.8-flash"]
 model = "qwen/qwen3-8-flash"
@@ -72,10 +72,10 @@ output = [ "text" ]
 
 [offers."opencode/qwen3.8-max".scores]
 reasoning = 5.71
-code = 7.39
+code = 8.11
 agentic = 5.94
-general = 5.46
-capability = 6.3
+general = 5.71
+capability = 6.5
 
 [offers."opencode/qwen3.6-plus"]
 model = "qwen/qwen3.6-plus"

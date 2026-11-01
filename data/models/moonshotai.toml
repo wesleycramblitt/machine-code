@@ -109,20 +109,18 @@ output = [ "text" ]
 reasoning = 8.97
 code = 5.11
 agentic = 7.27
-general = 3.2
-capability = 6.5
+general = 5.45
+capability = 6.8
 
 [models."moonshotai/kimi-k2-5-0127".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."moonshotai/kimi-k2-5-0127".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 46.8
-liveCodeBench = 46.8
-lmarena = 1247
+codingIndex = 46.8
+designArena = 1247
 gpqa = 84.6
 tauBench = 69.7
 
@@ -149,25 +147,23 @@ output = [ "text" ]
 
 [models."moonshotai/kimi-k2-6".scores]
 reasoning = 9.11
-code = 5.17
+code = 6.48
 agentic = 5.17
-general = 3.7
-capability = 6
+general = 5.53
+capability = 6.6
 
 [models."moonshotai/kimi-k2-6".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."moonshotai/kimi-k2-6".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 61.8
-liveCodeBench = 61.8
-tauBench = 73.6
-terminalBench = 20.5
-lmarena = 1270
+codingIndex = 61.8
+agenticIndex = 20.5
+designArena = 1270
 gpqa = 86.4
+tauBench = 73.6
 
 [models."moonshotai/kimi-k2-6".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -192,25 +188,23 @@ output = [ "text" ]
 
 [models."moonshotai/kimi-k2-7-code".scores]
 reasoning = 9.11
-code = 5.12
+code = 6.38
 agentic = 5.2
-general = 3.52
-capability = 6
+general = 5.58
+capability = 6.5
 
 [models."moonshotai/kimi-k2-7-code".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."moonshotai/kimi-k2-7-code".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 60.8
-liveCodeBench = 60.8
-tauBench = 73.7
-terminalBench = 21
-lmarena = 1262
+codingIndex = 60.8
+agenticIndex = 21
+designArena = 1262
 gpqa = 86.4
+tauBench = 73.7
 
 [models."moonshotai/kimi-k2-7-code".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -237,18 +231,16 @@ output = [ "text" ]
 reasoning = 6.14
 code = 2.61
 agentic = 6
-general = 0.24
-capability = 4.5
+general = 5.02
+capability = 5.1
 
 [models."moonshotai/kimi-k2-thinking".score_sources]
 code = "benchmark"
-general = "benchmark"
 
 [models."moonshotai/kimi-k2-thinking".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 21
-liveCodeBench = 21
-lmarena = 1111
+codingIndex = 21
+designArena = 1111
 
 [models."moonshotai/kimi-k2-thinking".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -297,11 +289,11 @@ input = [ "text", "image", "video" ]
 output = [ "text" ]
 
 [models."moonshotai/kimi-k3".scores]
-reasoning = 9.51
-code = 6.21
+reasoning = 5.88
+code = 7.56
 agentic = 5.65
-general = 4.18
-capability = 6.9
+general = 2.24
+capability = 6.3
 
 [models."moonshotai/kimi-k3".score_sources]
 reasoning = "benchmark"
@@ -311,13 +303,12 @@ general = "benchmark"
 
 [models."moonshotai/kimi-k3".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 17.4
+intelligenceIndex = 17.4
+codingIndex = 72
+agenticIndex = 29.3
+designArena = 1381
 gpqa = 91.9
-sweBench = 72
-liveCodeBench = 72
 tauBench = 73.6
-terminalBench = 29.3
-lmarena = 1381
 
 [models."moonshotai/kimi-k3".provenance]
 benchmark = "OpenRouter/artificial-analysis"

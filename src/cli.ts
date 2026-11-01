@@ -96,7 +96,7 @@ Usage:
                                     [--delegate true|false] [--verify direct|verified|redundant]
                                     [--issues required|optional|disabled] [--ask true|false]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
-                                    [--tier free|paid] [--min-capability N]
+                                    [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
@@ -105,8 +105,8 @@ Usage:
   machine_code models [filter]      Inspect the catalogue (--all, --provider, --min-cap, --axes, --json)
   machine_code policy [role]        Show effective capability policy (--json)
   machine_code policy edit [--repo] Edit machine defaults or repo overrides
-  machine_code models --agent <role> Dry-run selection (--context-chars N, --min-capability N,
-                                    --min-axes code=6.5, --tier free|paid, --model pin)
+  machine_code models --agent <role> Dry-run selection (--context-chars N, --min-fit N,
+                                    --min-capability N, --min-axes code=6.5, --tier free|paid)
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
@@ -251,7 +251,13 @@ function cmdInit(): number {
         `# expected_output_tokens = 2000\n` +
         `# max_output_tokens = 8000\n` +
         `# budget_tokens = 200000\n` +
-        `# min_capability = 0\n`,
+        `# min_fit = 7.0\n` +
+        `# min_capability = 0\n` +
+        `# [agents.general.axes]\n` +
+        `# reasoning = 7.2\n` +
+        `# code = 6.0\n` +
+        `# agentic = 6.0\n` +
+        `# general = 6.0\n`,
       "utf8",
     );
     process.stdout.write(`wrote ${l.policyFile}\n`);
@@ -351,7 +357,8 @@ function policyTemplate(kind: "machine" | "repo"): string {
     return `# machine_code machine config (global defaults; repo policy wins)
 [selection]
 tier = "paid"              # free | paid
-# min_capability = 7.4     # global hard floor for every agent
+# min_fit = 7.0            # global role-weighted capability floor
+# min_capability = 0       # neutral composite safety floor (optional)
 # min_context = 32000
 # tool_call = true
 # [selection.axes]         # global per-axis floors
@@ -368,9 +375,12 @@ funded = true
   }
   return `# machine_code repo policy (committed; overrides machine config)
 # [agents.build]
-# min_capability = 7.6
+# min_fit = 7.0           # primary role-weighted gate
 # [agents.build.axes]
-# code = 6.0
+# code = 6.5
+# agentic = 6.5
+# reasoning = 5.5
+# general = 3.0
 # [agents.build.weights]
 # code = 0.40
 `;
@@ -429,7 +439,7 @@ function cmdPolicy(argv: string[]): number {
   }
   process.stdout.write(`machine defaults: ${l.machineConfig}  [selection] / [agents.<role>]\n`);
   process.stdout.write(`repo overrides:   ${l.policyFile}  [agents.<role>]\n`);
-  process.stdout.write(`built-in:         min_capability ${DEFAULT_AGENT_POLICY.minCapability}  min_context ${DEFAULT_AGENT_POLICY.minContext}  expected_out ${DEFAULT_AGENT_POLICY.expectedOutputTokens}\n`);
+  process.stdout.write(`built-in:         min_fit ${DEFAULT_AGENT_POLICY.minFit}  min_capability ${DEFAULT_AGENT_POLICY.minCapability}  min_context ${DEFAULT_AGENT_POLICY.minContext}  expected_out ${DEFAULT_AGENT_POLICY.expectedOutputTokens}\n`);
 
   const names = role ? [role] : [...AGENT_NAMES];
   for (const name of names) {
@@ -440,7 +450,7 @@ function cmdPolicy(argv: string[]): number {
     const effectiveWeights = axisWeights(name, ap);
     const weights = CAPABILITY_AXES.map((axis) => `${axis} ${effectiveWeights[axis].toFixed(2)}`).join("  ");
     process.stdout.write(`\n[${name}]\n`);
-    process.stdout.write(`  min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
+    process.stdout.write(`  min_fit ${ap.minFit}   min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
     process.stdout.write(`  axes ${floors || "(none)"}\n`);
     process.stdout.write(`  weights ${weights}${ap.axisWeights ? "" : " (role defaults)"}\n`);
   }
@@ -537,6 +547,11 @@ function cmdModels(argv: string[]): number {
     if (!ap) fail(`unknown agent "${agent}"; choose one of ${Object.keys(policy.agents).join(", ")}`);
     const contextChars = flags.has("context-chars") ? Number(flags.get("context-chars")) : 16_000;
     if (!Number.isFinite(contextChars) || contextChars <= 0) fail("--context-chars needs a positive number");
+    const fitOverride = flags.has("min-fit") ? Number(flags.get("min-fit")) : undefined;
+    if (fitOverride !== undefined && (!Number.isFinite(fitOverride) || fitOverride < 0 || fitOverride > 10)) {
+      fail("--min-fit needs a number in 0-10");
+    }
+    if (fitOverride !== undefined) ap.minFit = fitOverride;
     const override = flags.has("min-capability") ? Number(flags.get("min-capability")) : undefined;
     if (override !== undefined && (!Number.isFinite(override) || override < 0 || override > 10)) {
       fail("--min-capability needs a number in 0-10");
@@ -567,7 +582,7 @@ function cmdModels(argv: string[]): number {
       .map((axis) => `${axis}>=${ap.minAxes![axis]}`)
       .join(" ");
     process.stdout.write(
-      `agent ${agent}  tier ${result.tier}  min_context ${ap.minContext}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
+      `agent ${agent}  tier ${result.tier}  min_context ${ap.minContext}  min_fit ${ap.minFit}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
     );
     process.stdout.write(
       `axes ${floors || "(no axis floors)"}\n` +
@@ -786,6 +801,12 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (tier !== undefined) {
     if (tier !== "free" && tier !== "paid") fail("--tier must be free|paid");
     machine.selection.tier = tier;
+  }
+  const minFit = flags.get("min-fit");
+  if (minFit !== undefined) {
+    const n = Number(minFit);
+    if (!Number.isFinite(n) || n < 0 || n > 10) fail("--min-fit needs a number in 0-10");
+    for (const ap of Object.values(policy.agents)) ap.minFit = n;
   }
   const minCapability = flags.get("min-capability");
   if (minCapability !== undefined) {

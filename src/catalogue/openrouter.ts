@@ -178,21 +178,20 @@ export function parseOpenRouterBenchmarks(payload: unknown): Map<string, Benchma
     if (!rawId) continue;
     const id = normalizeOpenRouterSlug(rawId);
     const bench = getBench(id);
-    // Artificial Analysis indices (0-100)
+    // Artificial Analysis indices are composites, not individual benchmark
+    // accuracies. Keep them separate so they can act as axis fallbacks without
+    // duplicating into (or polluting) GPQA/SWE/Terminal columns.
     if (typeof r.intelligence_index === "number" && Number.isFinite(r.intelligence_index)) {
       const v = r.intelligence_index;
-      if (bench.mmluPro === undefined || v > bench.mmluPro) bench.mmluPro = v;
-      if (bench.gpqa === undefined || v > bench.gpqa) bench.gpqa = v;
+      if (bench.intelligenceIndex === undefined || v > bench.intelligenceIndex) bench.intelligenceIndex = v;
     }
     if (typeof r.coding_index === "number" && Number.isFinite(r.coding_index)) {
       const v = r.coding_index;
-      if (bench.sweBench === undefined || v > bench.sweBench) bench.sweBench = v;
-      if (bench.liveCodeBench === undefined || v > bench.liveCodeBench) bench.liveCodeBench = v;
+      if (bench.codingIndex === undefined || v > bench.codingIndex) bench.codingIndex = v;
     }
     if (typeof r.agentic_index === "number" && Number.isFinite(r.agentic_index)) {
       const v = r.agentic_index;
-      if (bench.tauBench === undefined || v > bench.tauBench) bench.tauBench = v;
-      if (bench.terminalBench === undefined || v > bench.terminalBench) bench.terminalBench = v;
+      if (bench.agenticIndex === undefined || v > bench.agenticIndex) bench.agenticIndex = v;
     }
     // OpenRouter direct accuracies (0-1 -> 0-100)
     if (r.source === "openrouter" && typeof r.benchmark_type === "string" && typeof r.accuracy === "number") {
@@ -203,16 +202,18 @@ export function parseOpenRouterBenchmarks(payload: unknown): Map<string, Benchma
       else if (bt.includes("swe_bench") && (bench.sweBench === undefined || pct > bench.sweBench)) bench.sweBench = Math.round(pct * 10) / 10;
       else if (bt === "aime" && (bench.aime === undefined || pct > bench.aime)) bench.aime = Math.round(pct * 10) / 10;
     }
-    // Design Arena Elo per category — keep max Elo as lmarena proxy
+    // Design Arena Elo per category. This is not LMArena; keep it separate so
+    // it cannot masquerade as a general-knowledge/chat benchmark.
     if (r.source === "design-arena" && typeof r.elo === "number" && Number.isFinite(r.elo)) {
       const elo = r.elo;
-      if (bench.lmarena === undefined || elo > bench.lmarena) bench.lmarena = elo;
+      if (bench.designArena === undefined || elo > bench.designArena) bench.designArena = elo;
     }
     // Generic fallback for direct benchmark fields
     const src = (r.scores && typeof r.scores === "object" ? r.scores : r) as Record<string, unknown>;
     for (const k of [
       "lmarena", "sweBench", "sweBenchMultimodal", "terminalBench", "tauBench",
       "aime", "gpqa", "liveCodeBench", "math", "mmluPro", "ifeval", "osworld", "mmmu",
+      "intelligenceIndex", "codingIndex", "agenticIndex", "designArena",
     ] as const) {
       const v = src[k] ?? src[k.toLowerCase()] ?? (r.benchmarks as Record<string, unknown> | undefined)?.[k];
       if (typeof v === "number" && Number.isFinite(v) && (bench as unknown as Record<string, unknown>)[k] === undefined) {

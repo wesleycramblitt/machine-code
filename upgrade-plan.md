@@ -22,7 +22,7 @@
 | 7 — TUI status surfaces | **core done** | issue tree (default, cache-backed) with rollups/badges, header counts, filters/sort, awaiting filter, detail metadata; dedicated awaiting queue view + activity feed + search pending |
 | 8 — completion/hardening | **core done** | acceptance verdicts (`accept`), parent closure requires closed children + acceptance, reserved close/reopen cascade; remaining: opt-in real-GitHub integration test, activity feed/search |
 
-Current test suite: 118 tests (`npm test`).
+Current test suite: 123 tests (`npm test`).
 
 ## Settled decisions
 

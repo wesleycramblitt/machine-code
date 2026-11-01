@@ -125,8 +125,8 @@ output = [ "text" ]
 reasoning = 9.41
 code = 7.44
 agentic = 7.95
-general = 2.98
-capability = 7.5
+general = 5.85
+capability = 7.8
 
 [offers."opencode/gpt-5.4-mini"]
 model = "openai/gpt-5-4-mini"

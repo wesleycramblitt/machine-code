@@ -212,10 +212,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-14b-04-28".scores]
 reasoning = 6.23
-code = 1.3
+code = 1.88
 agentic = 2.5
 general = 4.91
-capability = 3.1
+capability = 3.3
 
 [models."qwen/qwen3-14b-04-28".score_sources]
 reasoning = "benchmark"
@@ -224,11 +224,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-14b-04-28".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 13.8
-liveCodeBench = 13.8
-tauBench = 44
-terminalBench = 0.9
+codingIndex = 13.8
+agenticIndex = 0.9
 gpqa = 59.2
+tauBench = 44
 
 [models."qwen/qwen3-14b-04-28".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -255,17 +254,16 @@ output = [ "text" ]
 reasoning = 7.63
 code = 4.92
 agentic = 4.46
-general = 0
-capability = 5
+general = 5.21
+capability = 5.6
 
 [models."qwen/qwen3-235b-a22b-07-25".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-235b-a22b-07-25".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1070
+designArena = 1070
 gpqa = 72.5
 tauBench = 39.5
 
@@ -292,25 +290,23 @@ output = [ "text" ]
 
 [models."qwen/qwen3-235b-a22b-thinking-2507".scores]
 reasoning = 8.21
-code = 1.89
+code = 2.73
 agentic = 3.33
-general = 0
-capability = 3.6
+general = 5.02
+capability = 4.4
 
 [models."qwen/qwen3-235b-a22b-thinking-2507".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-235b-a22b-thinking-2507".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 22.1
-liveCodeBench = 22.1
-tauBench = 61.6
-terminalBench = 1.3
-lmarena = 1051
+codingIndex = 22.1
+agenticIndex = 1.3
+designArena = 1051
 gpqa = 77
+tauBench = 61.6
 
 [models."qwen/qwen3-235b-a22b-thinking-2507".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -362,17 +358,16 @@ output = [ "text" ]
 reasoning = 6.39
 code = 5.19
 agentic = 5.13
-general = 0
-capability = 4.5
+general = 4.91
+capability = 5
 
 [models."qwen/qwen3-30b-a3b-04-28".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-30b-a3b-04-28".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 967
+designArena = 967
 gpqa = 60.9
 tauBench = 47
 
@@ -461,10 +456,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-32b-04-28".scores]
 reasoning = 6.37
-code = 1.4
+code = 2.03
 agentic = 2.66
 general = 4.93
-capability = 3.4
+capability = 3.6
 
 [models."qwen/qwen3-32b-04-28".score_sources]
 reasoning = "benchmark"
@@ -473,11 +468,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-32b-04-28".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 15.3
-liveCodeBench = 15.3
-tauBench = 47.5
-terminalBench = 0.9
+codingIndex = 15.3
+agenticIndex = 0.9
 gpqa = 60.7
+tauBench = 47.5
 
 [models."qwen/qwen3-32b-04-28".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -502,10 +496,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-5-122b-a10b".scores]
 reasoning = 8.89
-code = 3.72
+code = 5.01
 agentic = 4.69
 general = 5.6
-capability = 5.6
+capability = 6
 
 [models."qwen/qwen3-5-122b-a10b".score_sources]
 reasoning = "benchmark"
@@ -514,11 +508,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-5-122b-a10b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 45.7
-liveCodeBench = 45.7
-tauBench = 77.2
-terminalBench = 7.6
+codingIndex = 45.7
+agenticIndex = 7.6
 gpqa = 83.6
+tauBench = 77.2
 
 [models."qwen/qwen3-5-122b-a10b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -582,8 +575,7 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-5-35b-a3b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 37
-liveCodeBench = 37
+codingIndex = 37
 gpqa = 80.5
 tauBench = 74.9
 
@@ -610,25 +602,23 @@ output = [ "text" ]
 
 [models."qwen/qwen3-5-397b-a17b".scores]
 reasoning = 9.03
-code = 3.91
+code = 5.24
 agentic = 4.82
-general = 1.93
-capability = 5.3
+general = 5.59
+capability = 6.1
 
 [models."qwen/qwen3-5-397b-a17b".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-5-397b-a17b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 48.2
-liveCodeBench = 48.2
-tauBench = 78.4
-terminalBench = 8.3
-lmarena = 1189
+codingIndex = 48.2
+agenticIndex = 8.3
+designArena = 1189
 gpqa = 85.4
+tauBench = 78.4
 
 [models."qwen/qwen3-5-397b-a17b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -653,10 +643,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-5-9b".scores]
 reasoning = 8.29
-code = 2.37
+code = 3.46
 agentic = 3.88
 general = 5.61
-capability = 4.9
+capability = 5.2
 
 [models."qwen/qwen3-5-9b".score_sources]
 reasoning = "benchmark"
@@ -665,11 +655,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-5-9b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 28.7
-liveCodeBench = 28.7
-tauBench = 72.1
-terminalBench = 1.2
+codingIndex = 28.7
+agenticIndex = 1.2
 gpqa = 77.6
+tauBench = 72.1
 
 [models."qwen/qwen3-5-9b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -723,15 +712,12 @@ output = [ "text" ]
 reasoning = 6.9
 code = 6.03
 agentic = 6.67
-general = 1.89
-capability = 6.4
-
-[models."qwen/qwen3-5-plus".score_sources]
-general = "benchmark"
+general = 5.96
+capability = 6.8
 
 [models."qwen/qwen3-5-plus".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1187
+designArena = 1187
 
 [models."qwen/qwen3-5-plus".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -756,10 +742,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-6-27b".scores]
 reasoning = 8.82
-code = 4.6
+code = 5.73
 agentic = 5.24
 general = 5.66
-capability = 6
+capability = 6.3
 
 [models."qwen/qwen3-6-27b".score_sources]
 reasoning = "benchmark"
@@ -768,11 +754,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-6-27b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 53.7
-liveCodeBench = 53.7
-tauBench = 76.4
-terminalBench = 18.5
+codingIndex = 53.7
+agenticIndex = 18.5
 gpqa = 82.7
+tauBench = 76.4
 
 [models."qwen/qwen3-6-27b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -797,10 +782,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-6-35b-a3b".scores]
 reasoning = 8.57
-code = 3.72
+code = 4.67
 agentic = 4.72
 general = 5.66
-capability = 5.6
+capability = 5.8
 
 [models."qwen/qwen3-6-35b-a3b".score_sources]
 reasoning = "benchmark"
@@ -809,11 +794,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-6-35b-a3b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 41.9
-liveCodeBench = 41.9
-tauBench = 72.5
-terminalBench = 13.1
+codingIndex = 41.9
+agenticIndex = 13.1
 gpqa = 79.8
+tauBench = 72.5
 
 [models."qwen/qwen3-6-35b-a3b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -867,18 +851,16 @@ output = [ "text" ]
 reasoning = 6.87
 code = 5.81
 agentic = 6.65
-general = 3.07
-capability = 6.4
+general = 5.94
+capability = 6.7
 
 [models."qwen/qwen3-6-plus-04-02".score_sources]
 code = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-6-plus-04-02".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 54.5
-liveCodeBench = 54.5
-lmarena = 1241
+codingIndex = 54.5
+designArena = 1241
 
 [models."qwen/qwen3-6-plus-04-02".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -930,25 +912,23 @@ output = [ "text" ]
 
 [models."qwen/qwen3-7-max".scores]
 reasoning = 9.45
-code = 5.53
+code = 6.9
 agentic = 5.17
-general = 3.83
-capability = 6.5
+general = 5.77
+capability = 7.1
 
 [models."qwen/qwen3-7-max".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-7-max".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 66
-liveCodeBench = 66
-tauBench = 72
-terminalBench = 22.5
-lmarena = 1276
+codingIndex = 66
+agenticIndex = 22.5
+designArena = 1276
 gpqa = 90.9
+tauBench = 72
 
 [models."qwen/qwen3-7-max".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -973,25 +953,23 @@ output = [ "text" ]
 
 [models."qwen/qwen3-7-plus".scores]
 reasoning = 9.23
-code = 4.7
+code = 5.93
 agentic = 4.8
-general = 3.83
-capability = 6.1
+general = 6
+capability = 6.7
 
 [models."qwen/qwen3-7-plus".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-7-plus".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 55.9
-liveCodeBench = 55.9
-tauBench = 70.3
-terminalBench = 17.5
-lmarena = 1276
+codingIndex = 55.9
+agenticIndex = 17.5
+designArena = 1276
 gpqa = 87.9
+tauBench = 70.3
 
 [models."qwen/qwen3-7-plus".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1016,10 +994,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-8-2-4t-a95b".scores]
 reasoning = 9.19
-code = 6.84
+code = 7.55
 agentic = 6.67
 general = 5.56
-capability = 7.5
+capability = 7.7
 
 [models."qwen/qwen3-8-2-4t-a95b".score_sources]
 reasoning = "benchmark"
@@ -1028,11 +1006,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-8-2-4t-a95b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 71.9
-liveCodeBench = 71.9
-tauBench = 74.8
-terminalBench = 50.1
+codingIndex = 71.9
+agenticIndex = 50.1
 gpqa = 87.4
+tauBench = 74.8
 
 [models."qwen/qwen3-8-2-4t-a95b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1056,11 +1033,11 @@ input = [ "text", "image", "video" ]
 output = [ "text" ]
 
 [models."qwen/qwen3-8-27b".scores]
-reasoning = 8.75
-code = 6.41
+reasoning = 5.63
+code = 7.11
 agentic = 6.65
 general = 2.51
-capability = 6.9
+capability = 6.4
 
 [models."qwen/qwen3-8-27b".score_sources]
 reasoning = "benchmark"
@@ -1070,12 +1047,11 @@ general = "benchmark"
 
 [models."qwen/qwen3-8-27b".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 20.1
+intelligenceIndex = 20.1
+codingIndex = 68.1
+agenticIndex = 45.8
 gpqa = 81.9
-sweBench = 68.1
-liveCodeBench = 68.1
 tauBench = 77.5
-terminalBench = 45.8
 
 [models."qwen/qwen3-8-27b".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1137,10 +1113,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-8-max".scores]
 reasoning = 5.71
-code = 7.39
+code = 8.11
 agentic = 5.94
-general = 5.46
-capability = 6.6
+general = 5.71
+capability = 6.9
 
 [models."qwen/qwen3-8-max".score_sources]
 reasoning = "benchmark"
@@ -1150,13 +1126,10 @@ general = "benchmark"
 
 [models."qwen/qwen3-8-max".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 53.4
-gpqa = 53.4
-sweBench = 76.2
-liveCodeBench = 76.2
-tauBench = 56
-terminalBench = 56
-lmarena = 1339
+intelligenceIndex = 53.4
+codingIndex = 76.2
+agenticIndex = 56
+designArena = 1339
 
 [models."qwen/qwen3-8-max".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1237,17 +1210,16 @@ output = [ "text" ]
 reasoning = 5.57
 code = 4.93
 agentic = 4.74
-general = 0
-capability = 4.6
+general = 5.22
+capability = 5.2
 
 [models."qwen/qwen3-coder-30b-a3b-instruct".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-coder-30b-a3b-instruct".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1087
+designArena = 1087
 gpqa = 51.9
 tauBench = 42.7
 
@@ -1276,17 +1248,16 @@ output = [ "text" ]
 reasoning = 6.34
 code = 4.64
 agentic = 5.22
-general = 1.24
-capability = 5
+general = 5.04
+capability = 5.4
 
 [models."qwen/qwen3-coder-480b-a35b-07-25".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."qwen/qwen3-coder-480b-a35b-07-25".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1157
+designArena = 1157
 gpqa = 60.4
 tauBench = 48
 
@@ -1340,10 +1311,10 @@ output = [ "text" ]
 
 [models."qwen/qwen3-coder-next-2025-02-03".scores]
 reasoning = 7.9
-code = 2.82
+code = 4.16
 agentic = 3.24
 general = 5.24
-capability = 4.7
+capability = 5
 
 [models."qwen/qwen3-coder-next-2025-02-03".score_sources]
 reasoning = "benchmark"
@@ -1352,11 +1323,10 @@ agentic = "benchmark"
 
 [models."qwen/qwen3-coder-next-2025-02-03".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 36.2
-liveCodeBench = 36.2
-tauBench = 60.3
-terminalBench = 0.9
+codingIndex = 36.2
+agenticIndex = 0.9
 gpqa = 74.6
+tauBench = 60.3
 
 [models."qwen/qwen3-coder-next-2025-02-03".provenance]
 benchmark = "OpenRouter/artificial-analysis"

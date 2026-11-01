@@ -21,23 +21,20 @@ output = [ "text" ]
 
 [models."inception/mercury-2".scores]
 reasoning = 6.25
-code = 2.55
+code = 3.7
 agentic = 0.24
-general = 0
-capability = 2.4
+general = 5.12
+capability = 3.3
 
 [models."inception/mercury-2".score_sources]
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."inception/mercury-2".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 31.1
-liveCodeBench = 31.1
-tauBench = 1.6
-terminalBench = 1.6
-lmarena = 1036
+codingIndex = 31.1
+agenticIndex = 1.6
+designArena = 1036
 
 [models."inception/mercury-2".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -91,15 +88,12 @@ output = [ "text" ]
 reasoning = 6.84
 code = 5.94
 agentic = 6.66
-general = 2.87
-capability = 6.4
-
-[models."inception/mercury-3".score_sources]
-general = "benchmark"
+general = 5.62
+capability = 6.7
 
 [models."inception/mercury-3".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1232
+designArena = 1232
 
 [models."inception/mercury-3".provenance]
 benchmark = "OpenRouter/design-arena"

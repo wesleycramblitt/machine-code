@@ -9,7 +9,7 @@
  * `runLoop` (M0) runs a single agent; this layer chains phases per mode.
  */
 import { runLoop, type RunLoopInput, type RunLoopResult } from "./loop.js";
-import { type MachineConfig, type Policy, type AgentPolicy } from "./config.js";
+import { DEFAULT_AGENT_POLICY, type MachineConfig, type Policy, type AgentPolicy } from "./config.js";
 import { generalAgent, agentDef, type AgentDef, type AgentName } from "./agents.js";
 import { resolveAgent, type AgentConfig, type Verification } from "./agents/config.js";
 import { type MutableModels } from "./models.js";
@@ -111,12 +111,7 @@ async function singleAgentRun(input: {
 }
 
 export function policyFor(layout: Layout, name: AgentName, policy: Policy): AgentPolicy {
-  return policy.agents[name] ?? {
-    minContext: 32_000,
-    expectedOutputTokens: 2_000,
-    minCapability: 7,
-    toolCall: name !== "general",
-  };
+  return policy.agents[name] ?? { ...DEFAULT_AGENT_POLICY, toolCall: name !== "general" };
 }
 
 export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateResult> {

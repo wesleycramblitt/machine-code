@@ -21,10 +21,10 @@ output = [ "text" ]
 
 [models."inclusionai/ling-3-0-flash".scores]
 reasoning = 7.94
-code = 4.44
+code = 5.45
 agentic = 4.8
 general = 5.23
-capability = 5.6
+capability = 5.9
 
 [models."inclusionai/ling-3-0-flash".score_sources]
 reasoning = "benchmark"
@@ -33,11 +33,10 @@ agentic = "benchmark"
 
 [models."inclusionai/ling-3-0-flash".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 50.6
-liveCodeBench = 50.6
-tauBench = 68.7
-terminalBench = 19.3
+codingIndex = 50.6
+agenticIndex = 19.3
 gpqa = 74.9
+tauBench = 68.7
 
 [models."inclusionai/ling-3-0-flash".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -62,10 +61,10 @@ output = [ "text" ]
 
 [models."inclusionai/ling-3-0-flash-vl".scores]
 reasoning = 8.98
-code = 5.17
+code = 6.03
 agentic = 5.38
 general = 5.59
-capability = 5.9
+capability = 6.1
 
 [models."inclusionai/ling-3-0-flash-vl".score_sources]
 reasoning = "benchmark"
@@ -74,11 +73,10 @@ agentic = "benchmark"
 
 [models."inclusionai/ling-3-0-flash-vl".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 57
-liveCodeBench = 57
-tauBench = 70
-terminalBench = 28.7
+codingIndex = 57
+agenticIndex = 28.7
 gpqa = 84.8
+tauBench = 70
 
 [models."inclusionai/ling-3-0-flash-vl".provenance]
 benchmark = "OpenRouter/artificial-analysis"

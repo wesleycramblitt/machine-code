@@ -22,6 +22,13 @@ image = true
 input = [ "text", "audio", "image", "video" ]
 output = [ "text" ]
 
+[offers."openrouter/xiaomi/mimo-v2.5".scores]
+reasoning = 8.34
+code = 6.01
+agentic = 4.86
+general = 5.67
+capability = 6.5
+
 [offers."openrouter/xiaomi/mimo-v2.5-pro"]
 model = "xiaomi/mimo-v2-5-pro"
 provider = "openrouter"

@@ -13,6 +13,10 @@ export interface Benchmarks {
   terminalBench?: number; tauBench?: number; aime?: number
   gpqa?: number; liveCodeBench?: number; math?: number
   mmluPro?: number; ifeval?: number; osworld?: number; mmmu?: number
+  /** Artificial Analysis composite indices (0-100), not individual tests. */
+  intelligenceIndex?: number; codingIndex?: number; agenticIndex?: number
+  /** Design Arena Elo (not an LMArena score; kept for visibility, not scoring). */
+  designArena?: number
   source: string
 }
 

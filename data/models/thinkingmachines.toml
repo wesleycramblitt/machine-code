@@ -20,11 +20,11 @@ input = [ "text", "image", "audio" ]
 output = [ "text" ]
 
 [models."thinkingmachines/inkling".scores]
-reasoning = 8.87
-code = 4.65
+reasoning = 5.31
+code = 5.59
 agentic = 4.9
-general = 2.21
-capability = 5.9
+general = 1.75
+capability = 5.3
 
 [models."thinkingmachines/inkling".score_sources]
 reasoning = "benchmark"
@@ -34,13 +34,12 @@ general = "benchmark"
 
 [models."thinkingmachines/inkling".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 12.5
+intelligenceIndex = 12.5
+codingIndex = 52.1
+agenticIndex = 22.5
+designArena = 1223
 gpqa = 83.4
-sweBench = 52.1
-liveCodeBench = 52.1
 tauBench = 67.2
-terminalBench = 22.5
-lmarena = 1223
 
 [models."thinkingmachines/inkling".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -64,11 +63,11 @@ input = [ "text", "image", "audio" ]
 output = [ "text" ]
 
 [models."thinkingmachines/inkling-small".scores]
-reasoning = 9.13
-code = 4.74
+reasoning = 5.46
+code = 5.66
 agentic = 4.63
 general = 1.79
-capability = 5.9
+capability = 5.3
 
 [models."thinkingmachines/inkling-small".score_sources]
 reasoning = "benchmark"
@@ -78,12 +77,11 @@ general = "benchmark"
 
 [models."thinkingmachines/inkling-small".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 12.9
+intelligenceIndex = 12.9
+codingIndex = 52.9
+agenticIndex = 23.5
 gpqa = 86.6
-sweBench = 52.9
-liveCodeBench = 52.9
 tauBench = 60.7
-terminalBench = 23.5
 
 [models."thinkingmachines/inkling-small".provenance]
 benchmark = "OpenRouter/artificial-analysis"

@@ -64,8 +64,8 @@ cache_read = 0.12
 cache_write = 0
 
 [offers."openrouter/nvidia/nemotron-3-ultra-550b-a55b".scores]
-reasoning = 8.7
-code = 4.4
+reasoning = 5.19
+code = 5.34
 agentic = 5.04
-general = 1.33
-capability = 5.4
+general = 1.68
+capability = 4.9

@@ -733,7 +733,7 @@ export async function runTui(): Promise<void> {
           ` ${B}${C}Policy${R} ${D}(.machine_code/policy.toml)${R}`,
         ];
         if (ap) {
-          lines.push(`   min context ${C}${ap.minContext.toLocaleString()}${R}   expected out ${C}${ap.expectedOutputTokens}${R}   min capability ${C}${ap.minCapability}${R}   tool call ${C}${String(ap.toolCall)}${R}`);
+          lines.push(`   min context ${C}${ap.minContext.toLocaleString()}${R}   expected out ${C}${ap.expectedOutputTokens}${R}   min fit ${C}${ap.minFit}${R}   min cap ${C}${ap.minCapability}${R}   tool call ${C}${String(ap.toolCall)}${R}`);
           if (ap.maxOutputTokens != null) lines.push(`   max output ${C}${ap.maxOutputTokens}${R}`);
           if (ap.budgetTokens != null) lines.push(`   budget ${C}${ap.budgetTokens.toLocaleString()}${R} tokens`);
           const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
@@ -760,7 +760,7 @@ export async function runTui(): Promise<void> {
           const meta = AGENT_META[name] ?? { modes: [], blurb: "" };
           const ap = policy?.agents[name];
           const selr = i === sel;
-          const line = ` ${selr ? `${C}▸${R}` : " "} ${B}${M}${name.padEnd(10)}${R} ${def.readonly ? `${G}read-only${R}` : `${Y}mutating${R} `} ${D}${String(def.tools.length)} tools${R}  ${W}${meta.blurb}${R}${ap ? `  ${D}cap≥${ap.minCapability}${R}` : ""}`;
+          const line = ` ${selr ? `${C}▸${R}` : " "} ${B}${M}${name.padEnd(10)}${R} ${def.readonly ? `${G}read-only${R}` : `${Y}mutating${R} `} ${D}${String(def.tools.length)} tools${R}  ${W}${meta.blurb}${R}${ap ? `  ${D}fit≥${ap.minFit}${R}` : ""}`;
           rowList.push({ kind: "item", idx: i, text: selr ? `\x1b[48;5;236m${fit(line, cols)}\x1b[0m` : line });
         }
         const w = windowRows(rowList, AGENT_NAMES.length, sel, bodyH, listTop);
@@ -924,7 +924,7 @@ export async function runTui(): Promise<void> {
               .slice(0, 2)
               .map(([axis, value]) => `${axis} ${value.toFixed(2)}`)
               .join(", ");
-            lines.push(`   ${M}${name.padEnd(10)}${R} ctx≥${ap.minContext} out≈${ap.expectedOutputTokens} cap≥${ap.minCapability} tools=${String(ap.toolCall)}${ap.budgetTokens ? ` budget=${ap.budgetTokens}` : ""}`);
+            lines.push(`   ${M}${name.padEnd(10)}${R} ctx≥${ap.minContext} out≈${ap.expectedOutputTokens} fit≥${ap.minFit} tools=${String(ap.toolCall)}${ap.budgetTokens ? ` budget=${ap.budgetTokens}` : ""}`);
             lines.push(`   ${D}${"".padEnd(10)} weights ${topAxes}${ap.minAxes ? `  floors ${CAPABILITY_AXES.filter((a) => (ap.minAxes![a] ?? 0) > 0).map((a) => `${a}≥${ap.minAxes![a]}`).join(" ")}` : ""}${R}`);
           }
         }

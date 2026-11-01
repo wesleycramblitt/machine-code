@@ -21,10 +21,10 @@ output = [ "text" ]
 
 [models."cohere/command-a-plus-05-2026".scores]
 reasoning = 0.93
-code = 2.29
+code = 3.36
 agentic = 0.15
 general = 0.93
-capability = 1.4
+capability = 1.7
 
 [models."cohere/command-a-plus-05-2026".score_sources]
 reasoning = "benchmark"
@@ -34,12 +34,9 @@ general = "benchmark"
 
 [models."cohere/command-a-plus-05-2026".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 6.2
-gpqa = 6.2
-sweBench = 27.8
-liveCodeBench = 27.8
-tauBench = 1
-terminalBench = 1
+intelligenceIndex = 6.2
+codingIndex = 27.8
+agenticIndex = 1
 
 [models."cohere/command-a-plus-05-2026".provenance]
 benchmark = "OpenRouter/artificial-analysis"

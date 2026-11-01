@@ -29,8 +29,7 @@ code = "benchmark"
 
 [models."openai/gpt-3-5-turbo".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 10.7
-liveCodeBench = 10.7
+codingIndex = 10.7
 
 [models."openai/gpt-3-5-turbo".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -119,8 +118,7 @@ code = "benchmark"
 
 [models."openai/gpt-4".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 13.1
-liveCodeBench = 13.1
+codingIndex = 13.1
 
 [models."openai/gpt-4".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -147,17 +145,16 @@ output = [ "text" ]
 reasoning = 6.67
 code = 4.83
 agentic = 5.19
-general = 0.09
-capability = 5.3
+general = 5.53
+capability = 5.9
 
 [models."openai/gpt-4-1-2025-04-14".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-4-1-2025-04-14".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1104
+designArena = 1104
 gpqa = 63.7
 tauBench = 47.7
 
@@ -186,20 +183,18 @@ output = [ "text" ]
 reasoning = 6.82
 code = 2.52
 agentic = 4.89
-general = 0
-capability = 4.6
+general = 5.35
+capability = 5.2
 
 [models."openai/gpt-4-1-mini-2025-04-14".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-4-1-mini-2025-04-14".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 20.2
-liveCodeBench = 20.2
-lmarena = 1069
+codingIndex = 20.2
+designArena = 1069
 gpqa = 65.2
 tauBench = 44.3
 
@@ -228,20 +223,18 @@ output = [ "text" ]
 reasoning = 5.32
 code = 1.61
 agentic = 1.6
-general = 0
-capability = 3.1
+general = 5.23
+capability = 3.6
 
 [models."openai/gpt-4-1-nano-2025-04-14".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-4-1-nano-2025-04-14".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 11.1
-liveCodeBench = 11.1
-lmarena = 971
+codingIndex = 11.1
+designArena = 971
 gpqa = 49.1
 tauBench = 11
 
@@ -276,8 +269,7 @@ code = "benchmark"
 
 [models."openai/gpt-4-turbo".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 21.5
-liveCodeBench = 21.5
+codingIndex = 21.5
 
 [models."openai/gpt-4-turbo".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -304,17 +296,16 @@ output = [ "text" ]
 reasoning = 5.5
 code = 4.31
 agentic = 4.65
-general = 0
-capability = 4.1
+general = 5.04
+capability = 4.6
 
 [models."openai/gpt-4o".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-4o".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 906
+designArena = 906
 gpqa = 51.1
 tauBench = 41.7
 
@@ -351,8 +342,7 @@ code = "benchmark"
 
 [models."openai/gpt-4o-2024-05-13".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 24.2
-liveCodeBench = 24.2
+codingIndex = 24.2
 
 [models."openai/gpt-4o-2024-05-13".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -453,8 +443,7 @@ agentic = "benchmark"
 
 [models."openai/gpt-4o-mini".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 11.4
-liveCodeBench = 11.4
+codingIndex = 11.4
 gpqa = 43.6
 tauBench = 30.7
 
@@ -550,20 +539,18 @@ output = [ "text" ]
 reasoning = 9.14
 code = 5.35
 agentic = 8.6
-general = 2.26
-capability = 7.3
+general = 5.76
+capability = 7.7
 
 [models."openai/gpt-5-1".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-5-1".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 49.4
-liveCodeBench = 49.4
-lmarena = 1204
+codingIndex = 49.4
+designArena = 1204
 gpqa = 86.7
 tauBench = 80
 
@@ -592,15 +579,12 @@ output = [ "text" ]
 reasoning = 6.62
 code = 5.79
 agentic = 6.31
-general = 2.87
-capability = 6.2
-
-[models."openai/gpt-5-1-codex".score_sources]
-general = "benchmark"
+general = 5.76
+capability = 6.5
 
 [models."openai/gpt-5-1-codex".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1232
+designArena = 1232
 
 [models."openai/gpt-5-1-codex".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -654,15 +638,12 @@ output = [ "text" ]
 reasoning = 6.36
 code = 5.51
 agentic = 6.13
-general = 0.2
-capability = 5.8
-
-[models."openai/gpt-5-1-codex-mini".score_sources]
-general = "benchmark"
+general = 5.58
+capability = 6.3
 
 [models."openai/gpt-5-1-codex-mini".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1109
+designArena = 1109
 
 [models."openai/gpt-5-1-codex-mini".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -689,15 +670,12 @@ output = [ "text" ]
 reasoning = 6.65
 code = 5.82
 agentic = 6.33
-general = 2.22
-capability = 6.2
-
-[models."openai/gpt-5-2".score_sources]
-general = "benchmark"
+general = 5.79
+capability = 6.6
 
 [models."openai/gpt-5-2".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1202
+designArena = 1202
 
 [models."openai/gpt-5-2".provenance]
 benchmark = "OpenRouter/design-arena"
@@ -847,16 +825,15 @@ output = [ "text" ]
 reasoning = 6.74
 code = 5.9
 agentic = 7.99
-general = 1.39
-capability = 6.6
+general = 5.86
+capability = 7.1
 
 [models."openai/gpt-5-3-codex".score_sources]
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-5-3-codex".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1164
+designArena = 1164
 tauBench = 75.3
 
 [models."openai/gpt-5-3-codex".provenance]
@@ -884,20 +861,18 @@ output = [ "text" ]
 reasoning = 9.41
 code = 7.44
 agentic = 7.95
-general = 2.98
-capability = 7.8
+general = 5.98
+capability = 8.1
 
 [models."openai/gpt-5-4".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-5-4".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 71.1
-liveCodeBench = 71.1
-lmarena = 1237
+codingIndex = 71.1
+designArena = 1237
 gpqa = 90.2
 tauBench = 75
 
@@ -924,10 +899,10 @@ output = [ "text" ]
 
 [models."openai/gpt-5-4-mini".scores]
 reasoning = 8.9
-code = 4.73
+code = 5.95
 agentic = 4.63
 general = 5.7
-capability = 6.2
+capability = 6.6
 
 [models."openai/gpt-5-4-mini".score_sources]
 reasoning = "benchmark"
@@ -936,11 +911,10 @@ agentic = "benchmark"
 
 [models."openai/gpt-5-4-mini".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 56.1
-liveCodeBench = 56.1
-tauBench = 66.7
-terminalBench = 17.9
+codingIndex = 56.1
+agenticIndex = 17.9
 gpqa = 83.8
+tauBench = 66.7
 
 [models."openai/gpt-5-4-mini".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -965,10 +939,10 @@ output = [ "text" ]
 
 [models."openai/gpt-5-4-nano".scores]
 reasoning = 8.3
-code = 4.67
+code = 5.95
 agentic = 4.43
 general = 5.59
-capability = 6
+capability = 6.4
 
 [models."openai/gpt-5-4-nano".score_sources]
 reasoning = "benchmark"
@@ -977,11 +951,10 @@ agentic = "benchmark"
 
 [models."openai/gpt-5-4-nano".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 56.1
-liveCodeBench = 56.1
-tauBench = 64.7
-terminalBench = 16
+codingIndex = 56.1
+agenticIndex = 16
 gpqa = 77.7
+tauBench = 64.7
 
 [models."openai/gpt-5-4-nano".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1033,25 +1006,23 @@ output = [ "text" ]
 
 [models."openai/gpt-5-5".scores]
 reasoning = 9.63
-code = 6.69
+code = 7.94
 agentic = 5.98
-general = 4.15
-capability = 7.2
+general = 6.03
+capability = 7.7
 
 [models."openai/gpt-5-5".score_sources]
 reasoning = "benchmark"
 code = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-5-5".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 74.9
-liveCodeBench = 74.9
-tauBench = 73.7
-terminalBench = 36.4
-lmarena = 1291
+codingIndex = 74.9
+agenticIndex = 36.4
+designArena = 1291
 gpqa = 93.9
+tauBench = 73.7
 
 [models."openai/gpt-5-5".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1103,10 +1074,10 @@ output = [ "text" ]
 
 [models."openai/gpt-5-6-luna".scores]
 reasoning = 9.21
-code = 6.55
+code = 7.48
 agentic = 5.98
 general = 6.11
-capability = 7.2
+capability = 7.5
 
 [models."openai/gpt-5-6-luna".score_sources]
 reasoning = "benchmark"
@@ -1115,11 +1086,10 @@ agentic = "benchmark"
 
 [models."openai/gpt-5-6-luna".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 71.4
-liveCodeBench = 71.4
-tauBench = 69.7
-terminalBench = 42.1
+codingIndex = 71.4
+agenticIndex = 42.1
 gpqa = 87.6
+tauBench = 69.7
 
 [models."openai/gpt-5-6-luna".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1181,10 +1151,10 @@ output = [ "text" ]
 
 [models."openai/gpt-5-6-sol".scores]
 reasoning = 9.54
-code = 7.31
+code = 8.38
 agentic = 6.45
 general = 6.11
-capability = 7.7
+capability = 8
 
 [models."openai/gpt-5-6-sol".score_sources]
 reasoning = "benchmark"
@@ -1193,11 +1163,10 @@ agentic = "benchmark"
 
 [models."openai/gpt-5-6-sol".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 78.3
-liveCodeBench = 78.3
-tauBench = 73.3
-terminalBench = 47.4
+codingIndex = 78.3
+agenticIndex = 47.4
 gpqa = 92.4
+tauBench = 73.3
 
 [models."openai/gpt-5-6-sol".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1259,10 +1228,10 @@ output = [ "text" ]
 
 [models."openai/gpt-5-6-terra".scores]
 reasoning = 9.27
-code = 7.04
+code = 8.17
 agentic = 6.2
 general = 6.11
-capability = 7.5
+capability = 7.8
 
 [models."openai/gpt-5-6-terra".score_sources]
 reasoning = "benchmark"
@@ -1271,11 +1240,10 @@ agentic = "benchmark"
 
 [models."openai/gpt-5-6-terra".benchmarks]
 source = "OpenRouter/artificial-analysis"
-sweBench = 76.7
-liveCodeBench = 76.7
-tauBench = 72.3
-terminalBench = 43.2
+codingIndex = 76.7
+agenticIndex = 43.2
 gpqa = 88.4
+tauBench = 72.3
 
 [models."openai/gpt-5-6-terra".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1432,17 +1400,16 @@ output = [ "text" ]
 reasoning = 7.37
 code = 5.21
 agentic = 5.25
-general = 0.02
-capability = 5.6
+general = 5.36
+capability = 6.2
 
 [models."openai/gpt-5-nano-2025-08-07".score_sources]
 reasoning = "benchmark"
 agentic = "benchmark"
-general = "benchmark"
 
 [models."openai/gpt-5-nano-2025-08-07".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1101
+designArena = 1101
 gpqa = 70.5
 tauBench = 48.3
 
@@ -1603,11 +1570,11 @@ input = [ "text", "image", "file" ]
 output = [ "text" ]
 
 [models."openai/gpt-6-1-sol".scores]
-reasoning = 9.66
+reasoning = 7.74
 code = 6.4
 agentic = 7.3
-general = 6.57
-capability = 7.8
+general = 5.81
+capability = 7.3
 
 [models."openai/gpt-6-1-sol".score_sources]
 reasoning = "benchmark"
@@ -1616,9 +1583,9 @@ general = "benchmark"
 
 [models."openai/gpt-6-1-sol".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 54.5
+intelligenceIndex = 54.5
+designArena = 1437
 gpqa = 94.4
-lmarena = 1437
 tauBench = 70
 
 [models."openai/gpt-6-1-sol".provenance]
@@ -1670,11 +1637,11 @@ input = [ "text", "image", "file" ]
 output = [ "text" ]
 
 [models."openai/gpt-6-astra".scores]
-reasoning = 9.66
-code = 7.3
+reasoning = 7.84
+code = 8.2
 agentic = 6.3
 general = 6.02
-capability = 7.6
+capability = 7.5
 
 [models."openai/gpt-6-astra".score_sources]
 reasoning = "benchmark"
@@ -1684,12 +1651,11 @@ general = "benchmark"
 
 [models."openai/gpt-6-astra".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 56.9
+intelligenceIndex = 56.9
+codingIndex = 76.9
+agenticIndex = 51
 gpqa = 94.4
-sweBench = 76.9
-liveCodeBench = 76.9
 tauBench = 68
-terminalBench = 51
 
 [models."openai/gpt-6-astra".provenance]
 benchmark = "OpenRouter/artificial-analysis"
@@ -1750,11 +1716,11 @@ input = [ "text", "image", "file" ]
 output = [ "text" ]
 
 [models."openai/gpt-6-luna".scores]
-reasoning = 9.38
+reasoning = 6.37
 code = 6.4
 agentic = 7.03
 general = 3.36
-capability = 7.3
+capability = 6.6
 
 [models."openai/gpt-6-luna".score_sources]
 reasoning = "benchmark"
@@ -1763,7 +1729,7 @@ general = "benchmark"
 
 [models."openai/gpt-6-luna".benchmarks]
 source = "OpenRouter/artificial-analysis"
-mmluPro = 27.8
+intelligenceIndex = 27.8
 gpqa = 89.8
 tauBench = 67.3
 
@@ -2129,15 +2095,12 @@ output = [ "text" ]
 reasoning = 6.04
 code = 5.21
 agentic = 5.87
-general = 2.17
-capability = 5.2
-
-[models."openai/o3-2025-04-16".score_sources]
-general = "benchmark"
+general = 5.27
+capability = 5.6
 
 [models."openai/o3-2025-04-16".benchmarks]
 source = "OpenRouter/design-arena"
-lmarena = 1200
+designArena = 1200
 
 [models."openai/o3-2025-04-16".provenance]
 benchmark = "OpenRouter/design-arena"
