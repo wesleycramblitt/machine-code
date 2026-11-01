@@ -21,10 +21,10 @@
 | 4 — issues, hierarchy, reserved | **core done** | provider + gh + null, reserved ensure/audit/duplicates, Task-only association, `issue` CLI, issue tool; TUI cache deferred to Phase 7 |
 | 5 — PR pipeline, approval | **done** | `pr` provider/tool, runner publish (Task→Feature), Feature PR with temporary integration worktree, squash merges, human approval queue |
 | 6 — context assembly | **done** | priority bands, hierarchy + explicit refs, dedupe, budget, provenance manifest, prompt injection for run/queue/children |
-| 7 — TUI status surfaces | **done** | five-page TUI, issue-primary work tree with untracked runs, new-run composer with model/context preview, run sections (overview/timeline/thinking/changes/children/context), search/filter, spend, settings/artifact browser |
+| 7 — TUI status surfaces | **done** | four-page TUI, Work groups runs by issue with untracked runs, new-run composer with model/context preview, run sections (overview/timeline/thinking/changes/children/context), search/filter, spend, settings/artifact browser |
 | 8 — completion/hardening | **core done** | acceptance verdicts (`accept`), parent closure requires closed children + acceptance, reserved close/reopen cascade; remaining: opt-in real-GitHub integration test |
 
-Current test suite: 140 tests (`npm test`).
+Current test suite: 141 tests (`npm test`).
 
 ## Settled decisions
 

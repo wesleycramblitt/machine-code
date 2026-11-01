@@ -32,6 +32,40 @@ export interface ProviderCost {
   funded?: boolean;
 }
 
+export interface ThemeConfig {
+  header_bg?: string;
+  header_fg?: string;
+  footer_bg?: string;
+  footer_fg?: string;
+  sub_header_bg?: string;
+  sub_header_fg?: string;
+  back_bg?: string;
+  back_fg?: string;
+  section_bg?: string;
+  section_fg?: string;
+  section_active_bg?: string;
+  section_active_fg?: string;
+  tab_active_bg?: string;
+  tab_active_fg?: string;
+}
+
+export const DEFAULT_THEME: Required<ThemeConfig> = {
+  header_bg: "#161b22",
+  header_fg: "#c9d1d9",
+  footer_bg: "#161b22",
+  footer_fg: "#c9d1d9",
+  sub_header_bg: "#1f6feb",
+  sub_header_fg: "#ffffff",
+  back_bg: "#b91c1c",
+  back_fg: "#ffffff",
+  section_bg: "#111111",
+  section_fg: "#8b949e",
+  section_active_bg: "#d29922",
+  section_active_fg: "#111111",
+  tab_active_bg: "#58a6ff",
+  tab_active_fg: "#0d1117",
+};
+
 export interface MachineConfig {
   maxOutputTokens?: number;
   defaultMode?: PacketMode;
@@ -59,6 +93,8 @@ export interface MachineConfig {
     planFile?: string;
     knowledgeIndex?: string;
   };
+  /** TUI palette ([theme]); hex strings. */
+  theme: ThemeConfig;
 }
 
 /** Only the Phase 3 configuration fields; token/capability policy stays repo-side. */
@@ -195,6 +231,12 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       : "optional";
   const issueTtl = asNumber(issuesRaw.cache_ttl_seconds);
   const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
+  const themeRaw = (raw.theme ?? {}) as Record<string, unknown>;
+  const theme: ThemeConfig = {};
+  for (const key of Object.keys(DEFAULT_THEME) as Array<keyof ThemeConfig>) {
+    const value = themeRaw[key];
+    if (typeof value === "string" && value.trim()) theme[key] = value.trim();
+  }
   return {
     maxOutputTokens: asNumber(raw.max_output_tokens),
     defaultMode: defaultMode as PacketMode | undefined,
@@ -220,6 +262,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
       knowledgeIndex: typeof contextRaw.knowledge_index === "string" ? contextRaw.knowledge_index : undefined,
     },
+    theme,
   };
 }
 

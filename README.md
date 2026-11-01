@@ -85,6 +85,28 @@ funded = true
 unfunded providers are excluded. `free` only admits zero-price rows.
 `--tier` overrides it per run.
 
+The TUI palette is machine-configurable with hex colors. Header and footer share
+a surface, subpage chrome uses a contrasting accent, and inner section tabs get
+their own darker strip:
+
+```toml
+[theme]
+header_bg = "#161b22"
+header_fg = "#c9d1d9"
+footer_bg = "#161b22"
+footer_fg = "#c9d1d9"
+sub_header_bg = "#1f6feb"
+sub_header_fg = "#ffffff"
+back_bg = "#b91c1c"
+back_fg = "#ffffff"
+section_bg = "#111111"
+section_fg = "#8b949e"
+section_active_bg = "#d29922"
+section_active_fg = "#111111"
+tab_active_bg = "#58a6ff"
+tab_active_fg = "#0d1117"
+```
+
 Data lives in folders under `data/`: providers in `data/providers/<id>.toml`,
 agent roles (with prompts) in `data/agents/<role>.toml`, presets in
 `data/presets.toml`, and benchmark seeds in `data/benchmarks.json`.

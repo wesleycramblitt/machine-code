@@ -8,13 +8,13 @@
 import type { Layout } from "../paths.js";
 import type { MachineConfig, Policy } from "../config.js";
 import { AGENT_META, AGENT_NAMES } from "../agents.js";
-import { CAPABILITY_AXES } from "../config.js";
+import { CAPABILITY_AXES, DEFAULT_THEME } from "../config.js";
 import { axisWeights } from "../select.js";
 import { listArtifacts } from "../artifacts/registry.js";
 
 export interface SettingRow {
   id: string;
-  section: "selection" | "providers" | "agents" | "context" | "artifacts" | "paths" | "environment";
+  section: "selection" | "providers" | "agents" | "context" | "theme" | "artifacts" | "paths" | "environment";
   label: string;
   value: string;
   file?: string;
@@ -113,6 +113,33 @@ export function buildSettings(
       editable: true,
       choices: ["optional", "required", "disabled"],
     });
+    const themeKeys = [
+      "header_bg",
+      "header_fg",
+      "footer_bg",
+      "footer_fg",
+      "sub_header_bg",
+      "sub_header_fg",
+      "back_bg",
+      "back_fg",
+      "section_bg",
+      "section_fg",
+      "section_active_bg",
+      "section_active_fg",
+      "tab_active_bg",
+      "tab_active_fg",
+    ] as const;
+    for (const key of themeKeys) {
+      rows.push({
+        id: `theme.${key}`,
+        section: "theme",
+        label: key,
+        value: machine.theme[key] ?? DEFAULT_THEME[key],
+        file: configFile,
+        detail: key.endsWith("_bg") ? "background (hex)" : "foreground (hex)",
+        editable: true,
+      });
+    }
   } else {
     rows.push({
       id: "config.error",

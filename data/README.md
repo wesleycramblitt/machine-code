@@ -22,7 +22,9 @@ machine_code catalogue refresh --snapshot   # refresh runtime catalogue + snapsh
 machine_code catalogue snapshot             # snapshot an existing catalogue
 ```
 
-The runtime selection file remains `~/.machine_code/catalogue/models.json`.
+The runtime selection file remains `~/.machine_code/catalogue/models.json`. TUI chrome colors are
+machine-configurable under `[theme]` in `~/.machine_code/config.toml`; see the README
+for the full key list.
 
 ## Modes and reusable artifacts
 

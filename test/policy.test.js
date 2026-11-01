@@ -87,3 +87,16 @@ test("invalid tier and negative multiplier are rejected", () => {
     rmSync(badCost.root, { recursive: true, force: true });
   }
 });
+
+test("theme colors are machine-configurable and unknown keys are ignored", () => {
+  const { root, layout } = setup('[theme]\nheader_bg = "#010203"\nfooter_bg = "#111111"\nback_bg = "#aa0000"\nnonsense = "#fff"\n');
+  try {
+    const machine = loadMachineConfig(layout);
+    assert.equal(machine.theme.header_bg, "#010203");
+    assert.equal(machine.theme.footer_bg, "#111111");
+    assert.equal(machine.theme.back_bg, "#aa0000");
+    assert.equal(machine.theme.nonsense, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

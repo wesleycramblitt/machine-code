@@ -29,7 +29,7 @@ import {
 import { buildWorkIndex, type WorkRow } from "./tui/work.js";
 import { selectableLines } from "./tui/scroll.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
-import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, type MachineConfig, type Policy } from "./config.js";
+import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
 import { axisWeights, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability } from "./availability.js";
@@ -66,9 +66,56 @@ const BL = "\x1b[34m";
 const GR = "\x1b[90m";
 const W = "\x1b[37m";
 const BG = "\x1b[48;5;236m";
-const HEADER_BG = "\x1b[48;5;234m";
-const FOOTER_BG = "\x1b[48;5;234m";
-const TAB_ON = "\x1b[46m\x1b[30m\x1b[1m";
+const WRAP_OFF = "\x1b[?7l";
+const WRAP_ON = "\x1b[?7h";
+
+interface UiTheme {
+  headerBg: string;
+  headerFg: string;
+  footerBg: string;
+  footerFg: string;
+  subHeaderBg: string;
+  subHeaderFg: string;
+  backBg: string;
+  backFg: string;
+  sectionBg: string;
+  sectionFg: string;
+  sectionActiveBg: string;
+  sectionActiveFg: string;
+  tabActiveBg: string;
+  tabActiveFg: string;
+}
+
+function ansiHex(hex: string, layer: "fg" | "bg"): string {
+  const raw = hex.trim().replace(/^#/, "");
+  const expanded = raw.length === 3 ? raw.split("").map((char) => `${char}${char}`).join("") : raw;
+  if (!/^[0-9a-fA-F]{6}$/.test(expanded)) return layer === "fg" ? `${W}` : `${BG}`;
+  const n = Number.parseInt(expanded, 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  return `\x1b[${layer === "fg" ? 38 : 48};2;${r};${g};${b}m`;
+}
+
+function resolveTheme(config?: ThemeConfig): UiTheme {
+  const merged = { ...DEFAULT_THEME, ...(config ?? {}) };
+  return {
+    headerBg: ansiHex(merged.header_bg, "bg"),
+    headerFg: ansiHex(merged.header_fg, "fg"),
+    footerBg: ansiHex(merged.footer_bg, "bg"),
+    footerFg: ansiHex(merged.footer_fg, "fg"),
+    subHeaderBg: ansiHex(merged.sub_header_bg, "bg"),
+    subHeaderFg: ansiHex(merged.sub_header_fg, "fg"),
+    backBg: ansiHex(merged.back_bg, "bg"),
+    backFg: ansiHex(merged.back_fg, "fg"),
+    sectionBg: ansiHex(merged.section_bg, "bg"),
+    sectionFg: ansiHex(merged.section_fg, "fg"),
+    sectionActiveBg: ansiHex(merged.section_active_bg, "bg"),
+    sectionActiveFg: ansiHex(merged.section_active_fg, "fg"),
+    tabActiveBg: ansiHex(merged.tab_active_bg, "bg"),
+    tabActiveFg: ansiHex(merged.tab_active_fg, "fg"),
+  };
+}
 
 type Page = "work" | "runs" | "models" | "spend" | "settings";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "help";
@@ -77,10 +124,9 @@ type WorkFilter = RunFilter | "attention";
 
 const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "work", label: "Work", key: "1" },
-  { id: "runs", label: "Runs", key: "2" },
-  { id: "models", label: "Models", key: "3" },
-  { id: "spend", label: "Spend", key: "4" },
-  { id: "settings", label: "Settings", key: "5" },
+  { id: "models", label: "Models", key: "2" },
+  { id: "spend", label: "Spend", key: "3" },
+  { id: "settings", label: "Settings", key: "4" },
 ];
 const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
 const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "thinking", "changes", "children", "context"];
@@ -869,18 +915,50 @@ export async function runTui(): Promise<void> {
     searchMode = false;
   };
 
+  const subHeaderInfo = (): { title: string; detail: string } | null => {
+    if (screen === "list") return null;
+    if (screen === "run") {
+      const detail = runDetailData();
+      return {
+        title: "Run Details",
+        detail: detail
+          ? `${detail.summary.id.slice(-8)} ${trunc(detail.summary.request.replace(/\s+/g, " "), 72)}`
+          : String(selectedRunId ?? "").slice(-8),
+      };
+    }
+    if (screen === "issue") {
+      const issue = selectedIssue();
+      return issue
+        ? { title: "Issue Details", detail: `#${issue.ref.number} ${issue.title}` }
+        : { title: "Issue Details", detail: selectedIssueKey ?? "" };
+    }
+    if (screen === "newrun") {
+      const issue = newrun.issue ? `#${newrun.issue.number}` : "untracked";
+      return { title: "New Run", detail: `${issue} · ${trunc(newrun.prompt.replace(/\s+/g, " "), 64) || "untitled"}` };
+    }
+    if (screen === "model") {
+      return { title: "Model Details", detail: selectedModelKey ?? "" };
+    }
+    if (screen === "answer") return { title: "Answer Run", detail: String(selectedRunId ?? "").slice(-8) };
+    if (screen === "correct") return { title: "Correct Run", detail: String(selectedRunId ?? "").slice(-8) };
+    if (screen === "help") return { title: "Help", detail: "keyboard reference" };
+    return { title: screen, detail: "" };
+  };
+
   /* --------------------------------------------------------------- render */
 
   const draw = () => {
-    const cols = Math.max(20, (process.stdout.columns || 120) - 1);
+    const cols = Math.max(20, process.stdout.columns || 120);
     const rows = Math.max(6, process.stdout.rows || 40);
     const narrow = cols < 84;
     const short = rows < 24;
-    const footerReserve = cols < 50 ? 6 : cols < 70 ? 5 : cols < 90 ? 4 : cols < 110 ? 3 : 2;
+    const footerReserve = cols < 50 ? 7 : cols < 70 ? 6 : cols < 90 ? 5 : cols < 110 ? 4 : 3;
     const allRuns = listAllRuns(l.home);
     const cache = readIssueCache(l);
     const issues = cache?.issues ?? [];
     const counts = headerCounts(allRuns);
+    const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
+    const theme = resolveTheme(settingsMachine?.theme);
     if (Date.now() - spendCacheAt > 5_000) {
       spendToday = readSpendSummary(l.home, { days: 1 }).totalActual;
       spendCacheAt = Date.now();
@@ -888,17 +966,17 @@ export async function runTui(): Promise<void> {
     const todaySpend = spendToday;
     if (toast && Date.now() - toastAt > 8_000) toast = "";
 
+    const sub = subHeaderInfo();
+    const subHeader = sub
+      ? ` ${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}  ${B}${theme.subHeaderFg}${trunc(`${sub.title}: ${sub.detail}`, Math.max(12, cols - 14))}${R}`
+      : null;
     const tabTokens = TABS.map((tab) =>
       tab.id === page
-        ? `${TAB_ON}${tab.key}:${tab.label}${R}`
-        : `${D}${tab.key}:${tab.label}${R}`,
+        ? `${theme.tabActiveBg}${theme.tabActiveFg}${B}${tab.key}:${tab.label}${R}`
+        : `${theme.headerFg}${D}${tab.key}:${tab.label}${R}`,
     );
-    const header = [
-      ...wrapTokenList(tabTokens, cols, " "),
-      narrow
-        ? `${C}●${counts.active}${R} ${Y}?${counts.awaiting}${R} ${M}⚑${counts.approvals}${R} ${Y}PR${counts.openPrs}${R} ${G}$${todaySpend.toFixed(2)}${R}`
-        : `${C}●${R} ${counts.active} running  ${Y}?${R} ${counts.awaiting} awaiting  ${Y}⏸${R} ${counts.paused} paused  ${M}⚑${R} ${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}  ${Y}PR${R} ${counts.openPrs} open  ${G}$${todaySpend.toFixed(2)}${R} today  ${D}issues ${cache ? ago(cache.fetchedAt) : "none"}${R}`,
-    ];
+    const header = subHeader ? [subHeader] : wrapTokenList(tabTokens, cols, " ");
+    const headerTone = subHeader ? theme.subHeaderBg : theme.headerBg;
     const bodyH = Math.max(1, rows - header.length - footerReserve);
 
     // Resolve a newly launched run as soon as its record is visible.
@@ -951,7 +1029,6 @@ export async function runTui(): Promise<void> {
     if (modelSel >= modelRows.length) modelSel = Math.max(0, modelRows.length - 1);
     const selectedModel = modelRows[modelSel];
 
-    const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
     const settingsPolicy = effectivePolicy();
     const settingsRows = buildSettings(l, settingsMachine, settingsPolicy);
     if (settingsSel >= settingsRows.length) settingsSel = Math.max(0, settingsRows.length - 1);
@@ -983,8 +1060,8 @@ export async function runTui(): Promise<void> {
         if (row.kind !== "section") flatIndex++;
         const indent = "  ".repeat(row.depth);
         if (row.kind === "section") {
-          const text = ` ${indent}${B}${W}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
-          lines.push(selected(text, isSelected));
+          const text = ` ${indent}${B}${theme.sectionFg}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
+          lines.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
           continue;
         }
         if (row.kind === "issue") {
@@ -1139,7 +1216,6 @@ export async function runTui(): Promise<void> {
         parentRef = parent.parent;
       }
       const lines: string[] = [];
-      lines.push(` ${command("Esc", "Back to Work", undefined, GR)}  ${B}${C}Issue Details${R} ${D}#${issue.ref.number} ${trunc(issue.title, Math.max(10, cols - 42))}${R}`);
       lines.push(` ${healthIcon(issue.state === "closed" ? "done" : "on-track")} ${BL}#${issue.ref.number}${R} ${B}${W}${issue.title}${R} ${D}${issue.kind} · ${issue.state}${R}${issue.reserved ? ` ${M}[P&R]${R}` : ""}`);
       if (ancestors.length) lines.push(` ${D}${ancestors.reverse().map((parent) => `#${parent.ref.number} ${parent.title}`).join("  ←  ")}${R}`);
       lines.push(` ${D}${issue.labels.join(" · ") || "no labels"}${R}`);
@@ -1214,7 +1290,6 @@ export async function runTui(): Promise<void> {
       const contextLine = ` ${C}Context${R} ${W}~${fmtTokens(ctx.chars + ctx.promptChars)} chars${R} ${D}/ ~${fmtTokens(Math.ceil((ctx.chars + ctx.promptChars) / 4))} input tokens · ${ctx.artifacts.files.length} files · ${ctx.artifacts.tools.length} tools · ${ctx.artifacts.scripts.length} scripts · ${ctx.artifacts.skills.length} skills${R}`;
       const chainLine = ` ${BL}Hierarchy${R} ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "untracked · no issue context"}${R}`;
       const summary = [
-        ` ${command("Esc", "Back", undefined, GR)}  ${B}${C}New Run${R} ${D}${trunc(cwd, Math.max(10, cols - 30))}${R}`,
         modelLine,
         modelMeta,
         contextLine,
@@ -1347,7 +1422,6 @@ export async function runTui(): Promise<void> {
       const weights = policyWeightsFor(newrun.agent);
       const offers = siblingOffers(catalogueRows, model);
       const lines: string[] = [
-        ` ${command("Esc", "Back to Models", undefined, GR)}  ${B}${C}Model Details${R} ${D}${trunc(model.key, Math.max(10, cols - 44))}${R}`,
         ` ${B}${W}${model.name}${R} ${D}${model.key}${R}`,
         ` ${D}${model.providerID} · ${model.kind} · ${model.coding ? "coding" : "non-coding"} · ${model.modes.join(", ") || "plain chat"}${R}`,
         "",
@@ -1386,7 +1460,7 @@ export async function runTui(): Promise<void> {
       let flatIndex = 0;
       let selectedLine = 0;
       for (const group of groups) {
-        lines.push(` ${B}${W}${group.key}${R} ${D}(${group.rows.length})${R}`);
+        lines.push(background(fit(` ${B}${theme.sectionFg}${group.key}${R} ${D}(${group.rows.length})${R}`, cols), theme.sectionBg));
         for (const row of group.rows) {
           const isSelected = flatIndex === modelSel;
           if (isSelected) selectedLine = lines.length;
@@ -1469,7 +1543,7 @@ export async function runTui(): Promise<void> {
       for (const row of settingsRows) {
         if (row.section !== section) {
           section = row.section;
-          lines.push(` ${B}${W}${section.toUpperCase()}${R}`);
+          lines.push(background(fit(` ${B}${theme.sectionFg}${section.toUpperCase()}${R}`, cols), theme.sectionBg));
         }
         const isSelected = index === settingsSel;
         if (isSelected) selectedLine = lines.length;
@@ -1515,18 +1589,16 @@ export async function runTui(): Promise<void> {
         const sectionBar = wrapTokenList(
           RUN_SECTIONS.map((section) =>
             section === runSection
-              ? `${TAB_ON}${RUN_SECTION_LABEL[section]}${R}`
-              : `${D}${RUN_SECTION_LABEL[section]}${R}`,
+              ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B}${RUN_SECTION_LABEL[section]}${R}`
+              : `${theme.sectionFg}${RUN_SECTION_LABEL[section]}${R}`,
           ),
           cols - 2,
           " ",
-        );
-        const subHeader = ` ${command("Esc", "Back to Runs", undefined, GR)}  ${B}${C}Run Details${R} ${D}${s.id.slice(-8)} ${trunc(s.request.replace(/\s+/g, " "), Math.max(12, cols - 42))}${R}`;
+        ).map((line) => background(fit(` ${line}`, cols), theme.sectionBg));
         const lines: string[] = [
-          subHeader,
           ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}${s.mode ? `/${s.mode}` : ""}  ${G}${s.modelCalls}${R} call(s)  ${C}${fmtTokens(s.usage.totalTokens)}${R} tok  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${ago(s.lastActivityAt)}${R}`,
           ` ${D}${trunc(s.repoRoot, narrow ? cols - 8 : Math.floor(cols / 2))}  ${s.issue ? `#${s.issue.number}  ` : ""}${s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}  ` : ""}${s.worktree ? "worktree" : "read-only"}${R}`,
-          ...sectionBar.map((line) => ` ${line}`),
+          ...sectionBar,
           ` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`,
         ];
         if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
@@ -1712,7 +1784,6 @@ export async function runTui(): Promise<void> {
         : null;
       const width = Math.max(20, cols - 8);
       const lines = [
-        ` ${command("Esc", "Back to Run", undefined, GR)}  ${B}${C}Answer Run${R} ${D}${selectedRunId?.slice(-8) ?? "?"}${R}`,
         "",
         ` ${Y}?${R} ${W}${pending?.text ?? "(question text not recorded)"}${R}`,
         "",
@@ -1736,7 +1807,6 @@ export async function runTui(): Promise<void> {
       const detail = runDetailData();
       const width = Math.max(20, cols - 8);
       const lines = [
-        ` ${command("Esc", "Back to Run", undefined, GR)}  ${B}${C}Correct Run${R} ${D}${selectedRunId?.slice(-8) ?? "?"}${R}`,
         "",
         ` ${D}This interrupts the current run and starts a fresh child with the parent's issue,${R}`,
         ` ${D}context, and worktree changes. The new run sees only the correction, not the old transcript.${R}`,
@@ -1761,10 +1831,9 @@ export async function runTui(): Promise<void> {
     /* ------------------------------------------------------------- help */
     else if (screen === "help") {
       const lines = [
-        ` ${command("Esc", "Back", undefined, GR)}  ${B}${C}Help${R}`,
         "",
         ` ${C}Navigation${R}`,
-        `   ${W}1-5 / Tab${R}  switch page        ${W}j/k${R}      move or scroll`,
+        `   ${W}1-4 / Tab${R}  switch page        ${W}j/k${R}      move or scroll`,
         `   ${W}Enter${R}      open / start       ${W}Space${R}    fold or expand`,
         `   ${W}/${R}          search              ${W}q / Esc${R}  back or quit`,
         "",
@@ -1778,7 +1847,7 @@ export async function runTui(): Promise<void> {
         `   ${W}a${R} agent   ${W}t${R} tier   ${W}i${R} issue   ${W}e${R}/p prompt edit   ${W}s${R} settings   ${W}Enter${R} start   ${W}Esc${R} cancel`,
         `   In the prompt: ${W}Enter${R} newline · ${W}Esc${R} or ${W}jk${R} leaves insert mode.`,
         "",
-        ` ${D}Work is Epic → Feature → Task → runs. Runs with no issue stay in Untracked.${R}`,
+        ` ${D}Work groups runs by Epic → Feature → Task; runs with no issue stay in Untracked.${R}`,
         ` ${D}Screen: ${screen} · cwd: ${cwd}${R}`,
       ];
       body = clipBody(lines);
@@ -1799,13 +1868,22 @@ export async function runTui(): Promise<void> {
       secondary = `${D}filters ${page} · type to edit${R}`;
     }
     const defaultActions = joinCommands([
-      command("1-5", "Pages", undefined, C),
+      command("1-4", "Pages", undefined, C),
       command("?", "Help", undefined, BL),
       command("q", "Quit", undefined, GR),
     ]);
+    const statusTokens = [
+      `${C}●${R} ${counts.active} running`,
+      `${Y}?${R} ${counts.awaiting} awaiting`,
+      `${Y}⏸${R} ${counts.paused} paused`,
+      `${M}⚑${R} ${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}`,
+      `${Y}PR${R} ${counts.openPrs} open`,
+      `${G}$${todaySpend.toFixed(2)}${R} today`,
+    ];
     const footer = [
       ...wrapCommands(actions || defaultActions, cols),
       ...wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1),
+      ...wrapTokenList(statusTokens, cols, "  "),
     ];
     const bodySpace = Math.max(0, rows - header.length - footer.length);
     body = body.slice(0, bodySpace);
@@ -1816,11 +1894,11 @@ export async function runTui(): Promise<void> {
     const footerStart = headerCount + body.length;
     const output = frame.slice(0, rows).map((line, index) => {
       const fitted = fit(sanitizeLine(line), cols);
-      if (index < headerCount) return background(fitted, HEADER_BG);
-      if (index >= footerStart) return background(fitted, FOOTER_BG);
+      if (index < headerCount) return background(fitted, headerTone);
+      if (index >= footerStart) return background(fitted, theme.footerBg);
       return fitted;
     });
-    process.stdout.write(SYNC_ON + HOME + output.join("\n") + CLEAR_BELOW + SYNC_OFF);
+    process.stdout.write(SYNC_ON + WRAP_OFF + HOME + output.join("\n") + CLEAR_BELOW + WRAP_ON + SYNC_OFF);
   };
 
   /* ------------------------------------------------------------ issue modal helpers */
