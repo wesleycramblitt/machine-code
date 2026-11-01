@@ -61,6 +61,11 @@ node dist/cli.js tools
 node dist/cli.js tui                  # default when run with no command
 ```
 
+Provider keys are loaded automatically from `.env` files found by walking up
+from the current directory, then from `~/.machine_code/.env`; exported shell
+variables are never overridden. `machine_code providers` shows which key supplied
+each configured provider, without printing values.
+
 Selection is per call and multi-dimensional: each catalogue row carries
 `reasoning`, `code`, `agentic`, and `general` scores. Role weights live in
 `data/agents/<role>.toml`; `.machine_code/policy.toml` sets a role-weighted

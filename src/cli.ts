@@ -10,6 +10,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout } from "./paths.js";
+import { loadEnvFiles } from "./env.js";
 import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY, AGENT_NAMES, SELECTION_TIERS } from "./config.js";
 import { createModelsCollection, availableChatModels, providerStatuses } from "./models.js";
 import { refreshCatalogue } from "./catalogue/refresh.js";
@@ -2569,6 +2570,7 @@ async function cmdCorrect(argv: string[]): Promise<number> {
 /* -------------------------------------------------------------------- main */
 
 async function main(): Promise<void> {
+  loadEnvFiles();
   const [command, ...rest] = process.argv.slice(2);
   let code: number;
   switch (command) {

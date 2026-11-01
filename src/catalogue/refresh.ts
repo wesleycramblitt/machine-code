@@ -85,13 +85,14 @@ export function loadCuration(layout: Layout): Curation {
  * Rows the selector must never see:
  * - router/stealth pseudo-models (id "auto", OpenRouter's own namespace
  *   openrouter/...) route opaquely, which breaks deterministic selection;
- * - ":free" variants are quota- and app-gated (OpenRouter rejects them for
- *   unknown apps); free tiers are deliberately not part of v1;
  * - ":batch" variants are asynchronous batch endpoints, not interactive.
+ *
+ * ":free" variants are kept: they are real zero-price offers, visible in the
+ * catalogue and only eligible when the caller explicitly chooses the free tier.
  */
 function isMetaModel(providerID: string, id: string): boolean {
   if (id === "auto") return true;
-  if (id.endsWith(":free") || id.endsWith(":batch")) return true;
+  if (id.endsWith(":batch")) return true;
   return providerID === "openrouter" && id.startsWith("openrouter/");
 }
 
