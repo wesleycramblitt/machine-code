@@ -24,7 +24,7 @@
 | 7 — TUI status surfaces | **done** | five-page TUI, issue-primary work tree with untracked runs, new-run composer with model/context preview, run sections (overview/timeline/thinking/changes/children/context), search/filter, spend, settings/artifact browser |
 | 8 — completion/hardening | **core done** | acceptance verdicts (`accept`), parent closure requires closed children + acceptance, reserved close/reopen cascade; remaining: opt-in real-GitHub integration test |
 
-Current test suite: 134 tests (`npm test`).
+Current test suite: 140 tests (`npm test`).
 
 ## Settled decisions
 

@@ -42,3 +42,34 @@ test("work index nests issues and runs and separates untracked work", () => {
   assert.ok(filtered.rows.some((row) => row.kind === "run" && row.run.id === "a"));
   assert.ok(!filtered.rows.some((row) => row.kind === "run" && row.run.id === "free"));
 });
+
+test("section headings are cursor stops and collapse their contents", () => {
+  const runs = [
+    run({ id: "free", agent: "general", mode: "", status: "completed" }),
+    run({ id: "plan", agent: "architect", mode: "", status: "completed" }),
+  ];
+  const expanded = buildWorkIndex({ issues: [], runs });
+  const untracked = expanded.selectable.find((row) => row.kind === "section" && row.label === "Untracked");
+  assert.ok(untracked, "section heading is selectable");
+  assert.ok(expanded.selectable.some((row) => row.kind === "run" && row.run.id === "free"));
+
+  const collapsed = buildWorkIndex({ issues: [], runs, collapsed: new Set([untracked.id]) });
+  assert.ok(collapsed.selectable.some((row) => row.kind === "section" && row.id === untracked.id));
+  assert.ok(!collapsed.selectable.some((row) => row.kind === "run" && row.run.id === "free"));
+});
+
+test("issue rows collapse descendants and direct runs, then expand again", () => {
+  const epic = issue(10, "epic", "Epic");
+  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
+  const task = issue(31, "task", "Task", { parent: feature.ref });
+  const runs = [run({ id: "a", issue: task.ref }), run({ id: "direct", issue: epic.ref })];
+  const epicRow = buildWorkIndex({ issues: [epic, feature, task], runs }).selectable
+    .find((row) => row.kind === "issue" && row.issue.ref.number === 10);
+  assert.ok(epicRow?.collapsible);
+
+  const collapsed = buildWorkIndex({ issues: [epic, feature, task], runs, collapsed: new Set([epicRow.id]) });
+  assert.deepEqual(collapsed.rows.map((row) => row.id), [epicRow.id]);
+  const expanded = buildWorkIndex({ issues: [epic, feature, task], runs, collapsed: new Set() });
+  assert.ok(expanded.rows.some((row) => row.kind === "issue" && row.issue.ref.number === 31));
+  assert.ok(expanded.rows.some((row) => row.kind === "run" && row.run.id === "direct"));
+});

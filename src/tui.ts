@@ -27,6 +27,7 @@ import {
   type SortKey,
 } from "./tui/status.js";
 import { buildWorkIndex, type WorkRow } from "./tui/work.js";
+import { selectableLines } from "./tui/scroll.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, type MachineConfig, type Policy } from "./config.js";
 import { axisWeights, pick } from "./select.js";
@@ -837,14 +838,6 @@ export async function runTui(): Promise<void> {
     let actions = "";
     let secondary = "";
 
-    const selectableLines = (lines: string[], selectedIndex: number, scroll: number, height: number): { lines: string[]; scroll: number } => {
-      let top = scroll;
-      if (selectedIndex < top) top = selectedIndex;
-      if (selectedIndex >= top + height) top = selectedIndex - height + 1;
-      top = Math.max(0, Math.min(top, Math.max(0, lines.length - height)));
-      return { lines: lines.slice(top, top + height), scroll: top };
-    };
-
     const clipBody = (lines: string[]) => {
       if (lines.length > bodyH) return lines.slice(0, bodyH);
       return [...lines, ...Array.from({ length: bodyH - lines.length }, () => "")];
@@ -864,11 +857,12 @@ export async function runTui(): Promise<void> {
       const rowStart = lines.length;
       let flatIndex = -1;
       for (const row of work.rows) {
-        const isSelected = row.kind !== "section" && row.id === selectedId;
+        const isSelected = row.id === selectedId;
         if (row.kind !== "section") flatIndex++;
         const indent = "  ".repeat(row.depth);
         if (row.kind === "section") {
-          lines.push(` ${indent}${B}${W}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`);
+          const text = ` ${indent}${B}${W}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
+          lines.push(selected(text, isSelected));
           continue;
         }
         if (row.kind === "issue") {
@@ -898,9 +892,8 @@ export async function runTui(): Promise<void> {
       }
       const selectedLine = (() => {
         let line = rowStart;
-        for (let i = 0; i < work.rows.length; i++) {
-          const row = work.rows[i]!;
-          if (row.kind !== "section" && row.id === selectedId) return line;
+        for (const row of work.rows) {
+          if (row.id === selectedId) return line;
           line++;
         }
         return rowStart;
@@ -1737,18 +1730,23 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[A" || data === "k") { workSel = Math.max(0, workSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { workSel = Math.min(Math.max(0, work.selectable.length - 1), workSel + 1); draw(); return; }
       if (data === "G") { workSel = Math.max(0, work.selectable.length - 1); draw(); return; }
+      const toggleFold = (row: WorkRow | undefined): boolean => {
+        if (row?.kind !== "issue" && row?.kind !== "section") return false;
+        if (!row.collapsible) return false;
+        if (collapsed.has(row.id)) collapsed.delete(row.id);
+        else collapsed.add(row.id);
+        return true;
+      };
       if (data === "\r" || data === "\n") {
         const row = work.selectable[workSel];
+        if (row?.kind === "section") { toggleFold(row); draw(); return; }
         if (row?.kind === "issue") { selectedIssueKey = refKey(row.issue.ref); issueRunSel = 0; issueScroll = 0; screen = "issue"; }
         else if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
         draw();
         return;
       }
       if (data === " ") {
-        const row = work.selectable[workSel];
-        if (row?.kind === "issue" || row?.kind === "section") {
-          if (collapsed.has(row.id)) collapsed.delete(row.id); else collapsed.add(row.id);
-        }
+        toggleFold(work.selectable[workSel]);
         draw();
         return;
       }

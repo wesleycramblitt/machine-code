@@ -55,7 +55,7 @@ export interface WorkOptions {
 
 export interface WorkIndex {
   rows: WorkRow[];
-  /** Rows a cursor can land on (sections are skipped). */
+  /** Rows a cursor can land on, including collapsible section headings. */
   selectable: WorkRow[];
   byRunId: Map<string, WorkRow & { kind: "run" }>;
   byIssueKey: Map<string, WorkRow & { kind: "issue" }>;
@@ -229,7 +229,7 @@ export function buildWorkIndex(options: WorkOptions): WorkIndex {
   pushSection("Untracked", "section:untracked", untracked);
   pushSection("Orphaned issue", "section:orphaned", orphaned);
 
-  const selectable = rows.filter((row) => row.kind !== "section");
+  const selectable = rows;
   const attentionIssues = [...byIssueKey.values()].filter((row) => ATTENTION_HEALTH.has(row.rollup.health)).length;
   const attentionRuns = options.runs.filter(statusNeedsAttention).length;
   return {
@@ -244,7 +244,7 @@ export function buildWorkIndex(options: WorkOptions): WorkIndex {
   };
 }
 
-/** Next/previous selectable row, skipping sections. */
+/** Next/previous cursor row. Section headings are normal cursor stops. */
 export function moveSelection(index: number, delta: number, selectable: readonly WorkRow[]): number {
   if (selectable.length === 0) return 0;
   return Math.max(0, Math.min(selectable.length - 1, index + delta));
