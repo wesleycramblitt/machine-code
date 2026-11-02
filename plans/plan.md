@@ -17,8 +17,9 @@
 > artifact inventory and safe tool-manifest provisioning; executable scripts
 > remain human-approved CLI work. The read-only scheduler, dry-run CLI, TUI
 > preflight, and orchestration ledger/lease are implemented. Issue `plan`
-> writes/replaces `mc:plan` safely. LSP servers are supervised. The suite has
-> 234 tests.
+> writes/replaces `mc:plan` safely. LSP servers are supervised. Sequential
+> orchestration dispatch can execute a ready task through Build, gates, Review,
+> commit, and PR. The suite has 236 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -377,13 +378,14 @@ machine_code run --agent planner --issue 42 "<planning request>"
 Rejection moves the task to `needs_planning` and stops. No automatic Planner
 loop.
 
-## 8. Phase 5 — Read-only Orchestrator
+## 8. Phase 5 — Orchestrator
 
 Status: the pure scheduler (`src/orchestrator/scheduler.ts`),
 `machine_code orchestrate status|tick --dry-run`, and the TUI Orchestrate
 preflight exist: scopes, readiness, dependency order, active-run suppression,
-cycle reporting, JSON output, and durable ledger/lease state. Remaining:
-execution wiring (build/review dispatch, gates, closure, checkpoints).
+cycle reporting, JSON output, durable ledger/lease state, and sequential
+execution through the existing Build/gates/Review/commit/PR pipeline. Remaining:
+task closure/acceptance automation, retry policy, and parallel execution.
 
 ### Scopes
 
@@ -461,6 +463,12 @@ Replanning is always an explicit human/TUI Planner run. Technical failures are
 not silently reclassified as planning failures.
 
 ## 9. Phase 6 — Sequential execution
+
+Status: partially implemented. `executeTask` synthesizes a frozen packet, creates
+the Task worktree, and reuses the Build/gates/Review/commit/PR chain
+sequentially. Remaining: typed outcomes, closure/acceptance automation, retry
+policy, packet/result human checkpoints, and making the Orchestrator the primary
+path.
 
 - Dispatch Build and Review as separate runs. Build uses an isolated worktree;
   Review reads that worktree read-only.
@@ -558,7 +566,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 234 tests green. Add:
+Keep the existing 236 tests green. Add:
 
 | Area | Cases |
 |---|---|

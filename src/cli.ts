@@ -45,6 +45,8 @@ import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
+import { executeTask } from "./orchestrator/execute.js";
+import { acquireLease, createOrchestration, listOrchestrations, readOrchestration, releaseLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
@@ -191,8 +193,9 @@ Usage:
   machine_code model cooldown clear <id>
   machine_code availability [--probe] [--free-only] [--json]
                                     Show or probe cooling model availability
-  machine_code orchestrate status|tick --dry-run [--scope project|epic|feature]
-                                    Compute ready tasks from the issue graph
+  machine_code orchestrate status|tick|start [--dry-run]
+                                    [--scope project|epic|feature] [--epic <n>|--feature <n>]
+                                    Compute or execute ready issue-graph tasks
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code queue               Process committed packets in .machine_code/tasks/
   machine_code version
@@ -2631,22 +2634,22 @@ async function cmdProcesses(argv: string[]): Promise<number> {
 async function cmdOrchestrate(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const sub = positional[0] ?? "status";
-  if (sub !== "status" && sub !== "tick") fail("usage: machine_code orchestrate status|tick --dry-run [--scope project|epic|feature]");
-  if (sub === "tick" && !flags.has("dry-run")) {
-    fail("orchestrate tick is read-only in this phase; pass --dry-run");
+  if (sub !== "status" && sub !== "tick" && sub !== "start") {
+    fail("usage: machine_code orchestrate status|tick|start [--dry-run] [--scope project|epic|feature]");
   }
+  const dryRun = flags.has("dry-run") || flags.has("json") || sub === "status";
   const l = layout();
   const machine = loadMachineConfig(l);
   const bundle = await createIssueProvider(l, machine);
   if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
-  const scopeFlag = flags.get("scope");
-  const scope: OrchestrationScope =
-    scopeFlag === "project" || scopeFlag === "feature" || scopeFlag === "epic"
-      ? scopeFlag
+
+  let scope: OrchestrationScope =
+    flags.get("scope") === "project" || flags.get("scope") === "feature" || flags.get("scope") === "epic"
+      ? (flags.get("scope") as OrchestrationScope)
       : flags.has("feature")
         ? "feature"
         : "epic";
-  let scopeRef;
+  let scopeRef: IssueRef | undefined;
   if (scope === "epic") {
     const epic = flags.get("epic");
     if (!epic) fail("epic scope needs --epic <number>");
@@ -2656,11 +2659,31 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     if (!feature) fail("feature scope needs --feature <number>");
     scopeRef = parseIssueRef(feature, bundle.repo, "github");
   }
-  const maxParallelRaw = flags.get("max-parallel");
-  const maxParallel = maxParallelRaw === undefined ? undefined : Number(maxParallelRaw);
-  if (maxParallel !== undefined && (!Number.isInteger(maxParallel) || maxParallel < 0)) {
-    fail("--max-parallel must be a non-negative integer");
+
+  let orchestration: OrchestrationState | undefined;
+  const requestedId = flags.get("orchestration");
+  if (requestedId) {
+    orchestration = readOrchestration(l, requestedId) ?? undefined;
+    if (!orchestration) fail(`no such orchestration: ${requestedId}`);
+    scope = orchestration.scope;
+    scopeRef = orchestration.scopeRef;
+  } else if (!dryRun) {
+    if (sub === "tick") {
+      orchestration = listOrchestrations(l).find(
+        (state) =>
+          state.scope === scope &&
+          ((!scopeRef && !state.scopeRef) ||
+            (scopeRef && state.scopeRef && scopeRef.repo === state.scopeRef.repo && scopeRef.number === state.scopeRef.number)),
+      );
+    }
+    orchestration ??= createOrchestration(l, scope, scopeRef);
   }
+  if (orchestration?.stopReason) fail(`orchestration ${orchestration.id} stopped: ${orchestration.stopReason}`);
+
+  const maxParallelRaw = flags.get("max-parallel");
+  const maxParallel = maxParallelRaw === undefined ? 2 : Number(maxParallelRaw);
+  if (!Number.isInteger(maxParallel) || maxParallel < 0) fail("--max-parallel must be a non-negative integer");
+
   const issues = await bundle.provider.list({ state: "all", limit: 500 });
   const runs = listRuns(l);
   const result = planSchedule({ issues, scope, ...(scopeRef ? { scopeRef } : {}), runs, maxParallel });
@@ -2668,6 +2691,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     process.stdout.write(
       `${JSON.stringify(
         {
+          orchestration: orchestration?.id ?? null,
           scope: result.scope,
           scopeRef: result.scopeRef ?? null,
           tasks: result.tasks.map((task) => ({
@@ -2687,8 +2711,9 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     );
     return 0;
   }
+
   const scopeText = result.scopeRef ? `${result.scope} #${result.scopeRef.number}` : result.scope;
-  process.stdout.write(`orchestration ${scopeText}: ${result.tasks.length} task(s), ${result.ready.length} ready, ${result.dispatch.length} dispatch\n`);
+  process.stdout.write(`orchestration${orchestration ? ` ${orchestration.id}` : ""} ${scopeText}: ${result.tasks.length} task(s), ${result.ready.length} ready, ${result.dispatch.length} dispatch\n`);
   for (const task of result.tasks) {
     const mark = task.ready ? "READY" : "BLOCK";
     process.stdout.write(
@@ -2696,12 +2721,75 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         `${task.reason ? `\n         ${task.reason}` : ""}\n`,
     );
   }
-  if (result.dispatch.length > 0) {
-    process.stdout.write(`dispatch: ${result.dispatch.map((task) => `#${task.issue.ref.number}`).join(", ")}\n`);
-  }
   for (const error of result.errors) process.stderr.write(`orchestrate: ${error}\n`);
-  if (sub === "tick") process.stdout.write("dry-run only; no runs were dispatched.\n");
-  return 0;
+
+  if (dryRun) {
+    if (result.dispatch.length > 0) {
+      process.stdout.write(`dispatch: ${result.dispatch.map((task) => `#${task.issue.ref.number}`).join(", ")}\n`);
+    }
+    return 0;
+  }
+  if (!orchestration) fail("orchestration state missing");
+  const runtime = await loadRuntime(l);
+  const owner = `cli:${process.pid}`;
+  if (!acquireLease(l, orchestration.id, owner, 120_000)) {
+    fail(`orchestration ${orchestration.id} is leased by another process`);
+  }
+  const executed: Array<{ issue: number; runId: string; status: string; error?: string }> = [];
+  let stopReason: string | undefined;
+  try {
+    for (const task of result.dispatch) {
+      if (!task.plan) continue;
+      if (task.plan.planReview === "human" || task.plan.resultReview === "human") {
+        stopReason = `task #${task.issue.ref.number} requires human review`;
+        process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);
+        break;
+      }
+      const attempts = runs.filter((run) => {
+        const assigned = run.taskIssue ?? run.issue;
+        return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
+      }).length;
+      process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempts + 1}\n`);
+      let outcome;
+      try {
+        outcome = await executeTask({
+          layout: l,
+          machine: runtime.machine,
+          policy: runtime.policy,
+          models: runtime.models,
+          catalogue: runtime.catalogue.models,
+          configuredProviders: runtime.configuredProviders,
+          home: l.home,
+          provider: bundle.provider,
+          issue: task.issue,
+          plan: task.plan,
+          orchestrationId: orchestration.id,
+          orchestrationScope: scope,
+          ...(scopeRef ? { scopeRef } : {}),
+          attempt: attempts + 1,
+          requireModel: flags.get("model"),
+        });
+      } catch (error) {
+        stopReason = `task #${task.issue.ref.number} crashed: ${(error as Error).message}`;
+        process.stdout.write(`  STOP  #${task.issue.ref.number}  ${stopReason}\n`);
+        break;
+      }
+      executed.push({ issue: task.issue.ref.number, runId: outcome.runId, status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) });
+      process.stdout.write(`  ${outcome.status === "completed" ? "DONE" : "STOP"}  #${task.issue.ref.number}  ${outcome.runId}  ${outcome.status}${outcome.error ? `  ${outcome.error}` : ""}\n`);
+      if (outcome.status !== "completed") {
+        stopReason = `task #${task.issue.ref.number} ${outcome.status}: ${outcome.error ?? ""}`.trim();
+        break;
+      }
+    }
+    updateOrchestration(l, orchestration.id, {
+      lastTickAt: new Date().toISOString(),
+      checkpoint: executed.length > 0 ? "after-build" : "preflight",
+      ...(stopReason ? { stopReason } : {}),
+    });
+  } finally {
+    releaseLease(l, orchestration.id, owner);
+  }
+  return stopReason ? 1 : 0;
 }
 
 function cmdShow(argv: string[]): number {

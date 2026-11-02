@@ -76,6 +76,17 @@ test("feature and epic scopes include only descendants", () => {
   assert.match(missing.errors.join("\n"), /requires scopeRef/);
 });
 
+test("terminal runs suppress automatic re-dispatch", () => {
+  const task = issue(30);
+  const result = planSchedule({
+    issues: [task],
+    scope: "project",
+    runs: [{ id: "run-1", status: "completed", startedAt: "2026-11-02T00:00:00.000Z", taskIssue: ref(30), issue: ref(30) }],
+  });
+  assert.equal(result.dispatch.length, 0);
+  assert.match(result.tasks[0].reason, /awaiting review\/closure/);
+});
+
 test("cycles are reported and not dispatchable", () => {
   const a = issue(20, { blockedBy: [ref(21)] });
   const b = issue(21, { blockedBy: [ref(20)] });

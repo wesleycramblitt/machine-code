@@ -80,6 +80,20 @@ function activeTaskKeys(runs: readonly RunSummary[] | undefined): Set<string> {
   return keys;
 }
 
+/** Latest terminal run per task; automatic dispatch waits for review/closure. */
+function terminalTaskRuns(runs: readonly RunSummary[] | undefined): Map<string, RunSummary> {
+  const out = new Map<string, RunSummary>();
+  for (const run of runs ?? []) {
+    if (ACTIVE_RUN_STATUSES.has(run.status)) continue;
+    const task = run.taskIssue ?? run.issue;
+    if (!task) continue;
+    const key = refKey(task);
+    const prior = out.get(key);
+    if (!prior || prior.startedAt <= run.startedAt) out.set(key, run);
+  }
+  return out;
+}
+
 function deterministicOrder(tasks: readonly Issue[]): Issue[] {
   const byKey = new Map(tasks.map((issue) => [refKey(issue.ref), issue]));
   const indegree = new Map<string, number>();
@@ -127,6 +141,7 @@ export function planSchedule(input: ScheduleInput): ScheduleResult {
   const scopeTasks = tasksForScope(input.issues, input.scope, input.scopeRef);
   const order = deterministicOrder(scopeTasks);
   const active = activeTaskKeys(input.runs);
+  const terminal = terminalTaskRuns(input.runs);
   const errors: string[] = [];
   if (input.scope !== "project" && !input.scopeRef) {
     errors.push(`${input.scope} scope requires scopeRef`);
@@ -145,6 +160,8 @@ export function planSchedule(input: ScheduleInput): ScheduleResult {
     if (!isReadyPlan(plan)) reasons.push("plan is not ready");
     if (!validation.ok) reasons.push(...validation.errors);
     if (active.has(key)) reasons.push("an active run already owns this task");
+    const prior = terminal.get(key);
+    if (prior) reasons.push(`last run ${prior.id} is ${prior.status}; awaiting review/closure`);
     for (const blocker of issue.blockedBy) {
       const target = byKey.get(refKey(blocker));
       if (!target) reasons.push(`blocker ${blocker.repo}#${blocker.number} is not loaded`);

@@ -199,12 +199,15 @@ machine_code processes <run-id>
 machine_code processes logs <run-id> p-0001
 machine_code processes kill <run-id> p-0001   # or: all
 
-# read-only issue-graph readiness (no dispatch yet)
+# readiness preview, then one sequential execution pass
 machine_code orchestrate status --scope project
-machine_code orchestrate tick --dry-run --scope epic --epic 42
+machine_code orchestrate start --scope epic --epic 42
+machine_code orchestrate tick --orchestration <id> --dry-run
 ```
 
-The TUI Orchestrate tab shows the same schedule. `s` cycles project/epic/feature
+`start` and `tick` execute ready tasks one at a time through Build, gates,
+Review, commit, and PR. Tasks stay open for human acceptance. `--dry-run` only
+prints the schedule. The TUI Orchestrate tab shows the same schedule. `s` cycles project/epic/feature
 scope, `r` refreshes the issue cache, and Enter opens the selected issue.
 
 Orphaned running records are marked failed when read and during prune. Detached
