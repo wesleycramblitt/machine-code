@@ -205,9 +205,9 @@ the selected run will inherit before it starts.
 
 Prompted runs: every run has a stable id, an append-only event log, and a
 transcript checkpoint. Build and orchestrated runs get their own worktree and
-branch; Sudo edits the main tree by default (`--worktree` opts into isolation).
-Runs can ask clarifying questions, be paused/forked, and resume after a
-restart.
+branch; Sudo edits the main tree by default (`--worktree` opts into isolation);
+General and Review never create one. Runs can ask clarifying questions, be
+paused/forked, and resume after a restart.
 
 Design: [plan.md](plan.md) and the upgrade architecture in
 [upgrade-plan.md](upgrade-plan.md).

@@ -1015,11 +1015,11 @@ async function cmdRun(argv: string[]): Promise<number> {
 
   // Build and orchestrated runs work in an isolated worktree on an issue
   // branch. Sudo edits the main tree by default; --worktree opts it in.
-  // Read-only roles stay on the main tree, and review reads the worktree it
-  // inspects.
+  // General and review never create one: General is read-only, and Review
+  // reads the worktree it inspects.
   const forceWorktree = flags.has("worktree");
   const mutating =
-    agentNameParsed === "review"
+    agentNameParsed === "general" || agentNameParsed === "review"
       ? false
       : forceWorktree || agentNameParsed === "build" || (!directExec && mode !== undefined);
   let toolRoot = l.repoRoot;
@@ -1317,8 +1317,12 @@ async function cmdQueue(argv: string[]): Promise<number> {
     const abort = new AbortController();
     // Queued packets always carry their packet id, so the worktree gets the
     // snapshot materialized for Build to read. Sudo packets run on the main
-    // tree unless they carry an orchestration mode.
-    const mutating = packet.mode !== undefined || packet.agent === "build";
+    // tree unless they carry an orchestration mode; General/Review never
+    // create one.
+    const mutating =
+      packet.agent === "general" || packet.agent === "review"
+        ? false
+        : packet.mode !== undefined || packet.agent === "build";
     let toolRoot = l.repoRoot;
     if (mutating) {
       try {

@@ -35,32 +35,43 @@ export function childRuns(runs: readonly RunSummary[], parentId: string): RunSum
 
 export interface ThinkingChunk {
   at: string;
+  /** 1-based attempt. Call indices reset after a retry, so this keeps them apart. */
+  attempt?: number;
   call?: number;
   kind: "text" | "thinking";
   text: string;
   complete: boolean;
 }
 
-/** Live deltas + authoritative turn text, grouped by provider call. */
+/** Live deltas + authoritative turn text, grouped by attempt and provider call. */
 export function thinkingChunks(events: readonly RunEvent[]): ThinkingChunk[] {
   const out = new Map<string, ThinkingChunk>();
   const order: string[] = [];
-  const get = (key: string, at: string, call?: number, kind: "text" | "thinking" = "text"): ThinkingChunk => {
+  let attempt = 0;
+  const get = (
+    key: string,
+    at: string,
+    attemptNo: number,
+    call?: number,
+    kind: "text" | "thinking" = "text",
+  ): ThinkingChunk => {
     let chunk = out.get(key);
     if (!chunk) {
-      chunk = { at, call, kind, text: "", complete: false };
+      chunk = { at, attempt: attemptNo, call, kind, text: "", complete: false };
       out.set(key, chunk);
       order.push(key);
     }
     return chunk;
   };
   for (const event of events) {
+    // Each attempt starts with the loop's upfront call 0 selection.
+    if (event.type === "model_select" && event.call === 0) attempt += 1;
     const call = typeof event.call === "number" ? event.call : undefined;
     if (event.type === "model_delta") {
       const kind = event.kind === "thinking" ? "thinking" : "text";
       const text = typeof event.text === "string" ? event.text : "";
       if (!text) continue;
-      const chunk = get(`${call ?? "?"}:${kind}`, String(event.t ?? ""), call, kind);
+      const chunk = get(`${attempt}:${call ?? "?"}:${kind}`, String(event.t ?? ""), attempt, call, kind);
       chunk.text += text;
       chunk.at = String(event.t ?? chunk.at);
       continue;
@@ -69,10 +80,10 @@ export function thinkingChunks(events: readonly RunEvent[]): ThinkingChunk[] {
     const text = typeof event.text === "string" ? event.text.trim() : "";
     if (!text) continue;
     for (const existing of out.values()) {
-      if (existing.call === call) existing.complete = true;
+      if (existing.attempt === attempt && existing.call === call) existing.complete = true;
     }
-    const key = `${call ?? "?"}:text`;
-    const chunk = get(key, String(event.t ?? ""), call, "text");
+    const key = `${attempt}:${call ?? "?"}:text`;
+    const chunk = get(key, String(event.t ?? ""), attempt, call, "text");
     chunk.text = text;
     chunk.at = String(event.t ?? chunk.at);
     chunk.complete = true;

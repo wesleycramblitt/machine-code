@@ -1577,6 +1577,14 @@ export async function runTui(): Promise<void> {
         const context = readContextManifest(detail.dir);
         const children = childRuns(allRuns, s.id);
         const thinking = thinkingChunks(ev);
+        const thinkingByCall = new Map<string, ThinkingChunk[]>();
+        for (const chunk of thinking) {
+          if (typeof chunk.call !== "number") continue;
+          const key = `${chunk.attempt ?? 0}:${chunk.call}`;
+          const list = thinkingByCall.get(key) ?? [];
+          list.push(chunk);
+          thinkingByCall.set(key, list);
+        }
         const touched = touchedPaths(ev);
         runFooter = `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}`;
         const sectionBar = wrapTokenList(
@@ -1634,9 +1642,11 @@ export async function runTui(): Promise<void> {
         } else if (runSection === "timeline") {
           const eventLines: string[] = [];
           const starts: number[] = [];
+          let timelineAttempt = 0;
           for (let i = 0; i < ev.length; i++) {
             starts[i] = eventLines.length;
             const event = ev[i]!;
+            if (event.type === "model_select" && event.call === 0) timelineAttempt += 1;
             const isSelected = i === eventSel;
             const prefix = isSelected ? `${C}▸${R}` : " ";
             const time = String(event.t ?? "").slice(11, 19);
@@ -1673,10 +1683,36 @@ export async function runTui(): Promise<void> {
             } else if (type === "model_call_end") {
               const usage = (event.usage ?? {}) as { totalTokens?: number; input?: number; output?: number };
               eventLines.push(`${prefix} ${GR}${time}${R} ${M}◉${R} ${W}${String(event.provider)}${R}/${String(event.model)} ${statusColor(String(event.stopReason))}${String(event.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}tok ${Y}$${Number(event.cost ?? 0).toFixed(5)}${R}`);
-              const text = typeof event.text === "string" ? event.text : "";
-              if (text) {
-                for (const line of text.split("\n")) {
+              const callChunks =
+                typeof event.call === "number"
+                  ? (thinkingByCall.get(`${timelineAttempt}:${event.call}`) ?? [])
+                  : [];
+              const textChunk = callChunks.find((chunk) => chunk.kind === "text");
+              const output = (
+                typeof event.text === "string" && event.text.trim().length > 0
+                  ? event.text
+                  : textChunk?.text ?? ""
+              ).trim();
+              if (output) {
+                for (const line of output.split("\n")) {
                   for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${W}${wrapped}${R}`);
+                }
+              }
+              const reasoning = callChunks
+                .filter((chunk) => chunk.kind === "thinking")
+                .map((chunk) => chunk.text)
+                .join("\n")
+                .trim();
+              if (reasoning) {
+                const reasoningLines = reasoning.split("\n");
+                const shown = expandedEvent ? reasoningLines : reasoningLines.slice(0, 3);
+                const more =
+                  !expandedEvent && reasoningLines.length > shown.length
+                    ? ` ${D}(${reasoningLines.length - shown.length} more lines; space to expand)${R}`
+                    : "";
+                eventLines.push(`    ${M}thinking${R}${more}`);
+                for (const line of shown) {
+                  for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
                 }
               }
               if (expandedEvent) {
@@ -1731,10 +1767,18 @@ export async function runTui(): Promise<void> {
             else eventLines.push(`${prefix} ${GR}${time}${R} ${D}${type}${R}`);
           }
           eventSel = Math.max(0, Math.min(ev.length - 1, eventSel));
-          const start = starts[eventSel] ?? 0;
-          if (start < eventScroll) eventScroll = start;
-          if (start >= eventScroll + bodyH - 4) eventScroll = start - (bodyH - 4) + 1;
           const visibleCount = Math.max(1, bodyH - 4);
+          const start = starts[eventSel] ?? 0;
+          const end = starts[eventSel + 1] ?? eventLines.length;
+          if (end - start <= visibleCount) {
+            // Keep the whole selected block visible; selected model calls should
+            // show their output, not just their header.
+            if (end > eventScroll + visibleCount) eventScroll = end - visibleCount;
+            if (start < eventScroll) eventScroll = start;
+          } else {
+            // A long block starts at the top so the first output lines are visible.
+            eventScroll = start;
+          }
           eventScroll = Math.max(0, Math.min(eventScroll, Math.max(0, eventLines.length - visibleCount)));
           lines.push(...eventLines.slice(eventScroll, eventScroll + visibleCount));
           body = clipBody(lines);
