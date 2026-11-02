@@ -38,6 +38,7 @@ import { loadAvailability, saveAvailability, type AvailabilityState } from "./av
 import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
+import { listOrchestrations } from "./orchestrator/state.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
@@ -1989,6 +1990,9 @@ export async function runTui(): Promise<void> {
       actions = joinCommands([
         command("s", "Scope", orchestrateScope, Y),
         command("r", "Issues", undefined, C),
+        command("x", "Start", undefined, G),
+        command("a", "Approve", undefined, Y),
+        command("A", "Result", undefined, Y),
         command("j/k", "Move", undefined, M),
         command("Enter", "Open issue", undefined, G),
       ]);
@@ -3161,16 +3165,64 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "r") { void refreshIssues("current"); draw(); return; }
-      if (data === "\r" || data === "\n") {
+      const selectedTask = () => {
         const cached = readIssueCache(l)?.issues ?? [];
         const runs = listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot);
-        const schedule = planSchedule({
+        return planSchedule({
           issues: cached,
           scope: orchestrateScope,
           ...(orchestrateRef ? { scopeRef: orchestrateRef } : {}),
           runs,
+        }).tasks[orchestrateSel];
+      };
+      if (data === "x") {
+        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+        const args = ["orchestrate", "start", "--scope", orchestrateScope];
+        if (orchestrateScope === "epic" && orchestrateRef) args.push("--epic", String(orchestrateRef.number));
+        if (orchestrateScope === "feature" && orchestrateRef) args.push("--feature", String(orchestrateRef.number));
+        const child = spawn(process.execPath, [cliPath, ...args], {
+          cwd: l.repoRoot,
+          detached: true,
+          stdio: "ignore",
+          env: process.env,
         });
-        const task = schedule.tasks[orchestrateSel];
+        child.unref();
+        notify(`started orchestration for ${orchestrateScope}`);
+        draw();
+        return;
+      }
+      if (data === "a" || data === "A") {
+        const task = selectedTask();
+        const states = listOrchestrations(l);
+        const state =
+          states.find(
+            (candidate) =>
+              candidate.scope === orchestrateScope &&
+              ((!orchestrateRef && !candidate.scopeRef) ||
+                (orchestrateRef &&
+                  candidate.scopeRef?.repo === orchestrateRef.repo &&
+                  candidate.scopeRef.number === orchestrateRef.number)),
+          ) ?? states[0];
+        if (!task) notify("no task selected");
+        else if (!state) notify("no orchestration state");
+        else {
+          const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+          const args = ["orchestrate", "approve", "--orchestration", state.id, "--task", String(task.issue.ref.number)];
+          if (data === "A") args.push("--result");
+          const child = spawn(process.execPath, [cliPath, ...args], {
+            cwd: l.repoRoot,
+            detached: true,
+            stdio: "ignore",
+            env: process.env,
+          });
+          child.unref();
+          notify(`${data === "A" ? "result" : "packet"} approval for #${task.issue.ref.number}`);
+        }
+        draw();
+        return;
+      }
+      if (data === "\r" || data === "\n") {
+        const task = selectedTask();
         if (task) {
           selectedIssueKey = refKey(task.issue.ref);
           page = "runs";

@@ -383,9 +383,10 @@ loop.
 
 Status: the pure scheduler (`src/orchestrator/scheduler.ts`),
 `machine_code orchestrate status|tick --dry-run`, and the TUI Orchestrate
-preflight exist: scopes, readiness, dependency order, active-run suppression,
-cycle reporting, JSON output, durable ledger/lease state, and sequential
-execution through the existing Build/gates/Review/commit/PR pipeline. Remaining:
+preflight/controls exist: scopes, readiness, dependency order, active-run suppression,
+cycle reporting, JSON output, durable ledger/lease state, sequential execution
+through the existing Build/gates/Review/commit/PR pipeline, and TUI start/approve
+controls. Remaining:
 task closure/acceptance automation, retry policy, and parallel execution.
 
 ### Scopes

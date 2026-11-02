@@ -214,7 +214,9 @@ typed `Verdict:`; both are recorded as events. Completion failures retry with
 evidence up to the task's `retries_before_replan`, then stop at
 `needs_planning`. Tasks stay open for human acceptance. `--dry-run` only
 prints the schedule. The TUI Orchestrate tab shows the same schedule. `s` cycles project/epic/feature
-scope, `r` refreshes the issue cache, and Enter opens the selected issue.
+scope, `r` refreshes the issue cache, `x` starts execution for the scope, `a`
+approves the selected packet, `A` approves its result, and Enter opens the
+selected issue.
 
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are
