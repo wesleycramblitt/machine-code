@@ -920,6 +920,15 @@ export async function runTui(): Promise<void> {
     try { return loadPolicy(layout(repoRoot)); } catch { return undefined; }
   };
 
+  const orchestrateCandidates = (): Array<{ scope: OrchestrationScope; ref?: IssueRef }> => {
+    const cached = readIssueCache(l)?.issues ?? [];
+    return [
+      { scope: "project" },
+      ...cached.filter((issue) => issue.kind === "epic").map((issue) => ({ scope: "epic" as const, ref: issue.ref })),
+      ...cached.filter((issue) => issue.kind === "feature").map((issue) => ({ scope: "feature" as const, ref: issue.ref })),
+    ];
+  };
+
   const modelPreview = (): {
     context: ContextPreview;
     model?: CatalogueRow;
@@ -3166,18 +3175,21 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[A" || data === "k") { orchestrateSel = Math.max(0, orchestrateSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { orchestrateSel++; draw(); return; }
       if (data === "s") {
-        const cached = readIssueCache(l)?.issues ?? [];
-        const next = orchestrateScope === "project" ? "epic" : orchestrateScope === "epic" ? "feature" : "project";
-        const wanted = next === "epic" ? "epic" : next === "feature" ? "feature" : undefined;
-        const ref = wanted ? cached.find((issue) => issue.kind === wanted)?.ref : undefined;
-        if (wanted && !ref) {
-          notify(`no cached ${wanted} to scope to`);
-        } else {
-          orchestrateScope = next;
-          orchestrateRef = ref;
-          orchestrateSel = 0;
-          orchestrateScroll = 0;
-        }
+        const candidates = orchestrateCandidates();
+        const index = candidates.findIndex(
+          (candidate) =>
+            candidate.scope === orchestrateScope &&
+            ((!candidate.ref && !orchestrateRef) ||
+              (candidate.ref &&
+                orchestrateRef &&
+                candidate.ref.repo === orchestrateRef.repo &&
+                candidate.ref.number === orchestrateRef.number)),
+        );
+        const next = candidates[(index + 1 + candidates.length) % candidates.length] ?? { scope: "project" as const };
+        orchestrateScope = next.scope;
+        orchestrateRef = next.ref;
+        orchestrateSel = 0;
+        orchestrateScroll = 0;
         draw();
         return;
       }
