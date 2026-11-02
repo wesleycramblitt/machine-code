@@ -99,7 +99,10 @@ Meta routers (ids or names containing `router`) are never selected: they
 forward to unknown upstream models, so their catalogue scores and capabilities
 are guesses. A provider call that produces no stream event within
 `[selection] first_token_timeout_ms` (default 60 s) is aborted, the model is
-cooled, and the run's single bounded retry picks another model.
+cooled, and the run rotates to the next eligible model. Rate limits, free-tier
+usage limits, timeouts, and other retryable provider errors rotate the same
+way until a model succeeds or none remain; a free-tier limit cools every free
+offer on that provider rather than only the model that answered first.
 
 The TUI palette is machine-configurable with hex colors. Header and footer share
 a surface, subpage chrome uses a contrasting accent, and inner section tabs get

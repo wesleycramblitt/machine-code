@@ -13,6 +13,7 @@ export type ErrorKind =
   | "funds"
   | "rate-limit-model"
   | "rate-limit-provider"
+  | "free-limit"
   | "auth"
   | "quota"
   | "timeout"
@@ -39,6 +40,8 @@ export interface ClassifiedError {
 
 const COOLDOWN_TIERS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000, 24 * 60 * 60_000, 7 * 24 * 60 * 60_000, 30 * 24 * 60 * 60_000];
 const MAX_COOLDOWN = 30 * 24 * 60 * 60_000;
+/** Free-tier account limits are not a 1-minute model rate limit. */
+const FREE_LIMIT_COOLDOWN = 30 * 60_000;
 
 export interface ProviderHealth {
   disabled?: boolean;
@@ -162,6 +165,26 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
   const code = status ?? 0;
 
+  // Free-tier account limit: every free offer on that provider is affected,
+  // not just the model that happened to answer first. This must precede the
+  // generic 429 branch (OpenCode returns a 429 FreeUsageLimitError).
+  if (
+    msg.includes("free usage limit") ||
+    msg.includes("freeusagelimiterror") ||
+    msg.includes("free tier limit") ||
+    (msg.includes("free models") && msg.includes("subscribe"))
+  ) {
+    return {
+      kind: "free-limit",
+      message: msg,
+      retryable: true,
+      cooldownMs: FREE_LIMIT_COOLDOWN,
+      target: "none",
+      disableProvider: false,
+      needsAuth: false,
+    };
+  }
+
   // Billing / funds
   if (code === 402 || msg.includes("insufficient") || msg.includes("funds") || msg.includes("billing") || msg.includes("payment required") || msg.includes("quota exceeded")) {
     // distinguish account quota (429 with quota) from funds
@@ -256,10 +279,16 @@ export function applyClassification(
   providerId: string,
   modelKey: string,
   classified: ClassifiedError,
+  options?: { freeKeys?: readonly string[] },
 ): void {
   if (classified.disableProvider) disableProvider(state, providerId);
   if (classified.needsAuth) markNeedsAuth(state, providerId);
   if (!(classified.cooldownMs > 0 || classified.retryable)) return;
+  if (classified.kind === "free-limit") {
+    const keys = options?.freeKeys?.length ? options.freeKeys : [modelKey];
+    for (const key of new Set(keys)) coolModel(state, key, classified.cooldownMs || undefined);
+    return;
+  }
   if (classified.target === "model") {
     coolModel(state, modelKey, classified.cooldownMs || undefined);
   } else if (classified.target === "provider") {

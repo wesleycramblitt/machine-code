@@ -38,6 +38,25 @@ test("429 classifies as a retryable rate limit and still cools the target", () =
   assert.equal(isProviderCooling(state2, "opencode-go"), true);
 });
 
+test("free usage limits cool every free offer, not just the first model", () => {
+  const classified = classifyError(
+    new Error(
+      '429: {"type":"FreeUsageLimitError","message":"Free usage limit reached. Free models work in OpenCode; subscribe to OpenCode Go to keep going."}',
+    ),
+  );
+  assert.equal(classified.kind, "free-limit");
+  assert.equal(classified.retryable, true);
+  assert.ok(classified.cooldownMs >= 30 * 60_000 - 1000);
+
+  const state = empty();
+  applyClassification(state, "opencode", "opencode/deepseek-v4.1-flash-free", classified, {
+    freeKeys: ["opencode/deepseek-v4.1-flash-free", "opencode/glm-5.3-flash-free"],
+  });
+  assert.equal(isModelCooling(state, "opencode/deepseek-v4.1-flash-free"), true);
+  assert.equal(isModelCooling(state, "opencode/glm-5.3-flash-free"), true);
+  assert.equal(isProviderCooling(state, "opencode"), false, "paid models stay usable");
+});
+
 test("repeated rate limits escalate the cooldown tier", () => {
   const state = empty();
   const classified = classifyError(new Error("rate limit exceeded"));

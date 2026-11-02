@@ -5,15 +5,17 @@
  * size, run pick(), log the selection, and hand the loop the chosen model.
  * No stickiness — every call is selected and logged independently.
  *
- * Retry: a retryable provider error (rate limit, outage, malformed) gets at
- * most ONE bounded fallback retry on a different model. Insufficient funds,
- * auth failures, and refusals do not retry.
+ * Retry: retryable provider errors (rate limit, free-tier limit, outage,
+ * timeout, malformed) cool the failed target and rotate to the next eligible
+ * model until one succeeds or none remain. Insufficient funds, auth failures,
+ * and refusals do not retry.
  */
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
-import { pick, providerMultiplier } from "./select.js";
+import { pick, providerMultiplier, isFreeRow } from "./select.js";
+import { applyClassification, classifyError, loadAvailability, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
@@ -169,15 +171,40 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const ceiling = effectiveOutputCeiling(policy, input.machine);
   const configuredProviders = input.configuredProviders;
   const fundedProviders = fundedProviderIds(input.machine.providers);
+  // Callers normally load this, but a direct run must still respect persisted
+  // cooldowns. Loading here also keeps the in-memory state current.
+  const availability = input.availability ?? loadAvailability(input.home);
+  const triedModels = new Set<string>();
+
+  const applyErrorState = (
+    provider: string,
+    modelKey: string,
+    classified: ReturnType<typeof classifyError>,
+  ): void => {
+    const state = loadAvailability(input.home);
+    if (classified.kind === "free-limit") {
+      const freeKeys = input.catalogue
+        .filter((row) => row.providerID === provider && isFreeRow(row))
+        .map((row) => row.key);
+      applyClassification(state, provider, modelKey, classified, { freeKeys });
+    } else {
+      applyClassification(state, provider, modelKey, classified);
+    }
+    saveAvailability(input.home, state);
+    Object.assign(availability, state);
+  };
 
   const selectFor = (chars: number) =>
     pick({
       agent: input.agent.name,
       policy,
       machine: input.machine,
-      catalogue: input.catalogue,
+      catalogue:
+        triedModels.size === 0
+          ? input.catalogue
+          : input.catalogue.filter((row) => !triedModels.has(row.key)),
       configuredProviders,
-      availability: input.availability,
+      availability,
       fundedProviders,
       contextChars: chars,
       requireProvider: input.requireProvider,
@@ -192,7 +219,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 
-  let retried = false;
+  let lastFailure: string | undefined;
   let lastAssistant: AssistantMessage | undefined;
   let totalTokens = 0;
   let turns = 0;
@@ -238,21 +265,33 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     totalTokens = 0;
     turns = 0;
     budgetExhausted = false;
+    let appliedError: { key: string; message: string } | undefined;
 
     // First selection up front.
     const first = selectFor(initialChars);
     if ("error" in first) {
-      recorder.event("model_select", { error: first.error, rejected: first.rejected });
+      const error =
+        triedModels.size > 0
+          ? `all eligible models failed (${triedModels.size} tried); last error: ${lastFailure ?? first.error}`
+          : first.error;
+      recorder.event("model_select", { error, rejected: first.rejected });
+      recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure });
       clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
-      return { status: "failed", finalText: "", error: first.error };
+      return { status: "failed", finalText: "", error };
     }
     currentRow = first.selected;
     const firstModel = input.models.getModel(currentRow.providerID, currentRow.id);
     if (!firstModel) {
       const error = `catalogue row ${currentRow.key} is not in the provider's runtime catalog; run: machine_code catalogue refresh`;
       recorder.event("model_select", { call: 0, error });
-      clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
-      return { status: "failed", finalText: "", error };
+      triedModels.add(currentRow.key);
+      lastFailure = error;
+      recorder.event("retry", {
+        failedModel: currentRow.key,
+        kind: "missing-runtime-model",
+        attempt: triedModels.size,
+      });
+      continue;
     }
     let currentModel = firstModel;
     let callIndex = 0;
@@ -594,17 +633,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             // Error classification + availability update (M2).
             if (message.stopReason === "error" && message.errorMessage) {
               try {
-                const { classifyError, applyClassification, loadAvailability, saveAvailability } = await import("./availability.js");
                 const classified = classifyError(new Error(message.errorMessage));
-                const state = loadAvailability(input.home);
                 const provider = message.provider;
-                const key = `${provider}/${message.model}`;
-                applyClassification(state, provider, key, classified);
-                saveAvailability(input.home, state);
-                // mirror into the in-memory state used by this run
-                if (input.availability) {
-                  Object.assign(input.availability, state);
-                }
+                const key = currentRow?.key ?? `${provider}/${message.model}`;
+                applyErrorState(provider, key, classified);
+                appliedError = { key, message: message.errorMessage };
                 recorder.event("error_classified", {
                   kind: classified.kind,
                   target: classified.target,
@@ -653,9 +686,38 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       }
       await agent.waitForIdle();
     } catch (error) {
-      input.signal?.removeEventListener("abort", onExternalAbort);
+      const message = error instanceof Error ? error.message : String(error);
+      if (!cancelRequested && !pauseRequested && !input.signal?.aborted) {
+        try {
+          const classified = classifyError(new Error(message));
+          if (classified.retryable) {
+            const provider = currentRow?.providerID ?? "";
+            const failedKey = currentRow?.key ?? "";
+            if (provider && failedKey) {
+              try {
+                applyErrorState(provider, failedKey, classified);
+              } catch {
+                // availability write failure must not stop rotation
+              }
+              triedModels.add(failedKey);
+            }
+            lastFailure = message;
+            recorder.event("retry", {
+              failedModel: failedKey || "(unknown)",
+              kind: classified.kind,
+              attempt: triedModels.size,
+            });
+            continue;
+          }
+        } catch {
+          // classification failure falls through to the ordinary error path
+        }
+      }
       clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
-      return { status: "failed", finalText: "", error: (error as Error).message };
+      if (cancelRequested) return { status: "cancelled", finalText: "" };
+      if (pauseRequested) return { status: "paused", finalText: "" };
+      if (input.signal?.aborted) return { status: "interrupted", finalText: "" };
+      return { status: "failed", finalText: "", error: message };
     } finally {
       input.signal?.removeEventListener("abort", onExternalAbort);
     }
@@ -681,19 +743,33 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       error = la2?.errorMessage ?? "provider error";
     }
 
-    // Retry decision: at most one bounded fallback on a retryable error.
+    // Retry decision: rotate to the next eligible model on a retryable error.
     const la = lastAssistant as AssistantMessage | undefined;
-    if (status === "failed" && !retried && la?.errorMessage) {
+    if (status === "failed" && la?.errorMessage) {
+      let classified: ReturnType<typeof classifyError> | undefined;
       try {
-        const { classifyError, loadAvailability } = await import("./availability.js");
-        const classified = classifyError(new Error(la.errorMessage));
-        if (classified.retryable) {
-          retried = true;
-          recorder.event("retry", { failedModel: `${la.provider}/${la.model}`, kind: classified.kind });
-          continue; // retry with a fresh agent; the cooled target is now excluded
-        }
+        classified = classifyError(new Error(la.errorMessage));
       } catch {
-        // fall through to return
+        // classification failure falls through to the ordinary failure path
+      }
+      if (classified?.retryable) {
+        const failedKey = currentRow?.key ?? `${la.provider}/${la.model}`;
+        if (!appliedError || appliedError.key !== failedKey || appliedError.message !== la.errorMessage) {
+          try {
+            applyErrorState(la.provider, failedKey, classified);
+          } catch {
+            // availability write failure must not stop rotation
+          }
+        }
+        const failedModel = currentRow?.key ?? failedKey;
+        triedModels.add(failedModel);
+        lastFailure = la.errorMessage;
+        recorder.event("retry", {
+          failedModel,
+          kind: classified.kind,
+          attempt: triedModels.size,
+        });
+        continue; // retry with a fresh agent; the failed/cooled model is excluded
       }
     }
 
