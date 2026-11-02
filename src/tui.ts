@@ -75,6 +75,7 @@ interface UiTheme {
   headerFg: string;
   footerBg: string;
   footerFg: string;
+  bodyBg: string;
   subHeaderBg: string;
   subHeaderFg: string;
   backBg: string;
@@ -105,6 +106,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
     headerFg: ansiHex(merged.header_fg, "fg"),
     footerBg: ansiHex(merged.footer_bg, "bg"),
     footerFg: ansiHex(merged.footer_fg, "fg"),
+    bodyBg: ansiHex(merged.body_bg, "bg"),
     subHeaderBg: ansiHex(merged.sub_header_bg, "bg"),
     subHeaderFg: ansiHex(merged.sub_header_fg, "fg"),
     backBg: ansiHex(merged.back_bg, "bg"),
@@ -950,36 +952,6 @@ export async function runTui(): Promise<void> {
     searchMode = false;
   };
 
-  const subHeaderInfo = (): { title: string; detail: string } | null => {
-    if (screen === "list") return null;
-    if (screen === "run") {
-      const detail = runDetailData();
-      return {
-        title: "Run Details",
-        detail: detail
-          ? `${detail.summary.id.slice(-8)} ${trunc(detail.summary.request.replace(/\s+/g, " "), 72)}`
-          : String(selectedRunId ?? "").slice(-8),
-      };
-    }
-    if (screen === "issue") {
-      const issue = selectedIssue();
-      return issue
-        ? { title: "Issue Details", detail: `#${issue.ref.number} ${issue.title}` }
-        : { title: "Issue Details", detail: selectedIssueKey ?? "" };
-    }
-    if (screen === "newrun") {
-      const issue = newrun.issue ? `#${newrun.issue.number}` : "untracked";
-      return { title: "New Run", detail: `${issue} · ${trunc(newrun.prompt.replace(/\s+/g, " "), 64) || "untitled"}` };
-    }
-    if (screen === "model") {
-      return { title: "Model Details", detail: selectedModelKey ?? "" };
-    }
-    if (screen === "answer") return { title: "Answer Run", detail: String(selectedRunId ?? "").slice(-8) };
-    if (screen === "correct") return { title: "Correct Run", detail: String(selectedRunId ?? "").slice(-8) };
-    if (screen === "help") return { title: "Help", detail: "keyboard reference" };
-    return { title: screen, detail: "" };
-  };
-
   /* --------------------------------------------------------------- render */
 
   const draw = () => {
@@ -1002,20 +974,8 @@ export async function runTui(): Promise<void> {
     const todaySpend = spendToday;
     if (toast && Date.now() - toastAt > 8_000) toast = "";
 
-    const sub = subHeaderInfo();
-    const subHeader = sub
-      ? ` ${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}  ${B}${theme.subHeaderFg}${trunc(`${sub.title}: ${sub.detail}`, Math.max(12, cols - 14))}${R}`
-      : null;
-    const tabTokens = TABS.map((tab) =>
-      tab.id === page
-        ? `${theme.tabActiveBg}${theme.tabActiveFg}${B}${tab.key}:${tab.label}${R}`
-        : `${theme.headerFg}${D}${tab.key}:${tab.label}${R}`,
-    );
-    const header = subHeader ? [subHeader] : wrapTokenList(tabTokens, cols, " ");
-    const headerTone = subHeader ? theme.subHeaderBg : theme.headerBg;
-    const bodyH = Math.max(1, rows - header.length - footerReserve);
-
-    // Resolve a newly launched run as soon as its record is visible.
+    // Resolve a newly launched run before the header is built, so the first
+    // frame already shows the run-detail chrome.
     if (pendingRunAt > 0) {
       const fresh = allRuns
         .filter((run) => new Date(run.startedAt).getTime() >= pendingRunAt - 1_500)
@@ -1031,6 +991,21 @@ export async function runTui(): Promise<void> {
         pendingRunAt = 0;
       }
     }
+
+    const tabTokens = TABS.map((tab) =>
+      tab.id === page
+        ? `${theme.tabActiveBg}${theme.tabActiveFg}${B} ${tab.key}:${tab.label} ${R}`
+        : `${theme.headerFg}${D}${tab.key}:${tab.label}${R}`,
+    );
+    // Run details replace the whole header (tabs included) with a red Back bar.
+    const runDetailHeader = page === "runs" && screen === "run";
+    // Tabs stay visible on every other screen, followed by one blank line.
+    const header: string[] = runDetailHeader
+      ? [` ${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}`, ""]
+      : [...wrapTokenList(tabTokens, cols, " "), ""];
+    // Only the Back[Esc] label is red; the rest of the row keeps the header tone.
+    const headerTone = theme.headerBg;
+    const bodyH = Math.max(1, rows - header.length - (runDetailHeader ? 1 : footerReserve));
 
     const filteredRuns = runsFilter === "all" || runsFilter === "attention"
       ? allRuns
@@ -1071,6 +1046,8 @@ export async function runTui(): Promise<void> {
     let body: string[] = [];
     let actions = "";
     let secondary = "";
+    /** Run details show only the working directory in their footer. */
+    let runFooter = "";
 
     const clipBody = (lines: string[]) => {
       if (lines.length > bodyH) return lines.slice(0, bodyH);
@@ -1080,7 +1057,6 @@ export async function runTui(): Promise<void> {
     /* ------------------------------------------------------------- runs */
     if (page === "runs" && screen === "list") {
       const lines: string[] = [];
-      const repoCount = new Set(runIndex.runs.map(repoOf)).size;
       if (runsGroup === "gh-issue" && issueCachesByRepo.size === 0) {
         lines.push(` ${Y}No issue cache yet.${R} ${D}Runs without issues are listed under Untracked; press r to refresh when gh is available.${R}`);
         lines.push("");
@@ -1158,7 +1134,7 @@ export async function runTui(): Promise<void> {
             command("f", "Filter", runsFilter, M, C),
             command("?", "Help", undefined, GR),
           ]);
-      secondary = `${D}${runIndex.runs.length} run(s) · ${repoCount} repo(s) · ${counts.active} active · ${counts.awaiting} awaiting · ${runIndex.attention} need attention${runsText ? ` · filter “${runsText}”` : ""}${runsAttention || runsFilter === "attention" ? " · attention only" : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+      if (toast) secondary = `${Y}${toast}${R}`;
     }
 
     /* ------------------------------------------------------------ issue */
@@ -1551,10 +1527,11 @@ export async function runTui(): Promise<void> {
         const children = childRuns(allRuns, s.id);
         const thinking = thinkingChunks(ev);
         const touched = touchedPaths(ev);
+        runFooter = `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}`;
         const sectionBar = wrapTokenList(
           RUN_SECTIONS.map((section) =>
             section === runSection
-              ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B}${RUN_SECTION_LABEL[section]}${R}`
+              ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B} ${RUN_SECTION_LABEL[section]} ${R}`
               : `${theme.sectionFg}${RUN_SECTION_LABEL[section]}${R}`,
           ),
           cols - 2,
@@ -1562,13 +1539,15 @@ export async function runTui(): Promise<void> {
         ).map((line) => background(fit(` ${line}`, cols), theme.sectionBg));
         const lines: string[] = [
           ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}${s.mode ? `/${s.mode}` : ""}  ${G}${s.modelCalls}${R} call(s)  ${C}${fmtTokens(s.usage.totalTokens)}${R} tok  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${ago(s.lastActivityAt)}${R}`,
-          ` ${D}${trunc(s.repoRoot, narrow ? cols - 8 : Math.floor(cols / 2))}  ${s.issue ? `#${s.issue.number}  ` : ""}${s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}  ` : ""}${s.worktree ? "worktree" : "read-only"}${R}`,
-          ...sectionBar,
-          ` ${D}${"─".repeat(Math.max(0, cols - 2))}${R}`,
         ];
-        if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
-        if (s.error) lines.push(` ${RED}ERROR ${s.error}${R}`);
+        const issueMeta = [s.issue ? `#${s.issue.number}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
+          .filter(Boolean)
+          .join("  ");
+        if (issueMeta) lines.push(` ${D}${issueMeta}${R}`);
+        lines.push("", ...sectionBar, "");
         if (runSection === "overview") {
+          if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
+          if (s.error) lines.push(` ${RED}ERROR ${s.error}${R}`);
           lines.push(` ${B}${C}Request${R}`);
           for (const line of wrapText(s.request, cols - 4).slice(0, short ? 3 : 6)) lines.push(`  ${W}${line}${R}`);
           lines.push("", ` ${B}${C}Now${R}`);
@@ -1757,18 +1736,6 @@ export async function runTui(): Promise<void> {
           }
           body = clipBody(lines);
         }
-        const answerable = s.status === "awaiting_input" && Boolean(pending?.questionId);
-        actions = joinCommands([
-          command("h/l", "Section", RUN_SECTION_LABEL[runSection], C, Y),
-          command("j/k", runSection === "timeline" ? "Event" : "Scroll", undefined, M),
-          answerable ? command("a", "Answer", undefined, G) : "",
-          command("i", "Interrupt", undefined, RED),
-          command("c", "Correct", undefined, Y),
-          command("p", "Approve", undefined, M),
-          command("o", "Open", undefined, BL),
-          command("Esc", "Back", undefined, GR),
-        ]);
-        secondary = `${D}${s.id} · ${children.length} child run(s) · ${thinking.length} response(s)${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
       }
     }
 
@@ -1873,18 +1840,31 @@ export async function runTui(): Promise<void> {
       command("q", "Quit", undefined, GR),
     ]);
     const statusTokens = [
-      `${C}●${R} ${counts.active} running`,
-      `${Y}?${R} ${counts.awaiting} awaiting`,
-      `${Y}⏸${R} ${counts.paused} paused`,
       `${M}⚑${R} ${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}`,
       `${Y}PR${R} ${counts.openPrs} open`,
       `${G}$${todaySpend.toFixed(2)}${R} today`,
     ];
-    const footer = [
-      ...wrapCommands(actions || defaultActions, cols),
-      ...wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1),
-      ...wrapTokenList(statusTokens, cols, "  "),
+    // Runs list keeps its live counts on the very bottom row of the screen.
+    const runIndicators = [
+      `${C}●${R}  ${counts.active} running`,
+      `${Y}?${R}  ${counts.awaiting} awaiting`,
+      `${Y}⏸${R}  ${counts.paused} paused`,
     ];
+    const commandRows = runDetailHeader ? [] : wrapCommands(actions || defaultActions, cols);
+    const secondaryRows = runDetailHeader ? [] : wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1);
+    // The runs page owns the full status footer: live counts plus approvals/PR/spend.
+    const trailingRows = runDetailHeader
+      ? []
+      : page === "runs" && screen === "list"
+        ? wrapTokenList([...runIndicators, ...statusTokens], cols, "   ")
+        : [];
+    const footer = runDetailHeader
+      ? runFooter
+        ? [` ${D}${runFooter}${R}`]
+        : []
+      : [...commandRows, ...secondaryRows, ...trailingRows];
+    // Key legends sit on the near-black surface; trailing rows keep the footer band.
+    const legendRows = commandRows.length;
     const bodySpace = Math.max(0, rows - header.length - footer.length);
     body = body.slice(0, bodySpace);
     while (body.length < bodySpace) body.push("");
@@ -1892,11 +1872,16 @@ export async function runTui(): Promise<void> {
     while (frame.length < rows) frame.push("");
     const headerCount = header.length;
     const footerStart = headerCount + body.length;
+    // The runs page core sits on a darker surface than the header/footer bands.
+    const bodyTone = page === "runs" ? theme.bodyBg : null;
     const output = frame.slice(0, rows).map((line, index) => {
       const fitted = fit(sanitizeLine(line), cols);
       if (index < headerCount) return background(fitted, headerTone);
-      if (index >= footerStart) return background(fitted, theme.footerBg);
-      return fitted;
+      if (index >= footerStart) {
+        const footerIndex = index - footerStart;
+        return background(fitted, footerIndex < legendRows ? theme.bodyBg : theme.footerBg);
+      }
+      return bodyTone ? background(fitted, bodyTone) : fitted;
     });
     process.stdout.write(SYNC_ON + WRAP_OFF + HOME + output.join("\n") + CLEAR_BELOW + WRAP_ON + SYNC_OFF);
   };

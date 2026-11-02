@@ -43,6 +43,7 @@ export interface ThemeConfig {
   header_fg?: string;
   footer_bg?: string;
   footer_fg?: string;
+  body_bg?: string;
   sub_header_bg?: string;
   sub_header_fg?: string;
   back_bg?: string;
@@ -60,6 +61,7 @@ export const DEFAULT_THEME: Required<ThemeConfig> = {
   header_fg: "#c9d1d9",
   footer_bg: "#161b22",
   footer_fg: "#c9d1d9",
+  body_bg: "#0a0a0a",
   sub_header_bg: "#1f6feb",
   sub_header_fg: "#ffffff",
   back_bg: "#b91c1c",
