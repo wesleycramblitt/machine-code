@@ -202,6 +202,7 @@ machine_code processes kill <run-id> p-0001   # or: all
 # readiness preview, then one sequential execution pass
 machine_code orchestrate status --scope project
 machine_code orchestrate start --scope epic --epic 42
+machine_code orchestrate approve --orchestration <id> --task 31
 machine_code orchestrate tick --orchestration <id> --dry-run
 ```
 

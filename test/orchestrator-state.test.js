@@ -47,6 +47,8 @@ test("creates, reads, lists, and updates ledger state", () => {
     const updated = updateOrchestration(layout, state.id, { checkpoint: "before-build", lastTickAt: "2026-11-02T00:00:00.000Z" });
     assert.equal(updated.checkpoint, "before-build");
     assert.equal(readOrchestration(layout, state.id).lastTickAt, "2026-11-02T00:00:00.000Z");
+    updateOrchestration(layout, state.id, { approvedPackets: [31, 32], checkpoint: "packet_approved" });
+    assert.deepEqual(readOrchestration(layout, state.id).approvedPackets, [31, 32]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

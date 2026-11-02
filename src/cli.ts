@@ -198,6 +198,8 @@ Usage:
   machine_code orchestrate status|tick|start [--dry-run]
                                     [--scope project|epic|feature] [--epic <n>|--feature <n>]
                                     Compute or execute ready issue-graph tasks
+  machine_code orchestrate approve --orchestration <id> --task <n>
+                                    Approve a before-build packet checkpoint
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code queue               Process committed packets in .machine_code/tasks/
   machine_code version
@@ -2638,12 +2640,26 @@ async function cmdProcesses(argv: string[]): Promise<number> {
 async function cmdOrchestrate(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const sub = positional[0] ?? "status";
-  if (sub !== "status" && sub !== "tick" && sub !== "start") {
-    fail("usage: machine_code orchestrate status|tick|start [--dry-run] [--scope project|epic|feature]");
+  if (sub !== "status" && sub !== "tick" && sub !== "start" && sub !== "approve") {
+    fail("usage: machine_code orchestrate status|tick|start|approve [--dry-run] [--scope project|epic|feature]");
   }
   const dryRun = flags.has("dry-run") || flags.has("json") || sub === "status";
   const l = layout();
   const machine = loadMachineConfig(l);
+  if (sub === "approve") {
+    const id = flags.get("orchestration");
+    const task = Number(flags.get("task"));
+    if (!id || !Number.isInteger(task) || task <= 0) {
+      fail("usage: machine_code orchestrate approve --orchestration <id> --task <number>");
+    }
+    const state = readOrchestration(l, id);
+    if (!state) fail(`no such orchestration: ${id}`);
+    if (state.stopReason) fail(`orchestration ${id} is stopped: ${state.stopReason}`);
+    const approvedPackets = [...new Set([...(state.approvedPackets ?? []), task])].sort((a, b) => a - b);
+    updateOrchestration(l, id, { approvedPackets, checkpoint: "packet_approved" });
+    process.stdout.write(`approved packet for task #${task} in orchestration ${id}\n`);
+    return 0;
+  }
   const bundle = await createIssueProvider(l, machine);
   if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
 
@@ -2741,6 +2757,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   }
   const executed: Array<{ issue: number; runId: string; status: string; error?: string }> = [];
   let stopReason: string | undefined;
+  let checkpoint: string | undefined;
   try {
     for (const task of result.dispatch) {
       if (!task.plan) continue;
@@ -2749,8 +2766,13 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);
         break;
       }
-      if (task.plan.planReview === "human" || task.plan.resultReview === "human") {
-        stopReason = `task #${task.issue.ref.number} requires human review`;
+      if (task.plan.planReview === "human" && !(orchestration.approvedPackets ?? []).includes(task.issue.ref.number)) {
+        checkpoint = "awaiting_packet_approval";
+        process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting packet approval\n`);
+        break;
+      }
+      if (task.plan.resultReview === "human") {
+        stopReason = `task #${task.issue.ref.number} requires human result review`;
         process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);
         break;
       }
@@ -2814,7 +2836,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     }
     updateOrchestration(l, orchestration.id, {
       lastTickAt: new Date().toISOString(),
-      checkpoint: executed.length > 0 ? "after-build" : "preflight",
+      checkpoint: checkpoint ?? (executed.length > 0 ? "after-build" : "preflight"),
       ...(stopReason ? { stopReason } : {}),
     });
   } finally {
