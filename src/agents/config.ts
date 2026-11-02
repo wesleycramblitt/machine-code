@@ -240,6 +240,7 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   task: "run:spawn",
   ask: null, // gated by askEnabled(config)
   issue: "issue:read", // per-action capabilities are checked inside the tool
+  artifact: "artifact:provision",
   pr: "pr:read", // per-action capabilities are checked inside the tool
 };
 

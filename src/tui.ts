@@ -1014,8 +1014,14 @@ export async function runTui(): Promise<void> {
     }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess;
     const selectedIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
     const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
-    if (newrun.agent === "build" && selectedIssue && selectedIssue.kind !== "task" && issueAccess !== "create") {
-      notify("Build attaches to a Task. Choose a Task or an agent with issue creation access.");
+    if (
+      !planningAgent &&
+      newrun.agent !== "general" &&
+      selectedIssue &&
+      selectedIssue.kind !== "task" &&
+      issueAccess !== "create"
+    ) {
+      notify(`${newrun.agent} attaches to a Task. Choose a Task or an agent with issue creation access.`);
       return null;
     }
     const args = [

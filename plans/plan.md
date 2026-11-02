@@ -13,8 +13,9 @@
 > open-log, and kill controls. Detached delegated runs are supervised, and
 > orphan records are reconciled on read and during prune. Phase 4 has the
 > read-only Planner role with `issue_access=create`; Architect and Sudo now have
-> read access with an explicit `--allow-issue-create` override. The suite has
-> 224 tests.
+> read access with an explicit `--allow-issue-create` override. The Planner has
+> a read-only artifact inventory tool; provisioning remains human-approved CLI
+> work. The suite has 226 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -319,10 +320,12 @@ calls. The section refreshes while the run is active.
 ## 7. Phase 4 — Planner
 
 Status: partially implemented. `data/agents/planner.toml` is a read-only role
-with issue creation, issue editing, map/search/command/ask/pr tools, and the
-compact planning prompt. New-Epic bootstrap works through `issue create`.
-Remaining: the `artifact` provisioning tool, explicit plan-write helpers,
-human packet review checkpoints, and Planner-specific fixture evals.
+with issue creation, issue editing, map/search/command/ask/pr tools, a
+read-only artifact inventory tool, and the compact planning prompt. New-Epic
+bootstrap works through `issue create`.
+Remaining: artifact provisioning through the human approval path, explicit
+plan-write helpers, human packet review checkpoints, and Planner-specific
+fixture evals.
 
 ```bash
 machine_code run --agent planner "<plan a new epic>"
@@ -546,7 +549,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 224 tests green. Add:
+Keep the existing 226 tests green. Add:
 
 | Area | Cases |
 |---|---|

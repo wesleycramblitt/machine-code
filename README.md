@@ -226,8 +226,10 @@ Feature → Epic, nearest first:
 
 Tools live in `.machine_code/tools/<name>.toml`, scripts under
 `.machine_code/scripts/`. `machine_code tools new <name>` scaffolds both.
-The new-run composer previews exactly which files, tools, scripts, and issues
-the selected run will inherit before it starts.
+Planner can inspect them with the read-only `artifact` tool (`list`, `show`,
+`usage`); creating executable artifacts still goes through the human-approved
+CLI. The new-run composer previews exactly which files, tools, scripts, and
+issues the selected run will inherit before it starts.
 
 Skills live in `.machine_code/skills/<name>/SKILL.md`. Only descriptions are
 always visible; the body loads when an issue references the skill. The curation

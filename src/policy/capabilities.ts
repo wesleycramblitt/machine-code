@@ -23,6 +23,7 @@ export type Capability =
   | "code:read"
   | "code:write"
   | "artifact:write"
+  | "artifact:provision"
   | "issue:read"
   | "issue:create"
   | "issue:plan"
@@ -44,6 +45,7 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   "code:read",
   "code:write",
   "artifact:write",
+  "artifact:provision",
   "issue:read",
   "issue:create",
   "issue:plan",

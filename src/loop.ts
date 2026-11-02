@@ -481,6 +481,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       };
     }
 
+    const artifactContext: import("./tools/artifact.js").ArtifactToolContext | undefined =
+      input.layout && input.agent.tools.includes("artifact")
+        ? {
+            layout: input.layout,
+            capabilities: input.agentCapabilities ?? [],
+            recorder,
+          }
+        : undefined;
+
     // PR tool: read/create/merge are capability- and approval-gated.
     let prContext: import("./tools/pr.js").PrToolContext | undefined;
     if (input.layout && input.agent.tools.includes("pr")) {
@@ -506,6 +515,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             ask: askContext,
             task: taskContext,
             issues: issueContext,
+            artifacts: artifactContext,
             prs: prContext,
             state: memory,
             processes,

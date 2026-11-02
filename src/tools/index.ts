@@ -36,6 +36,7 @@ import { describeCommand, runCommand, type CommandRunResult } from "../commands/
 import { askTool, type AskContext } from "./ask.js";
 import { taskTool, type TaskContext } from "./task.js";
 import { issueTool, type IssueToolContext } from "./issues.js";
+import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { prTool, type PrToolContext } from "./pr.js";
 import { contextTool } from "./context.js";
 import type { RunStateStore } from "../context/state.js";
@@ -51,6 +52,8 @@ export interface ToolContext {
   task?: TaskContext;
   /** When provided, the `issue` tool is live (capability-gated issue access). */
   issues?: IssueToolContext;
+  /** When provided, the `artifact` tool is live (tools/scripts inventory). */
+  artifacts?: ArtifactToolContext;
   /** When provided, the `pr` tool is live (capability-gated PR access). */
   prs?: PrToolContext;
   /** Run state for the `context` tool. */
@@ -553,6 +556,24 @@ function issueUnavailable(): AgentTool<typeof IssueUnavailableParams> {
   };
 }
 
+/* ----------------------------------------------------------------- artifact */
+
+const ArtifactUnavailableParams = Type.Object({
+  action: Type.String({ description: "Artifact operation." }),
+});
+
+function artifactUnavailable(): AgentTool<typeof ArtifactUnavailableParams> {
+  return {
+    name: "artifact",
+    label: "artifact",
+    description: "Reusable tool and script inventory.",
+    parameters: ArtifactUnavailableParams,
+    async execute() {
+      return fail("artifact provisioning is not available in this run (role lacks artifact access)");
+    },
+  };
+}
+
 /* ---------------------------------------------------------------------- pr */
 
 const PrUnavailableParams = Type.Object({
@@ -573,7 +594,18 @@ function prUnavailable(): AgentTool<typeof PrUnavailableParams> {
 
 /* ------------------------------------------------------------------ all */
 
-export type CoreToolName = "read" | "write" | "edit" | "search" | "command" | "context" | "task" | "ask" | "issue" | "pr";
+export type CoreToolName =
+  | "read"
+  | "write"
+  | "edit"
+  | "search"
+  | "command"
+  | "context"
+  | "task"
+  | "ask"
+  | "issue"
+  | "artifact"
+  | "pr";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
   const all: Record<CoreToolName, AgentTool> = {
@@ -586,6 +618,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     task: ctx.task ? taskTool(ctx.task) : taskUnavailable(),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     issue: ctx.issues ? issueTool(ctx.issues) : issueUnavailable(),
+    artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     pr: ctx.prs ? prTool(ctx.prs) : prUnavailable(),
   };
   return allowed.map((name) => all[name]);
