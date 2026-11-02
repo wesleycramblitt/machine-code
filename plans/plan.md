@@ -469,9 +469,9 @@ Status: partially implemented. `executeTask` synthesizes a frozen packet, create
 the Task worktree, and reuses the Build/gates/Review/commit/PR chain
 sequentially. Build outcomes and Review verdicts are typed and recorded;
 completion failures retry with evidence up to `retries_before_replan`.
-Before-build packet approval is stored in the ledger and checked before
-dispatch. Remaining: closure/acceptance automation, after-review human approval,
-and making the Orchestrator the primary path.
+Before-build packet approval and after-review result approval are stored in the
+ledger and checked at their checkpoints. Remaining: closure/acceptance
+automation and making the Orchestrator the primary path.
 
 - Dispatch Build and Review as separate runs. Build uses an isolated worktree;
   Review reads that worktree read-only.

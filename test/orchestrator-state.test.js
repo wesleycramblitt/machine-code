@@ -49,6 +49,8 @@ test("creates, reads, lists, and updates ledger state", () => {
     assert.equal(readOrchestration(layout, state.id).lastTickAt, "2026-11-02T00:00:00.000Z");
     updateOrchestration(layout, state.id, { approvedPackets: [31, 32], checkpoint: "packet_approved" });
     assert.deepEqual(readOrchestration(layout, state.id).approvedPackets, [31, 32]);
+    updateOrchestration(layout, state.id, { approvedResults: [32], checkpoint: "result_approved" });
+    assert.deepEqual(readOrchestration(layout, state.id).approvedResults, [32]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

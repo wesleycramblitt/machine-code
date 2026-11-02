@@ -30,6 +30,8 @@ export interface OrchestrationState {
   lease?: OrchestrationLease;
   /** Task numbers whose before-build packet a human approved. */
   approvedPackets?: number[];
+  /** Task numbers whose completed result a human approved. */
+  approvedResults?: number[];
 }
 
 export function orchestrationsDir(layout: Layout): string {

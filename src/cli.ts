@@ -198,8 +198,8 @@ Usage:
   machine_code orchestrate status|tick|start [--dry-run]
                                     [--scope project|epic|feature] [--epic <n>|--feature <n>]
                                     Compute or execute ready issue-graph tasks
-  machine_code orchestrate approve --orchestration <id> --task <n>
-                                    Approve a before-build packet checkpoint
+  machine_code orchestrate approve --orchestration <id> --task <n> [--result]
+                                    Approve a packet or result checkpoint
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code queue               Process committed packets in .machine_code/tasks/
   machine_code version
@@ -231,6 +231,7 @@ const BOOLEAN_FLAGS = new Set([
   "free-only",
   "coding",
   "probe",
+  "result",
   "tool",
   "inherit-worktree",
   "worktree",
@@ -2655,9 +2656,14 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     const state = readOrchestration(l, id);
     if (!state) fail(`no such orchestration: ${id}`);
     if (state.stopReason) fail(`orchestration ${id} is stopped: ${state.stopReason}`);
-    const approvedPackets = [...new Set([...(state.approvedPackets ?? []), task])].sort((a, b) => a - b);
-    updateOrchestration(l, id, { approvedPackets, checkpoint: "packet_approved" });
-    process.stdout.write(`approved packet for task #${task} in orchestration ${id}\n`);
+    const resultApproval = flags.has("result");
+    const current = resultApproval ? state.approvedResults ?? [] : state.approvedPackets ?? [];
+    const approved = [...new Set([...current, task])].sort((a, b) => a - b);
+    updateOrchestration(l, id, {
+      ...(resultApproval ? { approvedResults: approved } : { approvedPackets: approved }),
+      checkpoint: resultApproval ? "result_approved" : "packet_approved",
+    });
+    process.stdout.write(`approved ${resultApproval ? "result" : "packet"} for task #${task} in orchestration ${id}\n`);
     return 0;
   }
   const bundle = await createIssueProvider(l, machine);
@@ -2771,11 +2777,6 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting packet approval\n`);
         break;
       }
-      if (task.plan.resultReview === "human") {
-        stopReason = `task #${task.issue.ref.number} requires human result review`;
-        process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);
-        break;
-      }
       const priorAttempts = runs.filter((run) => {
         const assigned = run.taskIssue ?? run.issue;
         return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
@@ -2783,6 +2784,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       let retryEvidence: string | undefined;
       let taskDone = false;
       let failureStop: string | undefined;
+      let resultHold = false;
       for (let retry = 0; retry <= task.plan.retriesBeforeReplan; retry++) {
         const attempt = priorAttempts + retry + 1;
         process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempt}${retry > 0 ? ` (retry ${retry})` : ""}\n`);
@@ -2815,6 +2817,11 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         process.stdout.write(`  ${outcome.status === "completed" ? "DONE" : "STOP"}  #${task.issue.ref.number}  ${outcome.runId}  ${outcome.status}${outcome.error ? `  ${outcome.error}` : ""}\n`);
         if (outcome.status === "completed") {
           taskDone = true;
+          if (task.plan.resultReview === "human" && !(orchestration.approvedResults ?? []).includes(task.issue.ref.number)) {
+            resultHold = true;
+            checkpoint = "awaiting_result_approval";
+            process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting result approval\n`);
+          }
           break;
         }
         retryEvidence = outcome.error ?? outcome.status;
@@ -2829,6 +2836,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         }
         process.stdout.write(`  RETRY #${task.issue.ref.number}  evidence: ${retryEvidence.slice(0, 200)}\n`);
       }
+      if (resultHold) break;
       if (!taskDone) {
         stopReason = failureStop ?? `task #${task.issue.ref.number} did not complete`;
         break;
