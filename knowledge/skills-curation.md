@@ -32,9 +32,8 @@ these tools.
 4. **Worktrees include skills.** `.machine_code/skills` is present in a run
    worktree. An agent can read a named skill path if a packet tells it to.
 5. **Prompt budget is tight.** The prompt plan is a shared base of at most
-   1,500 chars plus role deltas of at most 300 chars
-   (`plans/context-and-map-plan.md` §10). Its rule: add a rule only when an eval
-   failure justifies it.
+   1,500 chars plus role deltas of at most 300 chars. Its rule: add a rule only
+   when an eval failure justifies it.
 
 Consequences:
 

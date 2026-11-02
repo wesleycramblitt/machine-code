@@ -24,6 +24,6 @@ args = ["tsc", "--noEmit"]
 description = "Typecheck without emitting"
 timeout_ms = 120000
 
-# Dependency directories symlinked into fresh worktrees (see upgrade-plan.md §4.4).
+# Dependency directories symlinked into fresh worktrees (see plans/plan.md).
 [worktree]
 links = ["node_modules"]

@@ -263,5 +263,4 @@ semantic_model = ""    # pin a model, or leave empty for automatic selection
 refresh = "on-change"  # on-change | manual | always
 ```
 
-Design: [plans/context-and-map-plan.md](plans/context-and-map-plan.md) and the
-upgrade architecture in [plans/upgrade-plan.md](plans/upgrade-plan.md).
+Design and remaining work: [plans/plan.md](plans/plan.md).

@@ -1,328 +1,621 @@
-# machine_code — v1 plan
+# machine_code — remaining work
 
-> A Linux-first, file-based coding-agent tool optimized for correctness per dollar.
+> Consolidated roadmap. This file replaces `plans/context-and-map-plan.md`,
+> `plans/upgrade-plan.md`, and `plans/upgrade-plan-v2.md`; their full design
+> history remains in git. It lists only work that is not built.
+>
+> Baseline: `9388aa7`, 192 tests passing.
+>
+> Goal: complete real repository work with runner-owned evidence, low context
+> cost, and deterministic scheduling. Success measures: ≥80% on the fixed
+> 12-task suite, lower cost per completed task than `pi` and `mini-swe-agent`
+> on the same model, p50 time within 20% of `pi`, every change has gate
+> evidence, and interrupted work resumes explicitly.
 
-## 1. Goals
+## 1. Shipped baseline — do not rebuild
 
-Complete real repository tasks with fewer mistakes, tokens, and less time than general-purpose coding tools.
-
-**Success measures:** ≥80% on a fixed 12-task suite; lower cost per completed task than `pi` and `mini-swe-agent` on the same model; p50 time within 20% of `pi`; every completed change has runner-executed evidence; interrupted work resumes explicitly without replaying unfinished calls.
-
-**Out of scope:** arbitrary shell, permission prompts, automatic merge/PR, daemon/API, public plugin SDK, embeddings/index server, and an always-on agent scheduler. Worktrees isolate changes, not host execution; container isolation is deferred to M5 and must default to network off.
-
-## 2. Principles
-
-- Files are state, Git is history, and tests are truth. One loop, file-based state, and one run-event format.
-- Each agent starts with a small, explicit context; load files and skills on demand. No special `AGENTS.md` loading.
-- Use the fewest core tools. Add capabilities through typed manifests and profiles.
-- The runner verifies work; model assertions do not complete tasks.
-- Keep machine config, committed repo policy, and generated runtime state separate. Every abstraction must earn its complexity.
-
-## 3. Design
-
-### Runtime and dependencies
-
-Linux only; TypeScript on Node 22+. Use exact lockfile pins for `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`, behind local `Loop` and `Models` interfaces. Upgrade deliberately and run the eval suite; vendor only if upstream becomes unusable. `machine_code init` checks the six base CLIs and enabled profile dependencies.
-
-### Models and providers
-
-- **Credentials/catalogue:** use `pi-ai`'s standard environment variables; never store keys in files. `machine_code providers` reports configured providers and key sources. `machine_code catalogue refresh` combines provider metadata, OpenRouter benchmarks, run measurements, and dated curation into `~/.machine_code/catalogue/models.json`; retain provenance with precedence generated → benchmark → measured → curated.
-- **Config:** machine `config.toml` sets rate caps, vetoes, default `max_output_tokens`, and default packet mode; it may also set project-path price overrides. Repo `policy.toml` sets per-agent requirements and may override the output ceiling. Agent override wins over machine default; the effective value is capped by the selected model's maximum. If neither config sets a value, use that model maximum. The ceiling is distinct from total `budget_tokens` and the selector's fixed expected-output estimate. Reject settings below the expected-output value. Price caps are per-million-token rates, evaluated at the context-length tier used; committed repo policy cannot set money.
-- **Selection:** every call runs `pick(agent, requirements, state)`. Estimate input as current-context characters ÷ 4 and output as a fixed value per agent. Hard-filter credentials, tool support, context/output capacity, minimum context, caps, vetoes, and availability; also hard-filter the role-weighted capability floor (`min_fit`), optional neutral composite floor, and any per-axis floors. Then score the role-weighted axis mix (capability quality), estimated cost, speed, and context headroom. Fixed weights are tuned on evals; ties go to lexicographically smaller model ID. No stickiness or automatic model escalation after a failed gate.
-- **Fallback and health:** after a retryable provider error, cool the target and try at most one next-best eligible model; select and log each attempt separately. Do not execute tool calls until a valid response arrives. Insufficient funds disables a provider until manual re-enable. Temporary failures cool models/providers on `1m → 5m → 30m → 2h → 12h → 1d → 7d → 30d`, honoring longer `Retry-After` up to 30 days; success resets the tier. Auth failures become `needs-auth`; context/parameter incompatibility excludes the model for the current run; refusals get no fallback; malformed or unknown errors are logged safely and cool the model at the first tier. Availability is shared in `availability.json` under a lock.
-- **Accounting:** log every selection, estimate, filter summary, and candidate scores to per-run `events.jsonl`. Append one ≤4 KiB record per provider attempt to machine-wide `spend.jsonl`, linked by unique call ID; report actual and estimated spend separately by day, project, provider, and model. CLI/TUI expose provider enable/disable and cooldown-clear actions. Catalogue refresh does not clear health state.
-- Copy only the pure scoring, calibration, and OpenRouter parsing functions from `model-selector`; do not import from OpenCode config or port its tier model; selection has only free/paid here.
-
-### Tools, profiles, and search
-
-Exactly six core tools:
-
-| Tool | Function |
+| Area | Current state |
 |---|---|
-| `read`, `write`, `edit` | Bounded file access; `edit` requires a unique exact match. |
-| `search` | Read-only search in ten modes: map, files, text, structure, JSON, YAML, definition, references, workspace symbols, hover/info. |
-| `command` | Describe or run one named typed command from core, repo/global manifests, profiles, or gates. |
-| `task` | Spawn a bounded fresh-context child; available to Architect and Build, and to Sudo in a single-agent run. |
+| Runtime, models | TypeScript/Node 22, provider catalogue, capability/axis scoring, free/paid tiers, retries, cooldowns, spend ledger |
+| Runs | Run records, event log, transcripts, pause/cancel/fork/resume, `ask`/`respond`, cross-instance control |
+| Worktrees | Run worktrees, issue-based branches, clean preflight, dependency links, runner commits, prune |
+| Issues | GitHub/null providers, Epic → Feature → Task hierarchy, reserved Feature 0/Task 0, completion/approval, dependency reads |
+| PRs | Runner-owned Task → Feature and Feature → main PRs, integration worktree, approval queue, squash merges |
+| Context | Issue/packet/knowledge/skill/tool assembly, provenance, budget, child inheritance |
+| Maps and state | Deterministic map, semantic annotations with coalesced refresh, run-state rendering, artifacts, `context` tool, base + role prompts |
+| TUI/CLI | Four-tab TUI, issue-grouped runs, run detail, timeline, settings, spend/model views, map/status/prompt commands |
+| Reference | Web/PDF extraction and indexed reference bundles via typed commands |
 
-The six-CLI base palette is `git` (worktrees/history/diffs), `rg` (text and file listing), `ast-grep` (`sg`, syntax-shape search/rewrites), `jq` (JSON), `yq` (YAML), and `sd` (regex-by-default/literal with `-l` replacement). Edit precision: LSP for symbol rename, `ast-grep` for syntax shapes, `sd` for text. `rg` covers `grep`/`find`/`fd`; other exclusions include `sed`/`awk`/`perl`, `ctags`, tree-sitter CLI, `comby`, `jscodeshift`/`ts-morph`, `semgrep`, `scip`/`lsif`, presentation/interactive tools, profilers, watchers, and GNU `parallel`.
+The only unfinished validation from this baseline is in Phase 0.
 
-Language profiles declare optional LSP servers: TypeScript (`typescript-language-server`), Python (`pyright-langserver`), Rust (`rust-analyzer`), Go (`gopls`), C/C++ (`clangd`). A thin client uses `vscode-jsonrpc` and `vscode-languageserver-protocol`. Start one server per project lazily under time/memory budgets; it dies with its owner. Missing, over-budget, or indexing servers fall back to `ast-grep`/`rg`, with the fallback logged. LSP results are advisory and may be incomplete or stale. `core:check` supplies fast per-file diagnostics; profile lint/typecheck and gates remain authoritative.
+## 2. Target architecture
 
-Profiles are TOML manifests mapping shared verbs (`build`, `test`, `lint`, `format`, `typecheck`, `run`) to project tools. Initial profiles: TypeScript, Python, Rust, Go, shell, SQLite/data, GitHub; containers and reference ingestion are M5. Missing binaries are configuration gaps, not cooldowns.
+A local build system:
 
-Commands use fixed executables/argument vectors, typed arguments, timeouts, minimal environment, and capped output. Validate arguments and call with `execFile`; never interpolate shell strings. Kill process groups on timeout/interrupt and never pass provider secrets. Core commands:
-
-| Read-only | Mutating |
-|---|---|
-| `core:status`, `diff`, `history`, `show`, `check` | `core:move`, `copy`, `delete`, `replace`, `rewrite`, `rename` |
-
-Mutators belong to Build; Sudo gets all configured commands. `core:rename` previews the LSP workspace edit and reports all touched paths. Bulk replace/rewrite requires explicit path scope and reports paths/counts. All changes are checked in the resulting diff and by runner gates. No arbitrary shell, including for Sudo.
-
-Search/file access stays within the worktree, rejects binaries and symlink escapes, respects `.gitignore`, repo excludes, and built-in excludes (`.git`, `.machine_code/local`, `node_modules`, `vendor`, `dist`, `build`, `target`, `.next`, `coverage`, `.cache`, virtual environments). Default caps: read 24 KiB, search 12 KiB, command 8 KiB; results can be paged. The generated filtered repo map is on-demand, ≤32 KiB, never auto-loaded.
-
-Skills provide instructions, not tools. Prompts list skill names/descriptions; full `SKILL.md` bodies load only on request. `AGENTS.md` is ordinary searchable content. The `reference` skill describes research and curation; only an Architect doing reference work receives task-scoped web search, browser MCP, PDF extraction, and typed reference-index commands. Convert sources into attributed reference bundles, refresh central and project-linked indexes, and write only to `~/.machine_code/references/` and `.machine_code/references/links.toml`—never project code. This integration is M5.
-
-### Agents and modes
-
-Five agents have separate prompts, requirements, and allowlists in `policy.toml`:
-
-- **General:** general questions; only `read`, no search, commands, tasks, or writes. A single-agent role (empty `modes`).
-- **Architect:** explores and compiles an immutable packet (goal, paths, constraints, named gates); does not implement. Read/search/task and read-only core commands only, except scoped reference commands during reference work. Owns `modes = ["direct", "verified", "redundant"]` with `default_mode = "verified"`.
-- **Build:** code-specific implementation of one packet; cannot re-plan or change packet acceptance commands. It has the file tools and configured mutating/profile commands. `direct` adds no tests; `verified` and `redundant` author focused tests.
-- **Review:** fresh, read-only assessment of packet conformance, acceptance coverage, and completion. Read/search/read-only commands only; runs only in `redundant`.
-- **Sudo:** explicit rare single-agent role with all configured repo/global/profile/MCP permissions and core tools. It bypasses Architect, Build, and Review, and edits the main tree by default (`--worktree` opts into isolation). It uses typed commands and does not get arbitrary shell or host-root access.
-
-Modes are declared by the selected agent, not by a global TypeScript enum. A role with no modes runs alone; there is no `solo` value to select. The Architect declares `direct`, `verified`, and `redundant` and defaults to `verified`. The mode selects the coordinator/subagent chain and is validated against that role's data file.
-
-| Role | Modes | Flow |
-|---|---|---|
-| General / Sudo | none | one invocation |
-| Architect | `direct` | Architect → Build without new tests → runner gates |
-| Architect | `verified` | Architect → Build with focused tests → runner gates (default) |
-| Architect | `redundant` | `verified` plus a separate Review invocation; approval required |
-
-Packets may lower, never raise, the configured token budget. Examples: `machine_code run --agent general "summarize README.md"`; `machine_code run --agent architect --mode verified "fix the parser panic"`; `machine_code run --agent sudo "update release metadata"`.
-
-### Context, execution, and verification
-
-Each invocation starts fresh with its prompt, request/packet, allowed tool/skill descriptions, and only necessary handoffs. No repo-wide or skill-body preloads. Search/read are on-demand; no auto-compaction in v1. If the token budget is exceeded, Build writes `HANDOFF.md` and stops; resume is a fresh attempt.
-
-Build and orchestrated runs use a clean Git worktree at `.machine_code/local/worktrees/<run-id>` on `task/<task-id>/<attempt>`. A resumed attempt gets a new run ID and reuses the preserved worktree/branch. Sudo edits the main tree by default; pass `--worktree` to isolate it. General read-only questions read within the selected repository and do not need a worktree. No auto-merge; humans merge successful branches.
-
-The runner resolves gates from the packet plus repo defaults and runs named commands after Build (or after a Sudo mutation). A mutating task needs at least one applicable meaningful command; otherwise it is `blocked`. Record exit code, output, duration, and diff. `done` requires all gates to pass and, in `redundant`, Review approval. The runner always records `git diff --check`. No agent can self-certify.
-
-### Persistence and TUI
-
-Machine state is `~/.machine_code/` (override `MACHINE_CODE_HOME`); repo policy is committed under `.machine_code/`; generated/local state is gitignored under `.machine_code/local/`.
-
-| Location | Contents |
-|---|---|
-| `~/.machine_code/` | `config.toml`, `curation.toml`, catalogue, `spend.jsonl`, `availability.json`, personal profiles/tools/skills, references, instance files. |
-| `.machine_code/` | `policy.toml`, `plan.md`, immutable task packets, profiles/tools/skills, five agent prompts, optional `mcp.json`, and reference links. |
-| `.machine_code/local/` | Per-run `run.json`, append-only `events.jsonl`, packet snapshot, optional `HANDOFF.md`/repo map/control files, and worktrees. |
-
-`config.toml` reloads atomically before each model call. Repo policy/manifests are snapshotted from the task's base commit. Each run has one writer; spend is the only intentionally shared append-only ledger. Secrets never go in files.
-
-`machine_code` runs in the foreground or TUI; use tmux for persistence. No daemon/socket/network listener. Instances register PID/heartbeat. TUI lists runs across instances and sends sequenced control requests through per-run files. A dead owner is reported `interrupted`; stale command groups are terminated, but runs are never restarted automatically. `status`, `log`, `resume`, and `prune` read/write file state; pruning never removes active/interrupted runs. TUI shows the work hierarchy, run detail sections, model explorer, spend, and settings; every setting points at its true file and opens it in `$EDITOR` rather than hiding a partial form. Notifications (M4) are one-way email/webhook on terminal states.
-
-Queue packets are committed files processed in filename order. Completed packets are skipped; interrupted/blocked/failed work stops the queue until explicit resume/requeue. Packets remain immutable and each starts from the current base branch.
-
-### Packet shape
-
-Architect-generated or human-authored packets are immutable once a run begins. Acceptance entries name typed commands, never shell strings:
-
-```yaml
-id: fix-empty-parser
-mode: verified
-budget_tokens: 150000
-# goal, context paths, constraints, acceptance command names/typed args
+```text
+Planner       = configure step
+Issues        = build graph + task specs
+Orchestrator  = deterministic make/ninja
+Build/Review  = sibling runs, not subagents
+Replanning    = explicit Planner rerun
 ```
 
-Queued packets live in `.machine_code/tasks/`. `direct`, `verified`, and `redundant` imply Architect then Build; a single-agent packet omits `mode` and names its `agent` (for example `agent: sudo`).
+Rules:
 
-## 4. Build order
+- The Planner writes plans; it does not implement.
+- Issues and their machine-readable markers are the only project model.
+- The Orchestrator is code. It never calls a model or chooses new work.
+- Build and Review are independent runs. No agent spawns another agent.
+- Only the Planner creates issue structure by default. Issue access is an
+  explicit, visible role capability, not an inferred prompt behavior.
+- `general` and `sudo` remain standalone and outside orchestration.
+- Every run-owned OS process is registered, logged, and killable.
+- Existing issue, run, worktree, context, gate, PR, model, and spend behavior
+  remains intact.
 
-- **M0 — Core and General:** TypeScript app, config/policy loaders, provider/catalogue checks, selector, `pi-agent-core` loop, six tools/base palette, initial built-ins, run event stream. Gate: read-only General works with two providers; Ctrl-C leaves a readable interrupted run.
-- **M1 — Packets and agents:** named acceptance runner, TypeScript profile, bounded repo map, all five agents/modes and permissions, LSP search/check/rename. Gate: verified bug fix passes; direct authors no tests but still runs gates; redundant requires Review; Sudo mutations are gated; Architect/Review cannot mutate code; General only reads; no shell; semantic fallback works; rename passes TypeScript gates.
-- **M2 — State and health:** run records, status/log/resume/prune, machine-wide spend/availability, error classification, bounded provider retry. Gate: long command survives tmux detach; owner death terminates command group and reports interrupted; explicit resume starts fresh without replay; cooldown/disable/re-enable and one-retry behavior pass.
-- **M3 — TUI:** run/instance views, run detail, settings, spend, provider/model recovery actions. Gate: a third TUI observes and interrupts runs owned by TUI and headless instances; one owner can be SIGKILLed without impairing the other.
-- **M4 — Queue and notifications:** ordered immutable packets and terminal notifications. Gate: successful packets notify once; after owner death completed packets are skipped and queue stops at interrupted work.
-- **M5 — Evidence-based extras:** scoped reference ingestion/indexing (web, browser MCP, PDF, source-attributed bundles and linked indexes), then container sandbox only if evals show value. Gate: reference task searches/opens a web source, extracts a PDF, updates indexes, and uses the source in its packet; General never gets research tools.
+### Roles
 
-## 5. Evaluation and risks
+| Role | Kind | Issue | Issue access | Purpose |
+|---|---|---:|---|---|
+| Planner | agent | optional | create | Create/update Epic, Feature, and Task plans |
+| Build | agent | yes | read | Implement one frozen task snapshot |
+| Review | agent | yes | read | Typed verdict on one Build |
+| General | agent | no | none | Read-only questions outside a plan |
+| Sudo | agent | no | read (create opt-in) | Explicit escape hatch outside a plan |
+| Orchestrator | code | yes | manage | Schedule issue-backed runs |
 
-Use 12 workspace tasks (4 fixes, 3 features, 3 refactors, 2 test additions), one strong and one cheap fixed model, and control arms `pi` and `mini-swe-agent`. Record pass/fail, tokens, cost, time, tool calls, retries, interventions, and diff size. Do not ship features without a measured or clear usability benefit.
+Build cannot close its own task or edit the plan. Review cannot mutate the
+worktree. Architect, `task` delegation, `run:spawn`, and the child-run
+`Children` view are removed in Phase 8.
+
+## 3. Phase 0 — Finish shipped validation
+
+### 3.1 Replay the context/map evidence run
+
+Replay `20261102-173114-etdx` on the current build and record turns, calls, tool
+calls, peak context, total tokens, cost, edits, gate result, and wall time.
+
+Acceptance:
+
+- The task produces an edit.
+- ≤12 turns and ≤10 model calls.
+- ≤250,000 total reported tokens (≤35% of the 735,207 baseline).
+- Gates pass.
+- A model changes only on a retry inside the run envelope pool.
+- Context growth blocks with `context_exceeded`; it never switches models.
+- The answer uses `Result / Changes / Evidence` and the STE checklist.
+
+This validates the shipped context work. It is independent of Phases 1-8.
+
+### 3.2 Opt-in GitHub integration test
+
+Add an integration test that uses a real repository only when explicitly enabled
+by an environment flag. Keep it out of the default suite. Cover:
+
+- reserved Feature 0 / Task 0 creation and repair;
+- Task-only association;
+- dependency links;
+- acceptance and approval closure;
+- Task PR → Feature, Feature PR → main.
+
+## 4. Phase 1 — Contracts and schema
+
+- Add `mc:plan` parsing and validation.
+- Add run fields for orchestration/scope/task/attempt/phase/snapshot/review and
+  process counts.
+- Add process record types.
+- Expose `blocked_by` / `depends_on` through the `issue` tool (the provider
+  already supports them).
+- Add artifact-usage events and schema.
+- Add `issue_access` levels and derived issue capabilities; keep
+  `issue:write` as a deprecated alias for `issue:plan`.
+- Keep current run, queue, issue, and PR paths working.
+
+### Task marker
+
+```html
+<!-- mc:plan
+{"v":1,"status":"draft","role":"build","verification":"verified",
+ "worktree":"required","retries_before_replan":2,
+ "plan_review":"agent","result_review":"agent"}
+-->
+```
+
+- `status` is `draft` until material questions are resolved; the Orchestrator
+  ignores drafts.
+- `role` is `build` or `review`.
+- `verification` is `direct`, `verified`, or `redundant`.
+- `worktree` is `required` or `optional`.
+- `plan_review` / `result_review` are `agent` or `human`.
+- `mc:context`, `mc:approval`, and `mc:reserved` remain separate markers.
+- Acceptance criteria stay in the issue body.
+
+### Dependencies and snapshots
+
+- GitHub `blockedBy` is canonical. A task is ready only when every blocker is
+  closed; cycles are rejected. Cross-repo dependencies are deferred.
+- At dispatch, freeze the issue number/title, plan marker, acceptance criteria,
+  dependencies, context references, and base/worktree requirement.
+- Store the snapshot in the run directory and hash it into the run summary.
+- Review judges the build against the snapshot, not a body that changed
+  mid-flight.
+
+### Issue access
+
+Do not add another run mode for planning. Modes already select orchestration;
+a second mode could disagree with the enforced capability. Use one explicit
+access level per role and derive both enforcement and display from it.
+
+```toml
+# data/agents/<role>.toml
+issue_access = "create"   # none | read | plan | create
+```
+
+Repo or machine policy may override it as `[agents.<role>] issue_access`.
+
+| Level | Allows |
+|---|---|
+| `none` | No `issue` tool |
+| `read` | `list`, `view`, `tree` |
+| `plan` | read + `edit`, `link`, dependencies, `mc:plan`/`mc:context` |
+| `create` | plan + create Epic/Feature/Task |
+
+The existing `issues = required|optional|disabled` setting still controls
+whether tracking is required. `issue_access` controls what the role may do.
+
+- Defaults: Planner `create`; Build and Review `read`; General `none`; Sudo
+  `read`. Sudo `create` requires `[agents.sudo] issue_access = "create"` or the
+  explicit `--allow-issue-create` flag.
+- Enforcement: `issue.create` requires `issue:create`; `issue.edit`, `link`,
+  and dependency changes require `issue:plan`; `issue.close` remains a separate
+  approval-gated capability.
+- `--auto-issue` and harness gap-filling require `issue:create`. Otherwise
+  reject with `issue_create_forbidden` and suggest a Planner run.
+- Show the resolved level as a badge: `issues:create`, `issues:plan`,
+  `issues:read`, or `issues:none`. Resolve it as `issue_access` intersected with
+  the role's tool list, so a role without the `issue` tool always shows
+  `issues:none`. Use it in the new-run agent picker, run Overview, and
+  `machine_code policy [role]`.
+- A non-Planner role that has been granted `create` shows a warning and needs
+  explicit confirmation before it starts.
+- Planner attaches to the reserved Task 0 anchor; it does not use `--auto-issue`
+  to manufacture deliverables.
+- Role prompts state the same rule: Planner owns plan writes; Build, Review, and
+  General do not create or edit issue structure; Sudo does so only with explicit
+  create access.
+
+## 5. Phase 2 — Availability heartbeat and preflight
+
+Goal: do not start a run on a model that is known unavailable, and recover a
+cooldown as soon as evidence permits. A heartbeat is evidence, not a guarantee.
+
+What is actually free:
+
+- Provider metadata: authenticated `GET /models`, OpenRouter
+  `GET /models/user` and `GET /key`, Ollama `/api/tags`. These use no inference
+  and cost nothing.
+- Rate-limit headers on an error: `Retry-After` and `X-RateLimit-*`. Successful
+  responses often omit them.
+- There is no cross-provider free endpoint that proves a specific model's
+  current rate-limit state. Do not claim otherwise.
+- Paid completion probes are not implemented. A free-model 1-token probe costs
+  no money but consumes provider request quota, so it is opt-in.
+
+Design:
+
+- Add an `AvailabilityProbe` interface returning `ready`, `cooling`,
+  `unavailable`, `auth`, or `unknown`, plus source, `retryAfter`, and latency.
+- Add provider adapters only where a free metadata endpoint exists. Start with
+  OpenRouter, OpenAI-compatible discovery, and Ollama; everything else returns
+  `unknown` and keeps the existing cooldown.
+- Store `probe_after`, `last_probe`, `last_result`, and evidence in
+  `availability.json`. Keep the cooldown as a circuit breaker: a probe can clear
+  it early only on explicit `ready`; a failed probe extends it; `unknown` leaves
+  it alone.
+- Probe at run start and when a cooldown would gate selection. Optionally probe
+  visible cooling models on a TUI timer; never scan the whole catalogue.
+- A run-start preflight selects the best ready model. If none is ready, block
+  before creating a run record and show which models are cooling, why, and when
+  they can be probed again.
+- Coalesce probes per model and add jitter. One in-flight probe per model.
+- For a paid row, clear a cooldown only from metadata evidence, a manual clear,
+  or the next real run. Never send a probe completion.
+- Free-model completion probes use `max_tokens=1`, no tools, a fixed `ping`
+  prompt, and a short timeout. Run them only after a rate-limit cooldown or a
+  manual request, not on every tick. Record the probe and its result, but do not
+  count it as a run.
+- Events: `availability_probe_started`, `availability_probe_result`,
+  `availability_cooldown_cleared`, `availability_cooldown_extended`.
+- CLI: `machine_code availability [--agent build] [--probe] [--free-only]
+  [--json]` and `machine_code model probe <key>`. Extend the model/TUI status
+  with `ready`, `probing`, `cooling 4m`, `auth`, `funds`, or `unknown`.
+- Config:
+
+```toml
+[availability]
+probe = "metadata"          # off | metadata | free-models
+interval = "5m"
+timeout_ms = 5000
+free_completion_max_per_hour = 2
+```
+
+Probe results are advisory and expire. The real call remains the final
+authority; the probe only prevents a run from starting on a model already known
+to be unavailable.
+
+Acceptance: a pure metadata probe makes zero inference calls; no code path sends
+a paid completion probe; a known-unavailable model does not start a run; a
+recovered free model can clear its cooldown before the conservative timer; all
+probe activity is visible and rate-limited.
+
+## 6. Phase 3 — Process supervision
+
+Ship this before orchestration; it is useful on its own.
+
+### Registry
+
+One supervisor per run:
+
+```text
+.machine_code/local/runs/<run-id>/processes.jsonl
+.machine_code/local/runs/<run-id>/processes/<process-id>.stdout.log
+.machine_code/local/runs/<run-id>/processes/<process-id>.stderr.log
+```
+
+Records include id, run, origin (`tool|command|script|lsp|mcp|orchestrator`),
+name, tool call id, argv, pid/pgid, status, timestamps, exit code/signal, log
+paths, and last-output time. Emit `process_started`, `process_exited`,
+`process_killed`, and optional `process_output_truncated`; do not copy output
+lines into `events.jsonl`.
+
+### Lifecycle
+
+- Route every spawn/`execFile` through `src/processes/supervisor.ts`.
+- Spawn in a separate process group on Linux.
+- Cancel/interrupt terminates the whole group; terminal runs leave no children.
+- Kill sends `SIGTERM`, waits, then `SIGKILL`.
+- Only registered processes owned by the run can be killed. Never accept an
+  arbitrary PID.
+- Reap orphans during reconcile and `prune`.
+
+### Surfaces
+
+```bash
+machine_code processes <run-id> [--json]
+machine_code processes kill <run-id> <process-id|all>
+machine_code processes logs <run-id> <process-id> [--follow]
+```
+
+Run detail gains a **Processes** section with status, origin, name, pid, elapsed
+time, output tail, expand/follow/kill controls, and links from timeline tool
+calls. The section refreshes while the run is active.
+
+## 7. Phase 4 — Planner
+
+```bash
+machine_code run --agent planner "<plan a new epic>"
+machine_code run --agent planner --issue 42 "<planning request>"
+```
+
+- Add `data/agents/planner.toml`; keep `architect` as a deprecated alias until
+  Phase 8. While the alias remains, set its `issue_access` to `read`; only the
+  Planner creates issue structure.
+- Planner tools: `read`, `search`, `command`, `ask`, `issue`, `artifact`, `pr`;
+  read-only code access; no `task`.
+- Capabilities: `code:read`, `context:inherit`, `issue:read`, `issue:create`,
+  `issue:plan`, `artifact:provision`, `pr:read`.
+- Set `issue_access = "create"`. This is the only role that creates Epic,
+  Feature, or Task issues by default.
+- Add the `artifact` tool for listing/showing tools, scripts, manifests, usage,
+  and creating/updating them. New executable scripts require human approval.
+- Add deterministic plan validation and idempotent issue updates.
+- Support new-Epic bootstrap: create the Epic, ensure reserved Feature 0 and
+  Task 0, then attach later planning to the reserved anchor.
+- Update run-target resolution so Planner attaches to the planning anchor;
+  Review stays read-only and does not resolve as a planner.
+- Use `ask` until material ambiguity is resolved. There is no fixed question
+  cap; assumptions must be explicit and accepted.
+- Keep planning in issue memory, not transcript memory. Persist decisions
+  immediately so a new run can resume from issues.
+- Inventory existing tools/scripts before creating new ones. Attach a reference
+  at Task, Feature, or Epic scope according to actual reuse.
+- Record artifact use in Planner, Build, Review, and Orchestrator runs. Promote
+  an artifact after use by two different tasks/features; demote after the
+  configured unused window.
+- Validate before writing: acceptance exists, role/verification valid,
+  dependencies acyclic, context/artifact references exist, `ready` has no open
+  material questions, reserved anchors are not build tasks, scripts approved.
+- Do not require chain-of-thought. Use structured fields, evidence, validators,
+  and human review.
+
+### Human review points
+
+| Point | Marker | Behavior |
+|---|---|---|
+| Before Build | `plan_review: human` | Freeze snapshot; wait in `awaiting_packet_approval` |
+| After Review | `result_review: human` | Wait for human result approval before closure |
+| Before close/merge | `mc:approval` | Existing policy |
+
+Rejection moves the task to `needs_planning` and stops. No automatic Planner
+loop.
+
+## 8. Phase 5 — Read-only Orchestrator
+
+### Scopes
+
+| Scope | Includes |
+|---|---|
+| `project` | All open planned work in one repository |
+| `epic` | One Epic and its descendants |
+| `feature` | One Feature and its Tasks |
+
+Default scope is `epic`. Reserved anchors, drafts, untracked runs, and
+general/sudo runs are never scheduled.
+
+### Ledger and lease
+
+```text
+.machine_code/local/orchestrations/<id>.json
+.machine_code/local/orchestrations/<id>.lock
+.machine_code/local/orchestrations/<id>.events.jsonl
+```
+
+The ledger stores scope, lease owner/heartbeat, checkpoint, stop reason, last
+tick, and process id. It is operational state, not a second project model.
+
+### Tick
+
+1. Acquire or renew the lease.
+2. Reconcile interrupted runs.
+3. Load open tasks and dependency links.
+4. Validate markers, dependencies, cycles, references, and issue association.
+5. Ignore drafts.
+6. Close approved tasks when policy allows.
+7. Mark ready tasks: open, ready plan, all blockers closed, no active run.
+8. Dispatch Build up to `max_parallel`, honoring before-build checkpoints.
+9. Dispatch Review for completed builds with passing gates.
+10. Apply failure policy.
+11. Apply checkpoints and budgets.
+12. Release the lease or sleep.
+
+Every dispatch carries orchestration id, task issue, attempt, phase, and
+`reviewOfRunId`. Check for an active run with the same
+`orchestrationId + taskIssue + phase` before dispatch.
+
+### Triggers and stops
+
+Manual start/step, after-plan optional start, issue polling, watch loop, and TUI
+control. Webhooks are deferred.
+
+```bash
+machine_code orchestrate start --scope epic --epic 42
+machine_code orchestrate tick --scope feature --feature 43 --dry-run
+machine_code orchestrate watch --scope project --interval 15s
+machine_code orchestrate status|pause|resume|stop ...
+machine_code orchestrate approve|reject --task 101
+```
+
+Stop controls: `--max-parallel`, `--max-minutes`, `--max-spend-usd`,
+`--until`, `--checkpoint`, `--default-plan-review`, `--default-result-review`,
+`--on-needs-planning`, `--on-build-failure`.
+
+The same defaults live under `[orchestration]`: `scope`, `max_parallel`,
+`max_minutes`, `max_spend_usd`, `checkpoints`, `default_plan_review`,
+`default_result_review`, `on_needs_planning`, `on_build_failure`, and
+`auto_start_after_plan`.
+
+### Failure semantics
+
+| Outcome | Action |
+|---|---|
+| `completed` | Run gates, then Review |
+| `needs_planning` | Stop at `awaiting_plan`; no Planner loop |
+| `blocked` / `failed` / `interrupted` / `cancelled` | Stop; preserve evidence |
+| Gates fail or Review rejects | Retry Build with evidence up to `retries_before_replan`; then `needs_planning` |
+
+Replanning is always an explicit human/TUI Planner run. Technical failures are
+not silently reclassified as planning failures.
+
+## 9. Phase 6 — Sequential execution
+
+- Dispatch Build and Review as separate runs. Build uses an isolated worktree;
+  Review reads that worktree read-only.
+- Add typed Build outcomes and typed Review verdicts:
+  - Build: `completed`, `needs_planning`, `blocked`, `failed`.
+  - Review: `approved`, `changes_requested`, `needs_planning`, `blocked`,
+    `failed`.
+- Replace prose/regex approval detection with typed parsing.
+- Run gates, close tasks, and record evidence.
+- Implement `needs_planning`, retry budgets, and failure-evidence handoff.
+- Implement before-build packet approval and after-review human approval.
+- Make the Orchestrator the primary path for issue-backed work; keep `queue`
+  as a compatibility path until Phase 8.
+
+## 10. Phase 7 — Parallelism and checkpoints
+
+- Dispatch up to `max_parallel` without duplicate task/phase runs.
+- Enforce wall-clock, spend, and checkpoint stops.
+- Support project scope across Epics.
+- Implement replan stop/resume and failure evidence between attempts.
+- Serialize branch merges where required and surface conflicts.
+- Keep deterministic dependency order and idempotent ticks.
+
+## 11. Phase 8 — TUI and cleanup
+
+Primary tabs:
+
+```text
+1:Runs  2:Models  3:Spend  4:Settings  5:Orchestrate
+```
+
+Orchestrate list: scope, repo, Epic/Feature, plan readiness, counts
+(ready/draft/needs-planning/running/blocked), state/checkpoint, spend, attempts,
+last tick, model preview, pending reviews.
+
+Orchestrate preflight/details: included work, dependency order, per-task plan
+state, review policy, tools/scripts and scope, predicted model/cost, blockers,
+checkpoints, and start/step/pause/resume/stop/replan/approve/reject controls.
+
+Run detail sections become:
+
+```text
+Overview · Timeline · Processes · Thinking · Changes · Context · Related
+```
+
+`Related` shows orchestration id, task issue, attempt, sibling Build/Review, and
+fork/correct lineage. Remove `Children`.
+
+Runs keep repository/issue/status grouping and untracked general/sudo runs.
+Add orchestration/task badges.
+
+The new-run agent picker and run Overview show the `issues:*` badge. A
+non-Planner role with create access requires confirmation. The Models page and
+new-run preview show availability (`ready`, `probing`, `cooling 4m`, `auth`,
+`funds`, `unknown`) and allow a manual probe without starting a run. Start is
+disabled with a reason when no eligible model is ready.
+
+Cleanup:
+
+- Remove `task`, `run:spawn`, Architect, and Architect modes.
+- Deprecate `queue` as the primary scheduler; document migration.
+- Update README and data docs.
+- Keep all existing behavior for runs, issues, worktrees, spend, models, and
+  settings.
+
+## 12. New modules
+
+```text
+src/plan/schema.ts          parse/validate mc:plan
+src/plan/validate.ts        DAG, cycles, context, acceptance, artifacts
+src/plan/artifacts.ts       inventory and provisioning
+src/plan/usage.ts           usage index and promotion hints
+src/availability/probe.ts   probe result types and cooldown reconciliation
+src/availability/adapters.ts free metadata probes by provider
+src/agents/access.ts        issue_access -> capabilities + badge
+src/orchestrator/scheduler.ts
+src/orchestrator/state.ts   leases/checkpoints
+src/orchestrator/execute.ts build/review dispatch
+src/processes/supervisor.ts
+src/processes/registry.ts
+src/processes/kill.ts
+src/tui/orchestrate.ts      pure view model
+```
+
+Expected modifications: `src/cli.ts`, `src/tui.ts`, `src/state/run-schema.ts`,
+`src/tools/index.ts`, `src/tools/issues.ts`, `src/loop.ts`,
+`src/commands/registry.ts`, `src/availability.ts`, `src/agents/config.ts`,
+`src/policy/capabilities.ts`, `src/select.ts`, `src/tui/status.ts`,
+issue provider/tool code, `src/context/assemble.ts`, and
+`data/agents/*.toml`.
+
+Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
+`taskIssue`, `attempt`, `phase`, `reviewOfRunId`, `planSnapshotHash`,
+`planReview`, `resultReview`, `processCount`, `liveProcessCount`.
+
+## 13. Test plan
+
+Keep the existing 192 tests green. Add:
+
+| Area | Cases |
+|---|---|
+| Plan schema | parse/validate, drafts ignored, ready gate, missing acceptance/role, reserved rejected |
+| Dependencies | issue-tool create/edit, readiness, cycle rejection, same-repo only |
+| Availability | metadata probe makes no inference call; paid probe blocked; free probe opt-in; cooldown clears only on `ready`; extends on failure; `unknown` holds; preflight blocks before run creation; probe events and throttling |
+| Issue access | level resolution; create/edit/link/close enforcement; `--auto-issue` guard; `issues:*` badge mapping; non-Planner create override confirmation |
+| Planner | new-Epic bootstrap, idempotent updates, ambiguity loop, artifact reuse/approval, usage promotion; fixture suite: greenfield, extension, missing artifact, ambiguity, dependency, replan |
+| Snapshot | frozen fields, hash, review uses snapshot after issue edit |
+| Orchestrator | scopes, deterministic order, leases, no duplicate dispatch, dry-run, closed/draft/general/sudo exclusion |
+| Failure | `needs_planning` stop, gate/review retries, retry exhaustion, no automatic replan, typed verdicts |
+| Approvals | before-build packet approval, after-review approval, closure policy |
+| Processes | start/exit records, logs, individual/group/all kill, orphan reap, no arbitrary PID, terminal cleanup |
+| TUI | Orchestrate preflight, process selection/follow/kill, Related lineage, availability chip, `issues:*` badge and confirmation, no network in draw |
+| E2E | greenfield Epic, two dependent tasks, parallel tasks, project/feature scope, human packet review, review rejection, missing script reuse, kill a running script; Planner creates issues while Build cannot |
+| Compat | legacy `run.json`, packets, and display-only `solo` mode remain readable |
+| GitHub | opt-in real-repo integration suite from Phase 0 |
+
+## 14. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Upstream API churn | Exact pins and local interfaces; eval before upgrades. |
-| Long tasks exceed context | Hard token budgets, handoff, explicit fresh resume; no silent compaction. |
-| Large/generated repos flood context | Exclusions, bounded tools, filtered map, no shell. |
-| LSP is stale/heavy/missing | Lazy budgets, logged fallback, advisory-only results; gates are truth. |
-| Gate or profile gaps | Typed named gates; missing binaries are configuration errors; report `blocked`. |
-| Untrusted code/remote exposure | No listener; SSH/tmux only. Until container isolation exists, run trusted repos. |
+| GitHub latency or missing `blockedBy` | local cache, conditional requests, same-repo dependencies |
+| Plan edits during execution | immutable task snapshot and hash |
+| Parallel branch/merge conflicts | serialize merges; surface conflicts; one active run per task branch |
+| Process output volume | log files, not event lines; bounded tails |
+| Process-group differences | Linux-first; explicit kill tests |
+| Bad Planner graph | deterministic validators plus human plan review |
+| Duplicate dispatch | leases and the orchestration/task/phase check |
+| Context baseline regresses | complete the Phase 0 replay before v2 evaluation |
+| Probe traffic or quota burn | coalesce per model, jitter, metadata by default, free completion opt-in and capped |
+| Probe claims availability it cannot prove | treat `unknown` as unknown; keep the cooldown; never infer paid rate-limit state from metadata |
+| Agents create issue noise | one `issue_access` level per role, Planner-only by default, tool guard, visible badge |
 
-**Open decisions:** container runtime (M5); notification channel (M4); profile auto-detection vs explicit opt-in (start opt-in); selector weights and per-agent expected output (eval); validate `ast-grep` and `sd` on largest repos (M0); LSP server defaults/budgets (M1); consider LSP code actions only after diagnostics prove useful.
+## 15. Decisions and defaults
 
-## 6. Sources
+| Decision | Default |
+|---|---:|
+| Orchestration scope | epic |
+| Max parallel | 2 |
+| Retries before replan | 2 |
+| Plan review | agent |
+| Result review | agent |
+| Checkpoints | after plan approval, before Feature merge |
+| `on_needs_planning` | stop |
+| `on_build_failure` | stop |
+| Availability probe | metadata only |
+| Availability probe interval / timeout | 5 min / 5 s |
+| Free-model completion probe cap | 2 per hour total |
+| Cooldown early clear | only on `ready` evidence |
+| Paid completion probe | not implemented |
+| Planner issue access | create |
+| Build / Review issue access | read |
+| General issue access | none |
+| Sudo issue access | read; create opt-in with confirmation |
+| Process log retention | same as run retention |
+| LSP/MCP supervision | included |
+| Artifact promotion | 2 different tasks/features |
+| Plan audit | record each accepted revision as an issue comment |
+| Cross-repo dependencies | deferred |
+| Webhooks | deferred |
+| Container sandbox | deferred; worktrees isolate changes, not host execution |
 
-- [Pi](https://github.com/earendil-works/pi): reuse `pi-ai` and `pi-agent-core`, not its CLI or tool surface.
-- [Goose](https://github.com/aaif-goose/goose): interoperability reference; avoid hidden model calls and monolithic orchestration.
-- [OpenHands SDK](https://github.com/OpenHands/software-agent-sdk): isolation/event-log reference, not a stack to adopt.
-- `mini-swe-agent`: small benchmark control arm, not a base.
+Non-goals: agent-to-agent delegation, automatic replanning loops, orchestrating
+untracked general/sudo work, arbitrary shell, daemon/API, public plugin SDK,
+embeddings/index server, web UI, and replacing GitHub as the plan/state source.
 
-## 7. Upgrade addendum (2026-10-31)
+## 16. Acceptance
 
-The harness has been extended beyond this v1 plan. `upgrade-plan.md` is the
-authoritative design for the upgrade; the deltas that matter when reading the
-sections above:
+- No `task` tool or `run:spawn` remains.
+- A run does not start on a model already known to be unavailable; availability
+  state and probe evidence are visible.
+- Metadata probes make no inference call; paid completion probes are not
+  implemented; free-model probes are opt-in and capped.
+- Only the Planner creates issue structure by default; every role shows an
+  explicit `issues:*` access badge and the guard rejects unauthorized creates.
+- Planner creates and validates a complete issue graph, including greenfield
+  Epic bootstrap with reserved anchors.
+- Planner resolves ambiguity with an unbounded human question loop and records
+  decisions in issues.
+- Planner inventories and provisions tools/scripts at the correct scope.
+- Orchestrator supports project, Epic, and Feature scopes and schedules only
+  issue-backed ready tasks.
+- Build and Review are separate runs with typed outcomes.
+- `needs_planning` stops orchestration and requires an explicit Planner run.
+- Completion failures retry to the configured limit, then stop.
+- Optional human packet/result review works.
+- General/sudo stay standalone and untracked-capable.
+- Every run-owned OS process is visible, logged, and killable.
+- Run detail shows Processes and Related, not Children.
+- TUI has Orchestrate preflight and controls.
+- Existing run, issue, worktree, context, PR, spend, model, and settings
+  behavior remains intact.
 
-- **Nine core tools**, not six: `read`, `write`, `edit`, `search`, `command`,
-  `task` (real delegation), `ask` (suspend for user input), `issue` (GitHub),
-  `pr` (pull requests). `task` is no longer a stub.
-- **Agent configuration is separate from run modes.** Roles (general, architect,
-  build, review, sudo) carry explicit config: `delegate`, `verification`
-  (`direct|verified|redundant`), `issues` (`required|optional|disabled`), `ask`,
-  `approval` (`human|agent`), `ambiguity`. Run modes live in each role's
-  `modes` array; an empty array means the role runs alone, so `solo` is not a
-  separate value.
-- **Worktrees are real.** Mutating runs work in
-  `.machine_code/local/worktrees/<run-id>` on `mc/task/<n>` (or `mc/run/<id>`),
-  based on `mc/feature/<n>`; tools, commands, gates, and LSP run there. Branches
-  belong to issues; worktrees belong to runs.
-- **Runs persist beyond the process.** `transcript.json` checkpoints plus an
-  `inbox.jsonl` make awaiting-input, pause/fork, and resume-after-restart work;
-  the `ask` tool suspends a run without creating a new one.
-- **GitHub issues are the work index.** Every Epic gets one reserved
-  `Feature 0: Planning & Review`; every Feature gets one reserved
-  `Task 0: Planning & Review`. Runs attach to Tasks only; Epic/Feature planning
-  resolves to the reserved Task 0. Duplicate empty reserved issues are closed.
-- **Context is assembled per run** from the Task→Feature→Epic hierarchy, explicit
-  packet/knowledge/skill references, the project plan, and the parent run, with
-  a provenance manifest (`context.json`) and a character budget.
-- **PRs are runner-owned.** After gates/review the runner commits the worktree,
-  pushes the branch, and opens a Task PR into the Feature branch; after all
-  deliverable tasks close, `pr feature <n>` runs integration gates and opens the
-  Feature PR to main. Approval defaults to human (TUI/CLI approve), with
-  per-issue opt-in agent merges; squash merges.
-- **TUI**: issue-tree grouping with rollups/health, header counts, filters/sort,
-  awaiting-human filtering, issue cache, and run detail metadata.
+## 17. Deferred polish
 
-### Model selection
+These are not required for v2. Keep current defaults until an eval or usability
+case justifies the change:
 
-Capability is multi-dimensional, not a single scalar. Each catalogue row has
-four calibrated axes — `reasoning`, `code`, `agentic`, `general` — plus a
-composite `capability`. Repo policy sets, per role:
-
-```toml
-[agents.build]
-min_fit = 7.0              # role-weighted hard floor (0-10)
-min_capability = 0         # optional neutral safety floor
-[agents.build.axes]        # explicit hard per-axis floors
-reasoning = 5.5
-code = 6.5
-agentic = 6.5
-general = 3.0
-[agents.build.weights]     # role-weighted mix, normalized
-code = 0.40
-agentic = 0.35
-reasoning = 0.15
-general = 0.10
-```
-
-Every call hard-filters models below `min_fit`, the optional neutral
-`min_capability`, or any axis floor, then scores `0.5 × capability-quality +
-0.25 × cost + 0.10 × speed + 0.15 × headroom` (ascending). Capability-quality
-is the role-weighted axis fit converted to a penalty, so a materially better
-model outranks a cheaper one; close models are decided by cost. Defaults:
-role weights from `data/agents/<role>.toml`, `min_fit = 6`, neutral composite
-floor disabled (0).
-
-Inspect and dry-run the selector without spending tokens:
-
-```
-machine_code models                       # configured providers, capability-sorted
-machine_code models --all --json          # every row
-machine_code models --agent build         # hard filters + selected model + top candidates
-machine_code models --agent review --min-fit 7.6 --context-chars 48000
-```
-
-`--model <catalogue-key>` (or an id suffix) still pins one model. Provider
-note: pin with e.g. `--model opencode-go/glm-5.3-flash`.
-
-### Tiers, funding, and data files
-
-Selection has exactly two tiers:
-
-```toml
-[selection]
-tier = "paid"            # free | paid
-```
-
-- `paid` — every row that passes the capability/context floors is eligible,
-  including zero-price rows. The best fit wins; a free model can win outright.
-  Paid rows from providers without funding are rejected as
-  `unfunded-provider`; free rows bypass the funding check.
-- `free` — only zero-price rows are eligible.
-
-Provider funding and billing adjustments live in machine config:
-
-```toml
-[providers.opencode-go]
-cost_multiplier = 0.5    # 2x cheaper than list (quota discount)
-funded = true
-```
-
-Defaults come from `data/providers/<id>.toml`; `openrouter`, `opencode`, and
-`opencode-go` ship funded. Override per run with `--tier free|paid`. The
-catalogue (`~/.machine_code/catalogue/models.json`) is generated from
-`data/providers/`, `data/benchmarks.json`, provider metadata, and curation,
-and contains the full provider table plus every model's pricing, context,
-axes, and capability score. That is the single runtime data file. Each model row carries explicit
-`capabilities` (reasoning/toolCall/image, input/output modalities, context,
-max output), `modes` (reasoning, tools, vision, structured-output, ...),
-`pricing` (including tier bands), `scores` (four axes + composite), and
-`provenance.scoreSources` telling you whether each axis came from a benchmark,
-a metadata prior, or an authored override. Provider entries carry billing
-`modes` (usage/subscription/free), `billing` details ($10/$60 OpenCode Go
-quota), default `costMultiplier`, model counts, and price ranges.
-
-`data/models/<owner>.toml` and `data/offers/<provider>/<owner>.toml` are the
-generated, committed snapshot of the current catalogue (`machine_code
-catalogue snapshot`, or `catalogue refresh --snapshot`). It is normalized:
-capabilities, modes, scores, and benchmarks appear once per canonical model;
-provider offers carry pricing/free and only the fields that differ
-(context/max-output limits, modes, capability gaps). `score_sources` lists
-only non-metadata axes; an absent axis means the metadata prior. It is the
-readable starting point for reviewing model capabilities, modes, and prices;
-it is regenerated, not authoritative. Hand-authored capability/pricing
-corrections go in `data/model-overrides.toml` (machine override:
-`~/.machine_code/data/model-overrides.toml`) and win last.
-
-### Minimums and overrides
-
-Precedence (lowest → highest): built-in defaults → machine `[selection]` →
-machine `[agents.<role>]` → repo `.machine_code/policy.toml` `[agents.<role>]`.
-Axis tables merge per axis.
-
-Experiment per run without editing files:
-
-```bash
-machine_code run --tier free --min-fit 7.0 --min-axes code=6.5,agentic=7 ...
-machine_code models --agent build --min-fit 7.6 --min-axes reasoning=6.5
-```
-
-Inspect/edit the effective policy:
-
-```bash
-machine_code policy [role] [--json]
-machine_code policy edit [--repo]
-```
-
-### Agents and presets as data
-
-`data/agents/<role>.toml` defines one role (inline prompt, tools, read-only
-flag, TUI modes, blurb, default preset, capabilities, and score weights).
-Behavior presets live in `data/presets.toml`. Machine override:
-`~/.machine_code/data/agents/<role>.toml` or `presets.toml`; repo prompt
-override: `.machine_code/agents/<role>.md`. Capability gating stays in the
-harness, not the data files.
-
-### Benchmark provenance
-
-Direct benchmark results (GPQA, tau-bench, SWE-bench, etc.) and Artificial
-Analysis composite indices are stored separately. A composite index feeds its
-axis once; it is never copied into several component columns. Design Arena Elo
-is kept as `designArena` and is not treated as LMArena. Direct provider ids with
-a trailing date (`DeepSeek-V4-Flash-0731`, `claude-...-20241022`) resolve to the
-base canonical model before benchmark lookup.
-
-### Provider notes
-
-- **DeepInfra** is an OpenAI-compatible shim; `/v1/openai/models` metadata
-  supplies pricing, context, max output, and chat filtering.
-- **NVIDIA** models are zero-price in the generated catalog and are retained as
-  `free` rows: selectable in both tiers; free-only selection uses `--tier free`.
-- **OpenCode Go** is discounted via `cost_multiplier`; rate-limit errors cool
-  the model/provider on the tier schedule (1m → 5m → 30m → …), and a provider
-  cooldown makes the next call re-pick another provider.
+- optional branch slugs; numbered `mc/task/<n>` and `mc/feature/<n>` stay;
+- human approval timeout/expiry;
+- activity-feed cap and freeze controls;
+- narrow-terminal header count prioritization;
+- preset Feature integration gate set.
