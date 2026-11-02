@@ -56,7 +56,8 @@ const SYNC_ON = "\x1b[?2026h";
 const SYNC_OFF = "\x1b[?2026l";
 
 const B = "\x1b[1m";
-const D = "\x1b[2m";
+/** Secondary text: an explicit mid-gray reads far better than SGR faint on dark themes. */
+const D = "\x1b[38;2;154;164;178m";
 const R = "\x1b[0m";
 const C = "\x1b[36m";
 const G = "\x1b[32m";
@@ -406,13 +407,39 @@ function wrapTokenList(tokens: readonly string[], width: number, gap: string): s
   return lines.map((line) => (visible(line) > width ? trunc(line, width) : line));
 }
 
+/** Split a raw stdin read into keypresses, keeping ANSI sequences intact. */
+function splitKeys(input: string): string[] {
+  const keys: string[] = [];
+  let index = 0;
+  while (index < input.length) {
+    if (input[index] === "\x1b") {
+      const next = input[index + 1];
+      if (next === "[" || next === "O") {
+        let end = index + 2;
+        while (end < input.length && !/[@-~]/.test(input[end]!)) end += 1;
+        keys.push(input.slice(index, end + 1));
+        index = end + 1;
+      } else {
+        keys.push("\x1b");
+        index += 1;
+      }
+    } else {
+      keys.push(input[index]!);
+      index += 1;
+    }
+  }
+  return keys;
+}
+
 /** Keep a full-width bar's background through embedded style resets. */
 function background(value: string, tone: string): string {
   return `${tone}${value.replaceAll(R, `${R}${tone}`)}${R}`;
 }
 
 function selected(value: string, isSelected: boolean): string {
-  return isSelected ? `${BG}${value}${R}` : value;
+  if (!isSelected) return value;
+  // Keep the selection background through embedded color resets.
+  return `${BG}${value.replaceAll(R, `${R}${BG}`)}${R}`;
 }
 
 function printable(data: string): string {
@@ -458,6 +485,8 @@ export async function runTui(): Promise<void> {
   let modelsCoding = true;
   let modelSel = 0;
   let modelScroll = 0;
+  /** Rows in the exact order they are rendered (grouped), used by Enter/selection. */
+  let modelVisible: CatalogueRow[] = [];
   let selectedModelKey: string | null = null;
 
   let spendDaysWindow = 30;
@@ -997,11 +1026,15 @@ export async function runTui(): Promise<void> {
         ? `${theme.tabActiveBg}${theme.tabActiveFg}${B} ${tab.key}:${tab.label} ${R}`
         : `${theme.headerFg}${D}${tab.key}:${tab.label}${R}`,
     );
-    // Run details replace the whole header (tabs included) with a red Back bar.
+    // Detail screens replace the whole header (tabs included) with a Back bar.
     const runDetailHeader = page === "runs" && screen === "run";
+    const backHeader =
+      runDetailHeader ||
+      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct")) ||
+      (page === "models" && screen === "model");
     // Tabs stay visible on every other screen, followed by one blank line.
-    const header: string[] = runDetailHeader
-      ? [` ${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}`, ""]
+    const header: string[] = backHeader
+      ? [`${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}`, ""]
       : [...wrapTokenList(tabTokens, cols, " "), ""];
     // Only the Back[Esc] label is red; the rest of the row keeps the header tone.
     const headerTone = theme.headerBg;
@@ -1382,7 +1415,7 @@ export async function runTui(): Promise<void> {
       for (const offer of offers.slice(0, Math.max(3, Math.floor(bodyH / 2)))) {
         lines.push(`   ${offer.providerID === model.providerID ? C + "▸" : " "} ${pad(offer.providerID, 18)} ${Y}$${offer.pricing.input}${R}/${Y}$${offer.pricing.output}${R}  ${D}ctx ${fmtContext(offer.context)}${R}`);
       }
-      const w = selectableLines(lines, 0, modelScroll, bodyH);
+      const w = selectableLines(lines, modelScroll, modelScroll, bodyH);
       modelScroll = w.scroll;
       body = clipBody(w.lines);
       actions = joinCommands([
@@ -1398,6 +1431,7 @@ export async function runTui(): Promise<void> {
     else if (page === "models" && screen === "list") {
       const lines: string[] = [];
       const groups = groupModels(modelRows, modelGroup);
+      modelVisible = groups.flatMap((group) => group.rows);
       let flatIndex = 0;
       let selectedLine = 0;
       for (const group of groups) {
@@ -1439,9 +1473,12 @@ export async function runTui(): Promise<void> {
     else if (page === "spend") {
       const query = { days: spendDaysWindow === 0 ? undefined : spendDaysWindow };
       const summary = readSpendSummary(l.home, query);
-      const lines: string[] = [
+      const headerLines = [
         ` ${B}${W}Spend${R} ${D}${spendDaysWindow === 0 ? "all time" : `last ${spendDaysWindow} days`}${R}`,
         ` ${Y}$${summary.totalActual.toFixed(4)}${R} actual  ${D}$${summary.totalEstimated.toFixed(4)} estimate${R}  ${C}${fmtTokens(summary.totalTokens)}${R} tok  ${G}${fmtTokens(summary.freeTokens)}${R} free`,
+      ];
+      const lines: string[] = [
+        ...headerLines.map((line) => background(fit(line, cols), theme.sectionBg)),
         "",
       ];
       if (spendBy === "day") {
@@ -1462,7 +1499,7 @@ export async function runTui(): Promise<void> {
           lines.push(`  ${pad(key, narrow ? 20 : 38)} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
         }
       }
-      const w = selectableLines(lines, 0, spendScroll, bodyH);
+      const w = selectableLines(lines, spendScroll, spendScroll, bodyH);
       spendScroll = w.scroll;
       body = clipBody(w.lines);
       actions = joinCommands([
@@ -1546,9 +1583,14 @@ export async function runTui(): Promise<void> {
         if (issueMeta) lines.push(` ${D}${issueMeta}${R}`);
         lines.push("", ...sectionBar, "");
         if (runSection === "overview") {
+          lines.push(` ${B}${C}Status${R}`);
+          const statusText = s.error ?? s.finalText ?? s.status.toUpperCase();
+          const statusTone = s.error ? RED : s.status === "completed" ? G : W;
+          for (const line of wrapText(statusText, cols - 4).slice(0, short ? 3 : 6)) {
+            lines.push(`  ${statusTone}${line}${R}`);
+          }
           if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
-          if (s.error) lines.push(` ${RED}ERROR ${s.error}${R}`);
-          lines.push(` ${B}${C}Request${R}`);
+          lines.push("", ` ${B}${C}Request${R}`);
           for (const line of wrapText(s.request, cols - 4).slice(0, short ? 3 : 6)) lines.push(`  ${W}${line}${R}`);
           lines.push("", ` ${B}${C}Now${R}`);
           const lastModel = [...ev].reverse().find((event) => event.type === "model_select" && !event.error);
@@ -1872,8 +1914,6 @@ export async function runTui(): Promise<void> {
     while (frame.length < rows) frame.push("");
     const headerCount = header.length;
     const footerStart = headerCount + body.length;
-    // The runs page core sits on a darker surface than the header/footer bands.
-    const bodyTone = page === "runs" ? theme.bodyBg : null;
     const output = frame.slice(0, rows).map((line, index) => {
       const fitted = fit(sanitizeLine(line), cols);
       if (index < headerCount) return background(fitted, headerTone);
@@ -1881,7 +1921,8 @@ export async function runTui(): Promise<void> {
         const footerIndex = index - footerStart;
         return background(fitted, footerIndex < legendRows ? theme.bodyBg : theme.footerBg);
       }
-      return bodyTone ? background(fitted, bodyTone) : fitted;
+      // Every page body uses the theme body color, so the surface is controllable.
+      return background(fitted, theme.bodyBg);
     });
     process.stdout.write(SYNC_ON + WRAP_OFF + HOME + output.join("\n") + CLEAR_BELOW + WRAP_ON + SYNC_OFF);
   };
@@ -1910,7 +1951,7 @@ export async function runTui(): Promise<void> {
 
   /* ------------------------------------------------------------- input */
 
-  stdin.on("data", (data: string) => {
+  const handleKey = (data: string) => {
     if (data === "\x03") {
       cleanup();
       process.exit(0);
@@ -2228,18 +2269,13 @@ export async function runTui(): Promise<void> {
     /* ------------------------------------------------------- models list */
     if (page === "models") {
       if (data === "\x1b[A" || data === "k") { modelSel = Math.max(0, modelSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { modelSel++; draw(); return; }
+      if (data === "\x1b[B" || data === "j") {
+        modelSel = Math.min(Math.max(0, modelVisible.length - 1), modelSel + 1);
+        draw();
+        return;
+      }
       if (data === "\r" || data === "\n") {
-        const statuses = providerStatuses(createModelsCollection());
-        const configured = new Set(statuses.filter((status) => status.configured).map((status) => status.id));
-        const rows = filterModels(loadCatalogue(l.catalogueFile)?.models ?? [], {
-          text: modelText,
-          providers: modelsAll ? undefined : configured,
-          freeOnly: modelsFree,
-          codingOnly: modelsCoding,
-          sort: modelSort,
-        });
-        const row = rows[modelSel];
+        const row = modelVisible[modelSel];
         if (row) { selectedModelKey = row.key; modelScroll = 0; screen = "model"; }
         draw();
         return;
@@ -2326,6 +2362,19 @@ export async function runTui(): Promise<void> {
     }
 
     draw();
+  };
+
+  stdin.on("data", (chunk: string) => {
+    // Terminal key repeat can deliver several keys in one read. Text entry
+    // accepts the whole chunk (so pastes stay intact); navigation replays each
+    // key so held j/k never get dropped.
+    const textEntry =
+      screen === "answer" ||
+      screen === "correct" ||
+      searchMode ||
+      (screen === "newrun" && newRunInsert);
+    if (textEntry && !chunk.includes("\x1b")) handleKey(chunk);
+    else for (const key of splitKeys(chunk)) handleKey(key);
   });
 
   // Issue picker overlay is drawn after the page body by replacing the body

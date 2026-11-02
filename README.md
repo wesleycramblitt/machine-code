@@ -102,20 +102,20 @@ their own darker strip:
 
 ```toml
 [theme]
-header_bg = "#161b22"
-header_fg = "#c9d1d9"
-footer_bg = "#161b22"
-footer_fg = "#c9d1d9"
+header_bg = "#161616"
+header_fg = "#d9d9d9"
+footer_bg = "#161616"
+footer_fg = "#d9d9d9"
 body_bg = "#0a0a0a"
 sub_header_bg = "#1f6feb"
 sub_header_fg = "#ffffff"
-back_bg = "#b91c1c"
-back_fg = "#ffffff"
-section_bg = "#111111"
+back_bg = "#ff5858"
+back_fg = "#0d1117"
+section_bg = "#090909"
 section_fg = "#8b949e"
 section_active_bg = "#d29922"
 section_active_fg = "#111111"
-tab_active_bg = "#58a6ff"
+tab_active_bg = "#58a658"
 tab_active_fg = "#0d1117"
 ```
 
