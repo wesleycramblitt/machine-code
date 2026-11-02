@@ -1,6 +1,6 @@
 ---
 name: reference
-description: Research and curation procedure for turning web sources and PDFs into attributed reference bundles. Use only when asked to gather or index sources.
+description: Use when asked to gather or index web and PDF sources into attributed reference bundles.
 ---
 
 # Reference skill

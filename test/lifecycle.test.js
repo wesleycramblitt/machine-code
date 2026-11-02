@@ -326,3 +326,24 @@ test("sendControl writes a sequenced request and bumps from the ack", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("contextUsage prefers recorded values and falls back to events", async () => {
+  const { contextUsage } = await import("../dist/report/run.js");
+  const events = [
+    { type: "model_request", chars: 4_000 },
+    { type: "model_call_end", usage: { input: 900, cacheRead: 100 } },
+    { type: "model_request", chars: 8_000 },
+    { type: "model_call_end", usage: { input: 0, cacheRead: 0 } },
+  ];
+  const fallback = contextUsage({}, events);
+  assert.equal(fallback.chars, 8_000);
+  assert.equal(fallback.tokens, 1_000);
+  assert.equal(fallback.peakTokens, 2_000);
+  const recorded = contextUsage(
+    { contextChars: 6_000, contextTokens: 1_500, peakContextTokens: 2_500 },
+    events,
+  );
+  assert.equal(recorded.chars, 6_000);
+  assert.equal(recorded.tokens, 1_500);
+  assert.equal(recorded.peakTokens, 2_500);
+});

@@ -26,6 +26,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
+import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
+import { ensureSemanticMap } from "./map/ensure.js";
+import { renderSemanticIndex } from "./map/semantic.js";
+import { RunStateStore } from "./context/state.js";
+import { renderPromptMessages } from "./context/render.js";
 
 export const MAX_TURNS = 25;
 
@@ -88,11 +93,6 @@ function convertToLlm(messages: AgentMessage[]): Message[] {
   );
 }
 
-function contextChars(messages: readonly AgentMessage[]): number {
-  let total = 0;
-  for (const m of messages) total += JSON.stringify(m).length;
-  return total;
-}
 
 const TOOL_SCHEMA_CHARS = 1_500;
 
@@ -211,7 +211,49 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       requireModel: input.requireModel,
     });
 
-  const initialChars = input.agent.prompt.length + input.request.length + 2_000;
+  let mapIndex = "";
+  try {
+    const mapRoot = input.toolRoot ?? input.root;
+    const built = await buildRepoMap(mapRoot);
+    const semantic = await ensureSemanticMap({
+      root: mapRoot,
+      map: built.map,
+      models: input.models,
+      catalogue: input.catalogue,
+      configuredProviders,
+      fundedProviders,
+      policy,
+      machine: input.machine,
+      availability,
+      home: input.home,
+      runId: recorder.id,
+      recorder,
+      signal: input.signal,
+    });
+    mapIndex = [renderMapIndex(built.map), renderSemanticIndex(semantic)].filter(Boolean).join("\n");
+    recorder.event("map_built", {
+      files: built.map.files.length,
+      symbols: symbolCount(built.map),
+      bytes: mapBytes(built.map),
+      cached: built.cached,
+      head: built.map.head,
+    });
+  } catch (error) {
+    recorder.event("map_built", {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const memory = new RunStateStore({
+    runDir: recorder.dir,
+    runId: recorder.id,
+    goal: input.request,
+    repoRoot: input.toolRoot ?? input.root,
+    recorder,
+  });
+
+  const initialChars = input.agent.prompt.length + input.request.length + mapIndex.length + 2_000;
 
   const zeroUsage: Usage = {
     input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
@@ -226,6 +268,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let budgetExhausted = false;
   let currentRow: CatalogueRow | null = null;
   let agent: Agent | undefined;
+  /** Prompt chars for the request being prepared; used for context accounting. */
+  let lastRequestChars = initialChars;
+  let lastPromptChars = 0;
+  /** Rendered prompt for the request being prepared, consumed by transformContext. */
+  let pendingMessages: AgentMessage[] | null = null;
 
   // Instance registration + heartbeat + control-file polling (M3).
   const { registerInstance, heartbeatInstance, unregisterInstance } = await import("./state/instances.js");
@@ -386,6 +433,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             task: taskContext,
             issues: issueContext,
             prs: prContext,
+            state: memory,
           },
           input.agent.tools,
         ),
@@ -512,11 +560,21 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         })();
         return wrapped;
       },
+      transformContext: async (messages) => {
+        if (pendingMessages) {
+          const rendered = pendingMessages;
+          pendingMessages = null;
+          return rendered;
+        }
+        return renderPromptMessages(messages, memory, mapIndex, input.contextText).messages;
+      },
       prepareRequest: ({ context }) => {
-        const chars =
-          contextChars(context.messages) +
-          input.agent.prompt.length +
-          input.agent.tools.length * TOOL_SCHEMA_CHARS;
+        const rendered = renderPromptMessages(context.messages, memory, mapIndex, input.contextText);
+        pendingMessages = rendered.messages;
+        lastPromptChars = rendered.chars;
+        const chars = rendered.chars + input.agent.tools.length * TOOL_SCHEMA_CHARS;
+        lastRequestChars = chars;
+        recorder.recordContext(chars);
         const result = selectFor(chars);
         if ("error" in result) {
           recorder.event("model_select", { call: callIndex + 1, error: result.error, rejected: result.rejected });
@@ -564,6 +622,19 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             lastAssistant = message;
             const usage = message.usage ?? zeroUsage;
             const actual = usage.cost?.total;
+            const actualContextTokens = usage.input + usage.cacheRead;
+            recorder.recordContext(
+              lastRequestChars,
+              actualContextTokens > 0 ? actualContextTokens : undefined,
+            );
+            memory.ingestTurn(agent?.state.messages ?? [], turns + 1);
+            recorder.event("context_state", {
+              turn: turns + 1,
+              chars: lastRequestChars,
+              promptChars: lastPromptChars,
+              tokens: actualContextTokens > 0 ? actualContextTokens : Math.ceil(lastRequestChars / 4),
+              stateChars: memory.renderBlock().length,
+            });
             // Record the assistant's text output for this turn (for the TUI).
             const turnText = message.content
               .filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -580,6 +651,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
                 cacheRead: usage.cacheRead,
                 cacheWrite: usage.cacheWrite,
                 totalTokens: usage.totalTokens,
+              },
+              context: {
+                chars: lastRequestChars,
+                tokens: actualContextTokens > 0 ? actualContextTokens : Math.ceil(lastRequestChars / 4),
               },
               cost: typeof actual === "number" && Number.isFinite(actual) ? actual : null,
               durationMs: message.durationMs ?? null,
@@ -681,7 +756,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         // Resume: the reconstructed transcript tail is already continuable.
         await agent.continue();
       } else {
-        const promptText = input.contextText ? `${input.contextText}\n\n${input.request}` : input.request;
+        const promptText = [mapIndex, input.contextText, input.request].filter(Boolean).join("\n\n");
         await agent.prompt(promptText);
       }
       await agent.waitForIdle();

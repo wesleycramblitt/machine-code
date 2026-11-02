@@ -14,7 +14,7 @@ import { listArtifacts } from "../artifacts/registry.js";
 
 export interface SettingRow {
   id: string;
-  section: "selection" | "providers" | "agents" | "context" | "theme" | "artifacts" | "paths" | "environment";
+  section: "selection" | "providers" | "agents" | "context" | "map" | "theme" | "artifacts" | "paths" | "environment";
   label: string;
   value: string;
   file?: string;
@@ -100,6 +100,40 @@ export function buildSettings(
       section: "context",
       label: "Plan file",
       value: machine.context.planFile ?? "(auto)",
+      file: configFile,
+      editable: false,
+    });
+    rows.push({
+      id: "map.enabled",
+      section: "map",
+      label: "Repository map",
+      value: bool(machine.map.enabled),
+      file: configFile,
+      detail: "Deterministic file and symbol map. Always generated when enabled.",
+      editable: false,
+    });
+    rows.push({
+      id: "map.semantic",
+      section: "map",
+      label: "Semantic map",
+      value: bool(machine.map.semantic),
+      file: configFile,
+      detail: "One bounded annotation call on a stale or dirty map.",
+      editable: false,
+    });
+    rows.push({
+      id: "map.refresh",
+      section: "map",
+      label: "Semantic refresh",
+      value: machine.map.refresh,
+      file: configFile,
+      editable: false,
+    });
+    rows.push({
+      id: "map.semanticModel",
+      section: "map",
+      label: "Semantic model",
+      value: machine.map.semanticModel ?? "(auto)",
       file: configFile,
       editable: false,
     });

@@ -284,3 +284,40 @@ test("listAllRuns discovers runs registered under a fake machine home", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("RunRecorder tracks current and peak context", () => {
+  const root = tempDir("context");
+  const layout = fakeLayout(root);
+  const recorder = new RunRecorder(layout, {
+    agent: "general",
+    mode: "",
+    request: "context test",
+    repoRoot: root,
+  });
+  try {
+    recorder.recordContext(4_000, 1_000);
+    recorder.recordContext(8_000, 2_000);
+    recorder.recordContext(6_000, 1_500);
+    const raw = JSON.parse(readFileSync(join(recorder.dir, "run.json"), "utf8"));
+    assert.equal(raw.usage.contextChars, 6_000);
+    assert.equal(raw.usage.contextTokens, 1_500);
+    assert.equal(raw.usage.peakContextChars, 8_000);
+    assert.equal(raw.usage.peakContextTokens, 2_000);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("migrateRunSummary fills context usage fields for old runs", () => {
+  const migrated = migrateRunSummary({
+    id: "old",
+    status: "completed",
+    startedAt: "2026-10-31T00:00:00.000Z",
+    usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12 },
+  });
+  assert.ok(migrated);
+  assert.equal(migrated.usage.contextChars, 0);
+  assert.equal(migrated.usage.contextTokens, 0);
+  assert.equal(migrated.usage.peakContextChars, 0);
+  assert.equal(migrated.usage.peakContextTokens, 0);
+});

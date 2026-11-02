@@ -273,7 +273,17 @@ export class RunRecorder {
       startedAt: now,
       lastActivityAt: now,
       turns: 0,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        contextChars: 0,
+        contextTokens: 0,
+        peakContextChars: 0,
+        peakContextTokens: 0,
+      },
       cost: { actual: 0, estimated: 0 },
       modelCalls: 0,
       ...(init.parentRunId ? { parentRunId: init.parentRunId } : {}),
@@ -322,7 +332,11 @@ export class RunRecorder {
     this.event("run_state", { from, to: status, ...(reason ? { reason } : {}) });
   }
 
-  recordCall(usage: RunSummary["usage"], costTotal: number | null, estimatedCost: number): void {
+  recordCall(
+    usage: Pick<RunSummary["usage"], "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens">,
+    costTotal: number | null,
+    estimatedCost: number,
+  ): void {
     this.summary.modelCalls += 1;
     this.summary.usage.input += usage.input;
     this.summary.usage.output += usage.output;
@@ -335,6 +349,23 @@ export class RunRecorder {
       this.summary.cost.estimated += estimatedCost;
     }
     this.summary.turns += 1;
+    this.summary.lastActivityAt = new Date().toISOString();
+    this.writeSummary();
+  }
+
+  /**
+   * Record the prompt size for a request. `tokens` is the actual
+   * input+cacheRead count when the provider has answered; otherwise the
+   * caller's estimate is used.
+   */
+  recordContext(chars: number, tokens?: number): void {
+    if (!Number.isFinite(chars) || chars < 0) return;
+    const c = Math.round(chars);
+    const t = Math.max(0, Math.round(tokens ?? Math.ceil(chars / 4)));
+    this.summary.usage.contextChars = c;
+    this.summary.usage.contextTokens = t;
+    this.summary.usage.peakContextChars = Math.max(this.summary.usage.peakContextChars, c);
+    this.summary.usage.peakContextTokens = Math.max(this.summary.usage.peakContextTokens, t);
     this.summary.lastActivityAt = new Date().toISOString();
     this.writeSummary();
   }

@@ -166,21 +166,13 @@ function machineOverridesToConfig(o: AgentConfigOverrides | undefined): AgentCon
 
 const AMBIGUITY_PROMPTS: Record<AmbiguityMode, string> = {
   strict:
-    "Ambiguity policy STRICT: interpret instructions literally. Do not fill gaps with assumptions. " +
-    "Ask follow-up questions (ask tool) until every relevant ambiguity is resolved, even minor ones. " +
-    "Never expand the scope of the request on your own.",
+    "Ambiguity policy STRICT: read literally. Ask until every relevant ambiguity is resolved. Do not expand scope.",
   precise:
-    "Ambiguity policy PRECISE: resolve obvious, low-impact ambiguities yourself using context. " +
-    "Ask (ask tool) when an ambiguity materially affects implementation, architecture, or results. " +
-    "Avoid unnecessary questions; never make significant assumptions without approval.",
+    "Ambiguity policy PRECISE: resolve low-impact gaps. Ask when a choice materially affects the work.",
   adaptive:
-    "Ambiguity policy ADAPTIVE: use project context, existing conventions, and your judgment to resolve " +
-    "ambiguity. Ask when uncertainty materially affects the outcome; otherwise make reasonable " +
-    "implementation decisions independently and scale clarification to the task's risk.",
+    "Ambiguity policy ADAPTIVE: use context and conventions. Ask on material risk; otherwise decide.",
   autonomous:
-    "Ambiguity policy AUTONOMOUS: infer the user's intended outcome. Make implementation and " +
-    "architectural decisions independently. Do not ask questions; if genuinely blocked, stop and " +
-    "report blocked with evidence instead.",
+    "Ambiguity policy AUTONOMOUS: infer intent. Do not ask. If blocked, stop and report.",
 };
 
 export function ambiguityPrompt(mode: AmbiguityMode): string {
@@ -195,26 +187,20 @@ export function askEnabled(config: AgentConfig): boolean {
 /* ------------------------------------------------------ prompt composition */
 
 const VERIFICATION_PROMPTS: Record<Verification, string> = {
-  direct: "Verification level DIRECT: implement without adding new tests; runner-owned gates still apply.",
+  direct: "Verification level DIRECT: no new tests; runner gates still apply.",
   verified:
-    "Verification level VERIFIED: author focused tests for each acceptance criterion; runner-owned gates must pass. Run each gate once after the final edit and reuse the result unless files changed.",
+    "Verification level VERIFIED: add focused tests; run each gate once after the final edit, and reuse the result unless files changed.",
   redundant:
-    "Verification level REDUNDANT: verified, plus an independent review run must approve the work.",
+    "Verification level REDUNDANT: verified, plus independent review approval.",
 };
 
-export function composePrompt(def: AgentDef, config: AgentConfig, capabilities: readonly string[]): string {
-  const caps = [...capabilities].join(", ");
-  const lines = [
+export function composePrompt(def: AgentDef, config: AgentConfig, _capabilities: readonly string[]): string {
+  return [
     def.prompt,
     "",
-    `Agent configuration (preset ${config.preset}): delegate=${config.delegate}, verification=${config.verification}, issues=${config.issues}, ask=${askEnabled(config)}, approval=${config.approval}.`,
-    VERIFICATION_PROMPTS[config.verification],
+    `Config: preset ${config.preset}.`,
     ambiguityPrompt(config.ambiguity),
-    `Granted capabilities: ${caps}.`,
-    "These capabilities are enforced by the harness; do not attempt actions outside them.",
-    "Work in short loops: reuse successful search/read results, do not reread unchanged files, and do not rerun a passing gate unless files changed.",
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }
 
 /** Resolved agent bundle for a run. */
@@ -232,6 +218,7 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   write: "code:write",
   edit: "code:write",
   command: null,
+  context: null,
   task: "run:spawn",
   ask: null, // gated by askEnabled(config)
   issue: "issue:read", // per-action capabilities are checked inside the tool

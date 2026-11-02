@@ -57,9 +57,9 @@ export interface ThemeConfig {
 }
 
 export const DEFAULT_THEME: Required<ThemeConfig> = {
-  header_bg: "#555555",
+  header_bg: "#111111",
   header_fg: "#d9d9d9",
-  footer_bg: "#555555",
+  footer_bg: "#111111",
   footer_fg: "#d9d9d9",
   body_bg: "#0a0a0a",
   sub_header_bg: "#1f6feb",
@@ -68,7 +68,7 @@ export const DEFAULT_THEME: Required<ThemeConfig> = {
   back_fg: "#0d1117",
   section_bg: "#090909",
   section_fg: "#8b949e",
-  section_active_bg: "#d29922",
+  section_active_bg: "#d3d3d3",
   section_active_fg: "#111111",
   tab_active_bg: "#58a658",
   tab_active_fg: "#0d1117",
@@ -100,6 +100,14 @@ export interface MachineConfig {
     maxChars: number;
     planFile?: string;
     knowledgeIndex?: string;
+  };
+  /** Repository map ([map]). */
+  map: {
+    enabled: boolean;
+    semantic: boolean;
+    /** Optional pinned model key/id for semantic annotations. */
+    semanticModel?: string;
+    refresh: "on-change" | "manual" | "always";
   };
   /** TUI palette ([theme]); hex strings. */
   theme: ThemeConfig;
@@ -247,6 +255,8 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       : "optional";
   const issueTtl = asNumber(issuesRaw.cache_ttl_seconds);
   const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
+  const mapRaw = (raw.map ?? {}) as Record<string, unknown>;
+  const mapRefresh = mapRaw.refresh === "manual" || mapRaw.refresh === "always" ? mapRaw.refresh : "on-change";
   const themeRaw = (raw.theme ?? {}) as Record<string, unknown>;
   const theme: ThemeConfig = {};
   for (const key of Object.keys(DEFAULT_THEME) as Array<keyof ThemeConfig>) {
@@ -280,6 +290,14 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       maxChars: asNumber(contextRaw.max_chars) ?? 24_000,
       planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
       knowledgeIndex: typeof contextRaw.knowledge_index === "string" ? contextRaw.knowledge_index : undefined,
+    },
+    map: {
+      enabled: mapRaw.enabled !== false,
+      semantic: mapRaw.semantic !== false,
+      semanticModel: typeof mapRaw.semantic_model === "string" && mapRaw.semantic_model.trim()
+        ? mapRaw.semantic_model.trim()
+        : undefined,
+      refresh: mapRefresh,
     },
     theme,
   };

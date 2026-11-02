@@ -33,16 +33,18 @@ import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
 import { axisWeights, isMetaRouter, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
-import { loadAvailability } from "./availability.js";
+import { loadAvailability, type AvailabilityState } from "./availability.js";
 import { AGENT_META, AGENT_NAMES, agentDef } from "./agents.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
 import { loadCatalogue } from "./catalogue/load.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
-import type { CatalogueRow } from "./catalogue/types.js";
+import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, type ContextPreview } from "./context/preview.js";
-import { changesFor, childRuns, readContextManifest, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
+import { changesFor, childRuns, contextUsage, readContextManifest, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
+import { loadSemantic, readSemanticDirty } from "./map/semantic.js";
+import { serverAvailable } from "./lsp/index.js";
 
 /* --------------------------------------------------------------- terminal */
 
@@ -60,7 +62,8 @@ const B = "\x1b[1m";
 const D = "\x1b[38;2;154;164;178m";
 const R = "\x1b[0m";
 const C = "\x1b[36m";
-const G = "\x1b[32m";
+/** Explicit true-color green; terminal palette "green" is often olive/yellow. */
+const G = "\x1b[38;2;78;201;107m";
 const Y = "\x1b[33m";
 const RED = "\x1b[31m";
 const M = "\x1b[35m";
@@ -122,7 +125,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
 }
 
 type Page = "runs" | "models" | "spend" | "settings";
-type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "help";
+type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model";
 type RunSection = "overview" | "timeline" | "thinking" | "changes" | "children" | "context";
 type RunListFilter = RunFilter | "attention";
 
@@ -299,6 +302,14 @@ function fmtContext(value: number): string {
   return String(value);
 }
 
+/** Compact run-token label: 36.1K, 735K, 1.2M. */
+function fmtRunTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 10_000) return `${Math.round(value / 1_000)}K`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
 function icon(status: string): string {
   switch (status) {
     case "running": return `${C}●${R}`;
@@ -342,6 +353,25 @@ function statusColor(status: string): string {
   return GR;
 }
 
+/** Shared semantic tones for context provenance across previews and run details. */
+function contextTone(kind: string): string {
+  switch (kind) {
+    case "issue":
+    case "epic":
+    case "feature":
+    case "task": return Y;
+    case "packet": return M;
+    case "knowledge": return C;
+    case "file": return W;
+    case "skill": return G;
+    case "tool": return M;
+    case "script": return BL;
+    case "project":
+    case "parent-run": return GR;
+    default: return C;
+  }
+}
+
 function progress(value: number | undefined, width: number): string {
   if (value === undefined) return `${D}${"·".repeat(Math.max(1, width))}${R}`;
   const filled = Math.max(0, Math.min(width, Math.round((value / 100) * width)));
@@ -350,18 +380,34 @@ function progress(value: number | undefined, width: number): string {
 
 /**
  * One footer command: `Label[key]: Value`.
- * Label and key share a tone so adjacent commands stay visually distinct;
- * the value gets its own state color.
+ * Labels recede into the surface; the key and its current value share one
+ * semantic tone so the eye lands on the action and its state together.
  */
 function command(
   key: string,
   label: string,
   value?: string,
   tone: string = C,
-  valueTone: string = W,
 ): string {
-  const head = `${tone}${label}${R}${D}[${R}${B}${tone}${key}${R}${D}]${R}`;
-  return value === undefined || value === "" ? head : `${head}${D}:${R} ${B}${valueTone}${value}${R}`;
+  const head = `${D}${label}${R}${D}[${R}${B}${tone}${key}${R}${D}]${R}`;
+  return value === undefined || value === "" ? head : `${head}${D}:${R} ${B}${tone}${value}${R}`;
+}
+
+/** Stable role colors used wherever an agent name is shown. */
+function agentTone(agent: string): string {
+  switch (agent) {
+    case "sudo": return RED;
+    case "general": return G;
+    case "architect": return BL;
+    case "build": return C;
+    case "review": return M;
+    default: return C;
+  }
+}
+
+/** Paid is the costly/explicit path; free is the safe default. */
+function tierTone(tier: string): string {
+  return tier === "free" ? G : RED;
 }
 
 function joinCommands(items: Array<string | false | undefined | null>): string {
@@ -540,6 +586,21 @@ export async function runTui(): Promise<void> {
   /** Advanced, rarely-touched new-run options live behind [s]. */
   let newRunSettings = false;
   let newRunSettingsSel = 0;
+  /**
+   * Static inputs to the new-run preview (policy, catalogue, provider status,
+   * context files) are expensive to reload on every keystroke, so they are
+   * cached and only the prompt length is applied per frame.
+   */
+  let newRunPreviewCache: {
+    key: string;
+    at: number;
+    context: ContextPreview;
+    policy?: Policy;
+    machine?: MachineConfig;
+    catalogue: CatalogueDocument | null;
+    configured: Set<string>;
+    availability: AvailabilityState;
+  } | null = null;
   let answerText = "";
   let answerQuestionId = "";
   let correctText = "";
@@ -809,11 +870,33 @@ export async function runTui(): Promise<void> {
     policy?: Policy;
   } => {
     const newRunLayout = layout(newRunRepo);
-    const policy = effectivePolicy(newRunRepo);
-    const machine = (() => { try { return loadMachineConfig(newRunLayout); } catch { return undefined; } })();
-    const catalogue = loadCatalogue(newRunLayout.catalogueFile);
-    const cache = readIssueCache(newRunLayout);
-    const context = previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, newrun.prompt);
+    // Everything below depends on the repo/issue, not on the text being typed.
+    // Cache it for the duration of an insert session so keystrokes stay cheap.
+    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}`;
+    const previewTtl = newRunInsert ? 60_000 : 5_000;
+    if (
+      !newRunPreviewCache ||
+      newRunPreviewCache.key !== previewKey ||
+      Date.now() - newRunPreviewCache.at > previewTtl
+    ) {
+      const cache = readIssueCache(newRunLayout);
+      const statuses = providerStatuses(createModelsCollection());
+      newRunPreviewCache = {
+        key: previewKey,
+        at: Date.now(),
+        context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, ""),
+        policy: effectivePolicy(newRunRepo),
+        machine: (() => { try { return loadMachineConfig(newRunLayout); } catch { return undefined; } })(),
+        catalogue: loadCatalogue(newRunLayout.catalogueFile),
+        configured: new Set(statuses.filter((status) => status.configured).map((status) => status.id)),
+        availability: loadAvailability(l.home),
+      };
+    }
+    const base = newRunPreviewCache;
+    const context: ContextPreview = { ...base.context, promptChars: newrun.prompt.length };
+    const policy = base.policy;
+    const machine = base.machine;
+    const catalogue = base.catalogue;
     if (!policy || !machine || !catalogue) return { context, error: "configuration/catalogue unavailable" };
     const ap = policy.agents[newrun.agent];
     if (!ap) return { context, error: `unknown agent ${newrun.agent}` };
@@ -829,15 +912,13 @@ export async function runTui(): Promise<void> {
         effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
       }
     }
-    const statuses = providerStatuses(createModelsCollection());
-    const configured = new Set(statuses.filter((status) => status.configured).map((status) => status.id));
     const result = pick({
       agent: newrun.agent,
       policy: effective,
       machine,
       catalogue: catalogue.models,
-      configuredProviders: configured,
-      availability: loadAvailability(l.home),
+      configuredProviders: base.configured,
+      availability: base.availability,
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars: context.chars + context.promptChars,
       tier: newrun.tier,
@@ -999,11 +1080,16 @@ export async function runTui(): Promise<void> {
     const narrow = cols < 84;
     const short = rows < 24;
     const footerReserve = cols < 50 ? 7 : cols < 70 ? 6 : cols < 90 ? 5 : cols < 110 ? 4 : 3;
-    const allRuns = listAllRuns(l.home);
-    const cache = readIssueCache(l);
-    issueCachesByRepo = collectIssueCaches(allRuns);
-    const issues = issueCachesByRepo.get(l.repoRoot) ?? cache?.issues ?? [];
-    const counts = headerCounts(allRuns);
+    // The composer and models pages never need the run list; skipping the
+    // filesystem walk there keeps prompt typing responsive.
+    const needRunData =
+      pendingRunAt > 0 ||
+      (page === "runs" && (screen === "list" || screen === "issue" || screen === "run"));
+    const allRuns = needRunData ? listAllRuns(l.home) : [];
+    const cache = needRunData ? readIssueCache(l) : undefined;
+    if (needRunData) issueCachesByRepo = collectIssueCaches(allRuns);
+    const issues = needRunData ? issueCachesByRepo.get(l.repoRoot) ?? cache?.issues ?? [] : [];
+    const counts = needRunData ? headerCounts(allRuns) : headerCounts([]);
     const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
     const theme = resolveTheme(settingsMachine?.theme);
     if (Date.now() - spendCacheAt > 5_000) {
@@ -1043,19 +1129,43 @@ export async function runTui(): Promise<void> {
       (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct")) ||
       (page === "models" && screen === "model");
     // Tabs stay visible on every other screen, followed by one blank line.
+    // The composer keeps its Back bar but names itself next to it.
+    const backTitle =
+      page === "runs" && screen === "newrun"
+        ? `  ${B}${theme.headerFg}New Run${R}`
+        : runDetailHeader
+          ? `  ${B}${theme.headerFg}Run Details${R}`
+          : page === "models" && screen === "model"
+            ? `  ${B}${theme.headerFg}Model Details${R}`
+            : "";
+    const headerRight =
+      page === "runs" && screen === "newrun" && !newRunInsert && !modelPick && !issuePick && !newRunSettings
+        ? command("s", "Settings", undefined, M)
+        : "";
+    const backLine = `${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}${backTitle}`;
     const header: string[] = backHeader
-      ? [`${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}`, ""]
+      ? [
+          headerRight
+            ? `${backLine}${" ".repeat(Math.max(2, cols - visible(backLine) - visible(headerRight)))}${headerRight}`
+            : backLine,
+          "",
+        ]
       : [...wrapTokenList(tabTokens, cols, " "), ""];
-    // Only the Back[Esc] label is red; the rest of the row keeps the header tone.
-    const headerTone = theme.headerBg;
+    // The header shares the body surface; only the Back label keeps its own tone.
+    const headerTone = theme.bodyBg;
+    // Prompt editing moves its controls into the body but keeps the model line.
+    const hideFooter = screen === "newrun" && newRunInsert;
     const bodyH = Math.max(1, rows - header.length - (runDetailHeader ? 1 : footerReserve));
 
-    const filteredRuns = runsFilter === "all" || runsFilter === "attention"
-      ? allRuns
-      : filterRuns(allRuns, runsFilter);
+    const runsListScreen = page === "runs" && screen === "list";
+    const filteredRuns = runsListScreen
+      ? runsFilter === "all" || runsFilter === "attention"
+        ? allRuns
+        : filterRuns(allRuns, runsFilter)
+      : [];
     const runIndex = buildRunIndex({
       runs: filteredRuns,
-      issuesByRepo: issueCachesByRepo,
+      issuesByRepo: runsListScreen ? issueCachesByRepo : new Map(),
       group: runsGroup,
       collapsed,
       text: runsText,
@@ -1065,30 +1175,34 @@ export async function runTui(): Promise<void> {
     if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
     const selectedRow = runIndex.selectable[runsSel];
 
-    const catalogue = loadCatalogue(l.catalogueFile);
-    const statuses = providerStatuses(createModelsCollection());
+    const catalogue = page === "models" ? loadCatalogue(l.catalogueFile) : null;
+    const statuses = page === "models" ? providerStatuses(createModelsCollection()) : [];
     const activeProviders = new Set(statuses.map((status) => status.id));
     // Hide stale rows for providers that are disabled or no longer registered.
     const catalogueRows = (catalogue?.models ?? []).filter((row) => activeProviders.has(row.providerID));
     const configured = new Set(statuses.filter((status) => status.configured).map((status) => status.id));
-    const modelRows = filterModels(catalogueRows, {
-      text: modelText,
-      providers: modelsAll ? undefined : configured,
-      freeOnly: modelsFree,
-      codingOnly: modelsCoding,
-      sort: modelSort,
-      weights: policyWeightsFor(newrun.agent),
-    });
+    const modelRows = page === "models"
+      ? filterModels(catalogueRows, {
+          text: modelText,
+          providers: modelsAll ? undefined : configured,
+          freeOnly: modelsFree,
+          codingOnly: modelsCoding,
+          sort: modelSort,
+          weights: policyWeightsFor(newrun.agent),
+        })
+      : [];
     if (modelSel >= modelRows.length) modelSel = Math.max(0, modelRows.length - 1);
     const selectedModel = modelRows[modelSel];
 
-    const settingsPolicy = effectivePolicy();
-    const settingsRows = buildSettings(l, settingsMachine, settingsPolicy);
+    const settingsPolicy = page === "settings" ? effectivePolicy() : undefined;
+    const settingsRows = page === "settings" ? buildSettings(l, settingsMachine, settingsPolicy) : [];
     if (settingsSel >= settingsRows.length) settingsSel = Math.max(0, settingsRows.length - 1);
 
     let body: string[] = [];
     let actions = "";
     let secondary = "";
+    /** New-run content pinned to the bottom of the body, directly above the footer. */
+    let bottomAlign: { above: string[]; block: string[] } | null = null;
     /** True when `secondary` already carries its own styling (new-run model info). */
     let secondaryStyled = false;
     /** Run details show only the working directory in their footer. */
@@ -1138,12 +1252,12 @@ export async function runTui(): Promise<void> {
           if (narrow) {
             const identity = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R}${ask}${pr}`;
             rendered.push(selected(` ${trunc(identity, Math.max(12, cols - visible(right) - 2))} ${right}`, isSelected));
-            const agent = `${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}`;
+            const agent = `${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}`;
             const request = run.request.replace(/\s+/g, " ").slice(0, 60);
             const detail = `${agent} ${D}${request}${R}`;
             rendered.push(selected(` ${indent}      ${trunc(detail, Math.max(12, cols - indent.length - 8))}`, isSelected));
           } else {
-            const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}${ask}${pr}`;
+            const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}${ask}${pr}`;
             const context = `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}`;
             rendered.push(selected(` ${pad(left, Math.max(30, cols - visible(right) - visible(context) - 2))}${context}${right}`, isSelected));
           }
@@ -1167,7 +1281,6 @@ export async function runTui(): Promise<void> {
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
             command("/", "Search", undefined, BL),
-            command("?", "Help", undefined, GR),
           ])
         : joinCommands([
             command("n", "New run", undefined, C),
@@ -1175,9 +1288,8 @@ export async function runTui(): Promise<void> {
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
             command("/", "Search", undefined, BL),
-            command("g", "Group", RUN_GROUP_LABELS[runsGroup], Y, C),
-            command("f", "Filter", runsFilter, M, C),
-            command("?", "Help", undefined, GR),
+            command("g", "Group", RUN_GROUP_LABELS[runsGroup], C),
+            command("f", "Filter", runsFilter, M),
           ]);
       if (toast) secondary = `${Y}${toast}${R}`;
     }
@@ -1230,7 +1342,7 @@ export async function runTui(): Promise<void> {
       for (let i = 0; i < issueRuns.length; i++) {
         const run = issueRuns[i]!;
         const isSelected = i === Math.min(issueRunSel, issueRuns.length - 1);
-        const line = `   ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${M}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}  ${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
+        const line = `   ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}  ${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
         lines.push(selected(line, isSelected));
       }
       const w = selectableLines(lines, Math.max(0, runStart + issueRunSel), issueScroll, bodyH);
@@ -1255,7 +1367,7 @@ export async function runTui(): Promise<void> {
       const def = agentDef(l, newrun.agent);
       const issueChain = ctx.issueChain;
       const issueObj = newrun.issue ? issueByRef(newrun.issue) : undefined;
-      const issueValue = newrun.issue ? `#${newrun.issue.number} ${issueObj?.kind ?? ""}`.trim() : "untracked";
+      const issueValue = newrun.issue ? `#${newrun.issue.number} ${issueObj?.kind ?? ""}`.trim() : "NA";
       const displayAgent = newrun.agent ? `${newrun.agent[0]!.toUpperCase()}${newrun.agent.slice(1)}` : newrun.agent;
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
@@ -1269,46 +1381,54 @@ export async function runTui(): Promise<void> {
         : "?";
       const fitScore = preview.fit;
       const fitTone = fitScore === undefined ? D : fitScore >= 7.5 ? G : fitScore >= 6 ? Y : RED;
-      const costTone = preview.model?.free ? G : Y;
+      const costTone = preview.model?.free ? G : RED;
       const modelInfo = preview.error
-        ? `${M}Model[m]${R} ${RED}${preview.error}${R}`
+        ? command("m", "Model", preview.error, RED)
         : [
-            `${M}Model[m]${R} ${B}${C}${preview.model?.key ?? "?"}${R}`,
-            fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`,
-            `${D}cost${R} ${costTone}${estimateCost}${R}`,
-            ...(preview.model
-              ? [
-                  `${M}${preview.model.kind}${R}`,
-                  `${D}ctx${R} ${C}${fmtContext(preview.model.context)}${R}`,
-                  `${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`,
-                  `${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`,
-                ]
-              : []),
+            command("m", "Model", preview.model?.key ?? "?", C),
+            ...(narrow
+              ? []
+              : [
+                  fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`,
+                  `${D}cost${R} ${costTone}${estimateCost}${R}`,
+                  ...(preview.model
+                    ? [
+                        `${D}${preview.model.kind}${R}`,
+                        `${D}ctx${R} ${C}${fmtContext(preview.model.context)}${R}`,
+                        `${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`,
+                        `${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`,
+                      ]
+                    : []),
+                ]),
           ]
             .filter(Boolean)
             .join("  ");
       const contextTokens = Math.ceil((ctx.chars + ctx.promptChars) / 4);
       const contextLine = ` ${C}Context${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
       const chainLine = ` ${BL}Hierarchy${R} ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "untracked · no issue context"}${R}`;
+      const cwdLine = ` ${D}cwd${R} ${W}${newRunRepo}${R}`;
       const summary = [
         contextLine,
         chainLine,
+        cwdLine,
       ].filter(Boolean);
       if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
 
       const boxWidth = Math.max(20, cols - 4);
       const inner = Math.max(12, boxWidth - 2);
-      const promptText = newrun.prompt || (newRunInsert ? "" : "Press e to type the task");
-      const promptLines = wrapText(promptText, Math.max(8, inner - 3));
-      if (newRunInsert) {
-        if (promptLines.length === 0) promptLines.push("▌");
-        else promptLines[promptLines.length - 1] = `${promptLines[promptLines.length - 1]}▌`;
-      }
+      const promptText = newrun.prompt || (newRunInsert ? "" : "Press p to type the task");
+      // Include the cursor before wrapping so a freshly typed trailing space is
+      // not trimmed away until the next keystroke.
+      const promptLines = wrapText(newRunInsert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
       const promptActions = newRunInsert
-        ? ""
+        ? joinCommands([
+            command("Esc/jk", "Done", undefined, Y),
+            command("Enter", "Newline", undefined, G),
+            command("Backspace", "Delete", undefined, M),
+          ])
         : joinCommands([
-            command("e", "Prompt", "edit", G),
-            command("Enter", "Start", undefined, G),
+            command("p", "Prompt", undefined, G),
+            newrun.prompt.trim() ? command("Enter", "Start", undefined, RED) : "",
           ]);
       const promptHint = promptActions
         ? ` ${" ".repeat(Math.max(0, boxWidth - visible(promptActions)))}${promptActions}`
@@ -1321,18 +1441,14 @@ export async function runTui(): Promise<void> {
         ...shownPrompt.map((line) => ` ${D}│${R} ${W}${fit(line, inner - 2)}${R} ${D}│${R}`),
         ...Array.from({ length: Math.max(0, promptHeight - shownPrompt.length) }, () => ` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`),
         ` ${D}└${"─".repeat(inner)}┘${R}`,
-        ...(promptHint ? [promptHint] : []),
       ];
 
       const sources: string[] = [];
-      const sourceRoom = Math.max(0, bodyH - summary.length - promptBox.length - 2);
+      const sourceRoom = Math.max(0, bodyH - summary.length - promptBox.length - (promptHint ? 4 : 3));
       if (sourceRoom > 1 && ctx.sources.length > 0) {
         sources.push(` ${B}${C}Will inherit${R} ${D}· ${ctx.sources.length} source(s)${R}`);
-        const toneFor = (kind: string): string =>
-          kind === "issue" || kind === "task" || kind === "feature" || kind === "epic" ? Y :
-          kind === "tool" ? M : kind === "script" ? BL : kind === "skill" ? G : C;
         for (const source of ctx.sources.slice(0, Math.max(0, sourceRoom - 1))) {
-          const tone = toneFor(source.kind);
+          const tone = contextTone(source.kind);
           sources.push(`  ${source.exists ? G + "✓" : Y + "?"}${R} ${tone}${source.kind.padEnd(9)}${R} ${W}${trunc(source.ref, Math.max(12, cols - 30))}${R} ${D}${fmtTokens(source.chars)}${R}`);
         }
       }
@@ -1429,23 +1545,23 @@ export async function runTui(): Promise<void> {
         ]);
         secondary = `${D}${NEW_RUN_SETTING_FIELDS.length} option(s) · changes apply to this run only${R}`;
       } else {
-        body = clipBody([...summary, "", ...promptBox, ...(sources.length ? ["", ...sources] : [])]);
+        // Context and inherited sources stay above; the composer is pinned to
+        // the bottom of the body so it sits directly above the key-command row.
+        bottomAlign = {
+          above: [...summary, "", ...sources, ...(sources.length ? [""] : [])],
+          block: [...promptBox, ...(promptHint ? [promptHint] : []), ""],
+        };
+        // While editing the prompt the only controls live directly under the
+        // textbox; the bottom footer is intentionally empty.
         actions = newRunInsert
-          ? joinCommands([
-              command("Esc/jk", "Done", undefined, Y),
-              command("Enter", "Newline", undefined, G),
-              command("Backspace", "Delete", undefined, M),
-            ])
+          ? ""
           : joinCommands([
-              command("a", "Agent", displayAgent, C, M),
-              command("t", "Tier", displayTier, Y, newrun.tier === "free" ? G : Y),
-              command("i", "Issue", issueValue, BL, newrun.issue ? C : GR),
-              command("s", "Settings", undefined, M),
+              command("a", "Agent", displayAgent, agentTone(newrun.agent)),
+              command("t", "Tier", displayTier, tierTone(newrun.tier)),
+              command("i", "Issue", issueValue, newrun.issue ? C : GR),
             ]);
-        secondaryStyled = !newRunInsert;
-        secondary = newRunInsert
-          ? `${Y}Insert mode${R} ${D}· all key commands disabled · Esc or jk exits${R}${toast ? ` · ${Y}${toast}${R}` : ""}`
-          : `${modelInfo}${toast ? `  ${D}· ${toast}${R}` : ""}`;
+        secondaryStyled = true;
+        secondary = `${modelInfo}${toast ? `  ${D}· ${toast}${R}` : ""}`;
       }
     }
 
@@ -1459,8 +1575,8 @@ export async function runTui(): Promise<void> {
       const weights = policyWeightsFor(newrun.agent);
       const offers = siblingOffers(catalogueRows, model);
       const lines: string[] = [
-        ` ${B}${W}${model.name}${R} ${D}${model.key}${R}`,
-        ` ${D}${model.providerID} · ${model.kind} · ${model.coding ? "coding" : "non-coding"} · ${model.modes.join(", ") || "plain chat"}${R}`,
+        ` ${B}${W}${model.key}${R}`,
+        ` ${D}${model.kind} · ${model.coding ? "coding" : "non-coding"} · ${model.modes.join(", ") || "plain chat"}${R}`,
         "",
         ` ${B}${C}Capability${R}`,
       ];
@@ -1468,9 +1584,9 @@ export async function runTui(): Promise<void> {
         const score = model.scores[axis];
         lines.push(`   ${axis.padEnd(10)} ${progress(score * 10, Math.min(24, Math.max(8, Math.floor(cols / 4))))} ${score.toFixed(2)}`);
       }
-      lines.push(`   ${"weighted".padEnd(10)} ${D}${weights ? "role " + newrun.agent : "neutral"}${R} ${modelWeightedFit(model, weights).toFixed(2)}`);
+      lines.push(`   ${"weighted".padEnd(10)} ${weights ? `${D}role ${R}${agentTone(newrun.agent)}${newrun.agent}${R}` : `${D}neutral${R}`} ${modelWeightedFit(model, weights).toFixed(2)}`);
       lines.push("", ` ${B}${C}Offer${R}`);
-      lines.push(`   context ${C}${fmtContext(model.context)}${R} · max out ${C}${fmtContext(model.maxOutput)}${R} · in ${Y}$${model.pricing.input}${R}/M · out ${Y}$${model.pricing.output}${R}/M${model.free ? ` ${G}free${R}` : ""}`);
+      lines.push(`   context ${C}${fmtContext(model.context)}${R} · max out ${C}${fmtContext(model.maxOutput)}${R} · in ${Y}$${model.pricing.input}${R}/M · out ${Y}$${model.pricing.output}${R}/M ${model.free ? `${G}free${R}` : `${RED}paid${R}`}`);
       if (model.benchmarks) {
         lines.push(`   benchmarks ${D}${Object.entries(model.benchmarks).filter(([, value]) => typeof value === "number").slice(0, 6).map(([key, value]) => `${key} ${value}`).join("  ")}${R}`);
       }
@@ -1522,11 +1638,11 @@ export async function runTui(): Promise<void> {
       actions = joinCommands([
         command("Enter", "Details", undefined, G),
         command("/", "Search", undefined, BL),
-        command("a", "Providers", modelsAll ? "all" : "configured", C, modelsAll ? Y : C),
-        command("f", "Free", modelsFree ? "only" : "all", M, modelsFree ? G : GR),
-        command("c", "Coding", modelsCoding ? "only" : "all", Y, modelsCoding ? G : GR),
-        command("g", "Group", modelGroup, BL, C),
-        command("s", "Sort", modelSort, GR, C),
+        command("a", "Providers", modelsAll ? "all" : "configured", C),
+        command("f", "Free", modelsFree ? "only" : "all", modelsFree ? G : GR),
+        command("c", "Coding", modelsCoding ? "only" : "all", modelsCoding ? G : GR),
+        command("g", "Group", modelGroup, BL),
+        command("s", "Sort", modelSort, C),
         command("j/k", "Move", undefined, GR),
       ]);
       secondary = `${D}${modelRows.length} model(s)${modelText ? ` · “${modelText}”` : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
@@ -1559,15 +1675,16 @@ export async function runTui(): Promise<void> {
         const max = Math.max(0, ...entries.map(([, bucket]) => bucket.actual));
         for (const [key, bucket] of entries) {
           const perMillion = bucket.tokens > 0 ? bucket.actual / (bucket.tokens / 1_000_000) : 0;
-          lines.push(`  ${pad(key, narrow ? 20 : 38)} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
+          const keyTone = spendBy === "agent" ? agentTone(key) : W;
+          lines.push(`  ${keyTone}${pad(key, narrow ? 20 : 38)}${R} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
         }
       }
       const w = selectableLines(lines, spendScroll, spendScroll, bodyH);
       spendScroll = w.scroll;
       body = clipBody(w.lines);
       actions = joinCommands([
-        command("g", "Group", spendBy, C, G),
-        command("d", "Range", spendDaysWindow === 0 ? "all" : `${spendDaysWindow}d`, Y, C),
+        command("g", "Group", spendBy, C),
+        command("d", "Range", spendDaysWindow === 0 ? "all" : `${spendDaysWindow}d`, Y),
         command("j/k", "Scroll", undefined, M),
         command("r", "Refresh", undefined, GR),
       ]);
@@ -1599,14 +1716,7 @@ export async function runTui(): Promise<void> {
       settingsScroll = w.scroll;
       body = clipBody(w.lines);
       const row = visibleRows[Math.min(settingsSel, visibleRows.length - 1)];
-      actions = joinCommands([
-        command("j/k", "Select", undefined, M),
-        command("e", "Edit file", undefined, G),
-        command("o", "Reveal", undefined, BL),
-        command("p", "Policy", undefined, Y),
-        command("c", "Config", undefined, C),
-        command("r", "Reload", undefined, GR),
-      ]);
+      actions = command("j/k", "Select", undefined, M);
       secondary = row ? `${D}${row.label} · ${settingsFileFor(l, row) ?? "(no file)"}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "";
     }
 
@@ -1643,10 +1753,13 @@ export async function runTui(): Promise<void> {
               : `${theme.sectionFg}${RUN_SECTION_LABEL[section]}${R}`,
           ),
           cols - 2,
-          " ",
+          "  ",
         ).map((line) => background(fit(` ${line}`, cols), theme.sectionBg));
+        const ctxUsage = contextUsage(s.usage, ev);
+        const timeLabel = s.endedAt ? `ended ${ago(s.endedAt)} ago` : `updated ${ago(s.lastActivityAt)} ago`;
         const lines: string[] = [
-          ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${M}${s.agent}${R}${s.mode ? `/${s.mode}` : ""}  ${G}${s.modelCalls}${R} call(s)  ${C}${fmtTokens(s.usage.totalTokens)}${R} tok  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${ago(s.lastActivityAt)}${R}`,
+          ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${agentTone(s.agent)}${s.agent}${R}${s.mode ? `/${s.mode}` : ""}  ${G}${s.modelCalls}${R} call(s)  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${timeLabel}${R}`,
+          ` ${C}${fmtRunTokens(ctxUsage.tokens)}${R}${D} ctx${R}   ${M}${fmtRunTokens(s.usage.totalTokens)}${R}${D} total${R}`,
         ];
         const issueMeta = [s.issue ? `#${s.issue.number}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
           .filter(Boolean)
@@ -1654,35 +1767,49 @@ export async function runTui(): Promise<void> {
         if (issueMeta) lines.push(` ${D}${issueMeta}${R}`);
         lines.push("", ...sectionBar, "");
         if (runSection === "overview") {
-          lines.push(` ${B}${C}Status${R}`);
+          lines.push(` ${B}${statusColor(s.status)}Status${R}`);
           const statusText = s.error ?? s.finalText ?? s.status.toUpperCase();
-          const statusTone = s.error ? RED : s.status === "completed" ? G : W;
+          const statusTone = s.error || s.status === "failed" ? RED : W;
           for (const line of wrapText(statusText, cols - 4).slice(0, short ? 3 : 6)) {
             lines.push(`  ${statusTone}${line}${R}`);
           }
           if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
-          lines.push("", ` ${B}${C}Request${R}`);
+          lines.push("", ` ${B}${BL}Request${R}`);
           for (const line of wrapText(s.request, cols - 4).slice(0, short ? 3 : 6)) lines.push(`  ${W}${line}${R}`);
-          lines.push("", ` ${B}${C}Now${R}`);
+          lines.push("", ` ${B}${M}Now${R}`);
           const lastModel = [...ev].reverse().find((event) => event.type === "model_select" && !event.error);
           const lastTool = [...ev].reverse().find((event) => event.type === "tool_call_start");
           const lastEnd = [...ev].reverse().find((event) => event.type === "model_call_end");
-          lines.push(`  model  ${C}${String(lastModel?.key ?? "(pending)")}${R}`);
-          if (lastTool) lines.push(`  tool   ${Y}${String(lastTool.tool)}${R} ${D}${JSON.stringify(lastTool.args ?? {}).slice(0, cols - 18)}${R}`);
-          if (lastEnd) lines.push(`  turn   ${D}${String(lastEnd.stopReason ?? "")} · ${fmtTokens(Number((lastEnd.usage as { totalTokens?: number } | undefined)?.totalTokens ?? 0))} tok${R}`);
-          lines.push("", ` ${B}${C}Progress${R}`);
-          lines.push(`  context ${C}${context ? `${context.chars.toLocaleString()} chars / ${context.sources.length} sources` : "not recorded"}${R}`);
-          lines.push(`  changes ${touched.length ? `${C}${touched.length}${R} path(s) touched` : `${D}none yet${R}`}`);
-          if (children.length) lines.push(`  children ${C}${children.length}${R} subagent run(s)`);
-          lines.push(`  parent  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
+          lines.push(`  ${D}model${R}  ${C}${String(lastModel?.key ?? "(pending)")}${R}`);
+          if (lastTool) lines.push(`  ${D}tool${R}   ${Y}${String(lastTool.tool)}${R} ${D}${JSON.stringify(lastTool.args ?? {}).slice(0, cols - 18)}${R}`);
+          if (lastEnd) lines.push(`  ${D}turn${R}   ${D}${String(lastEnd.stopReason ?? "")}${R} ${D}· ${fmtTokens(Number((lastEnd.usage as { totalTokens?: number } | undefined)?.totalTokens ?? 0))} tok${R}`);
+          lines.push("", ` ${B}${G}Progress${R}`);
+          const mapRoot = s.worktree ?? s.repoRoot;
+          const semantic = loadSemantic(mapRoot);
+          const semanticDirty = readSemanticDirty(mapRoot);
+          const mapCached = existsSync(join(mapRoot, ".machine_code", "local", "cache", "map.json"));
+          const mapTone = mapCached ? G : Y;
+          const semanticTone = semantic && semanticDirty.length === 0 ? G : Y;
+          const semanticText = semantic ? (semanticDirty.length ? `stale (${semanticDirty.length})` : "cached") : "missing";
+          const lspReady = serverAvailable("typescript");
+          lines.push(
+            `  ${D}map${R}     ${mapTone}${mapCached ? "deterministic cached" : "deterministic missing"}${R}` +
+              ` ${D}·${R} ${D}semantic${R} ${semanticTone}${semanticText}${R}`,
+          );
+          lines.push(`  ${D}lsp${R}     ${lspReady ? G : Y}typescript ${lspReady ? "ready" : "missing"}${R}`);
+          lines.push(`  ${D}startup${R} ${C}${context ? `${context.chars.toLocaleString()} chars / ${context.sources.length} sources` : "not recorded"}${R}`);
+          lines.push(`  ${D}changes${R} ${touched.length ? `${G}${touched.length}${R} ${D}path(s) touched${R}` : `${D}none yet${R}`}`);
+          if (children.length) lines.push(`  ${D}children${R} ${M}${children.length}${R} ${D}subagent run(s)${R}`);
+          lines.push(`  ${D}parent${R}  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
           if (context) {
             lines.push("", ` ${B}${C}Context${R}`);
             for (const source of context.sources.slice(0, short ? 3 : 8)) {
-              lines.push(`  ${source.kind.padEnd(10)} ${D}${String(source.bytes).padStart(6)}b${R} ${source.ref}`);
+              const tone = contextTone(source.kind);
+              lines.push(`  ${tone}${source.kind.padEnd(10)}${R} ${D}${String(source.bytes).padStart(6)}b${R} ${W}${source.ref}${R}`);
             }
           }
           if (thinking.length) {
-            lines.push("", ` ${B}${C}Latest${R}`);
+            lines.push("", ` ${B}${Y}Latest${R}`);
             for (const line of wrapText(thinking[thinking.length - 1]!.text, cols - 4).slice(-Math.max(1, short ? 2 : 5))) lines.push(`  ${W}${line}${R}`);
           }
           const w = selectableLines(lines, 0, runScroll, bodyH);
@@ -1701,7 +1828,7 @@ export async function runTui(): Promise<void> {
             const time = String(event.t ?? "").slice(11, 19);
             const expandedEvent = expanded.has(`${s.id}:${i}`);
             const type = String(event.type);
-            if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${M}${event.agent}${R}${event.mode ? `/${event.mode}` : ""}`);
+            if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}${event.mode ? `/${event.mode}` : ""}`);
             else if (type === "model_select") {
               if (event.error) eventLines.push(`${prefix} ${GR}${time}${R} ${RED}select error ${String(event.error)}${R}`);
               else {
@@ -1809,7 +1936,7 @@ export async function runTui(): Promise<void> {
             else if (type === "retry") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}↻ retry${R} ${D}${String(event.failedModel)}${R}`);
             else if (type === "control") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}⌘ ${String(event.action)}${R}`);
             else if (type === "run_end") eventLines.push(`${prefix} ${GR}${time}${R} ${statusColor(String(event.status))}■ ${String(event.status).toUpperCase()}${R}`);
-            else if (type === "child_spawned") eventLines.push(`${prefix} ${GR}${time}${R} ${M}↳ child${R} ${C}${String(event.childRunId ?? "").slice(-8)}${R} ${D}${String(event.role ?? "")}${R}`);
+            else if (type === "child_spawned") eventLines.push(`${prefix} ${GR}${time}${R} ${M}↳ child${R} ${C}${String(event.childRunId ?? "").slice(-8)}${R} ${agentTone(String(event.role ?? ""))}${String(event.role ?? "")}${R}`);
             else if (type === "child_completed") eventLines.push(`${prefix} ${GR}${time}${R} ${M}↲ child done${R} ${C}${String(event.childRunId ?? "").slice(-8)}${R} ${String(event.status ?? "")}`);
             else if (type === "issue_created") eventLines.push(`${prefix} ${GR}${time}${R} ${G}+ issue${R} #${String(event.issue)} ${D}${String(event.kind ?? "")}${R}`);
             else if (type === "context_assembled") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}context${R} ${D}${fmtTokens(Number(event.chars ?? 0))} chars${R}`);
@@ -1871,7 +1998,7 @@ export async function runTui(): Promise<void> {
           for (let i = 0; i < children.length; i++) {
             const child = children[i]!;
             const isSelected = i === childSel;
-            const line = ` ${icon(child.status)} ${D}${child.id.slice(-8)}${R} ${M}${child.agent}${R}${child.mode ? `/${child.mode}` : ""} ${D}${fmtTokens(child.usage.totalTokens)} tok · ${fmtMoney(child.cost.actual)} · ${ago(child.lastActivityAt)}${R} ${child.request.replace(/\s+/g, " ").slice(0, 40)}`;
+            const line = ` ${icon(child.status)} ${D}${child.id.slice(-8)}${R} ${agentTone(child.agent)}${child.agent}${R}${child.mode ? `/${child.mode}` : ""} ${D}${fmtTokens(child.usage.totalTokens)} tok · ${fmtMoney(child.cost.actual)} · ${ago(child.lastActivityAt)}${R} ${child.request.replace(/\s+/g, " ").slice(0, 40)}`;
             lines.push(selected(line, isSelected));
           }
           body = clipBody(lines);
@@ -1880,7 +2007,8 @@ export async function runTui(): Promise<void> {
           else {
             lines.push(` ${B}${C}Context manifest${R} ${D}${context.chars.toLocaleString()} chars / ${context.sources.length} sources${R}`);
             for (const source of context.sources) {
-              lines.push(`  ${source.kind.padEnd(10)} ${D}${String(source.bytes).padStart(6)}b${R} ${source.origin.padEnd(9)} ${W}${trunc(source.ref, cols - 36)}${R}${source.truncated ? ` ${Y}trunc${R}` : ""}${source.warning ? ` ${Y}${source.warning}${R}` : ""}`);
+              const tone = contextTone(source.kind);
+              lines.push(`  ${tone}${source.kind.padEnd(10)}${R} ${D}${String(source.bytes).padStart(6)}b${R} ${D}${source.origin.padEnd(9)}${R} ${W}${trunc(source.ref, cols - 36)}${R}${source.truncated ? ` ${Y}trunc${R}` : ""}${source.warning ? ` ${Y}${source.warning}${R}` : ""}`);
             }
           }
           body = clipBody(lines);
@@ -1943,41 +2071,10 @@ export async function runTui(): Promise<void> {
       secondary = `${D}Esc returns to the run; use i when you only want to stop it${R}`;
     }
 
-    /* ------------------------------------------------------------- help */
-    else if (screen === "help") {
-      const lines = [
-        "",
-        ` ${C}Navigation${R}`,
-        `   ${W}1-4 / Tab${R}  switch page        ${W}j/k${R}      move or scroll`,
-        `   ${W}Enter${R}      open / start       ${W}Space${R}    fold or expand`,
-        `   ${W}/${R}          search              ${W}q / Esc${R}  back or quit`,
-        "",
-        ` ${Y}Runs${R}`,
-        `   ${W}n${R} new run    ${W}N${R} untracked run    ${W}g${R} group    ${W}f${R} filter    ${W}r${R} refresh cache`,
-        "",
-        ` ${M}Run detail${R}`,
-        `   ${W}h/l${R} section   ${W}space${R}/${W}Enter${R} expand   ${W}a${R} answer   ${W}i${R} interrupt   ${W}c${R} correct   ${W}p${R} approve   ${W}o${R} open`,
-        "",
-        ` ${G}New run${R}`,
-        `   ${W}a${R} agent   ${W}t${R} tier   ${W}i${R} issue   ${W}e${R}/p prompt edit   ${W}s${R} settings   ${W}Enter${R} start   ${W}Esc${R} cancel`,
-        `   In the prompt: ${W}Enter${R} newline · ${W}Esc${R} or ${W}jk${R} leaves insert mode.`,
-        "",
-        ` ${D}GH issue groups by repository, then the Epic → Feature → Task tree and Untracked.${R}`,
-        ` ${D}g cycles GH issue → Status (per repo) → Overall status (machine-wide).${R}`,
-        ` ${D}Screen: ${screen} · cwd: ${cwd}${R}`,
-      ];
-      body = clipBody(lines);
-      actions = joinCommands([
-        command("Esc", "Back", undefined, GR),
-        command("q", "Back", undefined, GR),
-      ]);
-      secondary = `${D}${process.env.npm_package_version ? `v${process.env.npm_package_version}` : ""}${R}`;
-    }
-
     /* ------------------------------------------------------------ compose */
     if (searchMode) {
       actions = joinCommands([
-        command("/", "Search", searchText || "…", C, W),
+        command("/", "Search", searchText || "…", C),
         command("Enter", "Apply", undefined, G),
         command("Esc", "Cancel", undefined, GR),
       ]);
@@ -1985,7 +2082,6 @@ export async function runTui(): Promise<void> {
     }
     const defaultActions = joinCommands([
       command("1-4", "Pages", undefined, C),
-      command("?", "Help", undefined, BL),
       command("q", "Quit", undefined, GR),
     ]);
     const statusTokens = [
@@ -1994,12 +2090,21 @@ export async function runTui(): Promise<void> {
       `${G}$${todaySpend.toFixed(2)}${R} today`,
     ];
     // Runs list keeps its live counts on the very bottom row of the screen.
+    const mapCached = existsSync(join(l.repoRoot, ".machine_code", "local", "cache", "map.json"));
+    const semantic = loadSemantic(l.repoRoot);
+    const semanticDirty = readSemanticDirty(l.repoRoot);
+    const mapTokens = [
+      `${mapCached ? G : Y}MAP${mapCached ? "✓" : "✗"}${R}`,
+      `${semantic ? (semanticDirty.length ? Y : G) : GR}SEM${semantic ? (semanticDirty.length ? "~" : "✓") : "-"}${R}`,
+      `${serverAvailable("typescript") ? G : GR}LSP${serverAvailable("typescript") ? "✓" : "✗"}${R}`,
+    ];
     const runIndicators = [
       `${C}●${R}  ${counts.active} running`,
       `${Y}?${R}  ${counts.awaiting} awaiting`,
       `${Y}⏸${R}  ${counts.paused} paused`,
+      ...(narrow ? [] : mapTokens),
     ];
-    const commandRows = runDetailHeader ? [] : wrapCommands(actions || defaultActions, cols);
+    const commandRows = runDetailHeader || hideFooter ? [] : wrapCommands(actions || defaultActions, cols);
     const secondaryRows = runDetailHeader
       ? []
       : secondaryStyled
@@ -2019,8 +2124,15 @@ export async function runTui(): Promise<void> {
     // Key legends sit on the near-black surface; trailing rows keep the footer band.
     const legendRows = commandRows.length;
     const bodySpace = Math.max(0, rows - header.length - footer.length);
-    body = body.slice(0, bodySpace);
-    while (body.length < bodySpace) body.push("");
+    if (bottomAlign) {
+      const block = bottomAlign.block.slice(-bodySpace);
+      const room = Math.max(0, bodySpace - block.length);
+      const above = bottomAlign.above.slice(0, room);
+      body = [...above, ...Array.from({ length: room - above.length }, () => ""), ...block];
+    } else {
+      body = body.slice(0, bodySpace);
+      while (body.length < bodySpace) body.push("");
+    }
     const frame = [...header, ...body, ...footer];
     while (frame.length < rows) frame.push("");
     const headerCount = header.length;
@@ -2257,12 +2369,6 @@ export async function runTui(): Promise<void> {
       return;
     }
 
-    if (screen === "help") {
-      if (data === "\x1b" || data === "q" || data === "?") { screen = "list"; draw(); return; }
-      draw();
-      return;
-    }
-
     // Page switching.
     const tabIndex = Number(data);
     if (data.length === 1 && tabIndex >= 1 && tabIndex <= TABS.length) {
@@ -2280,8 +2386,6 @@ export async function runTui(): Promise<void> {
       draw();
       return;
     }
-    if (data === "?") { screen = "help"; draw(); return; }
-
     if (data === "q") {
       if (screen !== "list") { screen = "list"; draw(); return; }
       if (page !== "runs") { page = "runs"; draw(); return; }
@@ -2534,25 +2638,6 @@ export async function runTui(): Promise<void> {
     if (page === "settings") {
       if (data === "\x1b[A" || data === "k") { settingsSel = Math.max(0, settingsSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { settingsSel++; draw(); return; }
-      if (data === "e" || data === "\r" || data === "\n") {
-        const machine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
-        const rows = buildSettings(l, machine, effectivePolicy());
-        const row = rows[settingsSel];
-        openEditor(settingsFileFor(l, row));
-        draw();
-        return;
-      }
-      if (data === "o") {
-        const machine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
-        const rows = buildSettings(l, machine, effectivePolicy());
-        const row = rows[settingsSel];
-        notify(settingsFileFor(l, row) ?? "");
-        draw();
-        return;
-      }
-      if (data === "p") { openEditor(l.policyFile); draw(); return; }
-      if (data === "c") { openEditor(l.machineConfig); draw(); return; }
-      if (data === "r") { draw(); return; }
       draw();
       return;
     }
@@ -2585,7 +2670,9 @@ export async function runTui(): Promise<void> {
   void refreshIssues();
   setInterval(() => {
     if (Date.now() - issueRefreshAt > 30_000) void refreshIssues();
-    draw();
+    // The composer repaints on input; background refreshes would only steal
+    // frames from typing.
+    if (!newRunInsert) draw();
   }, 1_000);
   process.stdout.on("resize", draw);
   draw();

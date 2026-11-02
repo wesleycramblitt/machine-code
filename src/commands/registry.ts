@@ -45,12 +45,37 @@ function asGitRef(value: unknown): string | undefined {
 const SPECS: CommandSpec[] = [
   {
     name: "core:status",
-    description: "Working-tree status (short) with branch and staged/untracked counts.",
+    description:
+      "Working-tree status (short) with branch and staged/untracked counts, plus map and LSP health.",
     binary: "git",
     args: () => ["status", "--short", "--branch"],
     schema: {},
     readonly: true,
-    timeoutMs: 15_000,
+    timeoutMs: 60_000,
+    handler: async (_args, ctx) => {
+      const { runStatusCommand } = await import("./map.js");
+      return runStatusCommand(ctx.root);
+    },
+  },
+  {
+    name: "core:map",
+    description:
+      "Deterministic repository map: status, render a path slice with symbols, or refresh the cache.",
+    binary: "git",
+    args: () => [],
+    schema: {
+      action: { type: "string", description: "status | render | refresh (default render)." },
+      path: { type: "string", description: "Directory or file prefix for render." },
+      symbols: { type: "boolean", description: "Include symbols in render (default true)." },
+      semantic: { type: "boolean", description: "Append semantic module annotations." },
+      refresh: { type: "boolean", description: "Rebuild the cache before returning." },
+    },
+    readonly: true,
+    timeoutMs: 60_000,
+    handler: async (args, ctx) => {
+      const { runMapCommand } = await import("./map.js");
+      return runMapCommand(args, ctx.root);
+    },
   },
   {
     name: "core:diff",

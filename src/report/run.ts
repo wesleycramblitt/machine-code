@@ -13,6 +13,49 @@ export interface ContextManifest {
   sources: ContextSource[];
 }
 
+export interface ContextUsageView {
+  chars: number;
+  tokens: number;
+  peakTokens: number;
+}
+
+/**
+ * Current and peak prompt size. New runs record this in run.json. Old runs
+ * fall back to the last model_request chars and the actual call usage.
+ */
+export function contextUsage(
+  usage: { contextChars?: number; contextTokens?: number; peakContextTokens?: number },
+  events: readonly RunEvent[],
+): ContextUsageView {
+  let lastChars = 0;
+  let lastTokens = 0;
+  let peakTokens = 0;
+  for (const event of events) {
+    if (event.type === "model_request" && typeof event.chars === "number") {
+      lastChars = event.chars;
+    }
+    if (event.type !== "model_call_end") continue;
+    const u = (event.usage ?? {}) as { input?: number; cacheRead?: number };
+    const tokens = Number(u.input ?? 0) + Number(u.cacheRead ?? 0);
+    if (tokens > 0) {
+      lastTokens = tokens;
+      peakTokens = Math.max(peakTokens, tokens);
+    }
+  }
+  const chars = usage.contextChars && usage.contextChars > 0 ? usage.contextChars : lastChars;
+  const tokens = usage.contextTokens && usage.contextTokens > 0
+    ? usage.contextTokens
+    : lastTokens > 0
+      ? lastTokens
+      : Math.ceil(chars / 4);
+  const peak = Math.max(
+    usage.peakContextTokens ?? 0,
+    peakTokens,
+    lastChars > 0 ? Math.ceil(lastChars / 4) : 0,
+  );
+  return { chars, tokens, peakTokens: peak };
+}
+
 export function readContextManifest(runDir: string): ContextManifest | null {
   const file = join(runDir, "context.json");
   if (!existsSync(file)) return null;

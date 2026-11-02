@@ -25,6 +25,20 @@ export const SEARCH_EXCLUDES = [
   "__pycache__",
 ];
 
+/** Files that never enter a listing, search, map, or model context. */
+export const SECRET_GLOBS = [
+  "!**/.env",
+  "!**/.env.*",
+  "!**/*.pem",
+  "!**/*.key",
+  "!**/*.p12",
+  "!**/id_rsa*",
+  "!**/id_ed25519*",
+  "!**/.npmrc",
+  "!**/.netrc",
+  "!**/.git-credentials",
+];
+
 export class ToolError extends Error {}
 
 /** Resolve a caller path inside root; reject escapes, including symlink hops. */
@@ -95,9 +109,115 @@ export function capText(text: string, capBytes: number): Capped {
   return { text: `${sliced}\n[truncated: output capped at ${capBytes} bytes]`, truncated: true };
 }
 
-/** ripgrep glob arguments that keep search out of excluded directories. */
+/** ripgrep glob arguments that keep search out of excluded directories and secrets. */
 export function excludeGlobs(): string[] {
-  return SEARCH_EXCLUDES.flatMap((dir) => ["--glob", `!**/${dir}/**`]);
+  return [
+    ...SEARCH_EXCLUDES.flatMap((dir) => ["--glob", `!**/${dir}/**`]),
+    ...SECRET_GLOBS.flatMap((glob) => ["--glob", glob]),
+  ];
+}
+
+/** Truncate text to a UTF-8 byte budget without splitting a code point. */
+export function truncateToBytes(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  let out = "";
+  let used = 0;
+  for (const ch of text) {
+    const size = Buffer.byteLength(ch, "utf8");
+    if (used + size > maxBytes) break;
+    out += ch;
+    used += size;
+  }
+  return out;
+}
+
+export interface NumberedPage {
+  text: string;
+  /** First line not delivered. Equals offset when nothing was delivered. */
+  nextOffset: number;
+  delivered: number;
+  /** True when the first delivered line was cut to fit the byte cap. */
+  truncatedLine: boolean;
+}
+
+/**
+ * Number and emit lines until the byte cap. The continuation offset is derived
+ * from delivered lines, never from the requested line slice. This is the fix
+ * for the old bug that skipped lines between the byte cut and the line limit.
+ */
+export function numberLinesCapped(
+  lines: readonly string[],
+  offset: number,
+  limit: number,
+  capBytes: number,
+): NumberedPage {
+  const out: string[] = [];
+  let used = 0;
+  let nextOffset = offset;
+  let truncatedLine = false;
+  const last = Math.min(lines.length, offset - 1 + Math.max(1, limit));
+  for (let index = offset - 1; index < last; index++) {
+    const lineNo = index + 1;
+    const raw = lines[index] ?? "";
+    const text = `${lineNo}: ${raw}`;
+    const cost = Buffer.byteLength(text, "utf8") + (out.length > 0 ? 1 : 0);
+    if (used + cost > capBytes) {
+      if (out.length === 0) {
+        const prefix = `${lineNo}: `;
+        const room = Math.max(0, capBytes - Buffer.byteLength(prefix, "utf8"));
+        const cut = prefix + truncateToBytes(raw, room);
+        out.push(cut);
+        used += Buffer.byteLength(cut, "utf8");
+        nextOffset = lineNo + 1;
+        truncatedLine = true;
+      } else {
+        nextOffset = lineNo;
+      }
+      break;
+    }
+    out.push(text);
+    used += cost;
+    nextOffset = lineNo + 1;
+  }
+  return { text: out.join("\n"), nextOffset, delivered: out.length, truncatedLine };
+}
+
+/** True when a relative path matches a secret-file glob. */
+export function isSecretPath(relPath: string): boolean {
+  return SECRET_GLOBS.some((glob) => globToRegExp(glob.slice(1)).test(relPath));
+}
+
+/**
+ * Match ripgrep-like globs against a path. A glob without "/" matches the
+ * basename at any depth; a glob with "/" matches the relative path.
+ */
+export function globToRegExp(glob: string): RegExp {
+  let pattern = glob.replaceAll("\\", "/");
+  let prefix = "";
+  if (pattern.startsWith("**/")) {
+    prefix = "(?:.*/)?";
+    pattern = pattern.slice(3);
+  } else if (!pattern.includes("/")) {
+    prefix = "(?:.*/)?";
+  }
+  let body = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        body += ".*";
+        i += 1;
+      } else {
+        body += "[^/]*";
+      }
+    } else if (ch === "?") {
+      body += "[^/]";
+    } else {
+      body += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${prefix}${body}$`);
 }
 
 export function toRelative(root: string, abs: string): string {

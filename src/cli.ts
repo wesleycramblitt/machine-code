@@ -45,7 +45,7 @@ import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
 import { artifactPeek } from "./context/preview.js";
-import { changesFor, childRuns, readContextManifest, thinkingChunks, touchedPaths } from "./report/run.js";
+import { changesFor, childRuns, contextUsage, readContextManifest, thinkingChunks, touchedPaths } from "./report/run.js";
 import { buildSettings, settingsFileFor } from "./tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./data.js";
 import { runTui } from "./tui.js";
@@ -139,9 +139,13 @@ Usage:
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
   machine_code runs [--group gh-issue|status|overall] [--filter ...] [--text Q]
                                     Run hierarchy grouped by repo/issue or status
-  machine_code show <run-id>        Rich run detail: model, ask, context, changes, children
-                                    [--events] [--thinking] [--changes] [--context] [--json]
+  machine_code show <run-id>        Rich run detail: model, ask, context, state, changes,
+                                    children [--events] [--thinking] [--changes] [--context]
+                                    [--state] [--json]
   machine_code context <run-id>     Print the run context manifest
+  machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
+                                    --no-symbols, --semantic)
+  machine_code prompts [role]       Print rendered agent prompts with chars and words (--json)
   machine_code spend [--days N] [--by provider|model|day|agent] [--json]
   machine_code tools [tool|script]  List repo/machine tools and scripts
   machine_code tools new <name>     Create an executable script + manifest
@@ -201,6 +205,11 @@ const BOOLEAN_FLAGS = new Set([
   "worktree",
   "json",
   "recreate",
+  "status",
+  "refresh",
+  "no-symbols",
+  "semantic",
+  "state",
 ]);
 
 function parseFlags(argv: string[]): { flags: Map<string, string>; positional: string[] } {
@@ -2182,6 +2191,13 @@ function fmtTokens(n: number): string {
   return String(n);
 }
 
+function fmtRunTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1_000)}K`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 function fmtMoney(n: number): string {
   if (n >= 10) return `$${n.toFixed(2)}`;
   if (n >= 1) return `$${n.toFixed(3)}`;
@@ -2345,6 +2361,10 @@ function cmdShow(argv: string[]): number {
   process.stdout.write(`  ${s.repoRoot}\n`);
   process.stdout.write(`  request  ${s.request.replace(/\s+/g, " ")}\n`);
   process.stdout.write(`  model    ${String(lastModel?.key ?? "(not selected yet)")}\n`);
+  const ctx = contextUsage(s.usage, run.events);
+  process.stdout.write(
+    `  context  ${fmtRunTokens(ctx.tokens)} ctx  ${fmtRunTokens(s.usage.totalTokens)} total  ${fmtRunTokens(ctx.peakTokens)} peak\n`,
+  );
   process.stdout.write(`  spend    ${s.modelCalls} calls  ${fmtTokens(s.usage.totalTokens)} tok  ${fmtMoney(s.cost.actual)} actual / ${fmtMoney(s.cost.estimated)} estimated\n`);
   if (s.issue) process.stdout.write(`  issue    #${s.issue.number}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
   if (s.parentRunId) process.stdout.write(`  parent   ${s.parentRunId}\n`);
@@ -2358,6 +2378,15 @@ function cmdShow(argv: string[]): number {
       process.stdout.write(`  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(6)}b ${source.origin.padEnd(9)} ${source.ref}${source.warning ? `  (${source.warning})` : ""}\n`);
     }
     if (!flags.has("context") && context.sources.length > 12) process.stdout.write(`  … ${context.sources.length - 12} more (--context)\n`);
+  }
+
+  const stateFile = join(runDir, "state.md");
+  if (existsSync(stateFile)) {
+    const stateLines = readFileSync(stateFile, "utf8").trim().split("\n");
+    process.stdout.write(`\nstate${flags.has("state") ? "" : ` (first ${Math.min(stateLines.length, 24)} lines; --state for all)`}\n`);
+    for (const line of stateLines.slice(0, flags.has("state") ? stateLines.length : 24)) {
+      process.stdout.write(`  ${line}\n`);
+    }
   }
 
   if (touched.length > 0) {
@@ -2464,6 +2493,84 @@ function cmdSpend(argv: string[]): number {
   } else {
     fail("--by must be provider|model|day|agent");
   }
+  return 0;
+}
+
+/* ------------------------------------------------------------- prompts */
+
+function cmdPrompts(argv: string[]): number {
+  const { flags, positional } = parseFlags(argv);
+  const requested = positional[0];
+  if (requested && !AGENT_NAMES.includes(requested)) {
+    fail(`unknown agent "${requested}"; choose one of ${AGENT_NAMES.join(", ")}`);
+  }
+  const l = layout();
+  const roles = requested ? [requested] : [...AGENT_NAMES];
+  const rows = roles.map((role) => {
+    const resolved = resolveAgent(l, role);
+    return {
+      role,
+      chars: resolved.prompt.length,
+      words: resolved.prompt.trim().split(/\s+/).filter(Boolean).length,
+      prompt: resolved.prompt,
+    };
+  });
+  if (flags.has("json")) {
+    process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+    return 0;
+  }
+  for (const row of rows) {
+    process.stdout.write(`\n# ${row.role} · ${row.chars} chars · ${row.words} words\n${row.prompt}\n`);
+  }
+  return 0;
+}
+
+/* --------------------------------------------------------------- map */
+
+async function cmdMap(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const action = flags.has("status") ? "status" : flags.has("refresh") ? "refresh" : "render";
+  const path = positional[0] ?? flags.get("path");
+  const l = layout();
+  if (flags.has("semantic") && flags.has("refresh")) {
+    const runtime = await loadRuntime(l);
+    const { buildRepoMap } = await import("./map/deterministic.js");
+    const { ensureSemanticMap } = await import("./map/ensure.js");
+    const built = await buildRepoMap(l.repoRoot);
+    await ensureSemanticMap({
+      root: l.repoRoot,
+      map: built.map,
+      models: runtime.models,
+      catalogue: runtime.catalogue.models,
+      configuredProviders: runtime.configuredProviders,
+      fundedProviders: fundedProviderIds(runtime.machine.providers),
+      policy: policyFor(l, "architect", runtime.policy),
+      machine: runtime.machine,
+      availability: loadAvailability(l.home),
+      home: l.home,
+      runId: "map-cli",
+      force: true,
+      recorder: {
+        event: (type, data) => {
+          if (type === "map_semantic") process.stderr.write(`map semantic ${JSON.stringify(data)}\n`);
+        },
+      },
+    });
+  }
+  const { runMapCommand } = await import("./commands/map.js");
+  const result = await runMapCommand(
+    {
+      action,
+      ...(path ? { path } : {}),
+      ...(flags.has("json") ? { json: true } : {}),
+      ...(flags.has("no-symbols") ? { symbols: false } : {}),
+      ...(flags.has("semantic") ? { semantic: true } : {}),
+      ...(flags.has("refresh") ? { refresh: true } : {}),
+    },
+    l.repoRoot,
+  );
+  if (result.isError) fail(result.text);
+  process.stdout.write(`${result.text}\n`);
   return 0;
 }
 
@@ -2696,6 +2803,12 @@ async function main(): Promise<void> {
       break;
     case "spend":
       code = cmdSpend(rest);
+      break;
+    case "prompts":
+      code = cmdPrompts(rest);
+      break;
+    case "map":
+      code = await cmdMap(rest);
       break;
     case "tools":
       code = cmdTools(rest);

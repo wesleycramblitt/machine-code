@@ -56,6 +56,7 @@ interface RoleData {
   blurb?: unknown;
   preset?: unknown;
   capabilities?: unknown;
+  base_prompt?: unknown;
   weights?: Record<string, unknown>;
 }
 
@@ -158,11 +159,23 @@ export function rolePreset(name: AgentName): string {
   return typeof role.preset === "string" ? role.preset : "assistant";
 }
 
+function basePrompt(name: AgentName): string {
+  const file = dataPath("prompts/base.md");
+  if (!existsSync(file)) return "";
+  return readFileSync(file, "utf8").replaceAll("<role>", name);
+}
+
 function agentPrompt(layout: Layout, name: AgentName): string {
-  const override = join(layout.repoDir, "agents", `${name}.md`);
-  if (existsSync(override)) return readFileSync(override, "utf8");
   const role = roleData(name);
-  return typeof role.prompt === "string" ? role.prompt : "";
+  const override = join(layout.repoDir, "agents", `${name}.md`);
+  const rolePrompt = existsSync(override)
+    ? readFileSync(override, "utf8")
+    : typeof role.prompt === "string"
+      ? role.prompt
+      : "";
+  if (role.base_prompt === false) return rolePrompt.trim();
+  const base = basePrompt(name).trim();
+  return [base, rolePrompt.trim()].filter(Boolean).join("\n\n");
 }
 
 function modeConfigs(role: RoleData, modes: readonly string[]): Record<string, AgentModeConfig> {

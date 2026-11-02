@@ -84,6 +84,13 @@ export interface RunUsage {
   cacheRead: number;
   cacheWrite: number;
   totalTokens: number;
+  /** Prompt size for the most recent request, in characters. */
+  contextChars: number;
+  /** Prompt tokens for the most recent request (input + cacheRead). */
+  contextTokens: number;
+  /** Largest prompt seen during the run. */
+  peakContextChars: number;
+  peakContextTokens: number;
 }
 
 export interface RunCost {
@@ -167,6 +174,10 @@ function migrateUsage(value: unknown): RunUsage {
     cacheRead: num(raw.cacheRead),
     cacheWrite: num(raw.cacheWrite),
     totalTokens: num(raw.totalTokens),
+    contextChars: num(raw.contextChars),
+    contextTokens: num(raw.contextTokens),
+    peakContextChars: num(raw.peakContextChars),
+    peakContextTokens: num(raw.peakContextTokens),
   };
 }
 

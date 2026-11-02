@@ -16,14 +16,29 @@ import {
   assertRegularFile,
   capText,
   excludeGlobs,
+  globToRegExp,
   isBinaryFile,
+  isSecretPath,
+  numberLinesCapped,
   resolveWithin,
+  toRelative,
 } from "./safety.js";
+import {
+  buildRepoMap,
+  findSymbols,
+  outlineFile,
+  renderOutline,
+  renderRepoMap,
+  symbolRange,
+  rangeAround,
+} from "../map/deterministic.js";
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
 import { askTool, type AskContext } from "./ask.js";
 import { taskTool, type TaskContext } from "./task.js";
 import { issueTool, type IssueToolContext } from "./issues.js";
 import { prTool, type PrToolContext } from "./pr.js";
+import { contextTool } from "./context.js";
+import type { RunStateStore } from "../context/state.js";
 
 export interface ToolContext {
   /** Worktree root every path is bound to. */
@@ -38,6 +53,8 @@ export interface ToolContext {
   issues?: IssueToolContext;
   /** When provided, the `pr` tool is live (capability-gated PR access). */
   prs?: PrToolContext;
+  /** Run state for the `context` tool. */
+  state?: RunStateStore;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -54,6 +71,8 @@ const ReadParams = Type.Object({
   path: Type.String({ description: "File path, relative to the worktree root." }),
   offset: Type.Optional(Type.Number({ description: "1-based line to start at (default 1)." })),
   limit: Type.Optional(Type.Number({ description: "Max lines to return (default 2000)." })),
+  symbol: Type.Optional(Type.String({ description: "Top-level symbol to read (resolved from the repo map)." })),
+  around: Type.Optional(Type.Number({ description: "1-based line; read the symbol that contains it." })),
 });
 
 export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
@@ -61,7 +80,8 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     name: "read",
     label: "read",
     description:
-      "Read a file inside the worktree. Line-paged, capped at 24 KiB per call; binary files are rejected.",
+      "Read a file inside the worktree. Use symbol or around for a surgical range; offset/limit page. " +
+      "Capped at 24 KiB per call; a bare full read of a larger file returns its outline. Binary files are rejected.",
     parameters: ReadParams,
     async execute(_id, params: Static<typeof ReadParams>) {
       try {
@@ -70,16 +90,68 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         if (isBinaryFile(abs)) return fail(`refusing to read a binary file: ${params.path}`);
         const raw = readFileSync(abs, "utf8");
         const lines = raw.split("\n");
-        const offset = Math.max(1, Math.floor(params.offset ?? 1));
-        const limit = Math.max(1, Math.floor(params.limit ?? 2000));
-        const slice = lines.slice(offset - 1, offset - 1 + limit);
-        const numbered = slice.map((line, i) => `${offset + i}: ${line}`).join("\n");
-        const capped = capText(numbered, READ_CAP_BYTES);
-        const more =
-          offset - 1 + slice.length < lines.length
-            ? `\n[${lines.length - (offset - 1 + slice.length)} more lines; call read with offset ${offset + slice.length}]`
-            : "";
-        return ok(capped.text + more);
+        const bytes = Buffer.byteLength(raw, "utf8");
+        if (params.symbol && params.around !== undefined) {
+          return fail("use symbol or around, not both");
+        }
+        if ((params.symbol || params.around !== undefined) && (params.offset !== undefined || params.limit !== undefined)) {
+          return fail("use symbol/around or offset/limit, not both");
+        }
+
+        let offset = Math.max(1, Math.floor(params.offset ?? 1));
+        let limit = Math.max(1, Math.floor(params.limit ?? 2000));
+        let header = "";
+
+        if (params.symbol || params.around !== undefined) {
+          const file = await outlineFile(ctx.root, params.path);
+          const range = file
+            ? params.symbol
+              ? symbolRange(file, params.symbol)
+              : rangeAround(file, params.around!)
+            : null;
+          if (!range) {
+            if (params.around !== undefined && !params.symbol) {
+              // No symbols in the file: fall back to a small line window.
+              offset = Math.max(1, params.around - 20);
+              limit = 41;
+              header = `${params.path}:${offset}-${offset + 40} (around ${params.around})`;
+            } else {
+              const suggestion = file && file.symbols.length > 0
+                ? file.symbols.slice(0, 12).map((symbol) => `${symbol.line} ${symbol.kind} ${symbol.name}`).join("\n")
+                : "(no symbols)";
+              return fail(
+                `no ${params.symbol ? `symbol "${params.symbol}"` : `symbol around line ${params.around}`} in ${params.path}. ` +
+                `Known symbols:\n${suggestion}`,
+              );
+            }
+          } else {
+            offset = range.start;
+            limit = Math.max(1, range.end - range.start + 1);
+            header = `${params.path}:${range.start}-${range.end} (${range.name})`;
+          }
+        } else if (bytes > READ_CAP_BYTES && params.offset === undefined && params.limit === undefined) {
+          const file = await outlineFile(ctx.root, params.path);
+          const outline = file ? renderOutline(file) : "(no symbols)";
+          return ok(
+            `[${params.path} is ${lines.length} lines / ${bytes} bytes; full read exceeds ${READ_CAP_BYTES} bytes]\n` +
+            `${outline}\nRead a symbol or a range.`,
+          );
+        }
+
+        if (offset > lines.length) {
+          return ok(`[offset ${offset} is past the end of ${params.path} (${lines.length} lines)]`);
+        }
+        const page = numberLinesCapped(lines, offset, limit, READ_CAP_BYTES);
+        const notes: string[] = [];
+        if (page.truncatedLine) {
+          notes.push(`[line ${page.nextOffset - 1} truncated at ${READ_CAP_BYTES} bytes]`);
+        }
+        if (page.nextOffset <= lines.length) {
+          notes.push(
+            `[${lines.length - (page.nextOffset - 1)} more lines; call read with offset ${page.nextOffset}]`,
+          );
+        }
+        return ok([header, page.text, ...notes].filter(Boolean).join("\n"));
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
       }
@@ -159,7 +231,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
 /* ------------------------------------------------------------------ search */
 
 const SEARCH_MODES: readonly string[] = [
-  "map", "files", "text", "structure", "json", "yaml",
+  "map", "files", "outline", "text", "structure", "json", "yaml",
   "definition", "references", "symbols", "info",
 ];
 
@@ -168,6 +240,7 @@ const SearchParams = Type.Object({
     [
       Type.Literal("map"),
       Type.Literal("files"),
+      Type.Literal("outline"),
       Type.Literal("text"),
       Type.Literal("structure"),
       Type.Literal("json"),
@@ -181,6 +254,11 @@ const SearchParams = Type.Object({
   ),
   pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure, symbol name for semantic modes." })),
   path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
+  paths: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Specific files or directories for text mode. Use instead of path.",
+    }),
+  ),
   line: Type.Optional(Type.Number({ description: "1-based line (semantic modes)." })),
   column: Type.Optional(Type.Number({ description: "1-based column (semantic modes)." })),
   limit: Type.Optional(Type.Number({ description: "Max results (default 200)." })),
@@ -214,9 +292,10 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     name: "search",
     label: "search",
     description:
-      "Read-only bounded search. Modes: map (filtered repo map), files (file listing), text (regex), " +
+      "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing), outline (one file's symbols), text (regex), " +
       "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), and semantic definition/references/symbols/info (LSP, from M1). " +
-      "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...) or binary files.",
+      "text accepts paths to search a specific file list. Never touches excluded directories " +
+      "(node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
     parameters: SearchParams,
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
@@ -224,12 +303,43 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
       try {
         switch (params.mode) {
           case "files": {
-            const args = ["--files", ...excludeGlobs()];
-            if (params.pattern) args.push("--glob", params.pattern);
-            return await exec("rg", args, scope, SEARCH_CAP_BYTES);
+            if (params.pattern === "*") {
+              return fail('files pattern "*" matches everything; use mode "map" or a specific glob');
+            }
+            const scopeIsFile = (() => {
+              try {
+                return statSync(scope).isFile();
+              } catch {
+                return false;
+              }
+            })();
+            if (scopeIsFile) {
+              const rel = toRelative(ctx.root, scope);
+              if (isSecretPath(rel)) return ok("no matches");
+              const match = !params.pattern || globToRegExp(params.pattern).test(rel);
+              return ok(match ? rel : "no matches");
+            }
+            // Never pass a positive glob to rg for a listing: positive globs
+            // override .gitignore and would expose ignored or secret files.
+            const result = await runProc("rg", ["--files", ...excludeGlobs()], {
+              cwd: scope,
+              timeoutMs: 30_000,
+            });
+            if (result.outcome === "spawn-error") return fail(`configuration gap: ${result.spawnError}`);
+            if (result.outcome === "timeout") return fail("rg timed out after 30s (process group killed)");
+            if (result.code !== 0 && result.stdout.length === 0) {
+              if (result.code === 1) return ok("no matches");
+              return fail(`rg exited ${result.code}: ${result.stderr.trim() || "(no stderr)"}`);
+            }
+            const all = result.stdout.split("\n").filter(Boolean);
+            const filtered = params.pattern ? all.filter((file) => globToRegExp(params.pattern!).test(file)) : all;
+            return ok(capText(filtered.join("\n"), SEARCH_CAP_BYTES).text || "no matches");
           }
           case "text": {
             if (!params.pattern) return fail("text mode requires a pattern");
+            if (params.path && params.paths && params.paths.length > 0) {
+              return fail("text mode accepts path or paths, not both");
+            }
             // rg needs a directory as cwd. When the caller scopes to one file,
             // run from the worktree root and pass the file explicitly.
             const scopeIsFile = (() => {
@@ -239,6 +349,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 return false;
               }
             })();
+            if (scopeIsFile && isSecretPath(toRelative(ctx.root, scope))) return ok("no matches");
             const args = [
               "--line-number",
               "--with-filename",
@@ -248,17 +359,32 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               "--",
               params.pattern,
             ];
+            if (params.paths && params.paths.length > 0) {
+              const targets = params.paths.map((path) => resolveWithin(ctx.root, path));
+              const visible = targets.filter((target) => !isSecretPath(toRelative(ctx.root, target)));
+              if (visible.length === 0) return ok("no matches");
+              args.push(...visible);
+              return await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
+            }
             if (scopeIsFile) args.push(params.path ?? scope);
             return await exec("rg", args, scopeIsFile ? ctx.root : scope, SEARCH_CAP_BYTES);
           }
           case "map": {
-            const result = await exec(
-              "rg",
-              ["--files", ...excludeGlobs()],
-              scope,
-              SEARCH_CAP_BYTES,
+            const built = await buildRepoMap(ctx.root);
+            return ok(
+              renderRepoMap(built.map, {
+                path: params.path,
+                maxBytes: 32 * 1024,
+              }) || "no files",
             );
-            return result;
+          }
+          case "outline": {
+            if (!params.path) return fail("outline mode requires a path");
+            const file = await outlineFile(ctx.root, params.path);
+            if (!file) return fail(`no outline for ${params.path} (binary or unreadable)`);
+            return ok(
+              `${file.path} (${file.lines} lines)\n${renderOutline(file) || "(no symbols)"}`,
+            );
           }
           case "json":
           case "yaml": {
@@ -280,20 +406,22 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             );
           }
           default: {
+            if (params.mode === "symbols") {
+              const built = await buildRepoMap(ctx.root);
+              const hits = findSymbols(built.map, params.pattern ?? "", limit);
+              return ok(hits.join("\n") || "no symbols");
+            }
             if (SEMANTIC_MODES.has(params.mode)) {
               const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
               if (!serverAvailable("typescript")) {
-                return fail(`semantic mode "${params.mode}" unavailable: typescript-language-server not installed. Fallback: text or structure.`);
+                return fail(
+                  `semantic mode "${params.mode}" unavailable: typescript-language-server not installed. ` +
+                  "Fallback: outline, text, or structure.",
+                );
               }
               const abs = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
               const client = lspClientFor(ctx.root, "typescript");
-              if (!client) return fail("LSP unavailable");
-              if (params.mode === "symbols") {
-                const syms = await client.workspaceSymbols(params.pattern ?? "");
-                if (syms === null) return fail("LSP server did not respond");
-                if (syms.length === 0) return ok("no symbols");
-                return ok(syms.map((s) => `${s.location.uri.replace("file://", "")}:${s.location.range.start.line + 1} ${s.kind} ${s.name}`).join("\\n"));
-              }
+              if (!client) return fail("LSP unavailable. Fallback: outline, text, or structure.");
               if (!params.path || params.line === undefined || params.column === undefined) {
                 return fail(`semantic mode "${params.mode}" requires path + line + column`);
               }
@@ -302,13 +430,13 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 const locs = await client.definition(abs, pos);
                 if (locs === null) return fail("LSP server did not respond");
                 if (locs.length === 0) return ok("no definition");
-                return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\\n"));
+                return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\n"));
               }
               if (params.mode === "references") {
                 const locs = await client.references(abs, pos);
                 if (locs === null) return fail("LSP server did not respond");
                 if (locs.length === 0) return ok("no references");
-                return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\\n"));
+                return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\n"));
               }
               if (params.mode === "info") {
                 const hover = await client.hover(abs, pos);
@@ -443,7 +571,7 @@ function prUnavailable(): AgentTool<typeof PrUnavailableParams> {
 
 /* ------------------------------------------------------------------ all */
 
-export type CoreToolName = "read" | "write" | "edit" | "search" | "command" | "task" | "ask" | "issue" | "pr";
+export type CoreToolName = "read" | "write" | "edit" | "search" | "command" | "context" | "task" | "ask" | "issue" | "pr";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
   const all: Record<CoreToolName, AgentTool> = {
@@ -452,6 +580,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     edit: editTool(ctx),
     search: searchTool(ctx),
     command: commandTool(ctx),
+    context: contextTool(ctx),
     task: ctx.task ? taskTool(ctx.task) : taskUnavailable(),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     issue: ctx.issues ? issueTool(ctx.issues) : issueUnavailable(),

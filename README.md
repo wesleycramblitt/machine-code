@@ -203,11 +203,50 @@ Tools live in `.machine_code/tools/<name>.toml`, scripts under
 The new-run composer previews exactly which files, tools, scripts, and issues
 the selected run will inherit before it starts.
 
+Skills live in `.machine_code/skills/<name>/SKILL.md`. Only descriptions are
+always visible; the body loads when an issue references the skill. The curation
+policy and the kept set are in
+[knowledge/skills-curation.md](knowledge/skills-curation.md).
+
 Prompted runs: every run has a stable id, an append-only event log, and a
 transcript checkpoint. Build and orchestrated runs get their own worktree and
 branch; Sudo edits the main tree by default (`--worktree` opts into isolation);
 General and Review never create one. Runs can ask clarifying questions, be
 paused/forked, and resume after a restart.
 
-Design: [plan.md](plan.md) and the upgrade architecture in
-[upgrade-plan.md](upgrade-plan.md).
+### Repository map, run state, and prompts
+
+`machine_code map [path]` prints the deterministic file and symbol map. It is
+cached under `.machine_code/local/cache/map.json`; `--status` shows map, semantic,
+and LSP health; `--semantic` adds module annotations; `--refresh` rebuilds the
+deterministic cache.
+
+Each run keeps its working memory outside the transcript:
+
+```text
+.machine_code/local/runs/<id>/
+  state.jsonl   facts, decisions, changes, next action
+  state.md      readable snapshot
+  artifacts/    content-addressed tool bodies
+```
+
+The model sees the run state plus the last step, not the full tool history. The
+`context` tool records decisions, focuses ranges, recalls artifacts, and resolves
+facts. A prompt that exceeds the run envelope or 90% of the selected model's
+window blocks and writes a split report instead of truncating.
+
+`machine_code prompts [role]` prints the rendered agent prompt with its size.
+Prompts share `data/prompts/base.md`; role files carry only short deltas.
+
+Map configuration lives in `~/.machine_code/config.toml`:
+
+```toml
+[map]
+enabled = true
+semantic = true
+semantic_model = ""    # pin a model, or leave empty for automatic selection
+refresh = "on-change"  # on-change | manual | always
+```
+
+Design: [plans/context-and-map-plan.md](plans/context-and-map-plan.md) and the
+upgrade architecture in [plans/upgrade-plan.md](plans/upgrade-plan.md).

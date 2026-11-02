@@ -207,16 +207,15 @@ test("tools are capability-gated: plan has no task, orchestrate does", () => {
   }
 });
 
-test("composed prompt states config, verification, ambiguity, and capabilities", () => {
+test("composed prompt states preset and ambiguity", () => {
   const root = tempDir("prompt");
   try {
     const layout = fakeLayout(root);
     const resolved = resolveAgent(layout, "architect", { runOverrides: { preset: "plan", ambiguity: "strict" } });
     assert.match(resolved.prompt, /preset plan/);
-    assert.match(resolved.prompt, /Verification level DIRECT/);
     assert.match(resolved.prompt, /Ambiguity policy STRICT/);
-    assert.match(resolved.prompt, /Granted capabilities:/);
-    assert.match(resolved.prompt, /artifact:write/);
+    assert.match(resolved.prompt, /core:map/);
+    assert.match(resolved.prompt, /context note/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
