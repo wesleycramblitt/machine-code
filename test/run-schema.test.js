@@ -61,6 +61,50 @@ test("migrateRunSummary fills missing lastActivityAt and rejects unusable record
   assert.equal(migrateRunSummary("nope"), null);
 });
 
+test("orchestration and process fields migrate with validation", () => {
+  const migrated = migrateRunSummary({
+    id: "orch-run",
+    status: "running",
+    startedAt: "2026-10-31T00:00:00.000Z",
+    orchestrationId: "orch-1",
+    orchestrationScope: "epic",
+    scopeRef: { provider: "github", repo: "o/r", number: 10 },
+    taskIssue: { provider: "github", repo: "o/r", number: 11 },
+    attempt: 2,
+    phase: "review",
+    planSnapshotHash: "abc",
+    planReview: "human",
+    resultReview: "agent",
+    processCount: 3,
+    liveProcessCount: 1,
+  });
+  assert.ok(migrated);
+  assert.equal(migrated.orchestrationId, "orch-1");
+  assert.equal(migrated.orchestrationScope, "epic");
+  assert.deepEqual(migrated.scopeRef, { provider: "github", repo: "o/r", number: 10 });
+  assert.deepEqual(migrated.taskIssue, { provider: "github", repo: "o/r", number: 11 });
+  assert.equal(migrated.attempt, 2);
+  assert.equal(migrated.phase, "review");
+  assert.equal(migrated.planSnapshotHash, "abc");
+  assert.equal(migrated.planReview, "human");
+  assert.equal(migrated.resultReview, "agent");
+  assert.equal(migrated.processCount, 3);
+  assert.equal(migrated.liveProcessCount, 1);
+
+  const invalid = migrateRunSummary({
+    id: "bad-orch",
+    status: "running",
+    orchestrationScope: "galaxy",
+    phase: "ship",
+    planReview: "bot",
+    resultReview: "bot",
+  });
+  assert.equal(invalid.orchestrationScope, undefined);
+  assert.equal(invalid.phase, undefined);
+  assert.equal(invalid.planReview, undefined);
+  assert.equal(invalid.resultReview, undefined);
+});
+
 test("writeJsonAtomic round-trips and leaves no temp files behind", () => {
   const dir = tempDir("atomic");
   const file = join(dir, "nested", "run.json");

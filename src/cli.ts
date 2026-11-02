@@ -27,7 +27,8 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "./state/questi
 import { loadTranscript, repairResumeTail } from "./state/transcript.js";
 import { packetPath, readPacket } from "./packet.js";
 import { agentDef, type AgentName } from "./agents.js";
-import { resolveAgent, type AgentConfig } from "./agents/config.js";
+import { resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
+import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { runLoop, type RunLoopResult } from "./loop.js";
 import { policyFor, type OrchestrateResult } from "./orchestrate.js";
 import { resolveGates, runGates } from "./verify.js";
@@ -38,7 +39,8 @@ import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved } from "./issues/reserved.js";
 import { resolveRunTarget } from "./issues/work.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
-import { loadAvailability } from "./availability.js";
+import { loadAvailability, saveAvailability } from "./availability.js";
+import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
@@ -175,7 +177,10 @@ Usage:
   machine_code provider disable|enable <name>
   machine_code provider cooldown <name> [minutes] | cooldown clear <name>
   machine_code model show <key|name>   Inspect axes, offers, providers for a model
+  machine_code model probe <key|name>  Probe model availability (free metadata)
   machine_code model cooldown clear <id>
+  machine_code availability [--probe] [--free-only] [--json]
+                                    Show or probe cooling model availability
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code queue               Process committed packets in .machine_code/tasks/
   machine_code version
@@ -201,7 +206,9 @@ const BOOLEAN_FLAGS = new Set([
   "direct-exec",
   "force",
   "free",
+  "free-only",
   "coding",
+  "probe",
   "tool",
   "inherit-worktree",
   "worktree",
@@ -468,6 +475,12 @@ function cmdPolicy(argv: string[]): number {
 
   const machine = loadMachineConfig(l);
   const policy = loadPolicy(l);
+  const issueAccessFor = (name: string): string =>
+    resolveAgentConfig({
+      role: name,
+      agentPolicy: policy.agents[name],
+      machineOverrides: machine.agents[name],
+    }).issueAccess ?? agentDef(l, name).issueAccess;
 
   if (flags.has("json")) {
     process.stdout.write(
@@ -481,6 +494,7 @@ function cmdPolicy(argv: string[]): number {
             const def = agentDef(l, name);
             return [name, { modes: def.modes, default: def.defaultMode ?? null, config: def.modeConfig }];
           })),
+          issueAccess: Object.fromEntries(AGENT_NAMES.map((name) => [name, issueAccessFor(name)])),
           files: { machine: l.machineConfig, repo: l.policyFile },
         },
         null,
@@ -523,6 +537,7 @@ function cmdPolicy(argv: string[]): number {
     process.stdout.write(`  min_fit ${ap.minFit}   min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
     process.stdout.write(`  free     min_fit ${ap.freeMinFit ?? ap.minFit}   min_capability ${ap.freeMinCapability ?? ap.minCapability}   axes ${freeFloors || "(inherits paid)"}\n`);
     const def = agentDef(l, name);
+    process.stdout.write(`  issue_access ${issueAccessFor(name)}\n`);
     process.stdout.write(`  modes ${def.modes.length ? `${def.modes.join(", ")}${def.defaultMode ? ` (default ${def.defaultMode})` : ""}` : "single-agent"}\n`);
     process.stdout.write(`  axes ${floors || "(none)"}\n`);
     process.stdout.write(`  weights ${weights}${ap.axisWeights ? "" : " (role defaults)"}\n`);
@@ -954,6 +969,55 @@ async function cmdRun(argv: string[]): Promise<number> {
     modeFlag ??
     (selectedDef.modes.length > 0 ? selectedDef.defaultMode ?? selectedDef.modes[0] : undefined);
 
+  const runIssueAccess =
+    resolveAgentConfig({
+      role: agentNameParsed,
+      agentPolicy: policy.agents[agentNameParsed],
+      machineOverrides: machine.agents[agentNameParsed],
+      runOverrides: agentOverrides,
+    }).issueAccess ?? agentDef(l, agentNameParsed).issueAccess;
+  if (flags.has("auto-issue") && runIssueAccess !== "create") {
+    fail(
+      `--auto-issue requires issue_access=create; ${agentNameParsed} has issue_access=${runIssueAccess}. ` +
+        "Select an existing Task or use an agent with issue creation access.",
+    );
+  }
+
+  // Probe cooling models with free metadata before a run record exists. A
+  // recovered model can rejoin selection; if nothing is ready, block here
+  // instead of starting a run that cannot make its first call.
+  const availabilityState = loadAvailability(l.home);
+  const probeResults = await probeCoolingModels({
+    rows: catalogueDoc.models,
+    state: availabilityState,
+    config: machine.availability,
+    configuredProviders,
+  });
+  if (probeResults.length > 0) saveAvailability(l.home, availabilityState);
+  for (const result of probeResults) {
+    if (result.status === "ready") {
+      process.stderr.write(`availability: ${result.key} recovered\n`);
+    } else if (result.status === "unavailable" || result.status === "auth") {
+      process.stderr.write(`availability: ${result.key} ${result.status}${result.message ? ` (${result.message})` : ""}\n`);
+    }
+  }
+  const preflight = pick({
+    agent: agentNameParsed,
+    policy: policy.agents[agentNameParsed]!,
+    machine,
+    catalogue: catalogueDoc.models,
+    configuredProviders,
+    availability: availabilityState,
+    fundedProviders: fundedProviderIds(machine.providers),
+    contextChars: request.length,
+    tier: machine.selection.tier,
+    requireProvider,
+    requireModel,
+  });
+  if ("error" in preflight) {
+    fail(`no model is ready before run start: ${preflight.error}${preflight.rejected[0] ? ` (${preflight.rejected[0].key}: ${preflight.rejected[0].reason})` : ""}`);
+  }
+
   // Fork lineage: resolve the parent before the recorder exists so the child
   // is born with its lineage (never patched in after the fact).
   const parentFlag = flags.get("parent");
@@ -993,6 +1057,21 @@ async function cmdRun(argv: string[]): Promise<number> {
       : {}),
   });
   registerProject(l.home, l.repoRoot);
+  for (const result of probeResults) {
+    recorder.event("availability_probe", {
+      key: result.key,
+      provider: result.providerID,
+      status: result.status,
+      source: result.source,
+      latencyMs: result.latencyMs,
+      ...(result.message ? { message: result.message } : {}),
+    });
+    if (result.status === "ready") {
+      recorder.event("availability_cooldown_cleared", { key: result.key });
+    } else if (result.status === "cooling" || result.status === "unavailable") {
+      recorder.event("availability_cooldown_extended", { key: result.key, retryAfterMs: result.retryAfterMs });
+    }
+  }
 
   // Issue association: runs attach to Tasks only. Epic/Feature input resolves
   // to the reserved Task 0 for planning/review; implementation runs require a
@@ -1294,6 +1373,90 @@ async function cmdProvider(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function cmdAvailability(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv);
+  const l = layout();
+  const machine = loadMachineConfig(l);
+  const state = loadAvailability(l.home);
+  const catalogue = loadCatalogue(l.catalogueFile);
+  if (!catalogue) fail("no catalogue; run machine_code catalogue refresh");
+  const configured = new Set(providerStatuses(createModelsCollection()).filter((p) => p.configured).map((p) => p.id));
+  const now = Date.now();
+  if (flags.has("probe")) {
+    const targets = probeCoolingCandidates(catalogue.models, state, configured, flags.has("free-only"));
+    if (targets.length === 0) {
+      process.stdout.write("no cooling models to probe\n");
+      return 0;
+    }
+    const results = [];
+    for (const target of targets) {
+      const result = await probeTarget(target, machine.availability, state);
+      applyProbeResult(state, result);
+      results.push(result);
+    }
+    saveAvailability(l.home, state);
+    if (flags.has("json")) {
+      process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
+      return 0;
+    }
+    for (const result of results) {
+      process.stdout.write(
+        `${result.key}  ${result.status}  ${result.source}  ${result.latencyMs}ms` +
+          `${result.retryAfterMs ? `  retry ${Math.ceil(result.retryAfterMs / 1000)}s` : ""}` +
+          `${result.message ? `  ${result.message}` : ""}\n`,
+      );
+    }
+    return 0;
+  }
+
+  if (flags.has("json")) {
+    process.stdout.write(`${JSON.stringify({ config: machine.availability, state }, null, 2)}\n`);
+    return 0;
+  }
+  process.stdout.write(
+    `probe ${machine.availability.probe}  interval ${Math.round(machine.availability.intervalMs / 1000)}s  timeout ${Math.round(machine.availability.timeoutMs / 1000)}s  free budget ${machine.availability.freeCompletionMaxPerHour}/h\n`,
+  );
+  const cooling = Object.entries(state.models)
+    .filter(([, health]) => typeof health.cooldownUntil === "number" && health.cooldownUntil > now)
+    .sort(([a], [b]) => (a < b ? -1 : 1));
+  if (cooling.length === 0) {
+    process.stdout.write("no cooling models\n");
+  } else {
+    process.stdout.write("cooling models:\n");
+    for (const [key, health] of cooling) {
+      process.stdout.write(
+        `  ${key}  until ${new Date(health.cooldownUntil!).toISOString()}  tier ${health.tier ?? 0}` +
+          `${health.lastProbeResult ? `  last ${health.lastProbeResult}` : ""}\n`,
+      );
+    }
+  }
+  const providers = Object.entries(state.providers).filter(([, health]) => health.disabled || health.needsAuth || (health.cooldownUntil ?? 0) > now);
+  if (providers.length > 0) {
+    process.stdout.write("provider health:\n");
+    for (const [id, health] of providers.sort(([a], [b]) => (a < b ? -1 : 1))) {
+      const bits = [
+        health.disabled ? "disabled" : "",
+        health.needsAuth ? "needs-auth" : "",
+        (health.cooldownUntil ?? 0) > now ? `cooling until ${new Date(health.cooldownUntil!).toISOString()}` : "",
+      ].filter(Boolean);
+      process.stdout.write(`  ${id}  ${bits.join(" · ")}\n`);
+    }
+  }
+  return 0;
+}
+
+function probeCoolingCandidates(
+  rows: readonly CatalogueRow[],
+  state: ReturnType<typeof loadAvailability>,
+  configured: ReadonlySet<string>,
+  freeOnly: boolean,
+) {
+  return rows
+    .filter((row) => configured.has(row.providerID) && (state.models[row.key]?.cooldownUntil ?? 0) > Date.now())
+    .filter((row) => !freeOnly || row.free || (row.pricing.input === 0 && row.pricing.output === 0))
+    .map(targetFor);
+}
+
 async function cmdModel(argv: string[]): Promise<number> {
   if (argv[0] === "show") {
     const query = argv[1];
@@ -1314,8 +1477,28 @@ async function cmdModel(argv: string[]): Promise<number> {
     }
     return 0;
   }
+  if (argv[0] === "probe") {
+    const query = argv[1];
+    if (!query) fail("usage: machine_code model probe <key|name>");
+    const l = layout();
+    const doc = loadCatalogue(l.catalogueFile);
+    if (!doc) fail("no catalogue; run machine_code catalogue refresh");
+    const row = filterModels(doc.models, { text: query, sort: "capability" })[0];
+    if (!row) fail(`no model matches "${query}"`);
+    const machine = loadMachineConfig(l);
+    const state = loadAvailability(l.home);
+    const result = await probeTarget(targetFor(row), machine.availability, state);
+    applyProbeResult(state, result);
+    saveAvailability(l.home, state);
+    process.stdout.write(
+      `${result.key}  ${result.status}  ${result.source}  ${result.latencyMs}ms` +
+        `${result.retryAfterMs ? `  retry ${Math.ceil(result.retryAfterMs / 1000)}s` : ""}` +
+        `${result.message ? `  ${result.message}` : ""}\n`,
+    );
+    return 0;
+  }
   if (argv[0] !== "cooldown" || argv[1] !== "clear" || !argv[2]) {
-    fail("usage: machine_code model show <key|name> | model cooldown clear <id>");
+    fail("usage: machine_code model show <key|name> | model probe <key|name> | model cooldown clear <id>");
   }
   const id = argv[2];
   const l = layout();
@@ -2390,6 +2573,10 @@ function cmdShow(argv: string[]): number {
   );
   process.stdout.write(`  spend    ${s.modelCalls} calls  ${fmtTokens(s.usage.totalTokens)} tok  ${fmtMoney(s.cost.actual)} actual / ${fmtMoney(s.cost.estimated)} estimated\n`);
   if (s.issue) process.stdout.write(`  issue    #${s.issue.number}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
+  const runAccess = s.capabilities
+    ? issueAccessFromCapabilities(s.capabilities)
+    : agentDef(found.layout, s.agent).issueAccess;
+  process.stdout.write(`  issues   ${runAccess}\n`);
   if (s.parentRunId) process.stdout.write(`  parent   ${s.parentRunId}\n`);
   if (s.worktree) process.stdout.write(`  worktree ${s.worktree}\n`);
   if (s.error) process.stdout.write(`  error    ${s.error}\n`);
@@ -2889,6 +3076,9 @@ async function main(): Promise<void> {
       break;
     case "model":
       code = await cmdModel(rest);
+      break;
+    case "availability":
+      code = await cmdAvailability(rest);
       break;
     case "queue":
       code = await cmdQueue(rest);

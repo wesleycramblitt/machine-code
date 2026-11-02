@@ -121,6 +121,38 @@ test("invalid tier and negative multiplier are rejected", () => {
   }
 });
 
+test("issue access is a policy override layer", () => {
+  const { root, layout } = setup('', '[agents.build]\nissue_access = "plan"\n');
+  try {
+    const policy = loadPolicy(layout);
+    assert.equal(policy.agents.build.issueAccess, "plan");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("availability probe settings parse durations and clamp the free budget", () => {
+  const { root, layout } = setup(
+    [
+      "[availability]",
+      'probe = "free-models"',
+      'interval = "90s"',
+      "timeout_ms = 2500",
+      "free_completion_max_per_hour = -3",
+      "",
+    ].join("\n"),
+  );
+  try {
+    const machine = loadMachineConfig(layout);
+    assert.equal(machine.availability.probe, "free-models");
+    assert.equal(machine.availability.intervalMs, 90_000);
+    assert.equal(machine.availability.timeoutMs, 2_500);
+    assert.equal(machine.availability.freeCompletionMaxPerHour, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("theme colors are machine-configurable and unknown keys are ignored", () => {
   const { root, layout } = setup('[theme]\nheader_bg = "#010203"\nfooter_bg = "#111111"\nback_bg = "#aa0000"\nnonsense = "#fff"\n');
   try {

@@ -23,6 +23,13 @@ import {
 
 export type AgentName = string;
 
+/** What a role may do to the issue plan, independent of orchestration mode. */
+export type IssueAccess = "none" | "read" | "plan" | "create";
+
+export function isIssueAccess(value: unknown): value is IssueAccess {
+  return value === "none" || value === "read" || value === "plan" || value === "create";
+}
+
 export interface AgentModeConfig {
   verification?: string;
   review?: boolean;
@@ -40,6 +47,8 @@ export interface AgentDef {
   defaultMode?: string;
   /** Per-mode coordinator behavior from the role file. */
   modeConfig: Record<string, AgentModeConfig>;
+  /** Explicit issue access; `none` removes the issue tool. */
+  issueAccess: IssueAccess;
   blurb: string;
   preset: string;
 }
@@ -56,6 +65,7 @@ interface RoleData {
   blurb?: unknown;
   preset?: unknown;
   capabilities?: unknown;
+  issue_access?: unknown;
   base_prompt?: unknown;
   weights?: Record<string, unknown>;
 }
@@ -144,6 +154,20 @@ export function roleCapabilities(name: AgentName): string[] {
   return strings(roleData(name).capabilities);
 }
 
+/**
+ * Role default for issue access. Older role files did not declare it; infer
+ * their behavior from the tool list and the legacy write capabilities so an
+ * upgrade does not silently remove access.
+ */
+export function roleIssueAccess(name: AgentName): IssueAccess {
+  const role = roleData(name);
+  if (isIssueAccess(role.issue_access)) return role.issue_access;
+  if (!strings(role.tools).includes("issue")) return "none";
+  const caps = strings(role.capabilities);
+  if (caps.includes("issue:hierarchy:write") || caps.includes("issue:write")) return "create";
+  return "read";
+}
+
 export function roleWeights(name: AgentName): Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> {
   const raw = roleData(name).weights ?? {};
   const out: Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> = {};
@@ -205,6 +229,7 @@ export function agentDef(layout: Layout, name: AgentName): AgentDef {
     modes,
     defaultMode: defaultModeRaw && modes.includes(defaultModeRaw) ? defaultModeRaw : undefined,
     modeConfig: modeConfigs(role, modes),
+    issueAccess: roleIssueAccess(name),
     blurb: typeof role.blurb === "string" ? role.blurb : "",
     preset: typeof role.preset === "string" ? role.preset : "assistant",
   };

@@ -34,8 +34,11 @@ import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
 import { axisWeights, isMetaRouter, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
-import { loadAvailability, type AvailabilityState } from "./availability.js";
-import { AGENT_META, AGENT_NAMES, agentDef } from "./agents.js";
+import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
+import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.js";
+import { AGENT_META, AGENT_NAMES, agentDef, type IssueAccess } from "./agents.js";
+import { resolveAgentConfig } from "./agents/config.js";
+import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
 import { loadCatalogue } from "./catalogue/load.js";
@@ -437,6 +440,10 @@ function agentTone(agent: string): string {
 /** Free is the safe default; paid is the yellow caution path. */
 function tierTone(tier: string): string {
   return tier === "free" ? G : Y;
+}
+
+function issueAccessTone(access: IssueAccess): string {
+  return access === "create" ? G : access === "plan" ? C : access === "read" ? D : GR;
 }
 
 function joinCommands(items: Array<string | false | undefined | null>): string {
@@ -982,6 +989,26 @@ export async function runTui(): Promise<void> {
       notify("type a task before starting");
       return null;
     }
+    const modelState = modelPreview();
+    if (modelState.error) {
+      notify(`no model is ready: ${modelState.error}`);
+      return null;
+    }
+    const policy = effectivePolicy(newRunRepo);
+    const newRunLayout = layout(newRunRepo);
+    const machine = newRunPreviewCache?.machine ?? (() => {
+      try { return loadMachineConfig(newRunLayout); } catch { return undefined; }
+    })();
+    const issueAccess = resolveAgentConfig({
+      role: newrun.agent,
+      agentPolicy: policy?.agents[newrun.agent],
+      machineOverrides: machine?.agents[newrun.agent],
+    }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess;
+    const selectedIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
+    if (newrun.agent === "build" && selectedIssue && selectedIssue.kind !== "task" && issueAccess !== "create") {
+      notify("Build attaches to a Task. Choose a Task or an agent with issue creation access.");
+      return null;
+    }
     const args = [
       "run",
       "--agent", newrun.agent,
@@ -1003,7 +1030,6 @@ export async function runTui(): Promise<void> {
     if (newrun.floors === "off") {
       args.push("--min-axes", "reasoning=0,code=0,agentic=0,general=0");
     } else if (newrun.floors === "strict") {
-      const policy = effectivePolicy(newRunRepo);
       const ap = policy?.agents[newrun.agent];
       const floors = CAPABILITY_AXES.map((axis) => {
         const current = ap?.minAxes?.[axis] ?? ap?.minFit ?? 6;
@@ -1013,7 +1039,7 @@ export async function runTui(): Promise<void> {
     }
     if (newrun.issue) {
       args.push("--issue", String(newrun.issue.number));
-      if (newrun.agent === "build" || newrun.agent === "sudo") args.push("--auto-issue");
+      if (issueAccess === "create" && selectedIssue && selectedIssue.kind !== "task") args.push("--auto-issue");
     }
     const excludedSections = [...newRunContextExcluded]
       .filter((key) => key.startsWith("section:"))
@@ -1444,6 +1470,16 @@ export async function runTui(): Promise<void> {
       const issueObj = newrun.issue ? issueByRef(newrun.issue) : undefined;
       const issueValue = newrun.issue ? `#${newrun.issue.number} ${issueObj?.kind ?? ""}`.trim() : "NA";
       const displayAgent = newrun.agent ? `${newrun.agent[0]!.toUpperCase()}${newrun.agent.slice(1)}` : newrun.agent;
+      const issueAccess = resolveAgentConfig({
+        role: newrun.agent,
+        agentPolicy: ap,
+        machineOverrides: preview.machine?.agents[newrun.agent],
+      }).issueAccess ?? def.issueAccess;
+      const willAutoCreate = issueAccess === "create" && Boolean(issueObj && issueObj.kind !== "task");
+      const agentAccessLine =
+        ` ${D}agent${R} ${agentTone(newrun.agent)}${displayAgent}${R}  ${D}issues${R} ` +
+        `${issueAccessTone(issueAccess)}${issueAccess}${R}` +
+        `${willAutoCreate ? `  ${Y}auto-create${R}` : ""}`;
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
       const fitText = newrun.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(newrun.minFit);
@@ -1624,6 +1660,7 @@ export async function runTui(): Promise<void> {
       );
       const summary = [
         modelInfo,
+        agentAccessLine,
         "",
         ...tabBar,
         panelLine(""),
@@ -1803,6 +1840,18 @@ export async function runTui(): Promise<void> {
       if (model.benchmarks) {
         lines.push(`   benchmarks ${D}${Object.entries(model.benchmarks).filter(([, value]) => typeof value === "number").slice(0, 6).map(([key, value]) => `${key} ${value}`).join("  ")}${R}`);
       }
+      const modelHealth = loadAvailability(l.home).models[model.key];
+      const coolingUntil = modelHealth?.cooldownUntil ?? 0;
+      const lastProbe = modelHealth?.lastProbeResult;
+      const probeTone =
+        lastProbe === "ready" ? G : lastProbe === "cooling" ? Y : lastProbe === "unknown" || lastProbe === "skipped" ? D : RED;
+      const healthText = coolingUntil > Date.now()
+        ? `${Y}cooling ${Math.max(1, Math.ceil((coolingUntil - Date.now()) / 60_000))}m${R}`
+        : lastProbe
+          ? `${probeTone}${lastProbe}${R}`
+          : `${D}not probed${R}`;
+      lines.push("", ` ${B}${C}Availability${R}`);
+      lines.push(`   ${healthText}${modelHealth?.lastProbeAt ? ` ${D}· ${ago(new Date(modelHealth.lastProbeAt).toISOString())}${R}` : ""}`);
       lines.push("", ` ${B}${C}Providers offering this model${R}`);
       for (const offer of offers.slice(0, Math.max(3, Math.floor(bodyH / 2)))) {
         lines.push(`   ${offer.providerID === model.providerID ? C + "▸" : " "} ${pad(offer.providerID, 18)} ${Y}$${offer.pricing.input}${R}/${Y}$${offer.pricing.output}${R}  ${D}ctx ${fmtContext(offer.context)}${R}`);
@@ -1813,6 +1862,7 @@ export async function runTui(): Promise<void> {
       actions = joinCommands([
         command("Esc", "Back", undefined, GR),
         command("j/k", "Scroll", undefined, M),
+        command("t", "Probe", undefined, G),
         command("p", "Copy key", undefined, C),
         command("o", "Provider", undefined, BL),
       ]);
@@ -1835,7 +1885,9 @@ export async function runTui(): Promise<void> {
           const cooling = (() => {
             const avail = loadAvailability(l.home);
             const phase = avail.models[row.key];
-            return phase?.cooldownUntil && phase.cooldownUntil > Date.now() ? ` ${Y}⏱${R}` : "";
+            if (!phase?.cooldownUntil || phase.cooldownUntil <= Date.now()) return "";
+            const minutes = Math.max(1, Math.ceil((phase.cooldownUntil - Date.now()) / 60_000));
+            return ` ${Y}⏱${minutes >= 60 ? `${Math.ceil(minutes / 60)}h` : `${minutes}m`}${R}`;
           })();
           const axes = narrow ? "" : ` ${D}R${row.scores.reasoning.toFixed(1)} C${row.scores.code.toFixed(1)} A${row.scores.agentic.toFixed(1)} G${row.scores.general.toFixed(1)}${R}`;
           const left = `   ${row.coding === false ? `${GR}○${R}` : `${G}●${R}`} ${BL}${trunc(row.name, narrow ? 20 : 30)}${R}${free}${cooling}`;
@@ -1979,10 +2031,15 @@ export async function runTui(): Promise<void> {
           ` ${M}${fmtRunTokens(s.usage.totalTokens)}${R}${D} total${R}`,
         ];
         footerCtx = `${C}ctx${R} ${W}${fmtRunTokens(ctxUsage.tokens)}${R}`;
+        const runIssueAccess = s.capabilities
+          ? issueAccessFromCapabilities(s.capabilities)
+          : agentDef(l, s.agent).issueAccess;
         const issueMeta = [s.issue ? `#${s.issue.number}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
           .filter(Boolean)
           .join("  ");
-        if (issueMeta) lines.push(` ${D}${issueMeta}${R}`);
+        const accessMeta = `${D}issues${R} ${issueAccessTone(runIssueAccess)}${runIssueAccess}${R}`;
+        if (issueMeta) lines.push(` ${D}${issueMeta}${R}  ${accessMeta}`);
+        else lines.push(` ${accessMeta}`);
         lines.push("", ...sectionBar, "");
         if (runSection === "overview") {
           lines.push(` ${B}${statusColor(s.status)}Status${R}`);
@@ -2827,6 +2884,22 @@ export async function runTui(): Promise<void> {
     if (page === "models" && screen === "model") {
       if (data === "\x1b[A" || data === "k") { modelScroll = Math.max(0, modelScroll - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { modelScroll++; draw(); return; }
+      if (data === "t") {
+        const row = loadCatalogue(l.catalogueFile)?.models.find((entry) => entry.key === selectedModelKey);
+        if (row) {
+          void (async () => {
+            const machine = loadMachineConfig(l);
+            const state = loadAvailability(l.home);
+            const result = await probeTarget(targetFor(row), machine.availability, state);
+            applyProbeResult(state, result);
+            saveAvailability(l.home, state);
+            notify(`${row.key}: ${result.status}${result.message ? ` (${result.message})` : ""}`);
+            draw();
+          })();
+        }
+        draw();
+        return;
+      }
       if (data === "p") { notify(selectedModelKey ?? ""); draw(); return; }
       if (data === "o") { notify(selectedModelKey ?? ""); draw(); return; }
       draw();

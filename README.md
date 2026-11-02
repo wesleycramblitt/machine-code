@@ -212,6 +212,39 @@ always visible; the body loads when an issue references the skill. The curation
 policy and the kept set are in
 [knowledge/skills-curation.md](knowledge/skills-curation.md).
 
+### Issue access and model availability
+
+Each role declares one `issue_access` level: `none`, `read`, `plan`, or
+`create`. The harness derives `issue:read`, `issue:plan`, and `issue:create`
+from it and removes the `issue` tool when access is `none`. The new-run agent
+picker and run Overview show an `issues:*` badge, and `machine_code policy`
+prints the effective level. Create access is required for new Epic, Feature, or
+Task issues.
+
+```toml
+# data/agents/<role>.toml
+issue_access = "read"   # none | read | plan | create
+```
+
+`machine_code availability` shows cooling models and provider health.
+`machine_code model probe <key>` checks one model. Metadata probes use free
+provider endpoints and never send a paid inference request. The optional
+`free-models` mode permits a capped 1-token probe for zero-price models only;
+it consumes provider request quota, not money.
+
+```toml
+[availability]
+probe = "metadata"          # off | metadata | free-models
+interval = "5m"
+timeout_ms = 5000
+free_completion_max_per_hour = 2
+```
+
+Runs probe cooling models before creating the run record, then select only from
+models that are ready. Metadata can clear a missing-model cooldown, but not a
+rate-limit or timeout cooldown; those require the opt-in free completion probe.
+An unknown result leaves the cooldown in place.
+
 Prompted runs: every run has a stable id, an append-only event log, and a
 transcript checkpoint. Build and orchestrated runs get their own worktree and
 branch; Sudo edits the main tree by default (`--worktree` opts into isolation);

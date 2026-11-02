@@ -13,7 +13,17 @@
  * prompts. Prompts only explain the policy.
  */
 import type { AgentConfigOverrides, AgentPolicy, MachineConfig, Policy } from "../config.js";
-import { AGENT_NAMES, agentDef, presetData, rolePreset, type AgentDef, type AgentName } from "../agents.js";
+import {
+  AGENT_NAMES,
+  agentDef,
+  isIssueAccess,
+  presetData,
+  roleIssueAccess,
+  rolePreset,
+  type AgentDef,
+  type AgentName,
+  type IssueAccess,
+} from "../agents.js";
 import type { Layout } from "../paths.js";
 import type { CoreToolName } from "../tools/index.js";
 import { capabilitiesFor, type Capability } from "../policy/capabilities.js";
@@ -29,6 +39,8 @@ export interface AgentConfig {
   delegate: boolean;
   verification: Verification;
   issues: IssueTracking;
+  /** Resolved by resolveAgentConfig; absent on raw presets. */
+  issueAccess?: IssueAccess;
   ask: boolean;
   approval: ApprovalMode;
   ambiguity: AmbiguityMode;
@@ -48,6 +60,7 @@ function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig
     issues: (ISSUE_TRACKINGS as readonly string[]).includes(String(raw.issues))
       ? (raw.issues as IssueTracking)
       : "optional",
+    ...(isIssueAccess(raw.issue_access) ? { issueAccess: raw.issue_access } : {}),
     ask: raw.ask !== false,
     approval: raw.approval === "agent" ? "agent" : "human",
     ambiguity: (AMBIGUITIES as readonly string[]).includes(String(raw.ambiguity))
@@ -94,11 +107,13 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     delegate: false,
     verification: "direct",
     issues: "disabled",
+    issueAccess: "none",
     ask: true,
     approval: "human",
     ambiguity: "precise",
   };
-  const config: AgentConfig = { ...base };
+  // The role file is the base for issue access. Behavior presets do not own it.
+  const config: AgentConfig = { ...base, issueAccess: roleIssueAccess(input.role) };
 
   const layers: Array<AgentConfigOverrides | undefined> = [
     machineOverridesToConfig(input.machineOverrides),
@@ -111,6 +126,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     if (v) config.verification = v;
     const it = pick(layer.issues, ISSUE_TRACKINGS);
     if (it) config.issues = it;
+    if (isIssueAccess(layer.issueAccess)) config.issueAccess = layer.issueAccess;
     if (layer.ask !== undefined) config.ask = layer.ask;
     if (layer.approval === "human" || layer.approval === "agent") config.approval = layer.approval;
     const a = pick(layer.ambiguity, AMBIGUITIES);
@@ -122,6 +138,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     if (input.runOverrides.delegate !== undefined) config.delegate = input.runOverrides.delegate;
     if (input.runOverrides.verification !== undefined) config.verification = input.runOverrides.verification;
     if (input.runOverrides.issues !== undefined) config.issues = input.runOverrides.issues;
+    if (isIssueAccess(input.runOverrides.issueAccess)) config.issueAccess = input.runOverrides.issueAccess;
     if (input.runOverrides.ask !== undefined) config.ask = input.runOverrides.ask;
     if (input.runOverrides.approval !== undefined) config.approval = input.runOverrides.approval;
     if (input.runOverrides.ambiguity !== undefined) config.ambiguity = input.runOverrides.ambiguity;
@@ -149,6 +166,7 @@ function agentPolicyToConfig(policy: AgentPolicy | undefined): AgentConfigOverri
   if (policy.delegate !== undefined) out.delegate = policy.delegate;
   if (policy.verification !== undefined) out.verification = policy.verification;
   if (policy.issues !== undefined) out.issues = policy.issues;
+  if (policy.issueAccess !== undefined) out.issueAccess = policy.issueAccess;
   if (policy.ask !== undefined) out.ask = policy.ask;
   if (policy.approval !== undefined) out.approval = policy.approval;
   if (policy.ambiguity !== undefined) out.ambiguity = policy.ambiguity;
@@ -250,6 +268,7 @@ export function resolveAgent(
   const capSet = new Set<string>(capabilities);
   let tools = def.tools.filter((t) => {
     if (t === "ask") return askEnabled(config);
+    if (t === "issue" && (config.issueAccess ?? roleIssueAccess(role)) === "none") return false;
     const needed = TOOL_CAPABILITY[t];
     if (needed && !capSet.has(needed)) return false;
     return true;

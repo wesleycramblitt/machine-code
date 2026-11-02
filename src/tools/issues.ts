@@ -10,14 +10,16 @@
  *   - close          → acceptance + approval policy (human requests approval)
  *   - ensure         → repairs missing/duplicate reserved issues
  *
- * Reads are issue:read; writes issue:write; linking/ensure need
- * issue:hierarchy:write; closure needs issue:close.
+ * Reads are issue:read; creating needs issue:create; editing, linking, and
+ * ensure need issue:plan (legacy issue:write / issue:hierarchy:write remain
+ * aliases); closure needs issue:close.
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   IssueError,
   parseIssueRef,
+  refKey,
   type Issue,
   type IssueProvider,
   type IssueRef,
@@ -69,6 +71,10 @@ const IssueParams = Type.Object({
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
   labels: Type.Optional(Type.Array(Type.String())),
+  /** Issue refs this issue is blocked by (create/edit). */
+  blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." }))),
+  /** Alias for blocked_by. Dependencies are the same graph. */
+  depends_on: Type.Optional(Type.Array(Type.String({ description: "Alias for blocked_by." }))),
   state: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")])),
   reason: Type.Optional(Type.String({ description: "Close reason (close)." })),
   depth: Type.Optional(Type.Number({ description: "Tree depth (default 2)." })),
@@ -87,6 +93,8 @@ function line(issue: Issue): string {
   if (isReserved(issue)) bits.push("[reserved]");
   if (issue.parent) bits.push(`parent=#${issue.parent.number}`);
   if (issue.approval) bits.push(`approval=${issue.approval}`);
+  if (issue.plan) bits.push(`plan=${issue.plan.status}`);
+  if (issue.planError) bits.push("plan=invalid");
   if (issue.blockedBy.length > 0) bits.push(`blocked-by=${issue.blockedBy.map((b) => `#${b.number}`).join(",")}`);
   return bits.join(" ");
 }
@@ -96,6 +104,47 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     if (!ctx.capabilities.includes(cap)) {
       throw new IssueError("capability_missing", `issue tool action requires ${cap}`);
     }
+  };
+  const requirePlan = (): void => {
+    if (
+      ctx.capabilities.includes("issue:plan") ||
+      ctx.capabilities.includes("issue:write") ||
+      ctx.capabilities.includes("issue:hierarchy:write")
+    ) {
+      return;
+    }
+    throw new IssueError("capability_missing", "issue tool action requires issue:plan");
+  };
+  const requireCreate = (): void => {
+    if (ctx.capabilities.includes("issue:create")) return;
+    throw new IssueError(
+      "issue_create_forbidden",
+      "creating issues requires issue:create; use an agent with issue_access=create",
+    );
+  };
+  const dependencies = async (
+    values: Array<readonly string[] | undefined>,
+    owner?: IssueRef,
+  ): Promise<IssueRef[] | undefined> => {
+    const raw = values.flatMap((value) => value ?? []);
+    if (raw.length === 0) return undefined;
+    const unique = new Map<string, IssueRef>();
+    for (const value of raw) {
+      const dependency = parseIssueRef(value, ctx.repo, ctx.provider.kind);
+      if (ctx.repo && dependency.repo !== ctx.repo) {
+        throw new IssueError(
+          "dependency_repo",
+          `dependency ${dependency.repo}#${dependency.number} must be in the same repository (${ctx.repo})`,
+        );
+      }
+      if (owner && refKey(owner) === refKey(dependency)) {
+        throw new IssueError("dependency_self", "an issue cannot block itself");
+      }
+      const found = await ctx.provider.get(dependency);
+      if (!found) throw new IssueError("dependency_not_found", `dependency ${value} was not found`);
+      unique.set(refKey(dependency), dependency);
+    }
+    return [...unique.values()];
   };
   const ref = (value: string | undefined, label: string): IssueRef => {
     if (!value) throw new IssueError("argument_missing", `${label} is required`);
@@ -107,8 +156,9 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     name: "issue",
     label: "issue",
     description:
-      "Structured GitHub issue access. list/view/tree read; create/edit write; link sets parent-child (Feature→Epic, Task→Feature); " +
-      "ensure maintains the reserved Feature 0 / Task 0 anchors; close follows the per-issue approval policy.",
+      "Structured GitHub issue access. list/view/tree read; create/edit write; create/edit accept blocked_by or depends_on; " +
+      "link sets parent-child (Feature→Epic, Task→Feature); ensure maintains the reserved Feature 0 / Task 0 anchors; " +
+      "close follows the per-issue approval policy.",
     parameters: IssueParams,
     async execute(_id, params: Static<typeof IssueParams>) {
       try {
@@ -150,7 +200,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         return ok(lines.join("\n"));
       }
       case "create": {
-        require("issue:write");
+        requireCreate();
         if (!params.kind) return fail("create requires kind (epic|feature|task)");
         if (!params.title) return fail("create requires title");
         const body = withApproval(params.body ?? "", ctx.defaultApproval);
@@ -170,12 +220,14 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           if (parentIssue.kind !== "epic") return fail(`a Feature's parent must be an Epic (got ${parentIssue.kind})`);
           await ensureEpicReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
         }
+        const blockedBy = await dependencies([params.blocked_by, params.depends_on]);
         const created = await ctx.provider.create({
           title: params.title,
           body,
           kind: params.kind,
           parent,
           labels: params.labels,
+          ...(blockedBy ? { blockedBy } : {}),
         });
         ctx.recorder.event("issue_created", { number: created.ref.number, kind: created.kind, parent: parent?.number });
         let note = "";
@@ -189,16 +241,18 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         return ok(`created #${created.ref.number} (${created.kind}): ${created.title}${note}`);
       }
       case "edit": {
-        require("issue:write");
+        requirePlan();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.reserved && params.title !== undefined) {
           return fail("reserved issues cannot be retitled (their identity is the reserved role)");
         }
+        const blockedBy = await dependencies([params.blocked_by, params.depends_on], target.ref);
         const updated = await ctx.provider.update(target.ref, {
           ...(params.title !== undefined ? { title: params.title } : {}),
           ...(params.body !== undefined ? { body: params.body } : {}),
           ...(params.labels !== undefined ? { labels: params.labels } : {}),
+          ...(blockedBy ? { blockedBy } : {}),
         });
         return ok(`updated #${updated.ref.number}: ${updated.title}`);
       }
@@ -230,7 +284,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         return ok(`closed #${target.ref.number}${cascaded.length ? ` (reserved: ${cascaded.map((n) => `#${n}`).join(", ")})` : ""}`);
       }
       case "link": {
-        require("issue:hierarchy:write");
+        requirePlan();
         const child = await ctx.provider.get(ref(params.issue, "issue"));
         if (!child) return fail(`issue not found: ${params.issue}`);
         if (!params.parent) return fail("link requires parent");
@@ -246,7 +300,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         return ok(`linked #${child.ref.number} (${child.kind}) under #${parent.ref.number} (${parent.kind})`);
       }
       case "ensure": {
-        require("issue:hierarchy:write");
+        requirePlan();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.kind === "epic") {

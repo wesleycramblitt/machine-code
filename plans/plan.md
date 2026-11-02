@@ -4,7 +4,11 @@
 > `plans/upgrade-plan.md`, and `plans/upgrade-plan-v2.md`; their full design
 > history remains in git. It lists only work that is not built.
 >
-> Baseline: `9388aa7`, 192 tests passing.
+> Baseline: `9388aa7`, 192 tests passing. Current: Phase 1 contracts are
+> implemented (issue access, `mc:plan` schema/validator, run orchestration
+> fields, process registry/types, issue dependencies, artifact usage). Phase 2
+> has metadata/free-model probes, run preflight, the `availability` CLI, and a
+> manual TUI probe. The suite has 218 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -100,6 +104,11 @@ by an environment flag. Keep it out of the default suite. Cover:
 
 ## 4. Phase 1 — Contracts and schema
 
+Status: implemented. This phase now includes issue access, derived
+capabilities, tool guards, `--auto-issue` guarding, UI badges, the `mc:plan`
+schema/validator, orchestration run fields, process registry/types, issue
+dependency fields, and artifact-usage records.
+
 - Add `mc:plan` parsing and validation.
 - Add run fields for orchestration/scope/task/attempt/phase/snapshot/review and
   process counts.
@@ -185,6 +194,10 @@ whether tracking is required. `issue_access` controls what the role may do.
   create access.
 
 ## 5. Phase 2 — Availability heartbeat and preflight
+
+Status: metadata and opt-in free-model probes, run preflight, CLI commands, and
+a manual TUI probe are implemented. Remaining: probe jitter, an automatic TUI
+timer, and richer provider health statuses.
 
 Goal: do not start a run on a model that is known unavailable, and recover a
 cooldown as soon as evidence permits. A heartbeat is evidence, not a guarantee.
@@ -514,7 +527,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 192 tests green. Add:
+Keep the existing 218 tests green. Add:
 
 | Area | Cases |
 |---|---|

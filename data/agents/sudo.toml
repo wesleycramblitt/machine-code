@@ -7,6 +7,7 @@ order = 5
 prompt = '''Sudo agent. Do the explicit task with all allowed tools. Map first. Commands are typed manifests: no shell, no host-root. Verify once. Stop.'''
 tools = ["context", "read", "write", "edit", "search", "command", "task", "ask", "issue", "pr"]
 readonly = false
+issue_access = "create"
 modes = []
 blurb = "full permissions; solo only"
 preset = "unrestricted"

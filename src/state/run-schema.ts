@@ -136,6 +136,18 @@ export interface RunSummary {
   commit?: string;
   /** Primary Task issue association (Tasks only, never Epic/Feature). */
   issue?: IssueRef;
+  /** Deterministic orchestration fields (optional until Phase 5). */
+  orchestrationId?: string;
+  orchestrationScope?: "project" | "epic" | "feature";
+  scopeRef?: IssueRef;
+  taskIssue?: IssueRef;
+  attempt?: number;
+  phase?: "build" | "review";
+  planSnapshotHash?: string;
+  planReview?: "agent" | "human";
+  resultReview?: "agent" | "human";
+  processCount?: number;
+  liveProcessCount?: number;
   /** Latest PR for this run's branch. */
   prNumber?: number;
   prUrl?: string;
@@ -234,6 +246,21 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     baseRef: str(r.baseRef),
     commit: str(r.commit),
     issue: migrateIssue(r.issue),
+    orchestrationId: str(r.orchestrationId),
+    orchestrationScope:
+      r.orchestrationScope === "project" || r.orchestrationScope === "epic" || r.orchestrationScope === "feature"
+        ? r.orchestrationScope
+        : undefined,
+    scopeRef: migrateIssue(r.scopeRef),
+    taskIssue: migrateIssue(r.taskIssue),
+    attempt: typeof r.attempt === "number" && Number.isFinite(r.attempt) ? r.attempt : undefined,
+    phase: r.phase === "build" || r.phase === "review" ? r.phase : undefined,
+    planSnapshotHash: str(r.planSnapshotHash),
+    planReview: r.planReview === "agent" || r.planReview === "human" ? r.planReview : undefined,
+    resultReview: r.resultReview === "agent" || r.resultReview === "human" ? r.resultReview : undefined,
+    processCount: typeof r.processCount === "number" && Number.isFinite(r.processCount) ? r.processCount : undefined,
+    liveProcessCount:
+      typeof r.liveProcessCount === "number" && Number.isFinite(r.liveProcessCount) ? r.liveProcessCount : undefined,
     prNumber: typeof r.prNumber === "number" ? r.prNumber : undefined,
     prUrl: str(r.prUrl),
     prState:

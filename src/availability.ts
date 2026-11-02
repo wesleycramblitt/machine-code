@@ -55,11 +55,19 @@ export interface ProviderHealth {
 export interface ModelHealth {
   cooldownUntil?: number;
   tier?: number;
+  /** Last probe timestamp (ms since epoch). */
+  lastProbeAt?: number;
+  /** Last probe status; kept as a string to avoid a types cycle. */
+  lastProbeResult?: string;
+  /** Classified error that caused the current cooldown. */
+  lastErrorKind?: string;
 }
 
 export interface AvailabilityState {
   providers: Record<string, ProviderHealth>;
   models: Record<string, ModelHealth>;
+  /** Timestamps of free-model completion probes in the last hour. */
+  freeProbeTimes?: number[];
 }
 
 export function availabilityFile(home: string): string {
@@ -68,19 +76,26 @@ export function availabilityFile(home: string): string {
 
 export function loadAvailability(home: string): AvailabilityState {
   const file = availabilityFile(home);
-  if (!existsSync(file)) return { providers: {}, models: {} };
+  if (!existsSync(file)) return { providers: {}, models: {}, freeProbeTimes: [] };
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as AvailabilityState;
     return {
       providers: parsed.providers ?? {},
       models: parsed.models ?? {},
+      freeProbeTimes: Array.isArray(parsed.freeProbeTimes)
+        ? parsed.freeProbeTimes.filter((at): at is number => typeof at === "number" && Number.isFinite(at))
+        : [],
     };
   } catch {
-    return { providers: {}, models: {} };
+    return { providers: {}, models: {}, freeProbeTimes: [] };
   }
 }
 
 export function saveAvailability(home: string, state: AvailabilityState): void {
+  const now = Date.now();
+  if (state.freeProbeTimes) {
+    state.freeProbeTimes = state.freeProbeTimes.filter((at) => at > now - 60 * 60_000);
+  }
   writeFileSync(availabilityFile(home), JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
@@ -125,7 +140,7 @@ export function coolModel(state: AvailabilityState, key: string, retryAfterMs?: 
   const tier = h.tier ?? 0;
   let ms = retryAfterMs && retryAfterMs > 0 ? Math.min(retryAfterMs, MAX_COOLDOWN) : COOLDOWN_TIERS[Math.min(tier, COOLDOWN_TIERS.length - 1)]!;
   const until = Date.now() + ms;
-  state.models[key] = { cooldownUntil: until, tier: Math.min(tier + 1, COOLDOWN_TIERS.length - 1) };
+  state.models[key] = { ...h, cooldownUntil: until, tier: Math.min(tier + 1, COOLDOWN_TIERS.length - 1) };
   return until;
 }
 
@@ -300,10 +315,14 @@ export function applyClassification(
   if (!(classified.cooldownMs > 0 || classified.retryable)) return;
   if (classified.kind === "free-limit") {
     const keys = options?.freeKeys?.length ? options.freeKeys : [modelKey];
-    for (const key of new Set(keys)) coolModel(state, key, classified.cooldownMs || undefined);
+    for (const key of new Set(keys)) {
+      state.models[key] = { ...(state.models[key] ?? {}), lastErrorKind: classified.kind };
+      coolModel(state, key, classified.cooldownMs || undefined);
+    }
     return;
   }
   if (classified.target === "model") {
+    state.models[modelKey] = { ...(state.models[modelKey] ?? {}), lastErrorKind: classified.kind };
     coolModel(state, modelKey, classified.cooldownMs || undefined);
   } else if (classified.target === "provider") {
     coolProvider(state, providerId, classified.cooldownMs || undefined);

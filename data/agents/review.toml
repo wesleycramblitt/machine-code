@@ -7,6 +7,7 @@ order = 4
 prompt = '''Review agent. Judge one build against its packet and diff. Read-only. Check each acceptance criterion. Judge the packet and diff, not the gates alone. Cite `path:line`. Stop with a verdict.'''
 tools = ["context", "read", "search", "command", "ask", "issue"]
 readonly = true
+issue_access = "read"
 modes = []
 blurb = "read-only judge; used by verified/redundant chains"
 preset = "review"

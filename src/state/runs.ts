@@ -233,6 +233,17 @@ export class RunRecorder {
       ambiguity?: string;
       capabilities?: string[];
       issue?: import("../issues/provider.js").IssueRef;
+      orchestrationId?: string;
+      orchestrationScope?: "project" | "epic" | "feature";
+      scopeRef?: import("../issues/provider.js").IssueRef;
+      taskIssue?: import("../issues/provider.js").IssueRef;
+      attempt?: number;
+      phase?: "build" | "review";
+      planSnapshotHash?: string;
+      planReview?: "agent" | "human";
+      resultReview?: "agent" | "human";
+      processCount?: number;
+      liveProcessCount?: number;
     },
     existing?: RunSummary,
   ) {
@@ -298,6 +309,17 @@ export class RunRecorder {
       ...(init.ambiguity !== undefined ? { ambiguity: init.ambiguity } : {}),
       ...(init.capabilities !== undefined ? { capabilities: init.capabilities } : {}),
       ...(init.issue !== undefined ? { issue: init.issue } : {}),
+      ...(init.orchestrationId !== undefined ? { orchestrationId: init.orchestrationId } : {}),
+      ...(init.orchestrationScope !== undefined ? { orchestrationScope: init.orchestrationScope } : {}),
+      ...(init.scopeRef !== undefined ? { scopeRef: init.scopeRef } : {}),
+      ...(init.taskIssue !== undefined ? { taskIssue: init.taskIssue } : {}),
+      ...(init.attempt !== undefined ? { attempt: init.attempt } : {}),
+      ...(init.phase !== undefined ? { phase: init.phase } : {}),
+      ...(init.planSnapshotHash !== undefined ? { planSnapshotHash: init.planSnapshotHash } : {}),
+      ...(init.planReview !== undefined ? { planReview: init.planReview } : {}),
+      ...(init.resultReview !== undefined ? { resultReview: init.resultReview } : {}),
+      ...(init.processCount !== undefined ? { processCount: init.processCount } : {}),
+      ...(init.liveProcessCount !== undefined ? { liveProcessCount: init.liveProcessCount } : {}),
     };
     this.writeSummary();
     this.event("run_start", {
@@ -413,7 +435,31 @@ export class RunRecorder {
   /** Patch writer-owned metadata (VCS fields + owner pid; no event). */
   patchSummary(
     fields: Partial<
-      Pick<RunSummary, "worktree" | "worktreeOwnerRunId" | "branch" | "baseBranch" | "baseRef" | "commit" | "pid" | "issue" | "prNumber" | "prUrl" | "prState">
+      Pick<
+        RunSummary,
+        | "worktree"
+        | "worktreeOwnerRunId"
+        | "branch"
+        | "baseBranch"
+        | "baseRef"
+        | "commit"
+        | "pid"
+        | "issue"
+        | "orchestrationId"
+        | "orchestrationScope"
+        | "scopeRef"
+        | "taskIssue"
+        | "attempt"
+        | "phase"
+        | "planSnapshotHash"
+        | "planReview"
+        | "resultReview"
+        | "processCount"
+        | "liveProcessCount"
+        | "prNumber"
+        | "prUrl"
+        | "prState"
+      >
     >,
   ): void {
     Object.assign(this.summary, fields);

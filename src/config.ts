@@ -25,6 +25,25 @@ export type PacketMode = "direct" | "verified" | "redundant";
 export type SelectionTier = "free" | "paid";
 export const SELECTION_TIERS: readonly SelectionTier[] = ["free", "paid"];
 
+export type AvailabilityProbeMode = "off" | "metadata" | "free-models";
+
+export interface AvailabilityConfig {
+  /** `metadata` uses free provider endpoints; `free-models` also permits a free 1-token probe. */
+  probe: AvailabilityProbeMode;
+  /** Minimum gap between automatic probes for one model. */
+  intervalMs: number;
+  timeoutMs: number;
+  /** Global budget for free-model completion probes. */
+  freeCompletionMaxPerHour: number;
+}
+
+export const DEFAULT_AVAILABILITY: AvailabilityConfig = {
+  probe: "metadata",
+  intervalMs: 5 * 60_000,
+  timeoutMs: 5_000,
+  freeCompletionMaxPerHour: 2,
+};
+
 /**
  * Abandon a provider call that has produced no stream event within this many
  * milliseconds. The model is cooled and the loop's bounded retry picks another.
@@ -79,6 +98,8 @@ export interface MachineConfig {
   defaultMode?: PacketMode;
   /** Selection tier and per-call request guards ([selection]). */
   selection: { tier: SelectionTier; firstTokenTimeoutMs: number };
+  /** Cooldown recovery probes ([availability]). */
+  availability: AvailabilityConfig;
   /** Per-provider billing adjustments ([providers.<id>]). */
   providers: Record<string, ProviderCost>;
   priceCaps: PriceCaps;
@@ -119,6 +140,7 @@ export interface AgentConfigOverrides {
   delegate?: boolean;
   verification?: string;
   issues?: string;
+  issueAccess?: string;
   ask?: boolean;
   approval?: string;
   ambiguity?: string;
@@ -162,6 +184,8 @@ export interface AgentPolicy {
   verification?: string;
   /** Issue tracking: required | optional | disabled. */
   issues?: string;
+  /** Issue access: none | read | plan | create. */
+  issueAccess?: string;
   /** May the agent use the ask tool. */
   ask?: boolean;
   /** Default approval mode for issues it plans/delegates: human | agent. */
@@ -179,6 +203,18 @@ export class ConfigError extends Error {}
 function asNumber(value: unknown): number | undefined {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/** Parse `5000`, `5s`, `5m`, or `1h` into milliseconds. */
+function asDuration(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)?\s*$/i.exec(value);
+  if (!match) return undefined;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  const unit = (match[2] ?? "ms").toLowerCase();
+  return n * (unit === "h" ? 3_600_000 : unit === "m" ? 60_000 : unit === "s" ? 1_000 : 1);
 }
 
 function asStringArray(value: unknown): string[] {
@@ -243,6 +279,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       delegate: typeof r.delegate === "boolean" ? r.delegate : undefined,
       verification: typeof r.verification === "string" ? r.verification : undefined,
       issues: typeof r.issues === "string" ? r.issues : typeof r.issue_tracking === "string" ? r.issue_tracking : undefined,
+      issueAccess: typeof r.issue_access === "string" ? r.issue_access : undefined,
       ask: typeof r.ask === "boolean" ? r.ask : undefined,
       approval: typeof r.approval === "string" ? r.approval : undefined,
       ambiguity: typeof r.ambiguity === "string" ? r.ambiguity : undefined,
@@ -255,6 +292,11 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       : "optional";
   const issueTtl = asNumber(issuesRaw.cache_ttl_seconds);
   const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
+  const availabilityRaw = (raw.availability ?? {}) as Record<string, unknown>;
+  const probeMode: AvailabilityProbeMode =
+    availabilityRaw.probe === "off" || availabilityRaw.probe === "free-models"
+      ? availabilityRaw.probe
+      : "metadata";
   const mapRaw = (raw.map ?? {}) as Record<string, unknown>;
   const mapRefresh = mapRaw.refresh === "manual" || mapRaw.refresh === "always" ? mapRaw.refresh : "on-change";
   const themeRaw = (raw.theme ?? {}) as Record<string, unknown>;
@@ -269,6 +311,17 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     selection: {
       tier: tierRaw as SelectionTier,
       firstTokenTimeoutMs: asNumber(selectionRaw.first_token_timeout_ms) ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+    },
+    availability: {
+      probe: probeMode,
+      intervalMs: asDuration(availabilityRaw.interval ?? availabilityRaw.interval_ms) ?? DEFAULT_AVAILABILITY.intervalMs,
+      timeoutMs: asDuration(availabilityRaw.timeout_ms) ?? DEFAULT_AVAILABILITY.timeoutMs,
+      freeCompletionMaxPerHour: Math.max(
+        0,
+        Math.floor(
+          asNumber(availabilityRaw.free_completion_max_per_hour) ?? DEFAULT_AVAILABILITY.freeCompletionMaxPerHour,
+        ),
+      ),
     },
     providers,
     priceCaps: { input: asNumber(caps.input), output: asNumber(caps.output) },
@@ -374,6 +427,7 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     delegate: typeof raw.delegate === "boolean" ? raw.delegate : base.delegate,
     verification: typeof raw.verification === "string" ? raw.verification : base.verification,
     issues: typeof raw.issues === "string" ? raw.issues : typeof raw.issue_tracking === "string" ? raw.issue_tracking : base.issues,
+    issueAccess: typeof raw.issue_access === "string" ? raw.issue_access : base.issueAccess,
     ask: typeof raw.ask === "boolean" ? raw.ask : base.ask,
     approval: typeof raw.approval === "string" ? raw.approval : base.approval,
     ambiguity: typeof raw.ambiguity === "string" ? raw.ambiguity : base.ambiguity,

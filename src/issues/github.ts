@@ -28,6 +28,7 @@ import {
   type NewIssue,
   type ReservedKind,
 } from "./provider.js";
+import { parsePlanMarker } from "../plan/schema.js";
 
 const ISSUE_FIELDS = [
   "number",
@@ -210,6 +211,7 @@ export class GitHubIssueProvider implements IssueProvider {
     if (typeof number !== "number") throw new IssueError("gh_bad_output", "issue JSON is missing a number");
     const body = j.body ?? "";
     const reserved = parseReservedMarker(body);
+    const plan = parsePlanMarker(body);
     const labels = (j.labels ?? [])
       .map((l) => (typeof l === "string" ? l : l.name ?? ""))
       .filter((l): l is string => l.length > 0);
@@ -249,6 +251,8 @@ export class GitHubIssueProvider implements IssueProvider {
         : {}),
       acceptance: parseAcceptance(body),
       approval: parseApprovalMarker(body),
+      ...(plan.plan ? { plan: plan.plan } : {}),
+      ...(plan.error ? { planError: plan.error } : {}),
       url: j.url,
       createdAt: j.createdAt,
       updatedAt: j.updatedAt,

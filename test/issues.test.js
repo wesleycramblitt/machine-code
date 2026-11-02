@@ -67,7 +67,7 @@ class FakeProvider {
       labels: input.labels ?? [],
       parent: input.parent,
       children: [],
-      blockedBy: [],
+      blockedBy: input.blockedBy ?? [],
       blocking: [],
       acceptance: parseAcceptance(input.body),
       approval: parseApprovalMarker(input.body),
@@ -86,6 +86,7 @@ class FakeProvider {
     if (!issue) throw new Error("missing");
     if (patch.title !== undefined) issue.title = patch.title;
     if (patch.body !== undefined) issue.body = patch.body;
+    if (patch.blockedBy !== undefined) issue.blockedBy = patch.blockedBy;
     return issue;
   }
   async close(ref) { const i = this.issues.get(ref.number); if (i) i.state = "closed"; }
@@ -277,7 +278,37 @@ test("issue tool gates actions by capability", async () => {
     assert.match(read.content[0].text, /issue:read/);
     const write = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "X" });
     assert.equal(write.isError, true);
-    assert.match(write.content[0].text, /issue:write/);
+    assert.match(write.content[0].text, /issue:create/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue tool requires issue:create for new issues and issue:plan for edits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-access-"));
+  try {
+    const p = new FakeProvider();
+    const readOnly = toolCtx(p, ["issue:read"], root).ctx;
+    const create = await issueTool(readOnly).execute("c1", { action: "create", kind: "epic", title: "X" });
+    assert.equal(create.isError, true);
+    assert.match(create.content[0].text, /issue_create_forbidden/);
+
+    const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
+    const edit = await issueTool(readOnly).execute("c1", {
+      action: "edit",
+      issue: String(epic.ref.number),
+      title: "Changed",
+    });
+    assert.equal(edit.isError, true);
+    assert.match(edit.content[0].text, /issue:plan/);
+
+    const planner = toolCtx(p, ["issue:read", "issue:plan"], root).ctx;
+    const allowed = await issueTool(planner).execute("c1", {
+      action: "edit",
+      issue: String(epic.ref.number),
+      title: "Changed",
+    });
+    assert.equal(allowed.isError, undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -287,13 +318,60 @@ test("issue tool creates an Epic with its reserved chain", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss2-"));
   try {
     const p = new FakeProvider();
-    const { ctx } = toolCtx(p, ["issue:read", "issue:write", "issue:hierarchy:write"], root);
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan", "issue:write", "issue:hierarchy:write"], root);
     const result = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Propulsion" });
     assert.equal(result.isError, undefined);
     assert.match(result.content[0].text, /reserved: Feature 0 #/);
     assert.equal(p.issues.size, 3);
     const epic = [...p.issues.values()].find((i) => i.kind === "epic");
     assert.equal((await p.children(epic.ref)).length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue tool records dependencies on create and edit", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-deps-"));
+  try {
+    const p = new FakeProvider();
+    const blocker = p.addRaw({ title: "Blocker", kind: "task" });
+    const dependent = p.addRaw({ title: "Dependent", kind: "task" });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+
+    const created = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Dependent epic",
+      depends_on: [String(blocker.ref.number)],
+    });
+    assert.equal(created.isError, undefined);
+    const epic = [...p.issues.values()].find((issue) => issue.title === "Dependent epic");
+    assert.ok(epic);
+    assert.deepEqual(epic.blockedBy, [blocker.ref]);
+
+    const edited = await issueTool(ctx).execute("c1", {
+      action: "edit",
+      issue: String(dependent.ref.number),
+      blocked_by: [String(blocker.ref.number)],
+    });
+    assert.equal(edited.isError, undefined);
+    assert.deepEqual(p.issues.get(dependent.ref.number).blockedBy, [blocker.ref]);
+
+    const crossRepo = await issueTool(ctx).execute("c1", {
+      action: "edit",
+      issue: String(dependent.ref.number),
+      blocked_by: ["other/repo#1"],
+    });
+    assert.equal(crossRepo.isError, true);
+    assert.match(crossRepo.content[0].text, /same repository/);
+
+    const missing = await issueTool(ctx).execute("c1", {
+      action: "edit",
+      issue: String(dependent.ref.number),
+      blocked_by: ["999"],
+    });
+    assert.equal(missing.isError, true);
+    assert.match(missing.content[0].text, /was not found/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

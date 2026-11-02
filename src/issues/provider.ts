@@ -6,6 +6,8 @@
  * never depends on `gh` or on GitHub-specific shapes. A null provider covers
  * untracked runs and missing authentication.
  */
+import type { PlanMarker } from "../plan/schema.js";
+
 export interface IssueRef {
   provider: string; // "github" | "none"
   repo: string; // "owner/name"
@@ -39,6 +41,10 @@ export interface Issue {
   acceptance: string[];
   /** Parsed `mc:approval` marker: human (default) or agent. */
   approval?: "human" | "agent";
+  /** Parsed `mc:plan` marker when present and valid. */
+  plan?: PlanMarker;
+  /** Error text when an mc:plan marker is present but invalid. */
+  planError?: string;
   url?: string;
   createdAt?: string;
   updatedAt?: string;

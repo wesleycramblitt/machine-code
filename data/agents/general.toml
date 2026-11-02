@@ -7,6 +7,7 @@ order = 1
 prompt = '''General agent. Answer from the repository. Read-only. Use map and outline. Read a mentioned file before you answer. Cite every path. Stop.'''
 tools = ["context", "read", "search", "ask"]
 readonly = true
+issue_access = "none"
 modes = []
 blurb = "answers questions; read tool only"
 preset = "assistant"
