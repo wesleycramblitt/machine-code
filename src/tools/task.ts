@@ -225,9 +225,10 @@ export function taskTool(ctx: TaskContext): AgentTool<typeof TaskParams> {
       return ok(`spawned detached child run (parent ${ctx.recorder.id}); list your children later with task action=status once it registers.`);
     }
 
-    // Synchronous child: its own worktree for builders; shared for reviewers.
+    // Synchronous child: Build gets its own worktree; reviewers and Sudo share
+    // the parent tree.
     let childToolRoot = ctx.root;
-    if (childRole === "build" || childRole === "sudo") {
+    if (childRole === "build") {
       try {
         const spec = await createWorktree({
           layout: ctx.layout,

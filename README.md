@@ -203,8 +203,9 @@ Tools live in `.machine_code/tools/<name>.toml`, scripts under
 The new-run composer previews exactly which files, tools, scripts, and issues
 the selected run will inherit before it starts.
 
-Prompted runs: every run has a stable id, an append-only event log, a
-transcript checkpoint, and (when it mutates code) its own worktree and branch.
+Prompted runs: every run has a stable id, an append-only event log, and a
+transcript checkpoint. Build and orchestrated runs get their own worktree and
+branch; Sudo edits the main tree by default (`--worktree` opts into isolation).
 Runs can ask clarifying questions, be paused/forked, and resume after a
 restart.
 

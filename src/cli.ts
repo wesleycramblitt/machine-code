@@ -111,8 +111,9 @@ const HELP = `machine_code ${VERSION}
 Usage:
   machine_code run --agent general [--provider <id>] [--model <key>] "<question>"
   machine_code run --agent architect [--mode direct|verified|redundant] "<task>" [--issue <n> [--auto-issue]]
-  machine_code run --agent sudo "<rare task>"
-                                    Mutating runs use an isolated worktree:
+  machine_code run --agent sudo "<rare task>" [--worktree]
+                                    Sudo edits the main tree by default; --worktree isolates it.
+                                    Build and orchestrated runs use an isolated worktree:
                                     [--issue <n>] [--auto-issue] [--issue-type task|feature]
                                     [--feature <n>] [--base <ref>]
                                     Agent config overrides:
@@ -197,6 +198,7 @@ const BOOLEAN_FLAGS = new Set([
   "coding",
   "tool",
   "inherit-worktree",
+  "worktree",
   "json",
   "recreate",
 ]);
@@ -1011,13 +1013,15 @@ async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Mutating runs work in an isolated worktree on an issue branch; read-only
-  // roles stay on the main tree. A configured orchestration mode always runs
-  // through Build, and review only reads the worktree it inspects.
+  // Build and orchestrated runs work in an isolated worktree on an issue
+  // branch. Sudo edits the main tree by default; --worktree opts it in.
+  // Read-only roles stay on the main tree, and review reads the worktree it
+  // inspects.
+  const forceWorktree = flags.has("worktree");
   const mutating =
     agentNameParsed === "review"
       ? false
-      : mode !== undefined || agentNameParsed === "sudo" || agentNameParsed === "build";
+      : forceWorktree || agentNameParsed === "build" || (!directExec && mode !== undefined);
   let toolRoot = l.repoRoot;
   if (mutating) {
     try {
@@ -1312,8 +1316,9 @@ async function cmdQueue(argv: string[]): Promise<number> {
     registerProject(l.home, l.repoRoot);
     const abort = new AbortController();
     // Queued packets always carry their packet id, so the worktree gets the
-    // snapshot materialized for Build to read.
-    const mutating = packet.mode !== undefined || packet.agent === "sudo" || packet.agent === "build";
+    // snapshot materialized for Build to read. Sudo packets run on the main
+    // tree unless they carry an orchestration mode.
+    const mutating = packet.mode !== undefined || packet.agent === "build";
     let toolRoot = l.repoRoot;
     if (mutating) {
       try {

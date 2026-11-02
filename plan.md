@@ -70,7 +70,7 @@ Five agents have separate prompts, requirements, and allowlists in `policy.toml`
 - **Architect:** explores and compiles an immutable packet (goal, paths, constraints, named gates); does not implement. Read/search/task and read-only core commands only, except scoped reference commands during reference work. Owns `modes = ["direct", "verified", "redundant"]` with `default_mode = "verified"`.
 - **Build:** code-specific implementation of one packet; cannot re-plan or change packet acceptance commands. It has the file tools and configured mutating/profile commands. `direct` adds no tests; `verified` and `redundant` author focused tests.
 - **Review:** fresh, read-only assessment of packet conformance, acceptance coverage, and completion. Read/search/read-only commands only; runs only in `redundant`.
-- **Sudo:** explicit rare single-agent role with all configured repo/global/profile/MCP permissions and core tools. It bypasses Architect, Build, and Review, but still uses worktrees, typed commands, and runner gates for mutations. It does not get arbitrary shell or host-root access.
+- **Sudo:** explicit rare single-agent role with all configured repo/global/profile/MCP permissions and core tools. It bypasses Architect, Build, and Review, and edits the main tree by default (`--worktree` opts into isolation). It uses typed commands and does not get arbitrary shell or host-root access.
 
 Modes are declared by the selected agent, not by a global TypeScript enum. A role with no modes runs alone; there is no `solo` value to select. The Architect declares `direct`, `verified`, and `redundant` and defaults to `verified`. The mode selects the coordinator/subagent chain and is validated against that role's data file.
 
@@ -87,7 +87,7 @@ Packets may lower, never raise, the configured token budget. Examples: `machine_
 
 Each invocation starts fresh with its prompt, request/packet, allowed tool/skill descriptions, and only necessary handoffs. No repo-wide or skill-body preloads. Search/read are on-demand; no auto-compaction in v1. If the token budget is exceeded, Build writes `HANDOFF.md` and stops; resume is a fresh attempt.
 
-Mutating tasks use a clean Git worktree at `.machine_code/local/worktrees/<run-id>` on `task/<task-id>/<attempt>`. A resumed attempt gets a new run ID and reuses the preserved worktree/branch. General read-only questions read within the selected repository and do not need a worktree. No auto-merge; humans merge successful branches.
+Build and orchestrated runs use a clean Git worktree at `.machine_code/local/worktrees/<run-id>` on `task/<task-id>/<attempt>`. A resumed attempt gets a new run ID and reuses the preserved worktree/branch. Sudo edits the main tree by default; pass `--worktree` to isolate it. General read-only questions read within the selected repository and do not need a worktree. No auto-merge; humans merge successful branches.
 
 The runner resolves gates from the packet plus repo defaults and runs named commands after Build (or after a Sudo mutation). A mutating task needs at least one applicable meaningful command; otherwise it is `blocked`. Record exit code, output, duration, and diff. `done` requires all gates to pass and, in `redundant`, Review approval. The runner always records `git diff --check`. No agent can self-certify.
 

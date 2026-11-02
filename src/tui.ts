@@ -512,9 +512,9 @@ export async function runTui(): Promise<void> {
   let changesCache: ChangesCache | null = null;
 
   let newrun: NewRunState = {
-    agent: "build",
-    mode: "verified",
-    preset: "implement",
+    agent: "sudo",
+    mode: "",
+    preset: "unrestricted",
     verification: "verified",
     issues: "optional",
     ask: true,
@@ -701,7 +701,7 @@ export async function runTui(): Promise<void> {
 
   const defaultNewRun = (): NewRunState => {
     const policy = (() => { try { return loadPolicy(l); } catch { return undefined; } })();
-    const agent = "build";
+    const agent = "sudo";
     const def = agentDef(l, agent);
     return {
       agent,
