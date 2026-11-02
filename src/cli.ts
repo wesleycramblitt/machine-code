@@ -44,6 +44,7 @@ import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./
 import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
+import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
@@ -190,6 +191,8 @@ Usage:
   machine_code model cooldown clear <id>
   machine_code availability [--probe] [--free-only] [--json]
                                     Show or probe cooling model availability
+  machine_code orchestrate status|tick --dry-run [--scope project|epic|feature]
+                                    Compute ready tasks from the issue graph
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code queue               Process committed packets in .machine_code/tasks/
   machine_code version
@@ -214,6 +217,7 @@ const BOOLEAN_FLAGS = new Set([
   "thinking",
   "delete-branch",
   "direct-exec",
+  "dry-run",
   "force",
   "free",
   "free-only",
@@ -2624,6 +2628,82 @@ async function cmdProcesses(argv: string[]): Promise<number> {
   return 0;
 }
 
+async function cmdOrchestrate(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const sub = positional[0] ?? "status";
+  if (sub !== "status" && sub !== "tick") fail("usage: machine_code orchestrate status|tick --dry-run [--scope project|epic|feature]");
+  if (sub === "tick" && !flags.has("dry-run")) {
+    fail("orchestrate tick is read-only in this phase; pass --dry-run");
+  }
+  const l = layout();
+  const machine = loadMachineConfig(l);
+  const bundle = await createIssueProvider(l, machine);
+  if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
+  const scopeFlag = flags.get("scope");
+  const scope: OrchestrationScope =
+    scopeFlag === "project" || scopeFlag === "feature" || scopeFlag === "epic"
+      ? scopeFlag
+      : flags.has("feature")
+        ? "feature"
+        : "epic";
+  let scopeRef;
+  if (scope === "epic") {
+    const epic = flags.get("epic");
+    if (!epic) fail("epic scope needs --epic <number>");
+    scopeRef = parseIssueRef(epic, bundle.repo, "github");
+  } else if (scope === "feature") {
+    const feature = flags.get("feature");
+    if (!feature) fail("feature scope needs --feature <number>");
+    scopeRef = parseIssueRef(feature, bundle.repo, "github");
+  }
+  const maxParallelRaw = flags.get("max-parallel");
+  const maxParallel = maxParallelRaw === undefined ? undefined : Number(maxParallelRaw);
+  if (maxParallel !== undefined && (!Number.isInteger(maxParallel) || maxParallel < 0)) {
+    fail("--max-parallel must be a non-negative integer");
+  }
+  const issues = await bundle.provider.list({ state: "all", limit: 500 });
+  const runs = listRuns(l);
+  const result = planSchedule({ issues, scope, ...(scopeRef ? { scopeRef } : {}), runs, maxParallel });
+  if (flags.has("json")) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          scope: result.scope,
+          scopeRef: result.scopeRef ?? null,
+          tasks: result.tasks.map((task) => ({
+            number: task.issue.ref.number,
+            title: task.issue.title,
+            ready: task.ready,
+            order: task.order,
+            ...(task.reason ? { reason: task.reason } : {}),
+            plan: task.plan ?? null,
+          })),
+          dispatch: result.dispatch.map((task) => task.issue.ref.number),
+          errors: result.errors,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return 0;
+  }
+  const scopeText = result.scopeRef ? `${result.scope} #${result.scopeRef.number}` : result.scope;
+  process.stdout.write(`orchestration ${scopeText}: ${result.tasks.length} task(s), ${result.ready.length} ready, ${result.dispatch.length} dispatch\n`);
+  for (const task of result.tasks) {
+    const mark = task.ready ? "READY" : "BLOCK";
+    process.stdout.write(
+      `  ${mark.padEnd(5)} #${task.issue.ref.number}  ${task.plan ? `${task.plan.status}/${task.plan.verification}` : "no-plan"}  ${task.issue.title}` +
+        `${task.reason ? `\n         ${task.reason}` : ""}\n`,
+    );
+  }
+  if (result.dispatch.length > 0) {
+    process.stdout.write(`dispatch: ${result.dispatch.map((task) => `#${task.issue.ref.number}`).join(", ")}\n`);
+  }
+  for (const error of result.errors) process.stderr.write(`orchestrate: ${error}\n`);
+  if (sub === "tick") process.stdout.write("dry-run only; no runs were dispatched.\n");
+  return 0;
+}
+
 function cmdShow(argv: string[]): number {
   const { flags, positional } = parseFlags(argv);
   const id = positional[0];
@@ -3182,6 +3262,9 @@ async function main(): Promise<void> {
       break;
     case "availability":
       code = await cmdAvailability(rest);
+      break;
+    case "orchestrate":
+      code = await cmdOrchestrate(rest);
       break;
     case "queue":
       code = await cmdQueue(rest);

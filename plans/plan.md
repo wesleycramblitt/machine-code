@@ -15,7 +15,8 @@
 > read-only Planner role with `issue_access=create`; Architect and Sudo now have
 > read access with an explicit `--allow-issue-create` override. The Planner has
 > a read-only artifact inventory tool; provisioning remains human-approved CLI
-> work. The suite has 226 tests.
+> work. The read-only scheduler and dry-run CLI are implemented. The suite has
+> 229 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -376,6 +377,11 @@ loop.
 
 ## 8. Phase 5 — Read-only Orchestrator
 
+Status: the pure scheduler (`src/orchestrator/scheduler.ts`) and
+`machine_code orchestrate status|tick --dry-run` exist: scopes, readiness,
+dependency order, active-run suppression, cycle reporting, and JSON output.
+Remaining: ledger/lease, TUI preflight, and execution wiring.
+
 ### Scopes
 
 | Scope | Includes |
@@ -549,7 +555,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 226 tests green. Add:
+Keep the existing 229 tests green. Add:
 
 | Area | Cases |
 |---|---|

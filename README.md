@@ -198,6 +198,10 @@ directory:
 machine_code processes <run-id>
 machine_code processes logs <run-id> p-0001
 machine_code processes kill <run-id> p-0001   # or: all
+
+# read-only issue-graph readiness (no dispatch yet)
+machine_code orchestrate status --scope project
+machine_code orchestrate tick --dry-run --scope epic --epic 42
 ```
 
 Orphaned running records are marked failed when read and during prune. Detached
