@@ -57,9 +57,9 @@ export interface ThemeConfig {
 }
 
 export const DEFAULT_THEME: Required<ThemeConfig> = {
-  header_bg: "#161616",
+  header_bg: "#121212",
   header_fg: "#d9d9d9",
-  footer_bg: "#161616",
+  footer_bg: "#121212",
   footer_fg: "#d9d9d9",
   body_bg: "#0a0a0a",
   sub_header_bg: "#1f6feb",
@@ -133,6 +133,14 @@ export interface AgentPolicy {
   minFit: number;
   /** Hard per-axis floors (0-10); omitted axes have no floor. */
   minAxes?: Partial<Record<CapabilityAxis, number>>;
+  /**
+   * Free-offer floors. Free rows are judged by these in every tier so a
+   * zero-price model can trade one weak axis for cost. Omitted values inherit
+   * the paid floors above.
+   */
+  freeMinFit?: number;
+  freeMinCapability?: number;
+  freeMinAxes?: Partial<Record<CapabilityAxis, number>>;
   /** Role-weighted axis mix; missing axes fall back to the role defaults and are normalized. */
   axisWeights?: Partial<Record<CapabilityAxis, number>>;
   /** Whether the agent calls tools (drives the tool-support hard filter). */
@@ -278,12 +286,21 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
 }
 
 const policyDefaults = loadTomlData<{ policy?: Record<string, unknown> }>("defaults.toml").policy ?? {};
+const freeDefaults = (policyDefaults.free ?? {}) as Record<string, unknown>;
 
 export const DEFAULT_AGENT_POLICY: AgentPolicy = {
   minContext: asNumber(policyDefaults.min_context) ?? 32_000,
   expectedOutputTokens: asNumber(policyDefaults.expected_output_tokens) ?? 2_000,
   minCapability: asNumber(policyDefaults.min_capability) ?? 0,
   minFit: asNumber(policyDefaults.min_fit) ?? 6,
+  freeMinCapability: asNumber(freeDefaults.min_capability) ?? 0,
+  freeMinFit: asNumber(freeDefaults.min_fit) ?? 5.5,
+  freeMinAxes: asAxisMap(freeDefaults.axes, "policy.free.axes") ?? {
+    reasoning: 5,
+    code: 5,
+    agentic: 5,
+    general: 3,
+  },
   toolCall: typeof policyDefaults.tool_call === "boolean" ? policyDefaults.tool_call : true,
 };
 
@@ -321,6 +338,7 @@ function mergeAxes<T extends Partial<Record<CapabilityAxis, number>> | undefined
 
 function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_AGENT_POLICY): AgentPolicy {
   const raw = (value ?? {}) as Record<string, unknown>;
+  const freeRaw = (raw.free ?? {}) as Record<string, unknown>;
   return {
     minContext: asNumber(raw.min_context) ?? base.minContext,
     expectedOutputTokens: asNumber(raw.expected_output_tokens) ?? base.expectedOutputTokens,
@@ -329,6 +347,9 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     minCapability: asNumber(raw.min_capability) ?? base.minCapability,
     minFit: asNumber(raw.min_fit) ?? base.minFit,
     minAxes: mergeAxes(base.minAxes, asAxisMap(raw.axes, `${label}.axes`)),
+    freeMinCapability: asNumber(freeRaw.min_capability) ?? base.freeMinCapability,
+    freeMinFit: asNumber(freeRaw.min_fit) ?? base.freeMinFit,
+    freeMinAxes: mergeAxes(base.freeMinAxes, asAxisMap(freeRaw.axes, `${label}.free.axes`)),
     axisWeights: mergeAxes(base.axisWeights, asAxisMap(raw.weights, `${label}.weights`)),
     toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : base.toolCall,
     preset: typeof raw.preset === "string" ? raw.preset : typeof raw.config_mode === "string" ? raw.config_mode : base.preset,

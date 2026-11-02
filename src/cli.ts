@@ -501,10 +501,14 @@ function cmdPolicy(argv: string[]): number {
     const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
       .map((axis) => `${axis}≥${ap.minAxes![axis]}`)
       .join(" ");
+    const freeFloors = CAPABILITY_AXES.filter((axis) => (ap.freeMinAxes?.[axis] ?? 0) > 0)
+      .map((axis) => `${axis}≥${ap.freeMinAxes![axis]}`)
+      .join(" ");
     const effectiveWeights = axisWeights(name, ap);
     const weights = CAPABILITY_AXES.map((axis) => `${axis} ${effectiveWeights[axis].toFixed(2)}`).join("  ");
     process.stdout.write(`\n[${name}]\n`);
     process.stdout.write(`  min_fit ${ap.minFit}   min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
+    process.stdout.write(`  free     min_fit ${ap.freeMinFit ?? ap.minFit}   min_capability ${ap.freeMinCapability ?? ap.minCapability}   axes ${freeFloors || "(inherits paid)"}\n`);
     const def = agentDef(l, name);
     process.stdout.write(`  modes ${def.modes.length ? `${def.modes.join(", ")}${def.defaultMode ? ` (default ${def.defaultMode})` : ""}` : "single-agent"}\n`);
     process.stdout.write(`  axes ${floors || "(none)"}\n`);
@@ -657,11 +661,15 @@ function cmdModels(argv: string[]): number {
     const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
       .map((axis) => `${axis}>=${ap.minAxes![axis]}`)
       .join(" ");
+    const freeFloors = CAPABILITY_AXES.filter((axis) => (ap.freeMinAxes?.[axis] ?? 0) > 0)
+      .map((axis) => `${axis}>=${ap.freeMinAxes![axis]}`)
+      .join(" ");
     process.stdout.write(
       `agent ${agent}  tier ${result.tier}  min_context ${ap.minContext}  min_fit ${ap.minFit}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
     );
     process.stdout.write(
       `axes ${floors || "(no axis floors)"}\n` +
+        `free floors min_fit ${ap.freeMinFit ?? ap.minFit}  min_capability ${ap.freeMinCapability ?? ap.minCapability}  axes ${freeFloors || "(inherits paid)"}\n` +
         `weights ${CAPABILITY_AXES.map((axis) => `${axis} ${weights[axis].toFixed(2)}`).join("  ")}\n`,
     );
     if (machine.priceCaps.input !== undefined || machine.priceCaps.output !== undefined) {

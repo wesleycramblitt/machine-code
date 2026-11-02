@@ -73,6 +73,39 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
   }
 });
 
+test("free floors parse and merge per axis across policy layers", () => {
+  const { root, layout } = setup(
+    [
+      "[agents.build]",
+      "min_fit = 6.0",
+      "[agents.build.free]",
+      "min_fit = 5.25",
+      "[agents.build.free.axes]",
+      "reasoning = 4.5",
+      "",
+    ].join("\n"),
+    [
+      "[agents.build.free]",
+      "min_fit = 5.0",
+      "[agents.build.free.axes]",
+      "general = 2.5",
+      "",
+    ].join("\n"),
+  );
+  try {
+    const policy = loadPolicy(layout);
+    assert.equal(policy.agents.build.freeMinFit, 5.0, "repo free min_fit wins");
+    assert.deepEqual(
+      policy.agents.build.freeMinAxes,
+      { reasoning: 4.5, code: 5, agentic: 5, general: 2.5 },
+      "free axes merge with the defaults per axis",
+    );
+    assert.equal(policy.agents.general.freeMinFit, 5.5, "built-in free floor applies to unnamed roles");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("invalid tier and negative multiplier are rejected", () => {
   const badMode = setup('[selection]\ntier = "fastest"\n');
   try {

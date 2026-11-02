@@ -218,18 +218,29 @@ function rejectReason(
   if (isMetaRouter(row)) return "router-model";
   if (input.policy.toolCall && !row.toolCall) return "no-tool-support";
   const tier = selectionTier(input);
-  if (tier === "free" && !isFreeRow(row)) return "not-free";
-  if (tier === "paid" && !isFreeRow(row)) {
+  const freeRow = isFreeRow(row);
+  if (tier === "free" && !freeRow) return "not-free";
+  if (tier === "paid" && !freeRow) {
     if (input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
   }
-  if (input.policy.minFit > 0 && capabilityFit(row.scores, weights) < input.policy.minFit) {
+  // Free offers use the free floor in both tiers. Paid offers keep the paid
+  // floor, so a cheap model cannot bypass the quality bar just by existing.
+  const minFit = freeRow ? (input.policy.freeMinFit ?? input.policy.minFit) : input.policy.minFit;
+  const minCapability = freeRow
+    ? (input.policy.freeMinCapability ?? input.policy.minCapability)
+    : input.policy.minCapability;
+  const minAxes =
+    freeRow && input.policy.freeMinAxes
+      ? { ...(input.policy.minAxes ?? {}), ...input.policy.freeMinAxes }
+      : input.policy.minAxes;
+  if (minFit > 0 && capabilityFit(row.scores, weights) < minFit) {
     return "below-min-fit";
   }
-  if (input.policy.minCapability > 0 && row.scores.capability < input.policy.minCapability) {
+  if (minCapability > 0 && row.scores.capability < minCapability) {
     return "below-min-capability";
   }
   for (const axis of CAPABILITY_AXES) {
-    const floor = input.policy.minAxes?.[axis];
+    const floor = minAxes?.[axis];
     if (floor !== undefined && floor > 0 && row.scores[axis] < floor) return `below-min-${axis}`;
   }
   if (row.context < input.policy.minContext) return "below-min-context";

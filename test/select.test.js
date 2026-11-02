@@ -130,6 +130,37 @@ test("per-axis floors reject spiky models even when the composite passes", () =>
   assert.ok(result.rejected.some((r) => r.key === "p/spiky" && r.reason === "below-min-code"));
 });
 
+test("free offers use the free floor in both tiers; paid offers keep the paid floor", () => {
+  const policy = {
+    ...basePolicy,
+    minCapability: 0,
+    minFit: 6,
+    minAxes: { general: 5 },
+    freeMinFit: 5.5,
+    freeMinAxes: { general: 3 },
+  };
+  const free = row("p/free", {
+    scores: axes(9, 8, 8, 3.5),
+    free: true,
+    pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  const paid = row("p/paid", { scores: axes(9, 8, 8, 3.5) });
+
+  const paidResult = pickOne([free, paid], policy);
+  assert.ok(!("error" in paidResult));
+  assert.equal(paidResult.selected.key, "p/free", "the free row clears its looser general floor");
+  assert.ok(paidResult.rejected.some((r) => r.key === "p/paid" && r.reason === "below-min-general"));
+  assert.ok(!paidResult.rejected.some((r) => r.key === "p/free"));
+
+  const freeResult = pickOne([free], policy, { tier: "free" });
+  assert.ok(!("error" in freeResult));
+  assert.equal(freeResult.selected.key, "p/free");
+
+  const paidInFree = pickOne([paid], policy, { tier: "free" });
+  assert.ok("error" in paidInFree);
+  assert.ok(paidInFree.rejected.some((r) => r.key === "p/paid" && r.reason === "not-free"));
+});
+
 test("role weights change the winner between code-heavy and reasoning-heavy models", () => {
   const coder = row("p/coder", { scores: axes(5.5, 9.5, 9, 5) });
   const thinker = row("p/thinker", { scores: axes(10, 6, 7, 10) });
