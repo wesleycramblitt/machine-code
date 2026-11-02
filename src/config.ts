@@ -57,9 +57,9 @@ export interface ThemeConfig {
 }
 
 export const DEFAULT_THEME: Required<ThemeConfig> = {
-  header_bg: "#121212",
+  header_bg: "#555555",
   header_fg: "#d9d9d9",
-  footer_bg: "#121212",
+  footer_bg: "#555555",
   footer_fg: "#d9d9d9",
   body_bg: "#0a0a0a",
   sub_header_bg: "#1f6feb",
