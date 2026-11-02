@@ -54,6 +54,9 @@ export interface OrchestrateInput {
   agentOverrides?: Partial<AgentConfig>;
   /** Assembled context block prepended to each phase's first prompt. */
   contextText?: string;
+  /** Skip the deterministic map index / semantic annotations up front. */
+  skipMap?: boolean;
+  skipSemantic?: boolean;
   signal?: AbortSignal;
 }
 
@@ -86,6 +89,8 @@ async function singleAgentRun(input: {
   requireProvider?: string;
   requireModel?: string;
   contextText?: string;
+  skipMap?: boolean;
+  skipSemantic?: boolean;
   signal?: AbortSignal;
 }): Promise<RunLoopResult> {
   return runLoop({
@@ -109,6 +114,8 @@ async function singleAgentRun(input: {
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
     contextText: input.contextText,
+    skipMap: input.skipMap,
+    skipSemantic: input.skipSemantic,
     signal: input.signal,
   });
 }
@@ -176,6 +183,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       requireProvider: input.requireProvider,
       requireModel: input.requireModel,
       contextText: input.contextText,
+      skipMap: input.skipMap,
+      skipSemantic: input.skipSemantic,
       signal: input.signal,
     });
     return { ...result, runId: recorder.id };
@@ -238,6 +247,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
           requireProvider: input.requireProvider,
           requireModel: input.requireModel,
           contextText: input.contextText,
+          skipMap: input.skipMap,
+          skipSemantic: input.skipSemantic,
           signal: input.signal,
         });
         if (archResult.status !== "completed") {
@@ -293,6 +304,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
         requireProvider: input.requireProvider,
         requireModel: input.requireModel,
         contextText: input.contextText,
+        skipMap: input.skipMap,
+        skipSemantic: input.skipSemantic,
         signal: input.signal,
       });
       if (buildResult.status === "failed" || buildResult.status === "interrupted") {
@@ -351,6 +364,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
           requireProvider: input.requireProvider,
           requireModel: input.requireModel,
           contextText: input.contextText,
+          skipMap: input.skipMap,
+          skipSemantic: input.skipSemantic,
           signal: input.signal,
         });
         if (reviewResult.status !== "completed") {

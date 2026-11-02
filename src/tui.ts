@@ -29,6 +29,7 @@ import {
   type RunRow,
 } from "./tui/runs.js";
 import { selectableLines } from "./tui/scroll.js";
+import { isTimelineEvent, stepTimelineSelection } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
 import { axisWeights, isMetaRouter, pick } from "./select.js";
@@ -43,7 +44,8 @@ import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, type ContextPreview } from "./context/preview.js";
 import { changesFor, childRuns, contextUsage, readContextManifest, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
-import { loadSemantic, readSemanticDirty } from "./map/semantic.js";
+import { loadSemantic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
+import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
 
 /* --------------------------------------------------------------- terminal */
@@ -71,6 +73,8 @@ const BL = "\x1b[34m";
 const GR = "\x1b[90m";
 const W = "\x1b[37m";
 const BG = "\x1b[48;5;236m";
+/** Slightly lighter than the body surface; groups the composer context panel. */
+const PANEL_BG = "\x1b[48;2;18;22;28m";
 const WRAP_OFF = "\x1b[?7l";
 const WRAP_ON = "\x1b[?7h";
 
@@ -158,6 +162,7 @@ const NEW_RUN_SETTING_FIELDS = [
   "floors",
 ] as const;
 type NewRunSettingField = (typeof NEW_RUN_SETTING_FIELDS)[number];
+const NEW_RUN_CONTEXT_TABS = ["Issues", "Files", "Knowledge", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
 
 interface NewRunState {
   agent: string;
@@ -353,6 +358,19 @@ function statusColor(status: string): string {
   return GR;
 }
 
+/** Compact codebase-index health tokens for bottom footers. */
+function mapStatusTokens(root: string): string[] {
+  const mapCached = existsSync(join(root, ".machine_code", "local", "cache", "map.json"));
+  const semantic = loadSemantic(root);
+  const semanticDirty = readSemanticDirty(root);
+  const lspReady = serverAvailable("typescript");
+  return [
+    `${mapCached ? G : Y}MAP${mapCached ? "✓" : "✗"}${R}`,
+    `${semantic ? (semanticDirty.length ? Y : G) : GR}SEM${semantic ? (semanticDirty.length ? "~" : "✓") : "-"}${R}`,
+    `${lspReady ? G : GR}LSP${lspReady ? "✓" : "✗"}${R}`,
+  ];
+}
+
 /** Shared semantic tones for context provenance across previews and run details. */
 function contextTone(kind: string): string {
   switch (kind) {
@@ -366,6 +384,7 @@ function contextTone(kind: string): string {
     case "skill": return G;
     case "tool": return M;
     case "script": return BL;
+    case "plan":
     case "project":
     case "parent-run": return GR;
     default: return C;
@@ -512,7 +531,6 @@ function refKey(ref: IssueRef | undefined): string {
 
 export async function runTui(): Promise<void> {
   const l = layout();
-  const cwd = l.repoRoot;
   mkdirSync(l.localDir, { recursive: true });
 
   let page: Page = "runs";
@@ -553,6 +571,8 @@ export async function runTui(): Promise<void> {
   let runScroll = 0;
   let eventSel = 0;
   let eventScroll = 0;
+  /** Line offset inside a selected timeline block (expanded inputs/outputs). */
+  let eventBodyScroll = 0;
   let thinkingScroll = 0;
   let thinkingFollow = true;
   let childSel = 0;
@@ -582,10 +602,14 @@ export async function runTui(): Promise<void> {
   let modelPickText = "";
   /** New-run prompt is modal: navigation keys are disabled while true. */
   let newRunInsert = false;
-  let newRunPendingJ = false;
   /** Advanced, rarely-touched new-run options live behind [s]. */
   let newRunSettings = false;
   let newRunSettingsSel = 0;
+  let newRunContextTab = 0;
+  let newRunContextItem = 0;
+  let newRunContextItemKeys: string[] = [];
+  let newRunContextSectionKey = "";
+  const newRunContextExcluded = new Set<string>();
   /**
    * Static inputs to the new-run preview (policy, catalogue, provider status,
    * context files) are expensive to reload on every keystroke, so they are
@@ -612,8 +636,6 @@ export async function runTui(): Promise<void> {
   let issueRefreshAt = 0;
   let issueRefreshing = false;
   let issueStatus = "no cache";
-  let spendCacheAt = 0;
-  let spendToday = 0;
 
   const stdin = process.stdin;
   stdin.setRawMode?.(true);
@@ -801,9 +823,11 @@ export async function runTui(): Promise<void> {
     newrun.mode = def.defaultMode ?? def.modes[0] ?? "";
     newrun.preset = def.preset;
     newRunInsert = false;
-    newRunPendingJ = false;
     newRunSettings = false;
     newRunSettingsSel = 0;
+    newRunContextTab = 0;
+    newRunContextItem = 0;
+    newRunContextExcluded.clear();
     modelPick = null;
     modelPickSel = 0;
     modelPickText = "";
@@ -868,6 +892,7 @@ export async function runTui(): Promise<void> {
     estimate?: { inputTokens: number; outputTokens: number };
     error?: string;
     policy?: Policy;
+    machine?: MachineConfig;
   } => {
     const newRunLayout = layout(newRunRepo);
     // Everything below depends on the repo/issue, not on the text being typed.
@@ -881,12 +906,16 @@ export async function runTui(): Promise<void> {
     ) {
       const cache = readIssueCache(newRunLayout);
       const statuses = providerStatuses(createModelsCollection());
+      const machine = (() => { try { return loadMachineConfig(newRunLayout); } catch { return undefined; } })();
       newRunPreviewCache = {
         key: previewKey,
         at: Date.now(),
-        context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, ""),
+        context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, "", {
+          planFile: machine?.context.planFile,
+          knowledgeIndex: machine?.context.knowledgeIndex,
+        }),
         policy: effectivePolicy(newRunRepo),
-        machine: (() => { try { return loadMachineConfig(newRunLayout); } catch { return undefined; } })(),
+        machine,
         catalogue: loadCatalogue(newRunLayout.catalogueFile),
         configured: new Set(statuses.filter((status) => status.configured).map((status) => status.id)),
         availability: loadAvailability(l.home),
@@ -897,9 +926,9 @@ export async function runTui(): Promise<void> {
     const policy = base.policy;
     const machine = base.machine;
     const catalogue = base.catalogue;
-    if (!policy || !machine || !catalogue) return { context, error: "configuration/catalogue unavailable" };
+    if (!policy || !machine || !catalogue) return { context, error: "configuration/catalogue unavailable", machine };
     const ap = policy.agents[newrun.agent];
-    if (!ap) return { context, error: `unknown agent ${newrun.agent}` };
+    if (!ap) return { context, error: `unknown agent ${newrun.agent}`, machine };
     const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
     if (newrun.minFit !== undefined) effective.minFit = newrun.minFit ?? 0;
     if (newrun.floors === "off") {
@@ -924,13 +953,14 @@ export async function runTui(): Promise<void> {
       tier: newrun.tier,
       requireModel: newrun.model,
     });
-    if ("error" in result) return { context, error: result.error, policy };
+    if ("error" in result) return { context, error: result.error, policy, machine };
     return {
       context,
       model: result.selected,
       fit: result.candidates.find((candidate) => candidate.key === result.selected.key)?.fit,
       estimate: result.estimate,
       policy,
+      machine,
     };
   };
 
@@ -971,6 +1001,13 @@ export async function runTui(): Promise<void> {
     if (newrun.issue) {
       args.push("--issue", String(newrun.issue.number));
       if (newrun.agent === "build" || newrun.agent === "sudo") args.push("--auto-issue");
+    }
+    const excludedSections = [...newRunContextExcluded]
+      .filter((key) => key.startsWith("section:"))
+      .map((key) => key.slice("section:".length));
+    const excludedItems = [...newRunContextExcluded].filter((key) => !key.startsWith("section:"));
+    if (excludedSections.length > 0 || excludedItems.length > 0) {
+      args.push("--context-exclude", JSON.stringify({ sections: excludedSections, items: excludedItems }));
     }
     args.push(newrun.prompt);
     return args;
@@ -1092,11 +1129,6 @@ export async function runTui(): Promise<void> {
     const counts = needRunData ? headerCounts(allRuns) : headerCounts([]);
     const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
     const theme = resolveTheme(settingsMachine?.theme);
-    if (Date.now() - spendCacheAt > 5_000) {
-      spendToday = readSpendSummary(l.home, { days: 1 }).totalActual;
-      spendCacheAt = Date.now();
-    }
-    const todaySpend = spendToday;
     if (toast && Date.now() - toastAt > 8_000) toast = "";
 
     // Resolve a newly launched run before the header is built, so the first
@@ -1117,63 +1149,13 @@ export async function runTui(): Promise<void> {
       }
     }
 
-    const tabTokens = TABS.map((tab) =>
-      tab.id === page
-        ? `${theme.tabActiveBg}${theme.tabActiveFg}${B} ${tab.key}:${tab.label} ${R}`
-        : `${theme.headerFg}${D}${tab.key}:${tab.label}${R}`,
-    );
-    // Detail screens replace the whole header (tabs included) with a Back bar.
-    const runDetailHeader = page === "runs" && screen === "run";
-    const backHeader =
-      runDetailHeader ||
-      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct")) ||
-      (page === "models" && screen === "model");
-    // Tabs stay visible on every other screen, followed by one blank line.
-    // The composer keeps its Back bar but names itself next to it.
-    const backTitle =
-      page === "runs" && screen === "newrun"
-        ? `  ${B}${theme.headerFg}New Run${R}`
-        : runDetailHeader
-          ? `  ${B}${theme.headerFg}Run Details${R}`
-          : page === "models" && screen === "model"
-            ? `  ${B}${theme.headerFg}Model Details${R}`
-            : "";
-    const headerRight =
-      page === "runs" && screen === "newrun" && !newRunInsert && !modelPick && !issuePick && !newRunSettings
-        ? command("s", "Settings", undefined, M)
-        : "";
-    const backLine = `${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}${backTitle}`;
-    const header: string[] = backHeader
-      ? [
-          headerRight
-            ? `${backLine}${" ".repeat(Math.max(2, cols - visible(backLine) - visible(headerRight)))}${headerRight}`
-            : backLine,
-          "",
-        ]
-      : [...wrapTokenList(tabTokens, cols, " "), ""];
-    // The header shares the body surface; only the Back label keeps its own tone.
-    const headerTone = theme.bodyBg;
-    // Prompt editing moves its controls into the body but keeps the model line.
-    const hideFooter = screen === "newrun" && newRunInsert;
-    const bodyH = Math.max(1, rows - header.length - (runDetailHeader ? 1 : footerReserve));
-
     const runsListScreen = page === "runs" && screen === "list";
-    const filteredRuns = runsListScreen
-      ? runsFilter === "all" || runsFilter === "attention"
-        ? allRuns
-        : filterRuns(allRuns, runsFilter)
-      : [];
-    const runIndex = buildRunIndex({
-      runs: filteredRuns,
-      issuesByRepo: runsListScreen ? issueCachesByRepo : new Map(),
-      group: runsGroup,
-      collapsed,
-      text: runsText,
-      attentionOnly: runsAttention || runsFilter === "attention",
-      preferredRepo: l.repoRoot,
-    });
-    if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
-    const selectedRow = runIndex.selectable[runsSel];
+    const runIndicators = [
+      `${C}●${R} ${counts.active} running`,
+      `${Y}?${R} ${counts.awaiting} awaiting`,
+      `${Y}⏸${R} ${counts.paused} paused`,
+    ];
+    const statusTokens = [`${Y}PR${R} ${counts.openPrs} open`];
 
     const catalogue = page === "models" ? loadCatalogue(l.catalogueFile) : null;
     const statuses = page === "models" ? providerStatuses(createModelsCollection()) : [];
@@ -1198,15 +1180,83 @@ export async function runTui(): Promise<void> {
     const settingsRows = page === "settings" ? buildSettings(l, settingsMachine, settingsPolicy) : [];
     if (settingsSel >= settingsRows.length) settingsSel = Math.max(0, settingsRows.length - 1);
 
+    const tabTokens = TABS.map((tab) =>
+      tab.id === page
+        ? `${theme.tabActiveBg}${theme.tabActiveFg}${B} ${tab.key}:${tab.label} ${R}`
+        : `${theme.headerFg}${D}${tab.key}:${tab.label}${R}`,
+    );
+    // Detail screens replace the whole header (tabs included) with a Back bar.
+    const runDetailHeader = page === "runs" && screen === "run";
+    const backHeader =
+      runDetailHeader ||
+      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct")) ||
+      (page === "models" && screen === "model");
+    // Tabs stay visible on every other screen. Runs and models replace the
+    // blank separator with a live summary line; other pages keep the blank.
+    const backTitle =
+      page === "runs" && screen === "newrun"
+        ? `  ${B}${theme.headerFg}New Run${R}`
+        : runDetailHeader
+          ? `  ${B}${theme.headerFg}Run Details${R}`
+          : page === "models" && screen === "model"
+            ? `  ${B}${theme.headerFg}Model Details${R}`
+            : "";
+    const headerRight =
+      page === "runs" && screen === "newrun" && !newRunInsert && !modelPick && !issuePick && !newRunSettings
+        ? command("s", "Settings", undefined, M)
+        : "";
+    const backLine = `${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}${backTitle}`;
+    const headerSubLines = runsListScreen
+      ? wrapTokenList([...runIndicators, ...statusTokens], cols, "  ").map((line) => ` ${line}`)
+      : page === "models" && screen === "list"
+        ? [` ${D}${modelRows.length} model(s)${modelText ? ` · “${modelText}”` : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`]
+        : [""];
+    const header: string[] = backHeader
+      ? [
+          headerRight
+            ? `${backLine}${" ".repeat(Math.max(2, cols - visible(backLine) - visible(headerRight)))}${headerRight}`
+            : backLine,
+          "",
+        ]
+      : [...wrapTokenList(tabTokens, cols, " "), ...headerSubLines];
+    // The header shares the body surface; only the Back label keeps its own tone.
+    const headerTone = theme.bodyBg;
+    // Prompt editing moves its controls into the body but keeps the model line.
+    const hideFooter = screen === "newrun" && newRunInsert;
+    const bodyH = Math.max(1, rows - header.length - (runDetailHeader ? 2 : footerReserve));
+
+    const filteredRuns = runsListScreen
+      ? runsFilter === "all" || runsFilter === "attention"
+        ? allRuns
+        : filterRuns(allRuns, runsFilter)
+      : [];
+    const runIndex = buildRunIndex({
+      runs: filteredRuns,
+      issuesByRepo: runsListScreen ? issueCachesByRepo : new Map(),
+      group: runsGroup,
+      collapsed,
+      text: runsText,
+      attentionOnly: runsAttention || runsFilter === "attention",
+      preferredRepo: l.repoRoot,
+    });
+    if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
+    const selectedRow = runIndex.selectable[runsSel];
+
     let body: string[] = [];
     let actions = "";
+    /** A second footer command row for view controls that would otherwise crowd the main one. */
+    let extraActions = "";
     let secondary = "";
     /** New-run content pinned to the bottom of the body, directly above the footer. */
-    let bottomAlign: { above: string[]; block: string[] } | null = null;
+    let bottomAlign: { above: string[]; block: string[]; filler?: string } | null = null;
     /** True when `secondary` already carries its own styling (new-run model info). */
     let secondaryStyled = false;
     /** Run details show only the working directory in their footer. */
     let runFooter = "";
+    /** The composer shows its target directory on the very last footer row. */
+    let locationFooter = "";
+    /** Right-aligned MAP/SEM/LSP status for the bottom footer. */
+    let footerMapTokens: string[] = [];
 
     const clipBody = (lines: string[]) => {
       if (lines.length > bodyH) return lines.slice(0, bodyH);
@@ -1288,9 +1338,11 @@ export async function runTui(): Promise<void> {
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
             command("/", "Search", undefined, BL),
-            command("g", "Group", RUN_GROUP_LABELS[runsGroup], C),
-            command("f", "Filter", runsFilter, M),
           ]);
+      extraActions = joinCommands([
+        command("g", "Group", RUN_GROUP_LABELS[runsGroup], C),
+        command("f", "Filter", runsFilter, M),
+      ]);
       if (toast) secondary = `${Y}${toast}${R}`;
     }
 
@@ -1361,6 +1413,8 @@ export async function runTui(): Promise<void> {
 
     /* ---------------------------------------------------------- new run */
     else if (screen === "newrun") {
+      locationFooter = newRunRepo;
+      footerMapTokens = mapStatusTokens(newRunRepo);
       const preview = modelPreview();
       const ctx = preview.context;
       const ap = preview.policy?.agents[newrun.agent];
@@ -1382,36 +1436,168 @@ export async function runTui(): Promise<void> {
       const fitScore = preview.fit;
       const fitTone = fitScore === undefined ? D : fitScore >= 7.5 ? G : fitScore >= 6 ? Y : RED;
       const costTone = preview.model?.free ? G : RED;
-      const modelInfo = preview.error
+      const modelIdentity = preview.error
         ? command("m", "Model", preview.error, RED)
-        : [
-            command("m", "Model", preview.model?.key ?? "?", C),
-            ...(narrow
-              ? []
-              : [
-                  fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`,
-                  `${D}cost${R} ${costTone}${estimateCost}${R}`,
-                  ...(preview.model
-                    ? [
-                        `${D}${preview.model.kind}${R}`,
-                        `${D}ctx${R} ${C}${fmtContext(preview.model.context)}${R}`,
-                        `${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`,
-                        `${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`,
-                      ]
-                    : []),
-                ]),
+        : command("m", "Model", preview.model?.key ?? "?", C);
+      const fitPart = fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`;
+      const costPart = `${D}cost${R} ${costTone}${estimateCost}${R}`;
+      const detailParts = preview.model
+        ? [
+            `${D}${preview.model.kind}${R}`,
+            `${D}ctx${R} ${C}${fmtContext(preview.model.context)}${R}`,
+            `${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`,
+            `${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`,
           ]
-            .filter(Boolean)
-            .join("  ");
-      const contextTokens = Math.ceil((ctx.chars + ctx.promptChars) / 4);
-      const contextLine = ` ${C}Context${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
-      const chainLine = ` ${BL}Hierarchy${R} ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "untracked · no issue context"}${R}`;
-      const cwdLine = ` ${D}cwd${R} ${W}${newRunRepo}${R}`;
+        : [];
+      const modelInfo = preview.error
+        ? ` ${modelIdentity}`
+        : [
+            ` ${[modelIdentity, fitPart, costPart, ...detailParts].filter(Boolean).join("  ")}`,
+            ` ${[modelIdentity, fitPart, costPart].filter(Boolean).join("  ")}`,
+            ` ${modelIdentity}`,
+          ].find((line) => visible(line) <= cols) ?? ` ${modelIdentity}`;
+      const issueSources = ctx.sources.filter((source) => source.kind === "issue");
+      const issueItems = issueChain.map((issue, index) => {
+        const source = issueSources[index];
+        const contextKind = index === 0 ? "task" : index === 1 ? "feature" : "epic";
+        return {
+          text: `#${issue.ref.number} ${issue.kind} ${issue.title}`,
+          chars: source?.chars ?? 0,
+          exists: source?.exists ?? true,
+          key: `${contextKind}:${issue.ref.repo}#${issue.ref.number}`,
+        };
+      });
+      const itemsFor = (kinds: readonly string[]) =>
+        ctx.sources
+          .filter((source) => kinds.includes(source.kind))
+          .map((source) => ({
+            text: source.ref,
+            chars: source.chars,
+            exists: source.exists,
+            key: `${source.kind}:${source.ref}`,
+          }));
+      const mapEnabled = preview.machine?.map.enabled !== false;
+      const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
+      const cachedMap = readCachedMap(newRunRepo);
+      const semantic = loadSemantic(newRunRepo);
+      const semanticDirty = readSemanticDirty(newRunRepo);
+      const mapChars = mapEnabled ? (cachedMap ? renderMapIndex(cachedMap).length : 1024) : 0;
+      const semanticChars = semanticEnabled ? (semantic ? renderSemanticIndex(semantic).length : 1024) : 0;
+      const codebaseItems = [
+        {
+          text: mapEnabled
+            ? cachedMap
+              ? `repo map · ${cachedMap.files.length} files · ${symbolCount(cachedMap)} symbols`
+              : "repo map · builds on first turn"
+            : "repo map · disabled",
+          chars: mapChars,
+          exists: mapEnabled && Boolean(cachedMap),
+          key: "map:index",
+        },
+        {
+          text: semanticEnabled
+            ? semantic
+              ? `semantic index · ${Object.keys(semantic.modules).length} modules${semanticDirty.length ? ` · ${semanticDirty.length} dirty` : ""}`
+              : "semantic index · builds when available"
+            : "semantic index · disabled",
+          chars: semanticChars,
+          exists: semanticEnabled && Boolean(semantic),
+          key: "semantic:index",
+        },
+      ];
+      const sections = [
+        { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
+        { label: "Files", tone: contextTone("file"), sectionKey: "section:files", items: itemsFor(["file"]) },
+        { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: itemsFor(["knowledge"]) },
+        { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: itemsFor(["skill"]) },
+        { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: itemsFor(["tool"]) },
+        { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: itemsFor(["script"]) },
+        { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
+        { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
+      ];
+      if (newRunContextTab >= sections.length) newRunContextTab = 0;
+      const excludedChars = sections.reduce((sum, section) => {
+        if (newRunContextExcluded.has(section.sectionKey)) {
+          return sum + section.items.reduce((itemSum, item) => itemSum + item.chars, 0);
+        }
+        return sum + section.items
+          .filter((item) => newRunContextExcluded.has(item.key))
+          .reduce((itemSum, item) => itemSum + item.chars, 0);
+      }, 0);
+      const totalChars = sections.reduce(
+        (sum, section) => sum + section.items.reduce((itemSum, item) => itemSum + item.chars, 0),
+        0,
+      );
+      const contextTokens = Math.ceil((Math.max(0, totalChars - excludedChars) + ctx.promptChars) / 4);
+      const ctxText = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
+      const contextLine = `${" ".repeat(Math.max(0, cols - visible(ctxText) - 1))}${ctxText}`;
+      const tabBar = wrapTokenList(
+        sections.map((section, index) => {
+          const label = newRunContextExcluded.has(section.sectionKey) ? `${section.label}✕` : section.label;
+          return index === newRunContextTab
+            ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B} ${label} ${R}`
+            : `${theme.sectionFg}${label}${R}`;
+        }),
+        cols - 2,
+        "  ",
+      ).map((line) => background(fit(` ${line}`, cols), PANEL_BG));
+      const activeSection = sections[newRunContextTab]!;
+      newRunContextSectionKey = activeSection.sectionKey;
+      newRunContextItemKeys = activeSection.items.map((item) => item.key);
+      newRunContextItem = Math.min(newRunContextItem, Math.max(0, activeSection.items.length - 1));
+      const sectionOff = newRunContextExcluded.has(activeSection.sectionKey);
+      const keptItems = sectionOff
+        ? []
+        : activeSection.items.filter((item) => !newRunContextExcluded.has(item.key));
+      const sectionTokens = Math.ceil(keptItems.reduce((sum, item) => sum + item.chars, 0) / 4);
+      const sectionHeader = background(
+        fit(
+          ` ${B}${activeSection.tone}${activeSection.label}${R} ${D}·${R} ${C}${fmtTokens(sectionTokens)}${R}` +
+            `${D} tok · ${keptItems.length}/${activeSection.items.length} kept${R}`,
+          cols,
+        ),
+        PANEL_BG,
+      );
+      const itemRoom = Math.max(1, Math.floor(bodyH * 0.28));
+      const itemStart = Math.max(
+        0,
+        Math.min(newRunContextItem - Math.floor(itemRoom / 2), Math.max(0, activeSection.items.length - itemRoom)),
+      );
+      const visibleItems = activeSection.items.slice(itemStart, itemStart + itemRoom);
+      const itemLines: string[] = [];
+      const panelLine = (line: string): string => background(fit(line, cols), PANEL_BG);
+      if (itemStart > 0) itemLines.push(panelLine(`  ${D}… ${itemStart} above${R}`));
+      for (let offset = 0; offset < visibleItems.length; offset++) {
+        const item = visibleItems[offset]!;
+        const index = itemStart + offset;
+        const excluded = sectionOff || newRunContextExcluded.has(item.key);
+        const mark = excluded ? `${RED}✕${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
+        const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 24))}${R} ${D}${fmtTokens(item.chars)}${R}`;
+        itemLines.push(index === newRunContextItem ? selected(fit(line, cols), true) : panelLine(line));
+      }
+      const remainingItems = activeSection.items.length - (itemStart + visibleItems.length);
+      if (remainingItems > 0) itemLines.push(panelLine(`  ${D}… ${remainingItems} more${R}`));
+      const compact = (key: string, label: string, tone: string): string =>
+        `${B}${tone}${key}${R} ${D}${label}${R}`;
+      const contextCommands = background(
+        fit(
+          ` ${[
+            compact("h/l", "tabs", Y),
+            compact("j/k", "sel", M),
+            compact("space", "keep", G),
+            compact("x", "sec", RED),
+          ].join("  ")}`,
+          cols,
+        ),
+        PANEL_BG,
+      );
       const summary = [
+        modelInfo,
         contextLine,
-        chainLine,
-        cwdLine,
-      ].filter(Boolean);
+        ...tabBar,
+        sectionHeader,
+        ...(itemLines.length ? itemLines : [panelLine(`  ${D}none${R}`)]),
+      ];
       if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
 
       const boxWidth = Math.max(20, cols - 4);
@@ -1422,7 +1608,7 @@ export async function runTui(): Promise<void> {
       const promptLines = wrapText(newRunInsert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
       const promptActions = newRunInsert
         ? joinCommands([
-            command("Esc/jk", "Done", undefined, Y),
+            command("Esc", "Done", undefined, Y),
             command("Enter", "Newline", undefined, G),
             command("Backspace", "Delete", undefined, M),
           ])
@@ -1442,16 +1628,6 @@ export async function runTui(): Promise<void> {
         ...Array.from({ length: Math.max(0, promptHeight - shownPrompt.length) }, () => ` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`),
         ` ${D}└${"─".repeat(inner)}┘${R}`,
       ];
-
-      const sources: string[] = [];
-      const sourceRoom = Math.max(0, bodyH - summary.length - promptBox.length - (promptHint ? 4 : 3));
-      if (sourceRoom > 1 && ctx.sources.length > 0) {
-        sources.push(` ${B}${C}Will inherit${R} ${D}· ${ctx.sources.length} source(s)${R}`);
-        for (const source of ctx.sources.slice(0, Math.max(0, sourceRoom - 1))) {
-          const tone = contextTone(source.kind);
-          sources.push(`  ${source.exists ? G + "✓" : Y + "?"}${R} ${tone}${source.kind.padEnd(9)}${R} ${W}${trunc(source.ref, Math.max(12, cols - 30))}${R} ${D}${fmtTokens(source.chars)}${R}`);
-        }
-      }
 
       if (modelPick === "newrun") {
         const list = pickerModels();
@@ -1527,7 +1703,6 @@ export async function runTui(): Promise<void> {
         };
         const lines: string[] = [
           ` ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
-          ` ${D}${cwd}${R}`,
           "",
         ];
         for (let i = 0; i < NEW_RUN_SETTING_FIELDS.length; i++) {
@@ -1548,8 +1723,9 @@ export async function runTui(): Promise<void> {
         // Context and inherited sources stay above; the composer is pinned to
         // the bottom of the body so it sits directly above the key-command row.
         bottomAlign = {
-          above: [...summary, "", ...sources, ...(sources.length ? [""] : [])],
-          block: [...promptBox, ...(promptHint ? [promptHint] : []), ""],
+          above: summary,
+          block: [contextCommands, ...promptBox, ...(promptHint ? [promptHint] : []), ""],
+          filler: background(fit("", cols), PANEL_BG),
         };
         // While editing the prompt the only controls live directly under the
         // textbox; the bottom footer is intentionally empty.
@@ -1561,7 +1737,7 @@ export async function runTui(): Promise<void> {
               command("i", "Issue", issueValue, newrun.issue ? C : GR),
             ]);
         secondaryStyled = true;
-        secondary = `${modelInfo}${toast ? `  ${D}· ${toast}${R}` : ""}`;
+        secondary = toast ? `${D}· ${Y}${toast}${R}` : "";
       }
     }
 
@@ -1645,7 +1821,7 @@ export async function runTui(): Promise<void> {
         command("s", "Sort", modelSort, C),
         command("j/k", "Move", undefined, GR),
       ]);
-      secondary = `${D}${modelRows.length} model(s)${modelText ? ` · “${modelText}”` : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+      secondary = "";
     }
 
     /* ------------------------------------------------------------ spend */
@@ -1674,9 +1850,10 @@ export async function runTui(): Promise<void> {
         const entries = Object.entries(buckets).sort((a, b) => b[1].actual - a[1].actual).slice(0, 40);
         const max = Math.max(0, ...entries.map(([, bucket]) => bucket.actual));
         for (const [key, bucket] of entries) {
+          const label = key === "map" ? "map (semantic)" : key;
           const perMillion = bucket.tokens > 0 ? bucket.actual / (bucket.tokens / 1_000_000) : 0;
           const keyTone = spendBy === "agent" ? agentTone(key) : W;
-          lines.push(`  ${keyTone}${pad(key, narrow ? 20 : 38)}${R} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
+          lines.push(`  ${keyTone}${pad(label, narrow ? 20 : 38)}${R} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
         }
       }
       const w = selectableLines(lines, spendScroll, spendScroll, bodyH);
@@ -1745,7 +1922,10 @@ export async function runTui(): Promise<void> {
           thinkingByCall.set(key, list);
         }
         const touched = touchedPaths(ev);
-        runFooter = `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}`;
+        runFooter =
+          `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}` +
+          (runSection === "timeline" ? "  ·  j/k events · space expand · PgUp/Dn scroll" : "");
+        footerMapTokens = mapStatusTokens(s.worktree ?? s.repoRoot);
         const sectionBar = wrapTokenList(
           RUN_SECTIONS.map((section) =>
             section === runSection
@@ -1790,7 +1970,9 @@ export async function runTui(): Promise<void> {
           const mapCached = existsSync(join(mapRoot, ".machine_code", "local", "cache", "map.json"));
           const mapTone = mapCached ? G : Y;
           const semanticTone = semantic && semanticDirty.length === 0 ? G : Y;
-          const semanticText = semantic ? (semanticDirty.length ? `stale (${semanticDirty.length})` : "cached") : "missing";
+          const semanticText = semantic
+            ? `${semanticDirty.length ? `stale (${semanticDirty.length})` : "cached"} · ${Object.keys(semantic.modules).length} modules`
+            : "missing";
           const lspReady = serverAvailable("typescript");
           lines.push(
             `  ${D}map${R}     ${mapTone}${mapCached ? "deterministic cached" : "deterministic missing"}${R}` +
@@ -1863,14 +2045,24 @@ export async function runTui(): Promise<void> {
                 typeof event.call === "number"
                   ? (thinkingByCall.get(`${timelineAttempt}:${event.call}`) ?? [])
                   : [];
-              const textChunk = callChunks.find((chunk) => chunk.kind === "text");
+              const textChunk = callChunks
+                .filter((chunk) => chunk.kind === "text")
+                .map((chunk) => chunk.text)
+                .join("");
               const output = (
                 typeof event.text === "string" && event.text.trim().length > 0
                   ? event.text
-                  : textChunk?.text ?? ""
+                  : textChunk
               ).trim();
               if (output) {
-                for (const line of output.split("\n")) {
+                const outputLines = output.split("\n");
+                const shown = expandedEvent ? outputLines : outputLines.slice(0, 3);
+                const more =
+                  !expandedEvent && outputLines.length > shown.length
+                    ? ` ${D}(${outputLines.length - shown.length} more lines; space to expand)${R}`
+                    : "";
+                eventLines.push(`    ${M}output${R}${more}`);
+                for (const line of shown) {
                   for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${W}${wrapped}${R}`);
                 }
               }
@@ -1943,17 +2135,23 @@ export async function runTui(): Promise<void> {
             else eventLines.push(`${prefix} ${GR}${time}${R} ${D}${type}${R}`);
           }
           eventSel = Math.max(0, Math.min(ev.length - 1, eventSel));
+          while (eventSel < ev.length - 1 && !isTimelineEvent(ev[eventSel])) eventSel += 1;
+          while (eventSel > 0 && !isTimelineEvent(ev[eventSel])) eventSel -= 1;
           const visibleCount = Math.max(1, bodyH - 4);
           const start = starts[eventSel] ?? 0;
           const end = starts[eventSel + 1] ?? eventLines.length;
           if (end - start <= visibleCount) {
+            eventBodyScroll = 0;
             // Keep the whole selected block visible; selected model calls should
             // show their output, not just their header.
             if (end > eventScroll + visibleCount) eventScroll = end - visibleCount;
             if (start < eventScroll) eventScroll = start;
           } else {
             // A long block starts at the top so the first output lines are visible.
-            eventScroll = start;
+            // PgDn/PgUp move the line offset inside the block.
+            const maxBodyScroll = Math.max(0, end - start - visibleCount);
+            eventBodyScroll = Math.max(0, Math.min(eventBodyScroll, maxBodyScroll));
+            eventScroll = start + eventBodyScroll;
           }
           eventScroll = Math.max(0, Math.min(eventScroll, Math.max(0, eventLines.length - visibleCount)));
           lines.push(...eventLines.slice(eventScroll, eventScroll + visibleCount));
@@ -2084,43 +2282,40 @@ export async function runTui(): Promise<void> {
       command("1-4", "Pages", undefined, C),
       command("q", "Quit", undefined, GR),
     ]);
-    const statusTokens = [
-      `${M}⚑${R} ${counts.approvals} approval${counts.approvals === 1 ? "" : "s"}`,
-      `${Y}PR${R} ${counts.openPrs} open`,
-      `${G}$${todaySpend.toFixed(2)}${R} today`,
-    ];
-    // Runs list keeps its live counts on the very bottom row of the screen.
-    const mapCached = existsSync(join(l.repoRoot, ".machine_code", "local", "cache", "map.json"));
-    const semantic = loadSemantic(l.repoRoot);
-    const semanticDirty = readSemanticDirty(l.repoRoot);
-    const mapTokens = [
-      `${mapCached ? G : Y}MAP${mapCached ? "✓" : "✗"}${R}`,
-      `${semantic ? (semanticDirty.length ? Y : G) : GR}SEM${semantic ? (semanticDirty.length ? "~" : "✓") : "-"}${R}`,
-      `${serverAvailable("typescript") ? G : GR}LSP${serverAvailable("typescript") ? "✓" : "✗"}${R}`,
-    ];
-    const runIndicators = [
-      `${C}●${R}  ${counts.active} running`,
-      `${Y}?${R}  ${counts.awaiting} awaiting`,
-      `${Y}⏸${R}  ${counts.paused} paused`,
-      ...(narrow ? [] : mapTokens),
-    ];
-    const commandRows = runDetailHeader || hideFooter ? [] : wrapCommands(actions || defaultActions, cols);
+    const commandRows = runDetailHeader || hideFooter
+      ? []
+      : [
+          ...wrapCommands(actions || defaultActions, cols),
+          ...(extraActions ? wrapCommands(extraActions, cols) : []),
+        ];
     const secondaryRows = runDetailHeader
       ? []
       : secondaryStyled
         ? wrapCommands(secondary, cols).slice(0, 2)
         : wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1);
-    // The runs page owns the full status footer: live counts plus approvals/PR/spend.
-    const trailingRows = runDetailHeader
-      ? []
-      : page === "runs" && screen === "list"
-        ? wrapTokenList([...runIndicators, ...statusTokens], cols, "   ")
-        : [];
+    const rightFooter = footerMapTokens.join("  ");
+    const mapFooterLine = rightFooter
+      ? `${" ".repeat(Math.max(0, cols - visible(rightFooter) - 1))}${rightFooter}`
+      : "";
+    const footerLeft = runDetailHeader ? runFooter : locationFooter;
+    const combinedFooterLine = (() => {
+      if (!footerLeft && !rightFooter) return "";
+      if (!footerLeft) return mapFooterLine;
+      if (!rightFooter) return ` ${D}${footerLeft}${R}`;
+      const left = trunc(footerLeft, Math.max(10, cols - visible(rightFooter) - 4));
+      const gap = Math.max(1, cols - visible(left) - visible(rightFooter) - 2);
+      return ` ${D}${left}${R}${" ".repeat(gap)}${rightFooter}`;
+    })();
     const footer = runDetailHeader
-      ? runFooter
-        ? [` ${D}${runFooter}${R}`]
-        : []
-      : [...commandRows, ...secondaryRows, ...trailingRows];
+      ? [
+          ...(footerLeft ? [` ${D}${footerLeft}${R}`] : []),
+          ...(mapFooterLine ? [mapFooterLine] : []),
+        ]
+      : [
+          ...commandRows,
+          ...secondaryRows,
+          ...(combinedFooterLine ? [combinedFooterLine] : []),
+        ];
     // Key legends sit on the near-black surface; trailing rows keep the footer band.
     const legendRows = commandRows.length;
     const bodySpace = Math.max(0, rows - header.length - footer.length);
@@ -2128,7 +2323,7 @@ export async function runTui(): Promise<void> {
       const block = bottomAlign.block.slice(-bodySpace);
       const room = Math.max(0, bodySpace - block.length);
       const above = bottomAlign.above.slice(0, room);
-      body = [...above, ...Array.from({ length: room - above.length }, () => ""), ...block];
+      body = [...above, ...Array.from({ length: room - above.length }, () => bottomAlign!.filler ?? ""), ...block];
     } else {
       body = body.slice(0, bodySpace);
       while (body.length < bodySpace) body.push("");
@@ -2326,16 +2521,7 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (newRunInsert) {
-        if (data === "\x1b" || data === "jk") { newRunInsert = false; newRunPendingJ = false; draw(); return; }
-        if ((newRunPendingJ || newrun.prompt.endsWith("j")) && data === "k") {
-          newrun.prompt = newrun.prompt.slice(0, -1);
-          newRunPendingJ = false;
-          newRunInsert = false;
-          draw();
-          return;
-        }
-        newRunPendingJ = false;
-        if (data === "j") newRunPendingJ = true;
+        if (data === "\x1b") { newRunInsert = false; draw(); return; }
         if (data === "\r" || data === "\n") {
           newrun.prompt += "\n";
         } else if (data === "\x7f" || data === "\b") {
@@ -2349,12 +2535,43 @@ export async function runTui(): Promise<void> {
       }
       if (data === "\x1b") { screen = "list"; draw(); return; }
       if (data === "\r" || data === "\n") { submitNewRun(); draw(); return; }
+      if (data === "h" || data === "\x1b[D") {
+        newRunContextTab = Math.max(0, newRunContextTab - 1);
+        newRunContextItem = 0;
+        draw();
+        return;
+      }
+      if (data === "l" || data === "\x1b[C") {
+        newRunContextTab = Math.min(NEW_RUN_CONTEXT_TABS.length - 1, newRunContextTab + 1);
+        newRunContextItem = 0;
+        draw();
+        return;
+      }
+      if (data === "j") { newRunContextItem += 1; draw(); return; }
+      if (data === "k") { newRunContextItem = Math.max(0, newRunContextItem - 1); draw(); return; }
+      if (data === " ") {
+        const key = newRunContextItemKeys[newRunContextItem];
+        if (key) {
+          if (newRunContextExcluded.has(key)) newRunContextExcluded.delete(key);
+          else newRunContextExcluded.add(key);
+        }
+        draw();
+        return;
+      }
+      if (data === "x") {
+        if (newRunContextSectionKey) {
+          if (newRunContextExcluded.has(newRunContextSectionKey)) newRunContextExcluded.delete(newRunContextSectionKey);
+          else newRunContextExcluded.add(newRunContextSectionKey);
+        }
+        draw();
+        return;
+      }
       if (data === "a") { cycleAgent(); draw(); return; }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
       if (data === "i") { startIssuePicker(); draw(); return; }
       if (data === "m") { startModelPicker(); draw(); return; }
       if (data === "s") { newRunSettings = true; newRunSettingsSel = 0; draw(); return; }
-      if (data === "e" || data === "p") { newRunInsert = true; newRunPendingJ = false; draw(); return; }
+      if (data === "e" || data === "p") { newRunInsert = true; draw(); return; }
       if (data === "X" && newrun.issue) { newrun.issue = undefined; draw(); return; }
       draw();
       return;
@@ -2504,8 +2721,15 @@ export async function runTui(): Promise<void> {
       const detail = runDetailData();
       if (!detail) { screen = "list"; draw(); return; }
       const n = detail.events.length;
+      const stepTimeline = (direction: -1 | 1): void => {
+        const next = stepTimelineSelection(detail.events, eventSel, direction);
+        if (next !== eventSel) {
+          eventSel = next;
+          eventBodyScroll = 0;
+        }
+      };
       if (data === "j" || data === "\x1b[B") {
-        if (runSection === "timeline") eventSel = Math.min(Math.max(0, n - 1), eventSel + 1);
+        if (runSection === "timeline") stepTimeline(1);
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll++; }
         else if (runSection === "children") childSel++;
         else runScroll++;
@@ -2513,7 +2737,7 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "k" || data === "\x1b[A") {
-        if (runSection === "timeline") eventSel = Math.max(0, eventSel - 1);
+        if (runSection === "timeline") stepTimeline(-1);
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll = Math.max(0, thinkingScroll - 1); }
         else if (runSection === "children") childSel = Math.max(0, childSel - 1);
         else runScroll = Math.max(0, runScroll - 1);
@@ -2525,6 +2749,7 @@ export async function runTui(): Promise<void> {
         runSection = RUN_SECTIONS[(index + delta + RUN_SECTIONS.length) % RUN_SECTIONS.length]!;
         runScroll = 0;
         eventScroll = 0;
+        eventBodyScroll = 0;
         thinkingFollow = true;
         draw();
       };
@@ -2533,6 +2758,9 @@ export async function runTui(): Promise<void> {
       if (data === "]" || data === "[") { moveSection(data === "]" ? 1 : -1); return; }
       const toggleEvent = () => {
         if (runSection !== "timeline") return;
+        while (eventSel < n && !isTimelineEvent(detail.events[eventSel])) eventSel += 1;
+        if (eventSel >= n) return;
+        eventBodyScroll = 0;
         const key = `${detail.summary.id}:${eventSel}`;
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
       };

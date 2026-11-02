@@ -1,6 +1,6 @@
 /**
  * Phase 6 tests: context assembly priority, provenance, dedupe, budget,
- * explicit artifact references, and project/skill sources.
+ * explicit artifact references, and plan/skill sources.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -209,10 +209,14 @@ test("budget truncates blocks and keeps higher priority first", async () => {
   }
 });
 
-test("project plan and skill descriptions are included last", async () => {
+test("plan files and skill descriptions are included last", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx5-"));
   try {
-    writeFileSync(join(root, "plan.md"), "# Project plan\nDo the thing.", "utf8");
+    writeFileSync(join(root, "plan.md"), "# Legacy plan\nDo not include me.", "utf8");
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "next.md"), "# Next plan\nShip it.", "utf8");
+    mkdirSync(join(root, ".machine_code", "plans"), { recursive: true });
+    writeFileSync(join(root, ".machine_code", "plans", "internal.md"), "# Internal plan\nKeep it local.", "utf8");
     mkdirSync(join(root, ".machine_code", "skills", "reference"), { recursive: true });
     writeFileSync(
       join(root, ".machine_code", "skills", "reference", "SKILL.md"),
@@ -221,10 +225,44 @@ test("project plan and skill descriptions are included last", async () => {
     );
     const bundle = await assembleContext({ layout: fakeLayout(root), machine: machine() });
     const kinds = bundle.sources.map((s) => s.kind);
-    assert.ok(kinds.includes("project"));
+    assert.ok(kinds.includes("plan"));
     assert.ok(kinds.includes("skill"));
-    assert.match(bundle.text, /Project plan/);
+    assert.match(bundle.text, /Next plan/);
+    assert.match(bundle.text, /Internal plan/);
+    assert.doesNotMatch(bundle.text, /Legacy plan/);
     assert.match(bundle.text, /reference: research and curation/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context exclusions drop whole sections and individual sources", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-exclude-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "next.md"), "# Next plan\nShip it.", "utf8");
+    mkdirSync(join(root, ".machine_code", "plans"), { recursive: true });
+    writeFileSync(join(root, ".machine_code", "plans", "internal.md"), "# Internal plan\nKeep it local.", "utf8");
+
+    const all = await assembleContext({ layout: fakeLayout(root), machine: machine() });
+    assert.match(all.text, /Next plan/);
+    assert.match(all.text, /Internal plan/);
+
+    const noPlans = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      exclude: { sections: ["plans"] },
+    });
+    assert.doesNotMatch(noPlans.text, /Next plan/);
+    assert.doesNotMatch(noPlans.text, /Internal plan/);
+
+    const onePlan = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      exclude: { items: ["plan:plans/next.md"] },
+    });
+    assert.doesNotMatch(onePlan.text, /Next plan/);
+    assert.match(onePlan.text, /Internal plan/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

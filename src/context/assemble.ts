@@ -8,7 +8,7 @@
  *   4 parent Epic                (3 KiB)
  *   5 explicit knowledge files   (6 KiB total)
  *   6 parent run + ancestor summaries (2 KiB each)
- *   7 project plan / knowledge index (2 KiB)
+ *   7 plan files / knowledge index (2 KiB each)
  *   8 skill descriptions / tools (1 KiB)
  *
  * Every block is labelled with its source and origin; context.json records the
@@ -26,6 +26,7 @@ import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
 import { parseArtifactReferences, parseSkillFrontMatter } from "./references.js";
+import { discoverPlanFiles } from "./plans.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
   type ContextBundle,
@@ -47,6 +48,13 @@ interface Pending {
   warning?: string;
 }
 
+export interface ContextExclusion {
+  /** Whole composer sections: issues, files, knowledge, skills, tools, scripts, plans. */
+  sections?: string[];
+  /** Per-source keys shaped as `kind:ref` (for issues, `task:repo#n`). */
+  items?: string[];
+}
+
 export interface AssembleInput {
   layout: Layout;
   machine: MachineConfig;
@@ -59,7 +67,19 @@ export interface AssembleInput {
   parentRun?: { id: string; request: string; finalText?: string };
   /** Override the configured character budget. */
   budgetChars?: number;
+  /** Drop whole sections or individual sources selected in the composer. */
+  exclude?: ContextExclusion;
 }
+
+const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
+  issues: ["task", "feature", "epic"],
+  files: ["file"],
+  knowledge: ["knowledge"],
+  skills: ["skill"],
+  tools: ["tool"],
+  scripts: ["script"],
+  plans: ["plan", "project"],
+};
 
 function sha1(text: string): string {
   return createHash("sha1").update(text).digest("hex");
@@ -329,16 +349,11 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // Project plan + knowledge index.
-  const planCandidates = [machine.context.planFile, ".machine_code/plan.md", "plan.md"].filter(Boolean);
-  const planPath = planCandidates.find((p) => {
-    const abs = withinRepo(layout.repoRoot, p!);
-    return Boolean(abs && existsSync(abs));
-  });
-  if (planPath) {
+  // Plan files + knowledge index.
+  for (const planPath of discoverPlanFiles(layout, machine.context.planFile)) {
     const abs = withinRepo(layout.repoRoot, planPath)!;
     const read = readFileCapped(abs, 2 * KIB);
-    if (read) pending.push({ kind: "project", origin: "inherited", ref: planPath, body: read.text, cap: 2 * KIB, band: 7 });
+    if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, body: read.text, cap: 2 * KIB, band: 7 });
   }
   if (machine.context.knowledgeIndex) {
     const abs = withinRepo(layout.repoRoot, machine.context.knowledgeIndex);
@@ -346,7 +361,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       const read = readFileCapped(abs, 2 * KIB);
       if (read) {
         pending.push({
-          kind: "project",
+          kind: "knowledge",
           origin: "inherited",
           ref: machine.context.knowledgeIndex,
           body: read.text,
@@ -379,10 +394,23 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     // profiles unavailable — skip
   }
 
+  // Apply composer exclusions before dedupe so removed sources never consume
+  // budget or collide with a kept source.
+  const excludedSections = new Set(input.exclude?.sections ?? []);
+  const excludedKinds = new Set<ContextKind>();
+  for (const [section, kinds] of Object.entries(SECTION_KINDS)) {
+    if (!excludedSections.has(section)) continue;
+    for (const kind of kinds) excludedKinds.add(kind);
+  }
+  const excludedItems = new Set(input.exclude?.items ?? []);
+  const keptPending = pending.filter(
+    (item) => !excludedKinds.has(item.kind) && !excludedItems.has(`${item.kind}:${item.ref}`),
+  );
+
   // Dedupe by (kind, ref) and content hash; keep the earliest (highest priority).
   const seen = new Set<string>();
   const selected: Pending[] = [];
-  for (const item of pending.sort((a, b) => a.band - b.band || (a.depth ?? 0) - (b.depth ?? 0))) {
+  for (const item of keptPending.sort((a, b) => a.band - b.band || (a.depth ?? 0) - (b.depth ?? 0))) {
     const key = `${item.kind}:${item.ref}`;
     const hash = sha1(item.body);
     if (seen.has(key) || seen.has(`h:${hash}`)) continue;

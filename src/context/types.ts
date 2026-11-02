@@ -1,12 +1,14 @@
 /**
  * machine_code — context bundle types.
  *
- * Context is assembled per run from inherited (issue hierarchy, project),
+ * Context is assembled per run from inherited (issue hierarchy, plans),
  * explicit (packet, knowledge, skills referenced by the issue), and discovered
  * (tool results) sources. The rendered text is what the model sees; the
  * manifest (context.json) records provenance so every block is traceable.
  */
 export type ContextKind =
+  | "plan"
+  /** Legacy manifests used "project" for the single plan file. */
   | "project"
   | "epic"
   | "feature"

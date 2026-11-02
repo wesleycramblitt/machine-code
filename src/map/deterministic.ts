@@ -78,6 +78,11 @@ export function mapCachePath(root: string): string {
   return join(root, ".machine_code", "local", "cache", "map.json");
 }
 
+/** Read the cached map synchronously for TUI previews (never rebuilds). */
+export function readCachedMap(root: string): RepoMap | null {
+  return readMap(mapCachePath(root))?.map ?? null;
+}
+
 function excludedPath(path: string): boolean {
   if (isSecretPath(path)) return true;
   return SEARCH_EXCLUDES.some(

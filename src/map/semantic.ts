@@ -17,6 +17,7 @@ import { join } from "node:path";
 import type { Context, Usage } from "@earendil-works/pi-ai";
 import type { MutableModels, ChatModel } from "../models.js";
 import { truncateToBytes } from "../tools/safety.js";
+import { readSemanticChanges } from "./changes.js";
 import { renderRepoMap, type RepoMap } from "./deterministic.js";
 
 export const SEMANTIC_SCHEMA = 1 as const;
@@ -41,6 +42,8 @@ export interface SemanticMap {
 export interface SemanticTask {
   prompt: string;
   modules: string[];
+  /** Latest change time included in the prompt; later changes stay dirty. */
+  changeCutoff: string;
 }
 
 export interface SemanticModelResult {
@@ -176,18 +179,35 @@ export function buildSemanticTask(input: SemanticTaskInput): SemanticTask {
         2,
       )
     : "{}";
+  const changeCutoff = new Date().toISOString();
+  const changes = readSemanticChanges(
+    input.root,
+    input.dirtyPaths.length > 0 ? input.dirtyPaths : undefined,
+    20,
+  ).filter((change) => change.t <= changeCutoff);
+  const changeText = changes.length > 0
+    ? changes
+        .map(
+          (change) =>
+            `- t${change.turn} ${change.agent}${change.model ? ` (${change.model})` : ""} ` +
+            `${change.path}: ${change.detail}`,
+        )
+        .join("\n")
+    : "(none)";
   const prompt = [
     "Annotate this repository map. Return JSON only, with no prose.",
     "For each module, write a 20-40 word purpose summary, up to 3 key files, and up to 2 edit hints.",
     "Use exact paths and symbol names. Do not speculate. Keep existing annotations unless the module is dirty.",
+    "Use recent changes to understand what moved; do not restate the change itself.",
     `Modules: ${targets.join(", ")}`,
     `Dirty paths: ${input.dirtyPaths.join(", ") || "(none)"}`,
+    `Recent changes:\n${truncateToBytes(changeText, 2048)}`,
     `Existing annotations: ${existing}`,
     "JSON shape: {\"modules\":{\"<module>\":{\"summary\":\"...\",\"keyFiles\":[\"...\"],\"editHints\":[\"...\"]}}}",
     "Map:",
     truncateToBytes(mapText, SEMANTIC_INPUT_BYTES),
   ].join("\n\n");
-  return { prompt, modules: targets };
+  return { prompt, modules: targets, changeCutoff };
 }
 
 function parseJson(text: string): unknown {
@@ -229,6 +249,8 @@ export interface MergeInput {
   model: string;
   response: string;
   dirtyPaths: readonly string[];
+  /** Changes after this time are not considered covered by this response. */
+  changeCutoff?: string;
 }
 
 /** Validate, merge, cap, and persist one semantic response. */
@@ -271,10 +293,13 @@ export function mergeSemantic(input: MergeInput): SemanticMap | null {
   }
   if (Buffer.byteLength(text, "utf8") > SEMANTIC_CAP_BYTES) return null;
   writeSemantic(input.root, semantic);
-  clearSemanticDirty(
-    input.root,
-    input.dirtyPaths.filter((path) => acceptedModules.has(moduleOf(path))),
-  );
+  const cutoff = input.changeCutoff ?? new Date().toISOString();
+  const handled = input.dirtyPaths.filter((path) => {
+    if (!acceptedModules.has(moduleOf(path))) return false;
+    const latest = readSemanticChanges(input.root, [path], 1)[0]?.t ?? "";
+    return latest <= cutoff;
+  });
+  clearSemanticDirty(input.root, handled);
   return semantic;
 }
 

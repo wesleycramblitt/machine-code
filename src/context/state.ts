@@ -14,9 +14,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
+import { readGitStatus, type GitStatusEntry } from "./git-status.js";
 import { markSemanticDirty } from "../map/semantic.js";
+import { recordSemanticChange } from "../map/changes.js";
 
 export type FactKind = "finding" | "decision" | "change";
 export type RefKind = "read" | "search" | "edit" | "focus";
@@ -121,6 +123,15 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function inline(text: string, max = 180): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length <= max ? clean : `${clean.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function lineCount(text: string): number {
+  return text.length === 0 ? 0 : text.split("\n").length;
+}
+
 function num(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
 }
@@ -159,6 +170,8 @@ export class RunStateStore {
   private readonly recorder?: EventSink;
   private state: RunState;
   private sequence = 0;
+  /** Git status at run construction; only deltas belong to this run. */
+  private gitBaseline: Map<string, GitStatusEntry> | null = null;
 
   constructor(options: StateStoreOptions) {
     this.runDir = options.runDir;
@@ -176,6 +189,7 @@ export class RunStateStore {
       counters: { turn: 0, steps: 0, artifacts: 0 },
     };
     this.load();
+    if (this.repoRoot) this.gitBaseline = readGitStatus(this.repoRoot);
   }
 
   get path(): string {
@@ -400,8 +414,87 @@ export class RunStateStore {
     });
   }
 
-  addChangeFact(path: string, ref: Ref, turn: number, summary: string): void {
-    if (this.repoRoot) markSemanticDirty(this.repoRoot, [path]);
+  private ignoredStatusPath(path: string): boolean {
+    if (path === ".machine_code" || path.startsWith(".machine_code/")) return true;
+    if (!this.repoRoot) return false;
+    const runPrefix = relative(this.repoRoot, this.runDir).split("\\").join("/");
+    if (!runPrefix || runPrefix.startsWith("..")) return false;
+    return path === runPrefix || path.startsWith(`${runPrefix}/`);
+  }
+
+  /** New or changed status entries since the last snapshot. */
+  private syncGitChanges(known: ReadonlySet<string>): Array<{ path: string; code: string }> {
+    if (!this.repoRoot || !this.gitBaseline) return [];
+    const current = readGitStatus(this.repoRoot);
+    if (!current) return [];
+    const changed: Array<{ path: string; code: string }> = [];
+    for (const [path, entry] of current) {
+      if (this.ignoredStatusPath(path)) continue;
+      if (known.has(path)) continue;
+      const prior = this.gitBaseline.get(path);
+      if (prior && prior.code === entry.code && prior.mtimeMs === entry.mtimeMs && prior.size === entry.size) {
+        continue;
+      }
+      changed.push({ path, code: entry.code });
+    }
+    this.gitBaseline = current;
+    return changed;
+  }
+
+  private addGitChangeFact(
+    items: ReadonlyArray<{ path: string; code: string }>,
+    turn: number,
+    actor?: { agent?: string; model?: string },
+    commandName?: string,
+  ): void {
+    if (!this.repoRoot || items.length === 0) return;
+    const paths = [...new Set(items.map((item) => item.path))].sort();
+    for (const item of items) {
+      markSemanticDirty(this.repoRoot, [item.path]);
+      recordSemanticChange(this.repoRoot, {
+        runId: this.runId,
+        turn,
+        agent: actor?.agent ?? "unknown",
+        ...(actor?.model ? { model: actor.model } : {}),
+        path: item.path,
+        tool: "git",
+        detail: `git status ${item.code} ${item.path}${commandName ? ` · via ${commandName}` : ""}`,
+      });
+    }
+    const shown = paths.slice(0, 8).join(", ");
+    this.append({
+      type: "fact",
+      fact: {
+        id: this.id(),
+        kind: "change",
+        text: `git status changed ${paths.length} path(s): ${shown}${paths.length > 8 ? " …" : ""}`,
+        refs: paths.slice(0, 10).map((path) => ({ path })),
+        turn,
+        status: "active",
+        key: `change:git:${sha1(paths.join("\0"))}`,
+      },
+    });
+  }
+
+  addChangeFact(
+    path: string,
+    ref: Ref,
+    turn: number,
+    summary: string,
+    change?: { agent?: string; model?: string; tool?: string; detail?: string },
+  ): void {
+    if (this.repoRoot) {
+      markSemanticDirty(this.repoRoot, [path]);
+      recordSemanticChange(this.repoRoot, {
+        runId: this.runId,
+        turn,
+        agent: change?.agent ?? "unknown",
+        ...(change?.model ? { model: change.model } : {}),
+        path,
+        tool: change?.tool ?? "edit",
+        detail: change?.detail ?? summary,
+      });
+    }
     this.append({
       type: "fact",
       fact: {
@@ -417,7 +510,11 @@ export class RunStateStore {
   }
 
   /** Ingest the assistant message and its tool results once per completed turn. */
-  ingestTurn(input: readonly unknown[], turn: number): void {
+  ingestTurn(
+    input: readonly unknown[],
+    turn: number,
+    actor?: { agent?: string; model?: string },
+  ): { changed: boolean } {
     const messages = input as readonly Record<string, unknown>[];
     let assistantIndex = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -426,7 +523,7 @@ export class RunStateStore {
         break;
       }
     }
-    if (assistantIndex < 0) return;
+    if (assistantIndex < 0) return { changed: false };
     const assistant = messages[assistantIndex]!;
     const assistantText = textOf(assistant).replace(/\s+/g, " ").trim();
     if (assistantText) {
@@ -446,7 +543,10 @@ export class RunStateStore {
 
     const calls = toolCalls(assistant);
     const refs: Ref[] = [];
+    const changedPaths = new Set<string>();
     let changed = false;
+    let commandRan = false;
+    let commandName = "";
     let verified = false;
     let artifacts = 0;
     let explicitFocus = false;
@@ -495,12 +595,39 @@ export class RunStateStore {
         this.addSearchFact(str(args.pattern) ?? "", found, turn);
         refs.push(...found.slice(0, 3));
       } else if (toolName === "command") {
-        this.addCommandFact(str(args.name) ?? "command", message.isError !== true, turn);
+        commandRan = true;
+        commandName = str(args.name) ?? "command";
+        this.addCommandFact(commandName, message.isError !== true, turn);
         verified = true;
       } else if ((toolName === "edit" || toolName === "write") && path) {
+        if (message.isError === true) continue;
         const ref: Ref = { path };
-        this.addChangeFact(path, ref, turn, resultText);
+        const oldText = str(args.oldString) ?? "";
+        const newText = str(args.newString) ?? "";
+        const content = str(args.content) ?? "";
+        const delta =
+          toolName === "edit"
+            ? `edit ${lineCount(oldText)}->${lineCount(newText)} lines (${oldText.length}->${newText.length} chars)`
+            : `write ${Buffer.byteLength(content, "utf8")} bytes`;
+        const intent = assistantText ? ` · intent: ${inline(assistantText)}` : "";
+        this.addChangeFact(path, ref, turn, resultText, {
+          ...actor,
+          tool: toolName,
+          detail: `${resultText} · ${delta}${intent}`,
+        });
         refs.push(ref);
+        changedPaths.add(path);
+        changed = true;
+      }
+    }
+
+    // Git status is the safety net for deletes, renames, formatters, and
+    // command-side writes. Edit/write keep the precise intent.
+    if (changed || commandRan) {
+      const gitChanges = this.syncGitChanges(changedPaths);
+      if (gitChanges.length > 0) {
+        this.addGitChangeFact(gitChanges, turn, actor, commandName);
+        for (const item of gitChanges) changedPaths.add(item.path);
         changed = true;
       }
     }
@@ -516,6 +643,7 @@ export class RunStateStore {
       artifacts,
     });
     this.saveMarkdown();
+    return { changed };
   }
 
   /** Compact model-facing state block. */

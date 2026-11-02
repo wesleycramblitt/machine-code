@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildRepoMap } from "../dist/map/deterministic.js";
+import { readSemanticChanges, recordSemanticChange } from "../dist/map/changes.js";
 import {
   buildSemanticTask,
   clearSemanticDirty,
@@ -174,4 +175,92 @@ test("runSemanticModel accumulates streamed text and usage", async () => {
   assert.equal(result.text, "hello world");
   assert.equal(result.usage.totalTokens, 12);
   assert.equal(result.stopReason, "stop");
+});
+
+test("change digest is bounded, path-filtered, and included in the task", async () => {
+  const root = tempRepo();
+  try {
+    const built = await buildRepoMap(root, { refresh: true });
+    recordSemanticChange(root, {
+      runId: "r1",
+      turn: 3,
+      agent: "build",
+      model: "test/model",
+      path: "src/a.ts",
+      tool: "edit",
+      detail: "edited src/a.ts (1 replacement) · intent: cache the preview",
+    });
+    recordSemanticChange(root, {
+      runId: "r1",
+      turn: 4,
+      agent: "build",
+      path: "lib/b.ts",
+      tool: "write",
+      detail: "wrote 10 bytes",
+    });
+    assert.equal(readSemanticChanges(root).length, 2);
+    const filtered = readSemanticChanges(root, ["src/a.ts"]);
+    assert.equal(filtered.length, 1);
+    assert.equal(filtered[0].agent, "build");
+    assert.equal(filtered[0].model, "test/model");
+    const task = buildSemanticTask({
+      root,
+      map: built.map,
+      existing: null,
+      dirtyPaths: ["src/a.ts"],
+    });
+    assert.match(task.prompt, /Recent changes/);
+    assert.match(task.prompt, /build \(test\/model\) src\/a\.ts/);
+    assert.doesNotMatch(task.prompt, /lib\/b\.ts/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a change during refresh keeps the path dirty", async () => {
+  const root = tempRepo();
+  try {
+    const built = await buildRepoMap(root, { refresh: true });
+    markSemanticDirty(root, ["src/a.ts"]);
+    recordSemanticChange(root, {
+      runId: "r1",
+      turn: 1,
+      agent: "build",
+      path: "src/a.ts",
+      tool: "edit",
+      detail: "first edit",
+      t: "2026-01-01T00:00:00.000Z",
+    });
+    const task = buildSemanticTask({
+      root,
+      map: built.map,
+      existing: null,
+      dirtyPaths: ["src/a.ts"],
+    });
+    recordSemanticChange(root, {
+      runId: "r1",
+      turn: 2,
+      agent: "build",
+      path: "src/a.ts",
+      tool: "edit",
+      detail: "second edit while the map call is in flight",
+      t: "2099-01-01T00:00:00.000Z",
+    });
+    const merged = mergeSemantic({
+      root,
+      map: built.map,
+      existing: null,
+      modules: task.modules,
+      model: "test/model",
+      response: JSON.stringify({
+        modules: { src: { summary: "Source." }, lib: { summary: "Library." } },
+      }),
+      dirtyPaths: ["src/a.ts"],
+      changeCutoff: task.changeCutoff,
+    });
+    assert.ok(merged);
+    assert.deepEqual(readSemanticDirty(root), ["src/a.ts"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

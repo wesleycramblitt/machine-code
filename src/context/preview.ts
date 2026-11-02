@@ -12,9 +12,10 @@ import type { Layout } from "../paths.js";
 import type { Issue, IssueRef } from "../issues/provider.js";
 import { artifactExists, artifactPath, listArtifacts, resolveArtifact, type ArtifactDef } from "../artifacts/registry.js";
 import { parseArtifactReferences } from "./references.js";
+import { discoverPlanFiles } from "./plans.js";
 
 export interface PreviewSource {
-  kind: "issue" | "file" | "knowledge" | "skill" | "tool" | "script" | "project";
+  kind: "issue" | "file" | "knowledge" | "skill" | "tool" | "script" | "plan" | "project";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;
@@ -78,11 +79,17 @@ export function issueChain(issues: readonly Issue[], ref?: IssueRef): Issue[] {
   return chain;
 }
 
+export interface PreviewContextOptions {
+  planFile?: string;
+  knowledgeIndex?: string;
+}
+
 export function previewContext(
   layout: Layout,
   issues: readonly Issue[],
   ref?: IssueRef,
   prompt = "",
+  options: PreviewContextOptions = {},
 ): ContextPreview {
   const chain = issueChain(issues, ref);
   const sources: PreviewSource[] = [];
@@ -163,11 +170,20 @@ export function previewContext(
     }
   }
 
-  const planPath = [".machine_code/plan.md", "plan.md"].map((p) => join(layout.repoRoot, p)).find((p) => existsSync(p));
-  if (planPath) {
-    const size = Math.min(2 * 1024, statSync(planPath).size);
+  for (const planPath of discoverPlanFiles(layout, options.planFile)) {
+    const size = capFor(join(layout.repoRoot, planPath), 2 * 1024);
     chars += size;
-    sources.push({ kind: "project", ref: planPath.replace(`${layout.repoRoot}/`, ""), origin: "inherited", depth: 3, chars: size, exists: true });
+    sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
+  }
+  if (options.knowledgeIndex) {
+    const root = resolve(layout.repoRoot);
+    const abs = resolve(root, options.knowledgeIndex);
+    const inside = abs === root || abs.startsWith(root + sep);
+    const exists = inside && existsSync(abs);
+    const size = exists ? capFor(abs, 2 * 1024) : 0;
+    chars += size;
+    sources.push({ kind: "knowledge", ref: options.knowledgeIndex, origin: "inherited", depth: 3, chars: size, exists });
+    if (!exists) warnings.push(`knowledge ${options.knowledgeIndex} is missing`);
   }
 
   return {

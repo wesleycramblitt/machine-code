@@ -4,13 +4,15 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { RunStateStore } from "../dist/context/state.js";
 import { renderPromptMessages } from "../dist/context/render.js";
 import { contextTool } from "../dist/tools/context.js";
+import { readSemanticChanges } from "../dist/map/changes.js";
 import { CORE_COMMANDS } from "../dist/commands/registry.js";
 
 function tempDir(prefix = "mc-state-") {
@@ -168,5 +170,110 @@ test("context tool notes, focuses, recalls, and reports state", async () => {
     assert.match(text, /src\/a\.ts:1-2/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("ingestTurn records a bounded change digest with actor intent", () => {
+  const root = tempDir();
+  try {
+    const store = new RunStateStore({
+      runDir: join(root, "run"),
+      runId: "r6",
+      goal: "goal",
+      repoRoot: root,
+    });
+    const ingested = store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "c6", name: "edit", args: { path: "src/tui.ts", oldString: "old", newString: "new" } }),
+        result({ id: "c6", name: "edit", text: "edited src/tui.ts (1 replacement)" }),
+      ],
+      1,
+      { agent: "build", model: "test/model" },
+    );
+    assert.equal(ingested.changed, true);
+    const changes = readSemanticChanges(root);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].path, "src/tui.ts");
+    assert.equal(changes[0].agent, "build");
+    assert.equal(changes[0].model, "test/model");
+    assert.match(changes[0].detail, /1->1 lines/);
+    assert.match(changes[0].detail, /intent: I will inspect the target/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("failed edits do not mark a change or record a digest", () => {
+  const root = tempDir();
+  try {
+    const store = new RunStateStore({
+      runDir: join(root, "run"),
+      runId: "r7",
+      goal: "goal",
+      repoRoot: root,
+    });
+    const ingested = store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "c7", name: "edit", args: { path: "src/tui.ts" } }),
+        result({ id: "c7", name: "edit", text: "no match in src/tui.ts", isError: true }),
+      ],
+      1,
+      { agent: "build", model: "test/model" },
+    );
+    assert.equal(ingested.changed, false);
+    assert.equal(store.getState().facts.find((fact) => fact.kind === "change"), undefined);
+    assert.equal(readSemanticChanges(root).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("git status detects command-side mutations without duplicating edits", () => {
+  const root = tempDir("mc-git-");
+  try {
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
+    const git = (...args) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    git("init", "-q");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "test");
+    git("add", ".");
+    git("commit", "-qm", "init");
+
+    const store = new RunStateStore({
+      runDir: join(root, "run"),
+      runId: "r8",
+      goal: "goal",
+      repoRoot: root,
+    });
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 2;\n", "utf8");
+    const ingested = store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "g1", name: "command", args: { action: "run", name: "core:status" }, text: "" }),
+        result({ id: "g1", name: "command", text: "ok" }),
+      ],
+      1,
+      { agent: "build", model: "test/model" },
+    );
+    assert.equal(ingested.changed, true);
+    const changes = readSemanticChanges(root);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].path, "src/a.ts");
+    assert.equal(changes[0].tool, "git");
+    assert.match(changes[0].detail, /via core:status/);
+    const change = store.getState().facts.find((fact) => fact.kind === "change");
+    assert.ok(change);
+    assert.match(change.text, /git status changed 1 path/);
+    assert.equal(change.refs[0].path, "src/a.ts");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

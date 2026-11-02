@@ -24,10 +24,11 @@
 > tests.
 >
 > Phase 3 landed on 2026-11-02: semantic module annotations, dirty-path
-> tracking on edit/write, incremental dirty-module refresh, validation and
-> 16 KiB cap, one bounded model call at run start, writer lock, manual
+> tracking on edit/write plus a git-status safety net for command-side changes,
+> bounded change digest, incremental dirty-module refresh, validation and
+> 16 KiB cap, coalesced refresh after changed turns, writer lock, manual
 > `machine_code map --semantic --refresh`, spend/event recording, and semantic
-> status/index rendering. The full test suite passes (184 tests).
+> status/index rendering. The full test suite passes (192 tests).
 >
 > This plan makes a run's prompt a rendered view of a small run state instead
 > of a growing replay of every tool call. It adds a mandatory deterministic
@@ -113,7 +114,8 @@ Also:
 - Build a **deterministic repository map** for every run. It is generated from
   git and source structure, not hand-maintained.
 - Build a **semantic map** from the deterministic map with one bounded LLM
-  call. Refresh it incrementally per run without an unmanageable build system.
+  call. Refresh it incrementally at run start and after changed turns without
+  an unmanageable build system.
 - Make reads, searches, and edits **surgical**. Never read a large file when an
   outline, a symbol, or a range is enough.
 - Make all agents **map-first and low-loop**. Use better prompts, not hardcoded
@@ -151,8 +153,10 @@ Also:
    facts. The model adds prose annotations. Annotations never override facts.
 5. **The map is generated state.** It lives under `.machine_code/local/cache/`,
    never in git, never in the repo root.
-6. **One map refresh per run.** No background daemon, no watcher, no model call
-   per edit. Mark dirty during a run; refresh at the next run start.
+6. **Coalesced refresh, not per edit.** No background daemon and no watcher.
+   Mark dirty per edit, then refresh once at run start and once after a changed
+   turn. At most one refresh is in flight; further changed turns queue one
+   follow-up. A burst of edits never becomes a burst of model calls.
 7. **Read the smallest unit.** Symbol, then outline, then range. Full-file reads
    are an explicit exception.
 8. **One hard limit: the run envelope and 90% of the model's context.** No
@@ -195,12 +199,13 @@ planning runs.
 Storage:
 
 ```text
-.machine_code/local/cache/map/
-  deterministic.json      # facts, no timestamps
-  deterministic.txt       # rendered, <= 32 KiB
-  semantic.json           # annotations + provenance
-  semantic.dirty          # paths edited since the last refresh
-  lock                    # best-effort writer lock
+.machine_code/local/cache/
+  map.json                # deterministic facts, no timestamps
+  map/
+    semantic.json         # annotations + provenance
+    semantic.dirty        # paths edited since the last refresh
+    changes.jsonl         # bounded change digest for semantic refreshes
+    semantic.lock         # best-effort writer lock
 .machine_code/local/runs/<run-id>/
   state.jsonl             # append-only facts, decisions, changes, opens
   state.md                # rendered snapshot for humans and resume
@@ -341,11 +346,12 @@ This avoids a per-file LLM call on a 400-file repository.
 
 One bounded call per refresh:
 
-- Rendered deterministic map, clipped to 8 KiB.
-- `README.md` and `knowledge/index.md`, clipped to 3 KiB total.
-- `git log -20 --name-status`, clipped to 2 KiB.
-- For a dirty-only refresh: the current annotations for affected modules plus
-  the changed file snippets.
+- Rendered deterministic map for the target modules, clipped to 12 KiB.
+- `README.md`, clipped to 2 KiB.
+- Recent bounded change digest, clipped to 2 KiB: path, turn, agent, model,
+  tool result, line/byte delta, and the changing assistant's one-line intent.
+- For a dirty-only refresh: the current annotations for affected modules.
+- No transcript, no raw tool bodies, no full diff.
 
 ### 7.3 Output
 
@@ -388,26 +394,34 @@ This is the "simple way" to keep it current:
 
 1. On run start, compare `semantic.baseCommit` with `HEAD` and `mapHash` with
    the deterministic map hash.
-2. Read `semantic.dirty`. Any run that edits a file appends the path there.
+2. Read `semantic.dirty`. An edit/write appends its path there and one bounded
+   entry to `changes.jsonl`. After any mutating tool, a git-status delta also
+   catches deletes, renames, formatters, and command-side writes. The status
+   snapshot stores codes and fingerprints only, never content.
 3. If clean and current, reuse. No model call.
 4. If dirty, refresh only the affected modules and files in one call. If more
    than 50% of modules are dirty, rebuild the whole semantic map.
 5. On success, atomically write `semantic.json` and clear the handled dirty
    paths. On failure, keep the old map, keep `dirty`, and log the error.
-6. During a run, only append to `semantic.dirty`. Do not call a model mid-run.
+6. After a turn that changed files, schedule a refresh. It runs after the turn,
+   not inside the edit. At most one refresh is in flight; a changed turn while
+   one runs queues a single follow-up. The refreshed index is used by later
+   prompts in the same run.
 7. `core:map --semantic --refresh` forces one synchronous refresh.
 
-This gives at most one semantic model call per run, only when something
-changed, with no watcher and no per-edit cost.
+This gives at most one in-flight semantic call, only when something changed,
+with no watcher and no per-edit cost.
 
 ### 7.5 Model and cost
 
 - `[map].semantic_model` pins a model. Empty means "cheapest eligible model
   with enough context", selected through the existing catalogue.
 - Record the call as `agent: "map"` in the spend ledger and as a
-  `map_semantic` event with usage and cost.
-- One retry at most. Failure degrades to the deterministic map.
-- No tool calls, no streaming. One JSON response.
+  `map_semantic` event with usage and cost. Spend groups it as
+  `map (semantic)`.
+- No automatic retry. Failure degrades to the deterministic map, keeps the
+  dirty paths, and a later changed turn or run start can retry.
+- No tool calls. One JSON response, bounded at 2,000 output tokens.
 
 ### 7.6 Use
 
@@ -1200,7 +1214,9 @@ Record in `events.jsonl`:
 
 - `map_built { files, symbols, bytes, cached, head, ok }`
 - `map_stale { paths }`
-- `map_semantic { model, modules, bytes, cost, durationMs, ok }`
+- `map_refresh_scheduled { turn }`
+- `map_refresh { turn, ok, modules, error }`
+- `map_semantic { model, modules, refreshed, bytes, cost, durationMs, ok }`
 - `lsp_status { language, state, binary, version }`
 - `context_state { turn, chars, tokens, promptChars, stateChars, stepChars, limit }`
 - `context_ingested { turn, facts, refs, artifacts, staleFacts }`
@@ -1339,11 +1355,14 @@ resume works from state alone.
 ### Phase 3 — Semantic map (complete)
 
 - Generation, validation, incremental refresh, dirty marker, lock, status.
-- One call per run maximum.
+- One coalesced refresh at run start and after changed turns; at most one in
+  flight plus one queued follow-up.
+- Bounded change digest carries the changing model's intent without its
+  transcript.
 
 Acceptance: unknown paths are rejected; a clean run makes zero semantic calls;
-a dirty run refreshes only affected modules; a failed call leaves the
-deterministic map usable.
+a dirty run refreshes only affected modules; a changed turn refreshes without
+blocking on every edit; a failed call leaves the deterministic map usable.
 
 ### Phase 4 — Prompts, STE100, and eval (prompts complete; replay pending)
 
@@ -1449,11 +1468,12 @@ Eval replay:
 | Index type | Deterministic structural map + LLM annotations | Cheap, local, no vector DB |
 | Map location | `.machine_code/local/cache/map/` | Generated state, no git noise |
 | Semantic granularity | Module-level with file hints | One call per repo, not per file |
-| Semantic refresh | At run start, dirty modules only | No watcher, bounded cost |
+| Semantic refresh | Run start + coalesced after a changed turn | Current semantics without per-edit calls |
 | Map injection | TOC only, ≤1 KiB | Full map is on demand |
 | Context model | `render(state, last_step)`; no history | Small by construction, no pruning |
 | Raw steps | Always 1: the current step | No variable to tune; more means split or recall |
 | State ingestion | Deterministic from assistant text + tool metadata | No extra model call |
+| Change detection | Edit/write intent + git-status delta | Precise intent, complete coverage |
 | Raw evidence | One step only; older evidence is facts + artifacts | No accumulation |
 | Continuity | `state.nextAction` plus facts | The thread survives the dropped step |
 | Artifact storage | Content-addressed per run | Recall without re-reading |

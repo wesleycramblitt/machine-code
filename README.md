@@ -179,6 +179,10 @@ overall view. In the TUI, `g` cycles GH issue → Status → Overall status.
 children, and event stream as the run detail screen. `machine_code spend` and
 `machine_code models` cover the catalogue and cost views without the TUI.
 
+In the run detail Timeline, `j`/`k` moves between timestamp events and skips
+streaming deltas. `space` expands the selected input, output, reasoning, tool
+args, or tool result; `PgUp`/`PgDn` scroll inside a long expanded block.
+
 Run modes belong to the selected agent. The Architect declares `direct`,
 `verified`, and `redundant` (default `verified`) plus the per-mode
 `verification`/`review` behavior in `data/agents/architect.toml`. A role with
@@ -237,6 +241,17 @@ window blocks and writes a split report instead of truncating.
 
 `machine_code prompts [role]` prints the rendered agent prompt with its size.
 Prompts share `data/prompts/base.md`; role files carry only short deltas.
+
+Semantic annotations refresh at run start and after a turn that changed files.
+An `edit`/`write` appends its path to `semantic.dirty` and a bounded entry to
+`changes.jsonl` with the turn, changing agent/model, tool result, line delta, and
+one-line intent. After any mutating tool, a git-status delta also catches
+deletes, renames, formatters, and command-side writes; it stores status codes
+and fingerprints, never file content. The semantic call reads the deterministic
+map slice, dirty modules, existing annotations, and that digest, never the
+transcript. At most one refresh is in flight; further changed turns queue one
+follow-up, so edits never become per-edit model calls. Spend groups the calls as
+`map (semantic)`.
 
 Map configuration lives in `~/.machine_code/config.toml`:
 

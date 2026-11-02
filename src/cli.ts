@@ -124,6 +124,8 @@ Usage:
                                     [--mode <agent mode>] (roles declare their own modes)
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
+                                    [--context-exclude '<json>'] omit selected context
+                                    sections or sources from a run
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
                                     Install missing base CLIs (default: pinned static binaries)
@@ -915,6 +917,22 @@ async function cmdRun(argv: string[]): Promise<number> {
     const axes = parseAxisOverrides(minAxes);
     for (const ap of Object.values(policy.agents)) ap.minAxes = { ...(ap.minAxes ?? {}), ...axes };
   }
+  const contextExcludeFlag = flags.get("context-exclude");
+  let contextExclude: import("./context/assemble.js").ContextExclusion | undefined;
+  if (contextExcludeFlag !== undefined) {
+    try {
+      const raw = JSON.parse(contextExcludeFlag) as { sections?: unknown; items?: unknown };
+      const strings = (value: unknown): string[] | undefined =>
+        Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : undefined;
+      contextExclude = { sections: strings(raw.sections), items: strings(raw.items) };
+    } catch {
+      fail("--context-exclude must be a JSON object");
+    }
+  }
+  const excludedSections = new Set(contextExclude?.sections ?? []);
+  const excludedItems = new Set(contextExclude?.items ?? []);
+  const skipMap = excludedSections.has("codebase") || excludedItems.has("map:index");
+  const skipSemantic = excludedSections.has("codebase") || excludedItems.has("semantic:index");
   if (requireProvider && !configuredProviders.has(requireProvider)) {
     fail(`provider "${requireProvider}" is not configured`);
   }
@@ -1096,6 +1114,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     provider: issueBundle.provider.kind === "none" ? undefined : issueBundle.provider,
     issue: issueRef,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
+    exclude: contextExclude,
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources });
@@ -1173,6 +1192,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       requireProvider,
       requireModel,
       contextText,
+      skipMap,
+      skipSemantic,
       signal: abort.signal,
     });
   } else {
@@ -1196,6 +1217,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       requireProvider,
       requireModel,
       contextText,
+      skipMap,
+      skipSemantic,
       signal: abort.signal,
     });
   }
@@ -2482,7 +2505,9 @@ function cmdSpend(argv: string[]): number {
     for (const [key, bucket] of Object.entries(summary.byModel).sort((a, b) => b[1].actual - a[1].actual).slice(0, 50)) printSpendBucket(key, bucket);
   } else if (by === "agent") {
     process.stdout.write(`\nby agent\n`);
-    for (const [key, bucket] of Object.entries(summary.byAgent).sort((a, b) => b[1].actual - a[1].actual)) printSpendBucket(key, bucket);
+    for (const [key, bucket] of Object.entries(summary.byAgent).sort((a, b) => b[1].actual - a[1].actual)) {
+      printSpendBucket(key === "map" ? "map (semantic)" : key, bucket);
+    }
   } else if (by === "day") {
     process.stdout.write(`\nby day\n`);
     const series = spendDays(summary, Math.min(days || 30, 90));

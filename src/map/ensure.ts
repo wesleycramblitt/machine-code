@@ -129,6 +129,7 @@ export async function ensureSemanticMap(input: EnsureSemanticInput): Promise<Sem
       model: row.key,
       response: result.text,
       dirtyPaths: dirty,
+      changeCutoff: task.changeCutoff,
     });
     if (!merged) {
       input.recorder.event("map_semantic", {

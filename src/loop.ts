@@ -78,6 +78,10 @@ export interface RunLoopInput {
   startMode?: "prompt" | "continue";
   /** Assembled context block prepended to the first prompt. */
   contextText?: string;
+  /** Skip the deterministic repo map index in the model's up-front context. */
+  skipMap?: boolean;
+  /** Skip semantic module annotations in the up-front context. */
+  skipSemantic?: boolean;
 }
 
 export interface RunLoopResult {
@@ -211,9 +215,62 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       requireModel: input.requireModel,
     });
 
+  const mapRoot = input.toolRoot ?? input.root;
+  const wantMap = input.skipMap !== true;
+  const wantSemantic = input.skipSemantic !== true;
   let mapIndex = "";
-  try {
-    const mapRoot = input.toolRoot ?? input.root;
+  if (wantMap || wantSemantic) try {
+    const built = await buildRepoMap(mapRoot);
+    const semantic = wantSemantic
+      ? await ensureSemanticMap({
+          root: mapRoot,
+          map: built.map,
+          models: input.models,
+          catalogue: input.catalogue,
+          configuredProviders,
+          fundedProviders,
+          policy,
+          machine: input.machine,
+          availability,
+          home: input.home,
+          runId: recorder.id,
+          recorder,
+          signal: input.signal,
+        })
+      : null;
+    mapIndex = [
+      wantMap ? renderMapIndex(built.map) : "",
+      wantSemantic ? renderSemanticIndex(semantic) : "",
+    ].filter(Boolean).join("\n");
+    recorder.event("map_built", {
+      files: built.map.files.length,
+      symbols: symbolCount(built.map),
+      bytes: mapBytes(built.map),
+      cached: built.cached,
+      head: built.map.head,
+      semantic: wantSemantic,
+    });
+  } catch (error) {
+    recorder.event("map_built", {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const memory = new RunStateStore({
+    runDir: recorder.dir,
+    runId: recorder.id,
+    goal: input.request,
+    repoRoot: mapRoot,
+    recorder,
+  });
+
+  // Semantic refresh after a changed turn. Coalesce so a burst of edits
+  // produces at most one in-flight refresh plus one follow-up.
+  let semanticRefreshInFlight = false;
+  let semanticRefreshQueued = false;
+  const runSemanticRefresh = async (turn: number): Promise<void> => {
+    if (input.skipSemantic) return;
     const built = await buildRepoMap(mapRoot);
     const semantic = await ensureSemanticMap({
       root: mapRoot,
@@ -231,27 +288,38 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       signal: input.signal,
     });
     mapIndex = [renderMapIndex(built.map), renderSemanticIndex(semantic)].filter(Boolean).join("\n");
-    recorder.event("map_built", {
-      files: built.map.files.length,
-      symbols: symbolCount(built.map),
-      bytes: mapBytes(built.map),
-      cached: built.cached,
-      head: built.map.head,
+    recorder.event("map_refresh", {
+      turn,
+      ok: true,
+      modules: Object.keys(semantic?.modules ?? {}).length,
     });
-  } catch (error) {
-    recorder.event("map_built", {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  const memory = new RunStateStore({
-    runDir: recorder.dir,
-    runId: recorder.id,
-    goal: input.request,
-    repoRoot: input.toolRoot ?? input.root,
-    recorder,
-  });
+  };
+  const scheduleSemanticRefresh = (turn: number): void => {
+    if (!input.machine.map.enabled || !input.machine.map.semantic || input.machine.map.refresh === "manual") return;
+    if (semanticRefreshInFlight) {
+      semanticRefreshQueued = true;
+      return;
+    }
+    semanticRefreshInFlight = true;
+    recorder.event("map_refresh_scheduled", { turn });
+    void (async () => {
+      try {
+        await runSemanticRefresh(turn);
+      } catch (error) {
+        recorder.event("map_refresh", {
+          turn,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        semanticRefreshInFlight = false;
+        if (semanticRefreshQueued) {
+          semanticRefreshQueued = false;
+          scheduleSemanticRefresh(turn);
+        }
+      }
+    })();
+  };
 
   const initialChars = input.agent.prompt.length + input.request.length + mapIndex.length + 2_000;
 
@@ -627,7 +695,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               lastRequestChars,
               actualContextTokens > 0 ? actualContextTokens : undefined,
             );
-            memory.ingestTurn(agent?.state.messages ?? [], turns + 1);
+            const ingested = memory.ingestTurn(
+              agent?.state.messages ?? [],
+              turns + 1,
+              { agent: input.agent.name, model: currentRow?.key },
+            );
+            if (ingested.changed) scheduleSemanticRefresh(turns + 1);
             recorder.event("context_state", {
               turn: turns + 1,
               chars: lastRequestChars,
