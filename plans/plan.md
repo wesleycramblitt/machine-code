@@ -490,6 +490,10 @@ automation and making the Orchestrator the primary path.
 
 ## 10. Phase 7 — Parallelism and checkpoints
 
+Status: sequential execution is now parallel up to `max_parallel`, with tasks
+sharing a Feature serialized to avoid branch/worktree races. Remaining:
+wall-clock/spend stops, project-wide checkpoints, and merge-conflict handling.
+
 - Dispatch up to `max_parallel` without duplicate task/phase runs.
 - Enforce wall-clock, spend, and checkpoint stops.
 - Support project scope across Epics.

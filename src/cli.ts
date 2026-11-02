@@ -2792,84 +2792,101 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   const executed: Array<{ issue: number; runId: string; status: string; error?: string }> = [];
   let stopReason: string | undefined;
   let checkpoint: string | undefined;
-  try {
-    for (const task of result.dispatch) {
-      if (!task.plan) continue;
-      if (task.plan.role !== "build") {
-        stopReason = `task #${task.issue.ref.number} has role ${task.plan.role}; review dispatch is not implemented`;
-        process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);
-        break;
+  const runTask = async (
+    task: NonNullable<(typeof result.dispatch)[number]>,
+  ): Promise<{ stop?: string; checkpoint?: string }> => {
+    if (!task.plan) return {};
+    if (task.plan.role !== "build") {
+      const stop = `task #${task.issue.ref.number} has role ${task.plan.role}; review dispatch is not implemented`;
+      process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stop}\n`);
+      return { stop };
+    }
+    if (task.plan.planReview === "human" && !(orchestration.approvedPackets ?? []).includes(task.issue.ref.number)) {
+      process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting packet approval\n`);
+      return { checkpoint: "awaiting_packet_approval" };
+    }
+    const priorAttempts = runs.filter((run) => {
+      const assigned = run.taskIssue ?? run.issue;
+      return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
+    }).length;
+    let retryEvidence: string | undefined;
+    for (let retry = 0; retry <= task.plan.retriesBeforeReplan; retry++) {
+      const attempt = priorAttempts + retry + 1;
+      process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempt}${retry > 0 ? ` (retry ${retry})` : ""}\n`);
+      let outcome;
+      try {
+        outcome = await executeTask({
+          layout: l,
+          machine: runtime.machine,
+          policy: runtime.policy,
+          models: runtime.models,
+          catalogue: runtime.catalogue.models,
+          configuredProviders: runtime.configuredProviders,
+          home: l.home,
+          provider: bundle.provider,
+          issue: task.issue,
+          plan: task.plan,
+          orchestrationId: orchestration.id,
+          orchestrationScope: scope,
+          ...(scopeRef ? { scopeRef } : {}),
+          attempt,
+          requireModel: flags.get("model"),
+          ...(retryEvidence ? { retryEvidence } : {}),
+        });
+      } catch (error) {
+        const stop = `task #${task.issue.ref.number} crashed: ${(error as Error).message}`;
+        process.stdout.write(`  STOP  #${task.issue.ref.number}  ${stop}\n`);
+        return { stop };
       }
-      if (task.plan.planReview === "human" && !(orchestration.approvedPackets ?? []).includes(task.issue.ref.number)) {
-        checkpoint = "awaiting_packet_approval";
-        process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting packet approval\n`);
-        break;
+      executed.push({ issue: task.issue.ref.number, runId: outcome.runId, status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) });
+      process.stdout.write(`  ${outcome.status === "completed" ? "DONE" : "STOP"}  #${task.issue.ref.number}  ${outcome.runId}  ${outcome.status}${outcome.error ? `  ${outcome.error}` : ""}\n`);
+      if (outcome.status === "completed") {
+        if (task.plan.resultReview === "human" && !(orchestration.approvedResults ?? []).includes(task.issue.ref.number)) {
+          process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting result approval\n`);
+          return { checkpoint: "awaiting_result_approval" };
+        }
+        return {};
       }
-      const priorAttempts = runs.filter((run) => {
-        const assigned = run.taskIssue ?? run.issue;
-        return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
-      }).length;
-      let retryEvidence: string | undefined;
-      let taskDone = false;
-      let failureStop: string | undefined;
-      let resultHold = false;
-      for (let retry = 0; retry <= task.plan.retriesBeforeReplan; retry++) {
-        const attempt = priorAttempts + retry + 1;
-        process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempt}${retry > 0 ? ` (retry ${retry})` : ""}\n`);
-        let outcome;
-        try {
-          outcome = await executeTask({
-            layout: l,
-            machine: runtime.machine,
-            policy: runtime.policy,
-            models: runtime.models,
-            catalogue: runtime.catalogue.models,
-            configuredProviders: runtime.configuredProviders,
-            home: l.home,
-            provider: bundle.provider,
-            issue: task.issue,
-            plan: task.plan,
-            orchestrationId: orchestration.id,
-            orchestrationScope: scope,
-            ...(scopeRef ? { scopeRef } : {}),
-            attempt,
-            requireModel: flags.get("model"),
-            ...(retryEvidence ? { retryEvidence } : {}),
-          });
-        } catch (error) {
-          failureStop = `task #${task.issue.ref.number} crashed: ${(error as Error).message}`;
-          process.stdout.write(`  STOP  #${task.issue.ref.number}  ${failureStop}\n`);
-          break;
-        }
-        executed.push({ issue: task.issue.ref.number, runId: outcome.runId, status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) });
-        process.stdout.write(`  ${outcome.status === "completed" ? "DONE" : "STOP"}  #${task.issue.ref.number}  ${outcome.runId}  ${outcome.status}${outcome.error ? `  ${outcome.error}` : ""}\n`);
-        if (outcome.status === "completed") {
-          taskDone = true;
-          if (task.plan.resultReview === "human" && !(orchestration.approvedResults ?? []).includes(task.issue.ref.number)) {
-            resultHold = true;
-            checkpoint = "awaiting_result_approval";
-            process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting result approval\n`);
-          }
-          break;
-        }
-        retryEvidence = outcome.error ?? outcome.status;
-        const retryable = isRetryableFailure(retryEvidence);
-        if (!retryable) {
-          failureStop = `task #${task.issue.ref.number} ${outcome.status}: ${retryEvidence}`;
-          break;
-        }
-        if (retry >= task.plan.retriesBeforeReplan) {
-          failureStop = `task #${task.issue.ref.number} needs_planning after ${task.plan.retriesBeforeReplan + 1} attempt(s)`;
-          break;
-        }
-        process.stdout.write(`  RETRY #${task.issue.ref.number}  evidence: ${retryEvidence.slice(0, 200)}\n`);
+      retryEvidence = outcome.error ?? outcome.status;
+      if (!isRetryableFailure(retryEvidence)) {
+        return { stop: `task #${task.issue.ref.number} ${outcome.status}: ${retryEvidence}` };
       }
-      if (resultHold) break;
-      if (!taskDone) {
-        stopReason = failureStop ?? `task #${task.issue.ref.number} did not complete`;
-        break;
+      if (retry >= task.plan.retriesBeforeReplan) {
+        return { stop: `task #${task.issue.ref.number} needs_planning after ${task.plan.retriesBeforeReplan + 1} attempt(s)` };
+      }
+      process.stdout.write(`  RETRY #${task.issue.ref.number}  evidence: ${retryEvidence.slice(0, 200)}\n`);
+    }
+    return { stop: `task #${task.issue.ref.number} did not complete` };
+  };
+
+  const queue = [...result.dispatch];
+  const locks = new Map<number, Promise<unknown>>();
+  const withFeatureLock = <T>(feature: number, work: () => Promise<T>): Promise<T> => {
+    const previous = locks.get(feature) ?? Promise.resolve();
+    const next = previous.then(work, work);
+    locks.set(feature, next.catch(() => undefined));
+    return next;
+  };
+  const stopped = (): boolean => Boolean(stopReason || checkpoint?.startsWith("awaiting"));
+  const workerCount = Math.min(Math.max(1, maxParallel), Math.max(1, queue.length));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (!stopped()) {
+      const task = queue.shift();
+      if (!task) return;
+      const feature = task.issue.parent?.number ?? 0;
+      const outcome = await withFeatureLock(feature, () => runTask(task));
+      if (outcome.stop) {
+        stopReason = outcome.stop;
+        return;
+      }
+      if (outcome.checkpoint) {
+        checkpoint = outcome.checkpoint;
+        return;
       }
     }
+  });
+  try {
+    await Promise.all(workers);
     updateOrchestration(l, orchestration.id, {
       lastTickAt: new Date().toISOString(),
       checkpoint: checkpoint ?? (executed.length > 0 ? "after-build" : "preflight"),
