@@ -19,8 +19,9 @@
 > execution CLI, TUI preflight, and orchestration ledger/lease are implemented.
 > Issue `plan` writes/replaces `mc:plan` safely. LSP servers are supervised.
 > Sequential orchestration dispatch executes a ready task through Build, gates,
-> Review, commit, and PR. Build outcomes and Review verdicts are typed. The
-> suite has 238 tests.
+> Review, commit, and PR. Build outcomes and Review verdicts are typed, and
+> completion failures retry with evidence up to the task budget. The suite has
+> 239 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -466,9 +467,10 @@ not silently reclassified as planning failures.
 
 Status: partially implemented. `executeTask` synthesizes a frozen packet, creates
 the Task worktree, and reuses the Build/gates/Review/commit/PR chain
-sequentially. Build outcomes and Review verdicts are typed and recorded.
-Remaining: closure/acceptance automation, retry policy, packet/result human
-checkpoints, and making the Orchestrator the primary path.
+sequentially. Build outcomes and Review verdicts are typed and recorded;
+completion failures retry with evidence up to `retries_before_replan`. Remaining:
+closure/acceptance automation, packet/result human checkpoints, and making the
+Orchestrator the primary path.
 
 - Dispatch Build and Review as separate runs. Build uses an isolated worktree;
   Review reads that worktree read-only.
@@ -478,7 +480,7 @@ checkpoints, and making the Orchestrator the primary path.
     `failed`.
 - Typed parsing replaces prose/regex approval detection (implemented).
 - Run gates, close tasks, and record evidence.
-- Implement `needs_planning`, retry budgets, and failure-evidence handoff.
+- `needs_planning`, retry budgets, and failure-evidence handoff are implemented.
 - Implement before-build packet approval and after-review human approval.
 - Make the Orchestrator the primary path for issue-backed work; keep `queue`
   as a compatibility path until Phase 8.
@@ -566,7 +568,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 238 tests green. Add:
+Keep the existing 239 tests green. Add:
 
 | Area | Cases |
 |---|---|

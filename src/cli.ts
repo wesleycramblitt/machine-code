@@ -46,6 +46,7 @@ import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { executeTask } from "./orchestrator/execute.js";
+import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { acquireLease, createOrchestration, listOrchestrations, readOrchestration, releaseLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
@@ -2753,39 +2754,61 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);
         break;
       }
-      const attempts = runs.filter((run) => {
+      const priorAttempts = runs.filter((run) => {
         const assigned = run.taskIssue ?? run.issue;
         return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
       }).length;
-      process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempts + 1}\n`);
-      let outcome;
-      try {
-        outcome = await executeTask({
-          layout: l,
-          machine: runtime.machine,
-          policy: runtime.policy,
-          models: runtime.models,
-          catalogue: runtime.catalogue.models,
-          configuredProviders: runtime.configuredProviders,
-          home: l.home,
-          provider: bundle.provider,
-          issue: task.issue,
-          plan: task.plan,
-          orchestrationId: orchestration.id,
-          orchestrationScope: scope,
-          ...(scopeRef ? { scopeRef } : {}),
-          attempt: attempts + 1,
-          requireModel: flags.get("model"),
-        });
-      } catch (error) {
-        stopReason = `task #${task.issue.ref.number} crashed: ${(error as Error).message}`;
-        process.stdout.write(`  STOP  #${task.issue.ref.number}  ${stopReason}\n`);
-        break;
+      let retryEvidence: string | undefined;
+      let taskDone = false;
+      let failureStop: string | undefined;
+      for (let retry = 0; retry <= task.plan.retriesBeforeReplan; retry++) {
+        const attempt = priorAttempts + retry + 1;
+        process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempt}${retry > 0 ? ` (retry ${retry})` : ""}\n`);
+        let outcome;
+        try {
+          outcome = await executeTask({
+            layout: l,
+            machine: runtime.machine,
+            policy: runtime.policy,
+            models: runtime.models,
+            catalogue: runtime.catalogue.models,
+            configuredProviders: runtime.configuredProviders,
+            home: l.home,
+            provider: bundle.provider,
+            issue: task.issue,
+            plan: task.plan,
+            orchestrationId: orchestration.id,
+            orchestrationScope: scope,
+            ...(scopeRef ? { scopeRef } : {}),
+            attempt,
+            requireModel: flags.get("model"),
+            ...(retryEvidence ? { retryEvidence } : {}),
+          });
+        } catch (error) {
+          failureStop = `task #${task.issue.ref.number} crashed: ${(error as Error).message}`;
+          process.stdout.write(`  STOP  #${task.issue.ref.number}  ${failureStop}\n`);
+          break;
+        }
+        executed.push({ issue: task.issue.ref.number, runId: outcome.runId, status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) });
+        process.stdout.write(`  ${outcome.status === "completed" ? "DONE" : "STOP"}  #${task.issue.ref.number}  ${outcome.runId}  ${outcome.status}${outcome.error ? `  ${outcome.error}` : ""}\n`);
+        if (outcome.status === "completed") {
+          taskDone = true;
+          break;
+        }
+        retryEvidence = outcome.error ?? outcome.status;
+        const retryable = isRetryableFailure(retryEvidence);
+        if (!retryable) {
+          failureStop = `task #${task.issue.ref.number} ${outcome.status}: ${retryEvidence}`;
+          break;
+        }
+        if (retry >= task.plan.retriesBeforeReplan) {
+          failureStop = `task #${task.issue.ref.number} needs_planning after ${task.plan.retriesBeforeReplan + 1} attempt(s)`;
+          break;
+        }
+        process.stdout.write(`  RETRY #${task.issue.ref.number}  evidence: ${retryEvidence.slice(0, 200)}\n`);
       }
-      executed.push({ issue: task.issue.ref.number, runId: outcome.runId, status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) });
-      process.stdout.write(`  ${outcome.status === "completed" ? "DONE" : "STOP"}  #${task.issue.ref.number}  ${outcome.runId}  ${outcome.status}${outcome.error ? `  ${outcome.error}` : ""}\n`);
-      if (outcome.status !== "completed") {
-        stopReason = `task #${task.issue.ref.number} ${outcome.status}: ${outcome.error ?? ""}`.trim();
+      if (!taskDone) {
+        stopReason = failureStop ?? `task #${task.issue.ref.number} did not complete`;
         break;
       }
     }

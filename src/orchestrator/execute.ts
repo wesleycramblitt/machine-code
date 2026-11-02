@@ -43,6 +43,8 @@ export interface ExecuteTaskInput {
   requireModel?: string;
   agentOverrides?: Partial<AgentConfig>;
   signal?: AbortSignal;
+  /** Prior failed-attempt evidence passed to the next Build. */
+  retryEvidence?: string;
 }
 
 export interface ExecuteTaskResult {
@@ -103,6 +105,9 @@ function snapshotHash(packet: TaskPacket, plan: PlanMarker): string {
 export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskResult> {
   const { layout, issue, plan } = input;
   const packet = packetForTask(issue, plan, input.attempt);
+  if (input.retryEvidence) {
+    packet.constraints = [...packet.constraints, `Previous attempt failed:\n${input.retryEvidence.slice(0, 4_000)}`];
+  }
   const hash = snapshotHash(packet, plan);
   const recorder = new RunRecorder(layout, {
     agent: "architect",

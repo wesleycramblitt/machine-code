@@ -44,3 +44,10 @@ export function inferReviewVerdict(text: string): ReviewVerdict {
   if (/\bfailed\b/i.test(text)) return "failed";
   return "approved";
 }
+
+/** Completion failures retry; planning and technical failures stop. */
+export function isRetryableFailure(error: string | undefined): boolean {
+  if (!error) return false;
+  if (/needs_planning/i.test(error)) return false;
+  return /(gates? failed|acceptance|review verdict|changes_requested|build outcome)/i.test(error);
+}
