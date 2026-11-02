@@ -75,6 +75,8 @@ const W = "\x1b[37m";
 const BG = "\x1b[48;5;236m";
 /** Slightly lighter than the body surface; groups the composer context panel. */
 const PANEL_BG = "\x1b[48;2;18;22;28m";
+/** Inactive detail tabs sit a touch darker than their section bar. */
+const SUBTAB_BG = "\x1b[48;2;5;5;5m";
 const WRAP_OFF = "\x1b[?7l";
 const WRAP_ON = "\x1b[?7h";
 
@@ -1211,19 +1213,24 @@ export async function runTui(): Promise<void> {
       : page === "models" && screen === "list"
         ? [` ${D}${modelRows.length} model(s)${modelText ? ` · “${modelText}”` : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`]
         : [""];
+    const rightHeaderPath = (path: string): string => {
+      const text = trunc(path, Math.max(10, cols - 2));
+      return `${" ".repeat(Math.max(0, cols - visible(text) - 1))}${GR}${text}${R}`;
+    };
+    const backSubLine = page === "runs" && screen === "newrun" ? rightHeaderPath(newRunRepo) : "";
     const header: string[] = backHeader
       ? [
           headerRight
             ? `${backLine}${" ".repeat(Math.max(2, cols - visible(backLine) - visible(headerRight)))}${headerRight}`
             : backLine,
-          "",
+          backSubLine,
         ]
       : [...wrapTokenList(tabTokens, cols, " "), ...headerSubLines];
     // The header shares the body surface; only the Back label keeps its own tone.
     const headerTone = theme.bodyBg;
     // Prompt editing moves its controls into the body but keeps the model line.
     const hideFooter = screen === "newrun" && newRunInsert;
-    const bodyH = Math.max(1, rows - header.length - (runDetailHeader ? 2 : footerReserve));
+    const bodyH = Math.max(1, rows - header.length - (runDetailHeader ? 1 : footerReserve));
 
     const filteredRuns = runsListScreen
       ? runsFilter === "all" || runsFilter === "attention"
@@ -1253,10 +1260,12 @@ export async function runTui(): Promise<void> {
     let secondaryStyled = false;
     /** Run details show only the working directory in their footer. */
     let runFooter = "";
-    /** The composer shows its target directory on the very last footer row. */
-    let locationFooter = "";
     /** Right-aligned MAP/SEM/LSP status for the bottom footer. */
     let footerMapTokens: string[] = [];
+    /** Context usage shown at the far left of the index footer row. */
+    let footerCtx = "";
+    /** Override for the bottom footer band; new-run uses the body surface. */
+    let footerBandTone = "";
 
     const clipBody = (lines: string[]) => {
       if (lines.length > bodyH) return lines.slice(0, bodyH);
@@ -1413,8 +1422,8 @@ export async function runTui(): Promise<void> {
 
     /* ---------------------------------------------------------- new run */
     else if (screen === "newrun") {
-      locationFooter = newRunRepo;
       footerMapTokens = mapStatusTokens(newRunRepo);
+      footerBandTone = theme.bodyBg;
       const preview = modelPreview();
       const ctx = preview.context;
       const ap = preview.policy?.agents[newrun.agent];
@@ -1440,13 +1449,20 @@ export async function runTui(): Promise<void> {
         ? command("m", "Model", preview.error, RED)
         : command("m", "Model", preview.model?.key ?? "?", C);
       const fitPart = fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`;
-      const costPart = `${D}cost${R} ${costTone}${estimateCost}${R}`;
+      const isFree = Boolean(
+        preview.model && (preview.model.free || (preview.model.pricing.input === 0 && preview.model.pricing.output === 0)),
+      );
+      const costPart = isFree ? `${G}free${R}` : `${D}cost${R} ${costTone}${estimateCost}${R}`;
       const detailParts = preview.model
         ? [
             `${D}${preview.model.kind}${R}`,
             `${D}ctx${R} ${C}${fmtContext(preview.model.context)}${R}`,
-            `${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`,
-            `${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`,
+            ...(!isFree && preview.model.pricing.input > 0
+              ? [`${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`]
+              : []),
+            ...(!isFree && preview.model.pricing.output > 0
+              ? [`${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`]
+              : []),
           ]
         : [];
       const modelInfo = preview.error
@@ -1529,8 +1545,7 @@ export async function runTui(): Promise<void> {
         0,
       );
       const contextTokens = Math.ceil((Math.max(0, totalChars - excludedChars) + ctx.promptChars) / 4);
-      const ctxText = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
-      const contextLine = `${" ".repeat(Math.max(0, cols - visible(ctxText) - 1))}${ctxText}`;
+      footerCtx = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
       const tabBar = wrapTokenList(
         sections.map((section, index) => {
           const label = newRunContextExcluded.has(section.sectionKey) ? `${section.label}✕` : section.label;
@@ -1584,23 +1599,29 @@ export async function runTui(): Promise<void> {
           ` ${[
             compact("h/l", "tabs", Y),
             compact("j/k", "sel", M),
-            compact("space", "keep", G),
-            compact("x", "sec", RED),
+            `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
           ].join("  ")}`,
           cols,
         ),
         PANEL_BG,
       );
+      const issueCommand = !newRunInsert && activeSection.sectionKey === "section:issues"
+        ? background(
+            fit(` ${command("i", "Issue", issueValue, newrun.issue ? C : GR)}`, cols),
+            PANEL_BG,
+          )
+        : "";
       const summary = [
         modelInfo,
-        contextLine,
+        "",
         ...tabBar,
+        panelLine(""),
         sectionHeader,
         ...(itemLines.length ? itemLines : [panelLine(`  ${D}none${R}`)]),
       ];
       if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
 
-      const boxWidth = Math.max(20, cols - 4);
+      const boxWidth = Math.max(20, cols - 2);
       const inner = Math.max(12, boxWidth - 2);
       const promptText = newrun.prompt || (newRunInsert ? "" : "Press p to type the task");
       // Include the cursor before wrapping so a freshly typed trailing space is
@@ -1616,8 +1637,15 @@ export async function runTui(): Promise<void> {
             command("p", "Prompt", undefined, G),
             newrun.prompt.trim() ? command("Enter", "Start", undefined, RED) : "",
           ]);
-      const promptHint = promptActions
-        ? ` ${" ".repeat(Math.max(0, boxWidth - visible(promptActions)))}${promptActions}`
+      const promptControls = newRunInsert
+        ? promptActions
+        : joinCommands([
+            command("a", "Agent", displayAgent, agentTone(newrun.agent)),
+            command("t", "Tier", displayTier, tierTone(newrun.tier)),
+            promptActions,
+          ]);
+      const promptHint = promptControls
+        ? ` ${" ".repeat(Math.max(0, boxWidth - visible(promptControls)))}${promptControls}`
         : "";
       const availableForPrompt = Math.max(3, bodyH - summary.length - (promptHint ? 7 : 6));
       const promptHeight = Math.max(3, Math.min(16, availableForPrompt, Math.floor(bodyH * 0.5)));
@@ -1718,24 +1746,23 @@ export async function runTui(): Promise<void> {
           command("j/k", "Move", undefined, M),
           command("Enter", "Change", undefined, G),
         ]);
-        secondary = `${D}${NEW_RUN_SETTING_FIELDS.length} option(s) · changes apply to this run only${R}`;
       } else {
         // Context and inherited sources stay above; the composer is pinned to
         // the bottom of the body so it sits directly above the key-command row.
         bottomAlign = {
           above: summary,
-          block: [contextCommands, ...promptBox, ...(promptHint ? [promptHint] : []), ""],
+          block: [
+            ...(issueCommand ? [issueCommand] : []),
+            contextCommands,
+            ...promptBox,
+            ...(promptHint ? [promptHint] : []),
+            "",
+          ],
           filler: background(fit("", cols), PANEL_BG),
         };
-        // While editing the prompt the only controls live directly under the
-        // textbox; the bottom footer is intentionally empty.
-        actions = newRunInsert
-          ? ""
-          : joinCommands([
-              command("a", "Agent", displayAgent, agentTone(newrun.agent)),
-              command("t", "Tier", displayTier, tierTone(newrun.tier)),
-              command("i", "Issue", issueValue, newrun.issue ? C : GR),
-            ]);
+        // Agent, tier, issue, and prompt controls live beside the prompt or in
+        // the Issues panel; the bottom footer has no command row.
+        actions = " ";
         secondaryStyled = true;
         secondary = toast ? `${D}· ${Y}${toast}${R}` : "";
       }
@@ -1930,7 +1957,7 @@ export async function runTui(): Promise<void> {
           RUN_SECTIONS.map((section) =>
             section === runSection
               ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B} ${RUN_SECTION_LABEL[section]} ${R}`
-              : `${theme.sectionFg}${RUN_SECTION_LABEL[section]}${R}`,
+              : `${SUBTAB_BG}${theme.sectionFg} ${RUN_SECTION_LABEL[section]} ${R}`,
           ),
           cols - 2,
           "  ",
@@ -1939,8 +1966,9 @@ export async function runTui(): Promise<void> {
         const timeLabel = s.endedAt ? `ended ${ago(s.endedAt)} ago` : `updated ${ago(s.lastActivityAt)} ago`;
         const lines: string[] = [
           ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${agentTone(s.agent)}${s.agent}${R}${s.mode ? `/${s.mode}` : ""}  ${G}${s.modelCalls}${R} call(s)  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${timeLabel}${R}`,
-          ` ${C}${fmtRunTokens(ctxUsage.tokens)}${R}${D} ctx${R}   ${M}${fmtRunTokens(s.usage.totalTokens)}${R}${D} total${R}`,
+          ` ${M}${fmtRunTokens(s.usage.totalTokens)}${R}${D} total${R}`,
         ];
+        footerCtx = `${C}ctx${R} ${W}${fmtRunTokens(ctxUsage.tokens)}${R}`;
         const issueMeta = [s.issue ? `#${s.issue.number}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
           .filter(Boolean)
           .join("  ");
@@ -2269,6 +2297,8 @@ export async function runTui(): Promise<void> {
       secondary = `${D}Esc returns to the run; use i when you only want to stop it${R}`;
     }
 
+    if (runDetailHeader && runFooter) header[1] = rightHeaderPath(runFooter);
+
     /* ------------------------------------------------------------ compose */
     if (searchMode) {
       actions = joinCommands([
@@ -2294,28 +2324,21 @@ export async function runTui(): Promise<void> {
         ? wrapCommands(secondary, cols).slice(0, 2)
         : wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1);
     const rightFooter = footerMapTokens.join("  ");
-    const mapFooterLine = rightFooter
-      ? `${" ".repeat(Math.max(0, cols - visible(rightFooter) - 1))}${rightFooter}`
-      : "";
-    const footerLeft = runDetailHeader ? runFooter : locationFooter;
-    const combinedFooterLine = (() => {
-      if (!footerLeft && !rightFooter) return "";
-      if (!footerLeft) return mapFooterLine;
-      if (!rightFooter) return ` ${D}${footerLeft}${R}`;
-      const left = trunc(footerLeft, Math.max(10, cols - visible(rightFooter) - 4));
-      const gap = Math.max(1, cols - visible(left) - visible(rightFooter) - 2);
-      return ` ${D}${left}${R}${" ".repeat(gap)}${rightFooter}`;
+    const mapFooterLine = (() => {
+      if (!footerCtx && !rightFooter) return "";
+      if (!rightFooter) return ` ${footerCtx}`;
+      if (!footerCtx) return `${" ".repeat(Math.max(0, cols - visible(rightFooter)))}${rightFooter}`;
+      const left = ` ${footerCtx}`;
+      const gap = Math.max(1, cols - visible(left) - visible(rightFooter));
+      return `${left}${" ".repeat(gap)}${rightFooter}`;
     })();
+    const mapFooterSurface = runDetailHeader ? theme.sectionBg : screen === "newrun" ? theme.bodyBg : "";
+    const styledMapFooterLine =
+      mapFooterLine && mapFooterSurface ? background(mapFooterLine, mapFooterSurface) : mapFooterLine;
+    const bottomLines = styledMapFooterLine ? [styledMapFooterLine] : [];
     const footer = runDetailHeader
-      ? [
-          ...(footerLeft ? [` ${D}${footerLeft}${R}`] : []),
-          ...(mapFooterLine ? [mapFooterLine] : []),
-        ]
-      : [
-          ...commandRows,
-          ...secondaryRows,
-          ...(combinedFooterLine ? [combinedFooterLine] : []),
-        ];
+      ? bottomLines
+      : [...commandRows, ...secondaryRows, ...bottomLines];
     // Key legends sit on the near-black surface; trailing rows keep the footer band.
     const legendRows = commandRows.length;
     const bodySpace = Math.max(0, rows - header.length - footer.length);
@@ -2337,7 +2360,7 @@ export async function runTui(): Promise<void> {
       if (index < headerCount) return background(fitted, headerTone);
       if (index >= footerStart) {
         const footerIndex = index - footerStart;
-        return background(fitted, footerIndex < legendRows ? theme.bodyBg : theme.footerBg);
+        return background(fitted, footerIndex < legendRows ? theme.bodyBg : footerBandTone || theme.footerBg);
       }
       // Every page body uses the theme body color, so the surface is controllable.
       return background(fitted, theme.bodyBg);
@@ -2568,7 +2591,7 @@ export async function runTui(): Promise<void> {
       }
       if (data === "a") { cycleAgent(); draw(); return; }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
-      if (data === "i") { startIssuePicker(); draw(); return; }
+      if (data === "i" && newRunContextSectionKey === "section:issues") { startIssuePicker(); draw(); return; }
       if (data === "m") { startModelPicker(); draw(); return; }
       if (data === "s") { newRunSettings = true; newRunSettingsSel = 0; draw(); return; }
       if (data === "e" || data === "p") { newRunInsert = true; draw(); return; }
