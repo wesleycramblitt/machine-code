@@ -218,7 +218,8 @@ evidence up to the task's `retries_before_replan`, then stop at
 prints the schedule. The TUI Orchestrate tab shows the same schedule. `s` cycles project/epic/feature
 scope, `r` refreshes the issue cache, `x` starts execution for the scope, `a`
 approves the selected packet, `A` approves its result, and Enter opens the
-selected issue.
+selected issue. The header shows the active orchestration id, checkpoint, and
+approval counts.
 
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are

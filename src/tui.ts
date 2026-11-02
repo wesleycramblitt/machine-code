@@ -1955,10 +1955,27 @@ export async function runTui(): Promise<void> {
         maxParallel: 2,
       });
       const scopeText = schedule.scopeRef ? `${schedule.scope} #${schedule.scopeRef.number}` : schedule.scope;
+      const states = listOrchestrations(l);
+      const ledger =
+        states.find(
+          (candidate) =>
+            candidate.scope === orchestrateScope &&
+            ((!scopeRef && !candidate.scopeRef) ||
+              (scopeRef &&
+                candidate.scopeRef?.repo === scopeRef.repo &&
+                candidate.scopeRef.number === scopeRef.number)),
+        ) ?? states[0];
       const lines: string[] = [
         ` ${B}${W}Orchestrate${R} ${D}${scopeText}${R}  ${G}${schedule.ready.length} ready${R}  ${Y}${schedule.blocked.length} blocked${R}  ${D}${schedule.dispatch.length} dispatch${R}`,
         ` ${D}${l.repoRoot}${R}`,
       ];
+      if (ledger) {
+        lines.push(
+          ` ${C}${ledger.id}${R}  ${D}${ledger.checkpoint ?? "preflight"}${R}  ` +
+            `${D}packets ${ledger.approvedPackets?.length ?? 0} · results ${ledger.approvedResults?.length ?? 0}${R}` +
+            `${ledger.stopReason ? `  ${RED}${ledger.stopReason}${R}` : ""}`,
+        );
+      }
       if (issues.length === 0) {
         lines.push("", ` ${Y}No cached issues. Press r to refresh.${R}`);
       } else if (schedule.tasks.length === 0) {
