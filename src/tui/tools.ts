@@ -43,3 +43,8 @@ export function toolListItems(
   }));
   return [...core, ...custom];
 }
+
+/** Conservative token estimate used by the context panel. */
+export function tokensForChars(chars: number): number {
+  return Math.ceil(Math.max(0, chars) / 4);
+}

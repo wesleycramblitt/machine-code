@@ -39,7 +39,7 @@ import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.j
 import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { listOrchestrations } from "./orchestrator/state.js";
-import { toolListItems } from "./tui/tools.js";
+import { toolListItems, tokensForChars } from "./tui/tools.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
@@ -1636,7 +1636,7 @@ export async function runTui(): Promise<void> {
         (sum, section) => sum + section.items.reduce((itemSum, item) => itemSum + item.chars, 0),
         0,
       );
-      const contextTokens = Math.ceil((Math.max(0, totalChars - excludedChars) + ctx.promptChars) / 4);
+      const contextTokens = tokensForChars(Math.max(0, totalChars - excludedChars) + ctx.promptChars);
       footerCtx = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
       // The context panel and prompt box share the same width.
       const panelWidth = Math.max(20, cols - 2);
@@ -1663,7 +1663,7 @@ export async function runTui(): Promise<void> {
       const keptItems = sectionOff
         ? []
         : activeSection.items.filter((item) => !newRunContextExcluded.has(item.key));
-      const sectionTokens = Math.ceil(keptItems.reduce((sum, item) => sum + item.chars, 0) / 4);
+      const sectionTokens = keptItems.reduce((sum, item) => sum + tokensForChars(item.chars), 0);
       const sectionHeader = panelLine(
         `${B}${activeSection.tone}${activeSection.label}${R} ${D}·${R} ${C}${fmtTokens(sectionTokens)}${R}` +
           `${D} tok · ${keptItems.length}/${activeSection.items.length} kept${R}`,
@@ -1683,7 +1683,7 @@ export async function runTui(): Promise<void> {
         const index = itemStart + offset;
         const excluded = sectionOff || newRunContextExcluded.has(item.key);
         const mark = excluded ? `${RED}✕${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
-        const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 24))}${R} ${D}${fmtTokens(item.chars)}${R}`;
+        const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 24))}${R} ${D}${fmtTokens(tokensForChars(item.chars))}${R}`;
         itemLines.push(panelLine(line, index === newRunContextItem));
       }
       const remainingItems = activeSection.items.length - (itemStart + visibleItems.length);
