@@ -35,7 +35,7 @@
 | PRs | Runner-owned Task → Feature and Feature → main PRs, integration worktree, approval queue, squash merges |
 | Context | Issue/packet/knowledge/skill/tool assembly, provenance, budget, child inheritance |
 | Maps and state | Deterministic map, semantic annotations with coalesced refresh, run-state rendering, artifacts, `context` tool, base + role prompts |
-| TUI/CLI | Four-tab TUI, issue-grouped runs, run detail, timeline, settings, spend/model views, map/status/prompt commands |
+| TUI/CLI | Five-tab TUI, issue-grouped runs, run detail, timeline, settings, spend/model views, Orchestrate preflight, map/status/prompt commands |
 | Reference | Web/PDF extraction and indexed reference bundles via typed commands |
 
 The only unfinished validation from this baseline is in Phase 0.
@@ -377,10 +377,11 @@ loop.
 
 ## 8. Phase 5 — Read-only Orchestrator
 
-Status: the pure scheduler (`src/orchestrator/scheduler.ts`) and
-`machine_code orchestrate status|tick --dry-run` exist: scopes, readiness,
-dependency order, active-run suppression, cycle reporting, and JSON output.
-Remaining: ledger/lease, TUI preflight, and execution wiring.
+Status: the pure scheduler (`src/orchestrator/scheduler.ts`),
+`machine_code orchestrate status|tick --dry-run`, and the TUI Orchestrate
+preflight exist: scopes, readiness, dependency order, active-run suppression,
+cycle reporting, and JSON output. Remaining: ledger/lease and execution
+wiring.
 
 ### Scopes
 

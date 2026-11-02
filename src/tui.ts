@@ -37,6 +37,7 @@ import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
+import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
@@ -140,7 +141,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
   };
 }
 
-type Page = "runs" | "models" | "spend" | "settings";
+type Page = "runs" | "models" | "spend" | "settings" | "orchestrate";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model";
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "children" | "context";
 type RunListFilter = RunFilter | "attention";
@@ -150,6 +151,7 @@ const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "models", label: "Models", key: "2" },
   { id: "spend", label: "Spend", key: "3" },
   { id: "settings", label: "Settings", key: "4" },
+  { id: "orchestrate", label: "Orchestrate", key: "5" },
 ];
 const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
 const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "children", "context"];
@@ -601,6 +603,10 @@ export async function runTui(): Promise<void> {
   let thinkingScroll = 0;
   let thinkingFollow = true;
   let childSel = 0;
+  let orchestrateScope: OrchestrationScope = "project";
+  let orchestrateRef: IssueRef | undefined;
+  let orchestrateSel = 0;
+  let orchestrateScroll = 0;
   const expanded = new Set<string>();
   let changesCache: ChangesCache | null = null;
 
@@ -1176,6 +1182,7 @@ export async function runTui(): Promise<void> {
     // filesystem walk there keeps prompt typing responsive.
     const needRunData =
       pendingRunAt > 0 ||
+      page === "orchestrate" ||
       (page === "runs" && (screen === "list" || screen === "issue" || screen === "run"));
     const allRuns = needRunData ? listAllRuns(l.home) : [];
     const cache = needRunData ? readIssueCache(l) : undefined;
@@ -1927,6 +1934,65 @@ export async function runTui(): Promise<void> {
         command("j/k", "Move", undefined, GR),
       ]);
       secondary = "";
+    }
+
+    /* ------------------------------------------------------- orchestrate */
+    else if (page === "orchestrate" && screen === "list") {
+      const runs = allRuns.filter((run) => run.repoRoot === l.repoRoot);
+      let scopeRef = orchestrateRef;
+      if (orchestrateScope !== "project" && !scopeRef) {
+        const wanted = orchestrateScope === "epic" ? "epic" : "feature";
+        const first = issues.find((issue) => issue.kind === wanted);
+        scopeRef = first?.ref;
+        orchestrateRef = scopeRef;
+      }
+      const schedule = planSchedule({
+        issues,
+        scope: orchestrateScope,
+        ...(scopeRef ? { scopeRef } : {}),
+        runs,
+        maxParallel: 2,
+      });
+      const scopeText = schedule.scopeRef ? `${schedule.scope} #${schedule.scopeRef.number}` : schedule.scope;
+      const lines: string[] = [
+        ` ${B}${W}Orchestrate${R} ${D}${scopeText}${R}  ${G}${schedule.ready.length} ready${R}  ${Y}${schedule.blocked.length} blocked${R}  ${D}${schedule.dispatch.length} dispatch${R}`,
+        ` ${D}${l.repoRoot}${R}`,
+      ];
+      if (issues.length === 0) {
+        lines.push("", ` ${Y}No cached issues. Press r to refresh.${R}`);
+      } else if (schedule.tasks.length === 0) {
+        lines.push("", ` ${D}No tasks in scope.${R}`);
+      } else {
+        const taskLines: string[] = [];
+        for (let i = 0; i < schedule.tasks.length; i++) {
+          const task = schedule.tasks[i]!;
+          const mark = task.ready ? `${G}READY${R}` : `${Y}BLOCK${R}`;
+          const plan = task.plan ? `${task.plan.status}/${task.plan.verification}` : "no-plan";
+          const line =
+            ` ${mark} ${D}#${task.issue.ref.number}${R} ${C}${plan.padEnd(16)}${R} ` +
+            `${W}${trunc(task.issue.title, Math.max(16, cols - 38))}${R}` +
+            `${task.reason ? ` ${D}${trunc(task.reason, Math.max(12, cols - 80))}${R}` : ""}`;
+          taskLines.push(selected(line, i === orchestrateSel));
+        }
+        orchestrateSel = Math.max(0, Math.min(orchestrateSel, taskLines.length - 1));
+        const available = Math.max(1, bodyH - lines.length - 1);
+        if (orchestrateSel < orchestrateScroll) orchestrateScroll = orchestrateSel;
+        if (orchestrateSel >= orchestrateScroll + available) orchestrateScroll = orchestrateSel - available + 1;
+        orchestrateScroll = Math.max(0, Math.min(orchestrateScroll, Math.max(0, taskLines.length - available)));
+        lines.push(...taskLines.slice(orchestrateScroll, orchestrateScroll + available));
+      }
+      if (schedule.dispatch.length > 0) {
+        lines.push("", ` ${D}dispatch ${R}${schedule.dispatch.map((task) => `#${task.issue.ref.number}`).join(", ")}`);
+      }
+      for (const error of schedule.errors) lines.push(` ${RED}${error}${R}`);
+      body = clipBody(lines);
+      actions = joinCommands([
+        command("s", "Scope", orchestrateScope, Y),
+        command("r", "Issues", undefined, C),
+        command("j/k", "Move", undefined, M),
+        command("Enter", "Open issue", undefined, G),
+      ]);
+      secondary = `${D}${scopeText}${R}`;
     }
 
     /* ------------------------------------------------------------ spend */
@@ -3070,6 +3136,49 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "r") { draw(); return; }
+      draw();
+      return;
+    }
+
+    /* -------------------------------------------------- orchestrate keys */
+    if (page === "orchestrate") {
+      if (data === "\x1b[A" || data === "k") { orchestrateSel = Math.max(0, orchestrateSel - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { orchestrateSel++; draw(); return; }
+      if (data === "s") {
+        const cached = readIssueCache(l)?.issues ?? [];
+        const next = orchestrateScope === "project" ? "epic" : orchestrateScope === "epic" ? "feature" : "project";
+        const wanted = next === "epic" ? "epic" : next === "feature" ? "feature" : undefined;
+        const ref = wanted ? cached.find((issue) => issue.kind === wanted)?.ref : undefined;
+        if (wanted && !ref) {
+          notify(`no cached ${wanted} to scope to`);
+        } else {
+          orchestrateScope = next;
+          orchestrateRef = ref;
+          orchestrateSel = 0;
+          orchestrateScroll = 0;
+        }
+        draw();
+        return;
+      }
+      if (data === "r") { void refreshIssues("current"); draw(); return; }
+      if (data === "\r" || data === "\n") {
+        const cached = readIssueCache(l)?.issues ?? [];
+        const runs = listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot);
+        const schedule = planSchedule({
+          issues: cached,
+          scope: orchestrateScope,
+          ...(orchestrateRef ? { scopeRef: orchestrateRef } : {}),
+          runs,
+        });
+        const task = schedule.tasks[orchestrateSel];
+        if (task) {
+          selectedIssueKey = refKey(task.issue.ref);
+          page = "runs";
+          screen = "issue";
+        }
+        draw();
+        return;
+      }
       draw();
       return;
     }

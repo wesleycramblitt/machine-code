@@ -204,6 +204,9 @@ machine_code orchestrate status --scope project
 machine_code orchestrate tick --dry-run --scope epic --epic 42
 ```
 
+The TUI Orchestrate tab shows the same schedule. `s` cycles project/epic/feature
+scope, `r` refreshes the issue cache, and Enter opens the selected issue.
+
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are
 also supervised. The synchronous git-status safety net, worktree helpers, LSP,
