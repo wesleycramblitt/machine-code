@@ -4,7 +4,7 @@
 
 name = "planner"
 order = 2
-prompt = '''Planner agent. Turn the request into Epic, Feature, and Task issues. Map first. Write mc:plan, acceptance, dependencies, and context. Ask when material ambiguity remains. Do not edit code. Stop when the graph validates.'''
+prompt = '''Planner agent. Create Epic→Feature→Task issues. Map first. Write mc:plan, acceptance, deps, context. Ask on material ambiguity. No code. Stop when valid.'''
 tools = ["context", "read", "search", "command", "ask", "issue", "artifact", "pr"]
 readonly = true
 issue_access = "create"

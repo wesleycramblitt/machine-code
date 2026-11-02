@@ -19,7 +19,8 @@
 > execution CLI, TUI preflight, and orchestration ledger/lease are implemented.
 > Issue `plan` writes/replaces `mc:plan` safely. LSP servers are supervised.
 > Sequential orchestration dispatch executes a ready task through Build, gates,
-> Review, commit, and PR. The suite has 236 tests.
+> Review, commit, and PR. Build outcomes and Review verdicts are typed. The
+> suite has 238 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -465,9 +466,9 @@ not silently reclassified as planning failures.
 
 Status: partially implemented. `executeTask` synthesizes a frozen packet, creates
 the Task worktree, and reuses the Build/gates/Review/commit/PR chain
-sequentially. Remaining: typed outcomes, closure/acceptance automation, retry
-policy, packet/result human checkpoints, and making the Orchestrator the primary
-path.
+sequentially. Build outcomes and Review verdicts are typed and recorded.
+Remaining: closure/acceptance automation, retry policy, packet/result human
+checkpoints, and making the Orchestrator the primary path.
 
 - Dispatch Build and Review as separate runs. Build uses an isolated worktree;
   Review reads that worktree read-only.
@@ -475,7 +476,7 @@ path.
   - Build: `completed`, `needs_planning`, `blocked`, `failed`.
   - Review: `approved`, `changes_requested`, `needs_planning`, `blocked`,
     `failed`.
-- Replace prose/regex approval detection with typed parsing.
+- Typed parsing replaces prose/regex approval detection (implemented).
 - Run gates, close tasks, and record evidence.
 - Implement `needs_planning`, retry budgets, and failure-evidence handoff.
 - Implement before-build packet approval and after-review human approval.
@@ -565,7 +566,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 236 tests green. Add:
+Keep the existing 238 tests green. Add:
 
 | Area | Cases |
 |---|---|

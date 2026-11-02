@@ -206,7 +206,9 @@ machine_code orchestrate tick --orchestration <id> --dry-run
 ```
 
 `start` and `tick` execute ready tasks one at a time through Build, gates,
-Review, commit, and PR. Tasks stay open for human acceptance. `--dry-run` only
+Review, commit, and PR. Build ends with a typed `Outcome:` and Review with a
+typed `Verdict:`; both are recorded as events. Tasks stay open for human
+acceptance. `--dry-run` only
 prints the schedule. The TUI Orchestrate tab shows the same schedule. `s` cycles project/epic/feature
 scope, `r` refreshes the issue cache, and Enter opens the selected issue.
 

@@ -4,7 +4,7 @@
 
 name = "architect"
 order = 2
-prompt = '''Architect agent. Plan one packet. Map first. Name exact `path:symbol` ranges and gates. Do not edit code. Stop when complete.'''
+prompt = '''Architect agent. Plan one packet. Map first. Name path:symbol and gates. No code. Stop.'''
 tools = ["context", "read", "search", "task", "command", "ask", "issue", "pr"]
 readonly = true
 issue_access = "read"

@@ -23,6 +23,7 @@ import { allCommands } from "./commands/profiles.js";
 import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
+import { inferReviewVerdict, parseBuildOutcome, parseReviewVerdict } from "./orchestrator/outcome.js";
 import type { Layout } from "./paths.js";
 
 /** Run modes are strings from agent config, not a global TypeScript union. */
@@ -318,6 +319,20 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
           runId: recorder.id,
         };
       }
+      const buildOutcome = parseBuildOutcome(buildResult.finalText);
+      recorder.event("build_outcome", {
+        outcome: buildOutcome ?? "completed",
+        source: buildOutcome ? "label" : "fallback",
+      });
+      if (buildOutcome && buildOutcome !== "completed") {
+        return {
+          status: buildOutcome === "failed" ? "failed" : "blocked",
+          finalText: buildResult.finalText,
+          error: `build outcome: ${buildOutcome}`,
+          packet,
+          runId: recorder.id,
+        };
+      }
 
       const gates = resolveGates(packet);
       const gateProcesses = new ProcessSupervisor({
@@ -383,12 +398,17 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
             runId: recorder.id,
           };
         }
-        const approved = /approv/i.test(reviewResult.finalText) && !/reject/i.test(reviewResult.finalText);
-        if (!approved) {
+        const labelledVerdict = parseReviewVerdict(reviewResult.finalText);
+        const verdict = labelledVerdict ?? inferReviewVerdict(reviewResult.finalText);
+        recorder.event("review_verdict", {
+          verdict,
+          source: labelledVerdict ? "label" : "fallback",
+        });
+        if (verdict !== "approved") {
           return {
-            status: "blocked",
+            status: verdict === "failed" ? "failed" : "blocked",
             finalText: reviewResult.finalText,
-            error: "Review agent rejected the work against the packet",
+            error: `Review verdict: ${verdict}`,
             packet,
             runId: recorder.id,
           };
