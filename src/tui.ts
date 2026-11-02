@@ -1255,17 +1255,12 @@ export async function runTui(): Promise<void> {
               1_000_000,
           )
         : "?";
-      const modelLine = preview.error
-        ? ` ${M}Model${R} ${RED}${preview.error}${R}`
-        : ` ${M}Model${R} ${B}${C}${preview.model?.key ?? "?"}${R} ${D}fit ${preview.fit?.toFixed(2) ?? "?"} · ${estimateCost}${R}`;
-      const modelMeta = preview.model
-        ? ` ${D}${preview.model.kind} · ctx ${fmtContext(preview.model.context)} · in $${preview.model.pricing.input}/M out $${preview.model.pricing.output}/M${R}`
-        : "";
+      const modelInfo = preview.error
+        ? `Model ${preview.error}`
+        : `Model ${preview.model?.key ?? "?"} fit ${preview.fit?.toFixed(2) ?? "?"} · ${estimateCost}${preview.model ? ` · ${preview.model.kind} · ctx ${fmtContext(preview.model.context)} · in $${preview.model.pricing.input}/M out $${preview.model.pricing.output}/M` : ""}`;
       const contextLine = ` ${C}Context${R} ${W}~${fmtTokens(ctx.chars + ctx.promptChars)} chars${R} ${D}/ ~${fmtTokens(Math.ceil((ctx.chars + ctx.promptChars) / 4))} input tokens · ${ctx.artifacts.files.length} files · ${ctx.artifacts.tools.length} tools · ${ctx.artifacts.scripts.length} scripts · ${ctx.artifacts.skills.length} skills${R}`;
       const chainLine = ` ${BL}Hierarchy${R} ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "untracked · no issue context"}${R}`;
       const summary = [
-        modelLine,
-        modelMeta,
         contextLine,
         chainLine,
       ].filter(Boolean);
@@ -1344,7 +1339,7 @@ export async function runTui(): Promise<void> {
           floors: floorText,
         };
         const lines: string[] = [
-          ` ${command("Esc", "Back", undefined, GR)}  ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
+          ` ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
           ` ${D}${cwd}${R}`,
           "",
         ];
@@ -1360,7 +1355,6 @@ export async function runTui(): Promise<void> {
         actions = joinCommands([
           command("j/k", "Move", undefined, M),
           command("Enter", "Change", undefined, G),
-          command("Esc", "Close", undefined, GR),
         ]);
         secondary = `${D}${NEW_RUN_SETTING_FIELDS.length} option(s) · changes apply to this run only${R}`;
       } else {
@@ -1378,11 +1372,10 @@ export async function runTui(): Promise<void> {
               command("e", "Prompt", newRunInsert ? "editing" : "edit", G, newRunInsert ? Y : W),
               command("s", "Settings", undefined, M),
               command("Enter", "Start", undefined, G),
-              command("Esc", "Cancel", undefined, GR),
             ]);
         secondary = newRunInsert
           ? `${Y}Insert mode${R} ${D}· all key commands disabled · Esc or jk exits${R}${toast ? ` · ${Y}${toast}${R}` : ""}`
-          : `${D}${def.blurb}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+          : `${D}${modelInfo}${toast ? ` · ${toast}` : ""}${R}`;
       }
     }
 
