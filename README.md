@@ -204,6 +204,7 @@ machine_code orchestrate status --scope project
 machine_code orchestrate start --scope epic --epic 42
 machine_code orchestrate approve --orchestration <id> --task 31
 machine_code orchestrate approve --orchestration <id> --task 31 --result
+# --result records human acceptance and closes the Task
 machine_code orchestrate tick --orchestration <id> --dry-run
 ```
 

@@ -470,7 +470,8 @@ the Task worktree, and reuses the Build/gates/Review/commit/PR chain
 sequentially. Build outcomes and Review verdicts are typed and recorded;
 completion failures retry with evidence up to `retries_before_replan`.
 Before-build packet approval and after-review result approval are stored in the
-ledger and checked at their checkpoints. Remaining: closure/acceptance
+ledger and checked at their checkpoints. Human result approval records
+acceptance evidence and closes the Task. Remaining: parent/agent closure
 automation and making the Orchestrator the primary path.
 
 - Dispatch Build and Review as separate runs. Build uses an isolated worktree;

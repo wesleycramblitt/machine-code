@@ -2657,6 +2657,34 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     if (!state) fail(`no such orchestration: ${id}`);
     if (state.stopReason) fail(`orchestration ${id} is stopped: ${state.stopReason}`);
     const resultApproval = flags.has("result");
+    if (resultApproval) {
+      const issueBundle = await createIssueProvider(l, machine);
+      if (issueBundle.provider.kind === "none") fail(`issue tracking unavailable: ${issueBundle.reason ?? "unknown reason"}`);
+      const repo = state.scopeRef?.repo ?? issueBundle.repo;
+      const ref = parseIssueRef(String(task), repo, "github");
+      const issue = await issueBundle.provider.get(ref);
+      if (!issue) fail(`task #${task} not found`);
+      const latest = listRuns(l)
+        .filter((run) => {
+          const assigned = run.taskIssue ?? run.issue;
+          return assigned?.repo === ref.repo && assigned.number === ref.number;
+        })
+        .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
+      if (!latest) fail(`no run is associated with task #${task}`);
+      const detail = readRun(l, latest.id);
+      if (!detail) fail(`run ${latest.id} is unreadable`);
+      const recorder = RunRecorder.reopen(l, detail.summary);
+      recorder.event("acceptance_verified", {
+        issue: ref.number,
+        by: "human",
+        criteria: issue.acceptance,
+        evidence: `approved result in orchestration ${id}`,
+      });
+      const completion = await checkCompletion(issueBundle.provider, l, issue);
+      if (!completion.ok) fail(`cannot close task #${task}: ${completion.reason}`);
+      await issueBundle.provider.close(ref, "completed");
+      process.stdout.write(`closed task #${task} after human result approval\n`);
+    }
     const current = resultApproval ? state.approvedResults ?? [] : state.approvedPackets ?? [];
     const approved = [...new Set([...current, task])].sort((a, b) => a - b);
     updateOrchestration(l, id, {
