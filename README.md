@@ -209,7 +209,9 @@ machine_code orchestrate tick --orchestration <id> --dry-run
 ```
 
 `start` and `tick` execute ready tasks up to `--max-parallel` at a time through
-Build, gates, Review, commit, and PR; tasks sharing a Feature are serialized. Build ends with a typed `Outcome:` and Review with a
+Build, gates, Review, commit, and PR; tasks sharing a Feature are serialized.
+`--max-minutes` and `--max-spend-usd` stop new dispatch when the invocation
+budget is exhausted. Build ends with a typed `Outcome:` and Review with a
 typed `Verdict:`; both are recorded as events. Completion failures retry with
 evidence up to the task's `retries_before_replan`, then stop at
 `needs_planning`. Tasks stay open for human acceptance. `--dry-run` only

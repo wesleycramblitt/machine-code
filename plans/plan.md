@@ -21,7 +21,8 @@
 > Sequential orchestration dispatch executes a ready task through Build, gates,
 > Review, commit, and PR. Build outcomes and Review verdicts are typed, and
 > completion failures retry with evidence up to the task budget. Before-build
-> packet approval is wired to the ledger. The suite has 239 tests.
+> packet approval is wired to the ledger. Execution honors wall-clock and spend
+> budgets. The suite has 240 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -490,9 +491,9 @@ automation and making the Orchestrator the primary path.
 
 ## 10. Phase 7 — Parallelism and checkpoints
 
-Status: sequential execution is now parallel up to `max_parallel`, with tasks
-sharing a Feature serialized to avoid branch/worktree races. Remaining:
-wall-clock/spend stops, project-wide checkpoints, and merge-conflict handling.
+Status: execution runs up to `max_parallel`, serializes tasks sharing a Feature,
+and stops new dispatch on `--max-minutes` or `--max-spend-usd`. Remaining:
+additional named checkpoints and richer merge-conflict handling.
 
 - Dispatch up to `max_parallel` without duplicate task/phase runs.
 - Enforce wall-clock, spend, and checkpoint stops.
@@ -575,7 +576,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 239 tests green. Add:
+Keep the existing 240 tests green. Add:
 
 | Area | Cases |
 |---|---|

@@ -47,6 +47,7 @@ import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { executeTask } from "./orchestrator/execute.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
+import { budgetStop } from "./orchestrator/budget.js";
 import { acquireLease, createOrchestration, listOrchestrations, readOrchestration, releaseLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
@@ -197,6 +198,7 @@ Usage:
                                     Show or probe cooling model availability
   machine_code orchestrate status|tick|start [--dry-run]
                                     [--scope project|epic|feature] [--epic <n>|--feature <n>]
+                                    [--max-parallel N] [--max-minutes N] [--max-spend-usd N]
                                     Compute or execute ready issue-graph tasks
   machine_code orchestrate approve --orchestration <id> --task <n> [--result]
                                     Approve a packet or result checkpoint
@@ -2737,6 +2739,16 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   const maxParallelRaw = flags.get("max-parallel");
   const maxParallel = maxParallelRaw === undefined ? 2 : Number(maxParallelRaw);
   if (!Number.isInteger(maxParallel) || maxParallel < 0) fail("--max-parallel must be a non-negative integer");
+  const maxMinutesRaw = flags.get("max-minutes");
+  const maxMinutes = maxMinutesRaw === undefined ? undefined : Number(maxMinutesRaw);
+  if (maxMinutes !== undefined && (!Number.isFinite(maxMinutes) || maxMinutes <= 0)) {
+    fail("--max-minutes must be a positive number");
+  }
+  const maxSpendRaw = flags.get("max-spend-usd");
+  const maxSpendUsd = maxSpendRaw === undefined ? undefined : Number(maxSpendRaw);
+  if (maxSpendUsd !== undefined && (!Number.isFinite(maxSpendUsd) || maxSpendUsd < 0)) {
+    fail("--max-spend-usd must be a non-negative number");
+  }
 
   const issues = await bundle.provider.list({ state: "all", limit: 500 });
   const runs = listRuns(l);
@@ -2867,10 +2879,22 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     locks.set(feature, next.catch(() => undefined));
     return next;
   };
+  const deadline = maxMinutes === undefined ? undefined : Date.now() + maxMinutes * 60_000;
+  const spentUsd = (): number =>
+    listRuns(l)
+      .filter((run) => run.orchestrationId === orchestration.id)
+      .reduce((sum, run) => sum + run.cost.actual, 0);
+  const invocationBudget = (): string | undefined =>
+    budgetStop({ ...(deadline !== undefined ? { deadline } : {}), ...(maxSpendUsd !== undefined ? { maxSpendUsd } : {}), spentUsd: spentUsd() });
   const stopped = (): boolean => Boolean(stopReason || checkpoint?.startsWith("awaiting"));
   const workerCount = Math.min(Math.max(1, maxParallel), Math.max(1, queue.length));
   const workers = Array.from({ length: workerCount }, async () => {
     while (!stopped()) {
+      const budget = invocationBudget();
+      if (budget) {
+        stopReason = budget;
+        return;
+      }
       const task = queue.shift();
       if (!task) return;
       const feature = task.issue.parent?.number ?? 0;
