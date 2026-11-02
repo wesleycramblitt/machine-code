@@ -423,7 +423,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
           `run: ${recorder.id}\n` +
           `packet: ${packet.id}` +
           (input.issueNumber ? `\nissue: ${input.issueNumber}` : "");
-        const { sha } = await commitWorktree({ path: toolRoot, message });
+        const { sha } = await commitWorktree({ path: toolRoot, message, processes: gateProcesses });
         if (sha) {
           recorder.patchSummary({ commit: sha });
           recorder.event("commit_created", { sha, branch: recorder.current.branch, packet: packet.id });

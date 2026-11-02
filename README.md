@@ -225,9 +225,9 @@ approval counts.
 
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are
-also supervised, along with LSP servers and worktree-creation git helpers. The
-synchronous git-status safety net, worktree commit/remove/prune helpers, and MCP
-spawns are the remaining supervision work.
+also supervised, along with LSP servers and worktree creation/commit git
+helpers. The synchronous git-status safety net, worktree remove/prune helpers,
+and MCP spawns are the remaining supervision work.
 
 Run modes belong to the selected agent. The Architect declares `direct`,
 `verified`, and `redundant` (default `verified`) plus the per-mode
@@ -253,8 +253,11 @@ Tools live in `.machine_code/tools/<name>.toml`, scripts under
 Planner can inspect them and provision tool manifests with the `artifact` tool
 (`list`, `show`, `usage`, `create`, `update`). Executable scripts require the
 explicit `--allow-artifact-scripts` run flag. Planner writes task policy with the issue
-`plan` action, which inserts or replaces the `mc:plan` marker. The new-run composer previews exactly which files, tools, scripts, and
-issues the selected run will inherit before it starts.
+`plan` action, which inserts or replaces the `mc:plan` marker. The new-run
+composer previews exactly which files, tools, scripts, and issues the selected
+run will inherit before it starts. The **Tools** subtab lists every tool
+available to the selected agent, including `issue` with its access level, plus
+custom repository/machine tools.
 
 Skills live in `.machine_code/skills/<name>/SKILL.md`. Only descriptions are
 always visible; the body loads when an issue references the skill. The curation

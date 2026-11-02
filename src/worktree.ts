@@ -438,7 +438,17 @@ export async function removeWorktree(opts: RemoveOptions): Promise<void> {
 /* ------------------------------------------------------------- commits */
 
 /** Stage everything in the worktree and commit; null when there is nothing to commit. */
-export async function commitWorktree(input: { path: string; message: string }): Promise<{ sha: string | null }> {
+export async function commitWorktree(input: {
+  path: string;
+  message: string;
+  processes?: ProcessSupervisor;
+}): Promise<{ sha: string | null }> {
+  return input.processes
+    ? worktreeSupervisor.run(input.processes, () => commitWorktreeBody(input))
+    : commitWorktreeBody(input);
+}
+
+async function commitWorktreeBody(input: { path: string; message: string }): Promise<{ sha: string | null }> {
   await gitOrThrow(input.path, ["add", "-A"], "git add");
   const status = await git(input.path, ["status", "--porcelain"]);
   if (status.stdout.trim() === "") return { sha: null };

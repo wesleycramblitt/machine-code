@@ -39,11 +39,12 @@ import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.j
 import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { listOrchestrations } from "./orchestrator/state.js";
+import { toolListItems } from "./tui/tools.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { AGENT_META, AGENT_NAMES, agentDef, type IssueAccess } from "./agents.js";
-import { resolveAgentConfig } from "./agents/config.js";
+import { resolveAgent, resolveAgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
@@ -1502,18 +1503,28 @@ export async function runTui(): Promise<void> {
       const issueObj = newrun.issue ? issueByRef(newrun.issue) : undefined;
       const issueValue = newrun.issue ? `#${newrun.issue.number} ${issueObj?.kind ?? ""}`.trim() : "NA";
       const displayAgent = newrun.agent ? `${newrun.agent[0]!.toUpperCase()}${newrun.agent.slice(1)}` : newrun.agent;
-      const issueAccess = resolveAgentConfig({
-        role: newrun.agent,
+      const resolvedAgent = resolveAgent(layout(newRunRepo), newrun.agent, {
         agentPolicy: ap,
         machineOverrides: preview.machine?.agents[newrun.agent],
-      }).issueAccess ?? def.issueAccess;
+        runOverrides: {
+          preset: newrun.preset,
+          verification: newrun.verification,
+          issues: newrun.issues,
+          ask: newrun.ask,
+          approval: newrun.approval,
+          ambiguity: newrun.ambiguity,
+        },
+      });
+      const issueAccess = resolvedAgent.config.issueAccess ?? def.issueAccess;
       const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
-      const willAutoCreate = !planningAgent && issueAccess === "create" && Boolean(issueObj && issueObj.kind !== "task");
-      const agentAccessLine =
-        ` ${D}agent${R} ${agentTone(newrun.agent)}${displayAgent}${R}  ${D}issues${R} ` +
-        `${issueAccessTone(issueAccess)}${issueAccess}${R}` +
-        `${willAutoCreate ? `  ${Y}auto-create${R}` : ""}`;
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
+      const toolItems = toolListItems(
+        resolvedAgent.def.tools.filter((tool) => tool !== "issue" || newrun.issues !== "disabled"),
+        issueAccess,
+        listArtifacts(layout(newRunRepo))
+          .filter((artifact) => artifact.kind === "tool")
+          .map((artifact) => ({ name: artifact.name, description: artifact.description })),
+      );
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
       const fitText = newrun.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(newrun.minFit);
       const estimateCost = preview.estimate
@@ -1607,7 +1618,7 @@ export async function runTui(): Promise<void> {
         { label: "Files", tone: contextTone("file"), sectionKey: "section:files", items: itemsFor(["file"]) },
         { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: itemsFor(["knowledge"]) },
         { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: itemsFor(["skill"]) },
-        { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: itemsFor(["tool"]) },
+        { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
         { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: itemsFor(["script"]) },
         { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
         { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
@@ -1693,7 +1704,6 @@ export async function runTui(): Promise<void> {
       );
       const summary = [
         modelInfo,
-        agentAccessLine,
         "",
         ...tabBar,
         panelLine(""),
