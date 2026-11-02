@@ -15,8 +15,9 @@
 > read-only Planner role with `issue_access=create`; Architect and Sudo now have
 > read access with an explicit `--allow-issue-create` override. The Planner has
 > artifact inventory and safe tool-manifest provisioning; executable scripts
-> remain human-approved CLI work. The read-only scheduler and dry-run CLI are
-> implemented. The suite has 229 tests.
+> remain human-approved CLI work. The read-only scheduler, dry-run CLI, TUI
+> preflight, and orchestration ledger/lease are implemented. The suite has 232
+> tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -380,8 +381,8 @@ loop.
 Status: the pure scheduler (`src/orchestrator/scheduler.ts`),
 `machine_code orchestrate status|tick --dry-run`, and the TUI Orchestrate
 preflight exist: scopes, readiness, dependency order, active-run suppression,
-cycle reporting, and JSON output. Remaining: ledger/lease and execution
-wiring.
+cycle reporting, JSON output, and durable ledger/lease state. Remaining:
+execution wiring (build/review dispatch, gates, closure, checkpoints).
 
 ### Scopes
 
@@ -556,7 +557,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 229 tests green. Add:
+Keep the existing 232 tests green. Add:
 
 | Area | Cases |
 |---|---|
