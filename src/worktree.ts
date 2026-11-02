@@ -25,7 +25,9 @@ import {
   symlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { runProc } from "./proc.js";
+import type { ProcessSupervisor } from "./processes/supervisor.js";
 import type { Layout } from "./paths.js";
 import { loadMachineConfig } from "./config.js";
 import { readPacket } from "./packet.js";
@@ -49,7 +51,20 @@ interface GitResult {
   stderr: string;
 }
 
+const worktreeSupervisor = new AsyncLocalStorage<ProcessSupervisor>();
+
 async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<GitResult> {
+  const supervisor = worktreeSupervisor.getStore();
+  if (supervisor) {
+    const run = await supervisor.run("git", args, {
+      cwd,
+      timeoutMs,
+      env: GIT_ENV,
+      origin: "tool",
+      name: "worktree:git",
+    });
+    return run.result;
+  }
   return runProc("git", args, { cwd, timeoutMs, env: GIT_ENV });
 }
 
@@ -199,6 +214,8 @@ export interface WorktreeRequest {
   base?: string;
   /** Queue packets: materialize the packet snapshot into the worktree. */
   packetId?: string;
+  /** Optional run supervisor for worktree git processes. */
+  processes?: ProcessSupervisor;
 }
 
 export interface WorktreeSpec {
@@ -280,6 +297,12 @@ async function linkDependencies(
  * the caller records events and updates run.json.
  */
 export async function createWorktree(req: WorktreeRequest): Promise<WorktreeSpec> {
+  return req.processes
+    ? worktreeSupervisor.run(req.processes, () => createWorktreeBody(req))
+    : createWorktreeBody(req);
+}
+
+async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   const layout = req.layout;
   const mainRoot = await mainWorktreeRoot(layout.repoRoot);
   const path = join(layout.localDir, "worktrees", req.runId);

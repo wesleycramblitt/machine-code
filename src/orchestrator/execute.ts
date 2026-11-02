@@ -20,6 +20,7 @@ import { writePacket, type PacketAcceptance, type TaskPacket } from "../packet.j
 import { parseArtifactReferences } from "../context/references.js";
 import { assembleContext } from "../context/assemble.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
+import { ProcessSupervisor } from "../processes/supervisor.js";
 import { loadAvailability } from "../availability.js";
 import { orchestrate } from "../orchestrate.js";
 import type { PlanMarker } from "../plan/schema.js";
@@ -131,6 +132,11 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
   recorder.event("packet_persisted", { id: packet.id, local: true });
 
   let toolRoot = layout.repoRoot;
+  const setupProcesses = new ProcessSupervisor({
+    runId: recorder.id,
+    runDir: recorder.dir,
+    onEvent: (type, data) => recorder.event(type, data),
+  });
   try {
     const spec = await createWorktree({
       layout,
@@ -138,6 +144,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
       kind: "task",
       issueNumber: issue.ref.number,
       ...(issue.parent ? { featureNumber: issue.parent.number } : {}),
+      processes: setupProcesses,
     });
     toolRoot = spec.path;
     recorder.patchSummary({

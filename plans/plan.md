@@ -22,7 +22,8 @@
 > Review, commit, and PR. Build outcomes and Review verdicts are typed, and
 > completion failures retry with evidence up to the task budget. Before-build
 > packet approval is wired to the ledger. Execution honors wall-clock and spend
-> budgets. The suite has 240 tests.
+> budgets. Worktree-creation git helpers are supervised. The suite has 241
+> tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -281,8 +282,9 @@ Status: partially implemented. The registry/supervisor, typed-command and gate
 process records and logs, `processes` CLI, run-detail Processes section with
 select/follow/open-log/kill controls, detached delegated-run tracking,
 SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
-exist. Map helper and LSP server spawns are supervised. Remaining: the
-synchronous git-status safety net, worktree helpers, and MCP spawns.
+exist. Map, LSP, and worktree-creation git helpers are supervised. Remaining:
+the synchronous git-status safety net, worktree commit/remove/prune helpers, and
+MCP spawns.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -578,7 +580,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 240 tests green. Add:
+Keep the existing 241 tests green. Add:
 
 | Area | Cases |
 |---|---|

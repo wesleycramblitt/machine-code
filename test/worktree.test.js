@@ -19,6 +19,8 @@ import {
   WorktreeError,
 } from "../dist/worktree.js";
 import { RunRecorder } from "../dist/state/runs.js";
+import { ProcessSupervisor } from "../dist/processes/supervisor.js";
+import { readProcessRecords } from "../dist/processes/registry.js";
 
 let COUNTER = 0;
 
@@ -54,6 +56,29 @@ function fakeLayout(root) {
     runsDir: join(root, ".machine_code", "local", "runs"),
   };
 }
+
+test("worktree git helpers are recorded by the supervisor", async () => {
+  const { dir } = tempRepo();
+  try {
+    const layout = fakeLayout(dir);
+    const runDir = join(layout.runsDir, "r-supervised");
+    const supervisor = new ProcessSupervisor({ runId: "r-supervised", runDir });
+    await createWorktree({
+      layout,
+      runId: "r-supervised",
+      kind: "task",
+      issueNumber: 41,
+      featureNumber: 40,
+      processes: supervisor,
+    });
+    const records = readProcessRecords(runDir);
+    assert.ok(records.length > 0);
+    assert.ok(records.every((record) => record.origin === "tool" && record.name === "worktree:git"));
+    assert.ok(records.some((record) => record.status === "exited"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("task worktree is created on its issue branch, based on the feature branch", async () => {
   const { dir } = tempRepo();

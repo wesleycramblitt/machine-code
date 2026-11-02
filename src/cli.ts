@@ -49,7 +49,7 @@ import { executeTask } from "./orchestrator/execute.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
 import { acquireLease, createOrchestration, listOrchestrations, readOrchestration, releaseLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
-import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
+import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
@@ -1158,6 +1158,11 @@ async function cmdRun(argv: string[]): Promise<number> {
   let toolRoot = l.repoRoot;
   if (mutating) {
     try {
+      const worktreeProcesses = new ProcessSupervisor({
+        runId: recorder.id,
+        runDir: recorder.dir,
+        onEvent: (type, data) => recorder.event(type, data),
+      });
       const spec = await createWorktree({
         layout: l,
         runId: recorder.id,
@@ -1165,6 +1170,7 @@ async function cmdRun(argv: string[]): Promise<number> {
         issueNumber: issueRef?.number,
         featureNumber,
         base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
+        processes: worktreeProcesses,
       });
       recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
       if (inheritWorktree && parentRun?.worktree) {
@@ -1568,7 +1574,18 @@ async function cmdQueue(argv: string[]): Promise<number> {
     let toolRoot = l.repoRoot;
     if (mutating) {
       try {
-        const spec = await createWorktree({ layout: l, runId: recorder.id, kind: "run", packetId: packet.id });
+        const worktreeProcesses = new ProcessSupervisor({
+          runId: recorder.id,
+          runDir: recorder.dir,
+          onEvent: (type, data) => recorder.event(type, data),
+        });
+        const spec = await createWorktree({
+          layout: l,
+          runId: recorder.id,
+          kind: "run",
+          packetId: packet.id,
+          processes: worktreeProcesses,
+        });
         recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
         for (const branch of spec.createdBranches) {
           recorder.event("branch_created", { branch, base: spec.baseRef });
