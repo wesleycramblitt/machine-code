@@ -186,7 +186,8 @@ args, or tool result; `PgUp`/`PgDn` scroll inside a long expanded block.
 Typed commands and runner gates run through the per-run process supervisor. The
 run detail **Processes** section shows each process, its status, pid, and output
 tail; `j`/`k` selects one, `x` kills the selected process, and `X` kills all
-live processes for the run. The record and full logs live under the run
+live processes for the run. Kill sends SIGTERM, waits briefly, then sends
+SIGKILL if the process group is still alive. The record and full logs live under the run
 directory:
 
 ```bash

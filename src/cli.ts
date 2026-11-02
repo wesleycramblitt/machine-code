@@ -44,7 +44,7 @@ import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./
 import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
-import { killAllProcesses, killProcessRecord } from "./processes/supervisor.js";
+import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
@@ -2535,7 +2535,7 @@ function tailFile(path: string, max = 600): string {
   return readLogTail(path, max);
 }
 
-function cmdProcesses(argv: string[]): number {
+async function cmdProcesses(argv: string[]): Promise<number> {
   const args = argv.filter((value) => !value.startsWith("--"));
   const json = argv.includes("--json");
   const l = layout();
@@ -2552,18 +2552,23 @@ function cmdProcesses(argv: string[]): number {
     const found = find(runId);
     const records = reconcileProcessRecords(found.runDir);
     if (target === "all") {
-      const killed = killAllProcesses(records);
-      process.stdout.write(`killed ${killed} process(es) for ${found.run.summary.id}\n`);
+      const outcome = await terminateAllProcesses(records);
+      process.stdout.write(
+        `terminated ${outcome.terminated} process(es)` +
+          `${outcome.killed ? `; ${outcome.killed} required SIGKILL` : ""} for ${found.run.summary.id}\n`,
+      );
       return 0;
     }
     const record = latestProcessRecords(records).find((entry) => entry.id === target);
     if (!record) fail(`no process ${target} for ${found.run.summary.id}`);
     try {
-      killProcessRecord(record);
+      const outcome = await terminateProcessRecord(record);
+      process.stdout.write(
+        `${outcome === "kill" ? "SIGKILL" : "SIGTERM"} for ${record.id} (${record.name})\n`,
+      );
     } catch (error) {
       fail((error as Error).message);
     }
-    process.stdout.write(`sent SIGTERM to ${record.id} (${record.name})\n`);
     return 0;
   }
 
@@ -3094,7 +3099,7 @@ async function main(): Promise<void> {
       code = cmdShow(rest);
       break;
     case "processes":
-      code = cmdProcesses(rest);
+      code = await cmdProcesses(rest);
       break;
     case "context":
       code = cmdContext(rest);

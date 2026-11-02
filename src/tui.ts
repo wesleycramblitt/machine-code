@@ -39,7 +39,7 @@ import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.j
 import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
-import { killAllProcesses, killProcessRecord } from "./processes/supervisor.js";
+import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { AGENT_META, AGENT_NAMES, agentDef, type IssueAccess } from "./agents.js";
 import { resolveAgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
@@ -2904,19 +2904,29 @@ export async function runTui(): Promise<void> {
         const record = reconcileProcessRecords(detail.dir)[processSel];
         if (!record) notify("no process selected");
         else {
-          try {
-            killProcessRecord(record);
-            notify(`sent SIGTERM to ${record.id}`);
-          } catch (error) {
-            notify((error as Error).message);
-          }
+          void (async () => {
+            try {
+              const outcome = await terminateProcessRecord(record);
+              notify(outcome === "kill" ? `SIGKILL ${record.id}` : `SIGTERM ${record.id}`);
+            } catch (error) {
+              notify((error as Error).message);
+            }
+            draw();
+          })();
         }
         draw();
         return;
       }
       if (runSection === "processes" && data === "X") {
-        const killed = killAllProcesses(reconcileProcessRecords(detail.dir));
-        notify(killed ? `sent SIGTERM to ${killed} process(es)` : "no live processes");
+        void (async () => {
+          const outcome = await terminateAllProcesses(reconcileProcessRecords(detail.dir));
+          notify(
+            outcome.terminated || outcome.killed
+              ? `terminated ${outcome.terminated}${outcome.killed ? `, killed ${outcome.killed}` : ""}`
+              : "no live processes",
+          );
+          draw();
+        })();
         draw();
         return;
       }

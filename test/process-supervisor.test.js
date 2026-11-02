@@ -7,7 +7,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { ProcessSupervisor } from "../dist/processes/supervisor.js";
+import { spawn } from "node:child_process";
+import { ProcessSupervisor, terminateProcessRecord } from "../dist/processes/supervisor.js";
 import { latestProcessRecords, readProcessRecords } from "../dist/processes/registry.js";
 
 function tempDir() {
@@ -50,6 +51,41 @@ test("supervised command records start/exit and keeps full logs", async () => {
     assert.equal(second.record.exitCode, 3);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("terminate escalates to SIGKILL after the grace period", async () => {
+  const child = spawn(
+    process.execPath,
+    ["-e", "process.on('SIGTERM',()=>{}); process.stdout.write('ready'); setInterval(()=>{},1000)"],
+    { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+  );
+  try {
+    assert.ok(child.pid);
+    await new Promise((resolve) => child.stdout.once("data", resolve));
+    const outcome = await terminateProcessRecord(
+      {
+        id: "p-test",
+        runId: "run-test",
+        origin: "command",
+        name: "ignore-term",
+        argv: ["node"],
+        pid: child.pid,
+        pgid: child.pid,
+        status: "running",
+        startedAt: new Date().toISOString(),
+        stdoutLog: "/tmp/out",
+        stderrLog: "/tmp/err",
+      },
+      150,
+    );
+    assert.equal(outcome, "kill");
+  } finally {
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
   }
 });
 

@@ -16,6 +16,7 @@ import {
   readProcessRecords,
 } from "./registry.js";
 import type { ProcessOrigin, ProcessRecord, ProcessStatus } from "./types.js";
+import { pidAlive } from "./reconcile.js";
 
 export interface SupervisorOptions {
   runId: string;
@@ -139,4 +140,53 @@ export function killAllProcesses(records: readonly ProcessRecord[], signal: Node
     }
   }
   return killed;
+}
+
+function groupAlive(pgid: number | undefined): boolean {
+  if (!pgid) return false;
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** SIGTERM, bounded grace period, then SIGKILL for the process group. */
+export async function terminateProcessRecord(record: ProcessRecord, graceMs = 2_000): Promise<"term" | "kill"> {
+  if (record.status !== "running") throw new Error(`process ${record.id} is not running`);
+  if (!record.pgid) throw new Error(`process ${record.id} has no process group`);
+  process.kill(-record.pgid, "SIGTERM");
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    if (!groupAlive(record.pgid) && !pidAlive(record.pid)) return "term";
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (groupAlive(record.pgid)) {
+    try {
+      process.kill(-record.pgid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+    return "kill";
+  }
+  return "term";
+}
+
+export async function terminateAllProcesses(
+  records: readonly ProcessRecord[],
+  graceMs = 2_000,
+): Promise<{ terminated: number; killed: number }> {
+  let terminated = 0;
+  let killed = 0;
+  for (const record of liveProcessRecords(records)) {
+    try {
+      const outcome = await terminateProcessRecord(record, graceMs);
+      if (outcome === "kill") killed += 1;
+      else terminated += 1;
+    } catch {
+      // Already gone.
+    }
+  }
+  return { terminated, killed };
 }
