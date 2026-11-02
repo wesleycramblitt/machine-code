@@ -73,10 +73,13 @@ const BL = "\x1b[34m";
 const GR = "\x1b[90m";
 const W = "\x1b[37m";
 const BG = "\x1b[48;5;236m";
-/** Slightly lighter than the body surface; groups the composer context panel. */
-const PANEL_BG = "\x1b[48;2;18;22;28m";
+/** Neutral charcoal, slightly lighter than the body surface. */
+const PANEL_BG = "\x1b[48;2;18;18;18m";
 /** Inactive detail tabs sit a touch darker than their section bar. */
 const SUBTAB_BG = "\x1b[48;2;5;5;5m";
+/** Start action is the only destructive-red control in the composer. */
+const START_BG = "\x1b[48;2;170;30;30m";
+const WHITE = "\x1b[97m";
 const WRAP_OFF = "\x1b[?7l";
 const WRAP_ON = "\x1b[?7h";
 
@@ -414,6 +417,11 @@ function command(
   return value === undefined || value === "" ? head : `${head}${D}:${R} ${B}${tone}${value}${R}`;
 }
 
+/** Command token with an explicit background, for the destructive start action. */
+function commandBadge(label: string, key: string, background: string, foreground: string): string {
+  return `${background}${foreground}${B} ${label}[${key}] ${R}`;
+}
+
 /** Stable role colors used wherever an agent name is shown. */
 function agentTone(agent: string): string {
   switch (agent) {
@@ -426,9 +434,9 @@ function agentTone(agent: string): string {
   }
 }
 
-/** Paid is the costly/explicit path; free is the safe default. */
+/** Free is the safe default; paid is the yellow caution path. */
 function tierTone(tier: string): string {
-  return tier === "free" ? G : RED;
+  return tier === "free" ? G : Y;
 }
 
 function joinCommands(items: Array<string | false | undefined | null>): string {
@@ -582,7 +590,7 @@ export async function runTui(): Promise<void> {
   let changesCache: ChangesCache | null = null;
 
   let newrun: NewRunState = {
-    agent: "sudo",
+    agent: "general",
     mode: "",
     preset: "unrestricted",
     verification: "verified",
@@ -590,7 +598,7 @@ export async function runTui(): Promise<void> {
     ask: true,
     approval: "human",
     ambiguity: "precise",
-    tier: "paid",
+    tier: "free",
     minFit: undefined,
     floors: "role",
     prompt: "",
@@ -604,6 +612,8 @@ export async function runTui(): Promise<void> {
   let modelPickText = "";
   /** New-run prompt is modal: navigation keys are disabled while true. */
   let newRunInsert = false;
+  /** `:` starts the two-key `:!` start command. */
+  let newRunColon = false;
   /** Advanced, rarely-touched new-run options live behind [s]. */
   let newRunSettings = false;
   let newRunSettingsSel = 0;
@@ -791,7 +801,7 @@ export async function runTui(): Promise<void> {
 
   const defaultNewRun = (): NewRunState => {
     const policy = (() => { try { return loadPolicy(l); } catch { return undefined; } })();
-    const agent = "sudo";
+    const agent = "general";
     const def = agentDef(l, agent);
     return {
       agent,
@@ -802,7 +812,7 @@ export async function runTui(): Promise<void> {
       ask: true,
       approval: "human",
       ambiguity: "precise",
-      tier: "paid",
+      tier: "free",
       minFit: undefined,
       floors: "role",
       prompt: "",
@@ -825,6 +835,7 @@ export async function runTui(): Promise<void> {
     newrun.mode = def.defaultMode ?? def.modes[0] ?? "";
     newrun.preset = def.preset;
     newRunInsert = false;
+    newRunColon = false;
     newRunSettings = false;
     newRunSettingsSel = 0;
     newRunContextTab = 0;
@@ -1016,6 +1027,7 @@ export async function runTui(): Promise<void> {
   };
 
   const submitNewRun = () => {
+    newRunColon = false;
     const args = buildNewRunArgs();
     if (!args) return;
     if (launch(args, newRunRepo)) {
@@ -1546,6 +1558,13 @@ export async function runTui(): Promise<void> {
       );
       const contextTokens = Math.ceil((Math.max(0, totalChars - excludedChars) + ctx.promptChars) / 4);
       footerCtx = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
+      // The context panel and prompt box share the same width.
+      const panelWidth = Math.max(20, cols - 2);
+      const panelLine = (line: string, isSelected = false, indent = false): string => {
+        const body = line.startsWith(" ") ? line.slice(1) : line;
+        const padded = fit(indent ? ` ${body}` : body, panelWidth);
+        return ` ${isSelected ? selected(padded, true) : background(padded, PANEL_BG)}`;
+      };
       const tabBar = wrapTokenList(
         sections.map((section, index) => {
           const label = newRunContextExcluded.has(section.sectionKey) ? `${section.label}✕` : section.label;
@@ -1553,9 +1572,9 @@ export async function runTui(): Promise<void> {
             ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B} ${label} ${R}`
             : `${theme.sectionFg}${label}${R}`;
         }),
-        cols - 2,
+        panelWidth,
         "  ",
-      ).map((line) => background(fit(` ${line}`, cols), PANEL_BG));
+      ).map((line) => panelLine(line, false, true));
       const activeSection = sections[newRunContextTab]!;
       newRunContextSectionKey = activeSection.sectionKey;
       newRunContextItemKeys = activeSection.items.map((item) => item.key);
@@ -1565,13 +1584,11 @@ export async function runTui(): Promise<void> {
         ? []
         : activeSection.items.filter((item) => !newRunContextExcluded.has(item.key));
       const sectionTokens = Math.ceil(keptItems.reduce((sum, item) => sum + item.chars, 0) / 4);
-      const sectionHeader = background(
-        fit(
-          ` ${B}${activeSection.tone}${activeSection.label}${R} ${D}·${R} ${C}${fmtTokens(sectionTokens)}${R}` +
-            `${D} tok · ${keptItems.length}/${activeSection.items.length} kept${R}`,
-          cols,
-        ),
-        PANEL_BG,
+      const sectionHeader = panelLine(
+        `${B}${activeSection.tone}${activeSection.label}${R} ${D}·${R} ${C}${fmtTokens(sectionTokens)}${R}` +
+          `${D} tok · ${keptItems.length}/${activeSection.items.length} kept${R}`,
+        false,
+        true,
       );
       const itemRoom = Math.max(1, Math.floor(bodyH * 0.28));
       const itemStart = Math.max(
@@ -1580,7 +1597,6 @@ export async function runTui(): Promise<void> {
       );
       const visibleItems = activeSection.items.slice(itemStart, itemStart + itemRoom);
       const itemLines: string[] = [];
-      const panelLine = (line: string): string => background(fit(line, cols), PANEL_BG);
       if (itemStart > 0) itemLines.push(panelLine(`  ${D}… ${itemStart} above${R}`));
       for (let offset = 0; offset < visibleItems.length; offset++) {
         const item = visibleItems[offset]!;
@@ -1588,29 +1604,24 @@ export async function runTui(): Promise<void> {
         const excluded = sectionOff || newRunContextExcluded.has(item.key);
         const mark = excluded ? `${RED}✕${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
         const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 24))}${R} ${D}${fmtTokens(item.chars)}${R}`;
-        itemLines.push(index === newRunContextItem ? selected(fit(line, cols), true) : panelLine(line));
+        itemLines.push(panelLine(line, index === newRunContextItem));
       }
       const remainingItems = activeSection.items.length - (itemStart + visibleItems.length);
       if (remainingItems > 0) itemLines.push(panelLine(`  ${D}… ${remainingItems} more${R}`));
       const compact = (key: string, label: string, tone: string): string =>
         `${B}${tone}${key}${R} ${D}${label}${R}`;
-      const contextCommands = background(
-        fit(
-          ` ${[
-            compact("h/l", "tabs", Y),
-            compact("j/k", "sel", M),
-            `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
-          ].join("  ")}`,
-          cols,
-        ),
-        PANEL_BG,
+      const contextCommands = panelLine(
+        joinCommands([
+          compact("h/l", "tabs", Y),
+          compact("j/k", "sel", M),
+          `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
+          !newRunInsert && activeSection.sectionKey === "section:issues"
+            ? command("i", "Issue", issueValue, newrun.issue ? C : GR)
+            : "",
+        ]),
+        false,
+        true,
       );
-      const issueCommand = !newRunInsert && activeSection.sectionKey === "section:issues"
-        ? background(
-            fit(` ${command("i", "Issue", issueValue, newrun.issue ? C : GR)}`, cols),
-            PANEL_BG,
-          )
-        : "";
       const summary = [
         modelInfo,
         "",
@@ -1621,7 +1632,7 @@ export async function runTui(): Promise<void> {
       ];
       if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
 
-      const boxWidth = Math.max(20, cols - 2);
+      const boxWidth = panelWidth;
       const inner = Math.max(12, boxWidth - 2);
       const promptText = newrun.prompt || (newRunInsert ? "" : "Press p to type the task");
       // Include the cursor before wrapping so a freshly typed trailing space is
@@ -1634,8 +1645,8 @@ export async function runTui(): Promise<void> {
             command("Backspace", "Delete", undefined, M),
           ])
         : joinCommands([
-            command("p", "Prompt", undefined, G),
-            newrun.prompt.trim() ? command("Enter", "Start", undefined, RED) : "",
+            command("p", "Prompt", undefined, M),
+            newrun.prompt.trim() ? commandBadge("Start", ":!", START_BG, WHITE) : "",
           ]);
       const promptControls = newRunInsert
         ? promptActions
@@ -1752,13 +1763,12 @@ export async function runTui(): Promise<void> {
         bottomAlign = {
           above: summary,
           block: [
-            ...(issueCommand ? [issueCommand] : []),
             contextCommands,
             ...promptBox,
             ...(promptHint ? [promptHint] : []),
             "",
           ],
-          filler: background(fit("", cols), PANEL_BG),
+          filler: panelLine(""),
         };
         // Agent, tier, issue, and prompt controls live beside the prompt or in
         // the Issues panel; the bottom footer has no command row.
@@ -2556,8 +2566,14 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
+      if (newRunColon) {
+        newRunColon = false;
+        if (data === "!") submitNewRun();
+        draw();
+        return;
+      }
+      if (data === ":") { newRunColon = true; draw(); return; }
       if (data === "\x1b") { screen = "list"; draw(); return; }
-      if (data === "\r" || data === "\n") { submitNewRun(); draw(); return; }
       if (data === "h" || data === "\x1b[D") {
         newRunContextTab = Math.max(0, newRunContextTab - 1);
         newRunContextItem = 0;
