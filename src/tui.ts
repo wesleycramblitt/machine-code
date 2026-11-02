@@ -1079,6 +1079,8 @@ export async function runTui(): Promise<void> {
     let body: string[] = [];
     let actions = "";
     let secondary = "";
+    /** True when `secondary` already carries its own styling (new-run model info). */
+    let secondaryStyled = false;
     /** Run details show only the working directory in their footer. */
     let runFooter = "";
 
@@ -1255,10 +1257,28 @@ export async function runTui(): Promise<void> {
               1_000_000,
           )
         : "?";
+      const fitScore = preview.fit;
+      const fitTone = fitScore === undefined ? D : fitScore >= 7.5 ? G : fitScore >= 6 ? Y : RED;
+      const costTone = preview.model?.free ? G : Y;
       const modelInfo = preview.error
-        ? `Model ${preview.error}`
-        : `Model ${preview.model?.key ?? "?"} fit ${preview.fit?.toFixed(2) ?? "?"} · ${estimateCost}${preview.model ? ` · ${preview.model.kind} · ctx ${fmtContext(preview.model.context)} · in $${preview.model.pricing.input}/M out $${preview.model.pricing.output}/M` : ""}`;
-      const contextLine = ` ${C}Context${R} ${W}~${fmtTokens(ctx.chars + ctx.promptChars)} chars${R} ${D}/ ~${fmtTokens(Math.ceil((ctx.chars + ctx.promptChars) / 4))} input tokens · ${ctx.artifacts.files.length} files · ${ctx.artifacts.tools.length} tools · ${ctx.artifacts.scripts.length} scripts · ${ctx.artifacts.skills.length} skills${R}`;
+        ? `${M}Model${R} ${RED}${preview.error}${R}`
+        : [
+            `${M}Model${R} ${B}${C}${preview.model?.key ?? "?"}${R}`,
+            fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`,
+            `${D}cost${R} ${costTone}${estimateCost}${R}`,
+            ...(preview.model
+              ? [
+                  `${M}${preview.model.kind}${R}`,
+                  `${D}ctx${R} ${C}${fmtContext(preview.model.context)}${R}`,
+                  `${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`,
+                  `${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`,
+                ]
+              : []),
+          ]
+            .filter(Boolean)
+            .join("  ");
+      const contextTokens = Math.ceil((ctx.chars + ctx.promptChars) / 4);
+      const contextLine = ` ${C}Context${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
       const chainLine = ` ${BL}Hierarchy${R} ${D}${issueChain.length ? issueChain.map((issue) => `#${issue.ref.number} ${issue.kind}`).join(" ← ") : "untracked · no issue context"}${R}`;
       const summary = [
         contextLine,
@@ -1373,9 +1393,10 @@ export async function runTui(): Promise<void> {
               command("s", "Settings", undefined, M),
               command("Enter", "Start", undefined, G),
             ]);
+        secondaryStyled = !newRunInsert;
         secondary = newRunInsert
           ? `${Y}Insert mode${R} ${D}· all key commands disabled · Esc or jk exits${R}${toast ? ` · ${Y}${toast}${R}` : ""}`
-          : `${D}${modelInfo}${toast ? ` · ${toast}` : ""}${R}`;
+          : `${modelInfo}${toast ? `  ${D}· ${toast}${R}` : ""}`;
       }
     }
 
@@ -1886,7 +1907,11 @@ export async function runTui(): Promise<void> {
       `${Y}⏸${R}  ${counts.paused} paused`,
     ];
     const commandRows = runDetailHeader ? [] : wrapCommands(actions || defaultActions, cols);
-    const secondaryRows = runDetailHeader ? [] : wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1);
+    const secondaryRows = runDetailHeader
+      ? []
+      : secondaryStyled
+        ? wrapCommands(secondary, cols).slice(0, 2)
+        : wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1);
     // The runs page owns the full status footer: live counts plus approvals/PR/spend.
     const trailingRows = runDetailHeader
       ? []
