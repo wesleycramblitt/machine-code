@@ -462,6 +462,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             home: input.home,
             requireModel: input.requireModel,
             signal: input.signal,
+            processes,
           }
         : undefined;
 

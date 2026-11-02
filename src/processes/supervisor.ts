@@ -4,8 +4,9 @@
  * Routes observed spawns through runProc, appends process records, and writes
  * full stdout/stderr to log files while returning the capped tool result.
  */
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { runProc, type ProcOptions, type ProcResult } from "../proc.js";
+import { appendFileSync, closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { minimalEnv, runProc, type ProcOptions, type ProcResult } from "../proc.js";
 import {
   appendProcessRecord,
   latestProcessRecords,
@@ -32,6 +33,19 @@ export interface SupervisedRunOptions extends Omit<ProcOptions, "hooks"> {
 
 export interface SupervisedRunResult {
   result: ProcResult;
+  processId: string;
+  record: ProcessRecord;
+}
+
+export interface SupervisedStartOptions {
+  cwd: string;
+  env?: Record<string, string>;
+  origin: ProcessOrigin;
+  name: string;
+  toolCallId?: string;
+}
+
+export interface SupervisedStartResult {
   processId: string;
   record: ProcessRecord;
 }
@@ -119,6 +133,73 @@ export class ProcessSupervisor {
     });
     finalize(result);
     return { result, processId: id, record };
+  }
+
+  /**
+   * Start a detached, long-lived process and return immediately. The parent
+   * records the process and writes its output to logs; if the parent exits
+   * first, reconcile marks the orphan later.
+   */
+  async start(binary: string, args: string[], options: SupervisedStartOptions): Promise<SupervisedStartResult> {
+    const { origin, name, toolCallId, cwd, env } = options;
+    const id = nextProcessId(readProcessRecords(this.options.runDir));
+    const logs = processLogPaths(this.options.runDir, id);
+    mkdirSync(processesDir(this.options.runDir), { recursive: true });
+    const startedAt = new Date().toISOString();
+    let record: ProcessRecord = {
+      id,
+      runId: this.options.runId,
+      origin,
+      name,
+      ...(toolCallId ? { toolCallId } : {}),
+      argv: [binary, ...args],
+      status: "running",
+      startedAt,
+      stdoutLog: logs.stdout,
+      stderrLog: logs.stderr,
+    };
+    appendProcessRecord(this.options.runDir, record);
+    this.options.onEvent?.("process_started", { processId: id, origin, name });
+    let outFd: number | undefined;
+    let errFd: number | undefined;
+    try {
+      outFd = openSync(logs.stdout, "a");
+      errFd = openSync(logs.stderr, "a");
+      const child = spawn(binary, args, {
+        cwd,
+        env: { ...minimalEnv(), ...(env ?? {}) },
+        detached: true,
+        stdio: ["ignore", outFd, errFd],
+      });
+      if (child.pid !== undefined) {
+        record = { ...record, pid: child.pid, pgid: child.pid };
+        appendProcessRecord(this.options.runDir, record);
+      }
+      const finish = (status: ProcessStatus, code: number | null, signal: string | null, error?: string): void => {
+        record = {
+          ...record,
+          status,
+          endedAt: new Date().toISOString(),
+          exitCode: code,
+          signal,
+          ...(error ? { error } : {}),
+        };
+        appendProcessRecord(this.options.runDir, record);
+        this.options.onEvent?.("process_exited", { processId: id, status, exitCode: code, signal });
+      };
+      child.on("error", (error: Error) => finish("spawn-error", null, null, error.message));
+      child.on("exit", (code, signal) => finish(code === 0 ? "exited" : signal ? "killed" : "failed", code, signal));
+      child.unref();
+      return { processId: id, record };
+    } catch (error) {
+      record = { ...record, status: "spawn-error", endedAt: new Date().toISOString(), error: (error as Error).message };
+      appendProcessRecord(this.options.runDir, record);
+      this.options.onEvent?.("process_exited", { processId: id, status: "spawn-error" });
+      return { processId: id, record };
+    } finally {
+      if (outFd !== undefined) closeSync(outFd);
+      if (errFd !== undefined) closeSync(errFd);
+    }
   }
 }
 

@@ -592,6 +592,7 @@ export async function runTui(): Promise<void> {
   let runSection: RunSection = "overview";
   let runScroll = 0;
   let processSel = 0;
+  let processFollow = false;
   let eventSel = 0;
   let eventScroll = 0;
   /** Line offset inside a selected timeline block (expanded inputs/outputs). */
@@ -2022,7 +2023,7 @@ export async function runTui(): Promise<void> {
           (runSection === "timeline"
             ? "  ·  j/k events · space expand · PgUp/Dn scroll"
             : runSection === "processes"
-              ? "  ·  j/k select · x kill · X kill all"
+              ? "  ·  j/k select · f follow · o log · x kill · X kill all"
               : "");
         footerMapTokens = mapStatusTokens(s.worktree ?? s.repoRoot);
         const sectionBar = wrapTokenList(
@@ -2303,6 +2304,7 @@ export async function runTui(): Promise<void> {
             const live = records.filter((record) => record.status === "running").length;
             lines.push(` ${B}${C}Processes${R} ${D}${records.length} total · ${live} running${R}`);
             const viewport = Math.max(1, bodyH - lines.length - 1);
+            if (processFollow) processSel = records.length - 1;
             processSel = Math.max(0, Math.min(processSel, records.length - 1));
             const start = Math.max(0, Math.min(processSel - Math.floor(viewport / 2), records.length - viewport));
             for (let i = start; i < Math.min(records.length, start + viewport); i++) {
@@ -2862,7 +2864,7 @@ export async function runTui(): Promise<void> {
       };
       if (data === "j" || data === "\x1b[B") {
         if (runSection === "timeline") stepTimeline(1);
-        else if (runSection === "processes") processSel++;
+        else if (runSection === "processes") { processFollow = false; processSel++; }
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll++; }
         else if (runSection === "children") childSel++;
         else runScroll++;
@@ -2871,7 +2873,7 @@ export async function runTui(): Promise<void> {
       }
       if (data === "k" || data === "\x1b[A") {
         if (runSection === "timeline") stepTimeline(-1);
-        else if (runSection === "processes") processSel = Math.max(0, processSel - 1);
+        else if (runSection === "processes") { processFollow = false; processSel = Math.max(0, processSel - 1); }
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll = Math.max(0, thinkingScroll - 1); }
         else if (runSection === "children") childSel = Math.max(0, childSel - 1);
         else runScroll = Math.max(0, runScroll - 1);
@@ -2883,6 +2885,7 @@ export async function runTui(): Promise<void> {
         runSection = RUN_SECTIONS[(index + delta + RUN_SECTIONS.length) % RUN_SECTIONS.length]!;
         runScroll = 0;
         processSel = 0;
+        processFollow = false;
         eventScroll = 0;
         eventBodyScroll = 0;
         thinkingFollow = true;
@@ -2900,6 +2903,20 @@ export async function runTui(): Promise<void> {
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
       };
       if (data === " ") { toggleEvent(); draw(); return; }
+      if (runSection === "processes" && data === "f") {
+        processFollow = !processFollow;
+        if (processFollow) processSel = Math.max(0, reconcileProcessRecords(detail.dir).length - 1);
+        notify(processFollow ? "following latest process" : "follow off");
+        draw();
+        return;
+      }
+      if (runSection === "processes" && data === "o") {
+        const record = reconcileProcessRecords(detail.dir)[processSel];
+        if (!record) notify("no process selected");
+        else openEditor(record.stdoutLog);
+        draw();
+        return;
+      }
       if (runSection === "processes" && data === "x") {
         const record = reconcileProcessRecords(detail.dir)[processSel];
         if (!record) notify("no process selected");
@@ -2937,6 +2954,11 @@ export async function runTui(): Promise<void> {
       if (data === "o") { openUrl(issueByRef(detail.summary.issue)?.url ?? detail.summary.prUrl); draw(); return; }
       if (data === "\r" || data === "\n") {
         if (runSection === "timeline") toggleEvent();
+        else if (runSection === "processes") {
+          const record = reconcileProcessRecords(detail.dir)[processSel];
+          if (!record) notify("no process selected");
+          else openEditor(record.stdoutLog);
+        }
         else if (runSection === "children") {
           const child = childRuns(listAllRuns(l.home), detail.summary.id)[childSel];
           if (child) { selectedRunId = child.id; runSection = "overview"; screen = "run"; }

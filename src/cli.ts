@@ -2293,6 +2293,14 @@ async function cmdPrune(argv: string[]): Promise<number> {
   const days = Number(flags.get("days") ?? "7");
   if (!Number.isFinite(days) || days < 0) fail("prune --days must be a non-negative number");
   const l = layout();
+  let checkedRuns = 0;
+  for (const run of listAllRuns(l.home)) {
+    const runDir = join(layout(run.repoRoot).runsDir, run.id);
+    if (!existsSync(runDir)) continue;
+    reconcileProcessRecords(runDir);
+    checkedRuns += 1;
+  }
+  if (checkedRuns > 0) process.stdout.write(`checked process records for ${checkedRuns} run(s).\n`);
   const { removed, skipped } = pruneRuns(l.home, days);
   process.stdout.write(`pruned ${removed} run(s) older than ${days} day(s); ${skipped} skipped (active/interrupted/recent).\n`);
   const worktrees = await pruneWorktrees(l);

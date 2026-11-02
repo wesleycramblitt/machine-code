@@ -185,9 +185,10 @@ args, or tool result; `PgUp`/`PgDn` scroll inside a long expanded block.
 
 Typed commands and runner gates run through the per-run process supervisor. The
 run detail **Processes** section shows each process, its status, pid, and output
-tail; `j`/`k` selects one, `x` kills the selected process, and `X` kills all
-live processes for the run. Kill sends SIGTERM, waits briefly, then sends
-SIGKILL if the process group is still alive. The record and full logs live under the run
+tail; `j`/`k` selects one, `f` follows the latest, `o` or Enter opens the log,
+`x` kills the selected process, and `X` kills all live processes for the run.
+Kill sends SIGTERM, waits briefly, then sends SIGKILL if the process group is
+still alive. The record and full logs live under the run
 directory:
 
 ```bash
@@ -196,8 +197,9 @@ machine_code processes logs <run-id> p-0001
 machine_code processes kill <run-id> p-0001   # or: all
 ```
 
-Orphaned running records are marked failed when read. LSP, map/git helpers, and
-delegated-run spawns are the remaining supervision work.
+Orphaned running records are marked failed when read and during prune. Detached
+delegated runs are tracked as `orchestrator` processes. LSP, map/git helpers,
+and MCP spawns are the remaining supervision work.
 
 Run modes belong to the selected agent. The Architect declares `direct`,
 `verified`, and `redundant` (default `verified`) plus the per-mode

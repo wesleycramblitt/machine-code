@@ -89,6 +89,27 @@ test("terminate escalates to SIGKILL after the grace period", async () => {
   }
 });
 
+test("start returns immediately and records the later exit", async () => {
+  const dir = tempDir();
+  try {
+    const supervisor = new ProcessSupervisor({ runId: "run-start", runDir: dir });
+    const started = await supervisor.start(process.execPath, ["-e", "setTimeout(()=>{},200)"], {
+      cwd: process.cwd(),
+      origin: "orchestrator",
+      name: "delegated:build",
+    });
+    assert.equal(started.processId, "p-0001");
+    assert.equal(started.record.status, "running");
+    assert.ok(started.record.pid);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const records = latestProcessRecords(readProcessRecords(dir));
+    assert.equal(records[0].status, "exited");
+    assert.equal(records[0].exitCode, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("spawn failures are recorded without throwing", async () => {
   const dir = tempDir();
   try {

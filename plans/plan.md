@@ -9,8 +9,9 @@
 > fields, process registry/types, issue dependencies, artifact usage). Phase 2
 > has metadata/free-model probes, run preflight, the `availability` CLI, and a
 > manual TUI probe. Phase 3 has the registry/supervisor, typed-command and gate tracking,
-> `processes` CLI, and the run-detail Processes section with kill controls.
-> Orphan records are reconciled on read. The suite has 223 tests.
+> `processes` CLI, and the run-detail Processes section with select, follow,
+> open-log, and kill controls. Detached delegated runs are supervised, and
+> orphan records are reconciled on read and during prune. The suite has 224 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -267,9 +268,9 @@ probe activity is visible and rate-limited.
 
 Status: partially implemented. The registry/supervisor, typed-command and gate
 process records and logs, `processes` CLI, run-detail Processes section with
-select/kill controls, SIGTERM→SIGKILL grace, and orphan reconciliation exist.
-Remaining: route every spawn (git/map, LSP, MCP, delegated runs), live
-follow/open-log controls, and a shared orphan reap during prune.
+select/follow/open-log/kill controls, detached delegated-run tracking,
+SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
+exist. Remaining: route map/git helpers, LSP, and MCP spawns.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -535,7 +536,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 223 tests green. Add:
+Keep the existing 224 tests green. Add:
 
 | Area | Cases |
 |---|---|

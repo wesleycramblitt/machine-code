@@ -44,6 +44,7 @@ export interface TaskContext {
   home: string;
   requireModel?: string;
   signal?: AbortSignal;
+  processes?: import("../processes/supervisor.js").ProcessSupervisor;
 }
 
 const TaskParams = Type.Object({
@@ -198,7 +199,6 @@ export function taskTool(ctx: TaskContext): AgentTool<typeof TaskParams> {
     if (params.wait === false) {
       // Detached child: a fresh process with lineage flags. Delegated
       // build/review children execute directly (no re-planning).
-      const { spawn } = await import("node:child_process");
       const { fileURLToPath } = await import("node:url");
       const cliPath = fileURLToPath(new URL("../../cli.js", import.meta.url));
       const args = [
@@ -215,6 +215,25 @@ export function taskTool(ctx: TaskContext): AgentTool<typeof TaskParams> {
         ...(ctx.requireModel ? ["--model", ctx.requireModel] : []),
         params.prompt!,
       ];
+      if (ctx.processes) {
+        const childEnv = Object.fromEntries(
+          Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+        );
+        const started = await ctx.processes.start(process.execPath, [cliPath, ...args], {
+          cwd: ctx.root,
+          env: childEnv,
+          origin: "orchestrator",
+          name: `delegated:${childRole}`,
+        });
+        if (started.record.status === "spawn-error") {
+          return fail(`could not start child run: ${started.record.error ?? "spawn failed"}`);
+        }
+        return ok(
+          `spawned detached child run (parent ${ctx.recorder.id}, process ${started.processId}); ` +
+            "list your children later with task action=status once it registers.",
+        );
+      }
+      const { spawn } = await import("node:child_process");
       const detached = spawn(process.execPath, [cliPath, ...args], {
         cwd: ctx.root,
         detached: true,
