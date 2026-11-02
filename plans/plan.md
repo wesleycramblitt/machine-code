@@ -16,8 +16,8 @@
 > read access with an explicit `--allow-issue-create` override. The Planner has
 > artifact inventory and safe tool-manifest provisioning; executable scripts
 > remain human-approved CLI work. The read-only scheduler, dry-run CLI, TUI
-> preflight, and orchestration ledger/lease are implemented. The suite has 232
-> tests.
+> preflight, and orchestration ledger/lease are implemented. Issue `plan`
+> writes/replaces `mc:plan` safely. The suite has 233 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -557,7 +557,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 232 tests green. Add:
+Keep the existing 233 tests green. Add:
 
 | Area | Cases |
 |---|---|

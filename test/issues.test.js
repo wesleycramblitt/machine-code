@@ -25,6 +25,7 @@ import {
   isReservedTask,
 } from "../dist/issues/reserved.js";
 import { issueTool } from "../dist/tools/issues.js";
+import { parsePlanMarker } from "../dist/plan/schema.js";
 import { RunRecorder } from "../dist/state/runs.js";
 import { resolveRunTarget } from "../dist/issues/work.js";
 
@@ -372,6 +373,52 @@ test("issue tool records dependencies on create and edit", async () => {
     });
     assert.equal(missing.isError, true);
     assert.match(missing.content[0].text, /was not found/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue tool writes and replaces mc:plan markers", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-"));
+  try {
+    const p = new FakeProvider();
+    const task = await p.create({
+      title: "Plan me",
+      body: "## Acceptance criteria\n- gate passes",
+      kind: "task",
+    });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:plan"], root);
+    const ready = await issueTool(ctx).execute("c1", {
+      action: "plan",
+      issue: String(task.ref.number),
+      status: "ready",
+      plan_role: "build",
+      verification: "verified",
+      plan_review: "human",
+    });
+    assert.equal(ready.isError, undefined);
+    const parsed = parsePlanMarker(p.issues.get(task.ref.number).body);
+    assert.equal(parsed.plan.status, "ready");
+    assert.equal(parsed.plan.planReview, "human");
+
+    const draft = await issueTool(ctx).execute("c1", {
+      action: "plan",
+      issue: String(task.ref.number),
+      status: "draft",
+    });
+    assert.equal(draft.isError, undefined);
+    const body = p.issues.get(task.ref.number).body;
+    assert.equal((body.match(/mc:plan/g) ?? []).length, 1, "replaces, not duplicates");
+    assert.equal(parsePlanMarker(body).plan.status, "draft");
+
+    const noAcceptance = await p.create({ title: "No acceptance", body: "", kind: "task" });
+    const refused = await issueTool(ctx).execute("c1", {
+      action: "plan",
+      issue: String(noAcceptance.ref.number),
+      status: "ready",
+    });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /acceptance/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

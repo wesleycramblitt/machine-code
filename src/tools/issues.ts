@@ -32,6 +32,7 @@ import {
   runCountsFrom,
 } from "../issues/reserved.js";
 import { checkCompletion, cascadeReserved } from "../issues/completion.js";
+import { renderPlanMarker, type PlanMarker, type PlanReview, type PlanRole, type PlanStatus, type PlanVerification, type PlanWorktree } from "../plan/schema.js";
 import type { Layout } from "../paths.js";
 import type { RunRecorder } from "../state/runs.js";
 
@@ -55,6 +56,7 @@ const IssueParams = Type.Object({
       Type.Literal("tree"),
       Type.Literal("create"),
       Type.Literal("edit"),
+      Type.Literal("plan"),
       Type.Literal("close"),
       Type.Literal("link"),
       Type.Literal("ensure"),
@@ -78,6 +80,16 @@ const IssueParams = Type.Object({
   state: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")])),
   reason: Type.Optional(Type.String({ description: "Close reason (close)." })),
   depth: Type.Optional(Type.Number({ description: "Tree depth (default 2)." })),
+  /** mc:plan fields for the `plan` action. */
+  status: Type.Optional(Type.Union([Type.Literal("draft"), Type.Literal("ready")])),
+  plan_role: Type.Optional(Type.Union([Type.Literal("build"), Type.Literal("review")])),
+  verification: Type.Optional(
+    Type.Union([Type.Literal("direct"), Type.Literal("verified"), Type.Literal("redundant")]),
+  ),
+  worktree: Type.Optional(Type.Union([Type.Literal("required"), Type.Literal("optional")])),
+  retries_before_replan: Type.Optional(Type.Number({ description: "Integer 0-20 (default 2)." })),
+  plan_review: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("human")])),
+  result_review: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("human")])),
 });
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -157,8 +169,8 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     label: "issue",
     description:
       "Structured GitHub issue access. list/view/tree read; create/edit write; create/edit accept blocked_by or depends_on; " +
-      "link sets parent-child (Feature→Epic, Task→Feature); ensure maintains the reserved Feature 0 / Task 0 anchors; " +
-      "close follows the per-issue approval policy.",
+      "plan writes or replaces the Task mc:plan marker; link sets parent-child (Feature→Epic, Task→Feature); " +
+      "ensure maintains the reserved Feature 0 / Task 0 anchors; close follows the per-issue approval policy.",
     parameters: IssueParams,
     async execute(_id, params: Static<typeof IssueParams>) {
       try {
@@ -255,6 +267,46 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           ...(blockedBy ? { blockedBy } : {}),
         });
         return ok(`updated #${updated.ref.number}: ${updated.title}`);
+      }
+      case "plan": {
+        requirePlan();
+        const target = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!target) return fail(`issue not found: ${params.issue}`);
+        if (target.kind !== "task") return fail("mc:plan applies to Task issues only");
+        if (target.reserved) return fail("reserved anchors cannot carry a deliverable plan");
+        if (params.status === "ready" && target.acceptance.length === 0) {
+          return fail("a ready plan needs acceptance criteria in the issue body");
+        }
+        const retries = params.retries_before_replan ?? target.plan?.retriesBeforeReplan ?? 2;
+        if (!Number.isInteger(retries) || retries < 0 || retries > 20) {
+          return fail("retries_before_replan must be an integer in 0-20");
+        }
+        const plan: PlanMarker = {
+          v: 1,
+          status: (params.status ?? target.plan?.status ?? "draft") as PlanStatus,
+          role: (params.plan_role ?? target.plan?.role ?? "build") as PlanRole,
+          verification: (params.verification ?? target.plan?.verification ?? "verified") as PlanVerification,
+          worktree: (params.worktree ?? target.plan?.worktree ?? "required") as PlanWorktree,
+          retriesBeforeReplan: retries,
+          planReview: (params.plan_review ?? target.plan?.planReview ?? "agent") as PlanReview,
+          resultReview: (params.result_review ?? target.plan?.resultReview ?? "agent") as PlanReview,
+        };
+        const marker = renderPlanMarker(plan);
+        const nextBody = /<!--\s*mc:plan[\s\S]*?-->/.test(target.body)
+          ? target.body.replace(/<!--\s*mc:plan[\s\S]*?-->/, marker)
+          : `${target.body.replace(/\s+$/, "")}\n\n${marker}\n`;
+        const updated = await ctx.provider.update(target.ref, { body: nextBody });
+        ctx.recorder.event("plan_updated", {
+          issue: updated.ref.number,
+          status: plan.status,
+          verification: plan.verification,
+          worktree: plan.worktree,
+        });
+        return ok(
+          `plan ${plan.status} on #${updated.ref.number}: ${plan.role}/${plan.verification}, ` +
+            `worktree ${plan.worktree}, retries ${plan.retriesBeforeReplan}, ` +
+            `reviews ${plan.planReview}/${plan.resultReview}`,
+        );
       }
       case "close": {
         require("issue:close");
