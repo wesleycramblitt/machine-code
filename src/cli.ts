@@ -41,8 +41,9 @@ import { resolveRunTarget } from "./issues/work.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
 import { loadAvailability, saveAvailability } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
-import { latestProcessRecords, readProcessRecords } from "./processes/registry.js";
+import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
+import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { killAllProcesses, killProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
@@ -2549,7 +2550,7 @@ function cmdProcesses(argv: string[]): number {
     const target = args[2];
     if (!runId || !target) fail("usage: machine_code processes kill <run-id> <process-id|all>");
     const found = find(runId);
-    const records = readProcessRecords(found.runDir);
+    const records = reconcileProcessRecords(found.runDir);
     if (target === "all") {
       const killed = killAllProcesses(records);
       process.stdout.write(`killed ${killed} process(es) for ${found.run.summary.id}\n`);
@@ -2571,7 +2572,7 @@ function cmdProcesses(argv: string[]): number {
     const target = args[2];
     if (!runId || !target) fail("usage: machine_code processes logs <run-id> <process-id>");
     const found = find(runId);
-    const record = latestProcessRecords(readProcessRecords(found.runDir)).find((entry) => entry.id === target);
+    const record = reconcileProcessRecords(found.runDir).find((entry) => entry.id === target);
     if (!record) fail(`no process ${target} for ${found.run.summary.id}`);
     process.stdout.write(`${record.id} ${record.name}  ${record.status}\n`);
     const stdout = tailFile(record.stdoutLog, 20_000);
@@ -2585,7 +2586,7 @@ function cmdProcesses(argv: string[]): number {
   const runId = args[0];
   if (!runId) fail("usage: machine_code processes <run-id> [--json] | processes kill <run-id> <id|all> | processes logs <run-id> <id>");
   const found = find(runId);
-  const records = latestProcessRecords(readProcessRecords(found.runDir));
+  const records = reconcileProcessRecords(found.runDir);
   if (json) {
     process.stdout.write(`${JSON.stringify(records, null, 2)}\n`);
     return 0;

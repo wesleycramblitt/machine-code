@@ -36,8 +36,10 @@ import { axisWeights, isMetaRouter, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.js";
-import { latestProcessRecords, readProcessRecords } from "./processes/registry.js";
+import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
+import { reconcileProcessRecords } from "./processes/reconcile.js";
+import { killAllProcesses, killProcessRecord } from "./processes/supervisor.js";
 import { AGENT_META, AGENT_NAMES, agentDef, type IssueAccess } from "./agents.js";
 import { resolveAgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
@@ -589,6 +591,7 @@ export async function runTui(): Promise<void> {
   let issueScroll = 0;
   let runSection: RunSection = "overview";
   let runScroll = 0;
+  let processSel = 0;
   let eventSel = 0;
   let eventScroll = 0;
   /** Line offset inside a selected timeline block (expanded inputs/outputs). */
@@ -2016,7 +2019,11 @@ export async function runTui(): Promise<void> {
         const touched = touchedPaths(ev);
         runFooter =
           `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}` +
-          (runSection === "timeline" ? "  ·  j/k events · space expand · PgUp/Dn scroll" : "");
+          (runSection === "timeline"
+            ? "  ·  j/k events · space expand · PgUp/Dn scroll"
+            : runSection === "processes"
+              ? "  ·  j/k select · x kill · X kill all"
+              : "");
         footerMapTokens = mapStatusTokens(s.worktree ?? s.repoRoot);
         const sectionBar = wrapTokenList(
           RUN_SECTIONS.map((section) =>
@@ -2289,26 +2296,28 @@ export async function runTui(): Promise<void> {
           }
           body = clipBody(lines);
         } else if (runSection === "processes") {
-          const records = latestProcessRecords(readProcessRecords(detail.dir));
+          const records = reconcileProcessRecords(detail.dir);
           if (records.length === 0) {
             lines.push(` ${D}No OS processes recorded for this run.${R}`);
           } else {
             const live = records.filter((record) => record.status === "running").length;
             lines.push(` ${B}${C}Processes${R} ${D}${records.length} total · ${live} running${R}`);
             const viewport = Math.max(1, bodyH - lines.length - 1);
-            runScroll = Math.max(0, Math.min(runScroll, Math.max(0, records.length - viewport)));
-            for (const record of records.slice(runScroll, runScroll + viewport)) {
+            processSel = Math.max(0, Math.min(processSel, records.length - 1));
+            const start = Math.max(0, Math.min(processSel - Math.floor(viewport / 2), records.length - viewport));
+            for (let i = start; i < Math.min(records.length, start + viewport); i++) {
+              const record = records[i]!;
               const tone = record.status === "running" ? Y : record.status === "exited" ? G : RED;
               const icon = record.status === "running" ? "●" : record.status === "exited" ? "✓" : "✗";
               const pid = record.pid ? `pid ${record.pid}` : "pid -";
               const ended = record.exitCode === undefined ? "" : ` exit ${record.exitCode}`;
-              lines.push(
+              const line =
                 ` ${tone}${icon}${R} ${D}${record.id}${R} ${tone}${record.status.padEnd(10)}${R}` +
-                  ` ${D}${record.origin.padEnd(8)}${R} ${W}${trunc(record.name, Math.max(16, cols - 48))}${R} ${D}${pid}${ended}${R}`,
-              );
+                ` ${D}${record.origin.padEnd(8)}${R} ${W}${trunc(record.name, Math.max(16, cols - 48))}${R} ${D}${pid}${ended}${R}`;
+              lines.push(selected(line, i === processSel));
               const log = readLogTail(record.stdoutLog, 4_000);
               const tail = log.trim().split("\n").filter(Boolean).at(-1);
-              if (tail) lines.push(`   ${D}${trunc(tail, Math.max(16, cols - 6))}${R}`);
+              if (tail && i === processSel) lines.push(`   ${D}${trunc(tail, Math.max(16, cols - 6))}${R}`);
             }
           }
           body = clipBody(lines);
@@ -2853,6 +2862,7 @@ export async function runTui(): Promise<void> {
       };
       if (data === "j" || data === "\x1b[B") {
         if (runSection === "timeline") stepTimeline(1);
+        else if (runSection === "processes") processSel++;
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll++; }
         else if (runSection === "children") childSel++;
         else runScroll++;
@@ -2861,6 +2871,7 @@ export async function runTui(): Promise<void> {
       }
       if (data === "k" || data === "\x1b[A") {
         if (runSection === "timeline") stepTimeline(-1);
+        else if (runSection === "processes") processSel = Math.max(0, processSel - 1);
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll = Math.max(0, thinkingScroll - 1); }
         else if (runSection === "children") childSel = Math.max(0, childSel - 1);
         else runScroll = Math.max(0, runScroll - 1);
@@ -2871,6 +2882,7 @@ export async function runTui(): Promise<void> {
         const index = RUN_SECTIONS.indexOf(runSection);
         runSection = RUN_SECTIONS[(index + delta + RUN_SECTIONS.length) % RUN_SECTIONS.length]!;
         runScroll = 0;
+        processSel = 0;
         eventScroll = 0;
         eventBodyScroll = 0;
         thinkingFollow = true;
@@ -2888,6 +2900,26 @@ export async function runTui(): Promise<void> {
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
       };
       if (data === " ") { toggleEvent(); draw(); return; }
+      if (runSection === "processes" && data === "x") {
+        const record = reconcileProcessRecords(detail.dir)[processSel];
+        if (!record) notify("no process selected");
+        else {
+          try {
+            killProcessRecord(record);
+            notify(`sent SIGTERM to ${record.id}`);
+          } catch (error) {
+            notify((error as Error).message);
+          }
+        }
+        draw();
+        return;
+      }
+      if (runSection === "processes" && data === "X") {
+        const killed = killAllProcesses(reconcileProcessRecords(detail.dir));
+        notify(killed ? `sent SIGTERM to ${killed} process(es)` : "no live processes");
+        draw();
+        return;
+      }
       if (data === "a") { answerRun(detail.summary); draw(); return; }
       if (data === "i") { interrupt(detail.summary); draw(); return; }
       if (data === "c") { startCorrect(detail.summary); draw(); return; }

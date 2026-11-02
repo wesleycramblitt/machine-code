@@ -183,9 +183,11 @@ In the run detail Timeline, `j`/`k` moves between timestamp events and skips
 streaming deltas. `space` expands the selected input, output, reasoning, tool
 args, or tool result; `PgUp`/`PgDn` scroll inside a long expanded block.
 
-Typed commands run through the per-run process supervisor. The run detail
-**Processes** section shows each process, its status, pid, and output tail.
-The record and full logs live under the run directory:
+Typed commands and runner gates run through the per-run process supervisor. The
+run detail **Processes** section shows each process, its status, pid, and output
+tail; `j`/`k` selects one, `x` kills the selected process, and `X` kills all
+live processes for the run. The record and full logs live under the run
+directory:
 
 ```bash
 machine_code processes <run-id>
@@ -193,8 +195,8 @@ machine_code processes logs <run-id> p-0001
 machine_code processes kill <run-id> p-0001   # or: all
 ```
 
-LSP, map/git helpers, and delegated-run spawns are the remaining supervision
-work.
+Orphaned running records are marked failed when read. LSP, map/git helpers, and
+delegated-run spawns are the remaining supervision work.
 
 Run modes belong to the selected agent. The Architect declares `direct`,
 `verified`, and `redundant` (default `verified`) plus the per-mode
