@@ -20,41 +20,41 @@
 # Tune with: machine_code models --agent <role> [--min-fit N]
 
 [agents.general]
-min_fit = 7.4
+min_fit = 6.0
 [agents.general.axes]
-reasoning = 7.2
-code = 6.0
+reasoning = 6.0
+code = 5.0
 agentic = 6.0
-general = 6.0
+general = 5.0
 
 [agents.architect]
-min_fit = 7.6
+min_fit = 6.0
 [agents.architect.axes]
-reasoning = 7.5
-agentic = 6.8
-code = 5.5
+reasoning = 6.0
+code = 5.0
+agentic = 6.0
 general = 5.0
 
 [agents.build]
-min_fit = 7.0
+min_fit = 6.0
 [agents.build.axes]
-code = 6.5
-agentic = 6.5
-reasoning = 5.5
-general = 3.0
+code = 5.5
+agentic = 5.0
+reasoning = 6.0
+general = 5.0
 
 [agents.review]
-min_fit = 7.7
+min_fit = 6.0
 [agents.review.axes]
-reasoning = 7.5
-code = 6.0
-agentic = 6.5
-general = 5.5
+reasoning = 6.0
+code = 5.0
+agentic = 6.0
+general = 5.0
 
 [agents.sudo]
-min_fit = 7.8
+min_fit = 6.0
 [agents.sudo.axes]
-reasoning = 8.0
-agentic = 7.5
-code = 6.0
-general = 5.5
+reasoning = 6.0
+code = 5.0
+agentic = 6.0
+general = 5.0
