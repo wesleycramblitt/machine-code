@@ -31,7 +31,7 @@ import {
 import { selectableLines } from "./tui/scroll.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
-import { axisWeights, pick } from "./select.js";
+import { axisWeights, isMetaRouter, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability } from "./availability.js";
 import { AGENT_META, AGENT_NAMES, agentDef } from "./agents.js";
@@ -158,6 +158,8 @@ type NewRunSettingField = (typeof NEW_RUN_SETTING_FIELDS)[number];
 
 interface NewRunState {
   agent: string;
+  /** Explicit catalogue key override; undefined lets the selector choose. */
+  model?: string;
   mode: string;
   preset: string;
   verification: "direct" | "verified" | "redundant";
@@ -529,6 +531,9 @@ export async function runTui(): Promise<void> {
   let issuePick: "newrun" | null = null;
   let issuePickSel = 0;
   let issuePickText = "";
+  let modelPick: "newrun" | null = null;
+  let modelPickSel = 0;
+  let modelPickText = "";
   /** New-run prompt is modal: navigation keys are disabled while true. */
   let newRunInsert = false;
   let newRunPendingJ = false;
@@ -738,6 +743,9 @@ export async function runTui(): Promise<void> {
     newRunPendingJ = false;
     newRunSettings = false;
     newRunSettingsSel = 0;
+    modelPick = null;
+    modelPickSel = 0;
+    modelPickText = "";
     screen = "newrun";
   };
 
@@ -833,6 +841,7 @@ export async function runTui(): Promise<void> {
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars: context.chars + context.promptChars,
       tier: newrun.tier,
+      requireModel: newrun.model,
     });
     if ("error" in result) return { context, error: result.error, policy };
     return {
@@ -853,6 +862,7 @@ export async function runTui(): Promise<void> {
       "run",
       "--agent", newrun.agent,
       ...(newrun.mode ? ["--mode", newrun.mode] : []),
+      ...(newrun.model ? ["--model", newrun.model] : []),
       "--tier", newrun.tier,
       "--preset", newrun.preset,
       "--verify", newrun.verification,
@@ -1261,9 +1271,9 @@ export async function runTui(): Promise<void> {
       const fitTone = fitScore === undefined ? D : fitScore >= 7.5 ? G : fitScore >= 6 ? Y : RED;
       const costTone = preview.model?.free ? G : Y;
       const modelInfo = preview.error
-        ? `${M}Model${R} ${RED}${preview.error}${R}`
+        ? `${M}Model[m]${R} ${RED}${preview.error}${R}`
         : [
-            `${M}Model${R} ${B}${C}${preview.model?.key ?? "?"}${R}`,
+            `${M}Model[m]${R} ${B}${C}${preview.model?.key ?? "?"}${R}`,
             fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`,
             `${D}cost${R} ${costTone}${estimateCost}${R}`,
             ...(preview.model
@@ -1294,7 +1304,16 @@ export async function runTui(): Promise<void> {
         if (promptLines.length === 0) promptLines.push("▌");
         else promptLines[promptLines.length - 1] = `${promptLines[promptLines.length - 1]}▌`;
       }
-      const availableForPrompt = Math.max(3, bodyH - summary.length - 6);
+      const promptActions = newRunInsert
+        ? ""
+        : joinCommands([
+            command("e", "Prompt", "edit", G),
+            command("Enter", "Start", undefined, G),
+          ]);
+      const promptHint = promptActions
+        ? ` ${" ".repeat(Math.max(0, boxWidth - visible(promptActions)))}${promptActions}`
+        : "";
+      const availableForPrompt = Math.max(3, bodyH - summary.length - (promptHint ? 7 : 6));
       const promptHeight = Math.max(3, Math.min(16, availableForPrompt, Math.floor(bodyH * 0.5)));
       const shownPrompt = promptLines.slice(-promptHeight);
       const promptBox = [
@@ -1302,6 +1321,7 @@ export async function runTui(): Promise<void> {
         ...shownPrompt.map((line) => ` ${D}│${R} ${W}${fit(line, inner - 2)}${R} ${D}│${R}`),
         ...Array.from({ length: Math.max(0, promptHeight - shownPrompt.length) }, () => ` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`),
         ` ${D}└${"─".repeat(inner)}┘${R}`,
+        ...(promptHint ? [promptHint] : []),
       ];
 
       const sources: string[] = [];
@@ -1317,7 +1337,38 @@ export async function runTui(): Promise<void> {
         }
       }
 
-      if (issuePick === "newrun") {
+      if (modelPick === "newrun") {
+        const list = pickerModels();
+        const weights = newRunWeights();
+        const total = list.length + 1;
+        if (modelPickSel >= total) modelPickSel = Math.max(0, total - 1);
+        const autoLine = ` ${newrun.model === undefined ? `${C}▸` : " "} ${G}Auto${R} ${D}let the selector choose${R}`;
+        const entries: string[] = [selected(autoLine, modelPickSel === 0)];
+        for (let i = 0; i < list.length; i++) {
+          const row = list[i]!;
+          const chosen = row.key === newrun.model;
+          const fit = modelWeightedFit(row, weights);
+          const free = row.free ? ` ${G}FREE${R}` : "";
+          const line = ` ${chosen ? `${C}▸` : " "} ${C}${row.key}${R} ${D}fit ${fit.toFixed(2)}${R}${free}`;
+          entries.push(selected(line, modelPickSel === i + 1));
+        }
+        const visible = Math.max(1, bodyH - 4);
+        const start = Math.max(0, Math.min(modelPickSel - Math.floor(visible / 2), Math.max(0, total - visible)));
+        const picker: string[] = [
+          ` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Select model${R} ${D}(type to filter; Enter selects)${R}`,
+          "",
+          ...entries.slice(start, start + visible),
+          "",
+          ` ${D}filter: ${modelPickText || "(all)"}${R}`,
+        ];
+        body = clipBody(picker.slice(0, bodyH));
+        actions = joinCommands([
+          command("Enter", "Select", undefined, G),
+          command("j/k", "Move", undefined, M),
+          command("Esc", "Close", undefined, GR),
+        ]);
+        secondary = `${D}${list.length} model(s)${modelPickText ? ` · “${modelPickText}”` : ""}${R}`;
+      } else if (issuePick === "newrun") {
         const list = pickerIssues();
         if (issuePickSel >= list.length) issuePickSel = Math.max(0, list.length - 1);
         const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link an issue${R} ${D}(type to filter; Enter selects)${R}`, ""];
@@ -1389,9 +1440,7 @@ export async function runTui(): Promise<void> {
               command("a", "Agent", displayAgent, C, M),
               command("t", "Tier", displayTier, Y, newrun.tier === "free" ? G : Y),
               command("i", "Issue", issueValue, BL, newrun.issue ? C : GR),
-              command("e", "Prompt", newRunInsert ? "editing" : "edit", G, newRunInsert ? Y : W),
               command("s", "Settings", undefined, M),
-              command("Enter", "Start", undefined, G),
             ]);
         secondaryStyled = !newRunInsert;
         secondary = newRunInsert
@@ -2011,6 +2060,54 @@ export async function runTui(): Promise<void> {
     notify(`linked #${issue.ref.number}; ${issue.kind === "task" ? "runs attach here" : "a child task will be created"}`);
   };
 
+  const newRunWeights = () => {
+    const policy = effectivePolicy(newRunRepo);
+    const ap = policy?.agents[newrun.agent];
+    return ap ? axisWeights(newrun.agent, ap) : undefined;
+  };
+
+  const pickerModels = (): CatalogueRow[] => {
+    const catalogue = loadCatalogue(layout(newRunRepo).catalogueFile);
+    if (!catalogue) return [];
+    const configured = new Set(
+      providerStatuses(createModelsCollection())
+        .filter((status) => status.configured)
+        .map((status) => status.id),
+    );
+    const policy = effectivePolicy(newRunRepo);
+    const minContext = policy?.agents[newrun.agent]?.minContext ?? 0;
+    const machine = (() => {
+      try {
+        return loadMachineConfig(layout(newRunRepo));
+      } catch {
+        return undefined;
+      }
+    })();
+    const funded = fundedProviderIds(machine?.providers ?? {});
+    return filterModels(catalogue.models, {
+      providers: configured,
+      freeOnly: newrun.tier === "free",
+      codingOnly: true,
+      toolCall: true,
+      text: modelPickText,
+      weights: newRunWeights(),
+      sort: "fit",
+    }).filter(
+      (row) =>
+        !isMetaRouter(row) &&
+        row.context >= minContext &&
+        (newrun.tier === "free" || row.free === true || funded.has(row.providerID)),
+    );
+  };
+
+  const startModelPicker = () => {
+    modelPick = "newrun";
+    modelPickText = "";
+    const list = pickerModels();
+    const index = newrun.model ? list.findIndex((row) => row.key === newrun.model) : -1;
+    modelPickSel = index >= 0 ? index + 1 : 0;
+  };
+
   /* ------------------------------------------------------------- input */
 
   const handleKey = (data: string) => {
@@ -2054,6 +2151,42 @@ export async function runTui(): Promise<void> {
     }
 
     if (screen === "newrun") {
+      if (modelPick === "newrun") {
+        const list = pickerModels();
+        if (data === "\x1b") { modelPick = null; draw(); return; }
+        if (data === "\x1b[A" || data === "k") { modelPickSel = Math.max(0, modelPickSel - 1); draw(); return; }
+        if (data === "\x1b[B" || data === "j") {
+          modelPickSel = Math.min(list.length, modelPickSel + 1);
+          draw();
+          return;
+        }
+        if (data === "\r" || data === "\n") {
+          if (modelPickSel === 0) {
+            newrun.model = undefined;
+          } else {
+            const row = list[modelPickSel - 1];
+            if (row) newrun.model = row.key;
+          }
+          modelPick = null;
+          notify(newrun.model ? `model ${newrun.model}` : "model auto");
+          draw();
+          return;
+        }
+        if (data === "\x7f" || data === "\b") {
+          modelPickText = modelPickText.slice(0, -1);
+          modelPickSel = 0;
+          draw();
+          return;
+        }
+        if (!data.startsWith("\x1b")) {
+          modelPickText += printable(data);
+          modelPickSel = 0;
+          draw();
+          return;
+        }
+        draw();
+        return;
+      }
       if (issuePick === "newrun") {
         if (data === "\x1b") { issuePick = null; draw(); return; }
         if (data === "\x1b[A" || data === "k") { issuePickSel = Math.max(0, issuePickSel - 1); draw(); return; }
@@ -2107,6 +2240,7 @@ export async function runTui(): Promise<void> {
       if (data === "a") { cycleAgent(); draw(); return; }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
       if (data === "i") { startIssuePicker(); draw(); return; }
+      if (data === "m") { startModelPicker(); draw(); return; }
       if (data === "s") { newRunSettings = true; newRunSettingsSel = 0; draw(); return; }
       if (data === "e" || data === "p") { newRunInsert = true; newRunPendingJ = false; draw(); return; }
       if (data === "X" && newrun.issue) { newrun.issue = undefined; draw(); return; }
