@@ -687,7 +687,7 @@ function cmdModels(argv: string[]): number {
       process.stdout.write(
         `  ${String(c.score).padEnd(9)} ${c.key.padEnd(58)} ` +
           `fit ${c.fit.toFixed(2).padEnd(5)} pen ${String(c.terms.capability).padEnd(6)} cost ${String(c.terms.cost).padEnd(6)} ` +
-          `speed ${String(c.terms.speed).padEnd(6)} head ${String(c.terms.headroom).padEnd(6)} ` +
+          `speed ${String(c.terms.speed).padEnd(6)} head ${String(c.terms.headroom).padEnd(6)} conf ${String(c.terms.confidence).padEnd(4)} ` +
           `~$${c.estimatedCost.toFixed(6)}\n`,
       );
     }

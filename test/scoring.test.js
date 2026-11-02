@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scoresFromBenchmarks } from "../dist/catalogue/scoring.js";
+import { scoresFromBenchmarks, scoresFromMetadata } from "../dist/catalogue/scoring.js";
 import { parseOpenRouterBenchmarks } from "../dist/catalogue/openrouter.js";
 
 test("composite indices are fallbacks, not duplicated direct tests", () => {
@@ -82,4 +82,22 @@ test("parser keeps Artificial Analysis indices separate from benchmark columns",
   assert.equal(bench.tauBench, undefined);
   assert.equal(bench.designArena, 1236);
   assert.equal(bench.lmarena, undefined);
+});
+
+function prior(id, name = id) {
+  return scoresFromMetadata({
+    id,
+    name,
+    family: "",
+    releaseDate: "",
+    knowledge: "",
+    context: 262_144,
+    capabilities: { reasoning: true, toolCall: true, image: false },
+  });
+}
+
+test("size tokens like 40b are not parsed as generations", () => {
+  assert.deepEqual(prior("flint-40b-free", "Flint 40B Free"), prior("flint-free", "Flint Free"));
+  assert.deepEqual(prior("qwen-120b", "Qwen 120B"), prior("qwen", "Qwen"));
+  assert.deepEqual(prior("mixtral-8x7b", "Mixtral 8x7b"), prior("mixtral", "Mixtral"));
 });

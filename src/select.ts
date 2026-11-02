@@ -3,9 +3,9 @@
  *
  * Every provider call runs pick(): estimate input as context chars ÷ 4 and
  * output as the agent's fixed expected output; hard-filter; score
- * role-weighted capability, estimated cost, speed, and context headroom with
- * fixed weights; ties go to the lexicographically smaller model key. No
- * stickiness, no learned estimates. Every pick is logged by the caller.
+ * role-weighted capability, estimated cost, speed, context headroom, and score
+ * confidence with fixed weights; ties go to the lexicographically smaller model
+ * key. No stickiness, no learned estimates. Every pick is logged by the caller.
  *
  * Capability is multi-dimensional. A row carries four axis scores
  * (reasoning, code, agentic, general); `pick` hard-filters on the role-weighted
@@ -27,6 +27,8 @@ export interface ScoreWeights {
   cost: number;
   speed: number;
   headroom: number;
+  /** Penalty for rows whose scores are metadata priors, not measurements. */
+  confidence: number;
 }
 
 /** Fixed scoring weights, tuned on evals. */
@@ -35,6 +37,7 @@ export const WEIGHTS: ScoreWeights = {
   cost: 0.25,
   speed: 0.1,
   headroom: 0.15,
+  confidence: 0.1,
 };
 
 type AxisWeights = Record<CapabilityAxis, number>;
@@ -86,7 +89,7 @@ export interface CandidateScore {
   score: number;
   /** Role-weighted axis mix used for this candidate. */
   fit: number;
-  terms: { capability: number; cost: number; speed: number; headroom: number };
+  terms: { capability: number; cost: number; speed: number; headroom: number; confidence: number };
   estimatedCost: number;
 }
 
@@ -252,6 +255,11 @@ export function scoreCandidate(
   const estimatedCost = effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, input.machine);
   const weights = roleWeightsInput ?? axisWeights(input.agent, input.policy);
   const fit = capabilityFit(row.scores, weights);
+  // Metadata priors are a guess about an unmeasured model. Keep them eligible
+  // (especially for the free tier) but do not let a guessed fit outrank a
+  // benchmark-backed row by a hair. Rows with any reported benchmark keep their
+  // measured fit; only fully estimated rows take the penalty.
+  const confidenceTerm = row.provenance?.estimated === true ? 1 : 0;
   // Lower is better: a role-fit of 10 scores 0, a fit of 6 scores 0.4. This
   // keeps a gradient above the floor instead of treating every eligible model
   // as equally capable.
@@ -265,7 +273,8 @@ export function scoreCandidate(
     WEIGHTS.capability * quality +
     WEIGHTS.cost * costTerm +
     WEIGHTS.speed * speedTerm +
-    WEIGHTS.headroom * headroomTerm;
+    WEIGHTS.headroom * headroomTerm +
+    WEIGHTS.confidence * confidenceTerm;
   return {
     key: row.key,
     score: Math.round(score * 1e6) / 1e6,
@@ -275,6 +284,7 @@ export function scoreCandidate(
       cost: Math.round(costTerm * 1e4) / 1e4,
       speed: Math.round(speedTerm * 1e4) / 1e4,
       headroom: Math.round(headroomTerm * 1e4) / 1e4,
+      confidence: Math.round(confidenceTerm * 1e4) / 1e4,
     },
     estimatedCost: Math.round(estimatedCost * 1e8) / 1e8,
   };

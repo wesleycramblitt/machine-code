@@ -161,6 +161,28 @@ test("capability is a gradient above the floor: equal price prefers the better m
   assert.ok(b.terms.capability < a.terms.capability, "better fit is a smaller penalty");
 });
 
+test("metadata-estimated rows yield to benchmark-backed rows at a similar fit", () => {
+  const estimated = row("p/estimated", { scores: axes(8.2, 8.2, 8.2, 8.2) });
+  const measured = row("p/measured", {
+    scores: axes(7.9, 7.9, 7.9, 7.9),
+    provenance: {
+      metadata: "generated",
+      benchmark: "test",
+      estimated: false,
+      estimatedFields: [],
+      curated: [],
+      scoreSources: { reasoning: "benchmark", code: "benchmark", agentic: "benchmark", general: "benchmark" },
+    },
+  });
+  const result = pickOne([estimated, measured], { ...basePolicy, minCapability: 0 });
+  assert.ok(!("error" in result));
+  assert.equal(result.selected.key, "p/measured");
+  const est = result.candidates.find((c) => c.key === "p/estimated");
+  const ben = result.candidates.find((c) => c.key === "p/measured");
+  assert.equal(est.terms.confidence, 1);
+  assert.equal(ben.terms.confidence, 0);
+});
+
 test("a materially better model can beat a cheaper one", () => {
   const cheap = row("p/cheap", {
     scores: axes(7.5, 7.5, 7.5, 7.5),

@@ -205,7 +205,12 @@ function tierSignal(id: string, name: string): number {
 
 /** A family version number, when the id carries one (claude-4-5, gpt-5.5). */
 function generationSignal(family: string, id: string): number {
-  const hay = `${family} ${id}`;
+  // Size tokens like 40b, 120b, 8x7b, and a4b are parameter counts, not
+  // generations. Left in place they parse as version 40/120 and max out the
+  // prior for small open models.
+  const hay = `${family} ${id}`
+    .replace(/\d+x\d+(?:\.\d+)?\s*[bBmM]\b/gi, " ")
+    .replace(/\d+(?:\.\d+)?\s*[bBmM]\b/gi, " ");
   const match = /(?:\b|[^\d])(\d+(?:\.\d+)?)(?=\D*$|\b)/.exec(hay);
   const version = match?.[1] ? Number.parseFloat(match[1]) : Number.NaN;
   if (!Number.isFinite(version)) return 0.5;

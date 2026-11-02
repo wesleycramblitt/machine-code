@@ -71,8 +71,11 @@ Selection is per call and multi-dimensional: each catalogue row carries
 `data/agents/<role>.toml`; `.machine_code/policy.toml` sets a role-weighted
 `min_fit`, explicit per-axis floors, and can override weights. The selector
 hard-filters, then trades weighted capability against cost, speed, and context
-headroom. A build agent is therefore judged mainly on code/agentic, while an
-architect is judged mainly on reasoning/agentic. `machine_code models --agent
+headroom. Rows whose scores are metadata-only priors carry a confidence
+penalty, so they stay eligible (especially in the free tier) but do not outrank
+benchmark-backed rows by a hair. A build agent is therefore judged mainly on
+code/agentic, while an architect is judged mainly on reasoning/agentic.
+`machine_code models --agent
 <role>` shows exactly what would be chosen.
 
 Selection has two tiers in `~/.machine_code/config.toml`:
