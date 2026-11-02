@@ -84,6 +84,19 @@ test("410 Gone is an EOL model: cooled for a week, retryable once", () => {
   assert.equal(isModelCooling(state, "nvidia/z-ai/glm-5.3"), true);
 });
 
+test("an upstream unavailable model is cooled for an hour, not one minute", () => {
+  const unavailable = classifyError(
+    new Error('400: {"type":"server_error","message":"Upstream request failed: Model is unavailable."}'),
+  );
+  assert.equal(unavailable.kind, "missing-model");
+  assert.equal(unavailable.retryable, true);
+  assert.equal(unavailable.target, "model");
+  assert.ok(unavailable.cooldownMs >= 60 * 60_000 - 1000);
+  const state = empty();
+  applyClassification(state, "opencode-go", "opencode-go/minimax", unavailable);
+  assert.equal(isModelCooling(state, "opencode-go/minimax"), true);
+});
+
 test("funds errors disable the provider; auth marks needs-auth", () => {
   const funds = classifyError(new Error("insufficient funds"), 402);
   assert.equal(funds.disableProvider, true);

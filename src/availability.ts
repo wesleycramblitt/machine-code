@@ -237,6 +237,20 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
       needsAuth: false,
     };
   }
+  // Upstream says the model is unavailable (OpenRouter 400 server_error). It is
+  // a model-specific outage, not a one-minute rate limit: cool it long enough
+  // that the next run does not waste a call on it.
+  if (msg.includes("model is unavailable") || msg.includes("model unavailable") || msg.includes("no available model")) {
+    return {
+      kind: "missing-model",
+      message: msg,
+      retryable: true,
+      cooldownMs: 60 * 60_000,
+      target: "model",
+      disableProvider: false,
+      needsAuth: false,
+    };
+  }
   // Missing/deprecated model
   if (code === 404 || msg.includes("model not found") || msg.includes("does not exist") || msg.includes("deprecated")) {
     return { kind: "missing-model", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };

@@ -8,8 +8,8 @@ timeout_ms = 120000
 
 [commands.test]
 binary = "npm"
-args = ["run", "test"]
-description = "Run the test suite"
+args = ["run", "test", "--", "--test-reporter=dot"]
+description = "Run the test suite (dot reporter; keeps the summary inside the output cap)"
 timeout_ms = 300000
 
 [commands.lint]

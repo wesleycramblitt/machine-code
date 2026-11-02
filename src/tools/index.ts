@@ -6,7 +6,7 @@
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { runProc } from "../proc.js";
 import {
@@ -215,7 +215,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     label: "search",
     description:
       "Read-only bounded search. Modes: map (filtered repo map), files (file listing), text (regex), " +
-      "structure (ast-grep pattern), json/yaml (jq/yq query), and semantic definition/references/symbols/info (LSP, from M1). " +
+      "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), and semantic definition/references/symbols/info (LSP, from M1). " +
       "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...) or binary files.",
     parameters: SearchParams,
     async execute(_id, params: Static<typeof SearchParams>) {
@@ -230,12 +230,26 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
           case "text": {
             if (!params.pattern) return fail("text mode requires a pattern");
-            return await exec(
-              "rg",
-              ["--line-number", "--max-count", String(limit), ...excludeGlobs(), "--", params.pattern],
-              scope,
-              SEARCH_CAP_BYTES,
-            );
+            // rg needs a directory as cwd. When the caller scopes to one file,
+            // run from the worktree root and pass the file explicitly.
+            const scopeIsFile = (() => {
+              try {
+                return statSync(scope).isFile();
+              } catch {
+                return false;
+              }
+            })();
+            const args = [
+              "--line-number",
+              "--with-filename",
+              "--max-count",
+              String(limit),
+              ...excludeGlobs(),
+              "--",
+              params.pattern,
+            ];
+            if (scopeIsFile) args.push(params.path ?? scope);
+            return await exec("rg", args, scopeIsFile ? ctx.root : scope, SEARCH_CAP_BYTES);
           }
           case "map": {
             const result = await exec(
@@ -318,10 +332,10 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
 /* ----------------------------------------------------------------- command */
 
 const CommandParams = Type.Object({
-  action: Type.Union([Type.Literal("describe"), Type.Literal("run")], {
-    description: "describe returns the command's typed schema; run executes it.",
+  action: Type.Union([Type.Literal("describe"), Type.Literal("list"), Type.Literal("run")], {
+    description: "list returns every schema in one call; describe returns one; run executes it.",
   }),
-  name: Type.String({ description: "Command name, e.g. core:status." }),
+  name: Type.Optional(Type.String({ description: "Command name, e.g. core:status (describe/run)." })),
   args: Type.Optional(
     Type.Record(Type.String(), Type.Unknown(), { description: "Typed arguments for run." }),
   ),
@@ -332,10 +346,17 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
     name: "command",
     label: "command",
     description:
-      "Describe or run a named, typed command (core:* built-ins and allowlisted manifests). No arbitrary shell.",
+      "List all typed command schemas in one call, describe one, or run it (core:* built-ins and allowlisted manifests). No arbitrary shell.",
     parameters: CommandParams,
     async execute(_id, params: Static<typeof CommandParams>) {
       try {
+        if (params.action === "list") {
+          const items = [...ctx.commands.keys()]
+            .sort()
+            .map((name) => describeCommand(name, ctx.commands));
+          return ok(items.join("\n\n"));
+        }
+        if (!params.name) return fail(`${params.action} requires a name`);
         if (params.action === "describe") {
           return ok(describeCommand(params.name, ctx.commands));
         }

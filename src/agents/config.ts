@@ -197,7 +197,7 @@ export function askEnabled(config: AgentConfig): boolean {
 const VERIFICATION_PROMPTS: Record<Verification, string> = {
   direct: "Verification level DIRECT: implement without adding new tests; runner-owned gates still apply.",
   verified:
-    "Verification level VERIFIED: author focused tests for each acceptance criterion; runner-owned gates must pass.",
+    "Verification level VERIFIED: author focused tests for each acceptance criterion; runner-owned gates must pass. Run each gate once after the final edit and reuse the result unless files changed.",
   redundant:
     "Verification level REDUNDANT: verified, plus an independent review run must approve the work.",
 };
@@ -212,6 +212,7 @@ export function composePrompt(def: AgentDef, config: AgentConfig, capabilities: 
     ambiguityPrompt(config.ambiguity),
     `Granted capabilities: ${caps}.`,
     "These capabilities are enforced by the harness; do not attempt actions outside them.",
+    "Work in short loops: reuse successful search/read results, do not reread unchanged files, and do not rerun a passing gate unless files changed.",
   ];
   return lines.join("\n");
 }

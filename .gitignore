@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 
 # machine_code runtime state (never commit generated/local state)
