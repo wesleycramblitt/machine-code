@@ -637,7 +637,15 @@ function cmdModels(argv: string[]): number {
     });
     if ("error" in result) {
       process.stdout.write(`${result.error}\n`);
-      for (const r of result.rejected) process.stdout.write(`  rejected ${r.key}: ${r.reason}\n`);
+      const byReason = Object.entries((result as { rejectedByReason?: Record<string, number> }).rejectedByReason ?? {}).sort((a, b) => b[1] - a[1]);
+      if (byReason.length > 0) {
+        process.stdout.write(`  by reason: ${byReason.map(([reason, n]) => `${reason} ${n}`).join("  ")}\n`);
+      }
+      for (const r of result.rejected.slice(0, 10)) process.stdout.write(`  e.g. ${r.key}: ${r.reason}\n`);
+      const rejectedCount = (result as { rejectedCount?: number }).rejectedCount;
+      if (typeof rejectedCount === "number" && rejectedCount > result.rejected.length) {
+        process.stdout.write(`  … ${rejectedCount - result.rejected.length} more\n`);
+      }
       return 1;
     }
     const weights = axisWeights(agent, ap);
