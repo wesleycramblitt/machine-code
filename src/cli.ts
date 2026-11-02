@@ -36,7 +36,7 @@ import { allCommands } from "./commands/profiles.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
-import { ensureEpicReserved, ensureFeatureReserved } from "./issues/reserved.js";
+import { ensureEpicReserved, ensureFeatureReserved, isReserved } from "./issues/reserved.js";
 import { resolveRunTarget } from "./issues/work.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
 import { loadAvailability, saveAvailability } from "./availability.js";
@@ -2686,6 +2686,20 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       if (!completion.ok) fail(`cannot close task #${task}: ${completion.reason}`);
       await issueBundle.provider.close(ref, "completed");
       process.stdout.write(`closed task #${task} after human result approval\n`);
+      let parent = issue.parent ? await issueBundle.provider.get(issue.parent) : undefined;
+      for (let depth = 0; parent && depth < 2; depth += 1) {
+        const siblings = (await issueBundle.provider.children(parent.ref)).filter((child) => !isReserved(child));
+        if (siblings.some((child) => child.state !== "closed")) break;
+        const parentCompletion = await checkCompletion(issueBundle.provider, l, parent);
+        if (parentCompletion.ok) {
+          process.stdout.write(
+            `parent ${parent.kind} #${parent.ref.number} is ready; approve with "machine_code approve ${parent.ref.number}"\n`,
+          );
+        } else {
+          process.stdout.write(`parent ${parent.kind} #${parent.ref.number}: ${parentCompletion.reason}\n`);
+        }
+        parent = parent.parent ? await issueBundle.provider.get(parent.parent) : undefined;
+      }
     }
     const current = resultApproval ? state.approvedResults ?? [] : state.approvedPackets ?? [];
     const approved = [...new Set([...current, task])].sort((a, b) => a - b);
