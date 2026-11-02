@@ -5,6 +5,7 @@
  */
 export type ModelKind =
   | "chat"
+  | "router"
   | "image"
   | "video"
   | "audio"
@@ -19,6 +20,7 @@ export interface ModelClassification {
 }
 
 const ID_PATTERNS: Array<[RegExp, ModelKind]> = [
+  [/(?:^|[/_.\-\s])(router|routing|auto-router|aggregator)(?:$|[/_.\-\s])/i, "router"],
   [/(?:^|[/_.\-\s])(video|sora|veo|kling|runway|pika|luma|hailuo|minimax-video)(?:$|[/_.\-\s])/i, "video"],
   [/(?:^|[/_.\-\s])(image|imagen|flux|stable-diffusion|midjourney|dall-e|nano-banana|gpt-image|image-gen)(?:$|[/_.\-\s])/i, "image"],
   [/(?:^|[/_.\-\s])(audio|tts|speech|voice|whisper|transcribe|realtime-audio)(?:$|[/_.\-\s])/i, "audio"],

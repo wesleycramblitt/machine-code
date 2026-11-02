@@ -10,8 +10,8 @@
  * auth failures, and refusals do not retry.
  */
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Usage } from "@earendil-works/pi-ai";
-import { effectiveOutputCeiling, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
+import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
+import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
 import { pick, providerMultiplier } from "./select.js";
 import { fundedProviderIds } from "./data.js";
@@ -27,13 +27,13 @@ import type { RunRecorder } from "./state/runs.js";
 
 export const MAX_TURNS = 25;
 
-/** Cap a JSON value for the event log: 2 KiB string budget, shallow-safe. */
+/** Cap a JSON value for the event log: 8 KiB string budget, shallow-safe. */
 function capJson(value: unknown): unknown {
   try {
     const s = JSON.stringify(value);
     if (s === undefined) return String(value).slice(0, 256);
-    if (s.length <= 2048) return value;
-    return { truncated: true, preview: s.slice(0, 2048) + "…" };
+    if (s.length <= 8192) return value;
+    return { truncated: true, preview: s.slice(0, 8192) + "…" };
   } catch {
     return String(value).slice(0, 256);
   }
@@ -93,6 +93,67 @@ function contextChars(messages: readonly AgentMessage[]): number {
 }
 
 const TOOL_SCHEMA_CHARS = 1_500;
+
+/** Never ask a provider for the model's full (possibly 384k) output ceiling. */
+const MAX_REQUESTED_OUTPUT_TOKENS = 32_000;
+/** Cap on the input/output text recorded per call in the event log. */
+const MODEL_IO_CAP = 24_000;
+
+/** Human-readable rendering of the exact messages sent to the model. */
+function renderModelInput(messages: readonly Message[]): string {
+  type Block = {
+    type: string;
+    text?: string;
+    thinking?: string;
+    name?: string;
+    arguments?: unknown;
+    mimeType?: string;
+    toolName?: string;
+    content?: Array<{ type: string; text?: string; mimeType?: string }>;
+  };
+  const out: string[] = [];
+  for (const message of messages) {
+    const content = (message as unknown as { content: string | Block[] }).content;
+    const parts: string[] = [];
+    if (typeof content === "string") {
+      parts.push(content);
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === "text") parts.push(block.text ?? "");
+        else if (block.type === "thinking") parts.push(`[thinking] ${block.thinking ?? ""}`);
+        else if (block.type === "toolCall") parts.push(`[tool call ${block.name ?? "?"}] ${JSON.stringify(block.arguments ?? {})}`);
+        else if (block.type === "image") parts.push(`[image ${block.mimeType ?? "?"}]`);
+        else if (block.type === "toolResult") {
+          const body = (block.content ?? []).map((item) => (item.type === "text" ? item.text ?? "" : `[image ${item.mimeType ?? "?"}]`)).join("\n");
+          parts.push(`[tool result ${block.toolName ?? "?"}]\n${body}`);
+        }
+      }
+    }
+    out.push(`--- ${message.role} ---\n${parts.join("\n")}`);
+  }
+  return out.join("\n\n");
+}
+
+function assistantError(model: Model<Api>, errorMessage: string): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage,
+    timestamp: Date.now(),
+  };
+}
 
 function assistantText(message: AssistantMessage | undefined): string {
   if (!message) return "";
@@ -294,14 +355,42 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       sessionId: recorder.id,
       convertToLlm,
       streamFn: (model, context, options) => {
+        const call = callIndex;
+        const firstTokenTimeoutMs =
+          input.machine.selection?.firstTokenTimeoutMs ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS;
+        const requestText = renderModelInput((context as Context).messages);
+        recorder.event("model_request", {
+          call,
+          provider: model.provider,
+          model: model.id,
+          messages: (context as Context).messages.length,
+          chars: requestText.length,
+          input:
+            requestText.length > MODEL_IO_CAP
+              ? requestText.slice(0, MODEL_IO_CAP) + "\n…[truncated]"
+              : requestText,
+        });
+
+        // Abort the request if the provider produces nothing for too long. The
+        // synthetic error below is classified as retryable, so the loop cools
+        // this model and re-picks another one.
+        const abort = new AbortController();
+        const outerSignal = options?.signal;
+        const onOuterAbort = () => abort.abort();
+        if (outerSignal) {
+          if (outerSignal.aborted) abort.abort();
+          else outerSignal.addEventListener("abort", onOuterAbort, { once: true });
+        }
+
+        const maxTokens =
+          ceiling === undefined
+            ? Math.min(model.maxTokens > 0 ? model.maxTokens : MAX_REQUESTED_OUTPUT_TOKENS, MAX_REQUESTED_OUTPUT_TOKENS)
+            : Math.min(ceiling, model.maxTokens > 0 ? model.maxTokens : ceiling);
+
         const source = input.models.stream(model, context as Context, {
           ...options,
-          maxTokens:
-            ceiling === undefined
-              ? model.maxTokens > 0
-                ? model.maxTokens
-                : undefined
-              : Math.min(ceiling, model.maxTokens > 0 ? model.maxTokens : ceiling),
+          signal: abort.signal,
+          maxTokens,
           identity: {
             userAgent: { custom: "machine_code/0.0.0" },
             attribution: { name: "machine_code", url: "https://github.com/extropian/machine-code" },
@@ -310,10 +399,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         // Mirror text/thinking deltas into the event log so the run detail
         // screen can show live reasoning without a second provider stream.
         const wrapped = createAssistantMessageEventStream();
-        const call = callIndex;
         let text = "";
         let thinking = "";
         let lastFlush = Date.now();
+        let settled = false;
         const flush = (): void => {
           if (text) {
             recorder.event("model_delta", { call, kind: "text", text });
@@ -325,9 +414,39 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
           lastFlush = Date.now();
         };
+        const finish = (message: AssistantMessage): void => {
+          if (settled) return;
+          settled = true;
+          flush();
+          wrapped.end(message);
+        };
+        const timer = setTimeout(() => {
+          if (settled) return;
+          abort.abort();
+          const message = assistantError(
+            model,
+            `provider timeout: no stream event within ${Math.round(firstTokenTimeoutMs / 1000)}s`,
+          );
+          flush();
+          if (!settled) {
+            settled = true;
+            wrapped.push({ type: "error", reason: "error", error: message } as AssistantMessageEvent);
+            wrapped.end(message);
+          }
+          recorder.event("error_classified", {
+            kind: "timeout",
+            target: "model",
+            retryable: true,
+            disableProvider: false,
+            needsAuth: false,
+          });
+        }, Math.max(1_000, firstTokenTimeoutMs));
+
         void (async () => {
           try {
             for await (const event of source) {
+              if (settled) continue; // drain after a timeout so the source can close
+              clearTimeout(timer);
               if (event.type === "text_delta") {
                 text += event.delta;
               } else if (event.type === "thinking_delta") {
@@ -338,11 +457,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               wrapped.push(event as AssistantMessageEvent);
             }
             const result = await source.result();
-            flush();
-            wrapped.end(result);
+            clearTimeout(timer);
+            finish(result);
           } catch {
-            flush();
-            wrapped.end();
+            clearTimeout(timer);
+            if (!settled) {
+              settled = true;
+              flush();
+              wrapped.end();
+            }
+          } finally {
+            clearTimeout(timer);
+            outerSignal?.removeEventListener("abort", onOuterAbort);
           }
         })();
         return wrapped;
@@ -419,7 +545,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               cost: typeof actual === "number" && Number.isFinite(actual) ? actual : null,
               durationMs: message.durationMs ?? null,
               ...(message.errorMessage ? { error: message.errorMessage } : {}),
-              ...(turnText ? { text: turnText.length > 4000 ? turnText.slice(0, 4000) + "\n…[truncated]" : turnText } : {}),
+              ...(turnText ? { text: turnText.length > MODEL_IO_CAP ? turnText.slice(0, MODEL_IO_CAP) + "\n…[truncated]" : turnText } : {}),
             });
             const estimatedCost =
               estimateCallCost(currentRow!.pricing, usage.input, Math.max(usage.output, policy.expectedOutputTokens)) *

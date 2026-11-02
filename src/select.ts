@@ -153,6 +153,17 @@ export function isFreeRow(row: CatalogueRow): boolean {
   return row.free === true || (row.pricing.input === 0 && row.pricing.output === 0);
 }
 
+/**
+ * Meta routers (OpenRouter "auto"/jev-router and similar) forward to unknown
+ * upstream models, so their catalogue scores and capabilities are guesses.
+ * They are never selected.
+ */
+const META_ROUTER_PATTERN = /(?:^|[/_.\-\s])(router|routing|auto-router|aggregator)(?:$|[/_.\-\s])/i;
+
+export function isMetaRouter(row: CatalogueRow): boolean {
+  return META_ROUTER_PATTERN.test(`${row.key} ${row.name ?? ""}`);
+}
+
 export function providerMultiplier(machine: MachineConfig, providerID: string): number {
   const value = machine.providers?.[providerID]?.costMultiplier;
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
@@ -201,6 +212,7 @@ function rejectReason(
     if (isModelCooling(avail, row.key)) return "model-cooling";
   }
   if (row.coding === false) return "non-coding-model";
+  if (isMetaRouter(row)) return "router-model";
   if (input.policy.toolCall && !row.toolCall) return "no-tool-support";
   const tier = selectionTier(input);
   if (tier === "free" && !isFreeRow(row)) return "not-free";
@@ -268,7 +280,9 @@ export function scoreCandidate(
   };
 }
 
-export function pick(input: PickInput): PickResult | { error: string; rejected: RejectedCandidate[] } {
+export function pick(
+  input: PickInput,
+): PickResult | { error: string; rejected: RejectedCandidate[]; rejectedCount: number; rejectedByReason: Record<string, number> } {
   const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens);
   const weights = axisWeights(input.agent, input.policy);
   const candidates: Array<{ row: CatalogueRow; scored: CandidateScore }> = [];
@@ -286,7 +300,12 @@ export function pick(input: PickInput): PickResult | { error: string; rejected: 
   }
 
   if (candidates.length === 0) {
-    return { error: `no eligible model for agent "${input.agent}"`, rejected: rejected.slice(0, 10) };
+    return {
+      error: `no eligible model for agent "${input.agent}"`,
+      rejected: rejected.slice(0, 10),
+      rejectedCount: rejected.length,
+      rejectedByReason,
+    };
   }
 
   // Ascending score; exact ties go to the lexicographically smaller key.

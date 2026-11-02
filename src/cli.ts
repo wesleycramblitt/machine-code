@@ -406,6 +406,7 @@ function policyTemplate(kind: "machine" | "repo"): string {
     return `# machine_code machine config (global defaults; repo policy wins)
 [selection]
 tier = "paid"              # free | paid
+# first_token_timeout_ms = 60000   # abandon a stalled call; cool it and retry
 # min_fit = 7.0            # global role-weighted capability floor
 # min_capability = 0       # neutral composite safety floor (optional)
 # min_context = 32000
@@ -563,6 +564,9 @@ function cmdModels(argv: string[]): number {
 
   const statuses = providerStatuses(createModelsCollection());
   const configured = new Set(statuses.filter((s) => s.configured).map((s) => s.id));
+  // Disabled providers are removed from the runtime collection; keep their
+  // stale catalogue rows out of every listing too.
+  const activeProviders = new Set(statuses.map((s) => s.id));
   const known = new Set(doc.models.map((m) => m.providerID));
   for (const id of configured) {
     if (!known.has(id)) {
@@ -577,7 +581,9 @@ function cmdModels(argv: string[]): number {
 
   // A free-only query is a catalogue question, not a configured-provider
   // question: surface free offers from every provider.
-  let rows = doc.models.filter((m) => all || flags.has("free") || configured.has(m.providerID));
+  let rows = doc.models.filter(
+    (m) => activeProviders.has(m.providerID) && (all || flags.has("free") || configured.has(m.providerID)),
+  );
   if (provider) rows = rows.filter((m) => m.providerID === provider);
   const family = flags.get("family");
   const sortFlag = (flags.get("sort") ?? "capability") as ModelSort;
@@ -637,14 +643,13 @@ function cmdModels(argv: string[]): number {
     });
     if ("error" in result) {
       process.stdout.write(`${result.error}\n`);
-      const byReason = Object.entries((result as { rejectedByReason?: Record<string, number> }).rejectedByReason ?? {}).sort((a, b) => b[1] - a[1]);
+      const byReason = Object.entries(result.rejectedByReason).sort((a, b) => b[1] - a[1]);
       if (byReason.length > 0) {
         process.stdout.write(`  by reason: ${byReason.map(([reason, n]) => `${reason} ${n}`).join("  ")}\n`);
       }
       for (const r of result.rejected.slice(0, 10)) process.stdout.write(`  e.g. ${r.key}: ${r.reason}\n`);
-      const rejectedCount = (result as { rejectedCount?: number }).rejectedCount;
-      if (typeof rejectedCount === "number" && rejectedCount > result.rejected.length) {
-        process.stdout.write(`  … ${rejectedCount - result.rejected.length} more\n`);
+      if (result.rejectedCount > result.rejected.length) {
+        process.stdout.write(`  … ${result.rejectedCount - result.rejected.length} more\n`);
       }
       return 1;
     }
@@ -917,9 +922,24 @@ async function cmdRun(argv: string[]): Promise<number> {
   const parentFlag = flags.get("parent");
   const inheritWorktree = flags.has("inherit-worktree");
   let parentRun: import("./state/runs.js").RunSummary | undefined;
+  /** Parent, grandparent, … nearest first, so a fork of a fork keeps the whole chain. */
+  const parentChain: Array<{ id: string; request: string; finalText?: string }> = [];
   if (parentFlag !== undefined) {
-    parentRun = listAllRuns(l.home).find((r) => r.id === parentFlag);
+    const allRuns = listAllRuns(l.home);
+    parentRun = allRuns.find((r) => r.id === parentFlag);
     if (!parentRun) fail(`no such parent run: ${parentFlag}`);
+    const byId = new Map(allRuns.map((run) => [run.id, run]));
+    const seen = new Set<string>();
+    let cursor: import("./state/runs.js").RunSummary | undefined = parentRun;
+    while (cursor && parentChain.length < 4 && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      parentChain.push({
+        id: cursor.id,
+        request: cursor.request,
+        ...(cursor.finalText ? { finalText: cursor.finalText } : {}),
+      });
+      cursor = cursor.parentRunId ? byId.get(cursor.parentRunId) : undefined;
+    }
   }
 
   const recorder = new RunRecorder(l, {
@@ -1054,9 +1074,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     machine,
     provider: issueBundle.provider.kind === "none" ? undefined : issueBundle.provider,
     issue: issueRef,
-    parentRun: parentRun
-      ? { id: parentRun.id, request: parentRun.request, finalText: parentRun.finalText }
-      : undefined,
+    parentRuns: parentChain.length > 0 ? parentChain : undefined,
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources });
@@ -1354,27 +1372,52 @@ async function cmdQueue(argv: string[]): Promise<number> {
 
 /* -------------------------------------------------------------------- log */
 
+function indentEventLines(text: string, prefix = "      "): string {
+  return text
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
+    .join("\n");
+}
+
 function fmtEvent(event: Record<string, unknown>): string {
   const t = String(event.t ?? "").slice(11, 19);
   const type = String(event.type);
   const rest = Object.fromEntries(Object.entries(event).filter(([k]) => k !== "t" && k !== "type"));
-  let detail = "";
+  const head = (label: string, detail: string): string => `  ${t}  ${label.padEnd(18)} ${detail}`;
+  // Streaming deltas are coalesced into model_call_end; printing each chunk
+  // split the response into unreadable fragments.
+  if (type === "model_delta") return "";
   if (type === "model_select") {
-    detail = rest.error
+    const detail = rest.error
       ? `error: ${rest.error}`
       : `-> ${rest.key}  est ${(rest.estimate as { inputTokens: number }).inputTokens}+${(rest.estimate as { outputTokens: number }).outputTokens} tok`;
-  } else if (type === "model_call_end") {
-    const u = rest.usage as { totalTokens: number };
-    detail = `${rest.provider}/${rest.model}  ${rest.stopReason}  ${u.totalTokens} tok  $${typeof rest.cost === "number" ? rest.cost.toFixed(6) : "?"}`;
-  } else if (type === "model_delta") {
-    const text = typeof rest.text === "string" ? rest.text.replace(/\s+/g, " ").slice(0, 60) : "";
-    detail = `${rest.kind ?? "text"} ${text}`;
-  } else if (type === "tool_call") {
-    detail = `${rest.tool}  ${rest.isError ? "ERROR" : "ok"}`;
-  } else if (type === "run_end") {
-    detail = String(rest.status);
+    return head(type, detail);
   }
-  return `  ${t}  ${type.padEnd(18)} ${detail}`;
+  if (type === "model_request") {
+    const header = head(type, `${rest.provider}/${rest.model}  ${rest.messages} msg  ${rest.chars} chars`);
+    const input = typeof rest.input === "string" ? rest.input : "";
+    return input ? `${header}\n${indentEventLines(input)}` : header;
+  }
+  if (type === "model_call_end") {
+    const u = rest.usage as { totalTokens: number };
+    const header = head(type, `${rest.provider}/${rest.model}  ${rest.stopReason}  ${u.totalTokens} tok  $${typeof rest.cost === "number" ? rest.cost.toFixed(6) : "?"}`);
+    const text = typeof rest.text === "string" ? rest.text.trim() : "";
+    return text ? `${header}\n${indentEventLines(text)}` : header;
+  }
+  if (type === "tool_call_start") {
+    const args = rest.args === undefined ? "" : `  ${JSON.stringify(rest.args)}`;
+    return head(type, `${rest.tool}${args}`);
+  }
+  if (type === "tool_call") {
+    const header = head(type, `${rest.tool}  ${rest.isError ? "ERROR" : "ok"}${typeof rest.durationMs === "number" ? `  ${rest.durationMs}ms` : ""}`);
+    const result = rest.result;
+    if (result === undefined) return header;
+    const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    return `${header}\n${indentEventLines(text.slice(0, 8_000))}`;
+  }
+  if (type === "run_end") return head(type, String(rest.status));
+  const detail = Object.keys(rest).length > 0 ? `  ${JSON.stringify(rest)}` : "";
+  return head(type, detail.trim());
 }
 
 function cmdLog(id: string | undefined): number {
@@ -1388,7 +1431,10 @@ function cmdLog(id: string | undefined): number {
   );
   if (s.error) process.stdout.write(`  error: ${s.error}\n`);
   process.stdout.write("events:\n");
-  for (const event of run.events) process.stdout.write(fmtEvent(event) + "\n");
+  for (const event of run.events) {
+    const line = fmtEvent(event);
+    if (line) process.stdout.write(line + "\n");
+  }
   return 0;
 }
 
@@ -2326,7 +2372,10 @@ function cmdShow(argv: string[]): number {
   const events = flags.has("events") || flags.has("full") ? run.events : run.events.slice(-12);
   process.stdout.write(`\nevents${events.length < run.events.length ? ` (last ${events.length} of ${run.events.length})` : ""}\n`);
   if (events.length === 0) process.stdout.write("  no events\n");
-  for (const event of events) process.stdout.write(fmtEvent(event as Record<string, unknown>) + "\n");
+  for (const event of events) {
+    const line = fmtEvent(event as Record<string, unknown>);
+    if (line) process.stdout.write(line + "\n");
+  }
   if (!flags.has("events") && !flags.has("full") && run.events.length > 12) process.stdout.write(`  … ${run.events.length - 12} more (--events)\n`);
   return 0;
 }

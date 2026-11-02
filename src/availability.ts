@@ -15,6 +15,7 @@ export type ErrorKind =
   | "rate-limit-provider"
   | "auth"
   | "quota"
+  | "timeout"
   | "missing-model"
   | "context-too-long"
   | "unsupported-param"
@@ -216,6 +217,11 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   // Missing/deprecated model
   if (code === 404 || msg.includes("model not found") || msg.includes("does not exist") || msg.includes("deprecated")) {
     return { kind: "missing-model", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
+  }
+  // Provider stall: no headers/first token in time. Retry elsewhere and let the
+  // model's cooldown tier escalate on repeated stalls.
+  if (msg.includes("timed out") || msg.includes("timeout") || msg.includes("no stream event")) {
+    return { kind: "timeout", message: msg, retryable: true, cooldownMs: 0, target: "model", disableProvider: false, needsAuth: false };
   }
   // Context too long
   if (msg.includes("context length") || msg.includes("context window") || msg.includes("too long") || msg.includes("maximum context")) {

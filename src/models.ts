@@ -19,6 +19,10 @@ export function createModelsCollection(): MutableModels {
   const models = builtinModels();
   const definitions = loadProviderDefinitions();
   for (const [id, def] of Object.entries(definitions)) {
+    if (def.disabled === true) {
+      models.deleteProvider(id);
+      continue;
+    }
     if ((def.discovery === "openai-compatible" || def.discovery === "ollama") && def.baseUrl) {
       models.setProvider(
         openAiCompatibleProvider({

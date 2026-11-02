@@ -15,8 +15,10 @@
 # that pass are scored with the same weighted mix, so a materially better model
 # can beat a cheaper one; close models are decided by cost/speed/headroom.
 #
-# Strictness here is deliberate: ~24 / 33 / 17 / 13 / 4 candidates survive for
-# general / architect / build / review / sudo against the 2026-11-01 catalogue.
+# Floors are deliberately permissive enough that every DeepSeek V4/V4.1 Flash
+# offer and many other mid-tier models remain selectable: ~166 / 179 / 174 /
+# 166 / 168 candidates survive for general / architect / build / review / sudo
+# in the paid tier (~8-13 in the free tier) against the 2026-11-01 catalogue.
 # Tune with: machine_code models --agent <role> [--min-fit N]
 
 [agents.general]

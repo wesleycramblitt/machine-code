@@ -266,3 +266,24 @@ test("artifact references cascade Task → Feature → Epic, including files/too
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("fork context keeps the whole parent chain", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-context-"));
+  try {
+    mkdirSync(join(root, ".machine_code"), { recursive: true });
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      parentRuns: [
+        { id: "child-parent", request: "Try now" },
+        { id: "grandparent", request: "original task", finalText: "original result" },
+      ],
+    });
+    assert.match(bundle.text, /parent run: child-parent/);
+    assert.match(bundle.text, /grandparent run: grandparent/);
+    assert.match(bundle.text, /objective: original task/);
+    assert.match(bundle.text, /result: original result/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

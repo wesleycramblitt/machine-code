@@ -83,6 +83,7 @@ const KIND_PRIORITY: ModelKind[] = [
   "rerank",
   "guard",
   "other",
+  "router",
   "chat",
 ];
 

@@ -78,6 +78,8 @@ export interface ProviderDefinition {
   baseUrl?: string;
   /** Keyless local provider (for example Ollama on localhost). */
   keyless?: boolean;
+  /** Excluded from the runtime provider collection even when a key is present. */
+  disabled?: boolean;
   /** Paid rows usable without a machine override. */
   funded?: boolean;
   /** Billing/access modes: usage, subscription, free. */
@@ -94,6 +96,7 @@ interface RawProvider {
   discovery?: unknown;
   base_url?: unknown;
   keyless?: unknown;
+  disabled?: unknown;
   funded?: unknown;
   modes?: unknown;
   cost_multiplier?: unknown;
@@ -119,6 +122,7 @@ function providerDefinition(value: RawProvider): ProviderDefinition {
         : {}),
     ...(typeof value.base_url === "string" ? { baseUrl: value.base_url } : {}),
     ...(typeof value.keyless === "boolean" ? { keyless: value.keyless } : {}),
+    ...(typeof value.disabled === "boolean" ? { disabled: value.disabled } : {}),
     ...(typeof value.funded === "boolean" ? { funded: value.funded } : {}),
     ...(Array.isArray(value.modes)
       ? { modes: value.modes.filter((v): v is string => typeof v === "string") }

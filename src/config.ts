@@ -25,6 +25,12 @@ export type PacketMode = "direct" | "verified" | "redundant";
 export type SelectionTier = "free" | "paid";
 export const SELECTION_TIERS: readonly SelectionTier[] = ["free", "paid"];
 
+/**
+ * Abandon a provider call that has produced no stream event within this many
+ * milliseconds. The model is cooled and the loop's bounded retry picks another.
+ */
+export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 60_000;
+
 export interface ProviderCost {
   /** Billed cost for this provider as a fraction of list price (1 = list). */
   costMultiplier?: number;
@@ -69,8 +75,8 @@ export const DEFAULT_THEME: Required<ThemeConfig> = {
 export interface MachineConfig {
   maxOutputTokens?: number;
   defaultMode?: PacketMode;
-  /** Selection tier ([selection]). */
-  selection: { tier: SelectionTier };
+  /** Selection tier and per-call request guards ([selection]). */
+  selection: { tier: SelectionTier; firstTokenTimeoutMs: number };
   /** Per-provider billing adjustments ([providers.<id>]). */
   providers: Record<string, ProviderCost>;
   priceCaps: PriceCaps;
@@ -240,7 +246,10 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
   return {
     maxOutputTokens: asNumber(raw.max_output_tokens),
     defaultMode: defaultMode as PacketMode | undefined,
-    selection: { tier: tierRaw as SelectionTier },
+    selection: {
+      tier: tierRaw as SelectionTier,
+      firstTokenTimeoutMs: asNumber(selectionRaw.first_token_timeout_ms) ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+    },
     providers,
     priceCaps: { input: asNumber(caps.input), output: asNumber(caps.output) },
     vetoes: asStringArray(raw.vetoes),

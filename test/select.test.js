@@ -97,6 +97,13 @@ test("non-coding models (image/video/audio/guard) are rejected", () => {
   assert.ok(result.rejected.some((r) => r.key === "p/image" && r.reason === "non-coding-model"));
 });
 
+test("meta routers are never selected", () => {
+  const router = row("openrouter/typesafe/jev-router");
+  const result = pickOne([router], { ...basePolicy, minCapability: 0 });
+  assert.ok("error" in result);
+  assert.ok(result.rejected.some((r) => r.key === router.key && r.reason === "router-model"));
+});
+
 test("min_fit is role-weighted: build favors code/agentic over general/reasoning", () => {
   const policy = {
     ...basePolicy,

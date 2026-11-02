@@ -7,7 +7,7 @@
  *   3 parent Feature             (4 KiB)
  *   4 parent Epic                (3 KiB)
  *   5 explicit knowledge files   (6 KiB total)
- *   6 parent run summary         (2 KiB)
+ *   6 parent run + ancestor summaries (2 KiB each)
  *   7 project plan / knowledge index (2 KiB)
  *   8 skill descriptions / tools (1 KiB)
  *
@@ -53,6 +53,8 @@ export interface AssembleInput {
   provider?: IssueProvider;
   issue?: IssueRef;
   packetId?: string;
+  /** Parent run and its ancestors, nearest first, for selected context inheritance. */
+  parentRuns?: Array<{ id: string; request: string; finalText?: string; depth?: number }>;
   /** Parent run, for selected context inheritance (summary only). */
   parentRun?: { id: string; request: string; finalText?: string };
   /** Override the configured character budget. */
@@ -296,16 +298,35 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // Parent run summary.
-  if (input.parentRun) {
+  // Parent run + ancestors. A fork inherits the immediate parent's objective and
+  // result, then the chain above it (grandparent, …) so a fork of a fork does
+  // not lose the original task.
+  const chain: Array<{ id: string; request: string; finalText?: string; depth: number }> =
+    input.parentRuns && input.parentRuns.length > 0
+      ? input.parentRuns.map((run, index) => ({ ...run, depth: run.depth ?? index + 1 }))
+      : input.parentRun
+        ? [{ ...input.parentRun, depth: 1 }]
+        : [];
+  for (const run of chain) {
+    if (run.depth > 4) break;
+    const label =
+      run.depth <= 1 ? "parent run" : run.depth === 2 ? "grandparent run" : `ancestor run (depth ${run.depth})`;
     const text = [
-      `parent run: ${input.parentRun.id}`,
-      `objective: ${input.parentRun.request.slice(0, 800)}`,
-      input.parentRun.finalText ? `result: ${input.parentRun.finalText.slice(0, 1200)}` : "",
+      `${label}: ${run.id}`,
+      `objective: ${run.request.slice(0, 800)}`,
+      run.finalText ? `result: ${run.finalText.slice(0, 1200)}` : "",
     ]
       .filter(Boolean)
       .join("\n");
-    pending.push({ kind: "parent-run", origin: "inherited", ref: input.parentRun.id, body: text, cap: 2 * KIB, band: 6 });
+    pending.push({
+      kind: "parent-run",
+      origin: "inherited",
+      ref: run.id,
+      depth: run.depth,
+      body: text,
+      cap: 2 * KIB,
+      band: 6,
+    });
   }
 
   // Project plan + knowledge index.

@@ -1048,8 +1048,10 @@ export async function runTui(): Promise<void> {
     const selectedRow = runIndex.selectable[runsSel];
 
     const catalogue = loadCatalogue(l.catalogueFile);
-    const catalogueRows = catalogue?.models ?? [];
     const statuses = providerStatuses(createModelsCollection());
+    const activeProviders = new Set(statuses.map((status) => status.id));
+    // Hide stale rows for providers that are disabled or no longer registered.
+    const catalogueRows = (catalogue?.models ?? []).filter((row) => activeProviders.has(row.providerID));
     const configured = new Set(statuses.filter((status) => status.configured).map((status) => status.id));
     const modelRows = filterModels(catalogueRows, {
       text: modelText,
@@ -1618,30 +1620,64 @@ export async function runTui(): Promise<void> {
                   }
                 }
               }
+            } else if (type === "model_request") {
+              const messages = Number(event.messages ?? 0);
+              const chars = Number(event.chars ?? 0);
+              eventLines.push(`${prefix} ${GR}${time}${R} ${BL}input${R} ${D}${messages} msg · ${fmtTokens(chars)} chars${R}`);
+              const input = typeof event.input === "string" ? event.input : "";
+              if (input) {
+                const inputLines = input.split("\n");
+                const shown = expandedEvent ? inputLines : inputLines.slice(0, 3);
+                for (const line of shown) {
+                  for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+                }
+                if (!expandedEvent && inputLines.length > 3) {
+                  eventLines.push(`    ${D}… ${inputLines.length - 3} more lines (space to expand)${R}`);
+                }
+              }
             } else if (type === "model_call_end") {
               const usage = (event.usage ?? {}) as { totalTokens?: number; input?: number; output?: number };
               eventLines.push(`${prefix} ${GR}${time}${R} ${M}◉${R} ${W}${String(event.provider)}${R}/${String(event.model)} ${statusColor(String(event.stopReason))}${String(event.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}tok ${Y}$${Number(event.cost ?? 0).toFixed(5)}${R}`);
+              const text = typeof event.text === "string" ? event.text : "";
+              if (text) {
+                for (const line of text.split("\n")) {
+                  for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${W}${wrapped}${R}`);
+                }
+              }
               if (expandedEvent) {
                 eventLines.push(`    ${D}input ${usage.input ?? 0}  output ${usage.output ?? 0}${R}`);
-                const text = typeof event.text === "string" ? event.text : "";
-                for (const line of wrapText(text, Math.max(30, cols - 6)).slice(0, 20)) eventLines.push(`    ${W}${line}${R}`);
               }
             } else if (type === "model_delta") {
-              const text = typeof event.text === "string" ? event.text.replace(/\s+/g, " ").slice(0, Math.max(20, cols - 30)) : "";
-              eventLines.push(`${prefix} ${GR}${time}${R} ${D}${String(event.kind ?? "text")}${R} ${W}${text}${R}`);
+              // Streaming deltas are coalesced by the Thinking section; showing
+              // each chunk here split the response into unreadable fragments.
             } else if (type === "tool_call_start") {
               eventLines.push(`${prefix} ${GR}${time}${R} ${Y}⚡${R} ${B}${String(event.tool)}${R} ${D}calling…${R}`);
-              if (expandedEvent && event.args) for (const line of wrapText(JSON.stringify(event.args), cols - 6)) eventLines.push(`    ${D}${line}${R}`);
+              if (event.args) {
+                const argsText = stripAnsi(JSON.stringify(event.args));
+                if (expandedEvent) {
+                  for (const line of wrapText(argsText, cols - 6)) eventLines.push(`    ${D}${line}${R}`);
+                } else {
+                  eventLines.push(`    ${D}${trunc(argsText.replace(/\s+/g, " "), Math.max(20, cols - 8))}${R}`);
+                }
+              }
             } else if (type === "tool_call") {
               const isEdit = event.tool === "write" || event.tool === "edit";
               eventLines.push(`${prefix} ${GR}${time}${R} ${isEdit ? `${G}✎${R}` : `${Y}⚡${R}`} ${B}${String(event.tool)}${R} ${event.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof event.durationMs === "number" ? ` ${D}${event.durationMs}ms${R}` : ""}`);
-              if (expandedEvent) {
-                const args = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) ?? null;
-                if (args) for (const line of wrapText(JSON.stringify(args), cols - 6)) eventLines.push(`    ${D}${line}${R}`);
-                const result = event.result;
-                if (result !== undefined) {
-                  const text = stripAnsi(typeof result === "string" ? result : JSON.stringify(result)).replace(/\n+/g, " ");
-                  for (const line of wrapText(text, cols - 6)) eventLines.push(`    ${G}→${R} ${line}`);
+              const args = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) ?? null;
+              if (expandedEvent && args) {
+                for (const line of wrapText(JSON.stringify(args), cols - 6)) eventLines.push(`    ${D}${line}${R}`);
+              }
+              const result = event.result;
+              if (result !== undefined) {
+                const text = stripAnsi(typeof result === "string" ? result : JSON.stringify(result));
+                if (expandedEvent) {
+                  for (const line of text.split("\n")) {
+                    for (const wrapped of wrapText(line, cols - 6)) eventLines.push(`    ${G}→${R} ${wrapped}`);
+                  }
+                } else {
+                  const preview = text.split("\n").filter((line) => line.trim().length > 0).slice(0, 2);
+                  for (const line of preview) eventLines.push(`    ${G}→${R} ${trunc(line, Math.max(20, cols - 8))}`);
+                  if (text.split("\n").length > 2) eventLines.push(`    ${D}… (space to expand)${R}`);
                 }
               }
             } else if (type === "gates") {
