@@ -36,6 +36,8 @@ import { axisWeights, isMetaRouter, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.js";
+import { latestProcessRecords, readProcessRecords } from "./processes/registry.js";
+import { readLogTail } from "./processes/logs.js";
 import { AGENT_META, AGENT_NAMES, agentDef, type IssueAccess } from "./agents.js";
 import { resolveAgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
@@ -138,7 +140,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
 
 type Page = "runs" | "models" | "spend" | "settings";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model";
-type RunSection = "overview" | "timeline" | "thinking" | "changes" | "children" | "context";
+type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "children" | "context";
 type RunListFilter = RunFilter | "attention";
 
 const TABS: Array<{ id: Page; label: string; key: string }> = [
@@ -148,10 +150,11 @@ const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "settings", label: "Settings", key: "4" },
 ];
 const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
-const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "thinking", "changes", "children", "context"];
+const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "children", "context"];
 const RUN_SECTION_LABEL: Record<RunSection, string> = {
   overview: "Overview",
   timeline: "Timeline",
+  processes: "Processes",
   thinking: "Thinking",
   changes: "Changes",
   children: "Children",
@@ -2283,6 +2286,30 @@ export async function runTui(): Promise<void> {
           if (touched.length) {
             lines.push("", ` ${B}${C}Touched by tools${R}`);
             for (const path of touched.slice(0, 10)) lines.push(`  ${G}✎${R} ${W}${path}${R}`);
+          }
+          body = clipBody(lines);
+        } else if (runSection === "processes") {
+          const records = latestProcessRecords(readProcessRecords(detail.dir));
+          if (records.length === 0) {
+            lines.push(` ${D}No OS processes recorded for this run.${R}`);
+          } else {
+            const live = records.filter((record) => record.status === "running").length;
+            lines.push(` ${B}${C}Processes${R} ${D}${records.length} total · ${live} running${R}`);
+            const viewport = Math.max(1, bodyH - lines.length - 1);
+            runScroll = Math.max(0, Math.min(runScroll, Math.max(0, records.length - viewport)));
+            for (const record of records.slice(runScroll, runScroll + viewport)) {
+              const tone = record.status === "running" ? Y : record.status === "exited" ? G : RED;
+              const icon = record.status === "running" ? "●" : record.status === "exited" ? "✓" : "✗";
+              const pid = record.pid ? `pid ${record.pid}` : "pid -";
+              const ended = record.exitCode === undefined ? "" : ` exit ${record.exitCode}`;
+              lines.push(
+                ` ${tone}${icon}${R} ${D}${record.id}${R} ${tone}${record.status.padEnd(10)}${R}` +
+                  ` ${D}${record.origin.padEnd(8)}${R} ${W}${trunc(record.name, Math.max(16, cols - 48))}${R} ${D}${pid}${ended}${R}`,
+              );
+              const log = readLogTail(record.stdoutLog, 4_000);
+              const tail = log.trim().split("\n").filter(Boolean).at(-1);
+              if (tail) lines.push(`   ${D}${trunc(tail, Math.max(16, cols - 6))}${R}`);
+            }
           }
           body = clipBody(lines);
         } else if (runSection === "children") {

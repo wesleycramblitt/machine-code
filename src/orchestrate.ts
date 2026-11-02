@@ -22,6 +22,7 @@ import { resolveGates, runGates } from "./verify.js";
 import { allCommands } from "./commands/profiles.js";
 import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
+import { ProcessSupervisor } from "./processes/supervisor.js";
 import type { Layout } from "./paths.js";
 
 /** Run modes are strings from agent config, not a global TypeScript union. */
@@ -319,7 +320,12 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       }
 
       const gates = resolveGates(packet);
-      const gateOutcome = await runGates(gates, { root: toolRoot, commands });
+      const gateProcesses = new ProcessSupervisor({
+        runId: recorder.id,
+        runDir: recorder.dir,
+        onEvent: (type, data) => recorder.event(type, data),
+      });
+      const gateOutcome = await runGates(gates, { root: toolRoot, commands, processes: gateProcesses });
       recorder.event("gates", {
         packet: packet.id,
         passed: gateOutcome.passed,

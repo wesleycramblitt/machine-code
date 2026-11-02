@@ -52,6 +52,13 @@ export function nextProcessId(records: readonly ProcessRecord[]): string {
   return `p-${String(max + 1).padStart(4, "0")}`;
 }
 
+/** Latest record per process id, preserving first-seen order. */
+export function latestProcessRecords(records: readonly ProcessRecord[]): ProcessRecord[] {
+  const latest = new Map<string, ProcessRecord>();
+  for (const record of records) latest.set(record.id, record);
+  return [...latest.values()];
+}
+
 export function liveProcessRecords(records: readonly ProcessRecord[]): ProcessRecord[] {
-  return records.filter((record) => record.status === "running");
+  return latestProcessRecords(records).filter((record) => record.status === "running");
 }

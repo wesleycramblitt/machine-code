@@ -41,6 +41,9 @@ import { resolveRunTarget } from "./issues/work.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
 import { loadAvailability, saveAvailability } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
+import { latestProcessRecords, readProcessRecords } from "./processes/registry.js";
+import { readLogTail } from "./processes/logs.js";
+import { killAllProcesses, killProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
@@ -146,6 +149,9 @@ Usage:
   machine_code show <run-id>        Rich run detail: model, ask, context, state, changes,
                                     children [--events] [--thinking] [--changes] [--context]
                                     [--state] [--json]
+  machine_code processes <run-id>   List run-owned processes [--json]
+  machine_code processes kill <run-id> <process-id|all>
+  machine_code processes logs <run-id> <process-id>
   machine_code context <run-id>     Print the run context manifest
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
                                     --no-symbols, --semantic)
@@ -2524,6 +2530,82 @@ function cmdRuns(argv: string[]): number {
 
 /* ------------------------------------------------------------------- show */
 
+function tailFile(path: string, max = 600): string {
+  return readLogTail(path, max);
+}
+
+function cmdProcesses(argv: string[]): number {
+  const args = argv.filter((value) => !value.startsWith("--"));
+  const json = argv.includes("--json");
+  const l = layout();
+  const find = (runId: string) => {
+    const found = findRunAnywhere(l.home, runId);
+    if (!found) fail(`no such run: ${runId}`);
+    return { ...found, runDir: join(found.layout.runsDir, found.run.summary.id) };
+  };
+
+  if (args[0] === "kill") {
+    const runId = args[1];
+    const target = args[2];
+    if (!runId || !target) fail("usage: machine_code processes kill <run-id> <process-id|all>");
+    const found = find(runId);
+    const records = readProcessRecords(found.runDir);
+    if (target === "all") {
+      const killed = killAllProcesses(records);
+      process.stdout.write(`killed ${killed} process(es) for ${found.run.summary.id}\n`);
+      return 0;
+    }
+    const record = latestProcessRecords(records).find((entry) => entry.id === target);
+    if (!record) fail(`no process ${target} for ${found.run.summary.id}`);
+    try {
+      killProcessRecord(record);
+    } catch (error) {
+      fail((error as Error).message);
+    }
+    process.stdout.write(`sent SIGTERM to ${record.id} (${record.name})\n`);
+    return 0;
+  }
+
+  if (args[0] === "logs") {
+    const runId = args[1];
+    const target = args[2];
+    if (!runId || !target) fail("usage: machine_code processes logs <run-id> <process-id>");
+    const found = find(runId);
+    const record = latestProcessRecords(readProcessRecords(found.runDir)).find((entry) => entry.id === target);
+    if (!record) fail(`no process ${target} for ${found.run.summary.id}`);
+    process.stdout.write(`${record.id} ${record.name}  ${record.status}\n`);
+    const stdout = tailFile(record.stdoutLog, 20_000);
+    const stderr = tailFile(record.stderrLog, 20_000);
+    if (stdout) process.stdout.write(`\n--- stdout ---\n${stdout}\n`);
+    if (stderr) process.stdout.write(`\n--- stderr ---\n${stderr}\n`);
+    if (!stdout && !stderr) process.stdout.write("(no output recorded)\n");
+    return 0;
+  }
+
+  const runId = args[0];
+  if (!runId) fail("usage: machine_code processes <run-id> [--json] | processes kill <run-id> <id|all> | processes logs <run-id> <id>");
+  const found = find(runId);
+  const records = latestProcessRecords(readProcessRecords(found.runDir));
+  if (json) {
+    process.stdout.write(`${JSON.stringify(records, null, 2)}\n`);
+    return 0;
+  }
+  if (records.length === 0) {
+    process.stdout.write(`no processes recorded for ${found.run.summary.id}\n`);
+    return 0;
+  }
+  for (const record of records) {
+    const pid = record.pid ? `pid ${record.pid}` : "pid -";
+    const exit = record.exitCode === undefined ? "" : ` exit ${record.exitCode}`;
+    process.stdout.write(
+      `${record.id}  ${record.status.padEnd(10)} ${record.origin.padEnd(8)} ${record.name.padEnd(24)} ${pid}${exit}\n`,
+    );
+    const tail = tailFile(record.stdoutLog, 180).trim().split("\n").at(-1);
+    if (tail) process.stdout.write(`   ${tail}\n`);
+  }
+  return 0;
+}
+
 function cmdShow(argv: string[]): number {
   const { flags, positional } = parseFlags(argv);
   const id = positional[0];
@@ -3009,6 +3091,9 @@ async function main(): Promise<void> {
       break;
     case "show":
       code = cmdShow(rest);
+      break;
+    case "processes":
+      code = cmdProcesses(rest);
       break;
     case "context":
       code = cmdContext(rest);

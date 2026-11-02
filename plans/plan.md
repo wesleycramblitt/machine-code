@@ -8,7 +8,8 @@
 > implemented (issue access, `mc:plan` schema/validator, run orchestration
 > fields, process registry/types, issue dependencies, artifact usage). Phase 2
 > has metadata/free-model probes, run preflight, the `availability` CLI, and a
-> manual TUI probe. The suite has 218 tests.
+> manual TUI probe. Phase 3 has the registry/supervisor, typed-command and gate tracking,
+> `processes` CLI, and the run-detail Processes section. The suite has 220 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -262,6 +263,11 @@ recovered free model can clear its cooldown before the conservative timer; all
 probe activity is visible and rate-limited.
 
 ## 6. Phase 3 — Process supervision
+
+Status: partially implemented. The registry/supervisor, typed-command and gate
+process records and logs, `processes` CLI, and run-detail Processes section exist.
+Remaining: route every spawn (git/map, LSP, MCP, delegated runs), TUI
+kill/follow controls, and orphan reaping.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -527,7 +533,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 218 tests green. Add:
+Keep the existing 220 tests green. Add:
 
 | Area | Cases |
 |---|---|

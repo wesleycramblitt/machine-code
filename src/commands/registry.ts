@@ -237,6 +237,8 @@ export interface CommandContext {
   root: string;
   /** Loaded commands (core + profiles). Falls back to CORE_COMMANDS. */
   commands?: ReadonlyMap<string, CommandSpec>;
+  /** When present, spawned commands are recorded by the run supervisor. */
+  processes?: import("../processes/supervisor.js").ProcessSupervisor;
 }
 
 export function describeCommand(name: string, commands?: ReadonlyMap<string, CommandSpec>): string {
@@ -262,6 +264,7 @@ export async function runCommand(
   name: string,
   args: Record<string, unknown>,
   ctx: CommandContext,
+  toolCallId?: string,
 ): Promise<CommandRunResult> {
   const map = ctx.commands ?? CORE_COMMANDS;
   const spec = map.get(name);
@@ -284,11 +287,21 @@ export async function runCommand(
   } catch (error) {
     return { text: `bad arguments: ${(error as Error).message}`, isError: true };
   }
-  const result = await runProc(spec.binary, argv, {
+  const procOptions = {
     cwd: ctx.root,
     timeoutMs: spec.timeoutMs,
     env: { GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
-  });
+  };
+  const result = ctx.processes
+    ? (
+        await ctx.processes.run(spec.binary, argv, {
+          ...procOptions,
+          origin: "command",
+          name: spec.name,
+          ...(toolCallId ? { toolCallId } : {}),
+        })
+      ).result
+    : await runProc(spec.binary, argv, procOptions);
   if (result.outcome === "spawn-error") {
     return { text: `configuration gap: ${result.spawnError}`, isError: true };
   }

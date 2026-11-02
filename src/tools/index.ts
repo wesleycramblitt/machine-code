@@ -55,6 +55,8 @@ export interface ToolContext {
   prs?: PrToolContext;
   /** Run state for the `context` tool. */
   state?: RunStateStore;
+  /** When present, spawned commands/processes are recorded by the supervisor. */
+  processes?: import("../processes/supervisor.js").ProcessSupervisor;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -488,7 +490,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         if (params.action === "describe") {
           return ok(describeCommand(params.name, ctx.commands));
         }
-        const result: CommandRunResult = await runCommand(params.name, params.args ?? {}, ctx);
+        const result: CommandRunResult = await runCommand(params.name, params.args ?? {}, ctx, _id);
         return result.isError ? fail(result.text) : ok(result.text);
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));

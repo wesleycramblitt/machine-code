@@ -1,0 +1,72 @@
+/**
+ * Supervisor: record lifecycle, logs, events, and spawn failures.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+import { ProcessSupervisor } from "../dist/processes/supervisor.js";
+import { latestProcessRecords, readProcessRecords } from "../dist/processes/registry.js";
+
+function tempDir() {
+  return mkdtempSync(join(tmpdir(), "mc-proc-"));
+}
+
+test("supervised command records start/exit and keeps full logs", async () => {
+  const dir = tempDir();
+  try {
+    const events = [];
+    const supervisor = new ProcessSupervisor({
+      runId: "run-1",
+      runDir: dir,
+      onEvent: (type, data) => events.push({ type, ...data }),
+    });
+    const ran = await supervisor.run(process.execPath, ["-e", 'process.stdout.write("hello"); process.stderr.write("err")'], {
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+      origin: "command",
+      name: "test:echo",
+      toolCallId: "call-1",
+    });
+    assert.equal(ran.result.code, 0);
+    assert.equal(ran.processId, "p-0001");
+    assert.equal(ran.record.status, "exited");
+    assert.equal(ran.record.toolCallId, "call-1");
+    assert.equal(readFileSync(ran.record.stdoutLog, "utf8"), "hello");
+    assert.equal(readFileSync(ran.record.stderrLog, "utf8"), "err");
+    assert.equal(latestProcessRecords(readProcessRecords(dir)).length, 1);
+    assert.deepEqual(events.map((event) => event.type), ["process_started", "process_exited"]);
+
+    const second = await supervisor.run(process.execPath, ["-e", "process.exit(3)"], {
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+      origin: "tool",
+      name: "test:fail",
+    });
+    assert.equal(second.processId, "p-0002");
+    assert.equal(second.record.status, "failed");
+    assert.equal(second.record.exitCode, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("spawn failures are recorded without throwing", async () => {
+  const dir = tempDir();
+  try {
+    const supervisor = new ProcessSupervisor({ runId: "run-2", runDir: dir });
+    const ran = await supervisor.run("definitely-not-a-real-binary", [], {
+      cwd: process.cwd(),
+      timeoutMs: 5_000,
+      origin: "command",
+      name: "missing",
+    });
+    assert.equal(ran.result.outcome, "spawn-error");
+    assert.equal(ran.record.status, "spawn-error");
+    assert.match(ran.record.error, /not installed|ENOENT/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

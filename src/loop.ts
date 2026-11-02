@@ -30,6 +30,7 @@ import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deter
 import { ensureSemanticMap } from "./map/ensure.js";
 import { renderSemanticIndex } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
+import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
 
 export const MAX_TURNS = 25;
@@ -263,6 +264,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     goal: input.request,
     repoRoot: mapRoot,
     recorder,
+  });
+  const processes = new ProcessSupervisor({
+    runId: recorder.id,
+    runDir: recorder.dir,
+    onEvent: (type, data) => recorder.event(type, data),
   });
 
   // Semantic refresh after a changed turn. Coalesce so a burst of edits
@@ -502,6 +508,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             issues: issueContext,
             prs: prContext,
             state: memory,
+            processes,
           },
           input.agent.tools,
         ),

@@ -16,6 +16,16 @@ export interface ProcResult {
   spawnError?: string;
 }
 
+export interface ProcHooks {
+  /** Called after spawn; detached process groups use the pid as the pgid. */
+  onSpawn?: (process: { pid?: number; pgid?: number }) => void;
+  /** Called with every chunk before the in-memory capture cap is applied. */
+  onStdout?: (chunk: Buffer) => void;
+  onStderr?: (chunk: Buffer) => void;
+  /** Called exactly once when the process settles. */
+  onExit?: (result: ProcResult) => void;
+}
+
 export interface ProcOptions {
   cwd: string;
   timeoutMs: number;
@@ -23,6 +33,8 @@ export interface ProcOptions {
   env?: Record<string, string>;
   /** Capture cap per stream (bytes); excess is discarded. Default 4 MiB. */
   maxBufferBytes?: number;
+  /** Observation hooks used by the process supervisor. */
+  hooks?: ProcHooks;
 }
 
 /** Minimal environment: enough for binaries, never provider secrets. */
@@ -54,6 +66,11 @@ export function runProc(binary: string, args: string[], options: ProcOptions): P
       });
       return;
     }
+    try {
+      options.hooks?.onSpawn?.({ ...(child.pid !== undefined ? { pid: child.pid, pgid: child.pid } : {}) });
+    } catch {
+      // Observation must never break the command.
+    }
     const cap = options.maxBufferBytes ?? 4 * 1024 * 1024;
     const chunks: Buffer[] = [];
     const errChunks: Buffer[] = [];
@@ -64,6 +81,11 @@ export function runProc(binary: string, args: string[], options: ProcOptions): P
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      try {
+        options.hooks?.onExit?.(result);
+      } catch {
+        // Observation must never change the command result.
+      }
       resolvePromise(result);
     };
     const timer = setTimeout(() => {
@@ -81,12 +103,22 @@ export function runProc(binary: string, args: string[], options: ProcOptions): P
     }, options.timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
+      try {
+        options.hooks?.onStdout?.(chunk);
+      } catch {
+        // Observation must never break the command.
+      }
       if (outLen < cap) {
         chunks.push(chunk);
         outLen += chunk.length;
       }
     });
     child.stderr.on("data", (chunk: Buffer) => {
+      try {
+        options.hooks?.onStderr?.(chunk);
+      } catch {
+        // Observation must never break the command.
+      }
       if (errLen < cap) {
         errChunks.push(chunk);
         errLen += chunk.length;
