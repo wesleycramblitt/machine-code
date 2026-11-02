@@ -110,6 +110,25 @@ test("start returns immediately and records the later exit", async () => {
   }
 });
 
+test("attach registers an existing long-lived child", async () => {
+  const dir = tempDir();
+  try {
+    const supervisor = new ProcessSupervisor({ runId: "run-attach", runDir: dir });
+    const child = spawn(process.execPath, ["-e", "setTimeout(()=>{},100)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const id = supervisor.attach(child, { origin: "lsp", name: "lsp:test" });
+    assert.equal(id, "p-0001");
+    await new Promise((resolve) => child.once("exit", resolve));
+    const records = latestProcessRecords(readProcessRecords(dir));
+    assert.equal(records[0].origin, "lsp");
+    assert.equal(records[0].status, "exited");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("spawn failures are recorded without throwing", async () => {
   const dir = tempDir();
   try {

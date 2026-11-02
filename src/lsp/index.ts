@@ -14,13 +14,17 @@ const SERVERS: Record<string, { binary: string; args: string[] }> = {
 
 const pool = new Map<string, LspClient>();
 
-export function lspClientFor(root: string, language: string): LspClient | null {
+export function lspClientFor(
+  root: string,
+  language: string,
+  processes?: import("../processes/supervisor.js").ProcessSupervisor,
+): LspClient | null {
   const spec = SERVERS[language];
   if (!spec) return null;
   const key = `${language}:${root}`;
   let client = pool.get(key);
   if (!client) {
-    client = new LspClient({ binary: spec.binary, args: spec.args, root });
+    client = new LspClient({ binary: spec.binary, args: spec.args, root, processes });
     pool.set(key, client);
   }
   return client;

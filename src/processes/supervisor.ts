@@ -5,7 +5,7 @@
  * full stdout/stderr to log files while returning the capped tool result.
  */
 import { appendFileSync, closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { minimalEnv, runProc, type ProcOptions, type ProcResult } from "../proc.js";
 import {
   appendProcessRecord,
@@ -40,6 +40,12 @@ export interface SupervisedRunResult {
 export interface SupervisedStartOptions {
   cwd: string;
   env?: Record<string, string>;
+  origin: ProcessOrigin;
+  name: string;
+  toolCallId?: string;
+}
+
+export interface SupervisedAttachOptions {
   origin: ProcessOrigin;
   name: string;
   toolCallId?: string;
@@ -200,6 +206,43 @@ export class ProcessSupervisor {
       if (outFd !== undefined) closeSync(outFd);
       if (errFd !== undefined) closeSync(errFd);
     }
+  }
+
+  /**
+   * Register an already-spawned long-lived child (for example an LSP server).
+   * Its stdio remains owned by the caller; only lifecycle metadata is recorded.
+   */
+  attach(child: ChildProcess, options: SupervisedAttachOptions): string {
+    const id = nextProcessId(readProcessRecords(this.options.runDir));
+    const logs = processLogPaths(this.options.runDir, id);
+    mkdirSync(processesDir(this.options.runDir), { recursive: true });
+    let record: ProcessRecord = {
+      id,
+      runId: this.options.runId,
+      origin: options.origin,
+      name: options.name,
+      ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+      argv: [options.name],
+      ...(child.pid !== undefined ? { pid: child.pid, pgid: child.pid } : {}),
+      status: "running",
+      startedAt: new Date().toISOString(),
+      stdoutLog: logs.stdout,
+      stderrLog: logs.stderr,
+    };
+    appendProcessRecord(this.options.runDir, record);
+    this.options.onEvent?.("process_started", { processId: id, origin: options.origin, name: options.name });
+    child.on("exit", (code, signal) => {
+      record = {
+        ...record,
+        status: code === 0 ? "exited" : signal ? "killed" : "failed",
+        endedAt: new Date().toISOString(),
+        exitCode: code,
+        signal,
+      };
+      appendProcessRecord(this.options.runDir, record);
+      this.options.onEvent?.("process_exited", { processId: id, status: record.status, exitCode: code, signal });
+    });
+    return id;
   }
 }
 

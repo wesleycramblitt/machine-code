@@ -28,6 +28,8 @@ export interface LspClientOptions {
   root: string;
   /** Per-request timeout (ms). */
   timeoutMs?: number;
+  /** Optional run supervisor for lifecycle visibility. */
+  processes?: import("../processes/supervisor.js").ProcessSupervisor;
 }
 
 export class LspClient {
@@ -60,9 +62,14 @@ export class LspClient {
       const child = spawn(this.options.binary, this.options.args, {
         cwd: this.options.root,
         stdio: ["pipe", "pipe", "pipe"],
+        detached: true,
         env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
       });
       this.process = child;
+      this.options.processes?.attach(child, {
+        origin: "lsp",
+        name: `lsp:${this.options.binary}`,
+      });
       const reader = new StreamMessageReader(child.stdout);
       const writer = new StreamMessageWriter(child.stdin);
       const conn = createMessageConnection(reader, writer);

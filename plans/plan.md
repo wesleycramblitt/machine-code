@@ -17,7 +17,8 @@
 > artifact inventory and safe tool-manifest provisioning; executable scripts
 > remain human-approved CLI work. The read-only scheduler, dry-run CLI, TUI
 > preflight, and orchestration ledger/lease are implemented. Issue `plan`
-> writes/replaces `mc:plan` safely. The suite has 233 tests.
+> writes/replaces `mc:plan` safely. LSP servers are supervised. The suite has
+> 234 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -276,8 +277,8 @@ Status: partially implemented. The registry/supervisor, typed-command and gate
 process records and logs, `processes` CLI, run-detail Processes section with
 select/follow/open-log/kill controls, detached delegated-run tracking,
 SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
-exist. Map helper spawns are supervised. Remaining: the synchronous git-status
-safety net, worktree helpers, LSP, and MCP spawns.
+exist. Map helper and LSP server spawns are supervised. Remaining: the
+synchronous git-status safety net, worktree helpers, and MCP spawns.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -557,7 +558,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 233 tests green. Add:
+Keep the existing 234 tests green. Add:
 
 | Area | Cases |
 |---|---|

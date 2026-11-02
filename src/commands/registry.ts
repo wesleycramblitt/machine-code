@@ -140,7 +140,7 @@ const SPECS: CommandSpec[] = [
       if (!serverAvailable("typescript")) {
         return { text: "LSP unavailable: typescript-language-server not installed (install: machine_code install typescript-language-server). Fallback: core:status + manual review.", isError: true };
       }
-      const client = lspClientFor(ctx.root, "typescript");
+      const client = lspClientFor(ctx.root, "typescript", ctx.processes);
       if (!client) return { text: "LSP unavailable for this language", isError: true };
       const diagnostics = await client.diagnosticsFor(abs, content);
       if (diagnostics === null) return { text: "LSP server did not respond (over budget or still indexing). Fallback to ast-grep/rg.", isError: true };
@@ -181,7 +181,7 @@ const SPECS: CommandSpec[] = [
       if (!serverAvailable("typescript")) {
         return { text: "LSP unavailable: typescript-language-server not installed. Rename falls back to ast-grep/rg (shape-based, not type-safe).", isError: true };
       }
-      const client = lspClientFor(ctx.root, "typescript");
+      const client = lspClientFor(ctx.root, "typescript", ctx.processes);
       if (!client) return { text: "LSP unavailable for this language", isError: true };
       const edit = await client.rename(abs, { line: line - 1, character: column - 1 }, newName);
       if (edit === null) {

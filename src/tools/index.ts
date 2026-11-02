@@ -425,7 +425,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 );
               }
               const abs = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
-              const client = lspClientFor(ctx.root, "typescript");
+              const client = lspClientFor(ctx.root, "typescript", ctx.processes);
               if (!client) return fail("LSP unavailable. Fallback: outline, text, or structure.");
               if (!params.path || params.line === undefined || params.column === undefined) {
                 return fail(`semantic mode "${params.mode}" requires path + line + column`);
