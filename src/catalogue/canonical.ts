@@ -74,12 +74,19 @@ export function buildCanonicalIndex(keys: Iterable<string>): CanonicalIndex {
   return index;
 }
 
+/** Offer suffixes ("-free", ":free", " free") are pricing variants, not models. */
+function withoutOfferSuffix(value: string): string {
+  return value.replace(/(?:[-\s]+free|:free)\s*$/i, "");
+}
+
 /** Resolve a model id/name to a canonical key; ambiguous or missing → undefined. */
 export function resolveCanonical(index: CanonicalIndex, ...candidates: string[]): string | undefined {
   for (const candidate of candidates) {
     if (!candidate) continue;
-    const resolved = index.get(normalizeModelSlug(candidate));
-    if (resolved) return resolved;
+    for (const variant of new Set([candidate, withoutOfferSuffix(candidate)])) {
+      const resolved = index.get(normalizeModelSlug(variant));
+      if (resolved) return resolved;
+    }
   }
   return undefined;
 }

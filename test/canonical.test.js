@@ -59,6 +59,13 @@ test("same-identity aliases keep the first (benchmark-backed) spelling", () => {
   assert.equal(resolveCanonical(index, "claude-haiku-4.5"), "anthropic/claude-haiku-4-5");
 });
 
+test("free offer suffixes resolve to the measured base model", () => {
+  const index = buildCanonicalIndex(["deepseek/deepseek-v4-1-flash"]);
+  assert.equal(resolveCanonical(index, "deepseek-v4.1-flash-free"), "deepseek/deepseek-v4-1-flash");
+  assert.equal(resolveCanonical(index, "DeepSeek V4.1 Flash Free"), "deepseek/deepseek-v4-1-flash");
+  assert.equal(resolveCanonical(index, "xingchen-agi/xing4.0-29b-a4b:free"), undefined);
+});
+
 test("later duplicate keys do not create a false ambiguity", () => {
   const index = buildCanonicalIndex(["openai/gpt-6-astra", "openai/gpt-6-astra"]);
   assert.equal(resolveCanonical(index, "gpt-6-astra"), "openai/gpt-6-astra");
