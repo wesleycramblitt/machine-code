@@ -41,6 +41,7 @@ export interface AgentConfig {
   issues: IssueTracking;
   /** Resolved by resolveAgentConfig; absent on raw presets. */
   issueAccess?: IssueAccess;
+  artifactScripts: boolean;
   ask: boolean;
   approval: ApprovalMode;
   ambiguity: AmbiguityMode;
@@ -61,6 +62,7 @@ function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig
       ? (raw.issues as IssueTracking)
       : "optional",
     ...(isIssueAccess(raw.issue_access) ? { issueAccess: raw.issue_access } : {}),
+    artifactScripts: raw.artifact_scripts === true,
     ask: raw.ask !== false,
     approval: raw.approval === "agent" ? "agent" : "human",
     ambiguity: (AMBIGUITIES as readonly string[]).includes(String(raw.ambiguity))
@@ -108,6 +110,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     verification: "direct",
     issues: "disabled",
     issueAccess: "none",
+    artifactScripts: false,
     ask: true,
     approval: "human",
     ambiguity: "precise",
@@ -127,6 +130,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     const it = pick(layer.issues, ISSUE_TRACKINGS);
     if (it) config.issues = it;
     if (isIssueAccess(layer.issueAccess)) config.issueAccess = layer.issueAccess;
+    if (layer.artifactScripts !== undefined) config.artifactScripts = layer.artifactScripts;
     if (layer.ask !== undefined) config.ask = layer.ask;
     if (layer.approval === "human" || layer.approval === "agent") config.approval = layer.approval;
     const a = pick(layer.ambiguity, AMBIGUITIES);
@@ -139,6 +143,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     if (input.runOverrides.verification !== undefined) config.verification = input.runOverrides.verification;
     if (input.runOverrides.issues !== undefined) config.issues = input.runOverrides.issues;
     if (isIssueAccess(input.runOverrides.issueAccess)) config.issueAccess = input.runOverrides.issueAccess;
+    if (input.runOverrides.artifactScripts !== undefined) config.artifactScripts = input.runOverrides.artifactScripts;
     if (input.runOverrides.ask !== undefined) config.ask = input.runOverrides.ask;
     if (input.runOverrides.approval !== undefined) config.approval = input.runOverrides.approval;
     if (input.runOverrides.ambiguity !== undefined) config.ambiguity = input.runOverrides.ambiguity;
@@ -167,6 +172,7 @@ function agentPolicyToConfig(policy: AgentPolicy | undefined): AgentConfigOverri
   if (policy.verification !== undefined) out.verification = policy.verification;
   if (policy.issues !== undefined) out.issues = policy.issues;
   if (policy.issueAccess !== undefined) out.issueAccess = policy.issueAccess;
+  if (policy.artifactScripts !== undefined) out.artifactScripts = policy.artifactScripts;
   if (policy.ask !== undefined) out.ask = policy.ask;
   if (policy.approval !== undefined) out.approval = policy.approval;
   if (policy.ambiguity !== undefined) out.ambiguity = policy.ambiguity;

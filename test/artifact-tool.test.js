@@ -86,7 +86,17 @@ test("artifact provisioning writes tool manifests but not scripts", async () => 
 
     const script = await artifactTool(ctx).execute("c1", { action: "create", name: "run", kind: "script" });
     assert.equal(script.isError, true);
-    assert.match(script.content[0].text, /human approval/);
+    assert.match(script.content[0].text, /explicit approval/);
+
+    const scriptOk = await artifactTool({ ...ctx, allowScripts: true }).execute("c1", {
+      action: "create",
+      name: "run-check",
+      kind: "script",
+      lang: "sh",
+      script: "#!/bin/sh\necho ok\n",
+    });
+    assert.equal(scriptOk.isError, undefined);
+    assert.match(readFileSync(join(layout.repoDir, "scripts", "run-check.sh"), "utf8"), /echo ok/);
 
     const missing = await artifactTool(ctx).execute("c1", { action: "show", name: "missing" });
     assert.equal(missing.isError, true);

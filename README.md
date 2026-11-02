@@ -237,9 +237,9 @@ Feature → Epic, nearest first:
 
 Tools live in `.machine_code/tools/<name>.toml`, scripts under
 `.machine_code/scripts/`. `machine_code tools new <name>` scaffolds both.
-Planner can inspect them and provision safe tool manifests with the `artifact`
-tool (`list`, `show`, `usage`, `create`, `update`); executable scripts still go
-through the human-approved CLI. Planner writes task policy with the issue
+Planner can inspect them and provision tool manifests with the `artifact` tool
+(`list`, `show`, `usage`, `create`, `update`). Executable scripts require the
+explicit `--allow-artifact-scripts` run flag. Planner writes task policy with the issue
 `plan` action, which inserts or replaces the `mc:plan` marker. The new-run composer previews exactly which files, tools, scripts, and
 issues the selected run will inherit before it starts.
 

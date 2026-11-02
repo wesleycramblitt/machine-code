@@ -53,6 +53,7 @@ test("role presets resolve to the documented defaults", () => {
     verification: "verified",
     issues: "optional",
     issueAccess: "read",
+    artifactScripts: false,
     ask: true,
     approval: "human",
     ambiguity: "precise",

@@ -24,6 +24,8 @@ export interface ArtifactToolContext {
   layout: Layout;
   capabilities: readonly string[];
   recorder: RunRecorder;
+  /** Human opt-in for executable script creation. */
+  allowScripts?: boolean;
 }
 
 const ArtifactParams = Type.Object({
@@ -36,6 +38,8 @@ const ArtifactParams = Type.Object({
   description: Type.Optional(Type.String()),
   command: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
+  script: Type.Optional(Type.String({ description: "Executable script body (kind=script)." })),
+  lang: Type.Optional(Type.String({ description: "Script extension, e.g. sh, py, js." })),
   force: Type.Optional(Type.Boolean({ description: "Replace an existing tool manifest (create/update)." })),
 });
 
@@ -70,9 +74,6 @@ function provisionTool(ctx: ArtifactToolContext, params: ArtifactParamsType, act
   if (!ctx.capabilities.includes("artifact:provision")) {
     return fail("artifact provisioning requires artifact:provision");
   }
-  if (params.kind === "script") {
-    return fail("new executable scripts require human approval; use \"machine_code tools new\"");
-  }
   const name = params.name?.trim();
   if (!name || !/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
     return fail("artifact name must match [a-z0-9][a-z0-9._-]*");
@@ -82,22 +83,43 @@ function provisionTool(ctx: ArtifactToolContext, params: ArtifactParamsType, act
     return fail(`artifact ${name} already exists (pass force=true to replace)`);
   }
   if (action === "update" && !existing) return fail(`artifact not found: ${name}`);
-  if (existing && (existing.origin !== "repo" || existing.kind !== "tool")) {
-    return fail(`artifact ${name} is not an editable repo tool`);
+  if (existing && existing.origin !== "repo") {
+    return fail(`artifact ${name} is not editable from this repository`);
   }
+  if (existing && params.kind && existing.kind !== params.kind) {
+    return fail(`artifact ${name} is a ${existing.kind}; it cannot be updated as a ${params.kind}`);
+  }
+  const scriptKind = (params.kind ?? existing?.kind) === "script";
+  if (scriptKind && !ctx.allowScripts) {
+    return fail("new executable scripts require explicit approval; restart the run with --allow-artifact-scripts");
+  }
+  const existingExt = existing?.path?.split(".").pop();
+  const lang = (params.lang ?? existingExt ?? "sh").replace(/^\./, "");
+  if (scriptKind && !/^[a-z0-9]+$/i.test(lang)) return fail("lang must be a simple extension, e.g. sh|py|js");
   const file = join(ctx.layout.repoDir, "tools", `${name}.toml`);
   if (action === "create" && existsSync(file) && !params.force) {
     return fail(`tool manifest already exists: ${file} (pass force=true to replace)`);
   }
   const description = params.description ?? existing?.description ?? name;
-  const command = params.command ?? existing?.command;
   const tags = params.tags ?? existing?.tags ?? [];
+  let command = params.command ?? existing?.command;
+  if (scriptKind) {
+    if (!params.script) return fail("creating a script requires script content");
+    const scriptPath = join(ctx.layout.repoDir, "scripts", `${name}.${lang}`);
+    if (action === "create" && existsSync(scriptPath) && !params.force) {
+      return fail(`script already exists: ${scriptPath} (pass force=true to replace)`);
+    }
+    mkdirSync(join(ctx.layout.repoDir, "scripts"), { recursive: true });
+    writeFileSync(scriptPath, params.script, { encoding: "utf8", mode: 0o755 });
+    command = `scripts/${name}.${lang}`;
+  }
+  const kind = scriptKind ? "script" : "tool";
   mkdirSync(join(ctx.layout.repoDir, "tools"), { recursive: true });
   writeFileSync(
     file,
     [
       `name = ${tomlString(name)}`,
-      'kind = "tool"',
+      `kind = ${tomlString(kind)}`,
       `description = ${tomlString(description)}`,
       ...(command ? [`command = ${tomlString(command)}`] : []),
       `tags = ${JSON.stringify(tags)}`,
@@ -106,10 +128,10 @@ function provisionTool(ctx: ArtifactToolContext, params: ArtifactParamsType, act
     ].join("\n"),
     "utf8",
   );
-  ctx.recorder.event("artifact_provisioned", { artifact: name, action, path: file });
+  ctx.recorder.event("artifact_provisioned", { artifact: name, action, kind, path: file });
   recordUsage(ctx, {
     artifact: name,
-    kind: "tool",
+    kind,
     scope: "task",
     issue: ctx.recorder.current.issue,
     runId: ctx.recorder.id,

@@ -133,6 +133,7 @@ Usage:
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
                                     [--mode <agent mode>] (roles declare their own modes)
                                     [--allow-issue-create] explicit issue:create override
+                                    [--allow-artifact-scripts] permit executable artifact scripts
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
                                     [--context-exclude '<json>'] omit selected context
@@ -210,6 +211,7 @@ function fail(message: string, code = 1): never {
 const BOOLEAN_FLAGS = new Set([
   "all",
   "attention",
+  "allow-artifact-scripts",
   "allow-issue-create",
   "auto-issue",
   "axes",
@@ -923,6 +925,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     agentOverrides.ambiguity = ambiguityFlag as AgentConfig["ambiguity"];
   }
   if (flags.has("allow-issue-create")) agentOverrides.issueAccess = "create";
+  if (flags.has("allow-artifact-scripts")) agentOverrides.artifactScripts = true;
   // A detached delegated child runs a single agent directly (task tool spawn).
   const directExec = flags.has("direct-exec");
 
@@ -2740,6 +2743,11 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   try {
     for (const task of result.dispatch) {
       if (!task.plan) continue;
+      if (task.plan.role !== "build") {
+        stopReason = `task #${task.issue.ref.number} has role ${task.plan.role}; review dispatch is not implemented`;
+        process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);
+        break;
+      }
       if (task.plan.planReview === "human" || task.plan.resultReview === "human") {
         stopReason = `task #${task.issue.ref.number} requires human review`;
         process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stopReason}\n`);

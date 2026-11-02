@@ -14,12 +14,12 @@
 > orphan records are reconciled on read and during prune. Phase 4 has the
 > read-only Planner role with `issue_access=create`; Architect and Sudo now have
 > read access with an explicit `--allow-issue-create` override. The Planner has
-> artifact inventory and safe tool-manifest provisioning; executable scripts
-> remain human-approved CLI work. The read-only scheduler, dry-run CLI, TUI
-> preflight, and orchestration ledger/lease are implemented. Issue `plan`
-> writes/replaces `mc:plan` safely. LSP servers are supervised. Sequential
-> orchestration dispatch can execute a ready task through Build, gates, Review,
-> commit, and PR. The suite has 236 tests.
+> artifact inventory/provisioning; executable scripts require explicit
+> `--allow-artifact-scripts` approval. The scheduler, dry-run and sequential
+> execution CLI, TUI preflight, and orchestration ledger/lease are implemented.
+> Issue `plan` writes/replaces `mc:plan` safely. LSP servers are supervised.
+> Sequential orchestration dispatch executes a ready task through Build, gates,
+> Review, commit, and PR. The suite has 236 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -324,12 +324,11 @@ calls. The section refreshes while the run is active.
 ## 7. Phase 4 — Planner
 
 Status: partially implemented. `data/agents/planner.toml` is a read-only role
-with issue creation, issue editing, map/search/command/ask/pr tools, a
-read-only artifact inventory tool, and the compact planning prompt. New-Epic
-bootstrap works through `issue create`.
-Remaining: artifact provisioning through the human approval path, explicit
-plan-write helpers, human packet review checkpoints, and Planner-specific
-fixture evals.
+with issue creation, issue editing, map/search/command/ask/pr tools, artifact
+inventory/provisioning, the issue `plan` action, and the compact planning
+prompt. New-Epic bootstrap works through `issue create`. Executable scripts
+require the explicit `--allow-artifact-scripts` run flag. Remaining: human
+packet review checkpoints and Planner-specific fixture evals.
 
 ```bash
 machine_code run --agent planner "<plan a new epic>"

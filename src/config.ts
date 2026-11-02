@@ -141,6 +141,7 @@ export interface AgentConfigOverrides {
   verification?: string;
   issues?: string;
   issueAccess?: string;
+  artifactScripts?: boolean;
   ask?: boolean;
   approval?: string;
   ambiguity?: string;
@@ -186,6 +187,8 @@ export interface AgentPolicy {
   issues?: string;
   /** Issue access: none | read | plan | create. */
   issueAccess?: string;
+  /** May provisioning write executable scripts (human opt-in). */
+  artifactScripts?: boolean;
   /** May the agent use the ask tool. */
   ask?: boolean;
   /** Default approval mode for issues it plans/delegates: human | agent. */
@@ -280,6 +283,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       verification: typeof r.verification === "string" ? r.verification : undefined,
       issues: typeof r.issues === "string" ? r.issues : typeof r.issue_tracking === "string" ? r.issue_tracking : undefined,
       issueAccess: typeof r.issue_access === "string" ? r.issue_access : undefined,
+      artifactScripts: typeof r.artifact_scripts === "boolean" ? r.artifact_scripts : undefined,
       ask: typeof r.ask === "boolean" ? r.ask : undefined,
       approval: typeof r.approval === "string" ? r.approval : undefined,
       ambiguity: typeof r.ambiguity === "string" ? r.ambiguity : undefined,
@@ -428,6 +432,7 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     verification: typeof raw.verification === "string" ? raw.verification : base.verification,
     issues: typeof raw.issues === "string" ? raw.issues : typeof raw.issue_tracking === "string" ? raw.issue_tracking : base.issues,
     issueAccess: typeof raw.issue_access === "string" ? raw.issue_access : base.issueAccess,
+    artifactScripts: typeof raw.artifact_scripts === "boolean" ? raw.artifact_scripts : base.artifactScripts,
     ask: typeof raw.ask === "boolean" ? raw.ask : base.ask,
     approval: typeof raw.approval === "string" ? raw.approval : base.approval,
     ambiguity: typeof raw.ambiguity === "string" ? raw.ambiguity : base.ambiguity,
