@@ -116,6 +116,7 @@ const HELP = `machine_code ${VERSION}
 
 Usage:
   machine_code run --agent general [--provider <id>] [--model <key>] "<question>"
+  machine_code run --agent planner "<plan a project>" [--issue <n>]
   machine_code run --agent architect [--mode direct|verified|redundant] "<task>" [--issue <n> [--auto-issue]]
   machine_code run --agent sudo "<rare task>" [--worktree]
                                     Sudo edits the main tree by default; --worktree isolates it.
@@ -128,6 +129,7 @@ Usage:
                                     [--issues required|optional|disabled] [--ask true|false]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
                                     [--mode <agent mode>] (roles declare their own modes)
+                                    [--allow-issue-create] explicit issue:create override
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
                                     [--context-exclude '<json>'] omit selected context
@@ -202,6 +204,7 @@ function fail(message: string, code = 1): never {
 const BOOLEAN_FLAGS = new Set([
   "all",
   "attention",
+  "allow-issue-create",
   "auto-issue",
   "axes",
   "changes",
@@ -912,6 +915,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     if (!valid.includes(ambiguityFlag)) fail(`--ambiguity must be one of ${valid.join(", ")}`);
     agentOverrides.ambiguity = ambiguityFlag as AgentConfig["ambiguity"];
   }
+  if (flags.has("allow-issue-create")) agentOverrides.issueAccess = "create";
   // A detached delegated child runs a single agent directly (task tool spawn).
   const directExec = flags.has("direct-exec");
 

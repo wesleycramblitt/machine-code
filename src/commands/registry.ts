@@ -54,7 +54,7 @@ const SPECS: CommandSpec[] = [
     timeoutMs: 60_000,
     handler: async (_args, ctx) => {
       const { runStatusCommand } = await import("./map.js");
-      return runStatusCommand(ctx.root);
+      return runStatusCommand(ctx.root, ctx.processes);
     },
   },
   {
@@ -74,7 +74,7 @@ const SPECS: CommandSpec[] = [
     timeoutMs: 60_000,
     handler: async (args, ctx) => {
       const { runMapCommand } = await import("./map.js");
-      return runMapCommand(args, ctx.root);
+      return runMapCommand(args, ctx.root, ctx.processes);
     },
   },
   {

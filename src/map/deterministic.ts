@@ -17,7 +17,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { runProc } from "../proc.js";
+import { runProc, type ProcOptions, type ProcResult } from "../proc.js";
+import type { ProcessSupervisor } from "../processes/supervisor.js";
 import {
   SEARCH_EXCLUDES,
   excludeGlobs,
@@ -74,6 +75,21 @@ function relative(path: string): string {
   return path.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
+async function mapProc(
+  binary: string,
+  args: string[],
+  options: ProcOptions,
+  processes: ProcessSupervisor | undefined,
+): Promise<ProcResult> {
+  if (!processes) return runProc(binary, args, options);
+  const run = await processes.run(binary, args, {
+    ...options,
+    origin: "tool",
+    name: `map:${binary}`,
+  });
+  return run.result;
+}
+
 export function mapCachePath(root: string): string {
   return join(root, ".machine_code", "local", "cache", "map.json");
 }
@@ -90,10 +106,10 @@ function excludedPath(path: string): boolean {
   );
 }
 
-async function gitInfo(root: string): Promise<GitInfo | null> {
-  const head = await runProc("git", ["-C", root, "rev-parse", "HEAD"], { cwd: root, timeoutMs: 10_000 });
+async function gitInfo(root: string, processes?: ProcessSupervisor): Promise<GitInfo | null> {
+  const head = await mapProc("git", ["-C", root, "rev-parse", "HEAD"], { cwd: root, timeoutMs: 10_000 }, processes);
   if (head.outcome !== "exit" || head.code !== 0) return null;
-  const status = await runProc("git", ["-C", root, "status", "--porcelain"], { cwd: root, timeoutMs: 15_000 });
+  const status = await mapProc("git", ["-C", root, "status", "--porcelain"], { cwd: root, timeoutMs: 15_000 }, processes);
   if (status.outcome !== "exit" || status.code !== 0) return null;
   const dirty: string[] = [];
   for (const line of status.stdout.split("\n")) {
@@ -104,15 +120,17 @@ async function gitInfo(root: string): Promise<GitInfo | null> {
   return { head: head.stdout.trim(), statusRaw: status.stdout, dirty };
 }
 
-async function listFiles(root: string): Promise<string[]> {
-  const git = await gitInfo(root);
+async function listFiles(root: string, processes?: ProcessSupervisor): Promise<string[]> {
+  const git = await gitInfo(root, processes);
   const out = new Set<string>();
   if (git) {
-    const tracked = await runProc("git", ["-C", root, "ls-files", "-z"], { cwd: root, timeoutMs: 20_000 });
-    const untracked = await runProc("git", ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"], {
-      cwd: root,
-      timeoutMs: 20_000,
-    });
+    const tracked = await mapProc("git", ["-C", root, "ls-files", "-z"], { cwd: root, timeoutMs: 20_000 }, processes);
+    const untracked = await mapProc(
+      "git",
+      ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"],
+      { cwd: root, timeoutMs: 20_000 },
+      processes,
+    );
     for (const result of [tracked, untracked]) {
       if (result.outcome !== "exit" || result.code !== 0) continue;
       for (const path of result.stdout.split("\0")) {
@@ -120,7 +138,7 @@ async function listFiles(root: string): Promise<string[]> {
       }
     }
   } else {
-    const result = await runProc("rg", ["--files", ...excludeGlobs()], { cwd: root, timeoutMs: 30_000 });
+    const result = await mapProc("rg", ["--files", ...excludeGlobs()], { cwd: root, timeoutMs: 30_000 }, processes);
     if (result.outcome === "exit" && result.code === 0) {
       for (const path of result.stdout.split("\n")) {
         if (path) out.add(relative(path));
@@ -266,6 +284,8 @@ function readMap(file: string): CacheEnvelope | null {
 
 export interface BuildMapOptions {
   refresh?: boolean;
+  /** When present, map helper processes are recorded by the run supervisor. */
+  processes?: ProcessSupervisor;
 }
 
 export interface BuiltMap {
@@ -275,8 +295,8 @@ export interface BuiltMap {
 }
 
 export async function buildRepoMap(root: string, options: BuildMapOptions = {}): Promise<BuiltMap> {
-  const git = await gitInfo(root);
-  const paths = await listFiles(root);
+  const git = await gitInfo(root, options.processes);
+  const paths = await listFiles(root, options.processes);
   const stats: Array<{ path: string; bytes: number; mtimeMs: number }> = [];
   for (const path of paths) {
     try {

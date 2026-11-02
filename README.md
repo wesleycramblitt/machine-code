@@ -19,6 +19,9 @@ node dist/cli.js catalogue refresh
 # read-only question
 node dist/cli.js run --agent general "summarize README.md"
 
+# plan an Epic/Feature/Task graph
+node dist/cli.js run --agent planner "plan the thermal model work"
+
 # implementation run in an isolated worktree on a Task branch
 node dist/cli.js run --agent architect --mode verified --issue 31 "implement the thermal model"
 
@@ -198,7 +201,8 @@ machine_code processes kill <run-id> p-0001   # or: all
 ```
 
 Orphaned running records are marked failed when read and during prune. Detached
-delegated runs are tracked as `orchestrator` processes. LSP, map/git helpers,
+delegated runs are tracked as `orchestrator` processes. Map helper spawns are
+also supervised. The synchronous git-status safety net, worktree helpers, LSP,
 and MCP spawns are the remaining supervision work.
 
 Run modes belong to the selected agent. The Architect declares `direct`,
@@ -234,10 +238,12 @@ policy and the kept set are in
 
 Each role declares one `issue_access` level: `none`, `read`, `plan`, or
 `create`. The harness derives `issue:read`, `issue:plan`, and `issue:create`
-from it and removes the `issue` tool when access is `none`. The new-run agent
-picker and run Overview show an `issues:*` badge, and `machine_code policy`
-prints the effective level. Create access is required for new Epic, Feature, or
-Task issues.
+from it and removes the `issue` tool when access is `none`. Planner has
+`create`; Architect, Build, Review, and Sudo have `read`; General has `none`.
+Sudo and other roles may opt in per run with `--allow-issue-create`. The
+new-run agent picker and run Overview show an `issues:*` badge, and
+`machine_code policy` prints the effective level. Create access is required for
+new Epic, Feature, or Task issues.
 
 ```toml
 # data/agents/<role>.toml

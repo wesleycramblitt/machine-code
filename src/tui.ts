@@ -436,6 +436,7 @@ function agentTone(agent: string): string {
     case "sudo": return RED;
     case "general": return G;
     case "architect": return BL;
+    case "planner": return BL;
     case "build": return C;
     case "review": return M;
     default: return C;
@@ -1012,6 +1013,7 @@ export async function runTui(): Promise<void> {
       machineOverrides: machine?.agents[newrun.agent],
     }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess;
     const selectedIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
+    const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
     if (newrun.agent === "build" && selectedIssue && selectedIssue.kind !== "task" && issueAccess !== "create") {
       notify("Build attaches to a Task. Choose a Task or an agent with issue creation access.");
       return null;
@@ -1046,7 +1048,7 @@ export async function runTui(): Promise<void> {
     }
     if (newrun.issue) {
       args.push("--issue", String(newrun.issue.number));
-      if (issueAccess === "create" && selectedIssue && selectedIssue.kind !== "task") args.push("--auto-issue");
+      if (!planningAgent && issueAccess === "create" && selectedIssue && selectedIssue.kind !== "task") args.push("--auto-issue");
     }
     const excludedSections = [...newRunContextExcluded]
       .filter((key) => key.startsWith("section:"))
@@ -1482,7 +1484,8 @@ export async function runTui(): Promise<void> {
         agentPolicy: ap,
         machineOverrides: preview.machine?.agents[newrun.agent],
       }).issueAccess ?? def.issueAccess;
-      const willAutoCreate = issueAccess === "create" && Boolean(issueObj && issueObj.kind !== "task");
+      const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
+      const willAutoCreate = !planningAgent && issueAccess === "create" && Boolean(issueObj && issueObj.kind !== "task");
       const agentAccessLine =
         ` ${D}agent${R} ${agentTone(newrun.agent)}${displayAgent}${R}  ${D}issues${R} ` +
         `${issueAccessTone(issueAccess)}${issueAccess}${R}` +

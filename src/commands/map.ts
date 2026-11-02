@@ -8,6 +8,7 @@ import { buildRepoMap, mapBytes, renderRepoMap, symbolCount } from "../map/deter
 import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex } from "../map/semantic.js";
 import { serverAvailable } from "../lsp/index.js";
 import { runProc } from "../proc.js";
+import type { ProcessSupervisor } from "../processes/supervisor.js";
 import type { CommandRunResult } from "./registry.js";
 
 function str(value: unknown): string | undefined {
@@ -17,13 +18,14 @@ function str(value: unknown): string | undefined {
 export async function runMapCommand(
   args: Record<string, unknown>,
   root: string,
+  processes?: ProcessSupervisor,
 ): Promise<CommandRunResult> {
   const action = str(args.action) ?? "render";
   const refresh = args.refresh === true || action === "refresh";
   const path = str(args.path);
   const symbols = args.symbols !== false;
   try {
-    const built = await buildRepoMap(root, { refresh });
+    const built = await buildRepoMap(root, { refresh, processes });
     const semantic = loadSemantic(root);
     const semanticDirty = readSemanticDirty(root);
     const semanticFresh = isSemanticFresh(semantic, built.map, semanticDirty);
@@ -59,17 +61,26 @@ export async function runMapCommand(
   }
 }
 
-export async function runStatusCommand(root: string): Promise<CommandRunResult> {
-  const git = await runProc("git", ["status", "--short", "--branch"], {
-    cwd: root,
-    timeoutMs: 15_000,
-  });
+export async function runStatusCommand(root: string, processes?: ProcessSupervisor): Promise<CommandRunResult> {
+  const git = processes
+    ? (
+        await processes.run("git", ["status", "--short", "--branch"], {
+          cwd: root,
+          timeoutMs: 15_000,
+          origin: "tool",
+          name: "map:git-status",
+        })
+      ).result
+    : await runProc("git", ["status", "--short", "--branch"], {
+        cwd: root,
+        timeoutMs: 15_000,
+      });
   const gitText =
     git.outcome === "exit" && git.code === 0
       ? git.stdout.trimEnd()
       : `git status unavailable: ${git.spawnError ?? `exit ${git.code ?? "?"}`}`;
   try {
-    const built = await buildRepoMap(root);
+    const built = await buildRepoMap(root, { processes });
     const mapLine =
       `map ${built.cached ? "fresh" : "rebuilt"} · ${built.map.files.length} files · ` +
       `${symbolCount(built.map)} symbols · ${mapBytes(built.map)} bytes`;

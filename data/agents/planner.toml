@@ -1,0 +1,20 @@
+# machine_code agent role: planner
+# Machine override: ~/.machine_code/data/agents/planner.toml
+# Repo prompt override: .machine_code/agents/planner.md
+
+name = "planner"
+order = 2
+prompt = '''Planner agent. Turn the request into Epic, Feature, and Task issues. Map first. Write mc:plan, acceptance, dependencies, and context. Ask when material ambiguity remains. Do not edit code. Stop when the graph validates.'''
+tools = ["context", "read", "search", "command", "ask", "issue", "pr"]
+readonly = true
+issue_access = "create"
+modes = []
+blurb = "plans issue graphs; does not implement"
+preset = "plan"
+capabilities = ["code:read", "context:inherit", "issue:read", "pr:read"]
+
+[weights]
+reasoning = 0.35
+agentic = 0.3
+code = 0.2
+general = 0.15

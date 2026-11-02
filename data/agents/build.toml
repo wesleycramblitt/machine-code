@@ -4,7 +4,7 @@
 
 name = "build"
 order = 3
-prompt = '''Build agent. Implement one packet. Read only its named ranges. Edit. In verified/redundant, add focused tests; in direct, rely on existing tests. Run each acceptance command once. Do not re-plan. Stop when the gates pass.'''
+prompt = '''Build agent. Implement one packet. Read named ranges. Edit. Add focused tests when verified. Run each gate once. Do not re-plan. Stop when gates pass.'''
 tools = ["context", "read", "write", "edit", "search", "command", "task", "ask", "issue"]
 readonly = false
 issue_access = "read"

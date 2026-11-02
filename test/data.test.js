@@ -38,8 +38,9 @@ test("machine funding overrides data in both directions", () => {
 });
 
 test("roles, prompts, tools, and presets come from data", () => {
-  assert.deepEqual([...AGENT_NAMES], ["general", "architect", "build", "review", "sudo"]);
+  assert.deepEqual([...AGENT_NAMES], ["general", "architect", "planner", "build", "review", "sudo"]);
   assert.equal(rolePreset("architect"), "orchestrate");
+  assert.equal(rolePreset("planner"), "plan");
   assert.equal(ROLE_PRESET.build, "implement");
   assert.equal(PRESETS.orchestrate.delegate, true);
   assert.equal(PRESETS.assistant.issues, "disabled");
@@ -49,6 +50,12 @@ test("roles, prompts, tools, and presets come from data", () => {
   assert.ok(architect.readonly);
   assert.ok(architect.tools.includes("task"));
   assert.deepEqual(AGENT_META.architect.modes, ["direct", "verified", "redundant"]);
+
+  const planner = agentDef(layout, "planner");
+  assert.match(planner.prompt, /Planner agent/);
+  assert.equal(planner.issueAccess, "create");
+  assert.ok(planner.tools.includes("issue"));
+  assert.ok(!planner.tools.includes("write"));
 
   const build = agentDef(layout, "build");
   assert.match(build.prompt, /Build agent/);

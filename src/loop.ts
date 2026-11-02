@@ -217,11 +217,16 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     });
 
   const mapRoot = input.toolRoot ?? input.root;
+  const processes = new ProcessSupervisor({
+    runId: recorder.id,
+    runDir: recorder.dir,
+    onEvent: (type, data) => recorder.event(type, data),
+  });
   const wantMap = input.skipMap !== true;
   const wantSemantic = input.skipSemantic !== true;
   let mapIndex = "";
   if (wantMap || wantSemantic) try {
-    const built = await buildRepoMap(mapRoot);
+    const built = await buildRepoMap(mapRoot, { processes });
     const semantic = wantSemantic
       ? await ensureSemanticMap({
           root: mapRoot,
@@ -265,19 +270,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     repoRoot: mapRoot,
     recorder,
   });
-  const processes = new ProcessSupervisor({
-    runId: recorder.id,
-    runDir: recorder.dir,
-    onEvent: (type, data) => recorder.event(type, data),
-  });
-
   // Semantic refresh after a changed turn. Coalesce so a burst of edits
   // produces at most one in-flight refresh plus one follow-up.
   let semanticRefreshInFlight = false;
   let semanticRefreshQueued = false;
   const runSemanticRefresh = async (turn: number): Promise<void> => {
     if (input.skipSemantic) return;
-    const built = await buildRepoMap(mapRoot);
+    const built = await buildRepoMap(mapRoot, { processes });
     const semantic = await ensureSemanticMap({
       root: mapRoot,
       map: built.map,

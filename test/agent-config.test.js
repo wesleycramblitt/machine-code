@@ -42,13 +42,17 @@ function tempDir(prefix) {
 /* ------------------------------------------------------ config resolution */
 
 test("role presets resolve to the documented defaults", () => {
+  const planner = resolveAgentConfig({ role: "planner" });
+  assert.equal(planner.preset, "plan");
+  assert.equal(planner.issueAccess, "create");
+
   const architect = resolveAgentConfig({ role: "architect" });
   assert.deepEqual(architect, {
     preset: "orchestrate",
     delegate: true,
     verification: "verified",
     issues: "optional",
-    issueAccess: "create",
+    issueAccess: "read",
     ask: true,
     approval: "human",
     ambiguity: "precise",
@@ -70,7 +74,7 @@ test("role presets resolve to the documented defaults", () => {
   assert.equal(sudo.preset, "unrestricted");
   assert.equal(sudo.delegate, true);
   assert.equal(sudo.issues, "optional");
-  assert.equal(sudo.issueAccess, "create");
+  assert.equal(sudo.issueAccess, "read");
 });
 
 test("override precedence: run flag > repo policy > machine > preset", () => {
@@ -141,9 +145,10 @@ test("ask is disabled in autonomous mode regardless of the ask flag", () => {
 test("capability matrix matches the design (architect plan/orchestrate)", () => {
   const plan = capabilitiesFor("architect", { ...PRESETS.plan });
   assert.ok(hasCapability(plan, "artifact:write"));
-  assert.ok(hasCapability(plan, "issue:write"));
-  assert.ok(hasCapability(plan, "issue:plan"));
-  assert.ok(hasCapability(plan, "issue:create"));
+  assert.ok(!hasCapability(plan, "issue:write"));
+  assert.ok(!hasCapability(plan, "issue:plan"));
+  assert.ok(!hasCapability(plan, "issue:create"));
+  assert.ok(hasCapability(plan, "issue:read"));
   assert.ok(!hasCapability(plan, "code:write"));
   assert.ok(!hasCapability(plan, "run:spawn"));
   assert.ok(!hasCapability(plan, "issue:close"));
@@ -178,6 +183,12 @@ test("capability matrix: build, review, general, sudo", () => {
   assert.ok(hasCapability(general, "code:read"));
   assert.ok(!hasCapability(general, "issue:read"));
 
+  const planner = capabilitiesFor("planner", { ...PRESETS.plan });
+  assert.ok(hasCapability(planner, "issue:create"));
+  assert.ok(hasCapability(planner, "issue:plan"));
+  assert.ok(hasCapability(planner, "issue:read"));
+  assert.ok(!hasCapability(planner, "code:write"));
+
   const sudo = capabilitiesFor("sudo", { ...PRESETS.unrestricted });
   assert.ok(hasCapability(sudo, "code:write"));
   assert.ok(hasCapability(sudo, "issue:close"));
@@ -189,11 +200,15 @@ test("issue_access is one resolved level and derives capabilities", () => {
   const root = tempDir("access");
   try {
     const layout = fakeLayout(root);
+    const planner = resolveAgent(layout, "planner");
+    assert.equal(planner.config.issueAccess, "create");
+    assert.ok(hasCapability(planner.capabilities, "issue:create"));
+    assert.ok(hasCapability(planner.capabilities, "issue:plan"));
+    assert.ok(planner.def.tools.includes("issue"));
+
     const architect = resolveAgent(layout, "architect");
-    assert.equal(architect.config.issueAccess, "create");
-    assert.ok(hasCapability(architect.capabilities, "issue:create"));
-    assert.ok(hasCapability(architect.capabilities, "issue:plan"));
-    assert.ok(architect.def.tools.includes("issue"));
+    assert.equal(architect.config.issueAccess, "read");
+    assert.ok(!hasCapability(architect.capabilities, "issue:create"));
 
     const build = resolveAgent(layout, "build");
     assert.equal(build.config.issueAccess, "read");
@@ -206,15 +221,15 @@ test("issue_access is one resolved level and derives capabilities", () => {
     assert.ok(!general.def.tools.includes("issue"));
     assert.ok(!hasCapability(general.capabilities, "issue:read"));
 
-    const planner = resolveAgent(layout, "architect", { runOverrides: { issueAccess: "plan" } });
-    assert.equal(planner.config.issueAccess, "plan");
-    assert.ok(hasCapability(planner.capabilities, "issue:plan"));
-    assert.ok(!hasCapability(planner.capabilities, "issue:create"));
+    const planOnly = resolveAgent(layout, "planner", { runOverrides: { issueAccess: "plan" } });
+    assert.equal(planOnly.config.issueAccess, "plan");
+    assert.ok(hasCapability(planOnly.capabilities, "issue:plan"));
+    assert.ok(!hasCapability(planOnly.capabilities, "issue:create"));
 
-    assert.equal(issueAccessFromCapabilities(architect.capabilities), "create");
+    assert.equal(issueAccessFromCapabilities(planner.capabilities), "create");
     assert.equal(issueAccessFromCapabilities(["issue:read", "issue:write"]), "plan");
     assert.equal(issueAccessFromCapabilities(build.capabilities), "read");
-    assert.equal(issueAccessFromCapabilities(planner.capabilities), "plan");
+    assert.equal(issueAccessFromCapabilities(planOnly.capabilities), "plan");
     assert.equal(issueAccessFromCapabilities(general.capabilities), "none");
   } finally {
     rmSync(root, { recursive: true, force: true });

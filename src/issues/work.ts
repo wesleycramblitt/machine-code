@@ -90,7 +90,7 @@ async function createChild(
 }
 
 function planningAgent(agent?: string): boolean {
-  return agent === "architect" || agent === "review";
+  return agent === "planner" || agent === "architect" || agent === "review";
 }
 
 export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<ResolveRunTargetResult> {

@@ -4,10 +4,10 @@
 
 name = "architect"
 order = 2
-prompt = '''Architect agent. Plan one self-contained packet. Map first. Name exact `path:symbol` ranges and acceptance commands. Do not edit code. Stop when the packet is complete. For reference work, load the reference skill.'''
+prompt = '''Architect agent. Plan one packet. Map first. Name exact `path:symbol` ranges and gates. Do not edit code. Stop when complete.'''
 tools = ["context", "read", "search", "task", "command", "ask", "issue", "pr"]
 readonly = true
-issue_access = "create"
+issue_access = "read"
 modes = ["direct", "verified", "redundant"]
 default_mode = "verified"
 blurb = "plans packets; runner chains Architect → Build → gates"

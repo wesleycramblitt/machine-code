@@ -372,7 +372,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             return await exec("rg", args, scopeIsFile ? ctx.root : scope, SEARCH_CAP_BYTES);
           }
           case "map": {
-            const built = await buildRepoMap(ctx.root);
+            const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
             return ok(
               renderRepoMap(built.map, {
                 path: params.path,
@@ -409,7 +409,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
           default: {
             if (params.mode === "symbols") {
-              const built = await buildRepoMap(ctx.root);
+              const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
               const hits = findSymbols(built.map, params.pattern ?? "", limit);
               return ok(hits.join("\n") || "no symbols");
             }

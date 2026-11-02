@@ -11,7 +11,10 @@
 > manual TUI probe. Phase 3 has the registry/supervisor, typed-command and gate tracking,
 > `processes` CLI, and the run-detail Processes section with select, follow,
 > open-log, and kill controls. Detached delegated runs are supervised, and
-> orphan records are reconciled on read and during prune. The suite has 224 tests.
+> orphan records are reconciled on read and during prune. Phase 4 has the
+> read-only Planner role with `issue_access=create`; Architect and Sudo now have
+> read access with an explicit `--allow-issue-create` override. The suite has
+> 224 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -270,7 +273,8 @@ Status: partially implemented. The registry/supervisor, typed-command and gate
 process records and logs, `processes` CLI, run-detail Processes section with
 select/follow/open-log/kill controls, detached delegated-run tracking,
 SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
-exist. Remaining: route map/git helpers, LSP, and MCP spawns.
+exist. Map helper spawns are supervised. Remaining: the synchronous git-status
+safety net, worktree helpers, LSP, and MCP spawns.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -313,6 +317,12 @@ time, output tail, expand/follow/kill controls, and links from timeline tool
 calls. The section refreshes while the run is active.
 
 ## 7. Phase 4 — Planner
+
+Status: partially implemented. `data/agents/planner.toml` is a read-only role
+with issue creation, issue editing, map/search/command/ask/pr tools, and the
+compact planning prompt. New-Epic bootstrap works through `issue create`.
+Remaining: the `artifact` provisioning tool, explicit plan-write helpers,
+human packet review checkpoints, and Planner-specific fixture evals.
 
 ```bash
 machine_code run --agent planner "<plan a new epic>"
