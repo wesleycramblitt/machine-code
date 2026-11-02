@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -60,13 +60,34 @@ test("artifact list and show expose repo tools and scripts", async () => {
   }
 });
 
-test("artifact provisioning is refused without the human path", async () => {
+test("artifact provisioning writes tool manifests but not scripts", async () => {
   const { root, layout, recorder } = setup();
   try {
     const ctx = { layout, capabilities: ["artifact:provision"], recorder };
-    const create = await artifactTool(ctx).execute("c1", { action: "create", name: "new-tool" });
-    assert.equal(create.isError, true);
-    assert.match(create.content[0].text, /human approval/);
+    const create = await artifactTool(ctx).execute("c1", {
+      action: "create",
+      name: "new-tool",
+      description: "A new tool",
+      command: "scripts/new-tool.sh",
+      tags: ["test"],
+    });
+    assert.equal(create.isError, undefined);
+    const manifest = readFileSync(join(layout.repoDir, "tools", "new-tool.toml"), "utf8");
+    assert.match(manifest, /A new tool/);
+    assert.match(manifest, /scripts\/new-tool\.sh/);
+
+    const update = await artifactTool(ctx).execute("c1", {
+      action: "update",
+      name: "new-tool",
+      description: "Updated tool",
+    });
+    assert.equal(update.isError, undefined);
+    assert.match(readFileSync(join(layout.repoDir, "tools", "new-tool.toml"), "utf8"), /Updated tool/);
+
+    const script = await artifactTool(ctx).execute("c1", { action: "create", name: "run", kind: "script" });
+    assert.equal(script.isError, true);
+    assert.match(script.content[0].text, /human approval/);
+
     const missing = await artifactTool(ctx).execute("c1", { action: "show", name: "missing" });
     assert.equal(missing.isError, true);
   } finally {

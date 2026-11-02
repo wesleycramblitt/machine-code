@@ -1,12 +1,12 @@
 /**
  * machine_code — the `artifact` tool.
  *
- * Read-only inventory for reusable tools and scripts. Provisioning stays a
- * human-approved operation in this phase; create/update return an actionable
- * refusal instead of silently writing executable files.
+ * Inventory for reusable tools and scripts. Tool manifests can be provisioned
+ * with `artifact:provision`; executable scripts remain a human-approved CLI
+ * operation.
  */
 import { Type, type Static } from "typebox";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
@@ -36,6 +36,7 @@ const ArtifactParams = Type.Object({
   description: Type.Optional(Type.String()),
   command: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
+  force: Type.Optional(Type.Boolean({ description: "Replace an existing tool manifest (create/update)." })),
 });
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -57,6 +58,67 @@ function readHead(path: string, max = 4_000): string {
   } catch {
     return "";
   }
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+type ArtifactParamsType = Static<typeof ArtifactParams>;
+
+function provisionTool(ctx: ArtifactToolContext, params: ArtifactParamsType, action: "create" | "update"): AgentToolResult<undefined> {
+  if (!ctx.capabilities.includes("artifact:provision")) {
+    return fail("artifact provisioning requires artifact:provision");
+  }
+  if (params.kind === "script") {
+    return fail("new executable scripts require human approval; use \"machine_code tools new\"");
+  }
+  const name = params.name?.trim();
+  if (!name || !/^[a-z0-9][a-z0-9._-]*$/i.test(name)) {
+    return fail("artifact name must match [a-z0-9][a-z0-9._-]*");
+  }
+  const existing = resolveArtifact(ctx.layout, name);
+  if (action === "create" && existing && !params.force) {
+    return fail(`artifact ${name} already exists (pass force=true to replace)`);
+  }
+  if (action === "update" && !existing) return fail(`artifact not found: ${name}`);
+  if (existing && (existing.origin !== "repo" || existing.kind !== "tool")) {
+    return fail(`artifact ${name} is not an editable repo tool`);
+  }
+  const file = join(ctx.layout.repoDir, "tools", `${name}.toml`);
+  if (action === "create" && existsSync(file) && !params.force) {
+    return fail(`tool manifest already exists: ${file} (pass force=true to replace)`);
+  }
+  const description = params.description ?? existing?.description ?? name;
+  const command = params.command ?? existing?.command;
+  const tags = params.tags ?? existing?.tags ?? [];
+  mkdirSync(join(ctx.layout.repoDir, "tools"), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      `name = ${tomlString(name)}`,
+      'kind = "tool"',
+      `description = ${tomlString(description)}`,
+      ...(command ? [`command = ${tomlString(command)}`] : []),
+      `tags = ${JSON.stringify(tags)}`,
+      "readonly = true",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  ctx.recorder.event("artifact_provisioned", { artifact: name, action, path: file });
+  recordUsage(ctx, {
+    artifact: name,
+    kind: "tool",
+    scope: "task",
+    issue: ctx.recorder.current.issue,
+    runId: ctx.recorder.id,
+    role: ctx.recorder.current.agent,
+    at: new Date().toISOString(),
+    success: true,
+    action,
+  } as ArtifactUsage);
+  return ok(`${action}d tool manifest ${file}`);
 }
 
 function usageFor(ctx: ArtifactToolContext, name: string): string {
@@ -107,10 +169,7 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
           );
         }
         if (params.action === "create" || params.action === "update") {
-          return fail(
-            `${params.action} is not available inside a run. Use "machine_code tools new|add" and review the file; ` +
-              "new executable scripts require human approval.",
-          );
+          return provisionTool(ctx, params, params.action);
         }
         const name = params.name;
         if (!name) return fail(`${params.action} requires name`);

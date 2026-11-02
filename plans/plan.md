@@ -14,9 +14,9 @@
 > orphan records are reconciled on read and during prune. Phase 4 has the
 > read-only Planner role with `issue_access=create`; Architect and Sudo now have
 > read access with an explicit `--allow-issue-create` override. The Planner has
-> a read-only artifact inventory tool; provisioning remains human-approved CLI
-> work. The read-only scheduler and dry-run CLI are implemented. The suite has
-> 229 tests.
+> artifact inventory and safe tool-manifest provisioning; executable scripts
+> remain human-approved CLI work. The read-only scheduler and dry-run CLI are
+> implemented. The suite has 229 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
