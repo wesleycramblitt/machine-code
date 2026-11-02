@@ -204,8 +204,9 @@ machine_code orchestrate status --scope project
 machine_code orchestrate start --scope epic --epic 42
 machine_code orchestrate approve --orchestration <id> --task 31
 machine_code orchestrate approve --orchestration <id> --task 31 --result
-# --result records human acceptance and closes the Task
-# It also reports when the parent Feature/Epic is ready for approval
+# --result records human acceptance and closes the Task.
+# Parent Features/Epics close when their policy is agent; otherwise the next
+# approval/acceptance command is printed.
 machine_code orchestrate tick --orchestration <id> --dry-run
 ```
 

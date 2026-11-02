@@ -2691,7 +2691,18 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         const siblings = (await issueBundle.provider.children(parent.ref)).filter((child) => !isReserved(child));
         if (siblings.some((child) => child.state !== "closed")) break;
         const parentCompletion = await checkCompletion(issueBundle.provider, l, parent);
-        if (parentCompletion.ok) {
+        if (parentCompletion.ok && (parent.approval ?? "human") === "agent") {
+          await issueBundle.provider.close(parent.ref, "completed");
+          const cascaded = await cascadeReserved(issueBundle.provider, parent, "close");
+          recorder.event("approval_granted", { issue: parent.ref.number, by: "agent", policy: "agent" });
+          recorder.event("issue_closed", {
+            issue: parent.ref.number,
+            by: recorder.id,
+            approval: "agent",
+            cascaded,
+          });
+          process.stdout.write(`closed parent ${parent.kind} #${parent.ref.number} under agent approval\n`);
+        } else if (parentCompletion.ok) {
           process.stdout.write(
             `parent ${parent.kind} #${parent.ref.number} is ready; approve with "machine_code approve ${parent.ref.number}"\n`,
           );
