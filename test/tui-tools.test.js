@@ -42,9 +42,9 @@ test("skill list splits the aggregate description block into one row per skill",
   );
   assert.equal(items.length, 3);
   assert.deepEqual(items.map((item) => item.key), [
-    "skill-desc:reference",
-    "skill-desc:requirements",
-    "skill-desc:systematic-debugging",
+    "skill:reference",
+    "skill:requirements",
+    "skill:systematic-debugging",
   ]);
   assert.equal(items.reduce((sum, item) => sum + item.chars, 0), 300);
   assert.ok(items.every((item) => item.chars > 0));

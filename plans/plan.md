@@ -27,7 +27,8 @@
 > chars/4 estimate as their section totals, and core tool schemas are counted
 > as always-sent request overhead. Always-visible skill descriptions are
 > previewed per skill, and knowledge/scripts list available file sizes without
-> counting them until referenced. The suite has 247 tests.
+> counting them until referenced. The composer can include available knowledge
+> and exclude individual skills. The suite has 249 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -584,7 +585,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 247 tests green. Add:
+Keep the existing 249 tests green. Add:
 
 | Area | Cases |
 |---|---|

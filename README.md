@@ -266,9 +266,15 @@ Skill descriptions are always visible and appear as one row per skill in the
 **Scripts** also list available files and manifests, marked `·`. Their rows
 show the content-size estimate with an `avail` suffix, but available entries
 are not counted in the section or footer token totals until they are part of
-the assembled context. Files and knowledge enter the prompt only when an
-issue's `mc:context` block, or the configured knowledge index, references
-them.
+the assembled context. Press `space` on an available knowledge file to include
+it; the composer passes it through `--context-include`. Files and knowledge
+enter the prompt otherwise only when an issue's `mc:context` block, or the
+configured knowledge index, references them.
+
+Each skill description can be switched off independently with `space`; that
+writes the `skill:<name>` exclusion, which removes both the description line
+and any referenced skill body. Turning off the whole Skills section still
+works as before.
 
 Skills live in `.machine_code/skills/<name>/SKILL.md`. Only descriptions are
 always visible; the body loads when an issue references the skill. The curation

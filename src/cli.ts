@@ -140,6 +140,8 @@ Usage:
                                     [--min-axes code=6.5,agentic=7]
                                     [--context-exclude '<json>'] omit selected context
                                     sections or sources from a run
+                                    [--context-include '<json>'] add knowledge files
+                                    selected in the composer
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
                                     Install missing base CLIs (default: pinned static binaries)
@@ -971,6 +973,19 @@ async function cmdRun(argv: string[]): Promise<number> {
       fail("--context-exclude must be a JSON object");
     }
   }
+  const contextIncludeFlag = flags.get("context-include");
+  let contextInclude: import("./context/assemble.js").ContextInclude | undefined;
+  if (contextIncludeFlag !== undefined) {
+    try {
+      const raw = JSON.parse(contextIncludeFlag) as { knowledge?: unknown };
+      const knowledge = Array.isArray(raw.knowledge)
+        ? raw.knowledge.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        : undefined;
+      contextInclude = { knowledge };
+    } catch {
+      fail("--context-include must be a JSON object");
+    }
+  }
   const excludedSections = new Set(contextExclude?.sections ?? []);
   const excludedItems = new Set(contextExclude?.items ?? []);
   const skipMap = excludedSections.has("codebase") || excludedItems.has("map:index");
@@ -1227,6 +1242,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     issue: issueRef,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
     exclude: contextExclude,
+    include: contextInclude,
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources });

@@ -655,8 +655,10 @@ export async function runTui(): Promise<void> {
   let newRunContextTab = 0;
   let newRunContextItem = 0;
   let newRunContextItemKeys: string[] = [];
+  let newRunContextItemAvailable: boolean[] = [];
   let newRunContextSectionKey = "";
   const newRunContextExcluded = new Set<string>();
+  const newRunContextIncluded = new Set<string>();
   /**
    * Static inputs to the new-run preview (policy, catalogue, provider status,
    * context files) are expensive to reload on every keystroke, so they are
@@ -876,6 +878,7 @@ export async function runTui(): Promise<void> {
     newRunContextTab = 0;
     newRunContextItem = 0;
     newRunContextExcluded.clear();
+    newRunContextIncluded.clear();
     modelPick = null;
     modelPickSel = 0;
     modelPickText = "";
@@ -1106,6 +1109,12 @@ export async function runTui(): Promise<void> {
     const excludedItems = [...newRunContextExcluded].filter((key) => !key.startsWith("section:"));
     if (excludedSections.length > 0 || excludedItems.length > 0) {
       args.push("--context-exclude", JSON.stringify({ sections: excludedSections, items: excludedItems }));
+    }
+    const includedKnowledge = [...newRunContextIncluded]
+      .filter((key) => key.startsWith("knowledge:"))
+      .map((key) => key.slice("knowledge:".length));
+    if (includedKnowledge.length > 0) {
+      args.push("--context-include", JSON.stringify({ knowledge: includedKnowledge }));
     }
     args.push(newrun.prompt);
     return args;
@@ -1615,14 +1624,18 @@ export async function runTui(): Promise<void> {
       const skillItems: ContextPanelItem[] = aggregateSkill
         ? skillListItems(skillMetas(newRunLayout), aggregateSkill.chars)
         : [];
+      const bodyChars = new Map<string, number>();
       for (const source of skillSources) {
         if (source === aggregateSkill) continue;
-        skillItems.push({
-          text: source.note ? `${source.ref} · ${source.note}` : source.ref,
-          chars: source.chars,
-          exists: source.exists,
-          key: `skill:${source.ref}`,
-        });
+        bodyChars.set(source.ref, (bodyChars.get(source.ref) ?? 0) + source.chars);
+      }
+      for (const item of skillItems) {
+        const name = item.key.slice("skill:".length);
+        item.chars += bodyChars.get(name) ?? 0;
+        bodyChars.delete(name);
+      }
+      for (const [name, chars] of bodyChars) {
+        skillItems.push({ text: name, chars, exists: true, key: `skill:${name}` });
       }
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
       const fitText = newrun.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(newrun.minFit);
@@ -1714,11 +1727,23 @@ export async function runTui(): Promise<void> {
         { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
       ];
       if (newRunContextTab >= sections.length) newRunContextTab = 0;
+      const isIncludedAvailable = (item: unknown): boolean => {
+        const row = item as ContextPanelItem;
+        return row.available === true && row.key.startsWith("knowledge:") && newRunContextIncluded.has(row.key);
+      };
+      const isCounted = (item: unknown): boolean => {
+        const row = item as ContextPanelItem;
+        return row.counted !== false || isIncludedAvailable(row);
+      };
+      const isShownAvailable = (item: unknown): boolean => {
+        const row = item as ContextPanelItem;
+        return row.available === true && !isIncludedAvailable(row);
+      };
       const excludedTokens = sections.reduce((sum, section) => {
         const sectionOff = newRunContextExcluded.has(section.sectionKey);
         return sum + section.items
           .filter((item) => {
-            if ((item as { counted?: boolean }).counted === false) return false;
+            if (!isCounted(item)) return false;
             if ((item as { fixed?: boolean }).fixed) return false;
             return sectionOff || newRunContextExcluded.has(item.key);
           })
@@ -1728,7 +1753,7 @@ export async function runTui(): Promise<void> {
         (sum, section) =>
           sum +
           section.items
-            .filter((item) => (item as { counted?: boolean }).counted !== false)
+            .filter((item) => isCounted(item))
             .reduce((itemSum, item) => itemSum + tokensForChars(item.chars), 0),
         0,
       );
@@ -1754,20 +1779,19 @@ export async function runTui(): Promise<void> {
       const activeSection = sections[newRunContextTab]!;
       newRunContextSectionKey = activeSection.sectionKey;
       newRunContextItemKeys = activeSection.items.map((item) => item.key);
-      newRunContextItem = Math.min(newRunContextItem, Math.max(0, activeSection.items.length - 1));
-      const sectionOff = newRunContextExcluded.has(activeSection.sectionKey);
-      const availableItems = activeSection.items.filter(
+      newRunContextItemAvailable = activeSection.items.map(
         (item) => (item as { available?: boolean }).available === true,
       );
-      const contextItems = activeSection.items.filter(
-        (item) => (item as { available?: boolean }).available !== true,
-      );
+      newRunContextItem = Math.min(newRunContextItem, Math.max(0, activeSection.items.length - 1));
+      const sectionOff = newRunContextExcluded.has(activeSection.sectionKey);
+      const availableItems = activeSection.items.filter((item) => isShownAvailable(item));
+      const contextItems = activeSection.items.filter((item) => !isShownAvailable(item));
       const keptItems = contextItems.filter((item) => {
         if ((item as { fixed?: boolean }).fixed) return true;
         return !sectionOff && !newRunContextExcluded.has(item.key);
       });
       const sectionTokens = keptItems
-        .filter((item) => (item as { counted?: boolean }).counted !== false)
+        .filter((item) => isCounted(item))
         .reduce((sum, item) => sum + tokensForChars(item.chars), 0);
       const keptLabel = contextItems.length > 0 ? ` · ${keptItems.length}/${contextItems.length} kept` : "";
       const availableLabel = availableItems.length > 0 ? ` · ${availableItems.length} available` : "";
@@ -1789,7 +1813,7 @@ export async function runTui(): Promise<void> {
         const item = visibleItems[offset]!;
         const index = itemStart + offset;
         const fixed = (item as { fixed?: boolean }).fixed === true;
-        const available = (item as { available?: boolean }).available === true;
+        const available = isShownAvailable(item);
         const excluded = !fixed && !available && (sectionOff || newRunContextExcluded.has(item.key));
         const mark = excluded ? `${RED}✕${R}` : available ? `${D}·${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
         const count = `${D}${fmtTokens(tokensForChars(item.chars))}${available ? " avail" : ""}${R}`;
@@ -2910,9 +2934,21 @@ export async function runTui(): Promise<void> {
       if (data === "k") { newRunContextItem = Math.max(0, newRunContextItem - 1); draw(); return; }
       if (data === " ") {
         const key = newRunContextItemKeys[newRunContextItem];
-        if (key && !key.startsWith("core-tool:") && !key.startsWith("skill-desc:")) {
+        const available = newRunContextItemAvailable[newRunContextItem] === true;
+        if (key && available) {
+          if (key.startsWith("knowledge:")) {
+            if (newRunContextIncluded.has(key)) newRunContextIncluded.delete(key);
+            else {
+              newRunContextIncluded.add(key);
+              newRunContextExcluded.delete(key);
+            }
+          }
+        } else if (key && !key.startsWith("core-tool:")) {
           if (newRunContextExcluded.has(key)) newRunContextExcluded.delete(key);
-          else newRunContextExcluded.add(key);
+          else {
+            newRunContextExcluded.add(key);
+            newRunContextIncluded.delete(key);
+          }
         }
         draw();
         return;

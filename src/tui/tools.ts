@@ -81,7 +81,7 @@ export function skillListItems(
       text: `${skill.name} · ${skill.description}`,
       chars,
       exists: true,
-      key: `skill-desc:${skill.name}`,
+      key: `skill:${skill.name}`,
     };
   });
 }

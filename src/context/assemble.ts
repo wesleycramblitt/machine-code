@@ -55,6 +55,11 @@ export interface ContextExclusion {
   items?: string[];
 }
 
+export interface ContextInclude {
+  /** Repo-relative knowledge files to add explicitly from the composer. */
+  knowledge?: string[];
+}
+
 export interface AssembleInput {
   layout: Layout;
   machine: MachineConfig;
@@ -69,6 +74,8 @@ export interface AssembleInput {
   budgetChars?: number;
   /** Drop whole sections or individual sources selected in the composer. */
   exclude?: ContextExclusion;
+  /** Add files selected in the composer that no issue references. */
+  include?: ContextInclude;
 }
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
@@ -136,6 +143,11 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Explicit packet (runner-provided or issue-referenced).
   const packetIds = new Set<string>();
   if (input.packetId) packetIds.add(input.packetId);
+
+  // Composer selections are known before pending items are built so they can
+  // filter aggregate blocks (skill descriptions) as well as complete items.
+  const excludedSections = new Set(input.exclude?.sections ?? []);
+  const excludedItems = new Set(input.exclude?.items ?? []);
 
   // Issue hierarchy + explicit references. Artifacts cascade Task → Feature →
   // Epic; nearest declarations win, and every block keeps its true origin.
@@ -253,6 +265,29 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     }
   }
 
+  // Explicit composer includes. These are user-selected knowledge files that
+  // no issue or configured index references; they are still ordinary
+  // provenance-tracked context blocks.
+  for (const path of input.include?.knowledge ?? []) {
+    const abs = withinRepo(layout.repoRoot, path);
+    if (!abs || !existsSync(abs)) {
+      pending.push({
+        kind: "knowledge",
+        origin: "explicit",
+        ref: path,
+        body: "",
+        cap: 0,
+        band: 1,
+        warning: "included knowledge is missing or outside the repo",
+      });
+      continue;
+    }
+    const read = readFileCapped(abs, 8 * KIB);
+    if (read) {
+      pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, cap: 8 * KIB, band: 1 });
+    }
+  }
+
   // Task / Feature / Epic blocks (task first, then nearest ancestor).
   if (current) {
     pending.push({
@@ -352,8 +387,14 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     }
   }
 
-  // Skills (descriptions only) + tool/command names.
-  const skills = skillMetas(layout);
+  // Skills (descriptions only) + tool/command names. Individual skill
+  // exclusions remove that skill's description; body items are filtered below.
+  const excludedSkillNames = new Set(
+    [...excludedItems]
+      .filter((key) => key.startsWith("skill:"))
+      .map((key) => key.slice("skill:".length)),
+  );
+  const skills = skillMetas(layout).filter((skill) => !excludedSkillNames.has(skill.name));
   if (skills.length > 0) {
     const text = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
     pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, body: text, cap: 1 * KIB, band: 8 });
@@ -376,13 +417,11 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
 
   // Apply composer exclusions before dedupe so removed sources never consume
   // budget or collide with a kept source.
-  const excludedSections = new Set(input.exclude?.sections ?? []);
   const excludedKinds = new Set<ContextKind>();
   for (const [section, kinds] of Object.entries(SECTION_KINDS)) {
     if (!excludedSections.has(section)) continue;
     for (const kind of kinds) excludedKinds.add(kind);
   }
-  const excludedItems = new Set(input.exclude?.items ?? []);
   const keptPending = pending.filter(
     (item) => !excludedKinds.has(item.kind) && !excludedItems.has(`${item.kind}:${item.ref}`),
   );
