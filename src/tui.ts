@@ -899,8 +899,17 @@ export async function runTui(): Promise<void> {
 
   const defaultNewRun = (): NewRunState => {
     const agent = "general";
-    const def = agentDef(layout(l.repoRoot), agent);
+    const repoLayout = layout(newRunRepo);
+    const def = agentDef(repoLayout, agent);
     const preset = PRESETS[def.preset];
+    // A new run starts from the machine selection tier, not a hard-coded free
+    // default. The per-run toggle can still override it.
+    let tier: "free" | "paid" = "free";
+    try {
+      tier = loadMachineConfig(repoLayout).selection.tier;
+    } catch {
+      // keep the safe default when the machine config is unavailable
+    }
     return {
       agent,
       preset: def.preset,
@@ -909,7 +918,7 @@ export async function runTui(): Promise<void> {
       ask: preset?.ask ?? true,
       approval: preset?.approval ?? "human",
       ambiguity: preset?.ambiguity ?? "precise",
-      tier: "free",
+      tier,
       minFit: undefined,
       floors: "role",
       prompt: "",
@@ -1121,7 +1130,7 @@ export async function runTui(): Promise<void> {
         effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
       }
     }
-    const result = pick({
+    const select = (requireModel?: string) => pick({
       agent: newrun.agent,
       policy: effective,
       machine,
@@ -1131,9 +1140,35 @@ export async function runTui(): Promise<void> {
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars: context.chars + context.promptChars + toolChars,
       tier: newrun.tier,
-      requireModel: newrun.model,
+      requireModel,
     });
-    if ("error" in result) return { context, error: result.error, policy, machine };
+    let result = select(newrun.model);
+    if ("error" in result && newrun.model) {
+      // A fork or an earlier pick can leave a pin that is now cooling,
+      // unfunded, or below this agent's floors. Prefer auto-selection over a
+      // dead end, and say what happened.
+      const pinned = newrun.model;
+      const fallback = select(undefined);
+      if (!("error" in fallback)) {
+        newrun.model = undefined;
+        notify(`pinned model ${pinned} is not eligible; using auto-selection`);
+        result = fallback;
+      }
+    }
+    if ("error" in result) {
+      const reasons = Object.entries(result.rejectedByReason)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([reason, count]) => `${modelReasonLabel(reason)} ${count}`)
+        .join(", ");
+      const pin = newrun.model ? ` · pinned ${newrun.model}` : "";
+      return {
+        context,
+        error: reasons ? `${result.error} (${reasons})${pin}` : `${result.error}${pin}`,
+        policy,
+        machine,
+      };
+    }
     return {
       context,
       model: result.selected,

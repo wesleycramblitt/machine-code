@@ -63,7 +63,7 @@ test("fork settings preserve a new run's saved selection and agent config", () =
   assert.deepEqual(result.issue, { provider: "github", repo: "o/r", number: 4 });
 });
 
-test("fork settings preserve the observed model and detect floors off", () => {
+test("fork settings keep auto-selection when the snapshot has no model pin", () => {
   const summary = {
     agent: "general",
     settings: {
@@ -80,7 +80,7 @@ test("fork settings preserve the observed model and detect floors off", () => {
     defaults,
   });
 
-  assert.equal(result.model, "p/free");
+  assert.equal(result.model, undefined);
   assert.equal(result.tier, "free");
   assert.equal(result.floors, "off");
   assert.equal(result.minFit, 0);

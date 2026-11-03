@@ -95,7 +95,8 @@ funded = true
 
 `paid` considers free and paid rows (a free model can win); paid rows from
 unfunded providers are excluded. `free` only admits zero-price rows.
-`--tier` overrides it per run.
+The New Run composer starts from this tier; press `t` there to override it for
+one run. `--tier` overrides it from the CLI.
 
 Meta routers (ids or names containing `router`) are never selected: they
 forward to unknown upstream models, so their catalogue scores and capabilities
@@ -217,8 +218,9 @@ the outcome summary, a live activity tail, and the latest thinking text.
 Press `f` on any run detail section to fork the run settings into a new run.
 The New Run composer opens with the same agent, model setting, tier, preset,
 verification, issue tracking, ask, approval, ambiguity, min-fit, floors, issue,
-and request. Edit the request, change any setting, and start the run. The fork
-keeps parent lineage; it does not inherit the parent worktree.
+and request. An explicit parent model pin is copied; a parent that used
+auto-selection stays on auto. Edit the request, change any setting, and start
+the run. The fork keeps parent lineage; it does not inherit the parent worktree.
 
 The New Run **Model[m]** picker lists every model from configured providers
 with a status: `✓` eligible, `⏸` cooling with the remaining time, or `✕` with

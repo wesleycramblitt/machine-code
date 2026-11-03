@@ -75,8 +75,12 @@ export function forkSettingsFromRun(input: {
   const { summary, events, catalogue, defaults, configuredProviders } = input;
   const cfg = eventConfig(events);
   const settings = summary.settings;
-  const modelKey =
-    settings?.model ?? observedModelKey(events, catalogue, configuredProviders);
+  // A saved snapshot is authoritative: an absent model means the parent used
+  // auto-selection, so do not pin the model that happened to answer. Old runs
+  // without a snapshot still fall back to their first successful model.
+  const modelKey = settings
+    ? settings.model
+    : observedModelKey(events, catalogue, configuredProviders);
   const row = modelKey ? findRow(catalogue, modelKey) : undefined;
   const model =
     row && (!configuredProviders || configuredProviders.has(row.providerID))
