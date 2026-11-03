@@ -24,6 +24,71 @@
 > on the same model, p50 time within 20% of `pi`, every change has gate
 > evidence, and interrupted work resumes explicitly.
 
+## 0. Remaining validation and hardening
+
+These are not missing implementation. They are validation, automation, and
+efficiency work left after the live end-to-end run recorded in
+`knowledge/eval-2026-11-03.md`.
+
+### 0.1 Exact Phase 0 replay
+
+- Replay `20261102-173114-etdx` on the current build and record turns, calls,
+  tool calls, peak context, total tokens, cost, edits, gate result, and wall
+  time.
+- Status: blocked by a missing run record in this checkout. The fresh live E2E
+  passed, but it is not a byte-for-byte replay.
+- Acceptance: the original run's metrics can be compared against the live
+  baseline without reconstructing missing history.
+
+### 0.2 Call-efficiency target
+
+- Reduce the live Build from **25 calls** to **≤10 calls** and **≤12 turns**
+  while keeping the edit, gates, Review approval, and PR flow intact.
+- Target: ≤250,000 total reported tokens for the replay task.
+- Status: open. The live run used 101,356 tokens but 25 calls.
+- Acceptance: the fixed replay/eval task meets the call and turn limits without
+  losing gate or Review evidence.
+
+### 0.3 Automated GitHub write/PR integration
+
+- Convert the manual live flow into an opt-in test that creates or uses a
+  disposable repository and covers:
+  - reserved Feature 0 / Task 0 creation and repair;
+  - Task-only association and dependency links;
+  - acceptance and approval closure;
+  - Task PR → Feature and Feature PR → main;
+  - cleanup of the temporary repository and branches.
+- Status: the checked-in `test/github-integration.test.js` is read-only. The
+  full write/PR flow passed manually.
+- Acceptance: one explicit environment flag runs the full lifecycle without
+  touching a production repository; the default suite never writes to GitHub.
+
+### 0.4 Broader live E2E matrix
+
+Exercise and record these paths against a disposable repository:
+
+- two dependent Tasks;
+- parallel Tasks under separate Features;
+- project and Feature scopes;
+- human packet approval and rejection;
+- Review rejection and retry evidence;
+- missing script reuse and artifact provisioning;
+- killing a running script/process.
+
+Status: implemented and covered in pieces, but not all exercised in the live
+run.
+
+### 0.5 Optional compatibility cleanup
+
+- Remove or formally document the remaining legacy `delegate` configuration.
+- Remove or document `--direct-exec` once no queue/child path uses it.
+- Keep `queue` explicitly documented as a compatibility path until a breaking
+  release removes it.
+- Record that no MCP client exists; future MCP spawns must use the process
+  supervisor.
+
+Status: non-blocking cleanup. No behavior change is required for v2.
+
 ## 1. Shipped baseline — do not rebuild
 
 | Area | Current state |
