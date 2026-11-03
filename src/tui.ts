@@ -34,8 +34,8 @@ import { selectableLines } from "./tui/scroll.js";
 import { describeTimelineEvent, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
-import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
-import { axisWeights, isMetaRouter, pick } from "./select.js";
+import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type AgentPolicy, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
+import { axisWeights, isMetaRouter, modelStatus, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
@@ -47,8 +47,8 @@ import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
-import { AGENT_META, AGENT_NAMES, agentDef, type IssueAccess } from "./agents.js";
-import { resolveAgent, resolveAgentConfig } from "./agents/config.js";
+import { AGENT_META, AGENT_NAMES, agentDef, type AgentDef, type IssueAccess } from "./agents.js";
+import { PRESETS, resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
@@ -172,6 +172,14 @@ const RUN_SECTION_LABEL: Record<RunSection, string> = {
   context: "Context",
 };
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
+const NEW_RUN_PRESET_INFO: Record<string, string> = {
+  plan: "Planner flow. Creates issue graphs, uses direct verification, asks when needed.",
+  orchestrate: "Delegated flow. Verified checks and issue tracking; used by the Orchestrator.",
+  implement: "Build flow. Verified checks, no clarifying questions.",
+  review: "Review flow. Direct verification, no clarifying questions.",
+  assistant: "Assistant flow. Issues disabled; asks when needed.",
+  unrestricted: "Permissive flow. Verified checks, delegation on, asks when needed.",
+};
 const NEW_RUN_SETTING_FIELDS = [
   "preset",
   "verification",
@@ -196,6 +204,78 @@ interface ContextPanelItem {
 const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
 
 type NewRunState = ForkedRunSettings;
+
+interface ModelPickerEntry {
+  row: CatalogueRow;
+  fit: number;
+  eligible: boolean;
+  reason?: string;
+}
+
+const MODEL_REASON_RANK: Record<string, number> = {
+  "model-cooling": 0,
+  "provider-cooling": 1,
+  "provider-disabled": 2,
+  "provider-needs-auth": 3,
+  "not-free": 4,
+  "unfunded-provider": 5,
+  "no-tool-support": 6,
+  "below-min-fit": 7,
+  "below-min-capability": 8,
+  "below-min-context": 10,
+  "context-too-small": 11,
+  "output-too-small": 12,
+  "non-coding-model": 13,
+  "router-model": 14,
+  "invalid-pricing": 15,
+};
+
+function modelReasonRank(reason: string | undefined): number {
+  if (!reason) return 99;
+  if (reason.startsWith("below-min-")) return 9;
+  return MODEL_REASON_RANK[reason] ?? 99;
+}
+
+function modelReasonLabel(reason: string | undefined): string {
+  if (!reason) return "ineligible";
+  if (reason.startsWith("below-min-") && !["below-min-fit", "below-min-capability", "below-min-context"].includes(reason)) {
+    return `below ${reason.slice("below-min-".length)} floor`;
+  }
+  switch (reason) {
+    case "provider-not-configured": return "provider not configured";
+    case "provider-filtered": return "provider filtered";
+    case "model-filtered": return "model filtered";
+    case "invalid-pricing": return "invalid price";
+    case "provider-disabled": return "provider disabled";
+    case "provider-needs-auth": return "needs auth";
+    case "provider-cooling": return "provider cooling";
+    case "model-cooling": return "cooling";
+    case "non-coding-model": return "not coding";
+    case "router-model": return "router";
+    case "no-tool-support": return "no tools";
+    case "not-free": return "paid only";
+    case "unfunded-provider": return "unfunded provider";
+    case "below-min-fit": return "below fit floor";
+    case "below-min-capability": return "below cap floor";
+    case "below-min-context": return "context below floor";
+    case "context-too-small": return "context too small";
+    case "output-too-small": return "output too small";
+    default: return reason;
+  }
+}
+
+function modelReasonText(entry: ModelPickerEntry, availability: AvailabilityState): string {
+  if (entry.eligible) return "";
+  if (entry.reason === "model-cooling" || entry.reason === "provider-cooling") {
+    const until = Math.max(
+      availability.models[entry.row.key]?.cooldownUntil ?? 0,
+      availability.providers[entry.row.providerID]?.cooldownUntil ?? 0,
+    );
+    const mins = until > Date.now() ? Math.max(1, Math.ceil((until - Date.now()) / 60_000)) : 0;
+    return mins > 0 ? `cooling ${mins}m` : "cooling";
+  }
+  return modelReasonLabel(entry.reason);
+}
 
 interface RunDetail {
   layout: Layout;
@@ -635,6 +715,7 @@ export async function runTui(): Promise<void> {
   let modelPick: "newrun" | null = null;
   let modelPickSel = 0;
   let modelPickText = "";
+  let modelPickEntries: ModelPickerEntry[] = [];
   /** New-run prompt is modal: navigation keys are disabled while true. */
   let newRunInsert = false;
   /** `:` starts the two-key `:!` start command. */
@@ -827,17 +908,17 @@ export async function runTui(): Promise<void> {
   };
 
   const defaultNewRun = (): NewRunState => {
-    const policy = (() => { try { return loadPolicy(l); } catch { return undefined; } })();
     const agent = "general";
-    const def = agentDef(l, agent);
+    const def = agentDef(layout(l.repoRoot), agent);
+    const preset = PRESETS[def.preset];
     return {
       agent,
       preset: def.preset,
-      verification: "verified",
-      issues: "optional",
-      ask: true,
-      approval: "human",
-      ambiguity: "precise",
+      verification: preset?.verification ?? "verified",
+      issues: preset?.issues ?? "optional",
+      ask: preset?.ask ?? true,
+      approval: preset?.approval ?? "human",
+      ambiguity: preset?.ambiguity ?? "precise",
       tier: "free",
       minFit: undefined,
       floors: "role",
@@ -846,6 +927,17 @@ export async function runTui(): Promise<void> {
   };
 
   newrun = defaultNewRun();
+
+  const applyPreset = (name: string) => {
+    const preset = PRESETS[name];
+    newrun.preset = name;
+    if (!preset) return;
+    newrun.verification = preset.verification;
+    newrun.issues = preset.issues;
+    newrun.ask = preset.ask;
+    newrun.approval = preset.approval;
+    newrun.ambiguity = preset.ambiguity;
+  };
 
   const resetNewRunUi = () => {
     newRunInsert = false;
@@ -861,6 +953,7 @@ export async function runTui(): Promise<void> {
     modelPick = null;
     modelPickSel = 0;
     modelPickText = "";
+    modelPickEntries = [];
     issuePick = null;
     issuePickSel = 0;
     issuePickText = "";
@@ -877,7 +970,7 @@ export async function runTui(): Promise<void> {
     };
     // Keep the selected agent's mode/preset coherent.
     const def = agentDef(layout(newRunRepo), newrun.agent);
-    newrun.preset = def.preset;
+    applyPreset(def.preset);
     resetNewRunUi();
     screen = "newrun";
   };
@@ -918,13 +1011,14 @@ export async function runTui(): Promise<void> {
     const index = NEW_RUN_AGENTS.indexOf(newrun.agent);
     newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? newrun.agent;
     const def = agentDef(layout(newRunRepo), newrun.agent);
-    newrun.preset = def.preset;
+    applyPreset(def.preset);
   };
 
   const cycleNewRunSetting = (field: NewRunSettingField) => {
     if (field === "preset") {
       const presets = ["plan", "orchestrate", "implement", "review", "assistant", "unrestricted"];
-      newrun.preset = presets[(presets.indexOf(newrun.preset) + 1) % presets.length]!;
+      const next = presets[(presets.indexOf(newrun.preset) + 1) % presets.length]!;
+      applyPreset(next);
       return;
     }
     if (field === "verification") {
@@ -1566,7 +1660,7 @@ export async function runTui(): Promise<void> {
       const preview = modelPreview();
       const ctx = preview.context;
       const ap = preview.policy?.agents[newrun.agent];
-      const def = agentDef(l, newrun.agent);
+      const def = agentDef(layout(newRunRepo), newrun.agent);
       const issueChain = ctx.issueChain;
       const issueObj = newrun.issue ? issueByRef(newrun.issue) : undefined;
       const issueValue = newrun.issue ? `#${newrun.issue.number} ${issueObj?.kind ?? ""}`.trim() : "NA";
@@ -1688,8 +1782,9 @@ export async function runTui(): Promise<void> {
       for (const [name, chars] of bodyChars) {
         skillItems.push({ text: name, chars, exists: true, key: `skill:${name}` });
       }
-      const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
-      const fitText = newrun.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(newrun.minFit);
+      const roleFit = ap ? (newrun.tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) : undefined;
+      const floorText = newrun.floors === "role" ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : newrun.floors;
+      const fitText = newrun.minFit === undefined ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : String(newrun.minFit);
       const estimateCost = preview.estimate
         ? fmtMoney(
             ((preview.estimate as { inputTokens: number }).inputTokens * (preview.model?.pricing.input ?? 0) +
@@ -1727,6 +1822,28 @@ export async function runTui(): Promise<void> {
             ` ${[modelIdentity, fitPart, costPart].filter(Boolean).join("  ")}`,
             ` ${modelIdentity}`,
           ].find((line) => visible(line) <= cols) ?? ` ${modelIdentity}`;
+      const floorsText = (() => {
+        if (!ap) return "floors unavailable";
+        if (newrun.floors === "off") return "floors off · fit 0";
+        const fit =
+          newrun.minFit === null
+            ? 0
+            : newrun.minFit ?? (newrun.tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) ?? 0;
+        const axes =
+          newrun.floors === "strict"
+            ? Object.fromEntries(
+                CAPABILITY_AXES.map((axis) => [
+                  axis,
+                  Math.min(10, Math.round(((ap.minAxes?.[axis] ?? ap.minFit ?? 6) + 0.5) * 10) / 10),
+                ]),
+              )
+            : newrun.tier === "free"
+              ? { ...(ap.minAxes ?? {}), ...(ap.freeMinAxes ?? {}) }
+              : ap.minAxes;
+        return `${newrun.tier} floors ${newrun.floors} · fit ${fit.toFixed(1)} · axes ${axisFloorText(axes)}`;
+      })();
+      const minimumsText = trunc(`${D}${floorsText}${R}`, Math.max(10, cols - 1));
+      const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
       const issueSources = ctx.sources.filter((source) => source.kind === "issue");
       const issueItems: ContextPanelItem[] = [];
       for (let index = 0; index < issueChain.length; index++) {
@@ -1915,6 +2032,7 @@ export async function runTui(): Promise<void> {
       );
       const summary = [
         modelInfo,
+        minimumsInfo,
         "",
         ...tabBar,
         panelLine(""),
@@ -1961,26 +2079,59 @@ export async function runTui(): Promise<void> {
       ];
 
       if (modelPick === "newrun") {
-        const list = pickerModels();
-        const weights = newRunWeights();
+        const list = modelPickEntries;
+        const availability = loadAvailability(l.home);
         const total = list.length + 1;
         if (modelPickSel >= total) modelPickSel = Math.max(0, total - 1);
         const autoLine = ` ${newrun.model === undefined ? `${C}▸` : " "} ${G}Auto${R} ${D}let the selector choose${R}`;
         const entries: string[] = [selected(autoLine, modelPickSel === 0)];
         for (let i = 0; i < list.length; i++) {
-          const row = list[i]!;
+          const entry = list[i]!;
+          const row = entry.row;
           const chosen = row.key === newrun.model;
-          const fit = modelWeightedFit(row, weights);
           const free = row.free ? ` ${G}FREE${R}` : "";
-          const line = ` ${chosen ? `${C}▸` : " "} ${C}${row.key}${R} ${D}fit ${fit.toFixed(2)}${R}${free}`;
+          const status = entry.eligible
+            ? `${G}✓${R}`
+            : entry.reason === "model-cooling" || entry.reason === "provider-cooling"
+              ? `${Y}⏸${R}`
+              : `${RED}✕${R}`;
+          const reason = entry.eligible ? "" : ` ${D}${modelReasonText(entry, availability)}${R}`;
+          const line = ` ${chosen ? `${C}▸` : " "} ${status} ${C}${row.key}${R} ${D}fit ${entry.fit.toFixed(2)}${R}${free}${reason}`;
           entries.push(selected(line, modelPickSel === i + 1));
         }
-        const visible = Math.max(1, bodyH - 4);
+        const eligibleCount = list.filter((entry) => entry.eligible).length;
+        const reasonCounts = new Map<string, number>();
+        for (const entry of list) {
+          if (entry.eligible) continue;
+          const reason = entry.reason ?? "ineligible";
+          reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
+        }
+        const reasonSummary = [...reasonCounts.entries()]
+          .sort(
+            (a, b) =>
+              modelReasonRank(a[0]) - modelReasonRank(b[0]) ||
+              b[1] - a[1] ||
+              a[0].localeCompare(b[0]),
+          )
+          .slice(0, 4)
+          .map(([reason, count]) => `${modelReasonLabel(reason)} ${count}`)
+          .join(" · ");
+        const summaryText =
+          `${eligibleCount} eligible · ${list.length - eligibleCount} ineligible` +
+          (reasonSummary ? ` · ${reasonSummary}` : "");
+        const selectedEntry = modelPickSel > 0 ? list[modelPickSel - 1] : undefined;
+        const selectedHint = selectedEntry && !selectedEntry.eligible
+          ? ` ${RED}${selectedEntry.row.key}: ${modelReasonText(selectedEntry, availability)}${R}`
+          : "";
+        const visible = Math.max(1, bodyH - 6);
         const start = Math.max(0, Math.min(modelPickSel - Math.floor(visible / 2), Math.max(0, total - visible)));
         const picker: string[] = [
           ` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Select model${R} ${D}(type to filter; Enter selects)${R}`,
+          ` ${D}${summaryText}${R}`,
           "",
           ...entries.slice(start, start + visible),
+          ...(list.length === 0 ? [` ${D}No configured models match this filter.${R}`] : []),
+          ...(selectedHint ? [selectedHint] : []),
           "",
           ` ${D}filter: ${modelPickText || "(all)"}${R}`,
         ];
@@ -1990,7 +2141,10 @@ export async function runTui(): Promise<void> {
           command("j/k", "Move", undefined, M),
           command("Esc", "Close", undefined, GR),
         ]);
-        secondary = `${D}${list.length} model(s)${modelPickText ? ` · “${modelPickText}”` : ""}${R}`;
+        secondary =
+          `${D}${list.length} model(s) · ✓ eligible · ⏸ cooling · ✕ ineligible` +
+          `${modelPickText ? ` · “${modelPickText}”` : ""}${R}` +
+          `${toast ? ` · ${Y}${toast}${R}` : ""}`;
       } else if (issuePick === "newrun") {
         const list = pickerIssues();
         if (issuePickSel >= list.length) issuePickSel = Math.max(0, list.length - 1);
@@ -2032,22 +2186,51 @@ export async function runTui(): Promise<void> {
           minFit: fitText,
           floors: floorText,
         };
+        const preset = PRESETS[newrun.preset];
+        const modeText = def.modes.length === 0
+          ? "single-agent (no role modes)"
+          : `${def.defaultMode ?? def.modes[0]} default · ${def.modes.join(", ")}`;
         const lines: string[] = [
           ` ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
+          ` ${D}Agent${R} ${agentTone(newrun.agent)}${newrun.agent}${R} ${D}· ${def.readonly ? "read-only" : "can write"} · issue access ${def.issueAccess} · default preset ${def.preset}${R}`,
+          ` ${D}Mode${R}  ${W}${modeText}${R}`,
+          ` ${D}${def.modes.length === 0 ? "All current roles run as one agent. Orchestration is a separate command, not a run mode." : `Mode config: ${def.modes.map((mode) => { const cfg = def.modeConfig[mode]; return `${mode}=${cfg?.verification ?? "role"}${cfg?.review ? "+review" : ""}`; }).join(" · ")}`}${R}`,
+          ` ${D}Preset${R} ${C}${newrun.preset}${R} ${D}· ${NEW_RUN_PRESET_INFO[newrun.preset] ?? ""}${R}`,
+          ` ${D}Defaults${R} ${D}${preset ? presetConfigText(preset) : "unknown preset"}${R}`,
+          ` ${D}Effective${R} ${D}${presetConfigText(resolvedAgent.config)} · issue access ${resolvedAgent.config.issueAccess ?? def.issueAccess}${R}`,
+          ` ${D}Policy${R} ${D}${policyFloorText(ap, newrun.tier)}${R}`,
+          ` ${D}Tools${R} ${D}${def.tools.join(", ")}${R}`,
           "",
         ];
+        const fieldLineIndexes: number[] = [];
         for (let i = 0; i < NEW_RUN_SETTING_FIELDS.length; i++) {
+          fieldLineIndexes.push(lines.length);
           const field = NEW_RUN_SETTING_FIELDS[i]!;
           const value = values[field];
           const tone = i % 2 === 0 ? C : M;
           const line = `  ${pad(labels[field], 12)} ${tone}${B}${value}${R}`;
           lines.push(selected(line, i === newRunSettingsSel));
         }
-        lines.push("", ` ${D}Rarely changed options live here; the main screen stays compact.${R}`);
-        body = clipBody(lines);
+        const field = NEW_RUN_SETTING_FIELDS[newRunSettingsSel]!;
+        lines.push("", ` ${B}${C}${labels[field]}${R}`);
+        for (const line of wrapText(settingExplanation(field, newrun, ap, def), Math.max(20, cols - 4))) {
+          lines.push(` ${D}${line}${R}`);
+        }
+        lines.push("", ` ${B}${C}Presets${R} ${D}· current ${newrun.preset}${R}`);
+        for (const name of Object.keys(NEW_RUN_PRESET_INFO)) {
+          const current = name === newrun.preset ? `${C}▸${R}` : " ";
+          lines.push(` ${current} ${B}${W}${name.padEnd(12)}${R} ${D}${NEW_RUN_PRESET_INFO[name]}${R}`);
+        }
+        const selectedLine = fieldLineIndexes[Math.min(newRunSettingsSel, fieldLineIndexes.length - 1)] ?? 0;
+        const start = Math.max(
+          0,
+          Math.min(selectedLine - Math.floor(bodyH / 3), Math.max(0, lines.length - bodyH)),
+        );
+        body = clipBody(lines.slice(start, start + bodyH));
         actions = joinCommands([
           command("j/k", "Move", undefined, M),
           command("Enter", "Change", undefined, G),
+          command("Esc/s", "Close", undefined, GR),
         ]);
       } else {
         // Context and inherited sources stay above; the composer is pinned to
@@ -2928,7 +3111,7 @@ export async function runTui(): Promise<void> {
     return ap ? axisWeights(newrun.agent, ap) : undefined;
   };
 
-  const pickerModels = (): CatalogueRow[] => {
+  const pickerModels = (): ModelPickerEntry[] => {
     const catalogue = loadCatalogue(layout(newRunRepo).catalogueFile);
     if (!catalogue) return [];
     const configured = new Set(
@@ -2937,7 +3120,7 @@ export async function runTui(): Promise<void> {
         .map((status) => status.id),
     );
     const policy = effectivePolicy(newRunRepo);
-    const minContext = policy?.agents[newrun.agent]?.minContext ?? 0;
+    const ap = policy?.agents[newrun.agent];
     const machine = (() => {
       try {
         return loadMachineConfig(layout(newRunRepo));
@@ -2945,28 +3128,53 @@ export async function runTui(): Promise<void> {
         return undefined;
       }
     })();
-    const funded = fundedProviderIds(machine?.providers ?? {});
-    return filterModels(catalogue.models, {
+    if (!ap || !machine) return [];
+    const availability = loadAvailability(l.home);
+    const funded = fundedProviderIds(machine.providers);
+    const weights = newRunWeights();
+    const rows = filterModels(catalogue.models, {
       providers: configured,
-      freeOnly: newrun.tier === "free",
       codingOnly: true,
-      toolCall: true,
       text: modelPickText,
-      weights: newRunWeights(),
+      weights,
       sort: "fit",
-    }).filter(
-      (row) =>
-        !isMetaRouter(row) &&
-        row.context >= minContext &&
-        (newrun.tier === "free" || row.free === true || funded.has(row.providerID)),
-    );
+    });
+    const input = {
+      agent: newrun.agent,
+      policy: ap,
+      machine,
+      catalogue: rows,
+      configuredProviders: configured,
+      fundedProviders: funded,
+      contextChars: (newRunPreviewCache?.context.chars ?? 0) + newrun.prompt.length + 2_000,
+      tier: newrun.tier,
+      availability,
+    };
+    return rows
+      .map((row): ModelPickerEntry => {
+        const status = modelStatus(row, input);
+        return {
+          row,
+          fit: modelWeightedFit(row, weights),
+          eligible: status.eligible,
+          ...(status.eligible ? {} : { reason: status.reason }),
+        };
+      })
+      .sort((a, b) => {
+        if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+        if (a.eligible) return b.fit - a.fit || a.row.key.localeCompare(b.row.key);
+        const rank = modelReasonRank(a.reason) - modelReasonRank(b.reason);
+        return rank || b.fit - a.fit || a.row.key.localeCompare(b.row.key);
+      });
   };
 
   const startModelPicker = () => {
     modelPick = "newrun";
     modelPickText = "";
-    const list = pickerModels();
-    const index = newrun.model ? list.findIndex((row) => row.key === newrun.model) : -1;
+    modelPickEntries = pickerModels();
+    const index = newrun.model
+      ? modelPickEntries.findIndex((entry) => entry.row.key === newrun.model)
+      : -1;
     modelPickSel = index >= 0 ? index + 1 : 0;
   };
 
@@ -3014,7 +3222,7 @@ export async function runTui(): Promise<void> {
 
     if (screen === "newrun") {
       if (modelPick === "newrun") {
-        const list = pickerModels();
+        const list = modelPickEntries;
         if (data === "\x1b") { modelPick = null; draw(); return; }
         if (data === "\x1b[A" || data === "k") { modelPickSel = Math.max(0, modelPickSel - 1); draw(); return; }
         if (data === "\x1b[B" || data === "j") {
@@ -3026,8 +3234,17 @@ export async function runTui(): Promise<void> {
           if (modelPickSel === 0) {
             newrun.model = undefined;
           } else {
-            const row = list[modelPickSel - 1];
-            if (row) newrun.model = row.key;
+            const entry = list[modelPickSel - 1];
+            if (!entry) {
+              draw();
+              return;
+            }
+            if (!entry.eligible) {
+              notify(`model not eligible: ${modelReasonText(entry, loadAvailability(l.home))}`);
+              draw();
+              return;
+            }
+            newrun.model = entry.row.key;
           }
           modelPick = null;
           notify(newrun.model ? `model ${newrun.model}` : "model auto");
@@ -3036,12 +3253,14 @@ export async function runTui(): Promise<void> {
         }
         if (data === "\x7f" || data === "\b") {
           modelPickText = modelPickText.slice(0, -1);
+          modelPickEntries = pickerModels();
           modelPickSel = 0;
           draw();
           return;
         }
         if (!data.startsWith("\x1b")) {
           modelPickText += printable(data);
+          modelPickEntries = pickerModels();
           modelPickSel = 0;
           draw();
           return;
@@ -3756,4 +3975,58 @@ function modelWeightedFit(
     row.scores.agentic * (base.agentic / sum) +
     row.scores.general * (base.general / sum)
   );
+}
+
+function presetConfigText(config: AgentConfig): string {
+  return (
+    `delegate ${config.delegate ? "on" : "off"} · verify ${config.verification}` +
+    ` · issues ${config.issues} · ask ${config.ask ? "on" : "off"}` +
+    ` · approval ${config.approval} · ambiguity ${config.ambiguity}` +
+    `${config.artifactScripts ? " · artifacts on" : ""}`
+  );
+}
+
+function axisFloorText(axes: Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> | undefined): string {
+  return CAPABILITY_AXES.map((axis) => `${axis[0]!.toUpperCase()}${(axes?.[axis] ?? 0).toFixed(1)}`).join(" ");
+}
+
+function policyFloorText(ap: AgentPolicy | undefined, tier: "free" | "paid"): string {
+  if (!ap) return "no policy";
+  const fit = (tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) ?? 0;
+  const axes = tier === "free" ? { ...(ap.minAxes ?? {}), ...(ap.freeMinAxes ?? {}) } : ap.minAxes;
+  const turns = ap.maxTurns === undefined ? "default" : String(ap.maxTurns);
+  const budget = ap.budgetTokens === undefined ? "" : ` · budget ${ap.budgetTokens}`;
+  return `min fit ${fit.toFixed(1)} · axes ${axisFloorText(axes)} · max turns ${turns}${budget}`;
+}
+
+function settingExplanation(
+  field: NewRunSettingField,
+  state: NewRunState,
+  ap: AgentPolicy | undefined,
+  def: AgentDef,
+): string {
+  switch (field) {
+    case "preset": {
+      const preset = PRESETS[state.preset];
+      return (
+        `${NEW_RUN_PRESET_INFO[state.preset] ?? "Unknown preset."} ` +
+        `Defaults: ${preset ? presetConfigText(preset) : "unknown"}. ` +
+        `Agent default preset: ${def.preset}. Policy: ${policyFloorText(ap, state.tier)}.`
+      );
+    }
+    case "verification":
+      return "direct runs the role's own checks. verified adds focused tests for acceptance. redundant adds an independent Review run.";
+    case "issues":
+      return "required fails the run when issue tracking is unavailable. optional uses it when available. disabled removes the issue tool.";
+    case "ask":
+      return "on lets the agent ask one precise question when a wrong change is likely. off makes it decide from context.";
+    case "approval":
+      return "human requires human approval for issue close and PR merge. agent lets the agent approve its own result.";
+    case "ambiguity":
+      return "strict asks on any material gap. precise resolves low-impact gaps and asks when a choice changes the work. adaptive infers intent. autonomous decides without asking.";
+    case "minFit":
+      return "Hard floor for the role-weighted model fit. role uses the policy floor. 0 disables the floor.";
+    case "floors":
+      return "role uses the policy axis floors. strict adds 0.5 to each role axis floor. off removes axis floors.";
+  }
 }

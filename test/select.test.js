@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { pick, scoreCandidate, axisWeights, capabilityFit } from "../dist/select.js";
+import { pick, modelStatus, scoreCandidate, axisWeights, capabilityFit } from "../dist/select.js";
 import { loadPolicy, ConfigError } from "../dist/config.js";
 
 function axes(reasoning = 8, code = 8, agentic = 8, general = 8) {
@@ -243,6 +243,31 @@ test("hard filters: tool support, min context, provider, pin", () => {
 
   const other = pickOne([big], basePolicy, { requireProvider: "q" });
   assert.ok("error" in other);
+});
+
+test("modelStatus reports eligibility and the exact rejection reason", () => {
+  const good = row("p/good");
+  const low = row("p/low", { scores: axes(5, 5, 5, 5) });
+  const input = {
+    agent: "general",
+    policy: basePolicy,
+    machine,
+    catalogue: [good, low],
+    configuredProviders: new Set(["p"]),
+    contextChars: 8_000,
+  };
+  assert.deepEqual(modelStatus(good, input), { eligible: true });
+  assert.deepEqual(modelStatus(low, input), { eligible: false, reason: "below-min-capability" });
+
+  const cooling = {
+    providers: { p: { cooldownUntil: Date.now() + 60_000 } },
+    models: {},
+    freeProbeTimes: [],
+  };
+  assert.deepEqual(modelStatus(good, { ...input, availability: cooling }), {
+    eligible: false,
+    reason: "provider-cooling",
+  });
 });
 
 test("ties go to the lexicographically smaller key", () => {

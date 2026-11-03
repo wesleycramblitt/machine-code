@@ -301,6 +301,17 @@ export function scoreCandidate(
   };
 }
 
+/** Why one catalogue row is not eligible, or eligible with no reason. */
+export function modelStatus(
+  row: CatalogueRow,
+  input: PickInput,
+): { eligible: true } | { eligible: false; reason: string } {
+  const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens);
+  const weights = axisWeights(input.agent, input.policy);
+  const reason = rejectReason(row, input, estimate, weights);
+  return reason ? { eligible: false, reason } : { eligible: true };
+}
+
 export function pick(
   input: PickInput,
 ): PickResult | { error: string; rejected: RejectedCandidate[]; rejectedCount: number; rejectedByReason: Record<string, number> } {

@@ -219,6 +219,14 @@ verification, issue tracking, ask, approval, ambiguity, min-fit, floors, issue,
 and request. Edit the request, change any setting, and start the run. The fork
 keeps parent lineage; it does not inherit the parent worktree.
 
+The New Run **Model[m]** picker lists every model from configured providers
+with a status: `✓` eligible, `⏸` cooling with the remaining time, or `✕` with
+the rejection reason (paid only, below fit or axis floor, no tools, context too
+small, and so on). Enter on an ineligible model reports why and keeps the
+picker open. The line under **Model[m]** shows the effective floor for the
+current tier and floor mode. Press `s` for settings; it explains every preset,
+the role mode, the effective agent parameters, and the policy floors.
+
 The harness blocks a third identical tool call with the same arguments and
 returns a corrective message; three blocked repeats end the run with a
 `loop_blocked` event and a summary that says so. After four reads of the same
