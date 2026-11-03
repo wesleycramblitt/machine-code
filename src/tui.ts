@@ -52,7 +52,7 @@ import { fundedProviderIds } from "./data.js";
 import { loadCatalogue } from "./catalogue/load.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
-import { previewContext, artifactPreview, type ContextPreview } from "./context/preview.js";
+import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
 import { changesFor, childRuns, contextUsage, readContextManifest, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemantic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
@@ -1534,17 +1534,55 @@ export async function runTui(): Promise<void> {
       const issueAccess = resolvedAgent.config.issueAccess ?? def.issueAccess;
       const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
+      const itemsFor = (kinds: readonly string[]) =>
+        ctx.sources
+          .filter((source) => kinds.includes(source.kind))
+          .map((source) => ({
+            text: source.note ? `${source.ref} · ${source.note}` : source.ref,
+            chars: source.chars,
+            exists: source.exists,
+            key: `${source.kind}:${source.ref}`,
+          }));
       const referencedToolChars = new Map(
         ctx.sources.filter((source) => source.kind === "tool").map((source) => [source.ref, source.chars]),
       );
+      const artifacts = listArtifacts(layout(newRunRepo));
       const toolItems = toolListItems(
         resolvedAgent.def.tools.filter((tool) => tool !== "issue" || newrun.issues !== "disabled"),
         issueAccess,
-        listArtifacts(layout(newRunRepo))
+        artifacts
           .filter((artifact) => artifact.kind === "tool")
           .map((artifact) => ({ name: artifact.name, description: artifact.description })),
         referencedToolChars,
       );
+      const knowledgeItems: Array<{ text: string; chars: number; exists: boolean; key: string; available?: boolean }> =
+        itemsFor(["knowledge"]);
+      const knownKnowledge = new Set(knowledgeItems.map((item) => item.key));
+      for (const path of discoverKnowledgeFiles(layout(newRunRepo))) {
+        const key = `knowledge:${path}`;
+        if (knownKnowledge.has(key)) continue;
+        knowledgeItems.push({
+          text: `${path} · available`,
+          chars: 0,
+          exists: true,
+          key,
+          available: true,
+        });
+      }
+      const scriptItems: Array<{ text: string; chars: number; exists: boolean; key: string; available?: boolean }> =
+        itemsFor(["script"]);
+      const knownScripts = new Set(scriptItems.map((item) => item.key));
+      for (const artifact of artifacts.filter((item) => item.kind === "script")) {
+        const key = `script:${artifact.name}`;
+        if (knownScripts.has(key)) continue;
+        scriptItems.push({
+          text: `${artifact.name} · script · available`,
+          chars: 0,
+          exists: true,
+          key,
+          available: true,
+        });
+      }
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
       const fitText = newrun.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(newrun.minFit);
       const estimateCost = preview.estimate
@@ -1595,15 +1633,6 @@ export async function runTui(): Promise<void> {
           key: `${contextKind}:${issue.ref.repo}#${issue.ref.number}`,
         };
       });
-      const itemsFor = (kinds: readonly string[]) =>
-        ctx.sources
-          .filter((source) => kinds.includes(source.kind))
-          .map((source) => ({
-            text: source.ref,
-            chars: source.chars,
-            exists: source.exists,
-            key: `${source.kind}:${source.ref}`,
-          }));
       const mapEnabled = preview.machine?.map.enabled !== false;
       const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
       const cachedMap = readCachedMap(newRunRepo);
@@ -1636,10 +1665,10 @@ export async function runTui(): Promise<void> {
       const sections = [
         { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
         { label: "Files", tone: contextTone("file"), sectionKey: "section:files", items: itemsFor(["file"]) },
-        { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: itemsFor(["knowledge"]) },
+        { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
         { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: itemsFor(["skill"]) },
         { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
-        { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: itemsFor(["script"]) },
+        { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
         { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
         { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
       ];
@@ -1704,8 +1733,9 @@ export async function runTui(): Promise<void> {
         const item = visibleItems[offset]!;
         const index = itemStart + offset;
         const fixed = (item as { fixed?: boolean }).fixed === true;
+        const available = (item as { available?: boolean }).available === true;
         const excluded = !fixed && (sectionOff || newRunContextExcluded.has(item.key));
-        const mark = excluded ? `${RED}✕${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
+        const mark = excluded ? `${RED}✕${R}` : available ? `${D}·${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
         const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 24))}${R} ${D}${fmtTokens(tokensForChars(item.chars))}${R}`;
         itemLines.push(panelLine(line, index === newRunContextItem));
       }

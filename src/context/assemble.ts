@@ -17,7 +17,7 @@
  * ancestor.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import type { MachineConfig } from "../config.js";
@@ -25,7 +25,7 @@ import type { Issue, IssueProvider, IssueRef } from "../issues/provider.js";
 import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
-import { parseArtifactReferences, parseSkillFrontMatter } from "./references.js";
+import { parseArtifactReferences, skillMetas } from "./references.js";
 import { discoverPlanFiles } from "./plans.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
@@ -116,26 +116,6 @@ function readFileCapped(file: string, cap: number): { text: string; warning?: st
   } catch {
     return null;
   }
-}
-
-function skillMetas(layout: Layout): Array<{ name: string; description: string }> {
-  const out = new Map<string, { name: string; description: string }>();
-  for (const dir of [join(layout.home, "skills"), join(layout.repoDir, "skills")]) {
-    if (!existsSync(dir)) continue;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
-    } catch {
-      continue;
-    }
-    for (const name of entries) {
-      const file = join(dir, name, "SKILL.md");
-      if (!existsSync(file)) continue;
-      const meta = parseSkillFrontMatter(readFileSync(file, "utf8"), file);
-      if (meta && !out.has(meta.name)) out.set(meta.name, { name: meta.name, description: meta.description });
-    }
-  }
-  return [...out.values()];
 }
 
 function skillBody(layout: Layout, name: string): { path: string; text: string } | null {

@@ -6,7 +6,7 @@ test("tool subtab lists core tools, issue access, and custom tools", () => {
   const items = toolListItems(
     ["read", "search", "issue", "artifact"],
     "create",
-    [{ name: "bench", description: "Run benchmarks" }],
+    [{ name: "bench", description: "Run benchmarks" }, { name: "lint", description: "Lint the tree" }],
     new Map([["bench", 512]]),
   );
   assert.deepEqual(items.map((item) => item.key), [
@@ -15,6 +15,7 @@ test("tool subtab lists core tools, issue access, and custom tools", () => {
     "core-tool:issue",
     "core-tool:artifact",
     "tool:bench",
+    "tool:lint",
   ]);
   assert.equal(items.find((item) => item.key === "core-tool:issue").text, "issue · GitHub issues · issues:create");
   assert.match(items.find((item) => item.key === "core-tool:search").text, /map, outline, search/);
@@ -24,6 +25,10 @@ test("tool subtab lists core tools, issue access, and custom tools", () => {
   assert.ok(core.every((item) => item.exists && item.fixed && item.chars > 0));
   assert.ok(custom.every((item) => item.exists && !item.fixed));
   assert.equal(custom[0].chars, 512);
+  assert.equal(custom[0].available, false);
+  assert.equal(custom[1].chars, 0);
+  assert.equal(custom[1].available, true);
+  assert.match(custom[1].text, /available/);
 });
 
 test("context item token estimates use the same chars/4 conversion", () => {

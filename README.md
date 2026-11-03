@@ -261,6 +261,13 @@ custom repository/machine tools. Core tool definitions are sent with every
 request, so their schema tokens are included in the estimate and cannot be
 excluded as context.
 
+Skill descriptions are always visible and appear in the **Skills** subtab even
+when no issue references a skill body. **Knowledge** and **Scripts** also list
+available files and manifests, marked `·` when they are discoverable but not
+part of the assembled context. Files and knowledge enter the prompt only when
+an issue's `mc:context` block, or the configured knowledge index, references
+them.
+
 Skills live in `.machine_code/skills/<name>/SKILL.md`. Only descriptions are
 always visible; the body loads when an issue references the skill. The curation
 policy and the kept set are in

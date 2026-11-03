@@ -6,12 +6,12 @@
  * issue hierarchy and caps file reads, which is enough to show what a run will
  * inherit before it starts.
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import type { Issue, IssueRef } from "../issues/provider.js";
 import { artifactExists, artifactPath, listArtifacts, resolveArtifact, type ArtifactDef } from "../artifacts/registry.js";
-import { parseArtifactReferences } from "./references.js";
+import { parseArtifactReferences, skillMetas } from "./references.js";
 import { discoverPlanFiles } from "./plans.js";
 
 export interface PreviewSource {
@@ -186,6 +186,24 @@ export function previewContext(
     if (!exists) warnings.push(`knowledge ${options.knowledgeIndex} is missing`);
   }
 
+  // Skill descriptions are visible on every run even when no issue references
+  // a skill body. Mirror the single aggregate block assembled at band 8.
+  const allSkills = skillMetas(layout);
+  if (allSkills.length > 0) {
+    const text = allSkills.map((skill) => `- ${skill.name}: ${skill.description}`).join("\n");
+    const size = Math.min(1024, text.length);
+    chars += size;
+    sources.push({
+      kind: "skill",
+      ref: `${allSkills.length} skills`,
+      origin: "explicit",
+      depth: 0,
+      chars: size,
+      exists: true,
+      note: allSkills.map((skill) => skill.name).join(", "),
+    });
+  }
+
   return {
     chars,
     promptChars: prompt.length,
@@ -194,6 +212,35 @@ export function previewContext(
     artifacts: { files, knowledge, skills, tools, scripts },
     warnings,
   };
+}
+
+/** Knowledge files that can be referenced from an issue, repo-relative. */
+export function discoverKnowledgeFiles(layout: Layout): string[] {
+  const root = resolve(layout.repoRoot);
+  const out = new Set<string>();
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 3 || out.size >= 50) return;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (out.size >= 50) return;
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        const rel = relative(root, abs);
+        if (!rel.startsWith("..")) out.add(rel);
+      }
+    }
+  };
+  for (const dir of ["knowledge", ".machine_code/knowledge"]) {
+    walk(join(root, dir), 0);
+  }
+  return [...out].sort();
 }
 
 /** Cheap index for the artifact browser. */

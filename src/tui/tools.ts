@@ -13,6 +13,8 @@ export interface ToolListItem {
   key: string;
   /** Tool definitions are always sent; they cannot be excluded as context. */
   fixed?: boolean;
+  /** Listed for discovery but not part of the assembled context. */
+  available?: boolean;
 }
 
 const DESCRIPTIONS: Record<string, string> = {
@@ -43,12 +45,16 @@ export function toolListItems(
     key: `core-tool:${tool}`,
     fixed: true,
   }));
-  const custom = customTools.map((artifact) => ({
-    text: `${artifact.name} · custom tool${artifact.description ? ` · ${artifact.description}` : ""}`,
-    chars: customChars?.get(artifact.name) ?? 0,
-    exists: true,
-    key: `tool:${artifact.name}`,
-  }));
+  const custom = customTools.map((artifact) => {
+    const referenced = customChars?.has(artifact.name) === true;
+    return {
+      text: `${artifact.name} · custom tool${artifact.description ? ` · ${artifact.description}` : ""}${referenced ? "" : " · available"}`,
+      chars: customChars?.get(artifact.name) ?? 0,
+      exists: true,
+      key: `tool:${artifact.name}`,
+      available: !referenced,
+    };
+  });
   return [...core, ...custom];
 }
 
