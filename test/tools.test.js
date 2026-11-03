@@ -74,16 +74,35 @@ test("semantic search returns module summaries and key files", async () => {
   assert.match(text, /files: src\/context\/state\.ts/);
 });
 
-test("text search scoped to a file still works", async () => {
+test("text search is the default when mode is omitted", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-search-"));
   try {
     writeFileSync(join(root, "package.json"), '{"scripts":{"test":"node --test"}}\n', "utf8");
     const tool = searchTool({ root, commands: CORE_COMMANDS });
-    const result = await tool.execute("id", { mode: "text", path: "package.json", pattern: "scripts" });
+    const result = await tool.execute("id", { path: "package.json", pattern: "scripts" });
     assert.equal(result.isError, undefined);
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /package\.json:1/);
     assert.match(text, /scripts/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read uses a symbol range even when offset or limit is also passed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-symbol-"));
+  try {
+    writeFileSync(
+      join(root, "a.ts"),
+      "export function foo() {\n  return 1;\n}\n\nexport function bar() {\n  return 2;\n}\n",
+      "utf8",
+    );
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "a.ts", symbol: "foo", limit: 1 });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /export function foo/);
+    assert.doesNotMatch(text, /export function bar/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

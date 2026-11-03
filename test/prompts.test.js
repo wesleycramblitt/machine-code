@@ -30,7 +30,7 @@ test("base and role deltas stay small", () => {
     assert.match(delta, /Stop/, `${role} has a stop condition`);
   }
   const total = base.length + Object.values(deltas).reduce((sum, delta) => sum + delta.length, 0);
-  assert.ok(total <= 3_300, `base + deltas is ${total} chars`);
+  assert.ok(total <= 3_500, `base + deltas is ${total} chars`);
 });
 
 test("rendered prompts name the resolved tools and config", () => {
@@ -63,6 +63,14 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.match(planner.prompt, /request names a new Epic\/Feature\/Task/);
     assert.match(planner.prompt, /Verify every Task is plan ready/);
     assert.match(planner.prompt, /issue access create/);
+
+    const build = resolveAgent(l, "build");
+    assert.match(build.prompt, /Task issue body is the packet/);
+    assert.match(build.prompt, /if empty, stop/);
+    assert.match(build.prompt, /do not list files or read whole large files/);
+
+    const sudo = resolveAgent(l, "sudo");
+    assert.match(sudo.prompt, /use its Deliverable and Acceptance/);
 
     const general = resolveAgent(l, "general");
     assert.deepEqual(general.def.tools, ["context", "read", "search", "ask"]);

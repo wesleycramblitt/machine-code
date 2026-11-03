@@ -104,9 +104,8 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         if (params.symbol && params.around !== undefined) {
           return fail("use symbol or around, not both");
         }
-        if ((params.symbol || params.around !== undefined) && (params.offset !== undefined || params.limit !== undefined)) {
-          return fail("use symbol/around or offset/limit, not both");
-        }
+        // Symbol/around wins when a model also passes offset/limit. Ignore the
+        // paging arguments instead of spending a turn on a schema correction.
 
         let offset = Math.max(1, Math.floor(params.offset ?? 1));
         let limit = Math.max(1, Math.floor(params.limit ?? 2000));
@@ -246,22 +245,24 @@ const SEARCH_MODES: readonly string[] = [
 ];
 
 const SearchParams = Type.Object({
-  mode: Type.Union(
-    [
-      Type.Literal("map"),
-      Type.Literal("files"),
-      Type.Literal("outline"),
-      Type.Literal("text"),
-      Type.Literal("structure"),
-      Type.Literal("json"),
-      Type.Literal("yaml"),
-      Type.Literal("definition"),
-      Type.Literal("references"),
-      Type.Literal("symbols"),
-      Type.Literal("info"),
-      Type.Literal("semantic"),
-    ],
-    { description: "Search mode." },
+  mode: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal("map"),
+        Type.Literal("files"),
+        Type.Literal("outline"),
+        Type.Literal("text"),
+        Type.Literal("structure"),
+        Type.Literal("json"),
+        Type.Literal("yaml"),
+        Type.Literal("definition"),
+        Type.Literal("references"),
+        Type.Literal("symbols"),
+        Type.Literal("info"),
+        Type.Literal("semantic"),
+      ],
+      { description: "Search mode (default text)." },
+    ),
   ),
   pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic, symbol name for LSP modes." })),
   path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
@@ -312,9 +313,10 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     parameters: SearchParams,
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
+      const mode = params.mode ?? "text";
       const limit = Math.max(1, Math.floor(params.limit ?? 200));
       try {
-        switch (params.mode) {
+        switch (mode) {
           case "files": {
             if (params.pattern === "*") {
               return fail('files pattern "*" matches everything; use mode "map" or a specific glob');
@@ -435,9 +437,9 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
           case "json":
           case "yaml": {
-            const binary = params.mode === "json" ? "jq" : "yq";
-            if (!params.pattern) return fail(`${params.mode} mode requires a query pattern`);
-            if (!params.path) return fail(`${params.mode} mode scopes to one document: pass its path`);
+            const binary = mode === "json" ? "jq" : "yq";
+            if (!params.pattern) return fail(`${mode} mode requires a query pattern`);
+            if (!params.path) return fail(`${mode} mode scopes to one document: pass its path`);
             const abs = resolveWithin(ctx.root, params.path);
             assertRegularFile(abs);
             return await exec(binary, [params.pattern, abs], ctx.root, SEARCH_CAP_BYTES);
@@ -453,7 +455,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             );
           }
           default: {
-            if (params.mode === "symbols") {
+            if (mode === "symbols") {
               const language = params.language ?? (params.path ? languageForPath(params.path) : null);
               if (language) {
                 const { formatDocumentSymbols, formatSymbols, lspClientFor, serverAvailable } = await import("../lsp/index.js");
@@ -494,9 +496,9 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               const note = language ? `\n[LSP ${language} unavailable or empty; used repo map]` : "";
               return ok((hits.join("\n") || "no symbols") + note);
             }
-            if (POSITION_MODES.has(params.mode)) {
+            if (POSITION_MODES.has(mode)) {
               if (!params.path || params.line === undefined || params.column === undefined) {
-                return fail(`LSP mode "${params.mode}" requires path + line + column`);
+                return fail(`LSP mode "${mode}" requires path + line + column`);
               }
               const language = params.language ?? languageForPath(params.path);
               if (!language) {
@@ -515,28 +517,28 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               const client = lspClientFor(ctx.root, language, ctx.processes);
               if (!client) return fail(`LSP ${language} unavailable. Fallback: outline, text, or structure.`);
               const pos = { line: params.line - 1, character: params.column - 1 };
-              if (params.mode === "definition") {
+              if (mode === "definition") {
                 const locs = await client.definition(abs, pos);
                 if (locs === null) return fail("LSP server did not respond. For TypeScript, ensure typescript is installed in the project. Fallback: outline, text, or structure.");
                 if (locs.length === 0) return ok("no definition");
                 return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\n"));
               }
-              if (params.mode === "references") {
+              if (mode === "references") {
                 const locs = await client.references(abs, pos);
                 if (locs === null) return fail("LSP server did not respond. For TypeScript, ensure typescript is installed in the project. Fallback: outline, text, or structure.");
                 if (locs.length === 0) return ok("no references");
                 return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\n"));
               }
-              if (params.mode === "info") {
+              if (mode === "info") {
                 const hover = await client.hover(abs, pos);
                 if (hover === null) return fail("LSP server did not respond. For TypeScript, ensure typescript is installed in the project. Fallback: outline, text, or structure.");
                 if (!hover) return ok("no info");
                 const content = typeof hover.contents === "string" ? hover.contents : (hover.contents as { value?: string }).value ?? JSON.stringify(hover.contents);
                 return ok(content);
               }
-              return fail(`unknown LSP mode: ${params.mode}`);
+              return fail(`unknown LSP mode: ${mode}`);
             }
-            return fail(`unknown search mode: ${params.mode}`);
+            return fail(`unknown search mode: ${mode}`);
           }
         }
       } catch (error) {
