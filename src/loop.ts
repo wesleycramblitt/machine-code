@@ -45,6 +45,39 @@ const REPEAT_BLOCK_LIMIT = 3;
 /** Reads of one path allowed before the harness forces the model to act. */
 const READ_PATH_LIMIT = 3;
 
+function issueRefKey(value: string): string {
+  const url = /\/issues\/(\d+)(?:$|[?#])/.exec(value);
+  if (url) return `#${url[1]}`;
+  const hash = /#(\d+)\b/.exec(value);
+  if (hash) return `#${hash[1]}`;
+  const bare = value.trim();
+  return /^\d+$/.test(bare) ? `#${bare}` : bare;
+}
+
+/** Canonical issue arguments so `repo#42`, `#42`, `42`, and a URL compare equal. */
+function normalizedIssueKey(params: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...params };
+  for (const key of ["issue", "parent"]) {
+    if (typeof out[key] === "string") out[key] = issueRefKey(out[key] as string);
+  }
+  for (const key of ["blocked_by", "depends_on"]) {
+    if (Array.isArray(out[key])) {
+      out[key] = (out[key] as unknown[]).map((value) =>
+        typeof value === "string" ? issueRefKey(value) : value,
+      );
+    }
+  }
+  if (out.action === "tree") {
+    if (out.state === undefined || out.state === "all") delete out.state;
+    if (out.depth === undefined || out.depth === 2) delete out.depth;
+  }
+  if (out.action === "list") {
+    if (out.state === undefined || out.state === "all") delete out.state;
+    if (out.limit === undefined || out.limit === 100) delete out.limit;
+  }
+  return out;
+}
+
 /** Stable JSON key for a tool call; argument order must not defeat the guard. */
 function stableKey(value: unknown): string {
   try {
@@ -604,6 +637,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const callCounts = new Map<string, { count: number; preview: string }>();
     const readPaths = new Map<string, number>();
     const searchKeys = new Map<string, number>();
+    let treeCalls = 0;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -744,6 +778,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             };
           };
 
+          // The planner needs one tree to inspect and one to verify. More is
+          // repeated work: GitHub tree calls are slow and the result is large.
+          if (tool.name === "issue" && (params as { action?: unknown }).action === "tree") {
+            treeCalls += 1;
+            if (treeCalls > 2) {
+              return block(
+                "Tree already inspected twice. Use the last tree result and stop.",
+                { args: capJson(params), treeCalls },
+              );
+            }
+          }
+
           // Search loops often vary only the limit or scope. Key on the mode,
           // scope, and pattern so the third equivalent search is blocked.
           let searchKey: string | undefined;
@@ -780,7 +826,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             }
           }
 
-          const key = `${tool.name}:${stableKey(params)}`;
+          const keyParams =
+            tool.name === "issue"
+              ? normalizedIssueKey(params as Record<string, unknown>)
+              : params;
+          const key = `${tool.name}:${stableKey(keyParams)}`;
           const prior = callCounts.get(key);
           if (prior && prior.count >= REPEAT_LIMIT) {
             const preview = prior.preview ? ` Previous result: ${prior.preview}` : "";

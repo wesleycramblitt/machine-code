@@ -235,6 +235,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
+      "mc:context is optional; add only exact known files and do not research it. " +
       "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
       "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
     parameters: IssueParams,
@@ -388,7 +389,8 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             remember(auto.issue, "plan ready");
             note =
               `\nplan ready on #${auto.issue.ref.number}. ` +
-              "Add an mc:context marker with files if known; then create the next Task or stop.";
+              "mc:context is optional; add only exact known files and do not research it. " +
+              "Then create the next Task or stop.";
           } else if (created.acceptance.length > 0) {
             note =
               `\nNext: plan failed (${auto.error ?? "unknown error"}); fix the body ` +
