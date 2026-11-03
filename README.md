@@ -199,12 +199,13 @@ the model's final response. `machine_code show`, the TUI Overview, and the
 `run` command print it. A run that hits the turn cap is recorded as `blocked`,
 not `completed`, and says so in the summary.
 
-`max_turns` in `[agents.<role>]` sets the per-run assistant-turn cap (default
-25; `0` disables it). It is a runaway backstop, not the primary cost control;
-`budget_tokens` and the repeat-call guard do that. Provider retries and model
-rotations do not refill the turn or token budget. The Planner uses
-`max_turns = 40` in this repository because a large plan can need several
-read/create/plan steps.
+`max_turns` in `[agents.<role>]` sets an optional assistant-turn cap. The
+default is `0` (no cap); set it only when a role needs a bound.
+`budget_tokens` is also unset by default and is opt-in. The repeat-call and
+read guards still stop loops; provider retries and model rotations do not
+refill a configured turn or token budget. A token budget counts total tokens,
+including cache reads, so a cache-heavy run can hit it sooner than its cost
+suggests.
 
 In the run detail Timeline, `j`/`k` moves between timestamp events. The timeline
 follows the newest event by default; `j`/`k` or `PgUp`/`PgDn` turns follow off,

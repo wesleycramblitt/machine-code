@@ -35,7 +35,8 @@ import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
 
-export const MAX_TURNS = 25;
+/** Default turn cap. 0 means no cap; set max_turns per role or run. */
+export const MAX_TURNS = 0;
 
 /** Identical calls allowed before the harness blocks the repeat. */
 const REPEAT_LIMIT = 2;
@@ -43,8 +44,6 @@ const REPEAT_LIMIT = 2;
 const REPEAT_BLOCK_LIMIT = 3;
 /** Reads of one path allowed before the harness forces the model to act. */
 const READ_PATH_LIMIT = 3;
-/** Planner research calls allowed between issue writes before it must act. */
-const PLANNER_RESEARCH_LIMIT = 6;
 
 /** Stable JSON key for a tool call; argument order must not defeat the guard. */
 function stableKey(value: unknown): string {
@@ -442,13 +441,39 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * blocked summary.
    */
   const finalAnswer = async (model: Model<Api>, reason: string): Promise<string> => {
+    const issueEvidence = (() => {
+      try {
+        const created = new Set<number>();
+        const planned = new Set<number>();
+        for (const line of readFileSync(join(recorder.dir, "events.jsonl"), "utf8").split("\n")) {
+          if (!line.trim()) continue;
+          let event: { type?: string; number?: unknown; issue?: unknown; status?: unknown };
+          try {
+            event = JSON.parse(line) as { type?: string; number?: unknown; issue?: unknown; status?: unknown };
+          } catch {
+            continue;
+          }
+          if (event.type === "issue_created" && typeof event.number === "number") created.add(event.number);
+          if (event.type === "plan_updated" && typeof event.issue === "number" && event.status === "ready") {
+            planned.add(event.issue);
+          }
+        }
+        if (created.size === 0 && planned.size === 0) return "";
+        const list = (values: Set<number>): string =>
+          [...values].sort((a, b) => a - b).map((number) => `#${number}`).join(", ");
+        return `Issue evidence: created ${created.size > 0 ? list(created) : "none"}; plan-ready ${planned.size > 0 ? list(planned) : "none"}.`;
+      } catch {
+        return "";
+      }
+    })();
     const prompt = [
       memory.renderBlock(),
+      issueEvidence,
       reason,
       "Do not call tools. Answer the user's request from the evidence above. If the evidence is insufficient, say exactly what is missing.",
       "Keep the answer under 20 lines. For a planning run, list the created issue numbers and the next concrete step; do not restate issue bodies.",
       `Request: ${input.request}`,
-    ].join("\n\n");
+    ].filter(Boolean).join("\n\n");
     try {
       const source = input.models.streamSimple(
         model,
@@ -478,6 +503,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       const usage = result.usage;
       if (usage) {
         const actual = usage.cost?.total;
+        const actualCost = typeof actual === "number" && Number.isFinite(actual) ? actual : null;
         recorder.recordCall(
           {
             input: usage.input,
@@ -486,9 +512,32 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             cacheWrite: usage.cacheWrite,
             totalTokens: usage.totalTokens,
           },
-          typeof actual === "number" && Number.isFinite(actual) ? actual : null,
+          actualCost,
           0,
         );
+        try {
+          const { appendSpendRecord } = await import("./spend.js");
+          appendSpendRecord(input.home, {
+            id: crypto.randomUUID(),
+            t: new Date().toISOString(),
+            repoRoot: input.root,
+            runId: recorder.id,
+            agent: input.agent.name,
+            provider: result.provider,
+            model: result.model,
+            usage: {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              totalTokens: usage.totalTokens,
+            },
+            cost: { actual: actualCost, estimated: 0 },
+            stopReason: result.stopReason,
+          });
+        } catch {
+          // ledger write failure must not break the final answer
+        }
       }
       const final = text.trim() || assistantText(result).trim();
       recorder.event("final_answer", {
@@ -555,7 +604,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const callCounts = new Map<string, { count: number; preview: string }>();
     const readPaths = new Map<string, number>();
     const searchKeys = new Map<string, number>();
-    let researchCalls = 0;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -695,24 +743,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               ...(loopBlocked ? { terminate: true } : {}),
             };
           };
-
-          // Planning is not research: after a bounded number of reads and
-          // searches, make the planner write Tasks instead of auditing source.
-          if (tool.name === "issue") {
-            const action = String((params as { action?: unknown }).action ?? "");
-            if (["create", "edit", "plan", "link", "ensure", "close"].includes(action)) {
-              researchCalls = 0;
-            }
-          } else if (tool.name === "read" || tool.name === "search" || tool.name === "context") {
-            researchCalls += 1;
-            if (input.agent.name === "planner" && researchCalls > PLANNER_RESEARCH_LIMIT) {
-              return block(
-                "Planning research budget exhausted. Stop reading and searching. " +
-                  "Create deliverable Tasks with issue action=create, then plan each with issue action=plan status=ready.",
-                { args: capJson(params), researchCalls },
-              );
-            }
-          }
 
           // Search loops often vary only the limit or scope. Key on the mode,
           // scope, and pattern so the third equivalent search is blocked.

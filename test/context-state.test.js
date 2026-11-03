@@ -73,6 +73,19 @@ test("issue facts render in the state block and update by number", () => {
   }
 });
 
+test("issue body facts stay compact in the run-state block", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-body", goal: "plan" });
+    store.addIssueBodyFact(7, "x".repeat(1_000));
+    const block = store.renderBlock();
+    assert.match(block, /#7 body: x/);
+    assert.ok(block.length < 500, "body excerpt is capped to 300 chars");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ingestTurn records read facts, artifacts, working set, and changes", () => {
   const dir = tempDir();
   try {

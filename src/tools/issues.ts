@@ -173,10 +173,13 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     const parent = issue.parent ? ` parent #${issue.parent.number}` : "";
     const plan = issue.plan ? ` plan ${issue.plan.status}` : "";
     const accept = issue.acceptance.length > 0 ? ` accept=${issue.acceptance.length}` : "";
+    const blocked = issue.blockedBy.length > 0
+      ? ` blocked-by ${issue.blockedBy.map((dependency) => `#${dependency.number}`).join(",")}`
+      : "";
     const reserved = isReserved(issue) ? " [reserved]" : "";
     ctx.state?.addIssueFact(
       issue.ref.number,
-      `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${accept}${reserved}${extra ? ` ${extra}` : ""}`,
+      `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${accept}${blocked}${reserved}${extra ? ` ${extra}` : ""}`,
     );
   };
   /**
@@ -356,7 +359,6 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           parent: parent?.number,
         });
         remember(created);
-        ctx.state?.addIssueBodyFact(created.ref.number, created.body);
         if (created.kind === "task" && parentFeatureTask0) linkPlanningRun(parentFeatureTask0);
         if (created.kind === "feature" && parentEpicTask0) linkPlanningRun(parentEpicTask0);
         let note = "";
@@ -383,7 +385,6 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           const auto = await autoPlan(created);
           if (auto.issue) {
             remember(auto.issue, "plan ready");
-            ctx.state?.addIssueBodyFact(auto.issue.ref.number, auto.issue.body);
             note =
               `\nplan ready on #${auto.issue.ref.number}. ` +
               "Add an mc:context marker with files if known; then create the next Task or stop.";
@@ -414,7 +415,6 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           ...(blockedBy ? { blockedBy } : {}),
         });
         remember(updated);
-        ctx.state?.addIssueBodyFact(updated.ref.number, updated.body);
         return ok(`updated #${updated.ref.number}: ${updated.title}`);
       }
       case "plan": {
@@ -456,7 +456,6 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           worktree: plan.worktree,
         });
         remember(updated, `plan ${plan.status}`);
-        ctx.state?.addIssueBodyFact(updated.ref.number, updated.body);
         return ok(
           `plan ${plan.status} on #${updated.ref.number}: ${plan.role}/${plan.verification}, ` +
             `worktree ${plan.worktree}, retries ${plan.retriesBeforeReplan}, ` +

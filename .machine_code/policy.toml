@@ -28,7 +28,6 @@
 
 [agents.general]
 min_fit = 6.0
-max_turns = 6
 [agents.general.axes]
 reasoning = 6.0
 code = 5.0
@@ -64,7 +63,6 @@ general = 3.0
 [agents.review]
 # Review is the last gate; require a stronger fit than general.
 min_fit = 7.0
-max_turns = 15
 [agents.review.axes]
 reasoning = 6.0
 code = 5.0
@@ -75,10 +73,8 @@ general = 5.0
 # orientation. If no free model clears this bar, the paid tier may pick a
 # stronger funded model instead.
 [agents.planner]
-# Planning is bounded: create the graph, then stop. A planner that keeps
-# re-reading source is not planning; it is burning context.
-max_turns = 24
-budget_tokens = 180000
+# No default turn or token cap. Set max_turns/budget_tokens here only when this
+# repository needs a bound. The repeat and read guards still stop loops.
 [agents.planner.free]
 min_fit = 6.5
 [agents.planner.free.axes]

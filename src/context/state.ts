@@ -449,7 +449,11 @@ export class RunStateStore {
     this.saveMarkdown();
   }
 
-  /** Remember a compact issue body so the planner does not re-view it. */
+  /**
+   * Remember a short body excerpt only when the model explicitly views an
+   * issue. Create/edit/plan already return the compact issue fact; storing the
+   * authored body again makes every later prompt larger.
+   */
   addIssueBodyFact(number: number | string, body: string, turn?: number): void {
     const at = turn ?? this.currentTurn();
     const clean = body.replace(/\s+/g, " ").trim();
@@ -459,7 +463,7 @@ export class RunStateStore {
       fact: {
         id: this.id(),
         kind: "finding",
-        text: `#${number} body: ${clean.slice(0, 600)}`,
+        text: `#${number} body: ${clean.slice(0, 300)}`,
         refs: [],
         turn: at,
         status: "active",
