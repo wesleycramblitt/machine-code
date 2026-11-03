@@ -6,6 +6,18 @@
  * viewport we keep one line of context visible above it, so the heading for the
  * first item in a group does not disappear just as the user scrolls back up.
  */
+/** Free-scrolling window for sections that have no cursor row. */
+export function scrollLines(
+  lines: readonly string[],
+  scroll: number,
+  height: number,
+): { lines: string[]; scroll: number } {
+  const viewport = Math.max(1, height);
+  const max = Math.max(0, lines.length - viewport);
+  const top = Math.max(0, Math.min(scroll, max));
+  return { lines: lines.slice(top, top + viewport), scroll: top };
+}
+
 export function selectableLines(
   lines: readonly string[],
   selectedIndex: number,

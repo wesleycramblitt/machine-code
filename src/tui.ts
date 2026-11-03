@@ -30,7 +30,7 @@ import {
   type RunGroup,
   type RunRow,
 } from "./tui/runs.js";
-import { selectableLines } from "./tui/scroll.js";
+import { scrollLines, selectableLines } from "./tui/scroll.js";
 import { describeTimelineEvent, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
@@ -2617,7 +2617,11 @@ export async function runTui(): Promise<void> {
                   hint("x", "kill", RED),
                   hint("X", "kill all", RED),
                 ]
-              : []),
+              : runSection === "overview" || runSection === "changes" || runSection === "context"
+                ? [hint("j/k", "scroll"), hint("PgUp/Dn", "page")]
+                : runSection === "related"
+                  ? [hint("j/k", "select")]
+                  : []),
         ]);
         footerMapTokens = mapStatusTokens(s.worktree ?? s.repoRoot);
         const sectionBar = wrapTokenList(
@@ -2705,7 +2709,7 @@ export async function runTui(): Promise<void> {
             lines.push("", ` ${B}${Y}Latest thinking${R}`);
             for (const line of wrapText(thinking[thinking.length - 1]!.text, cols - 4).slice(-Math.max(1, short ? 3 : 8))) lines.push(`  ${W}${line}${R}`);
           }
-          const w = selectableLines(lines, 0, runScroll, bodyH);
+          const w = scrollLines(lines, runScroll, bodyH);
           runScroll = w.scroll;
           body = clipBody(w.lines);
         } else if (runSection === "timeline") {
@@ -2915,7 +2919,9 @@ export async function runTui(): Promise<void> {
             lines.push("", ` ${B}${C}Touched by tools${R}`);
             for (const path of touched.slice(0, 10)) lines.push(`  ${G}✎${R} ${W}${path}${R}`);
           }
-          body = clipBody(lines);
+          const w = scrollLines(lines, runScroll, bodyH);
+          runScroll = w.scroll;
+          body = clipBody(w.lines);
         } else if (runSection === "processes") {
           const records = reconcileProcessRecords(detail.dir);
           if (records.length === 0) {
@@ -2979,7 +2985,9 @@ export async function runTui(): Promise<void> {
               lines.push(`  ${tone}${source.kind.padEnd(10)}${R} ${D}${String(source.bytes).padStart(6)}b${R} ${D}${source.origin.padEnd(9)}${R} ${W}${trunc(source.ref, cols - 36)}${R}${source.truncated ? ` ${Y}trunc${R}` : ""}${source.warning ? ` ${Y}${source.warning}${R}` : ""}`);
             }
           }
-          body = clipBody(lines);
+          const w = scrollLines(lines, runScroll, bodyH);
+          runScroll = w.scroll;
+          body = clipBody(w.lines);
         }
       }
     }
