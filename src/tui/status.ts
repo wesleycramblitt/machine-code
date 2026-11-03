@@ -164,12 +164,12 @@ export function healthOf(
 export function rollupIssue(
   issue: Issue,
   runs: readonly RunSummary[],
-  children: readonly Issue[] = [],
-  childRuns: (child: Issue) => readonly RunSummary[] = () => [],
+  tasks: readonly Issue[] = [],
+  descendantRuns: readonly RunSummary[] = [],
   now = Date.now(),
 ): IssueRollup {
-  const allRuns = [...runs, ...children.flatMap((c) => [...childRuns(c)])];
-  const deliverableTasks = children.filter((c) => c.kind === "task" && isDeliverable(c));
+  const allRuns = [...runs, ...descendantRuns];
+  const deliverableTasks = tasks.filter((c) => c.kind === "task" && isDeliverable(c));
   const tasksClosed = deliverableTasks.filter((c) => c.state === "closed").length;
   const tasksTotal = deliverableTasks.length;
   const latest = allRuns.reduce((max, r) => Math.max(max, lastActivity(r)), 0);
@@ -221,21 +221,33 @@ export function buildIssueTree(
             .filter((t) => t.kind === "task")
             .map((task) => ({
               task,
-              rollup: rollupIssue(task, runsFor(task, byIssue), [], () => [], now),
+              rollup: rollupIssue(task, runsFor(task, byIssue), [], [], now),
               runs: sortRuns(runsFor(task, byIssue), "activity"),
             }));
           const deliverableTasks = tasks.filter((t) => isDeliverable(t.task));
           return {
             feature,
-            rollup: rollupIssue(feature, runsFor(feature, byIssue), deliverableTasks.map((t) => t.task), (t) => runsFor(t, byIssue), now),
+            rollup: rollupIssue(
+              feature,
+              runsFor(feature, byIssue),
+              deliverableTasks.map((t) => t.task),
+              tasks.flatMap((t) => runsFor(t.task, byIssue)),
+              now,
+            ),
             tasks: sortTasks(tasks),
             runs: sortRuns(runsFor(feature, byIssue), "activity"),
           };
         });
-      const deliverableFeatures = features.filter((f) => isDeliverable(f.feature));
+      const allFeatureTasks = features.flatMap((f) =>
+        f.tasks.filter((t) => isDeliverable(t.task)).map((t) => t.task),
+      );
+      const allFeatureRuns = features.flatMap((f) => [
+        ...f.runs,
+        ...f.tasks.flatMap((t) => t.runs),
+      ]);
       return {
         epic,
-        rollup: rollupIssue(epic, runsFor(epic, byIssue), deliverableFeatures.map((f) => f.feature), (f) => runsFor(f, byIssue), now),
+        rollup: rollupIssue(epic, runsFor(epic, byIssue), allFeatureTasks, allFeatureRuns, now),
         features: sortFeatures(features),
         runs: sortRuns(runsFor(epic, byIssue), "activity"),
       };

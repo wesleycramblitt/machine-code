@@ -105,14 +105,33 @@ test("rollups exclude reserved tasks and aggregate runs/cost", () => {
     run({ status: "completed", cost: { actual: 0.1, estimated: 0 }, issue: t1.ref }),
     run({ status: "awaiting_input", cost: { actual: 0.05, estimated: 0 }, issue: t0.ref }),
   ];
-  const child = (i) => runs.filter((r) => r.issue?.number === i.ref.number);
-  const rollup = rollupIssue(feature, [], [t1, t2, t0], child, now);
+  const rollup = rollupIssue(feature, [], [t1, t2, t0], runs, now);
   assert.equal(rollup.tasksTotal, 2, "reserved Task 0 is not a deliverable");
   assert.equal(rollup.tasksClosed, 1);
   assert.equal(rollup.pct, 50);
   assert.equal(rollup.runsTotal, 3);
   assert.equal(rollup.runsActive, 2);
   assert.ok(Math.abs(rollup.cost - 0.35) < 1e-9);
+});
+
+test("epic rollups aggregate nested feature tasks and runs", () => {
+  const now = Date.now();
+  const epic = issue(10, "epic", "Epic");
+  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
+  const t1 = issue(31, "task", "Done", { parent: feature.ref, state: "closed" });
+  const t2 = issue(32, "task", "Open", { parent: feature.ref });
+  const runs = [
+    run({ id: "a", status: "completed", issue: t1.ref, cost: { actual: 0.1, estimated: 0 } }),
+    run({ id: "b", status: "running", issue: t2.ref, cost: { actual: 0.2, estimated: 0 } }),
+  ];
+  const tree = buildIssueTree([epic, feature, t1, t2], runs, now);
+  const rollup = tree.epics[0].rollup;
+  assert.equal(rollup.tasksClosed, 1);
+  assert.equal(rollup.tasksTotal, 2);
+  assert.equal(rollup.pct, 50);
+  assert.equal(rollup.runsTotal, 2);
+  assert.equal(rollup.runsActive, 1);
+  assert.ok(Math.abs(rollup.cost - 0.3) < 1e-9);
 });
 
 test("buildIssueTree nests epics→features→tasks and separates categories", () => {
@@ -137,6 +156,10 @@ test("buildIssueTree nests epics→features→tasks and separates categories", (
   assert.equal(tree.epics[0].features.length, 1);
   assert.equal(tree.epics[0].features[0].tasks.length, 2);
   assert.ok(tree.epics[0].features[0].tasks[0].task.labels.includes("mc:reserved"), "reserved first");
+  assert.equal(tree.epics[0].features[0].rollup.tasksTotal, 1);
+  assert.equal(tree.epics[0].features[0].rollup.runsTotal, 2);
+  assert.equal(tree.epics[0].rollup.tasksTotal, 1);
+  assert.equal(tree.epics[0].rollup.runsTotal, 2);
   assert.deepEqual(tree.planning.map((r) => r.id), []);
   assert.deepEqual(tree.untracked.map((r) => r.id), ["plan", "gen"]);
   assert.deepEqual(tree.orphaned.map((r) => r.id), ["orphan"]);

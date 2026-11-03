@@ -226,3 +226,29 @@ test("picker orders issues parent-first with real depth", () => {
     [[8, 0], [34, 1], [37, 2]],
   );
 });
+
+test("runs page epic rollups include nested feature tasks and runs", () => {
+  const epic = issue(8, "epic", "Epic");
+  const feature = issue(34, "feature", "Feature", { parent: epic.ref });
+  const task1 = issue(36, "task", "Done", { parent: feature.ref, state: "closed" });
+  const task2 = issue(37, "task", "Open", { parent: feature.ref });
+  const runs = [
+    run({ id: "a", status: "completed", issue: task1.ref }),
+    run({ id: "b", status: "running", issue: task2.ref }),
+  ];
+  const index = buildRunIndex({
+    runs,
+    issuesByRepo: new Map([[repoA, [epic, feature, task1, task2]]]),
+  });
+  const epicRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 8);
+  const featureRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 34);
+  assert.ok(epicRow && epicRow.kind === "issue");
+  assert.ok(featureRow && featureRow.kind === "issue");
+  assert.equal(epicRow.rollup.tasksClosed, 1);
+  assert.equal(epicRow.rollup.tasksTotal, 2);
+  assert.equal(epicRow.rollup.pct, 50);
+  assert.equal(epicRow.rollup.runsTotal, 2);
+  assert.equal(epicRow.rollup.runsActive, 1);
+  assert.equal(featureRow.rollup.tasksTotal, 2);
+  assert.equal(featureRow.rollup.runsTotal, 2);
+});

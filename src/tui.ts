@@ -1397,8 +1397,9 @@ export async function runTui(): Promise<void> {
           const badge = row.issue.reserved ? `${M}[P&R]${R} ` : "";
           const pr = roll.prState ? ` ${Y}PR ${roll.prState}${R}` : "";
           const runCount = narrow ? `${roll.runsTotal}r` : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`;
+          const taskCount = row.issue.kind === "task" ? "" : `  ${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R}`;
           const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${healthIcon(roll.health)} ${BL}#${row.issue.ref.number}${R} ${D}${row.issue.kind}${R} ${badge}${B}${W}${row.issue.title}${R}`;
-          const right = `${pct}  ${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R} ${runCount}${pr}  ${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`;
+          const right = `${pct}${taskCount} ${runCount}${pr}  ${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`;
           const text = ` ${narrow ? trunc(left, Math.max(18, cols - 16)) + " " + right : pad(left, Math.max(30, cols - visible(right) - 2)) + right}`;
           rendered.push(selected(text, isSelected));
         } else {

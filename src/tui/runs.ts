@@ -360,17 +360,31 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     const sectionId = `issues:${repoRoot}`;
     if (!pushSection(sectionId, "Git issues", issueCount, depth, "issues")) return;
 
+    const descendantsCache = new Map<string, { tasks: Issue[]; runs: RunSummary[] }>();
+    const descendantsOf = (issue: Issue): { tasks: Issue[]; runs: RunSummary[] } => {
+      const key = keyOf(issue.ref);
+      const cached = descendantsCache.get(key);
+      if (cached) return cached;
+      const tasks: Issue[] = [];
+      const runs: RunSummary[] = [];
+      for (const child of childrenOf(issue)) {
+        if (child.kind === "task" && isDeliverable(child)) tasks.push(child);
+        runs.push(...issueRuns(child));
+        const nested = descendantsOf(child);
+        tasks.push(...nested.tasks);
+        runs.push(...nested.runs);
+      }
+      const result = { tasks, runs };
+      descendantsCache.set(key, result);
+      return result;
+    };
+
     const walk = (issue: Issue, issueDepth: number, parent?: string): void => {
       if (!issueRelevant(issue)) return;
       const children = childrenOf(issue).filter(issueRelevant);
       const directRuns = issueRuns(issue);
-      const rollup = rollupIssue(
-        issue,
-        directRuns,
-        children.filter((child) => isDeliverable(child)),
-        (child) => issueRuns(child),
-        now,
-      );
+      const descendants = descendantsOf(issue);
+      const rollup = rollupIssue(issue, directRuns, descendants.tasks, descendants.runs, now);
       const id = `issue:${keyOf(issue.ref)}`;
       const collapsible = children.length > 0 || directRuns.length > 0;
       const isCollapsed = collapsed.has(id);
