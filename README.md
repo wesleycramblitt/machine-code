@@ -58,7 +58,7 @@ node dist/cli.js catalogue snapshot          # update committed data/models + da
 # worktrees, inspection
 node dist/cli.js worktree list
 node dist/cli.js runs                 # Epic → Feature → Task → runs + untracked
-node dist/cli.js show <run-id>        # overview/context/changes/children/events
+node dist/cli.js show <run-id>        # overview/context/changes/related/events
 node dist/cli.js spend --days 30
 node dist/cli.js tools
 node dist/cli.js tui                  # default when run with no command
@@ -179,7 +179,7 @@ running work is visible at a glance. `machine_code status` is shorthand for the
 overall view. In the TUI, `g` cycles GH issue → Status → Overall status.
 
 `machine_code show <run-id>` exposes the same overview, context, changes,
-children, and event stream as the run detail screen. `machine_code spend` and
+related lineage, and event stream as the run detail screen. `machine_code spend` and
 `machine_code models` cover the catalogue and cost views without the TUI.
 
 In the run detail Timeline, `j`/`k` moves between timestamp events and skips

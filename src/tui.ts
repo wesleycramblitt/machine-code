@@ -54,7 +54,7 @@ import { filterModels, groupModels, siblingOffers, type ModelSort } from "./cata
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
 import { skillMetas } from "./context/references.js";
-import { changesFor, childRuns, contextUsage, readContextManifest, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
+import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemantic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
@@ -147,7 +147,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
 
 type Page = "runs" | "models" | "spend" | "settings" | "orchestrate";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model";
-type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "children" | "context";
+type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
 type RunListFilter = RunFilter | "attention";
 
 const TABS: Array<{ id: Page; label: string; key: string }> = [
@@ -158,14 +158,14 @@ const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "orchestrate", label: "Orchestrate", key: "5" },
 ];
 const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
-const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "children", "context"];
+const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "related", "context"];
 const RUN_SECTION_LABEL: Record<RunSection, string> = {
   overview: "Overview",
   timeline: "Timeline",
   processes: "Processes",
   thinking: "Thinking",
   changes: "Changes",
-  children: "Children",
+  related: "Related",
   context: "Context",
 };
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
@@ -2256,7 +2256,7 @@ export async function runTui(): Promise<void> {
           readInbox(detail.dir),
         );
         const context = readContextManifest(detail.dir);
-        const children = childRuns(allRuns, s.id);
+        const relatedList = relatedRuns(allRuns, s);
         const thinking = thinkingChunks(ev);
         const thinkingByCall = new Map<string, ThinkingChunk[]>();
         for (const chunk of thinking) {
@@ -2336,7 +2336,7 @@ export async function runTui(): Promise<void> {
           lines.push(`  ${D}lsp${R}     ${lspReady ? G : Y}typescript ${lspReady ? "ready" : "missing"}${R}`);
           lines.push(`  ${D}startup${R} ${C}${context ? `${context.chars.toLocaleString()} chars / ${context.sources.length} sources` : "not recorded"}${R}`);
           lines.push(`  ${D}changes${R} ${touched.length ? `${G}${touched.length}${R} ${D}path(s) touched${R}` : `${D}none yet${R}`}`);
-          if (children.length) lines.push(`  ${D}children${R} ${M}${children.length}${R} ${D}subagent run(s)${R}`);
+          if (relatedList.length) lines.push(`  ${D}related${R}  ${M}${relatedList.length}${R} ${D}run(s)${R}`);
           lines.push(`  ${D}parent${R}  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
           if (context) {
             lines.push("", ` ${B}${C}Context${R}`);
@@ -2572,13 +2572,30 @@ export async function runTui(): Promise<void> {
             }
           }
           body = clipBody(lines);
-        } else if (runSection === "children") {
-          if (children.length === 0) lines.push(` ${D}No child/subagent runs.${R}`);
-          if (childSel >= children.length) childSel = Math.max(0, children.length - 1);
-          for (let i = 0; i < children.length; i++) {
-            const child = children[i]!;
+        } else if (runSection === "related") {
+          lines.push(` ${B}${C}Lineage${R}`);
+          if (s.orchestrationId) {
+            lines.push(
+              `  ${D}orchestration${R} ${C}${s.orchestrationId}${R}` +
+                `${s.orchestrationScope ? ` ${D}${s.orchestrationScope}${R}` : ""}`,
+            );
+          }
+          if (s.taskIssue) lines.push(`  ${D}task${R}        ${W}#${s.taskIssue.number}${R}`);
+          if (s.attempt !== undefined) lines.push(`  ${D}attempt${R}     ${W}${s.attempt}${R}`);
+          if (s.phase) lines.push(`  ${D}phase${R}       ${W}${s.phase}${R}`);
+          if (s.planReview) lines.push(`  ${D}plan review${R} ${W}${s.planReview}${R}`);
+          if (s.resultReview) lines.push(`  ${D}result${R}      ${W}${s.resultReview}${R}`);
+          if (s.planSnapshotHash) lines.push(`  ${D}snapshot${R}    ${D}${s.planSnapshotHash.slice(0, 12)}${R}`);
+          if (s.parentRunId) lines.push(`  ${D}parent${R}      ${D}${s.parentRunId.slice(-8)}${R}`);
+          if (s.resumedFrom) lines.push(`  ${D}resumed${R}     ${D}${s.resumedFrom.slice(-8)}${R}`);
+          if (s.forkReason) lines.push(`  ${D}fork${R}        ${W}${s.forkReason}${R}`);
+          lines.push("", ` ${B}${M}Related runs${R}`);
+          if (relatedList.length === 0) lines.push(` ${D}No related runs.${R}`);
+          if (childSel >= relatedList.length) childSel = Math.max(0, relatedList.length - 1);
+          for (let i = 0; i < relatedList.length; i++) {
+            const related = relatedList[i]!;
             const isSelected = i === childSel;
-            const line = ` ${icon(child.status)} ${D}${child.id.slice(-8)}${R} ${agentTone(child.agent)}${child.agent}${R}${child.mode ? `/${child.mode}` : ""} ${D}${fmtTokens(child.usage.totalTokens)} tok · ${fmtMoney(child.cost.actual)} · ${ago(child.lastActivityAt)}${R} ${child.request.replace(/\s+/g, " ").slice(0, 40)}`;
+            const line = ` ${icon(related.status)} ${D}${related.id.slice(-8)}${R} ${agentTone(related.agent)}${related.agent}${R}${related.mode ? `/${related.mode}` : ""} ${D}${fmtTokens(related.usage.totalTokens)} tok · ${fmtMoney(related.cost.actual)} · ${ago(related.lastActivityAt)}${R} ${related.request.replace(/\s+/g, " ").slice(0, 40)}`;
             lines.push(selected(line, isSelected));
           }
           body = clipBody(lines);
@@ -3127,7 +3144,7 @@ export async function runTui(): Promise<void> {
         if (runSection === "timeline") stepTimeline(1);
         else if (runSection === "processes") { processFollow = false; processSel++; }
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll++; }
-        else if (runSection === "children") childSel++;
+        else if (runSection === "related") childSel++;
         else runScroll++;
         draw();
         return;
@@ -3136,7 +3153,7 @@ export async function runTui(): Promise<void> {
         if (runSection === "timeline") stepTimeline(-1);
         else if (runSection === "processes") { processFollow = false; processSel = Math.max(0, processSel - 1); }
         else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll = Math.max(0, thinkingScroll - 1); }
-        else if (runSection === "children") childSel = Math.max(0, childSel - 1);
+        else if (runSection === "related") childSel = Math.max(0, childSel - 1);
         else runScroll = Math.max(0, runScroll - 1);
         draw();
         return;
@@ -3220,8 +3237,8 @@ export async function runTui(): Promise<void> {
           if (!record) notify("no process selected");
           else openEditor(record.stdoutLog);
         }
-        else if (runSection === "children") {
-          const child = childRuns(listAllRuns(l.home), detail.summary.id)[childSel];
+        else if (runSection === "related") {
+          const child = relatedRuns(listAllRuns(l.home), detail.summary)[childSel];
           if (child) { selectedRunId = child.id; runSection = "overview"; screen = "run"; }
         }
         draw();

@@ -56,7 +56,7 @@ import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
 import { artifactPeek } from "./context/preview.js";
-import { changesFor, childRuns, contextUsage, readContextManifest, thinkingChunks, touchedPaths } from "./report/run.js";
+import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths } from "./report/run.js";
 import { buildSettings, settingsFileFor } from "./tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./data.js";
 import { runTui } from "./tui.js";
@@ -158,7 +158,7 @@ Usage:
   machine_code runs [--group gh-issue|status|overall] [--filter ...] [--text Q]
                                     Run hierarchy grouped by repo/issue or status
   machine_code show <run-id>        Rich run detail: model, ask, context, state, changes,
-                                    children [--events] [--thinking] [--changes] [--context]
+                                    related [--events] [--thinking] [--changes] [--context]
                                     [--state] [--json]
   machine_code processes <run-id>   List run-owned processes [--json]
   machine_code processes kill <run-id> <process-id|all>
@@ -2991,7 +2991,7 @@ function cmdShow(argv: string[]): number {
   const runDir = join(found.layout.runsDir, s.id);
   const context = readContextManifest(runDir);
   const allRuns = listAllRuns(found.layout.home);
-  const children = childRuns(allRuns, s.id);
+  const related = relatedRuns(allRuns, s);
   const thinking = thinkingChunks(run.events);
   const touched = touchedPaths(run.events);
   const changes = s.worktree ? changesFor(s.worktree) : null;
@@ -3007,7 +3007,7 @@ function cmdShow(argv: string[]): number {
       `${JSON.stringify({
         summary: s,
         context,
-        children,
+        related,
         thinking,
         touched,
         changes,
@@ -3076,10 +3076,25 @@ function cmdShow(argv: string[]): number {
     if (changes.recent) process.stdout.write(`  recent commits:\n${changes.recent.split("\n").map((line) => `    ${line}`).join("\n")}\n`);
   }
 
-  if (children.length > 0) {
-    process.stdout.write(`\nchildren (${children.length})\n`);
-    for (const child of children) {
-      process.stdout.write(`  ${runGlyph(child.status)} ${child.id}  ${child.agent}${modeSuffix(child.mode)}  ${fmtMoney(child.cost.actual)}  ${child.request.slice(0, 60)}\n`);
+  if (s.orchestrationId || s.taskIssue || related.length > 0) {
+    process.stdout.write(`\nrelated\n`);
+    if (s.orchestrationId) {
+      process.stdout.write(
+        `  orchestration ${s.orchestrationId}${s.orchestrationScope ? ` (${s.orchestrationScope})` : ""}\n`,
+      );
+    }
+    if (s.taskIssue) process.stdout.write(`  task          #${s.taskIssue.number}\n`);
+    if (s.attempt !== undefined) process.stdout.write(`  attempt       ${s.attempt}\n`);
+    if (s.phase) process.stdout.write(`  phase         ${s.phase}\n`);
+    if (s.planReview) process.stdout.write(`  plan review   ${s.planReview}\n`);
+    if (s.resultReview) process.stdout.write(`  result review ${s.resultReview}\n`);
+    if (s.parentRunId) process.stdout.write(`  parent        ${s.parentRunId}\n`);
+    if (s.resumedFrom) process.stdout.write(`  resumed from  ${s.resumedFrom}\n`);
+    if (s.forkReason) process.stdout.write(`  fork reason   ${s.forkReason}\n`);
+    for (const run of related) {
+      process.stdout.write(
+        `  ${runGlyph(run.status)} ${run.id}  ${run.agent}${modeSuffix(run.mode)}  ${fmtMoney(run.cost.actual)}  ${run.request.slice(0, 60)}\n`,
+      );
     }
   }
 

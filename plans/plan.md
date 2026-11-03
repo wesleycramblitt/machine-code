@@ -30,8 +30,9 @@
 > counting them until referenced. The composer can include available knowledge
 > and exclude individual skills. Process cleanup helpers are supervised,
 > availability probes are coalesced and jittered, and the TUI refreshes cooling
-> models on a timer. The synchronous git-status safety net is supervised. The
-> suite has 252 tests.
+> models on a timer. The synchronous git-status safety net is supervised, and
+> run detail exposes Related lineage instead of Children. The suite has 253
+> tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -538,8 +539,9 @@ Run detail sections become:
 Overview · Timeline · Processes · Thinking · Changes · Context · Related
 ```
 
-`Related` shows orchestration id, task issue, attempt, sibling Build/Review, and
-fork/correct lineage. Remove `Children`.
+`Related` is implemented in both the TUI and `machine_code show`: it shows
+orchestration id, task issue, attempt, sibling Build/Review, and fork/resume
+lineage. `Children` has been removed.
 
 Runs keep repository/issue/status grouping and untracked general/sudo runs.
 Add orchestration/task badges.
@@ -590,7 +592,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 252 tests green. Add:
+Keep the existing 253 tests green. Add:
 
 | Area | Cases |
 |---|---|

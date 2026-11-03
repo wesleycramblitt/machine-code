@@ -3,7 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { thinkingChunks, touchedPaths, childRuns } from "../dist/report/run.js";
+import { thinkingChunks, touchedPaths, childRuns, relatedRuns } from "../dist/report/run.js";
 
 test("thinking chunks combine live deltas and final turn text", () => {
   const events = [
@@ -47,4 +47,23 @@ test("touched paths and child runs are derived from events and lineage", () => {
     { id: "other", parentRunId: "nope", startedAt: "2026-01-01T00:00:00Z" },
   ];
   assert.deepEqual(childRuns(runs, "parent").map((run) => run.id), ["child"]);
+});
+
+test("related runs include lineage and same-orchestration task siblings", () => {
+  const summary = {
+    id: "build",
+    orchestrationId: "orch-1",
+    taskIssue: { repo: "o/r", number: 5 },
+    rootRunId: "build",
+    parentRunId: "parent",
+    startedAt: "2026-01-01T00:00:00Z",
+  };
+  const runs = [
+    summary,
+    { id: "parent", startedAt: "2025-12-31T00:00:00Z" },
+    { id: "review", orchestrationId: "orch-1", taskIssue: { repo: "o/r", number: 5 }, startedAt: "2026-01-01T00:00:01Z" },
+    { id: "fork", rootRunId: "build", startedAt: "2026-01-01T00:00:02Z" },
+    { id: "other", orchestrationId: "orch-2", taskIssue: { repo: "o/r", number: 6 }, startedAt: "2026-01-01T00:00:03Z" },
+  ];
+  assert.deepEqual(relatedRuns(runs, summary).map((run) => run.id), ["fork", "review", "parent"]);
 });

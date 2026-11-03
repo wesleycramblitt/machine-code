@@ -76,6 +76,26 @@ export function childRuns(runs: readonly RunSummary[], parentId: string): RunSum
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
 }
 
+/** Parent, fork siblings, resume lineage, and same-orchestration task siblings. */
+export function relatedRuns(runs: readonly RunSummary[], summary: RunSummary): RunSummary[] {
+  return runs
+    .filter((run) => {
+      if (run.id === summary.id) return false;
+      if (run.parentRunId === summary.id || summary.parentRunId === run.id) return true;
+      if (summary.rootRunId && run.rootRunId === summary.rootRunId) return true;
+      if (summary.resumedFrom === run.id || run.resumedFrom === summary.id) return true;
+      return Boolean(
+        summary.orchestrationId &&
+          run.orchestrationId === summary.orchestrationId &&
+          summary.taskIssue &&
+          run.taskIssue &&
+          summary.taskIssue.repo === run.taskIssue.repo &&
+          summary.taskIssue.number === run.taskIssue.number,
+      );
+    })
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+}
+
 export interface ThinkingChunk {
   at: string;
   /** 1-based attempt. Call indices reset after a retry, so this keeps them apart. */
