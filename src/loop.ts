@@ -48,6 +48,8 @@ const READ_PATH_LIMIT = 3;
 const PLANNER_NO_PROGRESS_LIMIT = 10;
 /** Build/sudo research calls allowed without an edit, write, or command. */
 const MUTATING_NO_PROGRESS_LIMIT = 12;
+/** Read-only research calls allowed without a decision/focus note or command. */
+const READONLY_NO_PROGRESS_LIMIT = 20;
 
 function issueRefKey(value: string): string {
   const url = /\/issues\/(\d+)(?:$|[?#])/.exec(value);
@@ -815,19 +817,26 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             tool.name === "write" ||
             tool.name === "command" ||
             tool.name === "artifact";
+          const contextAction =
+            tool.name === "context" ? String((params as { action?: unknown }).action ?? "") : "";
+          const readonlyProgress =
+            tool.name === "context" && ["note", "focus", "forget"].includes(contextAction);
           const research =
             tool.name === "read" ||
             tool.name === "search" ||
             tool.name === "context" ||
             (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
+          const readonlyAgent = input.agent.name === "general" || input.agent.name === "review";
           const noProgressLimit =
             input.agent.name === "planner"
               ? PLANNER_NO_PROGRESS_LIMIT
               : input.agent.name === "build" || input.agent.name === "sudo"
                 ? MUTATING_NO_PROGRESS_LIMIT
-                : 0;
+                : readonlyAgent
+                  ? READONLY_NO_PROGRESS_LIMIT
+                  : 0;
           if (noProgressLimit > 0) {
-            if (issueWrite || mutatingProgress) {
+            if (issueWrite || mutatingProgress || (readonlyAgent && readonlyProgress)) {
               noProgressCalls = 0;
             } else if (research) {
               noProgressCalls += 1;
@@ -835,7 +844,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
                 return block(
                   input.agent.name === "planner"
                     ? `Planner has made ${noProgressCalls} research/verification calls without an issue write. Create missing Tasks or stop with issue numbers.`
-                    : `${noProgressCalls} research calls without an edit, write, or command. Act on the evidence or stop.`,
+                    : readonlyAgent
+                      ? `${noProgressCalls} research calls without a decision, focus note, or command. Record what you know and answer, or ask one precise question.`
+                      : `${noProgressCalls} research calls without an edit, write, or command. Act on the evidence or stop.`,
                   { args: capJson(params), noProgressCalls },
                 );
               }

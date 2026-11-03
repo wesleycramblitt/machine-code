@@ -52,6 +52,25 @@ export interface IssueToolContext {
   defaultApproval: "human" | "agent";
 }
 
+const GraphNode = Type.Object({
+  key: Type.String({ description: "Temporary key used by later nodes." }),
+  title: Type.String(),
+  body: Type.Optional(Type.String()),
+  blocked_by: Type.Optional(Type.Array(Type.String({ description: "Temporary key or issue ref." }))),
+});
+const GraphTask = Type.Object({
+  key: Type.String({ description: "Temporary key used by later nodes." }),
+  feature: Type.String({ description: "Feature key." }),
+  title: Type.String(),
+  body: Type.Optional(Type.String()),
+  blocked_by: Type.Optional(Type.Array(Type.String({ description: "Temporary key or issue ref." }))),
+});
+const GraphParams = Type.Object({
+  epic: GraphNode,
+  features: Type.Array(GraphNode),
+  tasks: Type.Array(GraphTask),
+});
+
 const IssueParams = Type.Object({
   action: Type.Union(
     [
@@ -59,6 +78,7 @@ const IssueParams = Type.Object({
       Type.Literal("view"),
       Type.Literal("tree"),
       Type.Literal("create"),
+      Type.Literal("graph"),
       Type.Literal("edit"),
       Type.Literal("plan"),
       Type.Literal("close"),
@@ -76,6 +96,7 @@ const IssueParams = Type.Object({
   ),
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
+  graph: Type.Optional(GraphParams),
   labels: Type.Optional(Type.Array(Type.String())),
   /** Issue refs this issue is blocked by (create/edit). */
   blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." }))),
@@ -234,7 +255,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     name: "issue",
     label: "issue",
     description:
-      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
+      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/graph/edit write; create/graph/edit accept blocked_by/depends_on; graph creates Epic→Features→Tasks with temporary keys in one call; " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
       "mc:context is optional; add only exact known files and do not research it. " +
@@ -336,6 +357,117 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         treeCache.set(treeKey, text);
         return ok(text);
       }
+      case "graph": {
+        requireCreate();
+        if (!params.graph) return fail("graph action requires graph");
+        const graph = params.graph;
+        const keys = new Set<string>();
+        const addKey = (key: string): void => {
+          if (!key) throw new IssueError("graph_key_missing", "every graph node needs a key");
+          if (keys.has(key)) throw new IssueError("graph_key_duplicate", `duplicate graph key ${key}`);
+          keys.add(key);
+        };
+        addKey(graph.epic.key);
+        for (const feature of graph.features) addKey(feature.key);
+        for (const task of graph.tasks) addKey(task.key);
+        const featureKeys = new Set(graph.features.map((feature) => feature.key));
+        for (const task of graph.tasks) {
+          if (!featureKeys.has(task.feature)) {
+            throw new IssueError("graph_parent_missing", `task ${task.key} references unknown feature ${task.feature}`);
+          }
+        }
+        const createdNodes = new Map<string, Issue>();
+        const resolveDependencies = (values: string[] | undefined): IssueRef[] | undefined => {
+          const refs = (values ?? []).map((value) => {
+            const node = createdNodes.get(value);
+            return node ? node.ref : parseIssueRef(value, ctx.repo, ctx.provider.kind);
+          });
+          return refs.length > 0 ? refs : undefined;
+        };
+        const notReady: string[] = [];
+        treeCache.clear();
+        const epic = await ctx.provider.create({
+          title: graph.epic.title,
+          body: withApproval(graph.epic.body ?? "", ctx.defaultApproval),
+          kind: "epic",
+        });
+        createdNodes.set(graph.epic.key, epic);
+        remember(epic);
+        ctx.state?.setPhase("act");
+        ctx.recorder.event("issue_created", { number: epic.ref.number, kind: epic.kind, title: epic.title });
+        const epicReserved = await ensureEpicReserved(ctx.provider, epic.ref, { runCounts: counts() });
+        remember(epicReserved.feature0);
+        remember(epicReserved.task0);
+        linkPlanningRun(epicReserved.task0);
+        for (const feature of graph.features) {
+          const created = await ctx.provider.create({
+            title: feature.title,
+            body: withApproval(feature.body ?? "", ctx.defaultApproval),
+            kind: "feature",
+            parent: epic.ref,
+          });
+          createdNodes.set(feature.key, created);
+          remember(created);
+          ctx.recorder.event("issue_created", {
+            number: created.ref.number,
+            kind: created.kind,
+            title: created.title,
+            parent: epic.ref.number,
+          });
+          const task0 = await ensureFeatureReserved(ctx.provider, created.ref, { runCounts: counts() });
+          remember(task0);
+          linkPlanningRun(task0);
+        }
+        for (const task of graph.tasks) {
+          const parent = createdNodes.get(task.feature);
+          if (!parent || parent.kind !== "feature") {
+            throw new IssueError("graph_parent_missing", `feature ${task.feature} was not created`);
+          }
+          const created = await ctx.provider.create({
+            title: task.title,
+            body: withApproval(task.body ?? "", ctx.defaultApproval),
+            kind: "task",
+            parent: parent.ref,
+          });
+          createdNodes.set(task.key, created);
+          remember(created);
+          ctx.recorder.event("issue_created", {
+            number: created.ref.number,
+            kind: created.kind,
+            title: created.title,
+            parent: parent.ref.number,
+          });
+          const auto = await autoPlan(created);
+          if (auto.issue) remember(auto.issue, "plan ready");
+          else notReady.push(`${task.key}: ${auto.error ?? "missing acceptance criteria"}`);
+        }
+        for (const feature of graph.features) {
+          const target = createdNodes.get(feature.key)!;
+          const blockedBy = resolveDependencies(feature.blocked_by);
+          if (blockedBy) {
+            const updated = await ctx.provider.update(target.ref, { blockedBy });
+            remember(updated);
+          }
+        }
+        for (const task of graph.tasks) {
+          const target = createdNodes.get(task.key)!;
+          const blockedBy = resolveDependencies(task.blocked_by);
+          if (blockedBy) {
+            const updated = await ctx.provider.update(target.ref, { blockedBy });
+            remember(updated);
+          }
+        }
+        treeCache.clear();
+        const summary = [
+          `epic #${epic.ref.number}`,
+          `features ${graph.features.map((feature) => `${feature.key}=#${createdNodes.get(feature.key)!.ref.number}`).join(", ") || "none"}`,
+          `tasks ${graph.tasks.map((task) => `${task.key}=#${createdNodes.get(task.key)!.ref.number}`).join(", ") || "none"}`,
+        ].join("; ");
+        return ok(
+          `created graph: ${summary}` +
+            (notReady.length > 0 ? `\nnot plan-ready: ${notReady.join("; ")}` : ""),
+        );
+      }
       case "create": {
         requireCreate();
         treeCache.clear();
@@ -385,6 +517,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           parent: parent?.number,
         });
         remember(created);
+        ctx.state?.setPhase("act");
         if (created.kind === "task" && parentFeatureTask0) linkPlanningRun(parentFeatureTask0);
         if (created.kind === "feature" && parentEpicTask0) linkPlanningRun(parentEpicTask0);
         let note = "";
@@ -443,6 +576,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           ...(blockedBy ? { blockedBy } : {}),
         });
         remember(updated);
+        ctx.state?.setPhase("act");
         return ok(`updated #${updated.ref.number}: ${updated.title}`);
       }
       case "plan": {
@@ -485,6 +619,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           worktree: plan.worktree,
         });
         remember(updated, `plan ${plan.status}`);
+        ctx.state?.setPhase("act");
         return ok(
           `plan ${plan.status} on #${updated.ref.number}: ${plan.role}/${plan.verification}, ` +
             `worktree ${plan.worktree}, retries ${plan.retriesBeforeReplan}, ` +

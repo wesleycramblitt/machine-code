@@ -42,8 +42,8 @@ test("gh issue groups by repository, then full issue hierarchy and untracked", (
   const otherEpic = issue(5, "epic", "Other Epic", { ref: ref(5, "o/other") });
   const runs = [
     run({ id: "a", issue: task.ref, status: "awaiting_input" }),
-    run({ id: "free", agent: "general", mode: "", status: "completed" }),
-    run({ id: "plan", agent: "build", mode: "", status: "completed" }),
+    run({ id: "free", agent: "general", mode: "", status: "completed", startedAt: "2026-01-01T00:00:01.000Z", lastActivityAt: "2026-01-01T00:00:01.000Z" }),
+    run({ id: "plan", agent: "build", mode: "", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", lastActivityAt: "2026-01-01T00:00:00.000Z" }),
     run({ id: "b", repoRoot: repoB, issue: otherEpic.ref, status: "blocked" }),
   ];
   const index = buildRunIndex({

@@ -342,6 +342,50 @@ test("empty issue list does not tell a read-only role to create", async () => {
   }
 });
 
+test("graph action creates the Epic, Features, Tasks, and dependencies in one call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueTool(ctx).execute("g1", {
+      action: "graph",
+      graph: {
+        epic: { key: "epic", title: "Epic", body: "## Goal\nEpic" },
+        features: [
+          { key: "a", title: "Feature A", body: "## Problem\nA" },
+          { key: "b", title: "Feature B", body: "## Problem\nB" },
+        ],
+        tasks: [
+          {
+            key: "a1",
+            feature: "a",
+            title: "Task A1",
+            body: "## Goal\nA1\n\nAcceptance criteria:\n- one",
+          },
+          {
+            key: "b1",
+            feature: "b",
+            title: "Task B1",
+            body: "## Goal\nB1\n\nAcceptance criteria:\n- two",
+            blocked_by: ["a1"],
+          },
+        ],
+      },
+    });
+    assert.equal(result.isError, undefined);
+    assert.match(result.content[0].text, /created graph/);
+    const tasks = [...p.issues.values()].filter((issue) => issue.kind === "task" && !issue.reserved);
+    assert.equal(tasks.length, 2);
+    const a1 = tasks.find((issue) => issue.title === "Task A1");
+    const b1 = tasks.find((issue) => issue.title === "Task B1");
+    assert.ok(a1 && b1);
+    assert.equal(b1.blockedBy[0].number, a1.ref.number);
+    assert.ok(tasks.every((issue) => issue.plan?.status === "ready"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("tree without an issue shows every root and its reserved anchors", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-tree-"));
   try {

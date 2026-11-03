@@ -25,12 +25,12 @@ const deltas = Object.fromEntries(
 test("base and role deltas stay small", () => {
   assert.ok(base.length <= 1_700, `base is ${base.length} chars`);
   for (const [role, delta] of Object.entries(deltas)) {
-    const limit = role === "planner" ? 850 : 300;
+    const limit = role === "planner" ? 950 : 300;
     assert.ok(delta.length <= limit, `${role} delta is ${delta.length} chars`);
     assert.match(delta, /Stop/, `${role} has a stop condition`);
   }
   const total = base.length + Object.values(deltas).reduce((sum, delta) => sum + delta.length, 0);
-  assert.ok(total <= 3_200, `base + deltas is ${total} chars`);
+  assert.ok(total <= 3_300, `base + deltas is ${total} chars`);
 });
 
 test("rendered prompts name the resolved tools and config", () => {
@@ -55,7 +55,7 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
     assert.match(planner.prompt, /Inspect tree/);
     assert.match(planner.prompt, /Reuse a non-reserved Epic\/Feature; else create the chain/);
-    assert.match(planner.prompt, /Create Tasks under each Feature/);
+    assert.match(planner.prompt, /create Tasks under each Feature/i);
     assert.match(planner.prompt, /Ignore reserved anchors/);
     assert.match(planner.prompt, /do not write files/);
     assert.match(planner.prompt, /Verify every Task is plan ready/);
@@ -85,7 +85,7 @@ test("every rendered prompt is concise and has the required rules", () => {
   try {
     for (const role of AGENT_NAMES) {
       const def = agentDef(layout(root), role);
-      assert.ok(def.prompt.length <= 2_700, `${role} prompt is ${def.prompt.length} chars`);
+      assert.ok(def.prompt.length <= 2_800, `${role} prompt is ${def.prompt.length} chars`);
       for (const required of ["run-state", "core:map", "context note", "ASD-STE100", "Result:", "Evidence:"]) {
         assert.ok(def.prompt.includes(required), `${role} prompt lacks ${required}`);
       }

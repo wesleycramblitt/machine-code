@@ -21,6 +21,9 @@ import type { ProcessSupervisor } from "../processes/supervisor.js";
 import { markSemanticDirty } from "../map/semantic.js";
 import { recordSemanticChange } from "../map/changes.js";
 
+/** Keep the model-facing state block compact; full facts remain in state.jsonl. */
+const MAX_STATE_CHARS = 10_000;
+
 export type FactKind = "finding" | "decision" | "change" | "issue";
 export type RefKind = "read" | "search" | "edit" | "focus";
 
@@ -739,46 +742,66 @@ export class RunStateStore {
     return { changed };
   }
 
-  /** Compact model-facing state block. */
+  /** Compact model-facing state block, capped by dropping body findings first. */
   renderBlock(): string {
-    const active = this.state.facts.filter((fact) => fact.status === "active");
-    const decisions = active.filter((fact) => fact.kind === "decision");
-    const issues = active.filter((fact) => fact.kind === "issue");
-    const findings = active.filter((fact) => fact.kind === "finding");
-    const changes = active.filter((fact) => fact.kind === "change");
-    const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`];
-    if (this.state.nextAction) lines.push(`Next: ${this.state.nextAction}`);
-    if (decisions.length > 0) {
-      lines.push("Decisions:");
-      for (const fact of decisions) lines.push(`- ${fact.text}`);
+    let active = this.state.facts.filter((fact) => fact.status === "active");
+    const build = (): string => {
+      const decisions = active.filter((fact) => fact.kind === "decision");
+      const issues = active.filter((fact) => fact.kind === "issue");
+      const findings = active.filter((fact) => fact.kind === "finding");
+      const changes = active.filter((fact) => fact.kind === "change");
+      const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`];
+      if (this.state.nextAction) lines.push(`Next: ${this.state.nextAction}`);
+      if (decisions.length > 0) {
+        lines.push("Decisions:");
+        for (const fact of decisions) lines.push(`- ${fact.text}`);
+      }
+      if (issues.length > 0) {
+        lines.push("Issues:");
+        const shown = issues.slice(-40);
+        for (const fact of shown) lines.push(`- ${fact.text}`);
+        if (issues.length > shown.length) {
+          lines.push(`- … ${issues.length - shown.length} older issue(s) omitted; use issue list or tree to inspect`);
+        }
+      }
+      if (findings.length > 0) {
+        lines.push("Findings:");
+        for (const fact of findings) lines.push(`- t${fact.turn}: ${fact.text}`);
+      }
+      if (this.state.workingSet.length > 0) {
+        lines.push("Working set:");
+        for (const ref of this.state.workingSet) lines.push(`- ${refLabel(ref)}`);
+      }
+      if (changes.length > 0) {
+        lines.push("Changes:");
+        for (const fact of changes) lines.push(`- ${fact.text}`);
+      }
+      const open = this.state.open.filter((question) => question.status === "open");
+      if (open.length > 0) {
+        lines.push("Open:");
+        for (const question of open) lines.push(`- ${question.text}`);
+      }
+      lines.push("</run-state>");
+      return lines.join("\n");
+    };
+
+    let block = build();
+    if (block.length <= MAX_STATE_CHARS) return block;
+    const bodyKeys = new Set(
+      active.filter((fact) => fact.key.startsWith("issue-body:")).map((fact) => fact.key),
+    );
+    if (bodyKeys.size > 0) {
+      active = active.filter((fact) => !bodyKeys.has(fact.key));
+      block = build();
     }
-    if (issues.length > 0) {
-      lines.push("Issues:");
-      const shown = issues.slice(-40);
-      for (const fact of shown) lines.push(`- ${fact.text}`);
-      if (issues.length > shown.length) {
-        lines.push(`- … ${issues.length - shown.length} older issue(s) omitted; use issue list or tree to inspect`);
+    if (block.length > MAX_STATE_CHARS) {
+      for (const fact of active.filter((item) => item.kind === "finding")) {
+        active = active.filter((item) => item !== fact);
+        block = build();
+        if (block.length <= MAX_STATE_CHARS) break;
       }
     }
-    if (findings.length > 0) {
-      lines.push("Findings:");
-      for (const fact of findings) lines.push(`- t${fact.turn}: ${fact.text}`);
-    }
-    if (this.state.workingSet.length > 0) {
-      lines.push("Working set:");
-      for (const ref of this.state.workingSet) lines.push(`- ${refLabel(ref)}`);
-    }
-    if (changes.length > 0) {
-      lines.push("Changes:");
-      for (const fact of changes) lines.push(`- ${fact.text}`);
-    }
-    const open = this.state.open.filter((question) => question.status === "open");
-    if (open.length > 0) {
-      lines.push("Open:");
-      for (const question of open) lines.push(`- ${question.text}`);
-    }
-    lines.push("</run-state>");
-    return lines.join("\n");
+    return block;
   }
 
   renderMarkdown(): string {

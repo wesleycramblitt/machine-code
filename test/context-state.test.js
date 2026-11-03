@@ -73,6 +73,23 @@ test("issue facts render in the state block and update by number", () => {
   }
 });
 
+test("state block drops body findings before issue facts", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-cap", goal: "plan" });
+    store.addIssueFact(1, '#1 epic "Plan"');
+    for (let number = 2; number < 42; number++) {
+      store.addIssueBodyFact(number, "x".repeat(1_000));
+    }
+    const block = store.renderBlock();
+    assert.ok(block.length <= 10_000, `state block is ${block.length} chars`);
+    assert.match(block, /#1 epic "Plan"/);
+    assert.doesNotMatch(block, /body:/, "body findings are dropped first");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("issue body facts stay compact in the run-state block", () => {
   const dir = tempDir();
   try {
