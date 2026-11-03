@@ -19,7 +19,7 @@ import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { readIssueCache, writeIssueCache } from "./issues/cache.js";
 import type { Issue, IssueRef } from "./issues/provider.js";
-import { filterRuns, headerCounts, issueGlyphKind, sortRuns, type RunFilter } from "./tui/status.js";
+import { filterRuns, headerCounts, issueGlyphKind, issueRowDetail, sortRuns, type RunFilter } from "./tui/status.js";
 import {
   RUN_GROUPS,
   RUN_GROUP_LABELS,
@@ -1337,6 +1337,8 @@ export async function runTui(): Promise<void> {
     const cols = Math.max(20, process.stdout.columns || 120);
     const rows = Math.max(6, process.stdout.rows || 40);
     const narrow = cols < 84;
+    /** Run rows need the wider one-line layout; below this they stack identity and request. */
+    const runNarrow = cols < 120;
     const short = rows < 24;
     const footerReserve = cols < 50 ? 7 : cols < 70 ? 6 : cols < 90 ? 5 : cols < 110 ? 4 : 3;
     // The composer and models pages never need the run list; skipping the
@@ -1516,14 +1518,30 @@ export async function runTui(): Promise<void> {
           rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
         } else if (row.kind === "issue") {
           const roll = row.rollup;
-          const pct = roll.pct === undefined ? `${D}—${R}` : `${progress(roll.pct, narrow ? 4 : 6)} ${String(roll.pct).padStart(3)}%`;
-          const badge = row.issue.reserved ? `${M}[P&R]${R} ` : "";
-          const pr = roll.prState ? ` ${Y}PR ${roll.prState}${R}` : "";
-          const runCount = narrow ? `${roll.runsTotal}r` : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`;
-          const taskCount = row.issue.kind === "task" ? "" : `  ${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R}`;
+          const detail = issueRowDetail(cols);
+          const badge = detail === "identity" || !row.issue.reserved ? "" : `${M}[P&R]${R} `;
           const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${issueIcon(row.issue)} ${BL}#${row.issue.ref.number}${R} ${D}${row.issue.kind}${R} ${badge}${B}${W}${row.issue.title}${R}`;
-          const right = `${pct}${taskCount} ${runCount}${pr}  ${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`;
-          const text = ` ${narrow ? trunc(left, Math.max(18, cols - 16)) + " " + right : pad(left, Math.max(30, cols - visible(right) - 2)) + right}`;
+          const parts: string[] = [];
+          if (detail !== "identity") {
+            if (!row.issue.reserved && roll.pct !== undefined) {
+              const width = detail === "full" ? 6 : 4;
+              parts.push(`${progress(roll.pct, width)} ${String(roll.pct).padStart(3)}%`);
+            }
+            if ((detail === "full" || detail === "medium") && row.issue.kind !== "task" && !row.issue.reserved && roll.tasksTotal > 0) {
+              parts.push(`${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R}`);
+            }
+            parts.push(detail === "compact"
+              ? `${roll.runsTotal}r`
+              : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`);
+            if (detail === "full") {
+              if (roll.prState) parts.push(`${Y}PR ${roll.prState}${R}`);
+              parts.push(`${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`);
+            }
+          }
+          const right = parts.join("  ");
+          const text = right
+            ? ` ${pad(left, Math.max(20, cols - visible(right) - 2))}${right}`
+            : ` ${trunc(left, Math.max(12, cols - 1))}`;
           rendered.push(selected(text, isSelected));
         } else {
           const run = row.run;
@@ -1531,8 +1549,10 @@ export async function runTui(): Promise<void> {
           const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
           const reason = run.stopReason && run.stopReason !== "completed" ? ` ${D}${run.stopReason}${R}` : "";
           const repoTag = runsGroup === "overall" ? ` ${D}[${repoLabel(run.repoRoot)}]${R}` : "";
-          const right = `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
-          if (narrow) {
+          const right = cols < 50
+            ? `${D}${fmtTokens(run.usage.totalTokens)} · ${ago(run.lastActivityAt)}${R}`
+            : `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
+          if (runNarrow) {
             const identity = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R}${ask}${pr}${reason}`;
             rendered.push(selected(` ${trunc(identity, Math.max(12, cols - visible(right) - 2))} ${right}`, isSelected));
             const agent = `${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}`;

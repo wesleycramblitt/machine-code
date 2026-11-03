@@ -14,6 +14,7 @@ import {
   sortRuns,
   healthOf,
   issueGlyphKind,
+  issueRowDetail,
   rollupIssue,
   headerCounts,
   awaitingHuman,
@@ -111,6 +112,17 @@ test("issue glyphs show issue state and plan state, not run health", () => {
     issueGlyphKind(issue(30, "task", "Task", { plan: { status: "ready" }, blockedBy: [ref(9)] })),
     "blocked",
   );
+});
+
+test("issue rows progressively hide detail as width shrinks", () => {
+  assert.equal(issueRowDetail(160), "full");
+  assert.equal(issueRowDetail(120), "full");
+  assert.equal(issueRowDetail(119), "medium");
+  assert.equal(issueRowDetail(100), "medium");
+  assert.equal(issueRowDetail(99), "compact");
+  assert.equal(issueRowDetail(84), "compact");
+  assert.equal(issueRowDetail(83), "identity");
+  assert.equal(issueRowDetail(20), "identity");
 });
 
 test("rollups exclude reserved tasks and aggregate runs/cost", () => {

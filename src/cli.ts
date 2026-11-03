@@ -2569,10 +2569,12 @@ function rowText(row: RunRow, width: number, group: RunGroup): string {
   }
   if (row.kind === "issue") {
     const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
-    const pct = row.rollup.pct === undefined ? "—" : `${row.rollup.pct}%`;
+    const pct = row.rollup.pct === undefined ? "" : `${row.rollup.pct}%`;
     const badge = row.issue.reserved ? " [P&R]" : "";
     const runs = row.rollup.runsTotal > 0 ? `runs ${row.rollup.runsTotal}` : "runs 0";
-    const tasks = row.issue.kind === "task" ? "" : ` ${row.rollup.tasksClosed}/${row.rollup.tasksTotal} ·`;
+    const tasks = row.issue.kind === "task" || row.issue.reserved || row.rollup.tasksTotal === 0
+      ? ""
+      : ` ${row.rollup.tasksClosed}/${row.rollup.tasksTotal} ·`;
     const head = `${indent}${fold} ${issueGlyph(row.issue)} #${row.issue.ref.number} ${row.issue.kind}${badge} ${row.issue.title}`;
     const tail = `  ${pct}${tasks} ${runs}${row.rollup.runsActive ? ` (${row.rollup.runsActive})` : ""} · ${fmtMoney(row.rollup.cost)}`;
     if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;

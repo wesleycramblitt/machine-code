@@ -143,6 +143,20 @@ function runsFor(issue: Issue, byIssue: Map<string, RunSummary[]>): RunSummary[]
   return byIssue.get(`${issue.ref.repo}#${issue.ref.number}`) ?? [];
 }
 
+/**
+ * Progressive disclosure for issue rows. Wide terminals keep progress, task
+ * counts, runs, PR state, and cost; narrow ones fall back to the issue's
+ * identity so the title still has room.
+ */
+export type IssueRowDetail = "full" | "medium" | "compact" | "identity";
+
+export function issueRowDetail(cols: number): IssueRowDetail {
+  if (cols >= 120) return "full";
+  if (cols >= 100) return "medium";
+  if (cols >= 84) return "compact";
+  return "identity";
+}
+
 /** Issue-row glyphs stay about the issue, not about the runs below it. */
 export type IssueGlyphKind = "closed" | "blocked" | "ready" | "draft" | "open";
 
