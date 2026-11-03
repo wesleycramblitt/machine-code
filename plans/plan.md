@@ -28,7 +28,9 @@
 > as always-sent request overhead. Always-visible skill descriptions are
 > previewed per skill, and knowledge/scripts list available file sizes without
 > counting them until referenced. The composer can include available knowledge
-> and exclude individual skills. The suite has 249 tests.
+> and exclude individual skills. Process cleanup helpers are supervised,
+> availability probes are coalesced and jittered, and the TUI refreshes cooling
+> models on a timer. The suite has 251 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -215,9 +217,9 @@ whether tracking is required. `issue_access` controls what the role may do.
 
 ## 5. Phase 2 — Availability heartbeat and preflight
 
-Status: metadata and opt-in free-model probes, run preflight, CLI commands, and
-a manual TUI probe are implemented. Remaining: probe jitter, an automatic TUI
-timer, and richer provider health statuses.
+Status: metadata and opt-in free-model probes, run preflight, CLI commands, a
+manual and automatic TUI probe, coalescing, and jitter are implemented.
+Remaining: richer provider health statuses.
 
 Goal: do not start a run on a model that is known unavailable, and recover a
 cooldown as soon as evidence permits. A heartbeat is evidence, not a guarantee.
@@ -287,9 +289,9 @@ Status: partially implemented. The registry/supervisor, typed-command and gate
 process records and logs, `processes` CLI, run-detail Processes section with
 select/follow/open-log/kill controls, detached delegated-run tracking,
 SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
-exist. Map, LSP, worktree-creation, and worktree-commit git helpers are
-supervised. Remaining: the synchronous git-status safety net, worktree
-remove/prune helpers, and MCP spawns.
+exist. Map, LSP, worktree-creation, worktree-commit, and worktree
+remove/prune git helpers are supervised. Remaining: the synchronous
+git-status safety net and MCP spawns when MCP support is introduced.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -337,8 +339,9 @@ Status: partially implemented. `data/agents/planner.toml` is a read-only role
 with issue creation, issue editing, map/search/command/ask/pr tools, artifact
 inventory/provisioning, the issue `plan` action, and the compact planning
 prompt. New-Epic bootstrap works through `issue create`. Executable scripts
-require the explicit `--allow-artifact-scripts` run flag. Remaining: human
-packet review checkpoints and Planner-specific fixture evals.
+require the explicit `--allow-artifact-scripts` run flag. Human packet and
+result review checkpoints are implemented. Remaining: Planner-specific fixture
+evals.
 
 ```bash
 machine_code run --agent planner "<plan a new epic>"
@@ -392,10 +395,11 @@ loop.
 Status: the pure scheduler (`src/orchestrator/scheduler.ts`),
 `machine_code orchestrate status|tick --dry-run`, and the TUI Orchestrate
 preflight/controls exist: scopes, readiness, dependency order, active-run suppression,
-cycle reporting, JSON output, durable ledger/lease state, sequential execution
-through the existing Build/gates/Review/commit/PR pipeline, and TUI
-start/approve/checkpoint controls. Remaining:
-task closure/acceptance automation, retry policy, and parallel execution.
+cycle reporting, JSON output, durable ledger/lease state, parallel execution
+through the existing Build/gates/Review/commit/PR pipeline, TUI
+start/approve/checkpoint controls, typed retry policy, and task
+closure/acceptance automation. Remaining: make the Orchestrator the primary
+issue-backed path and finish richer merge handling.
 
 ### Scopes
 
@@ -585,7 +589,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 249 tests green. Add:
+Keep the existing 251 tests green. Add:
 
 | Area | Cases |
 |---|---|

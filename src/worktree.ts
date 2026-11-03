@@ -396,6 +396,8 @@ export interface RemoveOptions {
   runId: string;
   deleteBranch?: boolean;
   force?: boolean;
+  /** Optional run supervisor for worktree git processes. */
+  processes?: ProcessSupervisor;
 }
 
 function runUsesWorktree(run: RunSummary, path: string, ownerRunId: string | undefined): boolean {
@@ -404,6 +406,12 @@ function runUsesWorktree(run: RunSummary, path: string, ownerRunId: string | und
 
 /** Remove a run's worktree; refuses while any active run owns or shares it. */
 export async function removeWorktree(opts: RemoveOptions): Promise<void> {
+  return opts.processes
+    ? worktreeSupervisor.run(opts.processes, () => removeWorktreeBody(opts))
+    : removeWorktreeBody(opts);
+}
+
+async function removeWorktreeBody(opts: RemoveOptions): Promise<void> {
   const layout = opts.layout;
   const path = join(layout.localDir, "worktrees", opts.runId);
   const runs = listRuns(layout);
@@ -475,7 +483,16 @@ async function commitWorktreeBody(input: { path: string; message: string }): Pro
 /* ------------------------------------------------------------- pruning */
 
 /** Remove orphaned worktree dirs (no run dir anymore) and prune git metadata. */
-export async function pruneWorktrees(layout: Layout): Promise<{ removed: number }> {
+export async function pruneWorktrees(
+  layout: Layout,
+  processes?: ProcessSupervisor,
+): Promise<{ removed: number }> {
+  return processes
+    ? worktreeSupervisor.run(processes, () => pruneWorktreesBody(layout))
+    : pruneWorktreesBody(layout);
+}
+
+async function pruneWorktreesBody(layout: Layout): Promise<{ removed: number }> {
   let mainRoot: string;
   try {
     mainRoot = await mainWorktreeRoot(layout.repoRoot);
@@ -503,7 +520,18 @@ export async function pruneWorktrees(layout: Layout): Promise<{ removed: number 
  * Recreate a missing worktree from its existing branch (resume path).
  * Committed work is preserved; uncommitted work is gone with the old dir.
  */
-export async function recreateWorktreeFromBranch(layout: Layout, runId: string, branch: string): Promise<string> {
+export async function recreateWorktreeFromBranch(
+  layout: Layout,
+  runId: string,
+  branch: string,
+  processes?: ProcessSupervisor,
+): Promise<string> {
+  return processes
+    ? worktreeSupervisor.run(processes, () => recreateWorktreeFromBranchBody(layout, runId, branch))
+    : recreateWorktreeFromBranchBody(layout, runId, branch);
+}
+
+async function recreateWorktreeFromBranchBody(layout: Layout, runId: string, branch: string): Promise<string> {
   const mainRoot = await mainWorktreeRoot(layout.repoRoot);
   if (!(await branchExists(mainRoot, branch))) {
     throw new WorktreeError("branch_missing", `branch ${branch} no longer exists`);

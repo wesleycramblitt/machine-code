@@ -334,7 +334,24 @@ export function recordFreeProbe(state: AvailabilityState, now = Date.now()): voi
   state.freeProbeTimes = [...(state.freeProbeTimes ?? []).filter((at) => at > now - 60 * 60_000), now];
 }
 
-export async function probeTarget(
+const inFlightProbes = new Map<string, Promise<ProbeResult>>();
+
+/** Coalesce concurrent probes for the same model. */
+export function probeTarget(
+  target: ProbeTarget,
+  config: AvailabilityConfig,
+  state?: AvailabilityState,
+): Promise<ProbeResult> {
+  const existing = inFlightProbes.get(target.key);
+  if (existing) return existing;
+  const promise = probeTargetBody(target, config, state).finally(() => {
+    inFlightProbes.delete(target.key);
+  });
+  inFlightProbes.set(target.key, promise);
+  return promise;
+}
+
+async function probeTargetBody(
   target: ProbeTarget,
   config: AvailabilityConfig,
   state?: AvailabilityState,
@@ -428,6 +445,12 @@ export async function probeCoolingModels(args: {
   for (const target of targets) {
     const last = args.state.models[target.key]?.lastProbeAt;
     if (!args.force && last && now - last < args.config.intervalMs) continue;
+    // Spread automatic probes slightly so a restart or timer tick does not
+    // fan out every cooling model at the same instant. Manual probes skip it.
+    if (!args.force && targets.length > 1) {
+      const jitter = Math.floor(Math.random() * 250);
+      if (jitter > 0) await new Promise((resolve) => setTimeout(resolve, jitter));
+    }
     const result = await probeTarget(target, args.config, args.state);
     applyProbeResult(args.state, result);
     results.push(result);

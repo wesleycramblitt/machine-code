@@ -35,7 +35,7 @@ import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAUL
 import { axisWeights, isMetaRouter, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
-import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.js";
+import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { listOrchestrations } from "./orchestrator/state.js";
@@ -3454,8 +3454,37 @@ export async function runTui(): Promise<void> {
   void drawWithPicker;
 
   void refreshIssues();
+  let availabilityProbeAt = Date.now();
   setInterval(() => {
     if (Date.now() - issueRefreshAt > 30_000) void refreshIssues();
+    if (Date.now() - availabilityProbeAt > 60_000) {
+      availabilityProbeAt = Date.now();
+      void (async () => {
+        try {
+          const machine = loadMachineConfig(l);
+          const catalogue = loadCatalogue(l.catalogueFile);
+          if (!catalogue) return;
+          const state = loadAvailability(l.home);
+          const configured = new Set(
+            providerStatuses(createModelsCollection())
+              .filter((status) => status.configured)
+              .map((status) => status.id),
+          );
+          const results = await probeCoolingModels({
+            rows: catalogue.models,
+            state,
+            config: machine.availability,
+            configuredProviders: configured,
+          });
+          if (results.length > 0) {
+            saveAvailability(l.home, state);
+            if (!newRunInsert) draw();
+          }
+        } catch {
+          // background availability refresh must never break the TUI
+        }
+      })();
+    }
     // The composer repaints on input; background refreshes would only steal
     // frames from typing.
     if (!newRunInsert) draw();

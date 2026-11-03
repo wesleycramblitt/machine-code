@@ -18,6 +18,7 @@ import { allCommands } from "../commands/profiles.js";
 import { runCommand } from "../commands/registry.js";
 import { recreateWorktreeFromBranch, removeWorktree, mainWorktreeRoot } from "../worktree.js";
 import type { RunRecorder } from "../state/runs.js";
+import { ProcessSupervisor } from "../processes/supervisor.js";
 
 const GIT_ENV = { GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" };
 
@@ -36,6 +37,8 @@ export interface PublishFeatureInput {
   /** Test injection. */
   prs?: PullRequestProvider;
   issues?: IssueProvider;
+  /** Optional run supervisor for integration git processes. */
+  processes?: ProcessSupervisor;
 }
 
 export interface PublishFeatureResult {
@@ -68,11 +71,18 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
 
   const branch = `mc/feature/${feature.ref.number}`;
   const runId = `feature-${feature.ref.number}`;
+  const processes =
+    input.processes ??
+    new ProcessSupervisor({
+      runId: recorder.id,
+      runDir: recorder.dir,
+      onEvent: (type, data) => recorder.event(type, data),
+    });
 
   // Temporary integration worktree on the Feature branch.
   let worktree: string;
   try {
-    worktree = await recreateWorktreeFromBranch(layout, runId, branch);
+    worktree = await recreateWorktreeFromBranch(layout, runId, branch, processes);
   } catch (error) {
     return { status: "failed", error: error instanceof Error ? error.message : String(error) };
   }
@@ -88,7 +98,7 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
     }
   } finally {
     try {
-      await removeWorktree({ layout, runId, force: true });
+      await removeWorktree({ layout, runId, force: true, processes });
     } catch {
       // leave the worktree for inspection
     }

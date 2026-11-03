@@ -312,9 +312,11 @@ free_completion_max_per_hour = 2
 ```
 
 Runs probe cooling models before creating the run record, then select only from
-models that are ready. Metadata can clear a missing-model cooldown, but not a
-rate-limit or timeout cooldown; those require the opt-in free completion probe.
-An unknown result leaves the cooldown in place.
+models that are ready. The TUI refreshes cooling models on a timer, coalesces
+concurrent probes for one model, and adds jitter when probing several at once.
+Metadata can clear a missing-model cooldown, but not a rate-limit or timeout
+cooldown; those require the opt-in free completion probe. An unknown result
+leaves the cooldown in place.
 
 Prompted runs: every run has a stable id, an append-only event log, and a
 transcript checkpoint. Build and orchestrated runs get their own worktree and

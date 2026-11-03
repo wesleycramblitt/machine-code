@@ -80,6 +80,34 @@ test("worktree git helpers are recorded by the supervisor", async () => {
   }
 });
 
+test("worktree remove and prune helpers are recorded by the supervisor", async () => {
+  const { dir } = tempRepo();
+  try {
+    const layout = fakeLayout(dir);
+    const runDir = join(layout.runsDir, "r-cleanup");
+    const supervisor = new ProcessSupervisor({ runId: "r-cleanup", runDir });
+    const spec = await createWorktree({
+      layout,
+      runId: "r-cleanup",
+      kind: "run",
+      processes: supervisor,
+    });
+    const beforeRemove = readProcessRecords(runDir).length;
+    await removeWorktree({ layout, runId: "r-cleanup", force: true, processes: supervisor });
+    const afterRemove = readProcessRecords(runDir).length;
+    assert.ok(afterRemove > beforeRemove);
+
+    mkdirSync(join(layout.localDir, "worktrees", "orphan"), { recursive: true });
+    const beforePrune = readProcessRecords(runDir).length;
+    const result = await pruneWorktrees(layout, supervisor);
+    assert.equal(result.removed, 1);
+    assert.ok(readProcessRecords(runDir).length > beforePrune);
+    assert.ok(!existsSync(spec.path));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("task worktree is created on its issue branch, based on the feature branch", async () => {
   const { dir } = tempRepo();
   try {

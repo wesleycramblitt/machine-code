@@ -241,6 +241,15 @@ test("probe results clear or extend the model cooldown", () => {
   assert.equal(current.models[freeTarget.key].lastProbeResult, "cooling");
 });
 
+test("concurrent probes for the same model are coalesced", async () => {
+  const config = { ...metadataConfig, probe: "off" };
+  const first = probeTarget(freeTarget, config, state());
+  const second = probeTarget(freeTarget, config, state());
+  assert.equal(first, second);
+  const result = await first;
+  assert.equal(result.status, "skipped");
+});
+
 test("availability state stores free probe timestamps", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-avail-"));
   try {
