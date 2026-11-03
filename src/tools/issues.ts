@@ -118,6 +118,8 @@ function line(issue: Issue): string {
 }
 
 export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> {
+  /** The graph changes only through this tool; cache trees until a write. */
+  const treeCache = new Map<string, string>();
   const require = (cap: string): void => {
     if (!ctx.capabilities.includes(cap)) {
       throw new IssueError("capability_missing", `issue tool action requires ${cap}`);
@@ -278,22 +280,35 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       case "tree": {
         require("issue:read");
         const depth = Math.max(0, Math.min(5, Math.floor(params.depth ?? 2)));
+        const state = params.state ?? "open";
+        const rootRef = params.issue ? ref(params.issue, "issue") : undefined;
+        const treeKey = rootRef ? `${refKey(rootRef)}:${depth}` : `roots:${state}:${depth}`;
+        const cached = treeCache.get(treeKey);
+        if (cached) return ok(`${cached}\n[cached tree; issue graph unchanged]`);
+        let deliverableTasks = 0;
+        let readyTasks = 0;
+        const countTask = (issue: Issue): void => {
+          if (issue.kind !== "task" || isReserved(issue)) return;
+          deliverableTasks += 1;
+          if (issue.plan?.status === "ready") readyTasks += 1;
+        };
         const lines: string[] = [];
         const walk = async (issue: Issue, level: number): Promise<void> => {
           if (level >= depth) return;
           for (const child of await ctx.provider.children(issue.ref)) {
             remember(child);
+            countTask(child);
             lines.push(`${"  ".repeat(level + 1)}${line(child)}`);
             await walk(child, level + 1);
           }
         };
         // No issue: show every root (open by default), so a planner can inspect
         // the whole forest without guessing a number first.
-        if (!params.issue) {
-          const state = params.state ?? "open";
+        if (!rootRef) {
           const roots = (await ctx.provider.list({ state, limit: 200 })).filter((issue) => !issue.parent);
           for (const root of roots) {
             remember(root);
+            countTask(root);
             lines.push(line(root));
             await walk(root, 0);
           }
@@ -304,17 +319,26 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
                 : "no issues",
             );
           }
-          return ok(lines.join("\n"));
+        } else {
+          const root = await ctx.provider.get(rootRef);
+          if (!root) return fail(`issue not found: ${params.issue}`);
+          remember(root);
+          countTask(root);
+          lines.push(line(root));
+          await walk(root, 0);
         }
-        const root = await ctx.provider.get(ref(params.issue, "issue"));
-        if (!root) return fail(`issue not found: ${params.issue}`);
-        remember(root);
-        lines.push(line(root));
-        await walk(root, 0);
-        return ok(lines.join("\n"));
+        const note = deliverableTasks === 0
+          ? ""
+          : deliverableTasks === readyTasks
+            ? `Graph complete: all ${deliverableTasks} deliverable Tasks are plan ready. Stop now unless a concrete missing deliverable is named.`
+            : `Graph incomplete: ${deliverableTasks - readyTasks} of ${deliverableTasks} deliverable Tasks are not plan ready.`;
+        const text = note ? `${note}\n\n${lines.join("\n")}` : lines.join("\n");
+        treeCache.set(treeKey, text);
+        return ok(text);
       }
       case "create": {
         requireCreate();
+        treeCache.clear();
         if (!params.kind) return fail("create requires kind (epic|feature|task)");
         if (!params.title) return fail("create requires title");
         const body = withApproval(params.body ?? "", ctx.defaultApproval);
@@ -405,6 +429,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       }
       case "edit": {
         requirePlan();
+        treeCache.clear();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.reserved && params.title !== undefined) {
@@ -422,6 +447,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       }
       case "plan": {
         requirePlan();
+        treeCache.clear();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.kind !== "task") return fail("mc:plan applies to Task issues only");
@@ -467,6 +493,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       }
       case "close": {
         require("issue:close");
+        treeCache.clear();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
         const completion = await checkCompletion(ctx.provider, ctx.layout, target);
@@ -494,6 +521,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       }
       case "link": {
         requirePlan();
+        treeCache.clear();
         const child = await ctx.provider.get(ref(params.issue, "issue"));
         if (!child) return fail(`issue not found: ${params.issue}`);
         if (!params.parent) return fail("link requires parent");
@@ -511,6 +539,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       }
       case "ensure": {
         requirePlan();
+        treeCache.clear();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.kind === "epic") {

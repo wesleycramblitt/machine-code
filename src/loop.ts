@@ -44,6 +44,10 @@ const REPEAT_LIMIT = 2;
 const REPEAT_BLOCK_LIMIT = 3;
 /** Reads of one path allowed before the harness forces the model to act. */
 const READ_PATH_LIMIT = 3;
+/** Planner research/verification calls allowed without an issue write. */
+const PLANNER_NO_PROGRESS_LIMIT = 10;
+/** Build/sudo research calls allowed without an edit, write, or command. */
+const MUTATING_NO_PROGRESS_LIMIT = 12;
 
 function issueRefKey(value: string): string {
   const url = /\/issues\/(\d+)(?:$|[?#])/.exec(value);
@@ -242,6 +246,53 @@ function assistantText(message: AssistantMessage | undefined): string {
     .filter((c): c is { type: "text"; text: string } => c.type === "text")
     .map((c) => c.text)
     .join("\n");
+}
+
+interface IssueEventEvidence {
+  created: number[];
+  planned: number[];
+}
+
+function readIssueEvidence(dir: string): IssueEventEvidence {
+  const created = new Set<number>();
+  const planned = new Set<number>();
+  try {
+    for (const line of readFileSync(join(dir, "events.jsonl"), "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      let event: { type?: string; number?: unknown; issue?: unknown; status?: unknown };
+      try {
+        event = JSON.parse(line) as { type?: string; number?: unknown; issue?: unknown; status?: unknown };
+      } catch {
+        continue;
+      }
+      if (event.type === "issue_created" && typeof event.number === "number") created.add(event.number);
+      if (event.type === "plan_updated" && typeof event.issue === "number" && event.status === "ready") {
+        planned.add(event.issue);
+      }
+    }
+  } catch {
+    // no event log yet
+  }
+  return {
+    created: [...created].sort((a, b) => a - b),
+    planned: [...planned].sort((a, b) => a - b),
+  };
+}
+
+function issueEvidenceText(evidence: IssueEventEvidence): string {
+  if (evidence.created.length === 0 && evidence.planned.length === 0) return "";
+  const list = (values: number[]): string => values.map((number) => `#${number}`).join(", ");
+  return `Issue evidence: created ${evidence.created.length > 0 ? list(evidence.created) : "none"}; plan-ready ${evidence.planned.length > 0 ? list(evidence.planned) : "none"}.`;
+}
+
+/** Keep a normal final answer honest when the model contradicts issue events. */
+function appendIssueEvidence(text: string, evidence: IssueEventEvidence): string {
+  if (!text.trim() || evidence.created.length === 0) return text;
+  const created = evidence.created.map((number) => `#${number}`);
+  const contradiction = /no (?:new )?issues? (?:were )?created/i.test(text);
+  const missing = evidence.created.filter((number) => !new RegExp(`#${number}\\b`).test(text));
+  if (!contradiction && missing.length === 0) return text;
+  return `${text.trimEnd()}\n\nIssues created: ${created.join(", ")}.`;
 }
 
 export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
@@ -474,34 +525,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * blocked summary.
    */
   const finalAnswer = async (model: Model<Api>, reason: string): Promise<string> => {
-    const issueEvidence = (() => {
-      try {
-        const created = new Set<number>();
-        const planned = new Set<number>();
-        for (const line of readFileSync(join(recorder.dir, "events.jsonl"), "utf8").split("\n")) {
-          if (!line.trim()) continue;
-          let event: { type?: string; number?: unknown; issue?: unknown; status?: unknown };
-          try {
-            event = JSON.parse(line) as { type?: string; number?: unknown; issue?: unknown; status?: unknown };
-          } catch {
-            continue;
-          }
-          if (event.type === "issue_created" && typeof event.number === "number") created.add(event.number);
-          if (event.type === "plan_updated" && typeof event.issue === "number" && event.status === "ready") {
-            planned.add(event.issue);
-          }
-        }
-        if (created.size === 0 && planned.size === 0) return "";
-        const list = (values: Set<number>): string =>
-          [...values].sort((a, b) => a - b).map((number) => `#${number}`).join(", ");
-        return `Issue evidence: created ${created.size > 0 ? list(created) : "none"}; plan-ready ${planned.size > 0 ? list(planned) : "none"}.`;
-      } catch {
-        return "";
-      }
-    })();
     const prompt = [
       memory.renderBlock(),
-      issueEvidence,
+      issueEvidenceText(readIssueEvidence(recorder.dir)),
       reason,
       "Do not call tools. Answer the user's request from the evidence above. If the evidence is insufficient, say exactly what is missing.",
       "Keep the answer under 20 lines. For a planning run, list the created issue numbers and the next concrete step; do not restate issue bodies.",
@@ -638,6 +664,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const readPaths = new Map<string, number>();
     const searchKeys = new Map<string, number>();
     let treeCalls = 0;
+    let noProgressCalls = 0;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -778,9 +805,46 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             };
           };
 
+          const issueAction =
+            tool.name === "issue" ? String((params as { action?: unknown }).action ?? "") : "";
+          const issueWrite =
+            tool.name === "issue" &&
+            ["create", "edit", "plan", "link", "ensure", "close"].includes(issueAction);
+          const mutatingProgress =
+            tool.name === "edit" ||
+            tool.name === "write" ||
+            tool.name === "command" ||
+            tool.name === "artifact";
+          const research =
+            tool.name === "read" ||
+            tool.name === "search" ||
+            tool.name === "context" ||
+            (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
+          const noProgressLimit =
+            input.agent.name === "planner"
+              ? PLANNER_NO_PROGRESS_LIMIT
+              : input.agent.name === "build" || input.agent.name === "sudo"
+                ? MUTATING_NO_PROGRESS_LIMIT
+                : 0;
+          if (noProgressLimit > 0) {
+            if (issueWrite || mutatingProgress) {
+              noProgressCalls = 0;
+            } else if (research) {
+              noProgressCalls += 1;
+              if (noProgressCalls >= noProgressLimit) {
+                return block(
+                  input.agent.name === "planner"
+                    ? `Planner has made ${noProgressCalls} research/verification calls without an issue write. Create missing Tasks or stop with issue numbers.`
+                    : `${noProgressCalls} research calls without an edit, write, or command. Act on the evidence or stop.`,
+                  { args: capJson(params), noProgressCalls },
+                );
+              }
+            }
+          }
+
           // The planner needs one tree to inspect and one to verify. More is
           // repeated work: GitHub tree calls are slow and the result is large.
-          if (tool.name === "issue" && (params as { action?: unknown }).action === "tree") {
+          if (tool.name === "issue" && issueAction === "tree") {
             treeCalls += 1;
             if (treeCalls > 2) {
               return block(
@@ -1331,6 +1395,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           : "The token budget is exhausted.";
       finalText = await finalAnswer(currentModel, reason);
     }
+    finalText = appendIssueEvidence(finalText, readIssueEvidence(recorder.dir));
 
     // Retry decision: rotate to the next eligible model on a retryable error.
     const la = lastAssistant as AssistantMessage | undefined;

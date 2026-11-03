@@ -232,8 +232,10 @@ The harness blocks a third identical tool call with the same arguments and
 returns a corrective message; three blocked repeats end the run with a
 `loop_blocked` event and a summary that says so. After four reads of the same
 path, a read result also carries a short nudge to use the run state and act.
-`command describe issue` returns a direct hint that `issue` is a tool, not a
-command.
+It also limits repeated issue trees and stops a planner after a bounded number
+of research/verification calls without an issue write; build and sudo get the
+same no-progress guard for edits, writes, and commands. `command describe issue`
+returns a direct hint that `issue` is a tool, not a command.
 
 Typed commands and runner gates run through the per-run process supervisor. The
 run detail **Processes** section shows each process, its status, pid, and output
