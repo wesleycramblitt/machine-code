@@ -76,10 +76,10 @@ general = 5.0
 # No default turn or token cap. Set max_turns/budget_tokens here only when this
 # repository needs a bound. The repeat and read guards still stop loops.
 [agents.planner.free]
-min_fit = 6.5
+min_fit = 5.5
 [agents.planner.free.axes]
-reasoning = 6.5
-agentic = 6.0
+reasoning = 5.5
+agentic = 5.0
 
 [agents.sudo]
 min_fit = 6.0
