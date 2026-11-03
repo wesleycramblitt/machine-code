@@ -221,7 +221,9 @@ prints the schedule. The TUI Orchestrate tab shows the same schedule. `s` cycles
 scope (project plus each cached Epic/Feature), `r` refreshes the issue cache, `x` starts execution for the scope, `a`
 approves the selected packet, `A` approves its result, and Enter opens the
 selected issue. The header shows the active orchestration id, checkpoint, and
-approval counts.
+approval counts. Agent result review records acceptance evidence and closes the
+Task automatically; human result review waits for `approve --result`. Parent
+closure cascades only where the parent's approval policy is `agent`.
 
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are

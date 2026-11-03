@@ -39,6 +39,7 @@ import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved, isReserved } from "./issues/reserved.js";
 import { resolveRunTarget } from "./issues/work.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
+import { closeCompletedTask } from "./orchestrator/closure.js";
 import { loadAvailability, saveAvailability } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
@@ -2914,6 +2915,31 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         if (task.plan.resultReview === "human" && !(orchestration.approvedResults ?? []).includes(task.issue.ref.number)) {
           process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting result approval\n`);
           return { checkpoint: "awaiting_result_approval" };
+        }
+        if (task.plan.resultReview === "agent") {
+          const fresh = await bundle.provider.get(task.issue.ref);
+          if (fresh) {
+            try {
+              const closed = await closeCompletedTask({
+                provider: bundle.provider,
+                layout: l,
+                issue: fresh,
+                runId: outcome.runId,
+                by: "agent",
+              });
+              if (closed.status !== "closed") {
+                return {
+                  stop: `task #${task.issue.ref.number} ${closed.status}: ${closed.error ?? "closure failed"}`,
+                };
+              }
+              const parents = closed.closedParents.length > 0
+                ? `; closed parent(s) ${closed.closedParents.map((number) => `#${number}`).join(", ")}`
+                : "";
+              process.stdout.write(`  CLOSE #${task.issue.ref.number}  agent-approved result${parents}\n`);
+            } catch (error) {
+              return { stop: `task #${task.issue.ref.number} closure failed: ${(error as Error).message}` };
+            }
+          }
         }
         return {};
       }

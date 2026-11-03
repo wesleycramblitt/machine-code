@@ -31,7 +31,8 @@
 > and exclude individual skills. Process cleanup helpers are supervised,
 > availability probes are coalesced and jittered, and the TUI refreshes cooling
 > models on a timer. The synchronous git-status safety net is supervised, and
-> run detail exposes Related lineage instead of Children. The suite has 253
+> run detail exposes Related lineage instead of Children, and agent-reviewed
+> results record acceptance evidence and close their Tasks. The suite has 254
 > tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
@@ -400,8 +401,8 @@ preflight/controls exist: scopes, readiness, dependency order, active-run suppre
 cycle reporting, JSON output, durable ledger/lease state, parallel execution
 through the existing Build/gates/Review/commit/PR pipeline, TUI
 start/approve/checkpoint controls, typed retry policy, and task
-closure/acceptance automation. Remaining: make the Orchestrator the primary
-issue-backed path and finish richer merge handling.
+closure/acceptance automation for agent-reviewed results. Remaining: make the
+Orchestrator the primary issue-backed path and finish richer merge handling.
 
 ### Scopes
 
@@ -592,7 +593,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 253 tests green. Add:
+Keep the existing 254 tests green. Add:
 
 | Area | Cases |
 |---|---|
