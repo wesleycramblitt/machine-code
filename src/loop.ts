@@ -31,6 +31,7 @@ import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deter
 import { ensureSemanticMap } from "./map/ensure.js";
 import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
+import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
 
@@ -1169,6 +1170,50 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       return { status: "failed", finalText: "", error: message };
     } finally {
       input.signal?.removeEventListener("abort", onExternalAbort);
+    }
+
+    // Some providers (notably weak free fallbacks) return tool-call markup as
+    // ordinary text. The agent sees no toolCall block and stops. Do not treat
+    // that as a final answer: cool the model and rotate to another one.
+    const malformed = lastAssistant as AssistantMessage | undefined;
+    const malformedText = assistantText(malformed);
+    const hasNativeToolCall = malformed?.content.some((block) => block.type === "toolCall") ?? false;
+    if (
+      malformed &&
+      malformed.stopReason !== "error" &&
+      malformed.stopReason !== "aborted" &&
+      !hasNativeToolCall &&
+      hasToolCallMarkup(malformedText)
+    ) {
+      const provider = currentRow?.providerID ?? malformed.provider;
+      const failedKey = currentRow?.key ?? `${malformed.provider}/${malformed.model}`;
+      const message = `model ${failedKey} returned tool-call markup as plain text`;
+      triedModels.add(failedKey);
+      lastFailure = message;
+      try {
+        const classified = classifyError(new Error(`malformed response: ${message}`));
+        applyErrorState(provider, failedKey, classified);
+        recorder.event("error_classified", {
+          kind: classified.kind,
+          target: classified.target,
+          retryable: classified.retryable,
+          disableProvider: classified.disableProvider,
+          needsAuth: classified.needsAuth,
+        });
+      } catch {
+        // availability update failure must not stop rotation
+      }
+      recorder.event("malformed_tool_call", {
+        provider,
+        model: failedKey,
+        text: malformedText.slice(0, 1_000),
+      });
+      recorder.event("retry", {
+        failedModel: failedKey,
+        kind: "malformed",
+        attempt: triedModels.size,
+      });
+      continue;
     }
 
     const la2 = lastAssistant as AssistantMessage | undefined;

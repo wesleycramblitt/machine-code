@@ -116,6 +116,8 @@ export function describeTimelineEvent(event: TimelineEventLike): string {
       return `gates ${event.passed ? "PASS" : "FAIL"}`;
     case "error_classified":
       return `error ${text(event.kind)}`;
+    case "malformed_tool_call":
+      return `malformed tool call ${text(event.model)}`;
     case "retry":
       return `retry ${text(event.failedModel)}`;
     case "control":
