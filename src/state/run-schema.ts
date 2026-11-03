@@ -167,6 +167,10 @@ export interface RunSummary {
   error?: string;
   /** Final assistant text, capped; shown in the TUI run detail. */
   finalText?: string;
+  /** Harness-generated outcome summary; always written on finalize. */
+  summary?: string;
+  /** Why the run stopped: completed, turn-cap, budget, loop, error, ... */
+  stopReason?: string;
 }
 
 function str(value: unknown): string | undefined {
@@ -277,6 +281,8 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     modelCalls: num(r.modelCalls),
     error: str(r.error),
     finalText: str(r.finalText),
+    summary: str(r.summary),
+    stopReason: str(r.stopReason),
   };
 }
 

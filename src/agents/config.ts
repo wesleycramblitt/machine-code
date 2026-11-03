@@ -198,8 +198,19 @@ const AMBIGUITY_PROMPTS: Record<AmbiguityMode, string> = {
     "Ambiguity policy AUTONOMOUS: infer intent. Do not ask. If blocked, stop and report.",
 };
 
-export function ambiguityPrompt(mode: AmbiguityMode): string {
-  return AMBIGUITY_PROMPTS[mode];
+const AMBIGUITY_PROMPTS_NO_ASK: Record<AmbiguityMode, string> = {
+  strict:
+    "Ambiguity policy STRICT: read literally. If a relevant ambiguity blocks the work, stop and report it. Do not expand scope.",
+  precise:
+    "Ambiguity policy PRECISE: resolve low-impact gaps. If a choice materially affects the work, stop and report the question.",
+  adaptive:
+    "Ambiguity policy ADAPTIVE: use context and conventions. If a material risk remains, stop and report it.",
+  autonomous:
+    "Ambiguity policy AUTONOMOUS: infer intent. Do not ask. If blocked, stop and report.",
+};
+
+export function ambiguityPrompt(mode: AmbiguityMode, askAvailable = true): string {
+  return askAvailable ? AMBIGUITY_PROMPTS[mode] : AMBIGUITY_PROMPTS_NO_ASK[mode];
 }
 
 /** `ask` is available in strict/precise/adaptive — never in autonomous. */
@@ -209,20 +220,19 @@ export function askEnabled(config: AgentConfig): boolean {
 
 /* ------------------------------------------------------ prompt composition */
 
-const VERIFICATION_PROMPTS: Record<Verification, string> = {
-  direct: "Verification level DIRECT: no new tests; runner gates still apply.",
-  verified:
-    "Verification level VERIFIED: add focused tests; run each gate once after the final edit, and reuse the result unless files changed.",
-  redundant:
-    "Verification level REDUNDANT: verified, plus independent review approval.",
-};
-
-export function composePrompt(def: AgentDef, config: AgentConfig, _capabilities: readonly string[]): string {
+export function composePrompt(
+  def: AgentDef,
+  config: AgentConfig,
+  tools: readonly CoreToolName[],
+): string {
+  const access = config.issueAccess ?? "none";
+  const ask = askEnabled(config);
   return [
     def.prompt,
     "",
-    `Config: preset ${config.preset}.`,
-    ambiguityPrompt(config.ambiguity),
+    `Config: preset ${config.preset} · issues ${config.issues} · issue access ${access} · verification ${config.verification} · ask ${ask ? "on" : "off"} · approval ${config.approval}.`,
+    `Tools: ${tools.length > 0 ? tools.join(", ") : "(none)"}.`,
+    ambiguityPrompt(config.ambiguity, ask),
   ].join("\n");
 }
 
@@ -280,6 +290,6 @@ export function resolveAgent(
   });
   // Read-only roles never hold mutating file tools regardless of capabilities.
   if (def.readonly) tools = tools.filter((t) => t !== "write" && t !== "edit");
-  const prompt = composePrompt(def, config, capabilities);
+  const prompt = composePrompt(def, config, tools);
   return { def: { ...def, prompt, tools }, config, capabilities, prompt };
 }

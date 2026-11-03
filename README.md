@@ -57,7 +57,7 @@ node dist/cli.js catalogue snapshot          # update committed data/models + da
 # worktrees, inspection
 node dist/cli.js worktree list
 node dist/cli.js runs                 # Epic → Feature → Task → runs + untracked
-node dist/cli.js show <run-id>        # overview/context/changes/related/events
+node dist/cli.js show <run-id>        # summary/overview/context/changes/related/events
 node dist/cli.js spend --days 30
 node dist/cli.js tools
 node dist/cli.js tui                  # default when run with no command
@@ -177,13 +177,40 @@ entirely and groups every run on the machine by status, so blocked, failed, and
 running work is visible at a glance. `machine_code status` is shorthand for the
 overall view. In the TUI, `g` cycles GH issue → Status → Overall status.
 
-`machine_code show <run-id>` exposes the same overview, context, changes,
-related lineage, and event stream as the run detail screen. `machine_code spend` and
-`machine_code models` cover the catalogue and cost views without the TUI.
+`machine_code show <run-id>` exposes the same overview, summary, context,
+changes, related lineage, and event stream as the run detail screen.
+`machine_code spend` and `machine_code models` cover the catalogue and cost
+views without the TUI.
 
-In the run detail Timeline, `j`/`k` moves between timestamp events and skips
-streaming deltas. `space` expands the selected input, output, reasoning, tool
-args, or tool result; `PgUp`/`PgDn` scroll inside a long expanded block.
+Every terminal run records a deterministic outcome summary in
+`run.json.summary` and a `run_summary` event. The summary is generated from the
+event stream and run state, so it exists even when the model produced no final
+message (turn cap, provider failure, interruption). It lists the stop reason,
+issues created, files changed, reads/searches/commands, retries, errors, and
+the model's final response. `machine_code show`, the TUI Overview, and the
+`run` command print it. A run that hits the turn cap is recorded as `blocked`,
+not `completed`, and says so in the summary.
+
+`max_turns` in `[agents.<role>]` sets the per-run assistant-turn cap (default
+25; `0` disables it). It is a runaway backstop, not the primary cost control;
+`budget_tokens` and the repeat-call guard do that. Provider retries and model
+rotations do not refill the turn or token budget. The Planner uses
+`max_turns = 40` in this repository because a large plan can need several
+read/create/plan steps.
+
+In the run detail Timeline, `j`/`k` moves between timestamp events. The timeline
+follows the newest event by default; `j`/`k` or `PgUp`/`PgDn` turns follow off,
+and `f` turns it back on. `v` toggles between key events and all raw events.
+`space` expands the selected input, output, reasoning, tool args, or tool
+result; `PgUp`/`PgDn` scroll inside a long expanded block. The Overview shows
+the outcome summary, a live activity tail, and the latest thinking text.
+
+The harness blocks a third identical tool call with the same arguments and
+returns a corrective message; three blocked repeats end the run with a
+`loop_blocked` event and a summary that says so. After four reads of the same
+path, a read result also carries a short nudge to use the run state and act.
+`command describe issue` returns a direct hint that `issue` is a tool, not a
+command.
 
 Typed commands and runner gates run through the per-run process supervisor. The
 run detail **Processes** section shows each process, its status, pid, and output
@@ -298,6 +325,12 @@ new Epic, Feature, or Task issues.
 issue_access = "read"   # none | read | plan | create
 ```
 
+Creating an Epic also creates reserved **Feature 0: Planning & Review** and
+**Task 0: Planning & Review** beneath it. Creating a Feature also creates a
+reserved **Task 0: Planning & Review**. These are coordination anchors, not
+deliverables. The Planner is told to ignore them; the issue tool marks them
+`[reserved]` in run state and rejects a Task created under reserved Feature 0.
+
 `machine_code availability` shows cooling models and provider health.
 `machine_code model probe <key>` checks one model. Metadata probes use free
 provider endpoints and never send a paid inference request. The optional
@@ -332,6 +365,16 @@ cached under `.machine_code/local/cache/map.json`; `--status` shows map, semanti
 and LSP health; `--semantic` adds module annotations; `--refresh` rebuilds the
 deterministic cache.
 
+Semantic annotations are module-level summaries with key files, edit hints, and
+search keywords. Every run builds a deterministic module index immediately from
+the repo map, so the semantic index is always fresh and costs no model call. LLM
+annotations are optional: they refresh only when `map.semantic_model` is pinned
+or `map.refresh = "always"`; otherwise the deterministic index is used. Generate
+them on demand with `machine_code map --semantic --refresh`. The semantic index
+is ranked by the request and capped at 3 KiB. `search { mode: "semantic" }`
+ranks modules by keyword overlap and returns their key files, so an agent can go
+from a concept or filename to the right file in one call.
+
 Each run keeps its working memory outside the transcript:
 
 ```text
@@ -348,17 +391,31 @@ window blocks and writes a split report instead of truncating.
 
 `machine_code prompts [role]` prints the rendered agent prompt with its size.
 Prompts share `data/prompts/base.md`; role files carry only short deltas.
+Every rendered prompt ends with generated `Config:` and `Tools:` lines. The
+config line names the preset, issue tracking, issue access, verification, ask
+availability, and approval mode. The tools line is the exact post-filter list,
+so a role never sees a tool it cannot call. When `ask` is unavailable, the
+ambiguity policy says to stop and report the question instead of asking.
 
-Semantic annotations refresh at run start and after a turn that changed files.
-An `edit`/`write` appends its path to `semantic.dirty` and a bounded entry to
-`changes.jsonl` with the turn, changing agent/model, tool result, line delta, and
-one-line intent. After any mutating tool, a git-status delta also catches
-deletes, renames, formatters, and command-side writes; it stores status codes
-and fingerprints, never file content. The semantic call reads the deterministic
-map slice, dirty modules, existing annotations, and that digest, never the
-transcript. At most one refresh is in flight; further changed turns queue one
-follow-up, so edits never become per-edit model calls. Spend groups the calls as
-`map (semantic)`.
+The Planner holds only `context`, `read`, `search`, `ask`, and `issue`. It
+inspects the issue list/tree, reuses a suitable Epic or Feature, creates the
+missing level, adds acceptance criteria and dependencies, and applies
+`mc:plan` to Tasks. It does not hold `command`, `artifact`, or `pr`, so the
+`command describe issue` detour is impossible. Build and Review say `ask off`
+and report blockers; their ambiguity policy matches.
+
+LLM annotations are optional. An `edit`/`write` appends its path to
+`semantic.dirty` and a bounded entry to `changes.jsonl` with the turn, changing
+agent/model, tool result, line delta, and one-line intent. After any mutating
+tool, a git-status delta also catches deletes, renames, formatters, and
+command-side writes; it stores status codes and fingerprints, never file
+content. The semantic call reads the deterministic map slice, dirty modules,
+existing annotations, and that digest, never the transcript. At most one refresh
+is in flight; further changed turns queue one follow-up, so edits never become
+per-edit model calls. Spend groups the calls as `map (semantic)`. Automatic
+annotation refresh happens only when `map.semantic_model` is pinned or
+`map.refresh = "always"`; otherwise the deterministic index is used and no
+annotation call is made.
 
 Map configuration lives in `~/.machine_code/config.toml`:
 
@@ -369,5 +426,39 @@ semantic = true
 semantic_model = ""    # pin a model, or leave empty for automatic selection
 refresh = "on-change"  # on-change | manual | always
 ```
+
+### Language servers
+
+LSP is optional and lazy. The registry covers TypeScript/JavaScript, Python,
+Rust, Go, C/C++, Java, Bash, Lua, YAML, JSON, HTML, CSS, Vue, Svelte, Ruby, PHP,
+C#, Kotlin, Swift, Zig, Terraform, Dockerfile, Nix, CMake, LaTeX, Markdown,
+Clojure, and Dart. A missing server disables only that language; map, outline,
+text, and structure search still work.
+
+`machine_code lsp list` shows every server, its file types, whether its binary
+is on PATH, and the install hint. `machine_code lsp status` shows only the
+servers whose languages appear in the current repo.
+
+Tool modes:
+
+- `search { mode: "symbols", path: "src/loop.ts", pattern: "RunRecorder" }`
+  uses LSP document symbols when a path is given, workspace symbols otherwise,
+  then falls back to the repo map.
+- `search { mode: "definition" | "references" | "info", path, line, column }`
+  uses the server inferred from the path (or `language`).
+- `core:check` and `core:rename` infer the language from the path.
+
+Language IDs are per extension, so TSX uses `typescriptreact` and SCSS uses
+`scss`. The client passes the user's environment to the server so toolchains
+such as Rust, Go, Java, and C/C++ find their homes.
+
+### Repository knowledge
+
+`knowledge/index.md` is the English-language entry point. When it exists,
+`loadMachineConfig` includes it in the context bundle by default; set
+`[context] knowledge_index = "..."` to choose another file, or `""` to disable.
+The index links to deeper notes such as `knowledge/architecture.md`. The
+deterministic module index handles "where is this code"; the knowledge files
+handle "why is this code shaped this way".
 
 Design and remaining work: [plans/plan.md](plans/plan.md).

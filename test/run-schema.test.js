@@ -48,7 +48,22 @@ test("migrateRunSummary upgrades a v1 record in memory without touching disk", (
   assert.equal(migrated.status, "completed");
   assert.equal(migrated.lastActivityAt, v1.endedAt);
   assert.equal(migrated.finalText, "4");
+  assert.equal(migrated.summary, undefined);
+  assert.equal(migrated.stopReason, undefined);
   assert.equal(migrated.usage.totalTokens, 843);
+});
+
+test("migrateRunSummary keeps the outcome summary and stop reason", () => {
+  const migrated = migrateRunSummary({
+    id: "summary-run",
+    status: "blocked",
+    startedAt: "2026-11-03T00:00:00.000Z",
+    summary: "Outcome: Stopped at the turn cap (25) before finishing.",
+    stopReason: "turn-cap",
+  });
+  assert.ok(migrated);
+  assert.match(migrated.summary, /turn cap/);
+  assert.equal(migrated.stopReason, "turn-cap");
 });
 
 test("migrateRunSummary fills missing lastActivityAt and rejects unusable records", () => {
@@ -167,6 +182,7 @@ test("RunRecorder writes v2 summary atomically and tracks lifecycle state", () =
       0.001,
       0.002,
     );
+    recorder.recordTurn(1);
     const afterCall = JSON.parse(readFileSync(join(recorder.dir, "run.json"), "utf8"));
     assert.equal(afterCall.modelCalls, 1);
     assert.equal(afterCall.turns, 1);
@@ -177,11 +193,41 @@ test("RunRecorder writes v2 summary atomically and tracks lifecycle state", () =
     assert.equal(done.status, "completed");
     assert.ok(done.endedAt);
     assert.equal(done.finalText, "all done");
+    assert.match(done.summary, /Outcome: Completed/);
+    assert.equal(done.stopReason, "completed");
+    const doneEvents = readFileSync(join(recorder.dir, "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(doneEvents.at(-2).type, "run_summary");
+    assert.equal(doneEvents.at(-1).type, "run_end");
     // finalize is idempotent
     recorder.finalize("failed", "late error");
     const stillDone = JSON.parse(readFileSync(join(recorder.dir, "run.json"), "utf8"));
     assert.equal(stillDone.status, "completed");
     assert.equal(stillDone.error, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("finalize derives a turn-cap summary when the model produced no final text", () => {
+  const root = tempDir("turncap");
+  const layout = fakeLayout(root);
+  const recorder = new RunRecorder(layout, {
+    agent: "planner",
+    mode: "",
+    request: "plan the work",
+    repoRoot: root,
+  });
+  try {
+    recorder.event("tool_call_start", { toolCallId: "t1", tool: "read", args: { path: "plans/plan.md" } });
+    recorder.event("tool_call", { toolCallId: "t1", tool: "read", isError: false });
+    recorder.event("turn_cap", { turns: 25 });
+    recorder.finalize("blocked", "turn cap reached (25) before the run finished");
+    const done = recorder.current;
+    assert.equal(done.status, "blocked");
+    assert.equal(done.stopReason, "turn-cap");
+    assert.match(done.summary, /Stopped at the turn cap \(25\)/);
+    assert.match(done.summary, /the planner did not create any issues/);
+    assert.match(done.summary, /Response: none/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { AGENT_NAMES, agentDef } from "../dist/agents.js";
+import { resolveAgent } from "../dist/agents/config.js";
 import { layout } from "../dist/paths.js";
 
 const root = process.cwd();
@@ -31,6 +32,48 @@ test("base and role deltas stay small", () => {
   assert.ok(total <= 2_400, `base + deltas is ${total} chars`);
 });
 
+test("rendered prompts name the resolved tools and config", () => {
+  const home = mkdtempSync(join(tmpdir(), "mc-prompt-tools-"));
+  const previous = process.env.MACHINE_CODE_HOME;
+  process.env.MACHINE_CODE_HOME = home;
+  try {
+    const l = layout(root);
+    for (const role of AGENT_NAMES) {
+      const resolved = resolveAgent(l, role);
+      assert.match(resolved.prompt, /Config: preset /, `${role} prompt lacks the config line`);
+      assert.ok(
+        resolved.prompt.includes(`Tools: ${resolved.def.tools.join(", ")}.`),
+        `${role} prompt does not match its filtered tools`,
+      );
+      assert.doesNotMatch(resolved.prompt, /Tools: \./, `${role} prompt has an empty tool list`);
+    }
+
+    const planner = resolveAgent(l, "planner");
+    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "issue", "artifact"]);
+    assert.ok(!planner.def.tools.includes("command"), "planner must not hold command");
+    assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
+    assert.match(planner.prompt, /Inspect the issue list\/tree/);
+    assert.match(planner.prompt, /If no suitable non-reserved Epic\/Feature exists, create Epic→Feature→Task/);
+    assert.match(planner.prompt, /Ignore the automatic Planning & Review anchors/);
+    assert.match(planner.prompt, /issue access create/);
+
+    const general = resolveAgent(l, "general");
+    assert.deepEqual(general.def.tools, ["context", "read", "search", "ask"]);
+    assert.ok(!general.def.tools.includes("command"), "general must not hold command");
+    assert.match(general.prompt, /core:map with command/);
+
+    for (const role of ["build", "review"]) {
+      const resolved = resolveAgent(l, role);
+      assert.match(resolved.prompt, /ask off/, `${role} must say ask is off`);
+      assert.match(resolved.prompt, /stop and report/, `${role} must report blockers instead of asking`);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.MACHINE_CODE_HOME;
+    else process.env.MACHINE_CODE_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("every rendered prompt is concise and has the required rules", () => {
   const home = mkdtempSync(join(tmpdir(), "mc-prompt-home-"));
   const previous = process.env.MACHINE_CODE_HOME;
@@ -38,7 +81,7 @@ test("every rendered prompt is concise and has the required rules", () => {
   try {
     for (const role of AGENT_NAMES) {
       const def = agentDef(layout(root), role);
-      assert.ok(def.prompt.length <= 1_800, `${role} prompt is ${def.prompt.length} chars`);
+      assert.ok(def.prompt.length <= 2_000, `${role} prompt is ${def.prompt.length} chars`);
       for (const required of ["run-state", "core:map", "context note", "ASD-STE100", "Result:", "Evidence:"]) {
         assert.ok(def.prompt.includes(required), `${role} prompt lacks ${required}`);
       }

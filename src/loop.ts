@@ -10,7 +10,7 @@
  * model until one succeeds or none remain. Insufficient funds, auth failures,
  * and refusals do not retry.
  */
-import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
@@ -29,12 +29,50 @@ import type { Layout } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
 import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { ensureSemanticMap } from "./map/ensure.js";
-import { renderSemanticIndex } from "./map/semantic.js";
+import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
 
 export const MAX_TURNS = 25;
+
+/** Identical calls allowed before the harness blocks the repeat. */
+const REPEAT_LIMIT = 2;
+/** Blocked repeats allowed before the run terminates. */
+const REPEAT_BLOCK_LIMIT = 3;
+
+/** Stable JSON key for a tool call; argument order must not defeat the guard. */
+function stableKey(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_key, item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        return Object.fromEntries(
+          Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)),
+        );
+      }
+      return item;
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+function repeatHint(tool: string): string {
+  switch (tool) {
+    case "read":
+      return "Read a different range or symbol, or proceed with the result you have.";
+    case "search":
+      return "Use the earlier result or change the pattern or path.";
+    case "issue":
+      return "Use the earlier issue result. If the list is empty, create the Epic with action=create.";
+    case "command":
+      return "Use the earlier command result. issue, pr, and artifact are tools, not commands.";
+    case "context":
+      return "Use the earlier context result or change the action.";
+    default:
+      return "Use the earlier result or change the arguments.";
+  }
+}
 
 /** Cap a JSON value for the event log: 8 KiB string budget, shallow-safe. */
 function capJson(value: unknown): unknown {
@@ -172,6 +210,8 @@ function assistantText(message: AssistantMessage | undefined): string {
 export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const { recorder } = input;
   const policy = input.policy;
+  const maxTurns =
+    policy.maxTurns === undefined ? MAX_TURNS : Math.max(0, Math.floor(policy.maxTurns));
   const ceiling = effectiveOutputCeiling(policy, input.machine);
   const configuredProviders = input.configuredProviders;
   const fundedProviders = fundedProviderIds(input.machine.providers);
@@ -224,29 +264,21 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const wantMap = input.skipMap !== true;
   const wantSemantic = input.skipSemantic !== true;
   let mapIndex = "";
+  let semanticMap: SemanticMap | null = null;
+  const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"], semantic: SemanticMap | null): string =>
+    [
+      wantMap ? renderMapIndex(map) : "",
+      wantSemantic ? renderSemanticIndex(semantic, 3_072, input.request) : "",
+    ].filter(Boolean).join("\n");
   if (wantMap || wantSemantic) try {
     const built = await buildRepoMap(mapRoot, { processes });
-    const semantic = wantSemantic
-      ? await ensureSemanticMap({
-          root: mapRoot,
-          map: built.map,
-          models: input.models,
-          catalogue: input.catalogue,
-          configuredProviders,
-          fundedProviders,
-          policy,
-          machine: input.machine,
-          availability,
-          home: input.home,
-          runId: recorder.id,
-          recorder,
-          signal: input.signal,
-        })
-      : null;
-    mapIndex = [
-      wantMap ? renderMapIndex(built.map) : "",
-      wantSemantic ? renderSemanticIndex(semantic) : "",
-    ].filter(Boolean).join("\n");
+    const dirty = wantSemantic ? readSemanticDirty(mapRoot) : [];
+    const deterministic = wantSemantic ? buildModuleIndex(built.map) : null;
+    const cached = wantSemantic ? loadSemantic(mapRoot) : null;
+    const cachedFresh = cached && isSemanticFresh(cached, built.map, dirty) ? cached : null;
+    semanticMap = deterministic ? mergeModuleIndex(deterministic, cachedFresh) : null;
+    const fresh = Boolean(cachedFresh);
+    mapIndex = renderIndex(built.map, semanticMap);
     recorder.event("map_built", {
       files: built.map.files.length,
       symbols: symbolCount(built.map),
@@ -254,7 +286,49 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       cached: built.cached,
       head: built.map.head,
       semantic: wantSemantic,
+      semanticMode: fresh ? "annotated" : "deterministic",
+      semanticDirty: dirty.length,
     });
+    // Do not block the first prompt on a semantic refresh. Use the
+    // deterministic index immediately. LLM annotations are opt-in: only
+    // refresh them when a semantic model is pinned or refresh is "always".
+    const annotationsEnabled =
+      Boolean(input.machine.map.semanticModel) || input.machine.map.refresh === "always";
+    if (wantSemantic && !fresh && annotationsEnabled) {
+      recorder.event("map_refresh_scheduled", { turn: 0, reason: cached ? "stale" : "missing" });
+      void ensureSemanticMap({
+        root: mapRoot,
+        map: built.map,
+        models: input.models,
+        catalogue: input.catalogue,
+        configuredProviders,
+        fundedProviders,
+        policy,
+        machine: input.machine,
+        availability,
+        home: input.home,
+        runId: recorder.id,
+        recorder,
+        signal: input.signal,
+      }).then((refreshed) => {
+        if (!refreshed) return;
+        semanticMap = deterministic ? mergeModuleIndex(deterministic, refreshed) : refreshed;
+        mapIndex = renderIndex(built.map, semanticMap);
+        recorder.event("map_refresh", {
+          turn: 0,
+          ok: true,
+          background: true,
+          modules: Object.keys(semanticMap?.modules ?? {}).length,
+        });
+      }).catch((error) => {
+        recorder.event("map_refresh", {
+          turn: 0,
+          ok: false,
+          background: true,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   } catch (error) {
     recorder.event("map_built", {
       ok: false,
@@ -277,6 +351,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const runSemanticRefresh = async (turn: number): Promise<void> => {
     if (input.skipSemantic) return;
     const built = await buildRepoMap(mapRoot, { processes });
+    const deterministic = buildModuleIndex(built.map);
     const semantic = await ensureSemanticMap({
       root: mapRoot,
       map: built.map,
@@ -292,15 +367,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       recorder,
       signal: input.signal,
     });
-    mapIndex = [renderMapIndex(built.map), renderSemanticIndex(semantic)].filter(Boolean).join("\n");
+    semanticMap = mergeModuleIndex(deterministic, semantic);
+    mapIndex = renderIndex(built.map, semanticMap);
     recorder.event("map_refresh", {
       turn,
       ok: true,
-      modules: Object.keys(semantic?.modules ?? {}).length,
+      modules: Object.keys(semanticMap.modules).length,
     });
   };
   const scheduleSemanticRefresh = (turn: number): void => {
     if (!input.machine.map.enabled || !input.machine.map.semantic || input.machine.map.refresh === "manual") return;
+    if (!input.machine.map.semanticModel && input.machine.map.refresh !== "always") return;
     if (semanticRefreshInFlight) {
       semanticRefreshQueued = true;
       return;
@@ -343,6 +420,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastAssistant: AssistantMessage | undefined;
   let totalTokens = 0;
   let turns = 0;
+  /** Cumulative turns across resumes, for the run summary. */
+  let reportedTurns = recorder.current.turns;
   let budgetExhausted = false;
   let currentRow: CatalogueRow | null = null;
   let agent: Agent | undefined;
@@ -351,6 +430,79 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastPromptChars = 0;
   /** Rendered prompt for the request being prepared, consumed by transformContext. */
   let pendingMessages: AgentMessage[] | null = null;
+
+  /**
+   * When the run hits a cap or loop guard, make one tool-free call so the user
+   * still gets an answer from the evidence in run state instead of only a
+   * blocked summary.
+   */
+  const finalAnswer = async (model: Model<Api>, reason: string): Promise<string> => {
+    const prompt = [
+      memory.renderBlock(),
+      reason,
+      "Do not call tools. Answer the user's request from the evidence above. If the evidence is insufficient, say exactly what is missing.",
+      `Request: ${input.request}`,
+    ].join("\n\n");
+    try {
+      const source = input.models.streamSimple(
+        model,
+        {
+          systemPrompt:
+            "You summarize a coding run that stopped early. Be concise and factual. Do not call tools.",
+          messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+        },
+        {
+          maxTokens: 800,
+          reasoning: "low",
+          sessionId: recorder.id,
+          signal: input.signal,
+          identity: {
+            userAgent: { custom: "machine_code/0.0.0" },
+            attribution: { name: "machine_code", url: "https://github.com/extropian/machine-code" },
+          },
+        },
+      );
+      let text = "";
+      let thinking = "";
+      for await (const event of source) {
+        if (event.type === "text_delta") text += event.delta;
+        else if (event.type === "thinking_delta") thinking += event.delta;
+      }
+      const result = await source.result();
+      const usage = result.usage;
+      if (usage) {
+        const actual = usage.cost?.total;
+        recorder.recordCall(
+          {
+            input: usage.input,
+            output: usage.output,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+            totalTokens: usage.totalTokens,
+          },
+          typeof actual === "number" && Number.isFinite(actual) ? actual : null,
+          0,
+        );
+      }
+      const final = text.trim() || assistantText(result).trim();
+      recorder.event("final_answer", {
+        reason,
+        chars: final.length,
+        thinkingChars: thinking.trim().length,
+        stopReason: result.stopReason,
+        ...(result.errorMessage ? { error: result.errorMessage } : {}),
+        ...(thinking.trim() ? { thinking: thinking.slice(0, 2_000) } : {}),
+        ...(final ? { text: final.slice(0, 2_000) } : {}),
+      });
+      return final;
+    } catch (error) {
+      recorder.event("final_answer", {
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return "";
+    }
+  };
 
   // Instance registration + heartbeat + control-file polling (M3).
   const { registerInstance, heartbeatInstance, unregisterInstance } = await import("./state/instances.js");
@@ -385,12 +537,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   }, 500);
 
   while (true) {
-    // Reset per-attempt state.
+    // Reset per-attempt state. Turn and token budgets are per run, not per
+    // provider attempt: a rate-limit rotation must not refill them.
     lastAssistant = undefined;
-    totalTokens = 0;
-    turns = 0;
     budgetExhausted = false;
     let appliedError: { key: string; message: string } | undefined;
+    let turnCapHit = false;
+    let loopBlocked = false;
+    let repeatBlocked = 0;
+    const callCounts = new Map<string, { count: number; preview: string }>();
+    const readPaths = new Map<string, number>();
+    const searchKeys = new Map<string, number>();
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -459,6 +616,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         capabilities: input.agentCapabilities ?? [],
         recorder,
         layout: input.layout,
+        state: memory,
         defaultApproval: input.agentConfig?.approval ?? "human",
       };
     }
@@ -486,19 +644,118 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       };
     }
 
-    const tools = coreTools(
+    const rawTools = coreTools(
       {
         root: input.toolRoot ?? input.root,
         commands: input.commands,
+        tools: input.agent.tools,
         ask: askContext,
         issues: issueContext,
         artifacts: artifactContext,
         prs: prContext,
         state: memory,
+        semantic: () => semanticMap,
         processes,
       },
       input.agent.tools,
     );
+    // Guard against loops: a weak model can burn the whole turn budget repeating
+    // the same read/search/issue call. The first two calls run normally; later
+    // identical calls return a corrective error, and repeated blocks terminate
+    // the turn batch.
+    const tools: AgentTool[] = rawTools.map((tool) => {
+      const execute = tool.execute.bind(tool);
+      return {
+        ...tool,
+        async execute(id, params, signal, onUpdate) {
+          const block = (message: string, detail: Record<string, unknown>) => {
+            repeatBlocked += 1;
+            if (repeatBlocked >= REPEAT_BLOCK_LIMIT) {
+              loopBlocked = true;
+              recorder.event("loop_blocked", { tool: tool.name, ...detail });
+            }
+            return {
+              content: [{ type: "text", text: message }],
+              details: undefined,
+              isError: true,
+              ...(loopBlocked ? { terminate: true } : {}),
+            };
+          };
+
+          // Search loops often vary only the limit or scope. Key on the mode,
+          // scope, and pattern so the third equivalent search is blocked.
+          let searchKey: string | undefined;
+          if (tool.name === "search") {
+            const args = params as { mode?: unknown; pattern?: unknown; path?: unknown; paths?: unknown };
+            const mode = typeof args.mode === "string" ? args.mode : "text";
+            const pattern = typeof args.pattern === "string" ? args.pattern : "";
+            const path = typeof args.path === "string" ? args.path : "";
+            const paths = Array.isArray(args.paths)
+              ? args.paths.filter((item): item is string => typeof item === "string").sort().join(",")
+              : "";
+            searchKey = `${mode}:${path}:${paths}:${pattern}`;
+            const prior = searchKeys.get(searchKey) ?? 0;
+            if (prior >= REPEAT_LIMIT) {
+              return block(
+                `Repeated ${mode} search blocked (${prior} earlier call(s) for this pattern and scope). ${repeatHint("search")}`,
+                { args: capJson(params), repeats: prior },
+              );
+            }
+          }
+
+          // Reads of the same path are capped separately from identical calls.
+          const readPath =
+            tool.name === "read" && typeof (params as { path?: unknown }).path === "string"
+              ? (params as { path: string }).path
+              : "";
+          if (readPath) {
+            const prior = readPaths.get(readPath) ?? 0;
+            if (prior >= 4) {
+              return block(
+                `Read limit reached for ${readPath} (${prior} earlier reads). Use the earlier results or answer. ${repeatHint("read")}`,
+                { args: capJson(params), repeats: prior },
+              );
+            }
+          }
+
+          const key = `${tool.name}:${stableKey(params)}`;
+          const prior = callCounts.get(key);
+          if (prior && prior.count >= REPEAT_LIMIT) {
+            const preview = prior.preview ? ` Previous result: ${prior.preview}` : "";
+            return block(
+              `Repeated identical ${tool.name} call blocked (${prior.count} earlier identical call(s)). ` +
+                `${repeatHint(tool.name)}${preview}`,
+              { args: capJson(params), repeats: prior.count },
+            );
+          }
+
+          const result = await execute(id, params, signal, onUpdate);
+          if (!result.isError && tool.name === "search" && searchKey) {
+            searchKeys.set(searchKey, (searchKeys.get(searchKey) ?? 0) + 1);
+          }
+          if (!result.isError && readPath) {
+            const count = (readPaths.get(readPath) ?? 0) + 1;
+            readPaths.set(readPath, count);
+            if (count >= 4) {
+              result.content.push({
+                type: "text",
+                text:
+                  `[harness] ${readPath} has been read ${count} times. ` +
+                  "Use the run state and act; do not re-read unchanged ranges.",
+              });
+            }
+          }
+          const preview = result.content
+            .filter((item): item is { type: "text"; text: string } => item.type === "text")
+            .map((item) => item.text)
+            .join("\n")
+            .replace(/\s+/g, " ")
+            .slice(0, 300);
+          callCounts.set(key, { count: (prior?.count ?? 0) + 1, preview });
+          return result;
+        },
+      } as AgentTool;
+    });
     const toolChars = toolDefinitionChars(tools);
     recorder.event("tools_registered", { names: tools.map((tool) => tool.name) });
 
@@ -667,6 +924,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       },
       finishTurn: ({ message }) => {
         turns += 1;
+        reportedTurns += 1;
+        recorder.recordTurn(reportedTurns);
         const usage = message.usage ?? zeroUsage;
         totalTokens += usage.totalTokens;
         if (policy.budgetTokens !== undefined && totalTokens > policy.budgetTokens) {
@@ -674,9 +933,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           recorder.event("budget_exhausted", { totalTokens, budget: policy.budgetTokens });
           return { action: "end" as const };
         }
-        if (turns >= MAX_TURNS) {
-          recorder.event("turn_cap", { turns });
+        if (loopBlocked) {
           return { action: "end" as const };
+        }
+        if (maxTurns > 0 && turns >= maxTurns) {
+          // A final answer with no tool calls is a natural completion, not a cap.
+          const wantsMore = message.content.some((block) => block.type === "toolCall");
+          if (wantsMore) {
+            turnCapHit = true;
+            recorder.event("turn_cap", { turns, maxTurns });
+            return { action: "end" as const };
+          }
         }
         return undefined;
       },
@@ -874,7 +1141,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
 
     const la2 = lastAssistant as AssistantMessage | undefined;
-    const finalText = assistantText(la2);
+    let finalText = assistantText(la2);
     const stop = la2?.stopReason;
     let status: RunLoopResult["status"] = "completed";
     let error: string | undefined;
@@ -884,14 +1151,29 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       status = "paused";
     } else if (input.signal?.aborted) {
       status = "interrupted";
+    } else if (loopBlocked) {
+      status = "blocked";
+      error = "repeated identical tool calls detected";
     } else if (budgetExhausted) {
       status = "blocked";
       error = `token budget exhausted (${policy.budgetTokens})`;
+    } else if (turnCapHit) {
+      status = "blocked";
+      error = `turn cap reached (${maxTurns}) before the run finished`;
     } else if (stop === "aborted") {
       status = "interrupted";
     } else if (stop === "error") {
       status = "failed";
       error = la2?.errorMessage ?? "provider error";
+    }
+
+    if (!finalText.trim() && currentModel && (turnCapHit || loopBlocked || budgetExhausted)) {
+      const reason = turnCapHit
+        ? "You have reached the turn cap."
+        : loopBlocked
+          ? "The harness stopped repeated tool calls."
+          : "The token budget is exhausted.";
+      finalText = await finalAnswer(currentModel, reason);
     }
 
     // Retry decision: rotate to the next eligible model on a retryable error.

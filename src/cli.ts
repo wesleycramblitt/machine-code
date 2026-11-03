@@ -24,6 +24,8 @@ import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { orchestrate } from "./orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, type RunStatus, type RunSummary } from "./state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "./state/question.js";
+import { summarizeRun, readStateView } from "./state/outcome.js";
+import { isTimelineEvent } from "./tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "./state/transcript.js";
 import { packetPath, readPacket } from "./packet.js";
 import { agentDef, type AgentName } from "./agents.js";
@@ -63,6 +65,7 @@ import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./da
 import { runTui } from "./tui.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "./install.js";
+import { allServers, formatServerList, lspStatusForPaths, serverAvailable } from "./lsp/index.js";
 
 /* ---------------------------------------------------------- runtime setup */
 
@@ -166,6 +169,7 @@ Usage:
   machine_code context <run-id>     Print the run context manifest
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
                                     --no-symbols, --semantic)
+  machine_code lsp [list|status]    Language servers, availability, and repo coverage (--json)
   machine_code prompts [role]       Print rendered agent prompts with chars and words (--json)
   machine_code spend [--days N] [--by provider|model|day|agent] [--json]
   machine_code tools [tool|script]  List repo/machine tools and scripts
@@ -303,13 +307,15 @@ function cmdInit(): number {
       problems += 1;
     }
   }
-  // Profile dependencies (language servers) — checked, not auto-installed.
-  process.stdout.write("\nProfile dependencies:\n");
-  const servers = [{ name: "typescript-language-server", purpose: "TypeScript LSP (check/rename/semantic search)" }];
-  for (const s of servers) {
-    const found = findOnPath([s.name]);
-    if (found) process.stdout.write(`  ok       ${s.name} (${s.purpose})\n`);
-    else process.stdout.write(`  MISSING  ${s.name} (${s.purpose}) — install: npm i -g ${s.name}\n`);
+  // Language servers are checked, not auto-installed. A missing server only
+  // disables LSP for that language; map/outline/text search still work.
+  process.stdout.write("\nLanguage servers (install only the ones your repos use):\n");
+  for (const spec of allServers()) {
+    if (serverAvailable(spec.id)) {
+      process.stdout.write(`  ok       ${spec.id.padEnd(12)} ${spec.name}\n`);
+    } else {
+      process.stdout.write(`  MISSING  ${spec.id.padEnd(12)} ${spec.name} — ${spec.install}\n`);
+    }
   }
 
   process.stdout.write("\nOptional integrations:\n");
@@ -1350,9 +1356,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   recorder.finalize(result.status, result.error, result.finalText);
-  if (result.finalText.trim().length > 0) {
-    process.stdout.write(`${result.finalText}\n`);
-  }
+  printRunOutcome(result, recorder);
   // One-way notification on terminal state (M4).
   if (machine.notify.webhookUrl || machine.notify.command) {
     const { notify } = await import("./notify.js");
@@ -1370,7 +1374,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
   const summary = recorder.current;
   process.stderr.write(
-    `\nrun ${summary.id}: ${summary.status} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
+    `\nrun ${summary.id}: ${summary.status}${summary.stopReason && summary.stopReason !== "completed" ? ` (${summary.stopReason})` : ""} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
   return EXIT[result.status];
 }
@@ -1657,7 +1661,70 @@ function indentEventLines(text: string, prefix = "      "): string {
     .join("\n");
 }
 
-function fmtEvent(event: Record<string, unknown>): string {
+function printRunOutcome(result: { status: string; finalText: string }, recorder: RunRecorder): void {
+  if (result.finalText.trim().length > 0) process.stdout.write(`${result.finalText}\n`);
+  const summary = recorder.current;
+  const outcome = summary.summary;
+  if (!outcome) return;
+  // A simple completed answer is already the outcome; do not repeat it.
+  const hasWork = recorder
+    .readEvents()
+    .some((event) => event.type === "tool_call_start" || event.type === "issue_created" || event.type === "gates");
+  if (summary.status === "completed" && result.finalText.trim().length > 0 && !hasWork) return;
+  process.stdout.write(`\n--- run summary ---\n${outcome}\n`);
+}
+
+function toolResultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (!result || typeof result !== "object") return String(result);
+  const obj = result as Record<string, unknown>;
+  if (Array.isArray(obj.content)) {
+    const text = obj.content
+      .filter(
+        (item): item is { type: string; text: string } =>
+          Boolean(item) &&
+          typeof item === "object" &&
+          (item as { type?: unknown }).type === "text" &&
+          typeof (item as { text?: unknown }).text === "string",
+      )
+      .map((item) => item.text)
+      .join("\n");
+    if (text) return text;
+  }
+  if (typeof obj.preview === "string") {
+    try {
+      const parsed = JSON.parse(obj.preview) as unknown;
+      const text = toolResultText(parsed);
+      if (text) return text;
+    } catch {
+      // The capJson preview is often a truncated JSON document. Extract the
+      // first text field so the CLI shows the tool output, not escaped JSON.
+      const match = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(obj.preview);
+      if (match) {
+        try {
+          return JSON.parse(`"${match[1]}"`) as string;
+        } catch {
+          // fall through to the truncated-text extraction
+        }
+      }
+      const marker = '"text":"';
+      const at = obj.preview.indexOf(marker);
+      if (at >= 0) {
+        return obj.preview
+          .slice(at + marker.length)
+          .replace(/…$/, "")
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "\t")
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, "\\");
+      }
+    }
+    return obj.preview;
+  }
+  return JSON.stringify(result, null, 2);
+}
+
+function fmtEvent(event: Record<string, unknown>, verbose = false): string {
   const t = String(event.t ?? "").slice(11, 19);
   const type = String(event.type);
   const rest = Object.fromEntries(Object.entries(event).filter(([k]) => k !== "t" && k !== "type"));
@@ -1674,13 +1741,19 @@ function fmtEvent(event: Record<string, unknown>): string {
   if (type === "model_request") {
     const header = head(type, `${rest.provider}/${rest.model}  ${rest.messages} msg  ${rest.chars} chars`);
     const input = typeof rest.input === "string" ? rest.input : "";
-    return input ? `${header}\n${indentEventLines(input)}` : header;
+    if (!input) return header;
+    const lines = input.split("\n");
+    const shown = verbose ? input : lines.slice(0, 8).join("\n") + (lines.length > 8 ? "\n…" : "");
+    return `${header}\n${indentEventLines(shown)}`;
   }
   if (type === "model_call_end") {
     const u = rest.usage as { totalTokens: number };
     const header = head(type, `${rest.provider}/${rest.model}  ${rest.stopReason}  ${u.totalTokens} tok  $${typeof rest.cost === "number" ? rest.cost.toFixed(6) : "?"}`);
     const text = typeof rest.text === "string" ? rest.text.trim() : "";
-    return text ? `${header}\n${indentEventLines(text)}` : header;
+    if (!text) return header;
+    const lines = text.split("\n");
+    const shown = verbose ? text : lines.slice(0, 8).join("\n") + (lines.length > 8 ? "\n…" : "");
+    return `${header}\n${indentEventLines(shown)}`;
   }
   if (type === "tool_call_start") {
     const args = rest.args === undefined ? "" : `  ${JSON.stringify(rest.args)}`;
@@ -1690,10 +1763,20 @@ function fmtEvent(event: Record<string, unknown>): string {
     const header = head(type, `${rest.tool}  ${rest.isError ? "ERROR" : "ok"}${typeof rest.durationMs === "number" ? `  ${rest.durationMs}ms` : ""}`);
     const result = rest.result;
     if (result === undefined) return header;
-    const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-    return `${header}\n${indentEventLines(text.slice(0, 8_000))}`;
+    const text = toolResultText(result);
+    return `${header}\n${indentEventLines(text.slice(0, verbose ? 8_000 : 400))}`;
   }
   if (type === "run_end") return head(type, String(rest.status));
+  if (type === "run_summary") {
+    const body = verbose && typeof rest.text === "string" ? rest.text : "";
+    return `${head(type, String(rest.headline ?? rest.stopReason ?? ""))}${body ? `\n${indentEventLines(body)}` : ""}`;
+  }
+  if (type === "turn_cap") return head(type, `reached ${rest.turns} turns`);
+  if (type === "budget_exhausted") return head(type, `${rest.totalTokens} tokens (budget ${rest.budget})`);
+  if (type === "loop_blocked") return head(type, `${rest.tool} repeated ${rest.repeats} times`);
+  if (type === "issue_created") return head(type, `#${rest.number} ${rest.kind} ${rest.title ?? ""}`);
+  if (type === "issue_linked") return head(type, `#${rest.issue} under #${rest.parent}`);
+  if (type === "plan_updated") return head(type, `#${rest.issue} ${rest.status} (${rest.verification})`);
   const detail = Object.keys(rest).length > 0 ? `  ${JSON.stringify(rest)}` : "";
   return head(type, detail.trim());
 }
@@ -1708,6 +1791,7 @@ function cmdLog(id: string | undefined): number {
       `  calls ${s.modelCalls}  turns ${s.turns}  tokens ${s.usage.totalTokens}  cost $${s.cost.actual.toFixed(6)} actual / $${s.cost.estimated.toFixed(6)} estimated\n`,
   );
   if (s.error) process.stdout.write(`  error: ${s.error}\n`);
+  if (s.summary) process.stdout.write(`summary:\n${indentEventLines(s.summary)}\n`);
   process.stdout.write("events:\n");
   for (const event of run.events) {
     const line = fmtEvent(event);
@@ -2310,17 +2394,17 @@ async function cmdResume(id: string | undefined, argv: string[]): Promise<number
       });
       if (!gateOutcome.passed) {
         recorder.finalize("blocked", `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`, result.finalText);
-        process.stdout.write(`${result.finalText}\n`);
+        printRunOutcome({ ...result, status: "blocked" }, recorder);
         return EXIT.blocked;
       }
     }
   }
 
   recorder.finalize(result.status, result.error, result.finalText);
-  if (result.finalText.trim().length > 0) process.stdout.write(`${result.finalText}\n`);
+  printRunOutcome(result, recorder);
   const summary = recorder.current;
   process.stderr.write(
-    `\nrun ${summary.id}: ${summary.status} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
+    `\nrun ${summary.id}: ${summary.status}${summary.stopReason && summary.stopReason !== "completed" ? ` (${summary.stopReason})` : ""} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
   return EXIT[result.status];
 }
@@ -3017,6 +3101,16 @@ function cmdShow(argv: string[]): number {
   );
   const lastModel = [...run.events].reverse().find((event) => event.type === "model_select" && !event.error);
   const lastActivity = [...run.events].reverse().find((event) => event.type === "tool_call_start" || event.type === "model_call_end");
+  const derived = s.summary
+    ? null
+    : summarizeRun({
+        summary: s,
+        events: run.events,
+        state: readStateView(runDir),
+        finalText: s.finalText,
+      });
+  const outcome = s.summary ?? derived!.text;
+  const stopReason = s.stopReason ?? derived?.stopReason ?? null;
 
   if (flags.has("json")) {
     process.stdout.write(
@@ -3030,12 +3124,14 @@ function cmdShow(argv: string[]): number {
         pendingQuestion: pending ?? null,
         lastModel: lastModel?.key ?? null,
         lastActivity: lastActivity ?? null,
+        outcome,
+        stopReason,
       }, null, 2)}\n`,
     );
     return 0;
   }
 
-  process.stdout.write(`${runGlyph(s.status)} ${s.id}  ${s.status.toUpperCase()}  ${s.agent}${modeSuffix(s.mode)}\n`);
+  process.stdout.write(`${runGlyph(s.status)} ${s.id}  ${s.status.toUpperCase()}${s.stopReason && s.stopReason !== "completed" ? ` (${s.stopReason})` : ""}  ${s.agent}${modeSuffix(s.mode)}\n`);
   process.stdout.write(`  ${s.repoRoot}\n`);
   process.stdout.write(`  request  ${s.request.replace(/\s+/g, " ")}\n`);
   process.stdout.write(`  model    ${String(lastModel?.key ?? "(not selected yet)")}\n`);
@@ -3053,6 +3149,7 @@ function cmdShow(argv: string[]): number {
   if (s.worktree) process.stdout.write(`  worktree ${s.worktree}\n`);
   if (s.error) process.stdout.write(`  error    ${s.error}\n`);
   if (pending) process.stdout.write(`  \x1b[33m? AWAITING INPUT\x1b[0m ${pending.text ?? ""}\n`);
+  process.stdout.write(`\nsummary\n${outcome.split("\n").map((line) => `  ${line}`).join("\n")}\n`);
 
   if (context) {
     process.stdout.write(`\ncontext ${context.chars.toLocaleString()} chars, ${context.sources.length} source(s)\n`);
@@ -3077,7 +3174,7 @@ function cmdShow(argv: string[]): number {
   }
 
   if (thinking.length > 0) {
-    process.stdout.write(`\nlatest response\n`);
+    process.stdout.write(`\nlatest thinking / text\n`);
     const chunks = flags.has("thinking") ? thinking : thinking.slice(-1);
     for (const chunk of chunks) {
       for (const line of chunk.text.split("\n").slice(0, flags.has("thinking") ? 200 : 12)) process.stdout.write(`  ${line}\n`);
@@ -3114,14 +3211,16 @@ function cmdShow(argv: string[]): number {
     }
   }
 
-  const events = flags.has("events") || flags.has("full") ? run.events : run.events.slice(-12);
-  process.stdout.write(`\nevents${events.length < run.events.length ? ` (last ${events.length} of ${run.events.length})` : ""}\n`);
-  if (events.length === 0) process.stdout.write("  no events\n");
+  const showAll = flags.has("events") || flags.has("full");
+  const visibleEvents = showAll ? run.events : run.events.filter((event) => isTimelineEvent(event, false));
+  const events = showAll ? visibleEvents : visibleEvents.slice(-12);
+  process.stdout.write(`\nevents${events.length < visibleEvents.length ? ` (last ${events.length} of ${visibleEvents.length} key events)` : ""}${showAll ? "" : "  (--events for all)"}\n`);
+  if (events.length === 0) process.stdout.write("  no key events\n");
   for (const event of events) {
-    const line = fmtEvent(event as Record<string, unknown>);
+    const line = fmtEvent(event as Record<string, unknown>, showAll);
     if (line) process.stdout.write(line + "\n");
   }
-  if (!flags.has("events") && !flags.has("full") && run.events.length > 12) process.stdout.write(`  … ${run.events.length - 12} more (--events)\n`);
+  if (!showAll && visibleEvents.length > 12) process.stdout.write(`  … ${visibleEvents.length - 12} more (--events)\n`);
   return 0;
 }
 
@@ -3271,6 +3370,62 @@ async function cmdMap(argv: string[]): Promise<number> {
   if (result.isError) fail(result.text);
   process.stdout.write(`${result.text}\n`);
   return 0;
+}
+
+/* -------------------------------------------------------------------- lsp */
+
+async function cmdLsp(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const action = positional[0] ?? "list";
+
+  if (action === "list") {
+    const specs = allServers();
+    if (flags.has("json")) {
+      process.stdout.write(
+        JSON.stringify(
+          specs.map((spec) => ({
+            id: spec.id,
+            name: spec.name,
+            binary: spec.binary,
+            available: serverAvailable(spec.id),
+            extensions: spec.extensions,
+            filenames: spec.filenames ?? [],
+            install: spec.install,
+          })),
+          null,
+          2,
+        ) + "\n",
+      );
+      return 0;
+    }
+    process.stdout.write(`${formatServerList()}\n`);
+    return 0;
+  }
+
+  if (action === "status") {
+    const l = layout();
+    const { buildRepoMap } = await import("./map/deterministic.js");
+    const built = await buildRepoMap(l.repoRoot);
+    const entries = lspStatusForPaths(built.map.files.map((file) => file.path));
+    if (flags.has("json")) {
+      process.stdout.write(JSON.stringify(entries, null, 2) + "\n");
+      return 0;
+    }
+    if (entries.length === 0) {
+      process.stdout.write("no matching language servers\n");
+      return 0;
+    }
+    for (const entry of entries) {
+      process.stdout.write(
+        `${entry.language.padEnd(12)} ${entry.available ? "ready" : "missing"}  ${entry.name}` +
+        `${entry.available ? "" : `  install: ${entry.install}`}\n`,
+      );
+    }
+    return 0;
+  }
+
+  fail("usage: machine_code lsp [list|status] [--json]");
+  return 1;
 }
 
 /* ------------------------------------------------------------- tools/config */
@@ -3510,6 +3665,9 @@ async function main(): Promise<void> {
       break;
     case "map":
       code = await cmdMap(rest);
+      break;
+    case "lsp":
+      code = await cmdLsp(rest);
       break;
     case "tools":
       code = cmdTools(rest);

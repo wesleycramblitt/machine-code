@@ -25,6 +25,7 @@ import {
   isReservedTask,
 } from "../dist/issues/reserved.js";
 import { issueTool } from "../dist/tools/issues.js";
+import { RunStateStore } from "../dist/context/state.js";
 import { parsePlanMarker } from "../dist/plan/schema.js";
 import { RunRecorder } from "../dist/state/runs.js";
 import { resolveRunTarget } from "../dist/issues/work.js";
@@ -285,6 +286,79 @@ test("issue tool gates actions by capability", async () => {
   }
 });
 
+test("empty issue list tells the planner to create the Epic", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-empty-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueTool(ctx).execute("c1", { action: "list" });
+    assert.equal(result.isError, undefined);
+    const text = result.content[0].text;
+    assert.match(text, /no issues/);
+    assert.match(text, /create the Epic/);
+    assert.match(text, /Do not list again/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("empty issue list does not tell a read-only role to create", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-empty-read-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read"], root);
+    const result = await issueTool(ctx).execute("c1", { action: "list" });
+    assert.equal(result.isError, undefined);
+    const text = result.content[0].text;
+    assert.match(text, /read-only issue access/);
+    assert.doesNotMatch(text, /create the Epic/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue creation is remembered in run state", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-state-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const state = new RunStateStore({ runDir: join(root, "state"), runId: "r", goal: "plan" });
+    ctx.state = state;
+    const created = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    assert.equal(created.isError, undefined);
+    const block = state.renderBlock();
+    assert.match(block, /Issues:/);
+    assert.match(block, /#1 epic open "Epic"/);
+    assert.match(block, /Feature 0: Planning & Review/);
+    assert.match(block, /Task 0: Planning & Review/);
+    assert.match(block, /\[reserved\]/, "reserved anchors are remembered");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a Task cannot be created under the reserved Feature 0 anchor", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-reserved-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const created = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    assert.equal(created.isError, undefined);
+    const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
+    assert.ok(feature0, "Epic creation reserves Feature 0");
+    const result = await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "task",
+      parent: `#${feature0.ref.number}`,
+      title: "Task",
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /reserved planning anchor/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("issue tool requires issue:create for new issues and issue:plan for edits", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-access-"));
   try {
@@ -323,9 +397,23 @@ test("issue tool creates an Epic with its reserved chain", async () => {
     const result = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Propulsion" });
     assert.equal(result.isError, undefined);
     assert.match(result.content[0].text, /reserved: Feature 0 #/);
+    assert.match(result.content[0].text, /Feature 0: Planning & Review/);
+    assert.match(result.content[0].text, /Task 0: Planning & Review/);
+    assert.match(result.content[0].text, /coordination anchors/);
     assert.equal(p.issues.size, 3);
     const epic = [...p.issues.values()].find((i) => i.kind === "epic");
     assert.equal((await p.children(epic.ref)).length, 1);
+
+    const feature = await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "feature",
+      parent: `#${epic.ref.number}`,
+      title: "Gates",
+    });
+    assert.equal(feature.isError, undefined);
+    assert.match(feature.content[0].text, /reserved: Task 0 #/);
+    assert.match(feature.content[0].text, /Task 0: Planning & Review/);
+    assert.match(feature.content[0].text, /coordination anchor/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

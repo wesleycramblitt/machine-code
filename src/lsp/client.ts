@@ -15,7 +15,9 @@ import {
 import { pathToFileURL } from "node:url";
 import type {
   Diagnostic,
+  DocumentSymbol,
   Location,
+  LocationLink,
   Position,
   SymbolInformation,
   Hover,
@@ -26,6 +28,12 @@ export interface LspClientOptions {
   binary: string;
   args: string[];
   root: string;
+  /** Default LSP languageId when the path has no better mapping. */
+  languageId?: string;
+  /** Map a file path to its LSP languageId (TSX vs TS, SCSS vs CSS, ...). */
+  languageIdForPath?: (path: string) => string;
+  /** Passed to initialize.initializationOptions. */
+  initializationOptions?: Record<string, unknown>;
   /** Per-request timeout (ms). */
   timeoutMs?: number;
   /** Optional run supervisor for lifecycle visibility. */
@@ -38,6 +46,7 @@ export class LspClient {
   private initialized = false;
   private starting: Promise<boolean> | null = null;
   private diagnostics = new Map<string, Diagnostic[]>();
+  private opened = new Map<string, number>();
   private readonly timeoutMs: number;
 
   constructor(private readonly options: LspClientOptions) {
@@ -63,7 +72,9 @@ export class LspClient {
         cwd: this.options.root,
         stdio: ["pipe", "pipe", "pipe"],
         detached: true,
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+        // Language servers need the user's toolchain env (JAVA_HOME, GOPATH,
+        // CARGO_HOME, ...), not just PATH/HOME.
+        env: process.env,
       });
       this.process = child;
       this.options.processes?.attach(child, {
@@ -84,6 +95,7 @@ export class LspClient {
       const initResult = await withTimeout(
         conn.sendRequest("initialize", {
           processId: process.pid,
+          clientInfo: { name: "machine_code", version: "0.0.0" },
           rootUri: pathToFileURL(this.options.root).href,
           capabilities: {
             textDocument: {
@@ -92,9 +104,13 @@ export class LspClient {
               references: {},
               hover: { contentFormat: ["markdown", "plaintext"] },
               rename: { prepareSupport: true },
+              documentSymbol: { hierarchicalDocumentSymbolSupport: true },
             },
             workspace: { symbol: {} },
           },
+          ...(this.options.initializationOptions
+            ? { initializationOptions: this.options.initializationOptions }
+            : {}),
           workspaceFolders: [{ uri: pathToFileURL(this.options.root).href, name: "root" }],
         }),
         this.timeoutMs,
@@ -120,12 +136,18 @@ export class LspClient {
     }
     this.connection = null;
     this.initialized = false;
+    this.opened.clear();
     try {
       if (this.process && !this.process.killed) this.process.kill("SIGTERM");
     } catch {
       // ignore
     }
     this.process = null;
+  }
+
+  /** Synchronous best-effort kill for process-exit cleanup. */
+  kill(): void {
+    this.dispose();
   }
 
   async shutdown(): Promise<void> {
@@ -146,18 +168,32 @@ export class LspClient {
 
   // ---- text document sync ----
 
-  async openDocument(filePath: string, content: string): Promise<string> {
+  async openDocument(filePath: string, content: string, languageId?: string): Promise<string> {
     const uri = pathToFileURL(filePath).href;
     if (!this.connection) return uri;
+    const resolved =
+      languageId ??
+      this.options.languageIdForPath?.(filePath) ??
+      this.options.languageId ??
+      "plaintext";
     try {
-      this.connection.sendNotification("textDocument/didOpen", {
-        textDocument: {
-          uri,
-          languageId: "typescript",
-          version: 1,
-          text: content,
-        },
-      });
+      const version = (this.opened.get(uri) ?? 0) + 1;
+      if (this.opened.has(uri)) {
+        this.connection.sendNotification("textDocument/didChange", {
+          textDocument: { uri, version },
+          contentChanges: [{ text: content }],
+        });
+      } else {
+        this.connection.sendNotification("textDocument/didOpen", {
+          textDocument: {
+            uri,
+            languageId: resolved,
+            version,
+            text: content,
+          },
+        });
+      }
+      this.opened.set(uri, version);
     } catch {
       // ignore
     }
@@ -183,6 +219,10 @@ export class LspClient {
 
   async rename(filePath: string, position: Position, newName: string): Promise<WorkspaceEdit | null> {
     if (!(await this.ensureStarted())) return null;
+    const { readFileSync } = await import("node:fs");
+    let content = "";
+    try { content = readFileSync(filePath, "utf8"); } catch { /* ignore */ }
+    await this.openDocument(filePath, content);
     const uri = pathToFileURL(filePath).href;
     try {
       const result = (await withTimeout(
@@ -215,9 +255,16 @@ export class LspClient {
           position,
         }),
         this.timeoutMs,
-      )) as Location | Location[] | null;
+      )) as Location | LocationLink | Array<Location | LocationLink> | null;
       if (result === null) return [];
-      return Array.isArray(result) ? result : [result];
+      const items = Array.isArray(result) ? result : [result];
+      // Servers may return LocationLink (targetUri/targetRange) instead of
+      // Location. Normalize so callers only see Location.
+      return items.map((item) =>
+        "targetUri" in item
+          ? { uri: item.targetUri, range: item.targetSelectionRange ?? item.targetRange }
+          : item,
+      );
     } catch {
       return null;
     }
@@ -261,6 +308,26 @@ export class LspClient {
         this.timeoutMs,
       )) as Hover | null;
       return result ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Hierarchical symbols for one open document. More reliable than workspace/symbol. */
+  async documentSymbols(filePath: string): Promise<Array<DocumentSymbol | SymbolInformation> | null> {
+    if (!(await this.ensureStarted())) return null;
+    const { readFileSync } = await import("node:fs");
+    let content = "";
+    try { content = readFileSync(filePath, "utf8"); } catch { /* ignore */ }
+    const uri = await this.openDocument(filePath, content);
+    try {
+      const result = (await withTimeout(
+        this.connection!.sendRequest("textDocument/documentSymbol", {
+          textDocument: { uri },
+        }),
+        this.timeoutMs,
+      )) as Array<DocumentSymbol | SymbolInformation> | null;
+      return result ?? [];
     } catch {
       return null;
     }

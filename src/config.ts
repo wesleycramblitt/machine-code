@@ -7,6 +7,7 @@
  * output-token ceiling per agent. Unknown keys are ignored (forward-compat).
  */
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parse } from "smol-toml";
 import type { Layout } from "./paths.js";
 import { AGENT_NAMES } from "./agents.js";
@@ -158,6 +159,8 @@ export interface AgentPolicy {
   maxOutputTokens?: number;
   /** Total token budget for one run of this agent. */
   budgetTokens?: number;
+  /** Hard cap on assistant turns for one run (default 25). */
+  maxTurns?: number;
   /** Neutral composite capability floor (0-10); broad safety only. 0 disables it. */
   minCapability: number;
   /** Role-weighted capability floor (0-10); the primary per-role quality gate. */
@@ -346,7 +349,14 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     context: {
       maxChars: asNumber(contextRaw.max_chars) ?? 24_000,
       planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
-      knowledgeIndex: typeof contextRaw.knowledge_index === "string" ? contextRaw.knowledge_index : undefined,
+      // A repo that keeps knowledge/index.md gets it in context by default.
+      // An explicit knowledge_index (including "") still wins.
+      knowledgeIndex:
+        typeof contextRaw.knowledge_index === "string"
+          ? contextRaw.knowledge_index
+          : layout.repoRoot && existsSync(join(layout.repoRoot, "knowledge", "index.md"))
+            ? "knowledge/index.md"
+            : undefined,
     },
     map: {
       enabled: mapRaw.enabled !== false,
@@ -419,6 +429,7 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     expectedOutputTokens: asNumber(raw.expected_output_tokens) ?? base.expectedOutputTokens,
     maxOutputTokens: asNumber(raw.max_output_tokens) ?? base.maxOutputTokens,
     budgetTokens: asNumber(raw.budget_tokens) ?? base.budgetTokens,
+    maxTurns: asNumber(raw.max_turns) ?? base.maxTurns,
     minCapability: asNumber(raw.min_capability) ?? base.minCapability,
     minFit: asNumber(raw.min_fit) ?? base.minFit,
     minAxes: mergeAxes(base.minAxes, asAxisMap(raw.axes, `${label}.axes`)),

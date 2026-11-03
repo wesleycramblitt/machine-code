@@ -122,6 +122,8 @@ export class GitHubIssueProvider implements IssueProvider {
   private readonly repoRoot: string;
   private readonly timeoutMs: number;
   private issueTypes: { epic?: string; feature?: string; task?: string } | null | undefined;
+  /** Labels already created or confirmed in this process. */
+  private readonly ensuredLabels = new Set<string>();
 
   constructor(options: GitHubProviderOptions) {
     this.repo = options.repo;
@@ -145,6 +147,34 @@ export class GitHubIssueProvider implements IssueProvider {
       throw new IssueError("gh_failed", `gh ${args[0] ?? ""} failed: ${result.stderr.trim() || `exit ${result.code}`}`);
     }
     return result.stdout;
+  }
+
+  /** Create missing labels before an issue write; gh refuses unknown labels. */
+  private async ensureLabels(labels: Iterable<string>): Promise<void> {
+    for (const label of labels) {
+      if (!label || this.ensuredLabels.has(label)) continue;
+      try {
+        await this.gh(
+          [
+            "label",
+            "create",
+            label,
+            "--repo",
+            this.repo,
+            "--force",
+            "--color",
+            "ededed",
+            "--description",
+            "machine_code managed",
+          ],
+          20_000,
+        );
+        this.ensuredLabels.add(label);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new IssueError("label_failed", `could not ensure label ${label}: ${message}`);
+      }
+    }
   }
 
   async available(): Promise<boolean> {
@@ -337,6 +367,7 @@ export class GitHubIssueProvider implements IssueProvider {
     ];
     const labels = new Set(input.labels ?? []);
     labels.add(`mc:${input.kind}`);
+    await this.ensureLabels(labels);
     const types = await this.detectIssueTypes();
     const nativeType = types?.[input.kind];
     if (nativeType) args.push("--type", nativeType);
@@ -353,6 +384,7 @@ export class GitHubIssueProvider implements IssueProvider {
   }
 
   async update(ref: IssueRef, patch: IssuePatch): Promise<Issue> {
+    if (patch.labels) await this.ensureLabels(patch.labels);
     const args = ["issue", "edit", String(ref.number), "--repo", this.repo];
     if (patch.title !== undefined) args.push("--title", patch.title);
     if (patch.body !== undefined) args.push("--body", patch.body);

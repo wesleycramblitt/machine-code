@@ -56,6 +56,23 @@ test("state records decisions, next, focus, and artifacts", () => {
   }
 });
 
+test("issue facts render in the state block and update by number", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-issue", goal: "plan" });
+    store.addIssueFact(12, '#12 epic "Plan"');
+    store.addIssueFact(13, '#13 feature "Gates" parent #12');
+    store.addIssueFact(13, '#13 feature "Gates" parent #12 plan ready');
+    const block = store.renderBlock();
+    assert.match(block, /Issues:/);
+    assert.match(block, /#12 epic "Plan"/);
+    assert.match(block, /#13 feature "Gates" parent #12 plan ready/);
+    assert.equal(block.match(/#13 feature/g)?.length, 1, "same issue updates in place");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ingestTurn records read facts, artifacts, working set, and changes", () => {
   const dir = tempDir();
   try {
@@ -86,6 +103,20 @@ test("ingestTurn records read facts, artifacts, working set, and changes", () =>
     assert.ok(change);
     assert.match(change.text, /edited src\/tui\.ts/);
     assert.equal(store.getState().phase, "act");
+
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "c3", name: "command", args: { action: "run", name: "typescript:test" } }),
+        result({ id: "c3", name: "command", text: "# tests 1\n# pass 1\n# fail 0" }),
+      ],
+      3,
+    );
+    const command = store.getState().facts.find((fact) => fact.key === "command:typescript:test:true");
+    assert.ok(command);
+    assert.match(command.text, /# tests 1/);
+    assert.match(command.text, /# pass 1/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

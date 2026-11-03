@@ -39,6 +39,8 @@ import { issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { prTool, type PrToolContext } from "./pr.js";
 import { contextTool } from "./context.js";
+import { loadSemantic, searchSemantic, type SemanticMap } from "../map/semantic.js";
+import { languageForPath, serverForLanguage } from "../lsp/servers.js";
 import type { RunStateStore } from "../context/state.js";
 
 export interface ToolContext {
@@ -46,6 +48,8 @@ export interface ToolContext {
   root: string;
   /** Loaded commands (core + profiles). */
   commands: ReadonlyMap<string, import("../commands/registry.js").CommandSpec>;
+  /** Tools available to this run, for role-aware errors. */
+  tools?: readonly string[];
   /** When provided, the `ask` tool is live (suspends the run for input). */
   ask?: AskContext;
   /** When provided, the `issue` tool is live (capability-gated issue access). */
@@ -56,6 +60,8 @@ export interface ToolContext {
   prs?: PrToolContext;
   /** Run state for the `context` tool. */
   state?: RunStateStore;
+  /** Current semantic map, if one is available. */
+  semantic?: () => SemanticMap | null;
   /** When present, spawned commands/processes are recorded by the supervisor. */
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
 }
@@ -235,7 +241,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
 
 const SEARCH_MODES: readonly string[] = [
   "map", "files", "outline", "text", "structure", "json", "yaml",
-  "definition", "references", "symbols", "info",
+  "definition", "references", "symbols", "info", "semantic",
 ];
 
 const SearchParams = Type.Object({
@@ -252,18 +258,20 @@ const SearchParams = Type.Object({
       Type.Literal("references"),
       Type.Literal("symbols"),
       Type.Literal("info"),
+      Type.Literal("semantic"),
     ],
     { description: "Search mode." },
   ),
-  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure, symbol name for semantic modes." })),
+  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic, symbol name for LSP modes." })),
   path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
   paths: Type.Optional(
     Type.Array(Type.String(), {
       description: "Specific files or directories for text mode. Use instead of path.",
     }),
   ),
-  line: Type.Optional(Type.Number({ description: "1-based line (semantic modes)." })),
-  column: Type.Optional(Type.Number({ description: "1-based column (semantic modes)." })),
+  line: Type.Optional(Type.Number({ description: "1-based line (LSP position modes)." })),
+  column: Type.Optional(Type.Number({ description: "1-based column (LSP position modes)." })),
+  language: Type.Optional(Type.String({ description: "LSP language id, e.g. typescript, python, rust. Default: infer from path." })),
   limit: Type.Optional(Type.Number({ description: "Max results (default 200)." })),
 });
 
@@ -288,7 +296,7 @@ async function exec(
   return ok(capText(result.stdout.trimEnd(), capBytes).text || "no matches");
 }
 
-const SEMANTIC_MODES = new Set(["definition", "references", "symbols", "info"]);
+const POSITION_MODES = new Set(["definition", "references", "info"]);
 
 export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
   return {
@@ -296,7 +304,8 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     label: "search",
     description:
       "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing), outline (one file's symbols), text (regex), " +
-      "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), and semantic definition/references/symbols/info (LSP, from M1). " +
+      "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), semantic (rank modules/key files by concept or filename), " +
+      "symbols (LSP document/workspace symbols when a server is available, else repo map), and LSP definition/references/info (needs path+line+column). " +
       "text accepts paths to search a specific file list. Never touches excluded directories " +
       "(node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
     parameters: SearchParams,
@@ -381,6 +390,32 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               }) || "no files",
             );
           }
+          case "semantic": {
+            if (!params.pattern) return fail("semantic mode requires a query");
+            const semantic = ctx.semantic?.() ?? loadSemantic(ctx.root);
+            if (!semantic) {
+              return fail(
+                "semantic map is not available; use map, outline, or text search, or refresh with machine_code map --semantic",
+              );
+            }
+            const matches = searchSemantic(semantic, params.pattern, limit);
+            if (matches.length === 0) {
+              return ok(`no semantic matches for "${params.pattern}"; try text or outline`);
+            }
+            return ok(
+              matches
+                .map((match) => {
+                  const files = match.entry.keyFiles?.length
+                    ? `\n  files: ${match.entry.keyFiles.join(", ")}`
+                    : "";
+                  const hints = match.entry.editHints?.length
+                    ? `\n  hints: ${match.entry.editHints.join("; ")}`
+                    : "";
+                  return `${match.module} (score ${match.score})\n  ${match.entry.summary}${files}${hints}`;
+                })
+                .join("\n\n"),
+            );
+          }
           case "outline": {
             if (!params.path) return fail("outline mode requires a path");
             const file = await outlineFile(ctx.root, params.path);
@@ -410,45 +445,87 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
           default: {
             if (params.mode === "symbols") {
+              const language = params.language ?? (params.path ? languageForPath(params.path) : null);
+              if (language) {
+                const { formatDocumentSymbols, formatSymbols, lspClientFor, serverAvailable } = await import("../lsp/index.js");
+                if (serverAvailable(language)) {
+                  const client = lspClientFor(ctx.root, language, ctx.processes);
+                  if (client) {
+                    if (params.path) {
+                      const symbols = await client.documentSymbols(resolveWithin(ctx.root, params.path));
+                      if (symbols && symbols.length > 0) {
+                        const formatted = formatDocumentSymbols(symbols, params.path);
+                        if (formatted.length > 0) {
+                          const query = (params.pattern ?? "").toLowerCase();
+                          const filtered = query
+                            ? formatted.filter((line) => line.toLowerCase().includes(query))
+                            : formatted;
+                          return ok((filtered.length > 0 ? filtered : formatted).slice(0, limit).join("\n"));
+                        }
+                      }
+                    } else {
+                      const symbols = await client.workspaceSymbols(params.pattern ?? "");
+                      if (symbols && symbols.length > 0) {
+                        return ok(formatSymbols(symbols.slice(0, limit)).join("\n"));
+                      }
+                    }
+                  }
+                }
+              }
               const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
-              const hits = findSymbols(built.map, params.pattern ?? "", limit);
-              return ok(hits.join("\n") || "no symbols");
+              let scopedMap = built.map;
+              if (params.path) {
+                const scopedPath = toRelative(ctx.root, resolveWithin(ctx.root, params.path));
+                const file =
+                  built.map.files.find((entry) => entry.path === scopedPath) ??
+                  (await outlineFile(ctx.root, scopedPath));
+                scopedMap = { ...built.map, files: file ? [file] : [] };
+              }
+              const hits = findSymbols(scopedMap, params.pattern ?? "", limit);
+              const note = language ? `\n[LSP ${language} unavailable or empty; used repo map]` : "";
+              return ok((hits.join("\n") || "no symbols") + note);
             }
-            if (SEMANTIC_MODES.has(params.mode)) {
+            if (POSITION_MODES.has(params.mode)) {
+              if (!params.path || params.line === undefined || params.column === undefined) {
+                return fail(`LSP mode "${params.mode}" requires path + line + column`);
+              }
+              const language = params.language ?? languageForPath(params.path);
+              if (!language) {
+                return fail(`no LSP server for ${params.path}; use outline, text, or structure`);
+              }
+              const spec = serverForLanguage(language);
+              if (!spec) return fail(`no LSP server for language "${language}"`);
               const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
-              if (!serverAvailable("typescript")) {
+              if (!serverAvailable(language)) {
                 return fail(
-                  `semantic mode "${params.mode}" unavailable: typescript-language-server not installed. ` +
+                  `LSP ${language} unavailable (${spec.name}). Install: ${spec.install}. ` +
                   "Fallback: outline, text, or structure.",
                 );
               }
-              const abs = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
-              const client = lspClientFor(ctx.root, "typescript", ctx.processes);
-              if (!client) return fail("LSP unavailable. Fallback: outline, text, or structure.");
-              if (!params.path || params.line === undefined || params.column === undefined) {
-                return fail(`semantic mode "${params.mode}" requires path + line + column`);
-              }
+              const abs = resolveWithin(ctx.root, params.path);
+              const client = lspClientFor(ctx.root, language, ctx.processes);
+              if (!client) return fail(`LSP ${language} unavailable. Fallback: outline, text, or structure.`);
               const pos = { line: params.line - 1, character: params.column - 1 };
               if (params.mode === "definition") {
                 const locs = await client.definition(abs, pos);
-                if (locs === null) return fail("LSP server did not respond");
+                if (locs === null) return fail("LSP server did not respond. For TypeScript, ensure typescript is installed in the project. Fallback: outline, text, or structure.");
                 if (locs.length === 0) return ok("no definition");
                 return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\n"));
               }
               if (params.mode === "references") {
                 const locs = await client.references(abs, pos);
-                if (locs === null) return fail("LSP server did not respond");
+                if (locs === null) return fail("LSP server did not respond. For TypeScript, ensure typescript is installed in the project. Fallback: outline, text, or structure.");
                 if (locs.length === 0) return ok("no references");
                 return ok(locs.map((l) => `${l.uri.replace("file://", "")}:${l.range.start.line + 1}:${l.range.start.character + 1}`).join("\n"));
               }
               if (params.mode === "info") {
                 const hover = await client.hover(abs, pos);
-                if (hover === null) return fail("LSP server did not respond");
+                if (hover === null) return fail("LSP server did not respond. For TypeScript, ensure typescript is installed in the project. Fallback: outline, text, or structure.");
                 if (!hover) return ok("no info");
                 const content = typeof hover.contents === "string" ? hover.contents : (hover.contents as { value?: string }).value ?? JSON.stringify(hover.contents);
                 return ok(content);
               }
-              return fail(`unknown semantic mode: ${params.mode}`);
+              return fail(`unknown LSP mode: ${params.mode}`);
             }
             return fail(`unknown search mode: ${params.mode}`);
           }
@@ -472,22 +549,47 @@ const CommandParams = Type.Object({
   ),
 });
 
+const CORE_TOOL_NAMES = new Set([
+  "read",
+  "write",
+  "edit",
+  "search",
+  "command",
+  "context",
+  "ask",
+  "issue",
+  "artifact",
+  "pr",
+]);
+
 export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
   return {
     name: "command",
     label: "command",
     description:
-      "List all typed command schemas in one call, describe one, or run it (core:* built-ins and allowlisted manifests). No arbitrary shell.",
+      "List all typed command schemas (large); describe one; or run it (core:* built-ins and allowlisted manifests). No arbitrary shell. " +
+      "issue, pr, artifact, read, search, context, and ask are tools, not commands; call them directly.",
     parameters: CommandParams,
     async execute(_id, params: Static<typeof CommandParams>) {
       try {
         if (params.action === "list") {
+          if (params.name) return fail(`list takes no name; use describe name=${params.name}`);
           const items = [...ctx.commands.keys()]
             .sort()
             .map((name) => describeCommand(name, ctx.commands));
           return ok(items.join("\n\n"));
         }
         if (!params.name) return fail(`${params.action} requires a name`);
+        if (CORE_TOOL_NAMES.has(params.name)) {
+          const available = !ctx.tools || ctx.tools.includes(params.name);
+          return fail(
+            available
+              ? `${params.name} is a tool, not a command. Call the ${params.name} tool directly with its action/parameters.`
+              : `${params.name} is a tool, but this role does not have it. Available tools: ${
+                  (ctx.tools ?? []).join(", ") || "(none)"
+                }.`,
+          );
+        }
         if (params.action === "describe") {
           return ok(describeCommand(params.name, ctx.commands));
         }

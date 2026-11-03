@@ -21,7 +21,7 @@ import type { ProcessSupervisor } from "../processes/supervisor.js";
 import { markSemanticDirty } from "../map/semantic.js";
 import { recordSemanticChange } from "../map/changes.js";
 
-export type FactKind = "finding" | "decision" | "change";
+export type FactKind = "finding" | "decision" | "change" | "issue";
 export type RefKind = "read" | "search" | "edit" | "focus";
 
 export interface Ref {
@@ -129,6 +129,16 @@ function str(value: unknown): string | undefined {
 function inline(text: string, max = 180): string {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean.length <= max ? clean : `${clean.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/** First few useful lines of a read/search result, for the state block. */
+function excerpt(text: string, max = 180): string {
+  const lines = text
+    .split("\n")
+    .map((line) => line.replace(/^\s*\d+:\s?/, "").trim())
+    .filter(Boolean);
+  if (lines.length > 0 && (/^\[?[^:\]]+:\d+-\d+/.test(lines[0]!) || /^\[.*\]$/.test(lines[0]!))) lines.shift();
+  return inline(lines.slice(0, 3).join(" "), max);
 }
 
 function lineCount(text: string): number {
@@ -372,14 +382,14 @@ export class RunStateStore {
     return getArtifact(this.runDir, id);
   }
 
-  addReadFact(ref: Ref, turn: number): void {
+  addReadFact(ref: Ref, turn: number, excerptText = ""): void {
     const key = `read:${ref.path}:${ref.range?.join("-") ?? ""}:${ref.hash ?? ""}`;
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind: "finding",
-        text: `read ${refLabel(ref)}`,
+        text: `read ${refLabel(ref)}${excerptText ? `: ${excerptText}` : ""}`,
         refs: [ref],
         turn,
         status: "active",
@@ -388,14 +398,14 @@ export class RunStateStore {
     });
   }
 
-  addSearchFact(query: string, refs: Ref[], turn: number): void {
+  addSearchFact(query: string, refs: Ref[], turn: number, hits = ""): void {
     const key = `search:${sha1(query)}`;
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind: "finding",
-        text: `search "${query}" -> ${refs.length} ref${refs.length === 1 ? "" : "s"}`,
+        text: `search "${query}" -> ${refs.length} ref${refs.length === 1 ? "" : "s"}${hits ? `: ${hits}` : ""}`,
         refs: refs.slice(0, 10),
         turn,
         status: "active",
@@ -404,19 +414,39 @@ export class RunStateStore {
     });
   }
 
-  addCommandFact(name: string, ok: boolean, turn: number): void {
+  addCommandFact(name: string, ok: boolean, turn: number, excerptText = ""): void {
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind: "finding",
-        text: `command ${name}: ${ok ? "ok" : "error"}`,
+        text: `command ${name}: ${ok ? "ok" : "error"}${excerptText ? `: ${excerptText}` : ""}`,
         refs: [],
         turn,
         status: "active",
         key: `command:${name}:${ok}`,
       },
     });
+  }
+
+  /** Remember an issue by number so the next prompt still has the graph. */
+  addIssueFact(number: number | string, text: string, turn?: number): void {
+    const at = turn ?? this.currentTurn();
+    const clean = text.replace(/\s+/g, " ").trim();
+    if (!clean) return;
+    this.append({
+      type: "fact",
+      fact: {
+        id: this.id(),
+        kind: "issue",
+        text: clean.slice(0, 240),
+        refs: [],
+        turn: at,
+        status: "active",
+        key: `issue:${number}`,
+      },
+    });
+    this.saveMarkdown();
   }
 
   private ignoredStatusPath(path: string): boolean {
@@ -588,7 +618,7 @@ export class RunStateStore {
           bytes: artifact.bytes,
         };
         refs.push(ref);
-        this.addReadFact(ref, turn);
+        this.addReadFact(ref, turn, excerpt(resultText));
       } else if (toolName === "search") {
         const found: Ref[] = [];
         for (const line of resultText.split("\n")) {
@@ -597,12 +627,16 @@ export class RunStateStore {
           found.push({ path: match[1]!, range: [Number(match[2]), Number(match[2])] });
           if (found.length >= 10) break;
         }
-        this.addSearchFact(str(args.pattern) ?? "", found, turn);
+        const hits = found
+          .slice(0, 3)
+          .map((ref) => `${ref.path}:${ref.range?.[0] ?? ""}`)
+          .join(", ");
+        this.addSearchFact(str(args.pattern) ?? "", found, turn, hits);
         refs.push(...found.slice(0, 3));
       } else if (toolName === "command") {
         commandRan = true;
         commandName = str(args.name) ?? "command";
-        this.addCommandFact(commandName, message.isError !== true, turn);
+        this.addCommandFact(commandName, message.isError !== true, turn, excerpt(resultText));
         verified = true;
       } else if ((toolName === "edit" || toolName === "write") && path) {
         if (message.isError === true) continue;
@@ -655,6 +689,7 @@ export class RunStateStore {
   renderBlock(): string {
     const active = this.state.facts.filter((fact) => fact.status === "active");
     const decisions = active.filter((fact) => fact.kind === "decision");
+    const issues = active.filter((fact) => fact.kind === "issue");
     const findings = active.filter((fact) => fact.kind === "finding");
     const changes = active.filter((fact) => fact.kind === "change");
     const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`];
@@ -662,6 +697,14 @@ export class RunStateStore {
     if (decisions.length > 0) {
       lines.push("Decisions:");
       for (const fact of decisions) lines.push(`- ${fact.text}`);
+    }
+    if (issues.length > 0) {
+      lines.push("Issues:");
+      const shown = issues.slice(-40);
+      for (const fact of shown) lines.push(`- ${fact.text}`);
+      if (issues.length > shown.length) {
+        lines.push(`- … ${issues.length - shown.length} older issue(s) omitted; use issue list or tree to inspect`);
+      }
     }
     if (findings.length > 0) {
       lines.push("Findings:");

@@ -28,6 +28,7 @@
 
 [agents.general]
 min_fit = 6.0
+max_turns = 6
 [agents.general.axes]
 reasoning = 6.0
 code = 5.0
@@ -61,12 +62,26 @@ agentic = 5.0
 general = 3.0
 
 [agents.review]
-min_fit = 6.0
+# Review is the last gate; require a stronger fit than general.
+min_fit = 7.0
+max_turns = 15
 [agents.review.axes]
 reasoning = 6.0
 code = 5.0
 agentic = 6.0
 general = 5.0
+
+# Planner free offers: keep a weak fallback from burning the turn budget on
+# orientation. If no free model clears this bar, the paid tier may pick a
+# stronger funded model instead.
+[agents.planner]
+# Planning a large plan needs more turns than a single edit/test loop.
+max_turns = 40
+[agents.planner.free]
+min_fit = 6.5
+[agents.planner.free.axes]
+reasoning = 6.5
+agentic = 6.0
 
 [agents.sudo]
 min_fit = 6.0

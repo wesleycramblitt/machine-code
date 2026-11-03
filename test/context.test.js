@@ -110,6 +110,27 @@ test("no inputs yields only the tool/command index", async () => {
   }
 });
 
+test("configured knowledge index is inherited into context", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-knowledge-"));
+  try {
+    mkdirSync(join(root, "knowledge"), { recursive: true });
+    writeFileSync(join(root, "knowledge", "index.md"), "# Repo knowledge\n\nStart here.\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine({
+        context: { maxChars: 24_000, planFile: undefined, knowledgeIndex: "knowledge/index.md" },
+      }),
+    });
+    const source = bundle.sources.find(
+      (item) => item.kind === "knowledge" && item.ref === "knowledge/index.md",
+    );
+    assert.ok(source, "knowledge index is a context source");
+    assert.match(bundle.text, /Repo knowledge/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("task → feature → epic inheritance with provenance", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx1-"));
   try {

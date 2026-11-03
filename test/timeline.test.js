@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isTimelineEvent, stepTimelineSelection } from "../dist/tui/timeline.js";
+import { describeTimelineEvent, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "../dist/tui/timeline.js";
 
 const events = [
   { type: "run_start" },
@@ -30,4 +30,30 @@ test("timeline selection stays put at the ends", () => {
   assert.equal(stepTimelineSelection(events, 5, 1), 5);
   assert.equal(stepTimelineSelection([], 0, 1), 0);
   assert.equal(stepTimelineSelection([{ type: "model_delta" }], 0, 1), 0);
+});
+
+test("routine internals are hidden unless verbose is requested", () => {
+  const mixed = [
+    { type: "run_start" },
+    { type: "context_state", turn: 1 },
+    { type: "checkpoint", turn: 1 },
+    { type: "model_select", call: 1, key: "p/m" },
+    { type: "model_select", call: 0, key: "p/m" },
+    { type: "tool_call", tool: "read" },
+    { type: "run_summary", stopReason: "completed" },
+  ];
+  assert.equal(isTimelineEvent(mixed[1]), false);
+  assert.equal(isTimelineEvent(mixed[2]), false);
+  assert.equal(isTimelineEvent(mixed[3]), false);
+  assert.equal(isTimelineEvent(mixed[4]), true);
+  assert.equal(isTimelineEvent(mixed[1], true), true);
+  assert.equal(lastTimelineIndex(mixed), 6);
+  assert.equal(lastTimelineIndex([{ type: "model_delta" }]), -1);
+});
+
+test("event descriptions are one-line and ANSI-free", () => {
+  assert.equal(describeTimelineEvent({ type: "tool_call", tool: "read", isError: false }), "read ok");
+  assert.match(describeTimelineEvent({ type: "issue_created", number: 12, kind: "epic", title: "Plan" }), /#12 epic Plan/);
+  assert.match(describeTimelineEvent({ type: "turn_cap", turns: 25 }), /25/);
+  assert.doesNotMatch(describeTimelineEvent({ type: "error_classified", kind: "rate-limit" }), /\x1b/);
 });

@@ -111,97 +111,148 @@ export async function ensureSemanticMap(input: EnsureSemanticInput): Promise<Sem
     input.recorder.event("map_semantic", { ok: false, error: picked.error, dirty: dirty.length });
     return existing;
   }
-  const row = picked.selected;
-  const model = input.models.getModel(row.providerID, row.id);
-  if (!model) {
-    input.recorder.event("map_semantic", { ok: false, error: `runtime model missing: ${row.key}`, dirty: dirty.length });
-    return existing;
+  const candidateKeys = [
+    picked.selected.key,
+    ...picked.candidates.map((candidate) => candidate.key),
+  ];
+  const candidates: CatalogueRow[] = [];
+  for (const key of candidateKeys) {
+    const row =
+      key === picked.selected.key
+        ? picked.selected
+        : input.catalogue.find((entry) => entry.key === key);
+    if (row && !candidates.some((candidate) => candidate.key === row.key)) candidates.push(row);
   }
 
-  const started = Date.now();
-  try {
-    const result = await runSemanticModel(input.models, model, task.prompt, input.signal);
-    const merged = mergeSemantic({
-      root: input.root,
-      map: input.map,
-      existing,
-      modules: task.modules,
-      model: row.key,
-      response: result.text,
-      dirtyPaths: dirty,
-      changeCutoff: task.changeCutoff,
-    });
-    if (!merged) {
-      input.recorder.event("map_semantic", {
-        ok: false,
-        error: "semantic response was empty or invalid",
+  let lastError = "no eligible semantic model";
+  const coolModel = async (row: CatalogueRow, message: string): Promise<void> => {
+    try {
+      const { applyClassification, classifyError, loadAvailability, saveAvailability } = await import("../availability.js");
+      const state = input.availability ?? loadAvailability(input.home);
+      applyClassification(state, row.providerID, row.key, classifyError(new Error(message)));
+      saveAvailability(input.home, state);
+    } catch {
+      // availability write failure must not break the map
+    }
+  };
+  for (const row of candidates) {
+    const model = input.models.getModel(row.providerID, row.id);
+    if (!model) {
+      lastError = `runtime model missing: ${row.key}`;
+      continue;
+    }
+    const started = Date.now();
+    try {
+      const result = await runSemanticModel(input.models, model, task.prompt, input.signal, 4_000, input.runId);
+      if (!result.text.trim()) {
+        lastError = result.error ?? `empty response (${result.stopReason ?? "unknown"})`;
+        input.recorder.event("map_semantic", {
+          ok: false,
+          error: lastError,
+          model: row.key,
+          durationMs: Date.now() - started,
+          dirty: dirty.length,
+        });
+        await coolModel(row, lastError);
+        continue;
+      }
+      const merged = mergeSemantic({
+        root: input.root,
+        map: input.map,
+        existing,
+        modules: task.modules,
         model: row.key,
+        response: result.text,
+        dirtyPaths: dirty,
+        changeCutoff: task.changeCutoff,
+      });
+      if (!merged) {
+        lastError = "semantic response was empty or invalid";
+        input.recorder.event("map_semantic", {
+          ok: false,
+          error: lastError,
+          model: row.key,
+          durationMs: Date.now() - started,
+          dirty: dirty.length,
+        });
+        continue;
+      }
+      const usage = result.usage;
+      const actual = usage?.cost?.total;
+      const actualCost = typeof actual === "number" && Number.isFinite(actual) ? actual : null;
+      const estimated = estimateCallCost(
+        row.pricing,
+        usage?.input ?? 0,
+        Math.max(usage?.output ?? 0, input.policy.expectedOutputTokens),
+      ) * providerMultiplier(input.machine, row.providerID);
+      const bytes = Buffer.byteLength(JSON.stringify(merged), "utf8");
+      input.recorder.event("map_semantic", {
+        ok: true,
+        model: row.key,
+        modules: Object.keys(merged.modules).length,
+        refreshed: task.modules.length,
+        bytes,
+        usage: usage
+          ? {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              totalTokens: usage.totalTokens,
+            }
+          : undefined,
+        cost: actualCost,
+        estimated,
         durationMs: Date.now() - started,
       });
-      return existing;
-    }
-    const usage = result.usage;
-    const actual = usage?.cost?.total;
-    const actualCost = typeof actual === "number" && Number.isFinite(actual) ? actual : null;
-    const estimated = estimateCallCost(
-      row.pricing,
-      usage?.input ?? 0,
-      Math.max(usage?.output ?? 0, input.policy.expectedOutputTokens),
-    ) * providerMultiplier(input.machine, row.providerID);
-    const bytes = Buffer.byteLength(JSON.stringify(merged), "utf8");
-    input.recorder.event("map_semantic", {
-      ok: true,
-      model: row.key,
-      modules: Object.keys(merged.modules).length,
-      refreshed: task.modules.length,
-      bytes,
-      usage: usage
-        ? {
-            input: usage.input,
-            output: usage.output,
-            cacheRead: usage.cacheRead,
-            cacheWrite: usage.cacheWrite,
-            totalTokens: usage.totalTokens,
-          }
-        : undefined,
-      cost: actualCost,
-      estimated,
-      durationMs: Date.now() - started,
-    });
-    if (usage) {
+      if (usage) {
+        try {
+          appendSpendRecord(input.home, {
+            id: randomUUID(),
+            t: new Date().toISOString(),
+            repoRoot: input.root,
+            runId: input.runId,
+            agent: "map",
+            provider: row.providerID,
+            model: row.id,
+            usage: {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              totalTokens: usage.totalTokens,
+            },
+            cost: { actual: actualCost, estimated },
+            stopReason: result.stopReason ?? "stop",
+          });
+        } catch {
+          // ledger failure must not break the run
+        }
+      }
+      return merged;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      input.recorder.event("map_semantic", {
+        ok: false,
+        error: lastError,
+        model: row.key,
+        durationMs: Date.now() - started,
+        dirty: dirty.length,
+      });
       try {
-        appendSpendRecord(input.home, {
-          id: randomUUID(),
-          t: new Date().toISOString(),
-          repoRoot: input.root,
-          runId: input.runId,
-          agent: "map",
-          provider: row.providerID,
-          model: row.id,
-          usage: {
-            input: usage.input,
-            output: usage.output,
-            cacheRead: usage.cacheRead,
-            cacheWrite: usage.cacheWrite,
-            totalTokens: usage.totalTokens,
-          },
-          cost: { actual: actualCost, estimated },
-          stopReason: result.stopReason ?? "stop",
-        });
+        await coolModel(row, lastError);
       } catch {
-        // ledger failure must not break the run
+        // availability write failure must not break the map
       }
     }
-    return merged;
-  } catch (error) {
-    input.recorder.event("map_semantic", {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-      model: row.key,
-      durationMs: Date.now() - started,
-    });
-    return existing;
   }
+  input.recorder.event("map_semantic", {
+    ok: false,
+    error: lastError,
+    dirty: dirty.length,
+    modelsTried: candidates.length,
+  });
+  return existing;
   } catch (error) {
     input.recorder.event("map_semantic", {
       ok: false,

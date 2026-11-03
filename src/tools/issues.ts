@@ -36,6 +36,7 @@ import { renderPlanMarker, type PlanMarker, type PlanReview, type PlanRole, type
 import { validatePlanIssue } from "../plan/validate.js";
 import type { Layout } from "../paths.js";
 import type { RunRecorder } from "../state/runs.js";
+import type { RunStateStore } from "../context/state.js";
 
 export interface IssueToolContext {
   provider: IssueProvider;
@@ -45,6 +46,8 @@ export interface IssueToolContext {
   recorder: RunRecorder;
   /** Needed for acceptance-evidence lookup in this repo's runs. */
   layout: Layout;
+  /** Optional run state so the next prompt remembers the issue graph. */
+  state?: RunStateStore;
   /** Approval default for deliverables created by this run. */
   defaultApproval: "human" | "agent";
 }
@@ -79,6 +82,7 @@ const IssueParams = Type.Object({
   /** Alias for blocked_by. Dependencies are the same graph. */
   depends_on: Type.Optional(Type.Array(Type.String({ description: "Alias for blocked_by." }))),
   state: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")])),
+  limit: Type.Optional(Type.Number({ description: "Max issues to list (default 100, max 200)." })),
   reason: Type.Optional(Type.String({ description: "Close reason (close)." })),
   depth: Type.Optional(Type.Number({ description: "Tree depth (default 2)." })),
   /** mc:plan fields for the `plan` action. */
@@ -164,14 +168,24 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     return parseIssueRef(value, ctx.repo, ctx.provider.kind);
   };
   const counts = () => runCountsFrom(requireRuns(ctx.recorder));
+  const remember = (issue: Issue, extra = ""): void => {
+    const parent = issue.parent ? ` parent #${issue.parent.number}` : "";
+    const plan = issue.plan ? ` plan ${issue.plan.status}` : "";
+    const reserved = isReserved(issue) ? " [reserved]" : "";
+    ctx.state?.addIssueFact(
+      issue.ref.number,
+      `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${reserved}${extra ? ` ${extra}` : ""}`,
+    );
+  };
 
   return {
     name: "issue",
     label: "issue",
     description:
-      "Structured GitHub issue access. list/view/tree read; create/edit write; create/edit accept blocked_by or depends_on; " +
-      "plan writes or replaces the Task mc:plan marker; link sets parent-child (Feature→Epic, Task→Feature); " +
-      "ensure maintains the reserved Feature 0 / Task 0 anchors; close follows the per-issue approval policy.",
+      "Structured GitHub issue access. list/view/tree read; create/edit write; create/edit accept blocked_by/depends_on; " +
+      "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
+      "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
+      "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
     parameters: IssueParams,
     async execute(_id, params: Static<typeof IssueParams>) {
       try {
@@ -187,13 +201,25 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     switch (params.action) {
       case "list": {
         require("issue:read");
-        const issues = await ctx.provider.list({ state: params.state ?? "all", limit: 100 });
-        return ok(issues.length === 0 ? "no issues" : issues.map(line).join("\n"));
+        const limit = Math.max(1, Math.min(200, Math.floor(params.limit ?? 100)));
+        const issues = await ctx.provider.list({ state: params.state ?? "all", limit });
+        if (issues.length === 0) {
+          const canCreate = ctx.capabilities.includes("issue:create");
+          return ok(
+            canCreate
+              ? "no issues\nNo issues exist yet. If you are planning, create the Epic now: " +
+                  'issue { action: "create", kind: "epic", title: "..." }. Do not list again.'
+              : "no issues\nNo issues exist yet. This role has read-only issue access.",
+          );
+        }
+        for (const issue of issues.slice(0, 50)) remember(issue);
+        return ok(issues.map(line).join("\n"));
       }
       case "view": {
         require("issue:read");
         const issue = await ctx.provider.get(ref(params.issue, "issue"));
         if (!issue) return fail(`issue not found: ${params.issue}`);
+        remember(issue);
         return ok(`${line(issue)}\n${issue.body.slice(0, 4000)}`);
       }
       case "tree": {
@@ -202,9 +228,11 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (!root) return fail(`issue not found: ${params.issue}`);
         const depth = Math.max(0, Math.min(5, Math.floor(params.depth ?? 2)));
         const lines = [line(root)];
+        remember(root);
         const walk = async (issue: Issue, level: number): Promise<void> => {
           if (level >= depth) return;
           for (const child of await ctx.provider.children(issue.ref)) {
+            remember(child);
             lines.push(`${"  ".repeat(level + 1)}${line(child)}`);
             await walk(child, level + 1);
           }
@@ -223,6 +251,12 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           const parentIssue = await ctx.provider.get(parent);
           if (!parentIssue) return fail(`parent not found: ${params.parent}`);
           if (parentIssue.kind !== "feature") return fail(`a Task's parent must be a Feature (got ${parentIssue.kind})`);
+          if (isReserved(parentIssue)) {
+            return fail(
+              `parent #${parentIssue.ref.number} is a reserved planning anchor; ` +
+                "create a normal Feature under the Epic and put Tasks there",
+            );
+          }
           // Repair the parent chain before adding a deliverable.
           if (parentIssue.kind === "feature") await ensureFeatureReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
         }
@@ -242,14 +276,33 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           labels: params.labels,
           ...(blockedBy ? { blockedBy } : {}),
         });
-        ctx.recorder.event("issue_created", { number: created.ref.number, kind: created.kind, parent: parent?.number });
+        ctx.recorder.event("issue_created", {
+          number: created.ref.number,
+          kind: created.kind,
+          title: created.title,
+          parent: parent?.number,
+        });
+        remember(created);
         let note = "";
         if (created.kind === "epic") {
           const reserved = await ensureEpicReserved(ctx.provider, created.ref, { runCounts: counts() });
-          note = `\nreserved: Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}`;
+          remember(reserved.feature0);
+          remember(reserved.task0);
+          note =
+            `\nreserved: Feature 0 #${reserved.feature0.ref.number} "Feature 0: Planning & Review", ` +
+            `Task 0 #${reserved.task0.ref.number} "Task 0: Planning & Review"` +
+            `\nThese are coordination anchors, not deliverables. Do not add work under them.` +
+            `\nNext: create Features with action=create kind=feature parent=#${created.ref.number}.`;
         } else if (created.kind === "feature") {
           const task0 = await ensureFeatureReserved(ctx.provider, created.ref, { runCounts: counts() });
-          note = `\nreserved: Task 0 #${task0.ref.number}`;
+          remember(task0);
+          note =
+            `\nreserved: Task 0 #${task0.ref.number} "Task 0: Planning & Review"` +
+            `\nThis is a coordination anchor, not a deliverable. Do not add work under it.` +
+            `\nNext: create Tasks with action=create kind=task parent=#${created.ref.number}.`;
+        } else {
+          note =
+            `\nNext: add acceptance criteria to the body, then action=plan issue=#${created.ref.number} status=ready.`;
         }
         return ok(`created #${created.ref.number} (${created.kind}): ${created.title}${note}`);
       }
@@ -267,6 +320,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           ...(params.labels !== undefined ? { labels: params.labels } : {}),
           ...(blockedBy ? { blockedBy } : {}),
         });
+        remember(updated);
         return ok(`updated #${updated.ref.number}: ${updated.title}`);
       }
       case "plan": {
@@ -307,6 +361,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           verification: plan.verification,
           worktree: plan.worktree,
         });
+        remember(updated, `plan ${plan.status}`);
         return ok(
           `plan ${plan.status} on #${updated.ref.number}: ${plan.role}/${plan.verification}, ` +
             `worktree ${plan.worktree}, retries ${plan.retriesBeforeReplan}, ` +
@@ -354,6 +409,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (child.kind === "feature") await ensureEpicReserved(ctx.provider, parent.ref, { runCounts: counts() });
         await ctx.provider.linkParent(child.ref, parent.ref);
         ctx.recorder.event("issue_linked", { issue: child.ref.number, parent: parent.ref.number });
+        remember(child, `parent #${parent.ref.number}`);
         return ok(`linked #${child.ref.number} (${child.kind}) under #${parent.ref.number} (${parent.kind})`);
       }
       case "ensure": {
@@ -362,18 +418,25 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.kind === "epic") {
           const reserved = await ensureEpicReserved(ctx.provider, target.ref, { runCounts: counts() });
+          remember(target);
+          remember(reserved.feature0);
+          remember(reserved.task0);
           return ok(
             `epic #${target.ref.number}: Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}`,
           );
         }
         if (target.kind === "feature") {
           const task0 = await ensureFeatureReserved(ctx.provider, target.ref, { runCounts: counts() });
+          remember(target);
+          remember(task0);
           return ok(`feature #${target.ref.number}: Task 0 #${task0.ref.number}`);
         }
         if (target.parent) {
           const parent = await ctx.provider.get(target.parent);
           if (parent?.kind === "feature") {
             const task0 = await ensureFeatureReserved(ctx.provider, parent.ref, { runCounts: counts() });
+            remember(target);
+            remember(task0);
             return ok(`task #${target.ref.number}: parent Task 0 #${task0.ref.number}`);
           }
         }

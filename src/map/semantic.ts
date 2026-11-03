@@ -18,7 +18,7 @@ import type { Context, Usage } from "@earendil-works/pi-ai";
 import type { MutableModels, ChatModel } from "../models.js";
 import { truncateToBytes } from "../tools/safety.js";
 import { readSemanticChanges } from "./changes.js";
-import { renderRepoMap, type RepoMap } from "./deterministic.js";
+import { renderRepoMap, type MapFile, type RepoMap } from "./deterministic.js";
 
 export const SEMANTIC_SCHEMA = 1 as const;
 const SEMANTIC_CAP_BYTES = 16 * 1024;
@@ -28,6 +28,57 @@ export interface SemanticEntry {
   summary: string;
   keyFiles?: string[];
   editHints?: string[];
+  /** Concrete search terms: filenames, symbols, concepts. */
+  keywords?: string[];
+}
+
+export interface SemanticMatch {
+  module: string;
+  entry: SemanticEntry;
+  score: number;
+}
+
+const STOPWORDS = new Set([
+  "the", "and", "for", "with", "from", "that", "this", "what", "how", "why", "where", "when",
+  "are", "was", "were", "you", "your", "its", "into", "about", "does", "use", "used", "using",
+  "can", "will", "should", "would", "could", "please", "one", "two", "all", "any", "not",
+  "but", "has", "have", "had", "them", "they", "their", "then", "than", "also", "just",
+]);
+
+/** Lowercase search tokens; splits filenames on dots so `state.md` matches `state`. */
+export function semanticTokens(text: string): string[] {
+  return [...new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9_]+/)
+      .filter((token) => token.length >= 3 && !STOPWORDS.has(token)),
+  )];
+}
+
+/** Rank modules by keyword overlap with a query. */
+export function searchSemantic(semantic: SemanticMap, query: string, limit = 10): SemanticMatch[] {
+  const tokens = semanticTokens(query);
+  if (tokens.length === 0) return [];
+  const matches: SemanticMatch[] = [];
+  for (const [module, entry] of Object.entries(semantic.modules)) {
+    const moduleText = module.toLowerCase();
+    const summary = entry.summary.toLowerCase();
+    const files = (entry.keyFiles ?? []).join(" ").toLowerCase();
+    const hints = (entry.editHints ?? []).join(" ").toLowerCase();
+    const keywords = (entry.keywords ?? []).join(" ").toLowerCase();
+    let score = 0;
+    for (const token of tokens) {
+      if (moduleText.includes(token)) score += 5;
+      if (summary.includes(token)) score += 3;
+      if (files.includes(token)) score += 6;
+      if (hints.includes(token)) score += 2;
+      if (keywords.includes(token)) score += 8;
+    }
+    if (score > 0) matches.push({ module, entry, score });
+  }
+  return matches
+    .sort((a, b) => b.score - a.score || a.module.localeCompare(b.module))
+    .slice(0, Math.max(1, limit));
 }
 
 export interface SemanticMap {
@@ -50,6 +101,73 @@ export interface SemanticModelResult {
   text: string;
   usage?: Usage;
   stopReason?: string;
+  error?: string;
+}
+
+/** Build a deterministic, always-fresh module index from the repo map. */
+export function buildModuleIndex(map: RepoMap): SemanticMap {
+  const byModule = new Map<string, MapFile[]>();
+  for (const file of map.files) {
+    const module = moduleOf(file.path);
+    const list = byModule.get(module) ?? [];
+    list.push(file);
+    byModule.set(module, list);
+  }
+  const modules: Record<string, SemanticEntry> = {};
+  for (const [module, files] of byModule) {
+    const sorted = [...files].sort(
+      (a, b) => b.symbols.length - a.symbols.length || b.bytes - a.bytes || a.path.localeCompare(b.path),
+    );
+    const byBytes = [...files].sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path)).slice(0, 2);
+    const keyFiles = [...new Set([...sorted.slice(0, 3), ...byBytes].map((file) => file.path))].slice(0, 4);
+    const symbols = [...new Set(sorted.flatMap((file) => file.symbols.map((symbol) => symbol.name)))].slice(0, 12);
+    const basenames = keyFiles.map((path) => path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? path);
+    const keywords = [...new Set([
+      module,
+      ...module.split("/"),
+      ...basenames,
+      ...symbols,
+    ].filter(Boolean))].slice(0, 16);
+    const summary = [
+      basenames.join(", "),
+      symbols.length > 0 ? symbols.slice(0, 8).join(", ") : "",
+    ].filter(Boolean).join(" — ");
+    modules[module] = {
+      summary: clip(summary || module, 240),
+      keyFiles,
+      keywords,
+    };
+  }
+  return {
+    schema: SEMANTIC_SCHEMA,
+    baseCommit: map.head,
+    mapHash: mapHashOf(map),
+    generatedAt: new Date().toISOString(),
+    model: "deterministic",
+    modules,
+  };
+}
+
+/** Overlay fresh LLM annotations on the deterministic index. */
+export function mergeModuleIndex(base: SemanticMap, overlay: SemanticMap | null): SemanticMap {
+  if (!overlay) return base;
+  const modules: Record<string, SemanticEntry> = { ...base.modules };
+  for (const [module, entry] of Object.entries(overlay.modules)) {
+    const current = modules[module];
+    if (!current) continue;
+    modules[module] = {
+      summary: entry.summary?.trim() || current.summary,
+      ...(entry.keyFiles?.length ? { keyFiles: entry.keyFiles } : current.keyFiles ? { keyFiles: current.keyFiles } : {}),
+      ...(entry.editHints?.length ? { editHints: entry.editHints } : current.editHints ? { editHints: current.editHints } : {}),
+      keywords: [...new Set([...(current.keywords ?? []), ...(entry.keywords ?? [])])].slice(0, 16),
+    };
+  }
+  return {
+    ...base,
+    model: overlay.model,
+    generatedAt: overlay.generatedAt,
+    modules,
+  };
 }
 
 function cacheDir(root: string): string {
@@ -196,14 +314,17 @@ export function buildSemanticTask(input: SemanticTaskInput): SemanticTask {
     : "(none)";
   const prompt = [
     "Annotate this repository map. Return JSON only, with no prose.",
-    "For each module, write a 20-40 word purpose summary, up to 3 key files, and up to 2 edit hints.",
+    "For each module, name its main exported types/functions and the problem it solves in 20-40 words.",
+    "keyFiles: up to 3 exact paths from the map.",
+    "editHints: up to 2 hints that name the file and symbol to change for a likely task.",
+    "keywords: up to 8 concrete search terms (filenames, symbols, concepts).",
     "Use exact paths and symbol names. Do not speculate. Keep existing annotations unless the module is dirty.",
     "Use recent changes to understand what moved; do not restate the change itself.",
     `Modules: ${targets.join(", ")}`,
     `Dirty paths: ${input.dirtyPaths.join(", ") || "(none)"}`,
     `Recent changes:\n${truncateToBytes(changeText, 2048)}`,
     `Existing annotations: ${existing}`,
-    "JSON shape: {\"modules\":{\"<module>\":{\"summary\":\"...\",\"keyFiles\":[\"...\"],\"editHints\":[\"...\"]}}}",
+    "JSON shape: {\"modules\":{\"<module>\":{\"summary\":\"...\",\"keyFiles\":[\"...\"],\"editHints\":[\"...\"],\"keywords\":[\"...\"]}}}",
     "Map:",
     truncateToBytes(mapText, SEMANTIC_INPUT_BYTES),
   ].join("\n\n");
@@ -234,10 +355,18 @@ function validEntry(value: unknown, map: RepoMap, module: string): SemanticEntry
   const editHints = Array.isArray(raw.editHints)
     ? raw.editHints.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 2)
     : [];
+  const keywords = Array.isArray(raw.keywords)
+    ? [...new Set(
+        raw.keywords
+          .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+          .map((item) => clip(item.trim(), 40)),
+      )].slice(0, 8)
+    : [];
   return {
     summary: clip(raw.summary.trim(), 240),
     ...(keyFiles.length > 0 ? { keyFiles } : {}),
     ...(editHints.length > 0 ? { editHints: editHints.map((hint) => clip(hint, 160)) } : {}),
+    ...(keywords.length > 0 ? { keywords } : {}),
   };
 }
 
@@ -303,11 +432,22 @@ export function mergeSemantic(input: MergeInput): SemanticMap | null {
   return semantic;
 }
 
-export function renderSemanticIndex(semantic: SemanticMap | null, maxBytes = 1024): string {
+export function renderSemanticIndex(semantic: SemanticMap | null, maxBytes = 3_072, query = ""): string {
   if (!semantic) return "";
+  const ranked = new Map(
+    (query.trim() ? searchSemantic(semantic, query, 16) : []).map((match) => [match.module, match.score]),
+  );
+  const modules = Object.entries(semantic.modules).sort(([a], [b]) => {
+    const scoreA = ranked.get(a) ?? 0;
+    const scoreB = ranked.get(b) ?? 0;
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return a.localeCompare(b);
+  });
   const lines = ["<semantic-map>"];
-  for (const [module, entry] of Object.entries(semantic.modules).sort(([a], [b]) => a.localeCompare(b))) {
-    lines.push(`${module} — ${entry.summary}`);
+  for (const [module, entry] of modules) {
+    const files = entry.keyFiles?.length ? ` · files: ${entry.keyFiles.join(", ")}` : "";
+    const hints = entry.editHints?.length ? ` · hints: ${entry.editHints.join("; ")}` : "";
+    lines.push(`${module} — ${entry.summary}${files}${hints}`);
   }
   lines.push("</semantic-map>");
   const text = lines.join("\n");
@@ -321,7 +461,8 @@ export async function runSemanticModel(
   model: ChatModel,
   prompt: string,
   signal?: AbortSignal,
-  maxTokens = 2000,
+  maxTokens = 4_000,
+  sessionId?: string,
 ): Promise<SemanticModelResult> {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
@@ -331,11 +472,16 @@ export async function runSemanticModel(
   }
   const timer = setTimeout(() => controller.abort(), 60_000);
   try {
-    const source = models.stream(
+    const source = models.streamSimple(
       model,
-      { messages: [{ role: "user", content: prompt }] } as Context,
+      {
+        systemPrompt: "Return JSON only. Do not call tools. No prose.",
+        messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+      } as Context,
       {
         maxTokens,
+        reasoning: "minimal",
+        sessionId,
         signal: controller.signal,
         identity: {
           userAgent: { custom: "machine_code/0.0.0" },
@@ -344,11 +490,24 @@ export async function runSemanticModel(
       },
     );
     let text = "";
-    for await (const event of source) {
-      if (event.type === "text_delta") text += event.delta;
+    try {
+      for await (const event of source) {
+        if (event.type === "text_delta") text += event.delta;
+      }
+      const result = await source.result();
+      return {
+        text,
+        usage: result.usage,
+        stopReason: result.stopReason,
+        ...(result.errorMessage ? { error: result.errorMessage } : {}),
+      };
+    } catch (error) {
+      return {
+        text,
+        stopReason: "error",
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-    const result = await source.result();
-    return { text, usage: result.usage, stopReason: result.stopReason };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);

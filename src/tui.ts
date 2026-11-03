@@ -15,6 +15,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
+import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { readIssueCache, writeIssueCache } from "./issues/cache.js";
 import type { Issue, IssueRef } from "./issues/provider.js";
@@ -29,7 +30,7 @@ import {
   type RunRow,
 } from "./tui/runs.js";
 import { selectableLines } from "./tui/scroll.js";
-import { isTimelineEvent, stepTimelineSelection } from "./tui/timeline.js";
+import { describeTimelineEvent, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
 import { axisWeights, isMetaRouter, pick } from "./select.js";
@@ -612,6 +613,10 @@ export async function runTui(): Promise<void> {
   let eventScroll = 0;
   /** Line offset inside a selected timeline block (expanded inputs/outputs). */
   let eventBodyScroll = 0;
+  /** Follow the newest timeline event; j/k or PgUp/PgDn turns it off. */
+  let timelineFollow = true;
+  /** Show routine internals in the timeline. */
+  let timelineVerbose = false;
   let thinkingScroll = 0;
   let thinkingFollow = true;
   let childSel = 0;
@@ -1399,17 +1404,18 @@ export async function runTui(): Promise<void> {
           const run = row.run;
           const ask = run.status === "awaiting_input" ? ` ${Y}ASK${R}` : "";
           const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
+          const reason = run.stopReason && run.stopReason !== "completed" ? ` ${D}${run.stopReason}${R}` : "";
           const repoTag = runsGroup === "overall" ? ` ${D}[${repoLabel(run.repoRoot)}]${R}` : "";
           const right = `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
           if (narrow) {
-            const identity = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R}${ask}${pr}`;
+            const identity = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R}${ask}${pr}${reason}`;
             rendered.push(selected(` ${trunc(identity, Math.max(12, cols - visible(right) - 2))} ${right}`, isSelected));
             const agent = `${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}`;
             const request = run.request.replace(/\s+/g, " ").slice(0, 60);
             const detail = `${agent} ${D}${request}${R}`;
             rendered.push(selected(` ${indent}      ${trunc(detail, Math.max(12, cols - indent.length - 8))}`, isSelected));
           } else {
-            const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}${ask}${pr}`;
+            const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}${ask}${pr}${reason}`;
             const context = `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}`;
             rendered.push(selected(` ${pad(left, Math.max(30, cols - visible(right) - visible(context) - 2))}${context}${right}`, isSelected));
           }
@@ -2255,6 +2261,15 @@ export async function runTui(): Promise<void> {
         const context = readContextManifest(detail.dir);
         const relatedList = relatedRuns(allRuns, s);
         const thinking = thinkingChunks(ev);
+        const outcomeText =
+          s.summary ??
+          summarizeRun({
+            summary: s,
+            events: ev,
+            state: readStateView(detail.dir),
+            finalText: s.finalText,
+          }).text;
+        const recentActivity = ev.filter((event) => isTimelineEvent(event, false)).slice(-8);
         const thinkingByCall = new Map<string, ThinkingChunk[]>();
         for (const chunk of thinking) {
           if (typeof chunk.call !== "number") continue;
@@ -2267,7 +2282,7 @@ export async function runTui(): Promise<void> {
         runFooter =
           `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}` +
           (runSection === "timeline"
-            ? "  ·  j/k events · space expand · PgUp/Dn scroll"
+            ? `  ·  j/k events · space expand · PgUp/Dn scroll · f follow ${timelineFollow ? "ON" : "OFF"} · v ${timelineVerbose ? "all" : "key events"}`
             : runSection === "processes"
               ? "  ·  j/k select · f follow · o log · x kill · X kill all"
               : "");
@@ -2300,12 +2315,16 @@ export async function runTui(): Promise<void> {
         lines.push("", ...sectionBar, "");
         if (runSection === "overview") {
           lines.push(` ${B}${statusColor(s.status)}Status${R}`);
-          const statusText = s.error ?? s.finalText ?? s.status.toUpperCase();
+          const statusText = s.error ?? s.status.toUpperCase();
           const statusTone = s.error || s.status === "failed" ? RED : W;
           for (const line of wrapText(statusText, cols - 4).slice(0, short ? 3 : 6)) {
             lines.push(`  ${statusTone}${line}${R}`);
           }
           if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
+          lines.push("", ` ${B}${G}Summary${R}`);
+          for (const rawLine of outcomeText.split("\n")) {
+            for (const line of wrapText(rawLine, cols - 4)) lines.push(`  ${W}${line}${R}`);
+          }
           lines.push("", ` ${B}${BL}Request${R}`);
           for (const line of wrapText(s.request, cols - 4).slice(0, short ? 3 : 6)) lines.push(`  ${W}${line}${R}`);
           lines.push("", ` ${B}${M}Now${R}`);
@@ -2315,6 +2334,13 @@ export async function runTui(): Promise<void> {
           lines.push(`  ${D}model${R}  ${C}${String(lastModel?.key ?? "(pending)")}${R}`);
           if (lastTool) lines.push(`  ${D}tool${R}   ${Y}${String(lastTool.tool)}${R} ${D}${JSON.stringify(lastTool.args ?? {}).slice(0, cols - 18)}${R}`);
           if (lastEnd) lines.push(`  ${D}turn${R}   ${D}${String(lastEnd.stopReason ?? "")}${R} ${D}· ${fmtTokens(Number((lastEnd.usage as { totalTokens?: number } | undefined)?.totalTokens ?? 0))} tok${R}`);
+          if (recentActivity.length) {
+            lines.push("", ` ${B}${C}Activity${R}${s.status === "running" ? ` ${G}live${R}` : ""}`);
+            for (const event of recentActivity) {
+              const time = String(event.t ?? "").slice(11, 19);
+              lines.push(`  ${D}${time}${R} ${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}`);
+            }
+          }
           lines.push("", ` ${B}${G}Progress${R}`);
           const mapRoot = s.worktree ?? s.repoRoot;
           const semantic = loadSemantic(mapRoot);
@@ -2343,8 +2369,8 @@ export async function runTui(): Promise<void> {
             }
           }
           if (thinking.length) {
-            lines.push("", ` ${B}${Y}Latest${R}`);
-            for (const line of wrapText(thinking[thinking.length - 1]!.text, cols - 4).slice(-Math.max(1, short ? 2 : 5))) lines.push(`  ${W}${line}${R}`);
+            lines.push("", ` ${B}${Y}Latest thinking${R}`);
+            for (const line of wrapText(thinking[thinking.length - 1]!.text, cols - 4).slice(-Math.max(1, short ? 3 : 8))) lines.push(`  ${W}${line}${R}`);
           }
           const w = selectableLines(lines, 0, runScroll, bodyH);
           runScroll = w.scroll;
@@ -2353,10 +2379,18 @@ export async function runTui(): Promise<void> {
           const eventLines: string[] = [];
           const starts: number[] = [];
           let timelineAttempt = 0;
+          if (timelineFollow) {
+            const lastVisible = lastTimelineIndex(ev, timelineVerbose);
+            if (lastVisible >= 0 && eventSel !== lastVisible) {
+              eventSel = lastVisible;
+              eventBodyScroll = 0;
+            }
+          }
           for (let i = 0; i < ev.length; i++) {
             starts[i] = eventLines.length;
             const event = ev[i]!;
             if (event.type === "model_select" && event.call === 0) timelineAttempt += 1;
+            if (!isTimelineEvent(event, timelineVerbose)) continue;
             const isSelected = i === eventSel;
             const prefix = isSelected ? `${C}▸${R}` : " ";
             const time = String(event.t ?? "").slice(11, 19);
@@ -2482,13 +2516,19 @@ export async function runTui(): Promise<void> {
             else if (type === "run_end") eventLines.push(`${prefix} ${GR}${time}${R} ${statusColor(String(event.status))}■ ${String(event.status).toUpperCase()}${R}`);
             else if (type === "child_spawned") eventLines.push(`${prefix} ${GR}${time}${R} ${M}↳ child${R} ${C}${String(event.childRunId ?? "").slice(-8)}${R} ${agentTone(String(event.role ?? ""))}${String(event.role ?? "")}${R}`);
             else if (type === "child_completed") eventLines.push(`${prefix} ${GR}${time}${R} ${M}↲ child done${R} ${C}${String(event.childRunId ?? "").slice(-8)}${R} ${String(event.status ?? "")}`);
-            else if (type === "issue_created") eventLines.push(`${prefix} ${GR}${time}${R} ${G}+ issue${R} #${String(event.issue)} ${D}${String(event.kind ?? "")}${R}`);
+            else if (type === "issue_created") eventLines.push(`${prefix} ${GR}${time}${R} ${G}+ issue${R} #${String(event.number ?? event.issue ?? "")} ${D}${String(event.kind ?? "")}${event.title ? ` ${String(event.title)}` : ""}${R}`);
+            else if (type === "issue_linked") eventLines.push(`${prefix} ${GR}${time}${R} ${G}link${R} #${String(event.issue ?? "")} under #${String(event.parent ?? "")}`);
+            else if (type === "plan_updated") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}plan${R} #${String(event.issue ?? "")} ${D}${String(event.status ?? "")}${R}`);
+            else if (type === "run_summary") eventLines.push(`${prefix} ${GR}${time}${R} ${B}${G}summary${R} ${D}${String(event.headline ?? event.stopReason ?? "")}${R}`);
+            else if (type === "turn_cap") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}turn cap${R} ${D}${String(event.turns ?? "")} turns${R}`);
+            else if (type === "budget_exhausted") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}budget exhausted${R} ${D}${String(event.totalTokens ?? "")} tok${R}`);
+            else if (type === "loop_blocked") eventLines.push(`${prefix} ${GR}${time}${R} ${RED}loop blocked${R} ${D}${String(event.tool ?? "")}${R}`);
             else if (type === "context_assembled") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}context${R} ${D}${fmtTokens(Number(event.chars ?? 0))} chars${R}`);
             else eventLines.push(`${prefix} ${GR}${time}${R} ${D}${type}${R}`);
           }
           eventSel = Math.max(0, Math.min(ev.length - 1, eventSel));
-          while (eventSel < ev.length - 1 && !isTimelineEvent(ev[eventSel])) eventSel += 1;
-          while (eventSel > 0 && !isTimelineEvent(ev[eventSel])) eventSel -= 1;
+          while (eventSel < ev.length - 1 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel += 1;
+          while (eventSel > 0 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel -= 1;
           const visibleCount = Math.max(1, bodyH - 4);
           const start = starts[eventSel] ?? 0;
           const end = starts[eventSel + 1] ?? eventLines.length;
@@ -3131,7 +3171,8 @@ export async function runTui(): Promise<void> {
       if (!detail) { screen = "list"; draw(); return; }
       const n = detail.events.length;
       const stepTimeline = (direction: -1 | 1): void => {
-        const next = stepTimelineSelection(detail.events, eventSel, direction);
+        timelineFollow = false;
+        const next = stepTimelineSelection(detail.events, eventSel, direction, timelineVerbose);
         if (next !== eventSel) {
           eventSel = next;
           eventBodyScroll = 0;
@@ -3163,6 +3204,11 @@ export async function runTui(): Promise<void> {
         processFollow = false;
         eventScroll = 0;
         eventBodyScroll = 0;
+        if (runSection === "timeline") {
+          timelineFollow = true;
+          const last = lastTimelineIndex(detail.events, timelineVerbose);
+          if (last >= 0) eventSel = last;
+        }
         thinkingFollow = true;
         draw();
       };
@@ -3171,13 +3217,48 @@ export async function runTui(): Promise<void> {
       if (data === "]" || data === "[") { moveSection(data === "]" ? 1 : -1); return; }
       const toggleEvent = () => {
         if (runSection !== "timeline") return;
-        while (eventSel < n && !isTimelineEvent(detail.events[eventSel])) eventSel += 1;
+        timelineFollow = false;
+        while (eventSel < n && !isTimelineEvent(detail.events[eventSel], timelineVerbose)) eventSel += 1;
         if (eventSel >= n) return;
         eventBodyScroll = 0;
         const key = `${detail.summary.id}:${eventSel}`;
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
       };
       if (data === " ") { toggleEvent(); draw(); return; }
+      if (runSection === "timeline" && data === "f") {
+        timelineFollow = !timelineFollow;
+        if (timelineFollow) {
+          const last = lastTimelineIndex(detail.events, timelineVerbose);
+          if (last >= 0) eventSel = last;
+          eventBodyScroll = 0;
+        }
+        notify(timelineFollow ? "following latest event" : "follow off");
+        draw();
+        return;
+      }
+      if (runSection === "timeline" && data === "v") {
+        timelineVerbose = !timelineVerbose;
+        const last = lastTimelineIndex(detail.events, timelineVerbose);
+        if (last >= 0) eventSel = last;
+        eventBodyScroll = 0;
+        notify(timelineVerbose ? "showing all events" : "showing key events");
+        draw();
+        return;
+      }
+      if (data === "\x1b[6~" || data === "\x1b[5~") {
+        const direction = data === "\x1b[6~" ? 1 : -1;
+        if (runSection === "timeline") {
+          timelineFollow = false;
+          eventBodyScroll = Math.max(0, eventBodyScroll + direction * 10);
+        } else if (runSection === "thinking") {
+          thinkingFollow = false;
+          thinkingScroll = Math.max(0, thinkingScroll + direction * 10);
+        } else {
+          runScroll = Math.max(0, runScroll + direction * 10);
+        }
+        draw();
+        return;
+      }
       if (runSection === "processes" && data === "f") {
         processFollow = !processFollow;
         if (processFollow) processSel = Math.max(0, reconcileProcessRecords(detail.dir).length - 1);
@@ -3241,7 +3322,17 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "g") { thinkingFollow = true; draw(); return; }
+      if (data === "g") {
+        thinkingFollow = true;
+        if (runSection === "timeline") {
+          timelineFollow = true;
+          const last = lastTimelineIndex(detail.events, timelineVerbose);
+          if (last >= 0) eventSel = last;
+          eventBodyScroll = 0;
+        }
+        draw();
+        return;
+      }
       draw();
       return;
     }

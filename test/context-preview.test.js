@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -38,6 +38,12 @@ test("preview includes always-visible skill descriptions", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("repository knowledge index fits the context cap and links deeper notes", () => {
+  const text = readFileSync(new URL("../knowledge/index.md", import.meta.url), "utf8");
+  assert.ok(Buffer.byteLength(text, "utf8") <= 2048, "knowledge/index.md must fit the 2 KiB inherited cap");
+  assert.match(text, /knowledge\/architecture\.md/);
 });
 
 test("knowledge discovery finds markdown files without listing the world", () => {

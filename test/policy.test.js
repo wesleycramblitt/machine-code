@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY } from "../dist/config.js";
@@ -34,6 +34,7 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
       "[agents.build]",
       "min_capability = 7.4",
       "min_fit = 7.1",
+      "max_turns = 12",
       "[agents.build.axes]",
       "code = 6.1",
       "",
@@ -63,6 +64,7 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
 
     assert.equal(policy.agents.build.minCapability, 7.6, "repo wins on the composite");
     assert.equal(policy.agents.build.minFit, 7.2, "repo wins on the role-weighted floor");
+    assert.equal(policy.agents.build.maxTurns, 12, "max_turns parses as a per-run cap");
     assert.deepEqual(policy.agents.build.minAxes, { reasoning: 7, code: 6.3 }, "axes merge per axis");
     assert.equal(policy.agents.review.minCapability, 7.2, "global default applies to unnamed roles");
     assert.equal(policy.agents.general.minFit, 6, "min_fit falls back to the built-in default");
@@ -161,6 +163,41 @@ test("theme colors are machine-configurable and unknown keys are ignored", () =>
     assert.equal(machine.theme.footer_bg, "#111111");
     assert.equal(machine.theme.back_bg, "#aa0000");
     assert.equal(machine.theme.nonsense, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("knowledge/index.md becomes the default knowledge index", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-knowledge-"));
+  const machine = join(root, "config.toml");
+  writeFileSync(machine, "", "utf8");
+  mkdirSync(join(root, "knowledge"), { recursive: true });
+  writeFileSync(join(root, "knowledge", "index.md"), "# Index\n", "utf8");
+  try {
+    const config = loadMachineConfig({ machineConfig: machine, repoRoot: root });
+    assert.equal(config.context.knowledgeIndex, "knowledge/index.md");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("explicit knowledge_index and empty string override the default", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-knowledge-"));
+  mkdirSync(join(root, "knowledge"), { recursive: true });
+  writeFileSync(join(root, "knowledge", "index.md"), "# Index\n", "utf8");
+  const machine = join(root, "config.toml");
+  try {
+    writeFileSync(machine, '[context]\nknowledge_index = "docs/kb.md"\n', "utf8");
+    assert.equal(
+      loadMachineConfig({ machineConfig: machine, repoRoot: root }).context.knowledgeIndex,
+      "docs/kb.md",
+    );
+    writeFileSync(machine, '[context]\nknowledge_index = ""\n', "utf8");
+    assert.equal(
+      loadMachineConfig({ machineConfig: machine, repoRoot: root }).context.knowledgeIndex,
+      "",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

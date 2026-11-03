@@ -119,9 +119,9 @@ const SPECS: CommandSpec[] = [
   },
   {
     name: "core:check",
-    description: "LSP diagnostics on a saved file (TypeScript by default). Returns errors/warnings. Falls back to unavailable when no server.",
-    binary: "typescript-language-server",
-    args: () => ["--stdio"],
+    description: "LSP diagnostics on a saved file. The server is inferred from the path. Returns errors/warnings.",
+    binary: "lsp",
+    args: () => [],
     schema: {
       path: { type: "string", required: true, description: "File path relative to the worktree root." },
     },
@@ -136,14 +136,23 @@ const SPECS: CommandSpec[] = [
       const { readFileSync } = await import("node:fs");
       let content = "";
       try { content = readFileSync(abs, "utf8"); } catch (e) { return { text: (e as Error).message, isError: true }; }
-      const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
-      if (!serverAvailable("typescript")) {
-        return { text: "LSP unavailable: typescript-language-server not installed (install: machine_code install typescript-language-server). Fallback: core:status + manual review.", isError: true };
+      const { languageForPath, lspClientFor, serverAvailable, serverForLanguage } = await import("../lsp/index.js");
+      const language = languageForPath(path);
+      if (!language) {
+        return { text: `no LSP server for ${path}; use core:status + manual review.`, isError: true };
       }
-      const client = lspClientFor(ctx.root, "typescript", ctx.processes);
-      if (!client) return { text: "LSP unavailable for this language", isError: true };
+      const spec = serverForLanguage(language);
+      if (!spec) return { text: `no LSP server for language "${language}"`, isError: true };
+      if (!serverAvailable(language)) {
+        return {
+          text: `LSP ${language} unavailable (${spec.name}). Install: ${spec.install}. Fallback: core:status + manual review.`,
+          isError: true,
+        };
+      }
+      const client = lspClientFor(ctx.root, language, ctx.processes);
+      if (!client) return { text: `LSP ${language} unavailable for this language`, isError: true };
       const diagnostics = await client.diagnosticsFor(abs, content);
-      if (diagnostics === null) return { text: "LSP server did not respond (over budget or still indexing). Fallback to ast-grep/rg.", isError: true };
+      if (diagnostics === null) return { text: "LSP server did not respond (over budget, indexing, or missing project toolchain; for TypeScript install typescript). Fallback to ast-grep/rg.", isError: true };
       if (diagnostics.length === 0) return { text: `${path}: no diagnostics`, isError: false };
       const lines = diagnostics.map((d) => {
         const sev = ["error", "warning", "info", "hint"][d.severity ?? 1] ?? "diag";
@@ -154,9 +163,9 @@ const SPECS: CommandSpec[] = [
   },
   {
     name: "core:rename",
-    description: "Type-safe symbol rename via LSP. Previews all touched paths; applies the workspace edit. Preview is required before applying.",
-    binary: "typescript-language-server",
-    args: () => ["--stdio"],
+    description: "Type-safe symbol rename via LSP. The server is inferred from the path. Previews all touched paths; applies the workspace edit.",
+    binary: "lsp",
+    args: () => [],
     schema: {
       path: { type: "string", required: true, description: "File path relative to the worktree root." },
       line: { type: "number", required: true, description: "1-based line of the symbol." },
@@ -177,49 +186,72 @@ const SPECS: CommandSpec[] = [
       const { resolveWithin } = await import("../tools/safety.js");
       let abs: string;
       try { abs = resolveWithin(ctx.root, path); } catch (e) { return { text: (e as Error).message, isError: true }; }
-      const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
-      if (!serverAvailable("typescript")) {
-        return { text: "LSP unavailable: typescript-language-server not installed. Rename falls back to ast-grep/rg (shape-based, not type-safe).", isError: true };
+      const { languageForPath, lspClientFor, serverAvailable, serverForLanguage } = await import("../lsp/index.js");
+      const language = languageForPath(path);
+      if (!language) {
+        return { text: `no LSP server for ${path}. Rename falls back to ast-grep/rg (shape-based, not type-safe).`, isError: true };
       }
-      const client = lspClientFor(ctx.root, "typescript", ctx.processes);
-      if (!client) return { text: "LSP unavailable for this language", isError: true };
+      const spec = serverForLanguage(language);
+      if (!spec) return { text: `no LSP server for language "${language}"`, isError: true };
+      if (!serverAvailable(language)) {
+        return {
+          text: `LSP ${language} unavailable (${spec.name}). Install: ${spec.install}. Rename falls back to ast-grep/rg (shape-based, not type-safe).`,
+          isError: true,
+        };
+      }
+      const client = lspClientFor(ctx.root, language, ctx.processes);
+      if (!client) return { text: `LSP ${language} unavailable for this language`, isError: true };
       const edit = await client.rename(abs, { line: line - 1, character: column - 1 }, newName);
       if (edit === null) {
-        return { text: "rename failed or symbol not found (server may still be indexing)", isError: true };
+        return { text: "rename failed or symbol not found (server may still be indexing; for TypeScript ensure typescript is installed in the project)", isError: true };
       }
-      const changes = edit.changes ?? {};
-      const docChanges = edit.documentChanges ?? [];
-      const paths = new Set<string>();
-      for (const uri of Object.keys(changes)) paths.add(uri);
-      for (const c of docChanges) { if ("textDocument" in c) paths.add(c.textDocument.uri); }
-      const preview = `rename to "${newName}" touches ${paths.size} file(s):\\n${[...paths].map((u) => "  " + u.replace("file://", "")).join("\\n")}`;
-      if (!apply) return { text: `${preview}\\n\\nPreview only — re-run with apply=true to apply.`, isError: false };
-      // Apply edits via the runner's fs (best-effort; LSP workspace edits are
-      // text edits we replay here).
+      type Edit = {
+        range: {
+          start: { line: number; character: number };
+          end: { line: number; character: number };
+        };
+        newText: string;
+      };
+      const editsByUri = new Map<string, Edit[]>();
+      const addEdits = (uri: string, edits: readonly Edit[]): void => {
+        editsByUri.set(uri, [...(editsByUri.get(uri) ?? []), ...edits]);
+      };
+      for (const [uri, edits] of Object.entries(edit.changes ?? {})) addEdits(uri, edits);
+      for (const change of edit.documentChanges ?? []) {
+        if ("textDocument" in change && "edits" in change) {
+          addEdits(change.textDocument.uri, change.edits as Edit[]);
+        }
+      }
+      const preview =
+        `rename to "${newName}" touches ${editsByUri.size} file(s):\n` +
+        `${[...editsByUri.keys()].map((uri) => "  " + uri.replace("file://", "")).join("\n")}`;
+      if (!apply) {
+        return { text: `${preview}\n\nPreview only — re-run with apply=true to apply.`, isError: false };
+      }
       const { readFileSync, writeFileSync } = await import("node:fs");
       const { fileURLToPath } = await import("node:url");
-      for (const uri of paths) {
+      for (const [uri, edits] of editsByUri) {
         const file = fileURLToPath(uri);
         let content = "";
         try { content = readFileSync(file, "utf8"); } catch { continue; }
-        const edits = changes[uri] ?? [];
-        // Apply edits in reverse order to preserve offsets.
-        const sorted = [...edits].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character);
-        let lines = content.split("\\n");
-        for (const e of sorted) {
-          // naive single-line edit
-          const ln = e.range.start.line;
-          const col = e.range.start.character;
-          const endLn = e.range.end.line;
-          const endCol = e.range.end.character;
-          if (ln === endLn) {
-            const row = lines[ln] ?? "";
-            lines[ln] = row.slice(0, col) + e.newText + row.slice(endCol);
-          }
+        const lineStarts = [0];
+        for (let i = 0; i < content.length; i++) {
+          if (content[i] === "\n") lineStarts.push(i + 1);
         }
-        writeFileSync(file, lines.join("\\n"), "utf8");
+        const offsetOf = (position: { line: number; character: number }): number =>
+          (lineStarts[position.line] ?? content.length) + position.character;
+        // Apply from the end so earlier offsets stay valid; this handles
+        // multi-line edits, unlike the old single-line splice.
+        const sorted = [...edits].sort((a, b) => offsetOf(b.range.start) - offsetOf(a.range.start));
+        let next = content;
+        for (const item of sorted) {
+          const start = offsetOf(item.range.start);
+          const end = offsetOf(item.range.end);
+          next = next.slice(0, start) + item.newText + next.slice(end);
+        }
+        writeFileSync(file, next, "utf8");
       }
-      return { text: `${preview}\\n\\nApplied.`, isError: false };
+      return { text: `${preview}\n\nApplied.`, isError: false };
     },
   },
 ];

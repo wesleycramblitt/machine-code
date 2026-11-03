@@ -1,24 +1,33 @@
-# Repository map
-README.md (great starting point for knowledge)
-data/ (configurable data files)
-src/ (source code)
-test/ (test cases)
+# machine_code — repository knowledge
 
-## Skills
-.machine_code/skills/ (SKILL.md procedures; descriptions always visible, bodies load per issue)
-knowledge/skills-curation.md (kept skills, dropped skills, authoring rules)
-knowledge/eval-2026-11-03.md (live Planner → Build → Review → PR evaluation)
+machine_code is a Linux-first coding-agent harness. One run is one role
+(general, planner, build, review, architect) with a bounded tool loop, a
+file-based run directory, and explicit outcome/verdict lines. It optimizes
+correctness per dollar, not maximum autonomy.
 
-## Build folders/files and others to ignore
-node_modules (node packages, ignore)
-dist (distribution/build generated with npm run build)
-.machine_code (machine code files)
-.git (git files, ignore)
-.env (environment)
-.gitignore (git ignores)
-LICENSE (MIT License
-package-lock.json
-package.json
-tsconfig.json (typescript configuration)
+## Start here
+- README.md — user-facing behavior, commands, and config.
+- knowledge/architecture.md — runtime flow, module map, invariants.
+- plans/plan.md — design decisions and remaining work.
+- src/ — TypeScript source. test/ — node:test suites. data/ — prompts,
+  agents, models, offers. .machine_code/ — repo policy and skills.
 
+## Runtime flow
+CLI (`src/cli.ts`) → run loop (`src/loop.ts`) → context assembly
+(`src/context/assemble.ts`) → model selection (`src/select.ts`) → tools
+(`src/tools/index.ts`) → run recorder (`src/state/runs.ts`) → TUI/report.
 
+## Where to look
+- Prompts/roles: `data/prompts/base.md`, `data/agents/*.toml`, `src/agents/config.ts`
+- Tools: `src/tools/index.ts`; issues: `src/tools/issues.ts`, `src/issues/`
+- Repo map/semantic: `src/map/`; LSP: `src/lsp/`
+- State/outcomes: `src/context/state.ts`, `src/state/`
+- Orchestrator/PR: `src/orchestrate.ts`, `src/orchestrator/`, `src/pr/`
+- Tests: `npm test` (builds first), `npm run build`
+
+## Invariants
+- No shell tool; commands are typed specs (`src/commands/registry.ts`).
+- Context is bounded and provenance is recorded in `context.json`.
+- Run state is the memory; earlier tool output is not replayed.
+- Every terminal run has a deterministic summary and a typed outcome.
+- Prompts use ASD-STE100: short, active, one idea per sentence.

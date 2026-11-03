@@ -21,6 +21,59 @@ test("command list returns every schema in one call", async () => {
   assert.match(text, /"path"/);
 });
 
+test("command list with a name points at describe", async () => {
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  const result = await tool.execute("id", { action: "list", name: "core:status" });
+  assert.equal(result.isError, true);
+  const text = result.content.map((c) => c.text ?? "").join("\n");
+  assert.match(text, /list takes no name/);
+  assert.match(text, /describe name=core:status/);
+});
+
+test("command describe points at tools, not commands", async () => {
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  const result = await tool.execute("id", { action: "describe", name: "issue" });
+  assert.equal(result.isError, true);
+  const text = result.content.map((c) => c.text ?? "").join("\n");
+  assert.match(text, /issue is a tool, not a command/);
+});
+
+test("command describe reports a tool the role does not have", async () => {
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS, tools: ["read", "search"] });
+  const result = await tool.execute("id", { action: "describe", name: "issue" });
+  assert.equal(result.isError, true);
+  const text = result.content.map((c) => c.text ?? "").join("\n");
+  assert.match(text, /issue is a tool, but this role does not have it/);
+  assert.match(text, /read, search/);
+});
+
+test("semantic search returns module summaries and key files", async () => {
+  const semantic = {
+    schema: 1,
+    baseCommit: "",
+    mapHash: "",
+    generatedAt: "",
+    model: "test/model",
+    modules: {
+      "src/context": {
+        summary: "Run state, facts, artifacts, and prompt rendering.",
+        keyFiles: ["src/context/state.ts"],
+        keywords: ["state.md"],
+      },
+    },
+  };
+  const tool = searchTool({
+    root: process.cwd(),
+    commands: CORE_COMMANDS,
+    semantic: () => semantic,
+  });
+  const result = await tool.execute("id", { mode: "semantic", pattern: "state.md" });
+  assert.equal(result.isError, undefined);
+  const text = result.content.map((c) => c.text ?? "").join("\n");
+  assert.match(text, /src\/context/);
+  assert.match(text, /files: src\/context\/state\.ts/);
+});
+
 test("text search scoped to a file still works", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-search-"));
   try {

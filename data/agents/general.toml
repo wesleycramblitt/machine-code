@@ -4,7 +4,7 @@
 
 name = "general"
 order = 1
-prompt = '''General agent. Answer from the repository. Read-only. Use map and outline. Read a mentioned file before you answer. Cite every path. Stop.'''
+prompt = '''General agent. Answer from the repo. Read-only. Use semantic/LSP search for names; outline files. Read mentioned files. Cite paths. Stop after two searches agree. Stop.'''
 tools = ["context", "read", "search", "ask"]
 readonly = true
 issue_access = "none"
@@ -14,7 +14,7 @@ preset = "assistant"
 capabilities = ["code:read", "context:inherit"]
 
 [weights]
-reasoning = 0.3
-code = 0.3
-agentic = 0.25
+reasoning = 0.35
+code = 0.15
+agentic = 0.35
 general = 0.15

@@ -12,14 +12,17 @@ import { buildRepoMap } from "../dist/map/deterministic.js";
 import { readSemanticChanges, recordSemanticChange } from "../dist/map/changes.js";
 import {
   buildSemanticTask,
+  buildModuleIndex,
   clearSemanticDirty,
   isSemanticFresh,
   loadSemantic,
   markSemanticDirty,
+  mergeModuleIndex,
   mergeSemantic,
   readSemanticDirty,
   renderSemanticIndex,
   runSemanticModel,
+  searchSemantic,
 } from "../dist/map/semantic.js";
 
 function tempRepo() {
@@ -67,6 +70,39 @@ test("semantic dirty tracking and freshness", async () => {
     assert.deepEqual(readSemanticDirty(root), []);
     assert.match(renderSemanticIndex(loaded), /<semantic-map>/);
     assert.match(renderSemanticIndex(loaded), /src — Source module/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("deterministic module index gives key files, symbols, and searchable keywords", async () => {
+  const root = tempRepo();
+  try {
+    const built = await buildRepoMap(root, { refresh: true });
+    const index = buildModuleIndex(built.map);
+    assert.ok(index.modules.src);
+    assert.ok(index.modules.src.keyFiles?.includes("src/a.ts"));
+    assert.ok(index.modules.src.keywords?.includes("alpha"));
+    assert.match(index.modules.src.summary, /alpha/);
+    const matches = searchSemantic(index, "alpha");
+    assert.equal(matches[0].module, "src");
+
+    const overlay = {
+      ...index,
+      model: "test/model",
+      generatedAt: "now",
+      modules: {
+        src: {
+          summary: "Annotated source.",
+          keyFiles: ["src/a.ts"],
+          keywords: ["custom"],
+        },
+      },
+    };
+    const merged = mergeModuleIndex(index, overlay);
+    assert.equal(merged.modules.src.summary, "Annotated source.");
+    assert.ok(merged.modules.src.keywords?.includes("alpha"));
+    assert.ok(merged.modules.src.keywords?.includes("custom"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -149,9 +185,37 @@ test("dirty-module refresh keeps existing annotations", async () => {
   }
 });
 
+test("semantic search ranks keywords, key files, and summaries", () => {
+  const semantic = {
+    schema: 1,
+    baseCommit: "",
+    mapHash: "",
+    generatedAt: "",
+    model: "test/model",
+    modules: {
+      "src/context": {
+        summary: "Run state, facts, artifacts, and prompt rendering.",
+        keyFiles: ["src/context/state.ts", "src/context/render.ts"],
+        keywords: ["state.md", "events.jsonl", "run state"],
+      },
+      "src/tools": {
+        summary: "Tool implementations and schemas.",
+        keyFiles: ["src/tools/index.ts"],
+      },
+    },
+  };
+  const matches = searchSemantic(semantic, "where is state.md written?");
+  assert.equal(matches[0].module, "src/context");
+  assert.ok(matches[0].score > 0);
+  const index = renderSemanticIndex(semantic, 4_096, "state.md");
+  assert.match(index, /src\/context — Run state/);
+  assert.match(index, /files: src\/context\/state.ts/);
+  assert.match(index, /<semantic-map>/);
+});
+
 test("runSemanticModel accumulates streamed text and usage", async () => {
   const fakeModels = {
-    stream: () => ({
+    streamSimple: () => ({
       async *[Symbol.asyncIterator]() {
         yield { type: "text_delta", delta: "hello " };
         yield { type: "text_delta", delta: "world" };

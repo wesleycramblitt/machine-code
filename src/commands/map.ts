@@ -5,8 +5,8 @@
  * status first and appends map/LSP health so the model can see what is fresh.
  */
 import { buildRepoMap, mapBytes, renderRepoMap, symbolCount } from "../map/deterministic.js";
-import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex } from "../map/semantic.js";
-import { serverAvailable } from "../lsp/index.js";
+import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex } from "../map/semantic.js";
+import { formatLspStatus, lspStatusForPaths } from "../lsp/index.js";
 import { runProc } from "../proc.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
 import type { CommandRunResult } from "./registry.js";
@@ -29,6 +29,8 @@ export async function runMapCommand(
     const semantic = loadSemantic(root);
     const semanticDirty = readSemanticDirty(root);
     const semanticFresh = isSemanticFresh(semantic, built.map, semanticDirty);
+    const deterministic = buildModuleIndex(built.map);
+    const merged = mergeModuleIndex(deterministic, semanticFresh ? semantic : null);
     if (action === "status") {
       return {
         text: [
@@ -39,21 +41,21 @@ export async function runMapCommand(
           `bytes: ${mapBytes(built.map)}`,
           `cache: ${built.cachePath}`,
           `cache: ${built.cached ? "fresh" : "rebuilt"}`,
-          `semantic: ${semantic ? (semanticFresh ? "fresh" : "stale") : "missing"} · ` +
-            `${Object.keys(semantic?.modules ?? {}).length} modules` +
+          `semantic: ${semanticFresh ? "annotated" : semantic ? "deterministic (stale annotations)" : "deterministic"} · ` +
+            `${Object.keys(merged.modules).length} modules` +
             `${semanticDirty.length ? ` · ${semanticDirty.length} dirty` : ""}`,
-          `lsp typescript: ${serverAvailable("typescript") ? "ready" : "missing"}`,
+          formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path))),
         ].join("\n"),
         isError: false,
       };
     }
     if (args.json === true) {
-      return { text: JSON.stringify({ map: built.map, semantic }, null, 2), isError: false };
+      return { text: JSON.stringify({ map: built.map, semantic: merged }, null, 2), isError: false };
     }
-    const deterministic = renderRepoMap(built.map, { path, symbols }) || "no files";
-    const semanticText = args.semantic === true ? renderSemanticIndex(semantic) : "";
+    const deterministicText = renderRepoMap(built.map, { path, symbols }) || "no files";
+    const semanticText = args.semantic === true ? renderSemanticIndex(merged, 16 * 1024, path ?? "") : "";
     return {
-      text: [deterministic, semanticText].filter(Boolean).join("\n\n"),
+      text: [deterministicText, semanticText].filter(Boolean).join("\n\n"),
       isError: false,
     };
   } catch (error) {
@@ -87,11 +89,12 @@ export async function runStatusCommand(root: string, processes?: ProcessSupervis
     const semantic = loadSemantic(root);
     const dirty = readSemanticDirty(root);
     const semanticFresh = isSemanticFresh(semantic, built.map, dirty);
+    const merged = mergeModuleIndex(buildModuleIndex(built.map), semanticFresh ? semantic : null);
     const semanticLine =
-      `semantic ${semantic ? (semanticFresh ? "fresh" : "stale") : "missing"} · ` +
-      `${Object.keys(semantic?.modules ?? {}).length} modules` +
+      `semantic ${semanticFresh ? "annotated" : "deterministic"} · ` +
+      `${Object.keys(merged.modules).length} modules` +
       `${dirty.length ? ` · ${dirty.length} dirty` : ""}`;
-    const lspLine = `lsp typescript: ${serverAvailable("typescript") ? "ready" : "missing"}`;
+    const lspLine = formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path)));
     return {
       text: [gitText, "", mapLine, semanticLine, lspLine].filter(Boolean).join("\n"),
       isError: git.outcome !== "exit" || git.code !== 0,

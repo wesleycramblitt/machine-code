@@ -9,6 +9,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
+import { summarizeRun, readStateView, type StopReason } from "./outcome.js";
 import {
   SCHEMA_VERSION,
   isActiveStatus,
@@ -255,6 +256,10 @@ export class RunRecorder {
       this.eventsFile = join(this.dir, "events.jsonl");
       this.summary = existing;
       this.finalized = false;
+      // A resumed run is live again; derive a fresh summary on its next
+      // finalize instead of showing the previous lifecycle's outcome.
+      this.summary.summary = undefined;
+      this.summary.stopReason = undefined;
       // Consume any stale control request: it was already handled by the
       // previous owner (e.g. the pause that preceded this resume). Without
       // this, the new process would replay it on its first poll.
@@ -370,7 +375,14 @@ export class RunRecorder {
     } else {
       this.summary.cost.estimated += estimatedCost;
     }
-    this.summary.turns += 1;
+    this.summary.lastActivityAt = new Date().toISOString();
+    this.writeSummary();
+  }
+
+  /** Record the run's assistant-turn count (not the model-call count). */
+  recordTurn(turns: number): void {
+    if (!Number.isFinite(turns) || turns < 0) return;
+    this.summary.turns = Math.max(this.summary.turns, Math.floor(turns));
     this.summary.lastActivityAt = new Date().toISOString();
     this.writeSummary();
   }
@@ -392,14 +404,26 @@ export class RunRecorder {
     this.writeSummary();
   }
 
+  /** Read the append-only event stream for this run. */
+  readEvents(): RunEvent[] {
+    if (!existsSync(this.eventsFile)) return [];
+    try {
+      return readFileSync(this.eventsFile, "utf8")
+        .split("\n")
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as RunEvent);
+    } catch {
+      return [];
+    }
+  }
+
   /** Terminal transition only; awaiting_input/paused go through setStatus. */
-  finalize(status: RunStatus, error?: string, finalText?: string): void {
+  finalize(status: RunStatus, error?: string, finalText?: string, summary?: string, stopReason?: StopReason): void {
     if (this.finalized) return;
     if (!isTerminalStatus(status)) {
       this.setStatus(status);
       return;
     }
-    this.finalized = true;
     this.summary.status = status;
     this.summary.endedAt = new Date().toISOString();
     this.summary.lastActivityAt = this.summary.endedAt;
@@ -407,8 +431,34 @@ export class RunRecorder {
     if (finalText && finalText.trim().length > 0) {
       this.summary.finalText = finalText.length > 8000 ? finalText.slice(0, 8000) + "\n…[truncated]" : finalText;
     }
+    // Every terminal run gets an outcome summary, even when the model produced
+    // no final text (turn cap, provider failure, interruption).
+    const outcome = summarizeRun({
+      summary: { ...this.summary, status, error: error ?? this.summary.error },
+      events: this.readEvents(),
+      state: readStateView(this.dir),
+      finalText: finalText ?? this.summary.finalText,
+      stopReason,
+    });
+    this.summary.summary = summary ?? outcome.text;
+    this.summary.stopReason = stopReason ?? outcome.stopReason;
     this.writeSummary();
-    const line: RunEvent = { t: this.summary.endedAt, type: "run_end", status, ...(error ? { error } : {}) };
+    this.finalized = true;
+    const summaryLine: RunEvent = {
+      t: this.summary.endedAt,
+      type: "run_summary",
+      headline: outcome.headline,
+      stopReason: this.summary.stopReason,
+      text: this.summary.summary,
+    };
+    appendFileSync(this.eventsFile, JSON.stringify(summaryLine) + "\n", "utf8");
+    const line: RunEvent = {
+      t: this.summary.endedAt,
+      type: "run_end",
+      status,
+      ...(this.summary.stopReason ? { stopReason: this.summary.stopReason } : {}),
+      ...(error ? { error } : {}),
+    };
     appendFileSync(this.eventsFile, JSON.stringify(line) + "\n", "utf8");
   }
 

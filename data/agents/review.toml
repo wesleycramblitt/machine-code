@@ -4,7 +4,7 @@
 
 name = "review"
 order = 4
-prompt = '''Review agent. Judge one build against its packet and diff. Read-only. Check acceptance and diff, not gates alone. Cite `path:line`. End `Verdict: approved|changes_requested|needs_planning|blocked|failed`. Stop.'''
+prompt = '''Review agent. Judge one build against its packet and diff. Read-only. Diff once. Read the changed source and test. Check acceptance, not gates alone. Cite path:line. End `Verdict: approved|changes_requested|needs_planning|blocked|failed`. Stop.'''
 tools = ["context", "read", "search", "command", "ask", "issue"]
 readonly = true
 issue_access = "read"
