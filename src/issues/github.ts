@@ -87,6 +87,13 @@ export async function repoFromGit(repoRoot: string): Promise<string | null> {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
+type GhRelation = Array<{ number?: number }> | { nodes?: Array<{ number?: number }> } | null;
+
+export function relationItems(value: GhRelation | undefined): Array<{ number?: number }> {
+  if (Array.isArray(value)) return value;
+  return Array.isArray(value?.nodes) ? value.nodes : [];
+}
+
 interface GhJsonIssue {
   number?: number;
   title?: string;
@@ -95,9 +102,9 @@ interface GhJsonIssue {
   labels?: Array<{ name?: string } | string>;
   issueType?: { name?: string } | null;
   parent?: { number?: number } | null;
-  subIssues?: Array<{ number?: number }>;
-  blockedBy?: Array<{ number?: number }>;
-  blocking?: Array<{ number?: number }>;
+  subIssues?: GhRelation;
+  blockedBy?: GhRelation;
+  blocking?: GhRelation;
   url?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -199,7 +206,7 @@ export class GitHubIssueProvider implements IssueProvider {
     // Depth fallback: child of something with children is a Feature, childless
     // child of a Feature is a Task, root with children is an Epic.
     const hasParent = Boolean(j.parent?.number);
-    const hasChildren = (j.subIssues ?? []).length > 0;
+    const hasChildren = relationItems(j.subIssues).length > 0;
     if (!hasParent && hasChildren) return "epic";
     if (hasParent && hasChildren) return "feature";
     if (hasParent) return "task";
@@ -216,15 +223,12 @@ export class GitHubIssueProvider implements IssueProvider {
       .map((l) => (typeof l === "string" ? l : l.name ?? ""))
       .filter((l): l is string => l.length > 0);
     const parent = j.parent?.number ? this.ref(j.parent.number) : undefined;
-    const children = (j.subIssues ?? [])
-      .map((s) => s.number)
-      .filter((n): n is number => typeof n === "number")
-      .map((n) => this.ref(n));
-    const refs = (list?: Array<{ number?: number }>) =>
-      (list ?? [])
-        .map((x) => x.number)
+    const refs = (list?: GhRelation) =>
+      relationItems(list)
+        .map((entry) => entry.number)
         .filter((n): n is number => typeof n === "number")
         .map((n) => this.ref(n));
+    const children = refs(j.subIssues);
     return {
       ref: this.ref(number),
       title: j.title ?? "",

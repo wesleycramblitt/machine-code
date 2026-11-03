@@ -13,9 +13,10 @@
 > checkpoints/closure; Build, gates, and an independent Review run; merge
 > conflict detection; Related lineage; and the Phase 8 cleanup (no `task` tool,
 > `run:spawn`, Architect, role modes, or Children). `queue` remains a
-> compatibility path. The suite has 254 passing tests plus one opt-in GitHub
-> smoke. The only remaining validation is credential-gated: the Phase 0 model
-> replay, the real write/PR GitHub suite, and model-backed Planner eval runs.
+> compatibility path. The suite has 256 passing tests plus one opt-in GitHub
+> smoke. A live Planner → Build → Review → Task PR → Feature PR run passed; the
+> exact Phase 0 replay is unavailable and the ≤10-call efficiency target remains
+> open.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -81,8 +82,13 @@ child-run `Children` view are retired.
 
 ## 3. Phase 0 — Finish shipped validation
 
-Status: the opt-in read-only GitHub smoke is present. The model replay and the
-write/PR integration still require an external repository and provider keys.
+Status: a live end-to-end run passed on a private temporary GitHub repository:
+Planner created Epic/Feature/Task plus reserved anchors, Orchestrator ran Build,
+gates, and a separate Review, Task PR #7 and Feature PR #8 merged, and Task #6
+closed under agent result approval. See
+`knowledge/eval-2026-11-03.md`. The exact replay `20261102-173114-etdx` is not
+present in this checkout. The live Build used 25 calls, so the ≤10-call
+efficiency target remains open.
 
 ### 3.1 Replay the context/map evidence run
 
@@ -583,7 +589,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 254 tests green. Add:
+Keep the existing 256 tests green. Add:
 
 | Area | Cases |
 |---|---|

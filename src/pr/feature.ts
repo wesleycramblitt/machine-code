@@ -79,6 +79,19 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
       onEvent: (type, data) => recorder.event(type, data),
     });
 
+  // The Task PR may have advanced the remote Feature branch since the local
+  // branch was created. Fast-forward the local ref before using it.
+  try {
+    const mainRoot = await mainWorktreeRoot(layout.repoRoot);
+    await runProc("git", ["fetch", "origin", `${branch}:${branch}`], {
+      cwd: mainRoot,
+      timeoutMs: 120_000,
+      env: GIT_ENV,
+    });
+  } catch {
+    // remote branch does not exist yet; the local branch is the source
+  }
+
   // Temporary integration worktree on the Feature branch.
   let worktree: string;
   try {

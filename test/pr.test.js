@@ -314,6 +314,33 @@ function taskIssue(n, state) {
   };
 }
 
+test("feature publish fast-forwards a stale local branch after a Task PR merge", async () => {
+  const { root, repo } = tempRepoWithOrigin();
+  try {
+    const layout = fakeLayout(repo);
+    git(repo, ["branch", "mc/feature/20", "main"]);
+    git(repo, ["push", "-q", "origin", "mc/feature/20"]);
+    // Advance the remote Feature branch without moving the local ref.
+    git(repo, ["checkout", "-q", "-b", "advance", "mc/feature/20"]);
+    writeFileSync(join(repo, "merged.txt"), "merged task\n", "utf8");
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-qm", "merged task"]);
+    git(repo, ["push", "-q", "origin", "advance:mc/feature/20"]);
+    git(repo, ["checkout", "-q", "main"]);
+    git(repo, ["branch", "-D", "advance"]);
+    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
+    const issues = new FakeIssueGraph(featureIssue("human"), [taskIssue(31, "closed")]);
+    const result = await publishFeature({ layout, machine: MACHINE, recorder, feature: issues.feature.ref, issues, prs: new FakePrProvider() });
+    assert.notEqual(result.status, "failed");
+    const local = git(repo, ["rev-parse", "mc/feature/20"]).trim();
+    const remote = git(repo, ["rev-parse", "origin/mc/feature/20"]).trim();
+    assert.equal(local, remote);
+    assert.match(git(repo, ["show", "mc/feature/20:merged.txt"]), /merged task/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("feature PR is blocked while deliverable tasks are open", async () => {
   const { root, repo } = tempRepoWithOrigin();
   try {

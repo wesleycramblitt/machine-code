@@ -500,6 +500,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       input.agent.tools,
     );
     const toolChars = toolDefinitionChars(tools);
+    recorder.event("tools_registered", { names: tools.map((tool) => tool.name) });
 
     agent = new Agent({
       initialState: {

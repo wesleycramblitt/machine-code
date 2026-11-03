@@ -488,3 +488,10 @@ test("auto-issue fills Epic → Feature → Task and reuses exact open children"
   assert.equal(second.issue.ref.number, first.issue.ref.number);
   assert.equal(second.created.length, 0, "the exact-title open task is reused");
 });
+
+test("gh relation objects and arrays both normalize to node lists", async () => {
+  const { relationItems } = await import("../dist/issues/github.js");
+  assert.deepEqual(relationItems([{ number: 1 }]), [{ number: 1 }]);
+  assert.deepEqual(relationItems({ nodes: [{ number: 2 }], totalCount: 1 }), [{ number: 2 }]);
+  assert.deepEqual(relationItems(null), []);
+});

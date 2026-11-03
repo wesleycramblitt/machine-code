@@ -7,6 +7,7 @@ test/ (test cases)
 ## Skills
 .machine_code/skills/ (SKILL.md procedures; descriptions always visible, bodies load per issue)
 knowledge/skills-curation.md (kept skills, dropped skills, authoring rules)
+knowledge/eval-2026-11-03.md (live Planner → Build → Review → PR evaluation)
 
 ## Build folders/files and others to ignore
 node_modules (node packages, ignore)
