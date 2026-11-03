@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toolListItems, tokensForChars } from "../dist/tui/tools.js";
+import { skillListItems, toolListItems, tokensForChars } from "../dist/tui/tools.js";
 
 test("tool subtab lists core tools, issue access, and custom tools", () => {
   const items = toolListItems(
@@ -29,6 +29,25 @@ test("tool subtab lists core tools, issue access, and custom tools", () => {
   assert.equal(custom[1].chars, 0);
   assert.equal(custom[1].available, true);
   assert.match(custom[1].text, /available/);
+});
+
+test("skill list splits the aggregate description block into one row per skill", () => {
+  const items = skillListItems(
+    [
+      { name: "reference", description: "research and curation" },
+      { name: "requirements", description: "clarify ambiguous work" },
+      { name: "systematic-debugging", description: "find the cause first" },
+    ],
+    300,
+  );
+  assert.equal(items.length, 3);
+  assert.deepEqual(items.map((item) => item.key), [
+    "skill-desc:reference",
+    "skill-desc:requirements",
+    "skill-desc:systematic-debugging",
+  ]);
+  assert.equal(items.reduce((sum, item) => sum + item.chars, 0), 300);
+  assert.ok(items.every((item) => item.chars > 0));
 });
 
 test("context item token estimates use the same chars/4 conversion", () => {

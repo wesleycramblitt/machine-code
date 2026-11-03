@@ -15,6 +15,8 @@ export interface ToolListItem {
   fixed?: boolean;
   /** Listed for discovery but not part of the assembled context. */
   available?: boolean;
+  /** False when `chars` describes the file, not assembled context. */
+  counted?: boolean;
 }
 
 const DESCRIPTIONS: Record<string, string> = {
@@ -53,9 +55,35 @@ export function toolListItems(
       exists: true,
       key: `tool:${artifact.name}`,
       available: !referenced,
+      counted: referenced,
     };
   });
   return [...core, ...custom];
+}
+
+/** Split the always-visible skill-description block into one row per skill. */
+export function skillListItems(
+  skills: ReadonlyArray<{ name: string; description: string }>,
+  totalChars: number,
+): ToolListItem[] {
+  if (skills.length === 0) return [];
+  const lines = skills.map((skill) => `- ${skill.name}: ${skill.description}`);
+  const lineChars = lines.reduce((sum, line) => sum + line.length, 0) || 1;
+  let allocated = 0;
+  return skills.map((skill, index) => {
+    const remaining = Math.max(0, totalChars - allocated);
+    const chars =
+      index === skills.length - 1
+        ? remaining
+        : Math.min(remaining, Math.round((totalChars * lines[index]!.length) / lineChars));
+    allocated += chars;
+    return {
+      text: `${skill.name} · ${skill.description}`,
+      chars,
+      exists: true,
+      key: `skill-desc:${skill.name}`,
+    };
+  });
 }
 
 /** Conservative token estimate used by the context panel. */

@@ -10,7 +10,7 @@
  * cache, the catalogue, config, and the spend ledger on each refresh.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
@@ -39,7 +39,7 @@ import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.j
 import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { listOrchestrations } from "./orchestrator/state.js";
-import { toolListItems, tokensForChars } from "./tui/tools.js";
+import { skillListItems, toolListItems, tokensForChars } from "./tui/tools.js";
 import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
@@ -53,8 +53,9 @@ import { loadCatalogue } from "./catalogue/load.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
+import { skillMetas } from "./context/references.js";
 import { changesFor, childRuns, contextUsage, readContextManifest, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
-import { listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
+import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemantic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
@@ -180,6 +181,16 @@ const NEW_RUN_SETTING_FIELDS = [
   "floors",
 ] as const;
 type NewRunSettingField = (typeof NEW_RUN_SETTING_FIELDS)[number];
+
+interface ContextPanelItem {
+  text: string;
+  chars: number;
+  exists: boolean;
+  key: string;
+  fixed?: boolean;
+  available?: boolean;
+  counted?: boolean;
+}
 const NEW_RUN_CONTEXT_TABS = ["Issues", "Files", "Knowledge", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
 
 interface NewRunState {
@@ -1546,7 +1557,8 @@ export async function runTui(): Promise<void> {
       const referencedToolChars = new Map(
         ctx.sources.filter((source) => source.kind === "tool").map((source) => [source.ref, source.chars]),
       );
-      const artifacts = listArtifacts(layout(newRunRepo));
+      const newRunLayout = layout(newRunRepo);
+      const artifacts = listArtifacts(newRunLayout);
       const toolItems = toolListItems(
         resolvedAgent.def.tools.filter((tool) => tool !== "issue" || newrun.issues !== "disabled"),
         issueAccess,
@@ -1555,32 +1567,61 @@ export async function runTui(): Promise<void> {
           .map((artifact) => ({ name: artifact.name, description: artifact.description })),
         referencedToolChars,
       );
-      const knowledgeItems: Array<{ text: string; chars: number; exists: boolean; key: string; available?: boolean }> =
-        itemsFor(["knowledge"]);
+      const knowledgeItems: ContextPanelItem[] = itemsFor(["knowledge"]);
       const knownKnowledge = new Set(knowledgeItems.map((item) => item.key));
-      for (const path of discoverKnowledgeFiles(layout(newRunRepo))) {
+      for (const path of discoverKnowledgeFiles(newRunLayout)) {
         const key = `knowledge:${path}`;
         if (knownKnowledge.has(key)) continue;
+        let size = 0;
+        try {
+          size = statSync(join(newRunLayout.repoRoot, path)).size;
+        } catch {
+          // keep the row visible with an unknown size
+        }
         knowledgeItems.push({
           text: `${path} · available`,
-          chars: 0,
+          chars: size,
           exists: true,
           key,
           available: true,
+          counted: false,
         });
       }
-      const scriptItems: Array<{ text: string; chars: number; exists: boolean; key: string; available?: boolean }> =
-        itemsFor(["script"]);
+      const scriptItems: ContextPanelItem[] = itemsFor(["script"]);
       const knownScripts = new Set(scriptItems.map((item) => item.key));
       for (const artifact of artifacts.filter((item) => item.kind === "script")) {
         const key = `script:${artifact.name}`;
         if (knownScripts.has(key)) continue;
+        let size = 0;
+        const path = artifactPath(newRunLayout, artifact);
+        if (path) {
+          try {
+            size = statSync(path).size;
+          } catch {
+            // keep the row visible with an unknown size
+          }
+        }
         scriptItems.push({
           text: `${artifact.name} · script · available`,
-          chars: 0,
+          chars: size,
           exists: true,
           key,
           available: true,
+          counted: false,
+        });
+      }
+      const skillSources = ctx.sources.filter((source) => source.kind === "skill");
+      const aggregateSkill = skillSources.find((source) => /^\d+ skills$/.test(source.ref));
+      const skillItems: ContextPanelItem[] = aggregateSkill
+        ? skillListItems(skillMetas(newRunLayout), aggregateSkill.chars)
+        : [];
+      for (const source of skillSources) {
+        if (source === aggregateSkill) continue;
+        skillItems.push({
+          text: source.note ? `${source.ref} · ${source.note}` : source.ref,
+          chars: source.chars,
+          exists: source.exists,
+          key: `skill:${source.ref}`,
         });
       }
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
@@ -1666,27 +1707,32 @@ export async function runTui(): Promise<void> {
         { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
         { label: "Files", tone: contextTone("file"), sectionKey: "section:files", items: itemsFor(["file"]) },
         { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
-        { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: itemsFor(["skill"]) },
+        { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
         { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
         { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
         { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
         { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
       ];
       if (newRunContextTab >= sections.length) newRunContextTab = 0;
-      const excludedChars = sections.reduce((sum, section) => {
+      const excludedTokens = sections.reduce((sum, section) => {
         const sectionOff = newRunContextExcluded.has(section.sectionKey);
         return sum + section.items
           .filter((item) => {
+            if ((item as { counted?: boolean }).counted === false) return false;
             if ((item as { fixed?: boolean }).fixed) return false;
             return sectionOff || newRunContextExcluded.has(item.key);
           })
-          .reduce((itemSum, item) => itemSum + item.chars, 0);
+          .reduce((itemSum, item) => itemSum + tokensForChars(item.chars), 0);
       }, 0);
-      const totalChars = sections.reduce(
-        (sum, section) => sum + section.items.reduce((itemSum, item) => itemSum + item.chars, 0),
+      const totalTokens = sections.reduce(
+        (sum, section) =>
+          sum +
+          section.items
+            .filter((item) => (item as { counted?: boolean }).counted !== false)
+            .reduce((itemSum, item) => itemSum + tokensForChars(item.chars), 0),
         0,
       );
-      const contextTokens = tokensForChars(Math.max(0, totalChars - excludedChars) + ctx.promptChars);
+      const contextTokens = Math.max(0, totalTokens - excludedTokens) + tokensForChars(ctx.promptChars);
       footerCtx = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
       // The context panel and prompt box share the same width.
       const panelWidth = Math.max(20, cols - 2);
@@ -1710,14 +1756,24 @@ export async function runTui(): Promise<void> {
       newRunContextItemKeys = activeSection.items.map((item) => item.key);
       newRunContextItem = Math.min(newRunContextItem, Math.max(0, activeSection.items.length - 1));
       const sectionOff = newRunContextExcluded.has(activeSection.sectionKey);
-      const keptItems = activeSection.items.filter((item) => {
+      const availableItems = activeSection.items.filter(
+        (item) => (item as { available?: boolean }).available === true,
+      );
+      const contextItems = activeSection.items.filter(
+        (item) => (item as { available?: boolean }).available !== true,
+      );
+      const keptItems = contextItems.filter((item) => {
         if ((item as { fixed?: boolean }).fixed) return true;
         return !sectionOff && !newRunContextExcluded.has(item.key);
       });
-      const sectionTokens = keptItems.reduce((sum, item) => sum + tokensForChars(item.chars), 0);
+      const sectionTokens = keptItems
+        .filter((item) => (item as { counted?: boolean }).counted !== false)
+        .reduce((sum, item) => sum + tokensForChars(item.chars), 0);
+      const keptLabel = contextItems.length > 0 ? ` · ${keptItems.length}/${contextItems.length} kept` : "";
+      const availableLabel = availableItems.length > 0 ? ` · ${availableItems.length} available` : "";
       const sectionHeader = panelLine(
         `${B}${activeSection.tone}${activeSection.label}${R} ${D}·${R} ${C}${fmtTokens(sectionTokens)}${R}` +
-          `${D} tok · ${keptItems.length}/${activeSection.items.length} kept${R}`,
+          `${D} tok${keptLabel}${availableLabel}${R}`,
         false,
         true,
       );
@@ -1734,9 +1790,10 @@ export async function runTui(): Promise<void> {
         const index = itemStart + offset;
         const fixed = (item as { fixed?: boolean }).fixed === true;
         const available = (item as { available?: boolean }).available === true;
-        const excluded = !fixed && (sectionOff || newRunContextExcluded.has(item.key));
+        const excluded = !fixed && !available && (sectionOff || newRunContextExcluded.has(item.key));
         const mark = excluded ? `${RED}✕${R}` : available ? `${D}·${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
-        const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 24))}${R} ${D}${fmtTokens(tokensForChars(item.chars))}${R}`;
+        const count = `${D}${fmtTokens(tokensForChars(item.chars))}${available ? " avail" : ""}${R}`;
+        const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 30))}${R} ${count}`;
         itemLines.push(panelLine(line, index === newRunContextItem));
       }
       const remainingItems = activeSection.items.length - (itemStart + visibleItems.length);
@@ -2853,7 +2910,7 @@ export async function runTui(): Promise<void> {
       if (data === "k") { newRunContextItem = Math.max(0, newRunContextItem - 1); draw(); return; }
       if (data === " ") {
         const key = newRunContextItemKeys[newRunContextItem];
-        if (key && !key.startsWith("core-tool:")) {
+        if (key && !key.startsWith("core-tool:") && !key.startsWith("skill-desc:")) {
           if (newRunContextExcluded.has(key)) newRunContextExcluded.delete(key);
           else newRunContextExcluded.add(key);
         }
