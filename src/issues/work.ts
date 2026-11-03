@@ -17,6 +17,7 @@ import {
 import {
   ensureEpicReserved,
   ensureFeatureReserved,
+  isReserved,
   isReservedTask,
   resolvePlanningAnchor,
   validateRunIssue,
@@ -103,6 +104,14 @@ export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<Re
     const resolved = await provider.get(anchor);
     if (!resolved) throw new IssueError("issue_not_found", `planning anchor ${anchor.repo}#${anchor.number} not found`);
     return { issue: resolved, created: [] };
+  }
+
+  // Never auto-create work under a reserved Planning & Review anchor.
+  if (autoCreate && isReserved(issue)) {
+    throw new IssueError(
+      "issue_is_reserved",
+      `${ref.repo}#${ref.number} is a reserved Planning & Review anchor; choose a deliverable Task`,
+    );
   }
 
   if (!autoCreate) {

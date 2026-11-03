@@ -755,6 +755,32 @@ test("planner and review targets resolve Epic/Feature to reserved Task 0", async
   }
 });
 
+test("auto-issue refuses to create work under reserved anchors", async () => {
+  const provider = new FakeProvider();
+  const epic = await provider.create({ title: "Epic", body: "", kind: "epic" });
+  const reserved = await ensureEpicReserved(provider, epic.ref);
+  await assert.rejects(
+    resolveRunTarget({
+      provider,
+      ref: reserved.feature0.ref,
+      request: "Implement",
+      agent: "build",
+      autoCreate: true,
+    }),
+    /reserved Planning & Review anchor/,
+  );
+  await assert.rejects(
+    resolveRunTarget({
+      provider,
+      ref: reserved.task0.ref,
+      request: "Implement",
+      agent: "build",
+      autoCreate: true,
+    }),
+    /reserved Planning & Review anchor/,
+  );
+});
+
 test("auto-issue fills Epic → Feature → Task and reuses exact open children", async () => {
   const provider = new FakeProvider();
   const epic = provider.addRaw({ kind: "epic", title: "Propulsion" });

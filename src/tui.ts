@@ -1054,6 +1054,15 @@ export async function runTui(): Promise<void> {
     }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess;
     const selectedIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
     const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
+    if (selectedIssue?.reserved && !planningAgent) {
+      const allowed =
+        (newrun.agent === "sudo" && selectedIssue.kind === "task") ||
+        (newrun.agent === "general" && selectedIssue.kind !== "task");
+      if (!allowed) {
+        notify(`${newrun.agent} cannot attach to a reserved Planning & Review anchor; choose a deliverable Task.`);
+        return null;
+      }
+    }
     if (
       !planningAgent &&
       newrun.agent !== "general" &&
@@ -1547,6 +1556,25 @@ export async function runTui(): Promise<void> {
       });
       const issueAccess = resolvedAgent.config.issueAccess ?? def.issueAccess;
       const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
+      const issueOutcome = (() => {
+        if (!newrun.issue) return "no issue · run is untracked";
+        if (!issueObj) return "issue is not in the cache";
+        if (issueObj.reserved) {
+          if (planningAgent) return "planning/review attaches to reserved Task 0";
+          if (newrun.agent === "general" && issueObj.kind !== "task") {
+            return "general attaches to reserved Task 0";
+          }
+          if (newrun.agent === "sudo" && issueObj.kind === "task") return "runs attach here";
+          return "reserved anchor · choose a deliverable Task";
+        }
+        if (issueObj.kind === "task") return "runs attach here";
+        if (planningAgent) return "planning/review attaches to reserved Task 0";
+        if (newrun.agent === "general") return "general attaches to reserved Task 0";
+        if (issueAccess === "create") {
+          return issueObj.kind === "epic" ? "will auto-create a Feature and Task" : "will auto-create a Task";
+        }
+        return "choose a Task or an agent with issue creation access";
+      })();
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
       const itemsFor = (kinds: readonly string[]) =>
         ctx.sources
@@ -1818,6 +1846,9 @@ export async function runTui(): Promise<void> {
         false,
         true,
       );
+      const issueHint = activeSection.sectionKey === "section:issues"
+        ? panelLine(` ${D}${issueOutcome}${R}`, false, true)
+        : "";
       const itemRoom = Math.max(1, Math.floor(bodyH * 0.28));
       const itemStart = Math.max(
         0,
@@ -1859,6 +1890,7 @@ export async function runTui(): Promise<void> {
         ...tabBar,
         panelLine(""),
         sectionHeader,
+        ...(issueHint ? [issueHint] : []),
         ...(itemLines.length ? itemLines : [panelLine(`  ${D}none${R}`)]),
       ];
       if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
@@ -2817,10 +2849,47 @@ export async function runTui(): Promise<void> {
     return orderIssueTree(cache.issues, issuePickText);
   };
 
+  const newRunIssueAccess = (): IssueAccess => {
+    const newRunLayout = layout(newRunRepo);
+    const policy = effectivePolicy(newRunRepo);
+    const machine = (() => {
+      try { return loadMachineConfig(newRunLayout); } catch { return undefined; }
+    })();
+    return (
+      resolveAgentConfig({
+        role: newrun.agent,
+        agentPolicy: policy?.agents[newrun.agent],
+        machineOverrides: machine?.agents[newrun.agent],
+      }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess
+    );
+  };
+
   const chooseIssue = (issue: Issue) => {
     newrun.issue = issue.ref;
     issuePick = null;
-    notify(`linked #${issue.ref.number}; ${issue.kind === "task" ? "runs attach here" : "a child task will be created"}`);
+    const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
+    let outcome: string;
+    if (issue.reserved) {
+      if (planningAgent) outcome = "planning/review attaches to its reserved Task 0";
+      else if (newrun.agent === "general" && issue.kind !== "task") {
+        outcome = "general attaches to its reserved Task 0";
+      } else if (newrun.agent === "sudo" && issue.kind === "task") {
+        outcome = "runs attach here";
+      } else {
+        outcome = "reserved Planning & Review anchor; choose a deliverable Task";
+      }
+    } else if (issue.kind === "task") {
+      outcome = "runs attach here";
+    } else if (planningAgent) {
+      outcome = "planning/review attaches to its reserved Task 0";
+    } else if (newrun.agent === "general") {
+      outcome = "general attaches to its reserved Task 0";
+    } else if (newRunIssueAccess() === "create") {
+      outcome = "a child Task will be created";
+    } else {
+      outcome = "choose a Task or an agent with issue creation access";
+    }
+    notify(`linked #${issue.ref.number}; ${outcome}`);
   };
 
   const newRunWeights = () => {
