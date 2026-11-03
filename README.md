@@ -171,6 +171,14 @@ default `--group gh-issue` groups by repository, then by the Epic â†’ Feature â†
 Task issue hierarchy, with runs that have no issue under Untracked and runs
 whose cached issue is missing under Orphaned issue.
 
+Runs attach to Tasks only. Selecting an Epic or Feature for a planner/review
+run resolves to that scope's reserved Planning & Review Task 0. A build or sudo
+run with issue-create access auto-creates the missing Task. A planner run that
+starts before the Epic or Feature exists links itself to the new scope's
+reserved Task 0 when it creates the first issue. A Task can own multiple runs;
+they appear as children of the Task row, while Epic and Feature rows show
+rollup counts. There are no direct Epic/Feature run rows.
+
 `--group status` keeps repository headings but groups each repository's runs by
 run status with no issue tree. `--group overall` drops repository headings
 entirely and groups every run on the machine by status, so blocked, failed, and

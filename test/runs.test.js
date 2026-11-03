@@ -252,3 +252,60 @@ test("runs page epic rollups include nested feature tasks and runs", () => {
   assert.equal(featureRow.rollup.tasksTotal, 2);
   assert.equal(featureRow.rollup.runsTotal, 2);
 });
+
+test("planning runs appear under the reserved Task 0 anchor", () => {
+  const epic = issue(8, "epic", "Epic");
+  const feature0 = issue(9, "feature", "Feature 0: Planning & Review", {
+    parent: epic.ref,
+    reserved: { for: epic.ref, kind: "epic-pr" },
+    labels: ["mc:reserved"],
+  });
+  const task0 = issue(10, "task", "Task 0: Planning & Review", {
+    parent: feature0.ref,
+    reserved: { for: feature0.ref, kind: "feature-pr" },
+    labels: ["mc:reserved"],
+  });
+  const runs = [run({ id: "plan", agent: "planner", issue: task0.ref })];
+  const index = buildRunIndex({
+    runs,
+    issuesByRepo: new Map([[repoA, [epic, feature0, task0]]]),
+  });
+
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
+    [8, 9, 10],
+  );
+  const taskRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 10);
+  assert.ok(taskRow && taskRow.kind === "issue");
+  assert.equal(taskRow.directRuns, 1);
+  const runRow = index.rows.find((row) => row.kind === "run" && row.run.id === "plan");
+  assert.ok(runRow && runRow.kind === "run");
+  assert.equal(runRow.parent, taskRow.id);
+  const epicRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 8);
+  assert.ok(epicRow && epicRow.kind === "issue");
+  assert.equal(epicRow.rollup.runsTotal, 1);
+});
+
+test("a Task lists every run associated with it", () => {
+  const epic = issue(8, "epic", "Epic");
+  const feature = issue(11, "feature", "Feature", { parent: epic.ref });
+  const task = issue(19, "task", "Task", { parent: feature.ref });
+  const runs = [
+    run({ id: "first", issue: task.ref }),
+    run({ id: "second", status: "blocked", issue: task.ref }),
+  ];
+  const index = buildRunIndex({
+    runs,
+    issuesByRepo: new Map([[repoA, [epic, feature, task]]]),
+  });
+  const taskRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 19);
+  assert.ok(taskRow && taskRow.kind === "issue");
+  assert.equal(taskRow.directRuns, 2);
+  assert.deepEqual(
+    index.rows
+      .filter((row) => row.kind === "run" && row.parent === taskRow.id)
+      .map((row) => row.run.id)
+      .sort(),
+    ["first", "second"],
+  );
+});

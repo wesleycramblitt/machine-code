@@ -179,6 +179,25 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${accept}${reserved}${extra ? ` ${extra}` : ""}`,
     );
   };
+  /**
+   * A planner run often starts before the Epic/Feature exists. When it creates
+   * the first issue, attach the run to that scope's reserved Task 0 so the
+   * Runs page shows it under Planning & Review, never directly under an Epic
+   * or Feature.
+   */
+  const linkPlanningRun = (anchor: Issue): void => {
+    const current = ctx.recorder.current;
+    if (current.issue) return;
+    if (current.agent !== "planner") return;
+    ctx.recorder.patchSummary({ issue: anchor.ref });
+    ctx.recorder.event("issue_linked", {
+      issue: anchor.ref.number,
+      kind: anchor.kind,
+      source: "planning-anchor",
+    });
+    remember(anchor);
+  };
+
   /** A Task with acceptance is ready by default; do not spend a turn on plan. */
   const autoPlan = async (target: Issue): Promise<{ issue?: Issue; error?: string }> => {
     if (target.plan || target.acceptance.length === 0) return {};
@@ -295,6 +314,8 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (!params.title) return fail("create requires title");
         const body = withApproval(params.body ?? "", ctx.defaultApproval);
         const parent = params.parent ? ref(params.parent, "parent") : undefined;
+        let parentFeatureTask0: Issue | undefined;
+        let parentEpicTask0: Issue | undefined;
         if (params.kind === "task") {
           if (!parent) return fail("creating a Task requires parent (its Feature)");
           const parentIssue = await ctx.provider.get(parent);
@@ -307,14 +328,17 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             );
           }
           // Repair the parent chain before adding a deliverable.
-          if (parentIssue.kind === "feature") await ensureFeatureReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
+          if (parentIssue.kind === "feature") {
+            parentFeatureTask0 = await ensureFeatureReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
+          }
         }
         if (params.kind === "feature") {
           if (!parent) return fail("creating a Feature requires parent (its Epic)");
           const parentIssue = await ctx.provider.get(parent);
           if (!parentIssue) return fail(`parent not found: ${params.parent}`);
           if (parentIssue.kind !== "epic") return fail(`a Feature's parent must be an Epic (got ${parentIssue.kind})`);
-          await ensureEpicReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
+          const reserved = await ensureEpicReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
+          parentEpicTask0 = reserved.task0;
         }
         const blockedBy = await dependencies([params.blocked_by, params.depends_on]);
         const created = await ctx.provider.create({
@@ -333,11 +357,14 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         });
         remember(created);
         ctx.state?.addIssueBodyFact(created.ref.number, created.body);
+        if (created.kind === "task" && parentFeatureTask0) linkPlanningRun(parentFeatureTask0);
+        if (created.kind === "feature" && parentEpicTask0) linkPlanningRun(parentEpicTask0);
         let note = "";
         if (created.kind === "epic") {
           const reserved = await ensureEpicReserved(ctx.provider, created.ref, { runCounts: counts() });
           remember(reserved.feature0);
           remember(reserved.task0);
+          linkPlanningRun(reserved.task0);
           note =
             `\nreserved: Feature 0 #${reserved.feature0.ref.number} "Feature 0: Planning & Review", ` +
             `Task 0 #${reserved.task0.ref.number} "Task 0: Planning & Review"` +

@@ -346,11 +346,12 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       const cached = relevantCache.get(key);
       if (cached !== undefined) return cached;
       const hasRun = issueRuns(issue).length > 0;
-      // Reserved anchors stay hidden unless a run is attached. Every other
-      // issue is part of the repo's plan, even when it has no run yet.
+      const childRelevant = childrenOf(issue).some((child) => issueRelevant(child));
+      // Reserved anchors stay hidden unless a run is attached to them or to a
+      // descendant. Every other issue is part of the repo's plan.
       const relevant =
-        (!issue.reserved || hasRun) &&
-        (text.length === 0 || ownMatch(issue) || hasRun || childrenOf(issue).some((child) => issueRelevant(child)));
+        (!issue.reserved || hasRun || childRelevant) &&
+        (text.length === 0 || ownMatch(issue) || hasRun || childRelevant);
       relevantCache.set(key, relevant);
       return relevant;
     };

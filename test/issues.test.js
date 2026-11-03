@@ -279,7 +279,7 @@ test("validateRunIssue enforces Task-only and reserved rules", async () => {
 
 /* ------------------------------------------------------------ issue tool */
 
-function toolCtx(provider, capabilities, root) {
+function toolCtx(provider, capabilities, root, agent = "build") {
   const layout = {
     home: join(root, "home"),
     machineConfig: "",
@@ -291,7 +291,7 @@ function toolCtx(provider, capabilities, root) {
     policyFile: "",
     runsDir: join(root, ".machine_code", "local", "runs"),
   };
-  const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent, mode: "", request: "r", repoRoot: root });
   return { recorder, layout, ctx: { provider, repo: "o/r", capabilities, recorder, layout, defaultApproval: "human" } };
 }
 
@@ -391,6 +391,76 @@ test("issue creation is remembered in run state", async () => {
     assert.match(block, /Feature 0: Planning & Review/);
     assert.match(block, /Task 0: Planning & Review/);
     assert.match(block, /\[reserved\]/, "reserved anchors are remembered");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("planner creation links the run to the new Epic's reserved Task 0", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-link-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root, "planner");
+    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    const epic = [...p.issues.values()].find((issue) => issue.kind === "epic");
+    const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
+    const task0 = [...p.issues.values()].find(
+      (issue) => issue.reserved?.kind === "feature-pr" && issue.parent?.number === feature0.ref.number,
+    );
+    assert.equal(ctx.recorder.current.issue.number, task0.ref.number);
+
+    await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "feature",
+      parent: `#${epic.ref.number}`,
+      title: "Feature",
+    });
+    assert.equal(ctx.recorder.current.issue.number, task0.ref.number, "the Epic anchor is not replaced");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("planner creating a Feature under an existing Epic links to the Epic's Task 0", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-feature-"));
+  try {
+    const p = new FakeProvider();
+    const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root, "planner");
+    await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "feature",
+      parent: `#${epic.ref.number}`,
+      title: "Feature",
+    });
+    const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
+    const epicTask0 = [...p.issues.values()].find(
+      (issue) => issue.reserved?.kind === "feature-pr" && issue.parent?.number === feature0.ref.number,
+    );
+    assert.equal(ctx.recorder.current.issue.number, epicTask0.ref.number);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("planner creating a Task links to that Feature's reserved Task 0", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-task-"));
+  try {
+    const p = new FakeProvider();
+    const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
+    const feature = await p.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root, "planner");
+    await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "task",
+      parent: `#${feature.ref.number}`,
+      title: "Task",
+      body: "## Acceptance criteria\n- one\n",
+    });
+    const task0 = [...p.issues.values()].find(
+      (issue) => issue.reserved?.kind === "feature-pr" && issue.parent?.number === feature.ref.number,
+    );
+    assert.equal(ctx.recorder.current.issue.number, task0.ref.number);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -662,6 +732,26 @@ test("issue close respects approval: human requests, agent closes", async () => 
     assert.equal(p.issues.get(agentIssue.ref.number).state, "closed");
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("planner and review targets resolve Epic/Feature to reserved Task 0", async () => {
+  const provider = new FakeProvider();
+  const epic = await provider.create({ title: "Epic", body: "", kind: "epic" });
+  const feature = await provider.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
+  const task = await provider.create({ title: "Task", body: "", kind: "task", parent: feature.ref });
+
+  for (const agent of ["planner", "review"]) {
+    const epicTarget = await resolveRunTarget({ provider, ref: epic.ref, request: "plan", agent });
+    assert.equal(epicTarget.issue.kind, "task");
+    assert.equal(epicTarget.issue.reserved?.kind, "feature-pr");
+
+    const featureTarget = await resolveRunTarget({ provider, ref: feature.ref, request: "plan", agent });
+    assert.equal(featureTarget.issue.kind, "task");
+    assert.equal(featureTarget.issue.reserved?.kind, "feature-pr");
+
+    const taskTarget = await resolveRunTarget({ provider, ref: task.ref, request: "plan", agent });
+    assert.equal(taskTarget.issue.ref.number, task.ref.number);
   }
 });
 
