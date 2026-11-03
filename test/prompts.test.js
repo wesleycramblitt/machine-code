@@ -52,9 +52,12 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "issue", "artifact"]);
     assert.ok(!planner.def.tools.includes("command"), "planner must not hold command");
     assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
-    assert.match(planner.prompt, /Inspect the issue list\/tree/);
-    assert.match(planner.prompt, /If no suitable non-reserved Epic\/Feature exists, create Epic→Feature→Task/);
-    assert.match(planner.prompt, /Ignore the automatic Planning & Review anchors/);
+    assert.match(planner.prompt, /Inspect tree/);
+    assert.match(planner.prompt, /Reuse a non-reserved Epic\/Feature; else create the chain/);
+    assert.match(planner.prompt, /Create Tasks under each Feature/);
+    assert.match(planner.prompt, /Ignore reserved anchors/);
+    assert.match(planner.prompt, /do not write files/);
+    assert.match(planner.prompt, /Verify every Task is plan ready/);
     assert.match(planner.prompt, /issue access create/);
 
     const general = resolveAgent(l, "general");

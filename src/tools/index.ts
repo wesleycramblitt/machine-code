@@ -17,6 +17,7 @@ import {
   assertRegularFile,
   capText,
   excludeGlobs,
+  expandGlobBraces,
   globToRegExp,
   isBinaryFile,
   isSecretPath,
@@ -303,7 +304,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     name: "search",
     label: "search",
     description:
-      "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing), outline (one file's symbols), text (regex), " +
+      "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing, globs support {a,b}), outline (one file's symbols; path or pattern), text (regex), " +
       "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), semantic (rank modules/key files by concept or filename), " +
       "symbols (LSP document/workspace symbols when a server is available, else repo map), and LSP definition/references/info (needs path+line+column). " +
       "text accepts paths to search a specific file list. Never touches excluded directories " +
@@ -325,10 +326,13 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 return false;
               }
             })();
+            const matchers = params.pattern
+              ? expandGlobBraces(params.pattern).map((pattern) => globToRegExp(pattern))
+              : [];
             if (scopeIsFile) {
               const rel = toRelative(ctx.root, scope);
               if (isSecretPath(rel)) return ok("no matches");
-              const match = !params.pattern || globToRegExp(params.pattern).test(rel);
+              const match = matchers.length === 0 || matchers.some((matcher) => matcher.test(rel));
               return ok(match ? rel : "no matches");
             }
             // Never pass a positive glob to rg for a listing: positive globs
@@ -344,7 +348,9 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               return fail(`rg exited ${result.code}: ${result.stderr.trim() || "(no stderr)"}`);
             }
             const all = result.stdout.split("\n").filter(Boolean);
-            const filtered = params.pattern ? all.filter((file) => globToRegExp(params.pattern!).test(file)) : all;
+            const filtered = matchers.length > 0
+              ? all.filter((file) => matchers.some((matcher) => matcher.test(file)))
+              : all;
             return ok(capText(filtered.join("\n"), SEARCH_CAP_BYTES).text || "no matches");
           }
           case "text": {
@@ -417,9 +423,12 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             );
           }
           case "outline": {
-            if (!params.path) return fail("outline mode requires a path");
-            const file = await outlineFile(ctx.root, params.path);
-            if (!file) return fail(`no outline for ${params.path} (binary or unreadable)`);
+            // Accept the path in `pattern` too: models often put the filename
+            // there before they learn the schema.
+            const outlinePath = params.path ?? params.pattern;
+            if (!outlinePath) return fail('outline mode requires a path (e.g. "src/file.ts")');
+            const file = await outlineFile(ctx.root, outlinePath);
+            if (!file) return fail(`no outline for ${outlinePath} (binary or unreadable)`);
             return ok(
               `${file.path} (${file.lines} lines)\n${renderOutline(file) || "(no symbols)"}`,
             );

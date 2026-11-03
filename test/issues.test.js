@@ -73,6 +73,8 @@ class FakeProvider {
       blocking: [],
       acceptance: parseAcceptance(input.body),
       approval: parseApprovalMarker(input.body),
+      plan: parsePlanMarker(input.body).plan,
+      planError: parsePlanMarker(input.body).error,
       reserved: this.reservedFrom(input.body),
       createdAt: `2026-01-0${Math.min(9, number)}T00:00:00Z`,
     };
@@ -87,7 +89,13 @@ class FakeProvider {
     const issue = this.issues.get(ref.number);
     if (!issue) throw new Error("missing");
     if (patch.title !== undefined) issue.title = patch.title;
-    if (patch.body !== undefined) issue.body = patch.body;
+    if (patch.body !== undefined) {
+      issue.body = patch.body;
+      issue.acceptance = parseAcceptance(patch.body);
+      const parsed = parsePlanMarker(patch.body);
+      issue.plan = parsed.plan;
+      issue.planError = parsed.error;
+    }
     if (patch.blockedBy !== undefined) issue.blockedBy = patch.blockedBy;
     return issue;
   }
@@ -147,6 +155,23 @@ test("marker and acceptance parsers", () => {
   assert.equal(parseApprovalMarker(body), "agent");
   assert.deepEqual(parseAcceptance(body), ["one", "two"]);
   assert.equal(parseReservedMarker("no marker"), null);
+
+  const plain = [
+    "Scope:",
+    "- not acceptance",
+    "",
+    "Acceptance criteria:",
+    "- gate passes",
+    "- typed errors",
+    "",
+    "Out of scope:",
+    "- not acceptance either",
+  ].join("\n");
+  assert.deepEqual(parseAcceptance(plain), ["gate passes", "typed errors"]);
+  assert.deepEqual(
+    parseAcceptance("**Acceptance criteria:**\n- one\n\n**Out of scope:**\n- two"),
+    ["one"],
+  );
 });
 
 /* ------------------------------------------------- reserved invariants */
@@ -317,6 +342,40 @@ test("empty issue list does not tell a read-only role to create", async () => {
   }
 });
 
+test("tree without an issue shows every root and its reserved anchors", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-tree-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const created = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    assert.equal(created.isError, undefined);
+    const result = await issueTool(ctx).execute("c2", { action: "tree", depth: 3 });
+    assert.equal(result.isError, undefined);
+    const text = result.content[0].text;
+    assert.match(text, /#1 epic open Epic/);
+    assert.match(text, /Feature 0: Planning & Review/);
+    assert.match(text, /Task 0: Planning & Review/);
+    assert.doesNotMatch(text, /argument_missing/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("empty tree without an issue gives the planner a create hint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-tree-empty-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueTool(ctx).execute("c1", { action: "tree" });
+    assert.equal(result.isError, undefined);
+    const text = result.content[0].text;
+    assert.match(text, /no open issues/);
+    assert.match(text, /create/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("issue creation is remembered in run state", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-state-"));
   try {
@@ -354,6 +413,61 @@ test("a Task cannot be created under the reserved Feature 0 anchor", async () =>
     });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /reserved planning anchor/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("creating a Task with acceptance auto-writes a ready plan", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-autoplan-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    const feature = await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "feature",
+      parent: "#1",
+      title: "Feature",
+    });
+    assert.equal(feature.isError, undefined);
+    const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
+    const task = await issueTool(ctx).execute("c3", {
+      action: "create",
+      kind: "task",
+      parent: `#${featureIssue.ref.number}`,
+      title: "Task",
+      body: "## Acceptance criteria\n- one\n- two\n",
+    });
+    assert.equal(task.isError, undefined);
+    assert.match(task.content[0].text, /plan ready/);
+    const created = [...p.issues.values()].find((issue) => issue.title === "Task");
+    assert.equal(created.acceptance.length, 2);
+    assert.equal(created.plan?.status, "ready");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("creating a Task without acceptance leaves it unplanned", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-autoplan-none-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    await issueTool(ctx).execute("c2", { action: "create", kind: "feature", parent: "#1", title: "Feature" });
+    const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
+    const task = await issueTool(ctx).execute("c3", {
+      action: "create",
+      kind: "task",
+      parent: `#${featureIssue.ref.number}`,
+      title: "Task",
+      body: "No criteria yet.",
+    });
+    assert.equal(task.isError, undefined);
+    assert.match(task.content[0].text, /add acceptance criteria/);
+    const created = [...p.issues.values()].find((issue) => issue.title === "Task");
+    assert.equal(created.plan, undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

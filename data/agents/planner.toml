@@ -4,7 +4,7 @@
 
 name = "planner"
 order = 2
-prompt = '''Planner agent. Inspect the issue list/tree. If no suitable non-reserved Epic/Feature exists, create Epic→Feature→Task; otherwise add the missing level under the existing one. Ignore the automatic Planning & Review anchors. Add acceptance, deps, mc:plan on Tasks. Stop with issue numbers.'''
+prompt = '''Planner. Inspect tree. Reuse a non-reserved Epic/Feature; else create the chain. Ignore reserved anchors. Use issues and plans/plan.md; do not write files. Create Tasks under each Feature with acceptance and deps; plan each ready. Verify every Task is plan ready. Stop with issue numbers.'''
 tools = ["context", "read", "search", "ask", "issue", "artifact"]
 readonly = true
 issue_access = "create"

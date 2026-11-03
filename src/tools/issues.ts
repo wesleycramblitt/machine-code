@@ -112,6 +112,7 @@ function line(issue: Issue): string {
   if (issue.approval) bits.push(`approval=${issue.approval}`);
   if (issue.plan) bits.push(`plan=${issue.plan.status}`);
   if (issue.planError) bits.push("plan=invalid");
+  if (issue.acceptance.length > 0) bits.push(`accept=${issue.acceptance.length}`);
   if (issue.blockedBy.length > 0) bits.push(`blocked-by=${issue.blockedBy.map((b) => `#${b.number}`).join(",")}`);
   return bits.join(" ");
 }
@@ -171,18 +172,45 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
   const remember = (issue: Issue, extra = ""): void => {
     const parent = issue.parent ? ` parent #${issue.parent.number}` : "";
     const plan = issue.plan ? ` plan ${issue.plan.status}` : "";
+    const accept = issue.acceptance.length > 0 ? ` accept=${issue.acceptance.length}` : "";
     const reserved = isReserved(issue) ? " [reserved]" : "";
     ctx.state?.addIssueFact(
       issue.ref.number,
-      `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${reserved}${extra ? ` ${extra}` : ""}`,
+      `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${accept}${reserved}${extra ? ` ${extra}` : ""}`,
     );
+  };
+  /** A Task with acceptance is ready by default; do not spend a turn on plan. */
+  const autoPlan = async (target: Issue): Promise<{ issue?: Issue; error?: string }> => {
+    if (target.plan || target.acceptance.length === 0) return {};
+    const plan: PlanMarker = {
+      v: 1,
+      status: "ready",
+      role: "build",
+      verification: "verified",
+      worktree: "required",
+      retriesBeforeReplan: 2,
+      planReview: "agent",
+      resultReview: "agent",
+    };
+    const marker = renderPlanMarker(plan);
+    const nextBody = `${target.body.replace(/\s+$/, "")}\n\n${marker}\n`;
+    const validation = validatePlanIssue({ ...target, body: nextBody }, { layout: ctx.layout });
+    if (!validation.ok) return { error: validation.errors.join("; ") };
+    const updated = await ctx.provider.update(target.ref, { body: nextBody });
+    ctx.recorder.event("plan_updated", {
+      issue: updated.ref.number,
+      status: plan.status,
+      verification: plan.verification,
+      worktree: plan.worktree,
+    });
+    return { issue: updated };
   };
 
   return {
     name: "issue",
     label: "issue",
     description:
-      "Structured GitHub issue access. list/view/tree read; create/edit write; create/edit accept blocked_by/depends_on; " +
+      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
       "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
@@ -220,15 +248,13 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         const issue = await ctx.provider.get(ref(params.issue, "issue"));
         if (!issue) return fail(`issue not found: ${params.issue}`);
         remember(issue);
+        ctx.state?.addIssueBodyFact(issue.ref.number, issue.body);
         return ok(`${line(issue)}\n${issue.body.slice(0, 4000)}`);
       }
       case "tree": {
         require("issue:read");
-        const root = await ctx.provider.get(ref(params.issue, "issue"));
-        if (!root) return fail(`issue not found: ${params.issue}`);
         const depth = Math.max(0, Math.min(5, Math.floor(params.depth ?? 2)));
-        const lines = [line(root)];
-        remember(root);
+        const lines: string[] = [];
         const walk = async (issue: Issue, level: number): Promise<void> => {
           if (level >= depth) return;
           for (const child of await ctx.provider.children(issue.ref)) {
@@ -237,6 +263,29 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             await walk(child, level + 1);
           }
         };
+        // No issue: show every root (open by default), so a planner can inspect
+        // the whole forest without guessing a number first.
+        if (!params.issue) {
+          const state = params.state ?? "open";
+          const roots = (await ctx.provider.list({ state, limit: 200 })).filter((issue) => !issue.parent);
+          for (const root of roots) {
+            remember(root);
+            lines.push(line(root));
+            await walk(root, 0);
+          }
+          if (lines.length === 0) {
+            return ok(
+              state === "open"
+                ? "no open issues\nCreate the Epic with action=create if you are planning."
+                : "no issues",
+            );
+          }
+          return ok(lines.join("\n"));
+        }
+        const root = await ctx.provider.get(ref(params.issue, "issue"));
+        if (!root) return fail(`issue not found: ${params.issue}`);
+        remember(root);
+        lines.push(line(root));
         await walk(root, 0);
         return ok(lines.join("\n"));
       }
@@ -283,6 +332,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           parent: parent?.number,
         });
         remember(created);
+        ctx.state?.addIssueBodyFact(created.ref.number, created.body);
         let note = "";
         if (created.kind === "epic") {
           const reserved = await ensureEpicReserved(ctx.provider, created.ref, { runCounts: counts() });
@@ -300,9 +350,22 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             `\nreserved: Task 0 #${task0.ref.number} "Task 0: Planning & Review"` +
             `\nThis is a coordination anchor, not a deliverable. Do not add work under it.` +
             `\nNext: create Tasks with action=create kind=task parent=#${created.ref.number}.`;
+        } else if (created.plan) {
+          note = `\nplan already ${created.plan.status}.`;
         } else {
-          note =
-            `\nNext: add acceptance criteria to the body, then action=plan issue=#${created.ref.number} status=ready.`;
+          const auto = await autoPlan(created);
+          if (auto.issue) {
+            remember(auto.issue, "plan ready");
+            ctx.state?.addIssueBodyFact(auto.issue.ref.number, auto.issue.body);
+            note = `\nplan ready on #${auto.issue.ref.number}. Next: create the next Task or stop.`;
+          } else if (created.acceptance.length > 0) {
+            note =
+              `\nNext: plan failed (${auto.error ?? "unknown error"}); fix the body, ` +
+              `then action=plan issue=#${created.ref.number} status=ready.`;
+          } else {
+            note =
+              `\nNext: add acceptance criteria to the body, then action=plan issue=#${created.ref.number} status=ready.`;
+          }
         }
         return ok(`created #${created.ref.number} (${created.kind}): ${created.title}${note}`);
       }
@@ -321,6 +384,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           ...(blockedBy ? { blockedBy } : {}),
         });
         remember(updated);
+        ctx.state?.addIssueBodyFact(updated.ref.number, updated.body);
         return ok(`updated #${updated.ref.number}: ${updated.title}`);
       }
       case "plan": {
@@ -362,6 +426,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           worktree: plan.worktree,
         });
         remember(updated, `plan ${plan.status}`);
+        ctx.state?.addIssueBodyFact(updated.ref.number, updated.body);
         return ok(
           `plan ${plan.status} on #${updated.ref.number}: ${plan.role}/${plan.verification}, ` +
             `worktree ${plan.worktree}, retries ${plan.retriesBeforeReplan}, ` +

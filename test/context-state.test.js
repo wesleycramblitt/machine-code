@@ -122,6 +122,47 @@ test("ingestTurn records read facts, artifacts, working set, and changes", () =>
   }
 });
 
+test("search facts count file, outline, and map matches", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-search", goal: "plan" });
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "s1", name: "search", args: { mode: "files", pattern: "data/**/*.{md,toml}" } }),
+        result({ id: "s1", name: "search", text: "data/a.md\ndata/b.toml" }),
+      ],
+      1,
+    );
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "s2", name: "search", args: { mode: "outline", pattern: "plans/plan.md" } }),
+        result({ id: "s2", name: "search", text: "plans/plan.md (762 lines)\n(no symbols)" }),
+      ],
+      2,
+    );
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "s3", name: "search", args: { mode: "map", path: "src/map" } }),
+        result({ id: "s3", name: "search", text: "src/map/ (4 files)\n  changes.ts (103) — x" }),
+      ],
+      3,
+    );
+    const searches = store.getState().facts.filter((fact) => fact.text.startsWith("search "));
+    const text = searches.map((fact) => fact.text).join("\n");
+    assert.match(text, /files data\/\*\*\/\*\.\{md,toml\}" -> 2 refs: data\/a\.md, data\/b\.toml/);
+    assert.match(text, /outline plans\/plan\.md" -> 1 ref: plans\/plan\.md/);
+    assert.match(text, /map src\/map" -> 2 refs: src\/map\/, src\/map\/changes\.ts/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("explicit context focus survives automatic ingestion", () => {
   const dir = tempDir();
   try {

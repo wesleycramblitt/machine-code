@@ -40,6 +40,10 @@ export const MAX_TURNS = 25;
 const REPEAT_LIMIT = 2;
 /** Blocked repeats allowed before the run terminates. */
 const REPEAT_BLOCK_LIMIT = 3;
+/** Reads of one path allowed before the harness forces the model to act. */
+const READ_PATH_LIMIT = 3;
+/** Planner research calls allowed between issue writes before it must act. */
+const PLANNER_RESEARCH_LIMIT = 6;
 
 /** Stable JSON key for a tool call; argument order must not defeat the guard. */
 function stableKey(value: unknown): string {
@@ -64,7 +68,7 @@ function repeatHint(tool: string): string {
     case "search":
       return "Use the earlier result or change the pattern or path.";
     case "issue":
-      return "Use the earlier issue result. If the list is empty, create the Epic with action=create.";
+      return "Use the earlier issue result or act on the graph; do not view the same issue again.";
     case "command":
       return "Use the earlier command result. issue, pr, and artifact are tools, not commands.";
     case "context":
@@ -441,6 +445,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       memory.renderBlock(),
       reason,
       "Do not call tools. Answer the user's request from the evidence above. If the evidence is insufficient, say exactly what is missing.",
+      "Keep the answer under 20 lines. For a planning run, list the created issue numbers and the next concrete step; do not restate issue bodies.",
       `Request: ${input.request}`,
     ].join("\n\n");
     try {
@@ -452,8 +457,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
         },
         {
-          maxTokens: 800,
-          reasoning: "low",
+          maxTokens: 1200,
+          reasoning: "minimal",
           sessionId: recorder.id,
           signal: input.signal,
           identity: {
@@ -545,9 +550,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     let turnCapHit = false;
     let loopBlocked = false;
     let repeatBlocked = 0;
+    let repeatBlockedTurn = -1;
     const callCounts = new Map<string, { count: number; preview: string }>();
     const readPaths = new Map<string, number>();
     const searchKeys = new Map<string, number>();
+    let researchCalls = 0;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -669,7 +676,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         ...tool,
         async execute(id, params, signal, onUpdate) {
           const block = (message: string, detail: Record<string, unknown>) => {
-            repeatBlocked += 1;
+            // A parallel batch can block several calls in one turn. Count one
+            // strike per turn so a single batch does not terminate the run.
+            const turn = memory.currentTurn();
+            if (turn !== repeatBlockedTurn) {
+              repeatBlockedTurn = turn;
+              repeatBlocked += 1;
+            }
             if (repeatBlocked >= REPEAT_BLOCK_LIMIT) {
               loopBlocked = true;
               recorder.event("loop_blocked", { tool: tool.name, ...detail });
@@ -681,6 +694,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               ...(loopBlocked ? { terminate: true } : {}),
             };
           };
+
+          // Planning is not research: after a bounded number of reads and
+          // searches, make the planner write Tasks instead of auditing source.
+          if (tool.name === "issue") {
+            const action = String((params as { action?: unknown }).action ?? "");
+            if (["create", "edit", "plan", "link", "ensure", "close"].includes(action)) {
+              researchCalls = 0;
+            }
+          } else if (tool.name === "read" || tool.name === "search" || tool.name === "context") {
+            researchCalls += 1;
+            if (input.agent.name === "planner" && researchCalls > PLANNER_RESEARCH_LIMIT) {
+              return block(
+                "Planning research budget exhausted. Stop reading and searching. " +
+                  "Create deliverable Tasks with issue action=create, then plan each with issue action=plan status=ready.",
+                { args: capJson(params), researchCalls },
+              );
+            }
+          }
 
           // Search loops often vary only the limit or scope. Key on the mode,
           // scope, and pattern so the third equivalent search is blocked.
@@ -710,7 +741,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               : "";
           if (readPath) {
             const prior = readPaths.get(readPath) ?? 0;
-            if (prior >= 4) {
+            if (prior >= READ_PATH_LIMIT) {
               return block(
                 `Read limit reached for ${readPath} (${prior} earlier reads). Use the earlier results or answer. ${repeatHint("read")}`,
                 { args: capJson(params), repeats: prior },
@@ -736,7 +767,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           if (!result.isError && readPath) {
             const count = (readPaths.get(readPath) ?? 0) + 1;
             readPaths.set(readPath, count);
-            if (count >= 4) {
+            if (count >= READ_PATH_LIMIT) {
               result.content.push({
                 type: "text",
                 text:

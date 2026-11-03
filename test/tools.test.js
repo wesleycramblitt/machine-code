@@ -176,6 +176,32 @@ test("search files rejects '*' and never lists ignored or secret files", async (
   }
 });
 
+test("search files expands brace globs and outline accepts a pattern path", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-brace-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "data"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "data", "a.md"), "# a\n", "utf8");
+    writeFileSync(join(root, "data", "b.toml"), "x = 1\n", "utf8");
+    writeFileSync(join(root, "data", "c.json"), "{}\n", "utf8");
+    writeFileSync(join(root, "src", "app.ts"), "export function run() {}\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+
+    const files = await tool.execute("id", { mode: "files", pattern: "data/**/*.{md,toml}" });
+    const filesText = files.content.map((c) => c.text ?? "").join("\n");
+    assert.match(filesText, /data\/a\.md/);
+    assert.match(filesText, /data\/b\.toml/);
+    assert.doesNotMatch(filesText, /c\.json/);
+
+    const outline = await tool.execute("id", { mode: "outline", pattern: "src/app.ts" });
+    assert.equal(outline.isError, undefined);
+    assert.match(outline.content.map((c) => c.text ?? "").join("\n"), /src\/app\.ts/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("text search respects ignore rules and a specific paths list", async () => {
   const root = initRepoWithSecrets();
   try {

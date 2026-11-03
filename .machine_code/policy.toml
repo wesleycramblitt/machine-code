@@ -75,8 +75,10 @@ general = 5.0
 # orientation. If no free model clears this bar, the paid tier may pick a
 # stronger funded model instead.
 [agents.planner]
-# Planning a large plan needs more turns than a single edit/test loop.
-max_turns = 40
+# Planning is bounded: create the graph, then stop. A planner that keeps
+# re-reading source is not planning; it is burning context.
+max_turns = 24
+budget_tokens = 180000
 [agents.planner.free]
 min_fit = 6.5
 [agents.planner.free.axes]

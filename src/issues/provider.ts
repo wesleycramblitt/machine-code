@@ -148,16 +148,50 @@ export function parseApprovalMarker(body: string): "human" | "agent" | undefined
   }
 }
 
-/** Parse acceptance criteria from a `## Acceptance criteria` bullet section. */
+/** Parse acceptance criteria from a heading or a plain `Acceptance criteria:` label. */
 export function parseAcceptance(body: string): string[] {
   const lines = body.split("\n");
   let inSection = false;
   const out: string[] = [];
+  const otherSections = new Set([
+    "scope",
+    "context",
+    "problem",
+    "outcome",
+    "success",
+    "success measures",
+    "verification",
+    "dependencies",
+    "out of scope",
+    "notes",
+    "background",
+    "goal",
+    "why now",
+    "risks",
+    "deliverables",
+  ]);
   for (const line of lines) {
     const heading = line.match(/^#{1,6}\s+(.*)$/);
     if (heading) {
       inSection = /acceptance/i.test(heading[1] ?? "");
       continue;
+    }
+    // Planners often write `Acceptance criteria:` without a markdown heading.
+    if (/^\s*(?:\*\*)?acceptance(?: criteria)?(?:\*\*)?\s*$/i.test(line)) {
+      inSection = true;
+      continue;
+    }
+    const label = line.match(/^\s*(?:\*\*)?([A-Za-z][A-Za-z /-]{2,40})(?:\*\*)?:\s*(.*)$/);
+    if (label) {
+      const name = (label[1] ?? "").trim().toLowerCase();
+      if (/acceptance/i.test(name)) {
+        inSection = true;
+        continue;
+      }
+      if (otherSections.has(name)) {
+        inSection = false;
+        continue;
+      }
     }
     if (!inSection) continue;
     const bullet = line.match(/^\s*[-*]\s+(.*)$/);

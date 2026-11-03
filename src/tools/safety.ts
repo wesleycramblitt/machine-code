@@ -206,8 +206,15 @@ export function globToRegExp(glob: string): RegExp {
     const ch = pattern[i]!;
     if (ch === "*") {
       if (pattern[i + 1] === "*") {
-        body += ".*";
-        i += 1;
+        if (pattern[i + 2] === "/") {
+          // `**/` matches zero or more directories, so `data/**/*.md`
+          // includes `data/a.md` as well as `data/x/a.md`.
+          body += "(?:.*/)?";
+          i += 2;
+        } else {
+          body += ".*";
+          i += 1;
+        }
       } else {
         body += "[^/]*";
       }
@@ -218,6 +225,20 @@ export function globToRegExp(glob: string): RegExp {
     }
   }
   return new RegExp(`^${prefix}${body}$`);
+}
+
+/** Expand simple `{a,b}` alternatives in a glob. */
+export function expandGlobBraces(glob: string): string[] {
+  const start = glob.indexOf("{");
+  if (start === -1) return [glob];
+  const end = glob.indexOf("}", start + 1);
+  if (end === -1) return [glob];
+  const prefix = glob.slice(0, start);
+  const body = glob.slice(start + 1, end);
+  const suffix = glob.slice(end + 1);
+  const parts = body.split(",");
+  if (parts.length < 2) return [glob];
+  return parts.flatMap((part) => expandGlobBraces(`${prefix}${part}${suffix}`));
 }
 
 export function toRelative(root: string, abs: string): string {

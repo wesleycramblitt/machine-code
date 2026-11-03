@@ -449,6 +449,26 @@ export class RunStateStore {
     this.saveMarkdown();
   }
 
+  /** Remember a compact issue body so the planner does not re-view it. */
+  addIssueBodyFact(number: number | string, body: string, turn?: number): void {
+    const at = turn ?? this.currentTurn();
+    const clean = body.replace(/\s+/g, " ").trim();
+    if (!clean) return;
+    this.append({
+      type: "fact",
+      fact: {
+        id: this.id(),
+        kind: "finding",
+        text: `#${number} body: ${clean.slice(0, 600)}`,
+        refs: [],
+        turn: at,
+        status: "active",
+        key: `issue-body:${number}`,
+      },
+    });
+    this.saveMarkdown();
+  }
+
   private ignoredStatusPath(path: string): boolean {
     if (path === ".machine_code" || path.startsWith(".machine_code/")) return true;
     if (!this.repoRoot) return false;
@@ -620,18 +640,48 @@ export class RunStateStore {
         refs.push(ref);
         this.addReadFact(ref, turn, excerpt(resultText));
       } else if (toolName === "search") {
+        const mode = str(args.mode) ?? "text";
+        const paths = Array.isArray(args.paths)
+          ? args.paths.filter((item): item is string => typeof item === "string").join(",")
+          : "";
+        const query = str(args.pattern) ?? str(args.path) ?? paths;
         const found: Ref[] = [];
-        for (const line of resultText.split("\n")) {
-          const match = /^([^:\n]+):(\d+)(?::\d+)?/.exec(line.trim());
-          if (!match) continue;
-          found.push({ path: match[1]!, range: [Number(match[2]), Number(match[2])] });
-          if (found.length >= 10) break;
+        if (mode === "files") {
+          for (const line of resultText.split("\n")) {
+            const path = line.trim();
+            if (!path || path.startsWith("no ") || path.startsWith("[")) continue;
+            found.push({ path });
+            if (found.length >= 10) break;
+          }
+        } else if (mode === "outline") {
+          const match = /^(.+?) \(\d+ lines\)/.exec(resultText.trimStart());
+          if (match) found.push({ path: match[1]!.trim() });
+        } else if (mode === "map") {
+          let root = "";
+          for (const line of resultText.split("\n")) {
+            const dir = /^(\S+\/) \(\d+ files\)/.exec(line.trim());
+            if (dir) {
+              root = dir[1]!;
+              found.push({ path: root });
+            } else {
+              const file = /^\s+(\S+) \(\d+\)/.exec(line);
+              if (file && root) found.push({ path: `${root}${file[1]}` });
+            }
+            if (found.length >= 10) break;
+          }
+        } else {
+          for (const line of resultText.split("\n")) {
+            const match = /^([^:\n]+):(\d+)(?::\d+)?/.exec(line.trim());
+            if (!match) continue;
+            found.push({ path: match[1]!, range: [Number(match[2]), Number(match[2])] });
+            if (found.length >= 10) break;
+          }
         }
         const hits = found
           .slice(0, 3)
-          .map((ref) => `${ref.path}:${ref.range?.[0] ?? ""}`)
+          .map((ref) => `${ref.path}${ref.range ? `:${ref.range[0]}` : ""}`)
           .join(", ");
-        this.addSearchFact(str(args.pattern) ?? "", found, turn, hits);
+        this.addSearchFact(mode === "text" ? query : `${mode} ${query}`.trim(), found, turn, hits);
         refs.push(...found.slice(0, 3));
       } else if (toolName === "command") {
         commandRan = true;

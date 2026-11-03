@@ -48,7 +48,7 @@ test("roles, prompts, tools, and presets come from data", () => {
   assert.equal(AGENT_META.build.modes.length, 0);
 
   const planner = agentDef(layout, "planner");
-  assert.match(planner.prompt, /Planner agent/);
+  assert.match(planner.prompt, /Planner\./);
   assert.equal(planner.issueAccess, "create");
   assert.ok(planner.tools.includes("issue"));
   assert.ok(!planner.tools.includes("write"));
