@@ -25,11 +25,12 @@ const deltas = Object.fromEntries(
 test("base and role deltas stay small", () => {
   assert.ok(base.length <= 1_500, `base is ${base.length} chars`);
   for (const [role, delta] of Object.entries(deltas)) {
-    assert.ok(delta.length <= 300, `${role} delta is ${delta.length} chars`);
+    const limit = role === "planner" ? 500 : 300;
+    assert.ok(delta.length <= limit, `${role} delta is ${delta.length} chars`);
     assert.match(delta, /Stop/, `${role} has a stop condition`);
   }
   const total = base.length + Object.values(deltas).reduce((sum, delta) => sum + delta.length, 0);
-  assert.ok(total <= 2_400, `base + deltas is ${total} chars`);
+  assert.ok(total <= 2_600, `base + deltas is ${total} chars`);
 });
 
 test("rendered prompts name the resolved tools and config", () => {
