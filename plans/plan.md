@@ -4,8 +4,9 @@
 > `plans/upgrade-plan.md`, and `plans/upgrade-plan-v2.md`; their full design
 > history remains in git. It lists only work that is not built.
 >
-> Baseline: `9388aa7`, 192 tests passing. Current: all planned code work is
-> implemented. Phases 1-8 are complete: issue access and `mc:plan` validation;
+> Baseline: `9388aa7`, 192 tests passing. Current: the shipped baseline is
+> implemented; Phase 0 validation and tool-call hardening remain. Phases 1-8
+> are complete: issue access and `mc:plan` validation;
 > metadata/free-model probes with preflight, coalescing, jitter, TUI refresh,
 > and provider health; process supervision for commands, gates, maps, LSP,
 > worktree git helpers, and synchronous git status; Planner provisioning and
@@ -13,10 +14,10 @@
 > checkpoints/closure; Build, gates, and an independent Review run; merge
 > conflict detection; Related lineage; and the Phase 8 cleanup (no `task` tool,
 > `run:spawn`, Architect, role modes, or Children). `queue` remains a
-> compatibility path. The suite has 256 passing tests plus one opt-in GitHub
-> smoke. A live Planner → Build → Review → Task PR → Feature PR run passed; the
-> exact Phase 0 replay is unavailable and the ≤10-call efficiency target remains
-> open.
+> compatibility path. The suite has 309 tests (308 passing, 1 skipped) plus one
+> opt-in GitHub smoke. A live Planner → Build → Review → Task PR → Feature PR
+> run passed; the exact Phase 0 replay is unavailable and the ≤10-call
+> efficiency target remains open.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -88,6 +89,55 @@ run.
   supervisor.
 
 Status: non-blocking cleanup. No behavior change is required for v2.
+
+### 0.6 Tool-call protocol reliability
+
+Status: the text-markup guard shipped in `066be1c`. The model probe and
+fallback policy remain open.
+
+Problem: a free fallback model returned `<tool_call>` markup as plain text. The
+loop saw `stopReason: stop` with no native `toolCall` blocks and marked the run
+`completed` after two turns. The run was still in the orient phase. The
+catalogue had marked the model tool-capable from OpenRouter endpoint metadata,
+which only proves that the endpoint accepts `tools` / `tool_choice`.
+
+Rules:
+
+- Tool-using roles require native structured tool calls.
+- A text-only response with tool-call markup is malformed. Do not treat it as a
+  final answer.
+- Cool the model, rotate to another model, and fail the run when none remain.
+- Never silently complete a run on unparsed tool-call markup.
+- Do not add a text protocol as an implicit fallback. Add it only as an
+  explicit per-model protocol with a strict parser and tests.
+
+Work:
+
+- Add a bounded live tool-call smoke test during catalogue refresh or selection.
+  Use one harmless tool and require a native call. Record pass/fail and probe
+  time.
+- Mark models that fail the probe as unreliable for tool-using roles. Re-probe
+  later; do not trust metadata alone.
+- Add curated overrides for known text-only models.
+- Decide the failure policy per tier: fail fast, use a funded model, or use a
+  strict text parser for a named model family.
+- Add a repair prompt only when the model can recover. Otherwise rotate.
+- Cover provider routing: the same model may work on one backend and fail on
+  another.
+- Extend the detector when new text formats appear: JSON tool calls, ReAct
+  `Action:` blocks, or other XML variants.
+
+Acceptance:
+
+- A model that emits text markup never produces a `completed` run.
+- The event log contains `malformed_tool_call`; the timeline and run detail show
+  it.
+- The failed model is cooled and excluded for the rest of the run.
+- If every eligible model is malformed, the run status is `failed` with a clear
+  error.
+- A model that passes the probe can complete a real tool-using run.
+- Tests cover native calls, text markup, a single prose mention, a valid final
+  answer, and the all-models-malformed case.
 
 ## 1. Shipped baseline — do not rebuild
 

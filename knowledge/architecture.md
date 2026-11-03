@@ -36,6 +36,21 @@ state, selection, and verification; the model owns decisions and edits.
 - **Orchestrator** (`src/orchestrate.ts`, `src/orchestrator/`): issue-backed
   scheduling, worktrees, gates, review, commit, PR.
 
+## Tool-call protocol
+
+Tool-using roles use native structured tool calls from the provider API. The
+provider returns `toolCall` blocks (or the provider-equivalent); the loop
+executes them and returns tool results in the next request.
+
+A text-only response that contains tool-call markup is malformed. The loop
+records `malformed_tool_call`, cools the model, and rotates to another model.
+If no model remains, the run fails. It never marks that response completed.
+
+Catalogue `toolCall` flags are metadata, not proof. OpenRouter rows infer the
+flag from endpoint parameters. A model can accept `tools` and still return text
+markup. See `knowledge/model-tool-calling.md` for the failure, the guard, and
+the remaining probe work.
+
 ## Retrieval stack
 
 1. **Git** gives the file set, head, and dirty paths.
@@ -50,6 +65,8 @@ state, selection, and verification; the model owns decisions and edits.
 - Context is bounded; every block has provenance in `context.json`.
 - Run state is the memory; the transcript is not replayed.
 - One logical change per tool call; read the smallest unit that justifies it.
+- Tool calls are structured. Text tool-call markup is malformed; rotate models
+  or fail, never complete.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
 - Prompts use ASD-STE100 and end with the role's typed terminal line.
 
