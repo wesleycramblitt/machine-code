@@ -1461,7 +1461,7 @@ export async function runTui(): Promise<void> {
     const headerTone = theme.bodyBg;
     // Prompt editing moves its controls into the body but keeps the model line.
     const hideFooter = screen === "newrun" && newRunInsert;
-    const bodyH = Math.max(1, rows - header.length - (runDetailHeader ? 1 : footerReserve));
+    const bodyH = Math.max(1, rows - header.length - footerReserve);
 
     const filteredRuns = runsListScreen
       ? runsFilter === "all" || runsFilter === "attention"
@@ -1490,7 +1490,8 @@ export async function runTui(): Promise<void> {
     /** True when `secondary` already carries its own styling (new-run model info). */
     let secondaryStyled = false;
     /** Run details show only the working directory in their footer. */
-    let runFooter = "";
+    let runCwd = "";
+    let runHints = "";
     /** Right-aligned MAP/SEM/LSP status for the bottom footer. */
     let footerMapTokens: string[] = [];
     /** Context usage shown at the far left of the index footer row. */
@@ -2550,13 +2551,29 @@ export async function runTui(): Promise<void> {
           thinkingByCall.set(key, list);
         }
         const touched = touchedPaths(ev);
-        runFooter =
-          `${Y}fork[f]${R}  ·  ${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}` +
-          (runSection === "timeline"
-            ? `  ·  j/k events · space expand · PgUp/Dn scroll · F follow ${timelineFollow ? "ON" : "OFF"} · v ${timelineVerbose ? "all" : "key events"}`
+        runCwd = `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}`;
+        const hint = (key: string, label: string, tone = M): string =>
+          `${B}${tone}${key}${R} ${D}${label}${R}`;
+        runHints = joinCommands([
+          command("f", "fork", undefined, Y),
+          ...(runSection === "timeline"
+            ? [
+                hint("j/k", "events"),
+                hint("space", "expand", G),
+                hint("PgUp/Dn", "scroll"),
+                hint("F", `follow ${timelineFollow ? "ON" : "OFF"}`, Y),
+                hint("v", timelineVerbose ? "all" : "key events"),
+              ]
             : runSection === "processes"
-              ? "  ·  j/k select · F follow · o log · x kill · X kill all"
-              : "");
+              ? [
+                  hint("j/k", "select"),
+                  hint("F", "follow", Y),
+                  hint("o", "log", G),
+                  hint("x", "kill", RED),
+                  hint("X", "kill all", RED),
+                ]
+              : []),
+        ]);
         footerMapTokens = mapStatusTokens(s.worktree ?? s.repoRoot);
         const sectionBar = wrapTokenList(
           RUN_SECTIONS.map((section) =>
@@ -2977,7 +2994,7 @@ export async function runTui(): Promise<void> {
       secondary = `${D}Esc returns to the run; use i when you only want to stop it${R}`;
     }
 
-    if (runDetailHeader && runFooter) header[1] = rightHeaderPath(runFooter);
+    if (runDetailHeader && runCwd) header[1] = rightHeaderPath(runCwd);
 
     /* ------------------------------------------------------------ compose */
     if (searchMode) {
@@ -2992,12 +3009,17 @@ export async function runTui(): Promise<void> {
       command("1-4", "Pages", undefined, C),
       command("q", "Quit", undefined, GR),
     ]);
-    const commandRows = runDetailHeader || hideFooter
+    const commandRows = hideFooter
       ? []
-      : [
-          ...wrapCommands(actions || defaultActions, cols),
-          ...(extraActions ? wrapCommands(extraActions, cols) : []),
-        ];
+      : runDetailHeader
+        ? [
+            ...(runHints ? wrapCommands(runHints, cols) : []),
+            ...(extraActions ? wrapCommands(extraActions, cols) : []),
+          ]
+        : [
+            ...wrapCommands(actions || defaultActions, cols),
+            ...(extraActions ? wrapCommands(extraActions, cols) : []),
+          ];
     const secondaryRows = runDetailHeader
       ? []
       : secondaryStyled
@@ -3016,9 +3038,7 @@ export async function runTui(): Promise<void> {
     const styledMapFooterLine =
       mapFooterLine && mapFooterSurface ? background(mapFooterLine, mapFooterSurface) : mapFooterLine;
     const bottomLines = styledMapFooterLine ? [styledMapFooterLine] : [];
-    const footer = runDetailHeader
-      ? bottomLines
-      : [...commandRows, ...secondaryRows, ...bottomLines];
+    const footer = [...commandRows, ...secondaryRows, ...bottomLines];
     // Key legends sit on the near-black surface; trailing rows keep the footer band.
     const legendRows = commandRows.length;
     const bodySpace = Math.max(0, rows - header.length - footer.length);
