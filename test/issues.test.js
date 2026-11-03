@@ -381,6 +381,12 @@ test("graph action creates the Epic, Features, Tasks, and dependencies in one ca
     assert.ok(a1 && b1);
     assert.equal(b1.blockedBy[0].number, a1.ref.number);
     assert.ok(tasks.every((issue) => issue.plan?.status === "ready"));
+
+    const tree = await issueTool(ctx).execute("c3", { action: "tree", depth: 3 });
+    assert.equal(tree.isError, undefined);
+    assert.match(tree.content[0].text, /Graph complete/);
+    assert.match(tree.content[0].text, /create it now with issue action=graph/);
+    assert.match(tree.content[0].text, /Do not inspect source/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

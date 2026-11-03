@@ -58,6 +58,8 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.match(planner.prompt, /create Tasks under each Feature/i);
     assert.match(planner.prompt, /Ignore reserved anchors/);
     assert.match(planner.prompt, /do not write files/);
+    assert.match(planner.prompt, /do not read\/search source or call issue list/);
+    assert.match(planner.prompt, /request names a new Epic\/Feature\/Task/);
     assert.match(planner.prompt, /Verify every Task is plan ready/);
     assert.match(planner.prompt, /issue access create/);
 

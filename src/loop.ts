@@ -45,7 +45,7 @@ const REPEAT_BLOCK_LIMIT = 3;
 /** Reads of one path allowed before the harness forces the model to act. */
 const READ_PATH_LIMIT = 3;
 /** Planner research/verification calls allowed without an issue write. */
-const PLANNER_NO_PROGRESS_LIMIT = 10;
+const PLANNER_NO_PROGRESS_LIMIT = 6;
 /** Build/sudo research calls allowed without an edit, write, or command. */
 const MUTATING_NO_PROGRESS_LIMIT = 12;
 /** Read-only research calls allowed without a decision/focus note or command. */
@@ -107,7 +107,7 @@ function repeatHint(tool: string): string {
     case "search":
       return "Use the earlier result or change the pattern or path.";
     case "issue":
-      return "Use the earlier issue result or act on the graph; do not view the same issue again.";
+      return "Use the earlier issue result; create the missing graph or stop. Do not view the same issue again.";
     case "command":
       return "Use the earlier command result. issue, pr, and artifact are tools, not commands.";
     case "context":
@@ -667,6 +667,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const searchKeys = new Map<string, number>();
     let treeCalls = 0;
     let noProgressCalls = 0;
+    /** A planner tree already said the graph is plan ready. */
+    let plannerGraphComplete = false;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -827,6 +829,21 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             tool.name === "context" ||
             (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
           const readonlyAgent = input.agent.name === "general" || input.agent.name === "review";
+          if (issueWrite) plannerGraphComplete = false;
+          if (input.agent.name === "planner" && plannerGraphComplete) {
+            const researchAfterComplete =
+              tool.name === "read" ||
+              tool.name === "search" ||
+              (tool.name === "context" && contextAction === "recall") ||
+              (tool.name === "issue" && ["list", "tree"].includes(issueAction));
+            if (researchAfterComplete) {
+              return block(
+                "Issue graph is complete. Do not research source or re-inspect the tree. " +
+                  "If the request names a new Epic/Feature/Task, create it now; otherwise stop with issue numbers.",
+                { args: capJson(params), graphComplete: true },
+              );
+            }
+          }
           const noProgressLimit =
             input.agent.name === "planner"
               ? PLANNER_NO_PROGRESS_LIMIT
@@ -843,7 +860,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               if (noProgressCalls >= noProgressLimit) {
                 return block(
                   input.agent.name === "planner"
-                    ? `Planner has made ${noProgressCalls} research/verification calls without an issue write. Create missing Tasks or stop with issue numbers.`
+                    ? `Planner has made ${noProgressCalls} research/verification calls without an issue write. Stop research and create the missing Epic/Features/Tasks with issue action=graph or action=create, or stop with issue numbers.`
                     : readonlyAgent
                       ? `${noProgressCalls} research calls without a decision, focus note, or command. Record what you know and answer, or ask one precise question.`
                       : `${noProgressCalls} research calls without an edit, write, or command. Act on the evidence or stop.`,
@@ -917,6 +934,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
 
           const result = await execute(id, params, signal, onUpdate);
+          if (
+            input.agent.name === "planner" &&
+            tool.name === "issue" &&
+            issueAction === "tree" &&
+            !result.isError
+          ) {
+            const text = result.content
+              .filter((item): item is { type: "text"; text: string } => item.type === "text")
+              .map((item) => item.text)
+              .join("\n");
+            plannerGraphComplete = text.includes("Graph complete:");
+          }
           if (!result.isError && tool.name === "search" && searchKey) {
             searchKeys.set(searchKey, (searchKeys.get(searchKey) ?? 0) + 1);
           }

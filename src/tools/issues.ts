@@ -351,7 +351,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         const note = deliverableTasks === 0
           ? ""
           : deliverableTasks === readyTasks
-            ? `Graph complete: all ${deliverableTasks} deliverable Tasks are plan ready. Stop now unless a concrete missing deliverable is named.`
+            ? `Graph complete: all ${deliverableTasks} deliverable Tasks are plan ready. If the request names a new Epic, Feature, or Task, create it now with issue action=graph (new chain) or action=create (one issue); otherwise stop with issue numbers. Do not inspect source.`
             : `Graph incomplete: ${deliverableTasks - readyTasks} of ${deliverableTasks} deliverable Tasks are not plan ready.`;
         const text = note ? `${note}\n\n${lines.join("\n")}` : lines.join("\n");
         treeCache.set(treeKey, text);
