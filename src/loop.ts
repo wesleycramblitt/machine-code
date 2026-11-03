@@ -45,7 +45,7 @@ const REPEAT_BLOCK_LIMIT = 3;
 /** Reads of one path allowed before the harness forces the model to act. */
 const READ_PATH_LIMIT = 3;
 /** Planner research/verification calls allowed without an issue write. */
-const PLANNER_NO_PROGRESS_LIMIT = 6;
+const PLANNER_NO_PROGRESS_LIMIT = 10;
 /** Build/sudo research calls allowed without an edit, write, or command. */
 const MUTATING_NO_PROGRESS_LIMIT = 12;
 /** Read-only research calls allowed without a decision/focus note or command. */
@@ -667,8 +667,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const searchKeys = new Map<string, number>();
     let treeCalls = 0;
     let noProgressCalls = 0;
-    /** A planner tree already said the graph is plan ready. */
-    let plannerGraphComplete = false;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -829,21 +827,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             tool.name === "context" ||
             (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
           const readonlyAgent = input.agent.name === "general" || input.agent.name === "review";
-          if (issueWrite) plannerGraphComplete = false;
-          if (input.agent.name === "planner" && plannerGraphComplete) {
-            const researchAfterComplete =
-              tool.name === "read" ||
-              tool.name === "search" ||
-              (tool.name === "context" && contextAction === "recall") ||
-              (tool.name === "issue" && ["list", "tree"].includes(issueAction));
-            if (researchAfterComplete) {
-              return block(
-                "Issue graph is complete. Do not research source or re-inspect the tree. " +
-                  "If the request names a new Epic/Feature/Task, create it now; otherwise stop with issue numbers.",
-                { args: capJson(params), graphComplete: true },
-              );
-            }
-          }
           const noProgressLimit =
             input.agent.name === "planner"
               ? PLANNER_NO_PROGRESS_LIMIT
@@ -934,18 +917,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
 
           const result = await execute(id, params, signal, onUpdate);
-          if (
-            input.agent.name === "planner" &&
-            tool.name === "issue" &&
-            issueAction === "tree" &&
-            !result.isError
-          ) {
-            const text = result.content
-              .filter((item): item is { type: "text"; text: string } => item.type === "text")
-              .map((item) => item.text)
-              .join("\n");
-            plannerGraphComplete = text.includes("Graph complete:");
-          }
           if (!result.isError && tool.name === "search" && searchKey) {
             searchKeys.set(searchKey, (searchKeys.get(searchKey) ?? 0) + 1);
           }
