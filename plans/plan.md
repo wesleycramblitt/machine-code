@@ -4,39 +4,18 @@
 > `plans/upgrade-plan.md`, and `plans/upgrade-plan-v2.md`; their full design
 > history remains in git. It lists only work that is not built.
 >
-> Baseline: `9388aa7`, 192 tests passing. Current: Phase 1 contracts are
-> implemented (issue access, `mc:plan` schema/validator, run orchestration
-> fields, process registry/types, issue dependencies, artifact usage). Phase 2
-> has metadata/free-model probes, run preflight, the `availability` CLI, and a
-> manual TUI probe. Phase 3 has the registry/supervisor, typed-command and gate tracking,
-> `processes` CLI, and the run-detail Processes section with select, follow,
-> open-log, and kill controls. Detached delegated runs are supervised, and
-> orphan records are reconciled on read and during prune. Phase 4 has the
-> read-only Planner role with `issue_access=create`; Build, Review, and Sudo have
-> read access with an explicit `--allow-issue-create` override. The Planner has
-> artifact inventory/provisioning; executable scripts require explicit
-> `--allow-artifact-scripts` approval. The scheduler, dry-run and sequential
-> execution CLI, TUI preflight, and orchestration ledger/lease are implemented.
-> Issue `plan` writes/replaces `mc:plan` safely. LSP servers are supervised.
-> Sequential orchestration dispatch executes a ready task through Build, gates,
-> Review, commit, and PR. Build outcomes and Review verdicts are typed, and
-> completion failures retry with evidence up to the task budget. Before-build
-> packet approval is wired to the ledger. Execution honors wall-clock and spend
-> budgets. Worktree-creation git helpers are supervised. The Tools subtab lists
-> all agent tools and custom tools. Context item token counts use the same
-> chars/4 estimate as their section totals, and core tool schemas are counted
-> as always-sent request overhead. Always-visible skill descriptions are
-> previewed per skill, and knowledge/scripts list available file sizes without
-> counting them until referenced. The composer can include available knowledge
-> and exclude individual skills. Process cleanup helpers are supervised,
-> availability probes are coalesced and jittered, and the TUI refreshes cooling
-> models on a timer. The synchronous git-status safety net is supervised, and
-> run detail exposes Related lineage instead of Children, and agent-reviewed
-> results record acceptance evidence and close their Tasks. Phase 8 cleanup is
-> complete: the `task` tool, `run:spawn`, Architect, role modes, and the
-> Children section are gone; `queue` remains a compatibility path. Plan
-> references are validated before writing, and agent-reviewed results close
-> their Tasks. The suite has 254 passing tests plus one opt-in GitHub smoke.
+> Baseline: `9388aa7`, 192 tests passing. Current: all planned code work is
+> implemented. Phases 1-8 are complete: issue access and `mc:plan` validation;
+> metadata/free-model probes with preflight, coalescing, jitter, TUI refresh,
+> and provider health; process supervision for commands, gates, maps, LSP,
+> worktree git helpers, and synchronous git status; Planner provisioning and
+> deterministic fixtures; Orchestrator scopes/leases/parallelism/retries/
+> checkpoints/closure; Build, gates, and an independent Review run; merge
+> conflict detection; Related lineage; and the Phase 8 cleanup (no `task` tool,
+> `run:spawn`, Architect, role modes, or Children). `queue` remains a
+> compatibility path. The suite has 254 passing tests plus one opt-in GitHub
+> smoke. The only remaining validation is credential-gated: the Phase 0 model
+> replay, the real write/PR GitHub suite, and model-backed Planner eval runs.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -294,7 +273,7 @@ probe activity is visible and rate-limited.
 
 ## 6. Phase 3 — Process supervision
 
-Status: partially implemented. The registry/supervisor, typed-command and gate
+Status: implemented. The registry/supervisor, typed-command and gate
 process records and logs, `processes` CLI, run-detail Processes section with
 select/follow/open-log/kill controls, detached delegated-run tracking,
 SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
@@ -344,14 +323,15 @@ calls. The section refreshes while the run is active.
 
 ## 7. Phase 4 — Planner
 
-Status: partially implemented. `data/agents/planner.toml` is a read-only role
+Status: implemented. `data/agents/planner.toml` is a read-only role
 with issue creation, issue editing, map/search/command/ask/pr tools, artifact
 inventory/provisioning, the issue `plan` action, and the compact planning
 prompt. New-Epic bootstrap works through `issue create`. Executable scripts
 require the explicit `--allow-artifact-scripts` run flag. Human packet and
 result review checkpoints are implemented, and the deterministic Planner
 fixture matrix covers greenfield, draft, missing artifacts, dependencies, and
-replan bounds. Remaining: model-backed Planner eval runs.
+replan bounds. Model-backed Planner eval runs are the remaining external
+validation.
 
 ```bash
 machine_code run --agent planner "<plan a new epic>"
