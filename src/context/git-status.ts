@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { ProcessSupervisor } from "../processes/supervisor.js";
 
 export interface GitStatusEntry {
   code: string;
@@ -25,15 +26,28 @@ function fingerprint(root: string, path: string): { mtimeMs: number; size: numbe
 }
 
 /** Null means "not a git checkout" or "status failed"; callers fall back. */
-export function readGitStatus(root: string): Map<string, GitStatusEntry> | null {
+export function readGitStatus(
+  root: string,
+  processes?: ProcessSupervisor,
+): Map<string, GitStatusEntry> | null {
   if (!existsSync(join(root, ".git"))) return null;
   let output: string;
   try {
-    output = execFileSync(
-      "git",
-      ["-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-      { encoding: "utf8", timeout: 5_000, maxBuffer: 8 * 1024 * 1024 },
-    );
+    if (processes) {
+      const result = processes.runSync(
+        "git",
+        ["-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        { cwd: root, timeoutMs: 5_000, origin: "tool", name: "git:status" },
+      );
+      if (result.status !== 0) return null;
+      output = result.stdout;
+    } else {
+      output = execFileSync(
+        "git",
+        ["-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        { encoding: "utf8", timeout: 5_000, maxBuffer: 8 * 1024 * 1024 },
+      );
+    }
   } catch {
     return null;
   }

@@ -54,6 +54,29 @@ test("supervised command records start/exit and keeps full logs", async () => {
   }
 });
 
+test("synchronous runs are recorded with their logs", () => {
+  const dir = tempDir();
+  try {
+    const supervisor = new ProcessSupervisor({ runId: "run-sync", runDir: dir });
+    const result = supervisor.runSync(
+      process.execPath,
+      ["-e", 'process.stdout.write("sync-out"); process.stderr.write("sync-err")'],
+      { cwd: process.cwd(), timeoutMs: 10_000, origin: "tool", name: "git:status" },
+    );
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, "sync-out");
+    assert.equal(result.stderr, "sync-err");
+    const records = latestProcessRecords(readProcessRecords(dir));
+    assert.equal(records.length, 1);
+    assert.equal(records[0].name, "git:status");
+    assert.equal(records[0].status, "exited");
+    assert.equal(readFileSync(records[0].stdoutLog, "utf8"), "sync-out");
+    assert.equal(readFileSync(records[0].stderrLog, "utf8"), "sync-err");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("terminate escalates to SIGKILL after the grace period", async () => {
   const child = spawn(
     process.execPath,

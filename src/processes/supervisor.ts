@@ -5,7 +5,7 @@
  * full stdout/stderr to log files while returning the capped tool result.
  */
 import { appendFileSync, closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { minimalEnv, runProc, type ProcOptions, type ProcResult } from "../proc.js";
 import {
   appendProcessRecord,
@@ -54,6 +54,15 @@ export interface SupervisedAttachOptions {
 export interface SupervisedStartResult {
   processId: string;
   record: ProcessRecord;
+}
+
+export interface SupervisedSyncResult {
+  processId: string;
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  error?: string;
 }
 
 function statusFor(result: ProcResult): ProcessStatus {
@@ -139,6 +148,70 @@ export class ProcessSupervisor {
     });
     finalize(result);
     return { result, processId: id, record };
+  }
+
+  /**
+   * Run a short-lived process without yielding. Used by synchronous safety
+   * nets such as the git-status delta. The process is still recorded and its
+   * output is written to the run's log files.
+   */
+  runSync(binary: string, args: string[], options: SupervisedRunOptions): SupervisedSyncResult {
+    const { origin, name, toolCallId, ...procOptions } = options;
+    const id = nextProcessId(readProcessRecords(this.options.runDir));
+    const logs = processLogPaths(this.options.runDir, id);
+    mkdirSync(processesDir(this.options.runDir), { recursive: true });
+    const startedAt = new Date().toISOString();
+    let record: ProcessRecord = {
+      id,
+      runId: this.options.runId,
+      origin,
+      name,
+      ...(toolCallId ? { toolCallId } : {}),
+      argv: [binary, ...args],
+      status: "running",
+      startedAt,
+      stdoutLog: logs.stdout,
+      stderrLog: logs.stderr,
+    };
+    appendProcessRecord(this.options.runDir, record);
+    this.options.onEvent?.("process_started", { processId: id, origin, name });
+    const result = spawnSync(binary, args, {
+      cwd: procOptions.cwd,
+      env: { ...minimalEnv(), ...(procOptions.env ?? {}) },
+      timeout: procOptions.timeoutMs,
+      maxBuffer: 8 * 1024 * 1024,
+      encoding: "utf8",
+    });
+    const stdout = result.stdout ?? "";
+    const stderr = result.stderr ?? "";
+    writeFileSync(logs.stdout, stdout, "utf8");
+    writeFileSync(logs.stderr, stderr, "utf8");
+    const status = result.error ? "spawn-error" : result.status === 0 ? "exited" : "failed";
+    record = {
+      ...record,
+      status,
+      endedAt: new Date().toISOString(),
+      ...(result.pid !== undefined ? { pid: result.pid, pgid: result.pid } : {}),
+      exitCode: result.status,
+      signal: result.signal,
+      ...(result.error ? { error: result.error.message } : {}),
+    };
+    appendProcessRecord(this.options.runDir, record);
+    this.options.onEvent?.("process_exited", {
+      processId: id,
+      status,
+      exitCode: result.status,
+      signal: result.signal,
+      ...(result.error ? { error: result.error.message } : {}),
+    });
+    return {
+      processId: id,
+      status: result.status,
+      signal: result.signal,
+      stdout,
+      stderr,
+      ...(result.error ? { error: result.error.message } : {}),
+    };
   }
 
   /**

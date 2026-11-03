@@ -17,6 +17,7 @@ import {
 import { dirname, join, relative } from "node:path";
 import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
 import { readGitStatus, type GitStatusEntry } from "./git-status.js";
+import type { ProcessSupervisor } from "../processes/supervisor.js";
 import { markSemanticDirty } from "../map/semantic.js";
 import { recordSemanticChange } from "../map/changes.js";
 
@@ -85,6 +86,8 @@ export interface StateStoreOptions {
   /** Repository/worktree root for map dirty markers. */
   repoRoot?: string;
   recorder?: EventSink;
+  /** Optional run supervisor for the synchronous git-status safety net. */
+  processes?: ProcessSupervisor;
 }
 
 function sha1(text: string): string {
@@ -168,6 +171,7 @@ export class RunStateStore {
   readonly runId: string;
   private readonly repoRoot?: string;
   private readonly recorder?: EventSink;
+  private readonly processes?: ProcessSupervisor;
   private state: RunState;
   private sequence = 0;
   /** Git status at run construction; only deltas belong to this run. */
@@ -178,6 +182,7 @@ export class RunStateStore {
     this.runId = options.runId;
     this.repoRoot = options.repoRoot;
     this.recorder = options.recorder;
+    this.processes = options.processes;
     this.state = {
       version: 1,
       runId: options.runId,
@@ -189,7 +194,7 @@ export class RunStateStore {
       counters: { turn: 0, steps: 0, artifacts: 0 },
     };
     this.load();
-    if (this.repoRoot) this.gitBaseline = readGitStatus(this.repoRoot);
+    if (this.repoRoot) this.gitBaseline = readGitStatus(this.repoRoot, this.processes);
   }
 
   get path(): string {
@@ -425,7 +430,7 @@ export class RunStateStore {
   /** New or changed status entries since the last snapshot. */
   private syncGitChanges(known: ReadonlySet<string>): Array<{ path: string; code: string }> {
     if (!this.repoRoot || !this.gitBaseline) return [];
-    const current = readGitStatus(this.repoRoot);
+    const current = readGitStatus(this.repoRoot, this.processes);
     if (!current) return [];
     const changed: Array<{ path: string; code: string }> = [];
     for (const [path, entry] of current) {

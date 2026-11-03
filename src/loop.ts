@@ -268,6 +268,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     goal: input.request,
     repoRoot: mapRoot,
     recorder,
+    processes,
   });
   // Semantic refresh after a changed turn. Coalesce so a burst of edits
   // produces at most one in-flight refresh plus one follow-up.

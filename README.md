@@ -225,9 +225,9 @@ approval counts.
 
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are
-also supervised, along with LSP servers and worktree creation/commit git
-helpers. The synchronous git-status safety net, worktree remove/prune helpers,
-and MCP spawns are the remaining supervision work.
+also supervised, along with LSP servers, worktree creation/commit/remove/prune
+git helpers, and the synchronous git-status safety net. MCP spawns are the
+remaining supervision work when MCP support is added.
 
 Run modes belong to the selected agent. The Architect declares `direct`,
 `verified`, and `redundant` (default `verified`) plus the per-mode

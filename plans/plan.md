@@ -30,7 +30,8 @@
 > counting them until referenced. The composer can include available knowledge
 > and exclude individual skills. Process cleanup helpers are supervised,
 > availability probes are coalesced and jittered, and the TUI refreshes cooling
-> models on a timer. The suite has 251 tests.
+> models on a timer. The synchronous git-status safety net is supervised. The
+> suite has 252 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -289,9 +290,9 @@ Status: partially implemented. The registry/supervisor, typed-command and gate
 process records and logs, `processes` CLI, run-detail Processes section with
 select/follow/open-log/kill controls, detached delegated-run tracking,
 SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
-exist. Map, LSP, worktree-creation, worktree-commit, and worktree
-remove/prune git helpers are supervised. Remaining: the synchronous
-git-status safety net and MCP spawns when MCP support is introduced.
+exist. Map, LSP, worktree-creation, worktree-commit, worktree remove/prune, and
+the synchronous git-status safety net are supervised. Remaining: MCP spawns
+when MCP support is introduced.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -589,7 +590,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 251 tests green. Add:
+Keep the existing 252 tests green. Add:
 
 | Area | Cases |
 |---|---|
