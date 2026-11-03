@@ -27,12 +27,12 @@ The runtime selection file remains `~/.machine_code/catalogue/models.json`. TUI 
 machine-configurable under `[theme]` in `~/.machine_code/config.toml`; see the README
 for the full key list.
 
-## Modes and reusable artifacts
+## Orchestration and reusable artifacts
 
-Modes are role data, not a global enum. The Architect ships
-`modes = ["direct", "verified", "redundant"]`, `default_mode = "verified"`, and
-`[mode.<name>]` tables that set Build verification and whether Review runs.
-General, Build, Review, and Sudo ship with `modes = []`; they run alone.
+Role modes are retired. The Orchestrator freezes a packet, runs Build in an
+isolated worktree, executes acceptance gates, runs Review as an independent
+read-only run, then commits and publishes. Roles declare no mode vocabulary.
+`queue` remains a compatibility path for committed packets.
 
 Issues can point at cascading repo artifacts in a single block. The nearest
 Task wins, then its Feature, then its Epic:

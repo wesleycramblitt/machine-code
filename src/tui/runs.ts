@@ -197,8 +197,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const orphaned: RunSummary[] = [];
   for (const run of baseRuns) {
     if (!run.issue) {
-      if (run.agent === "architect" && (!run.mode || run.mode === "plan" || run.mode === "solo")) planning.push(run);
-      else untracked.push(run);
+      untracked.push(run);
       continue;
     }
     const repoRoot = repoOf(run);

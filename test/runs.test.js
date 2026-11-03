@@ -43,7 +43,7 @@ test("gh issue groups by repository, then full issue hierarchy and untracked", (
   const runs = [
     run({ id: "a", issue: task.ref, status: "awaiting_input" }),
     run({ id: "free", agent: "general", mode: "", status: "completed" }),
-    run({ id: "plan", agent: "architect", mode: "", status: "completed" }),
+    run({ id: "plan", agent: "build", mode: "", status: "completed" }),
     run({ id: "b", repoRoot: repoB, issue: otherEpic.ref, status: "blocked" }),
   ];
   const index = buildRunIndex({
@@ -68,8 +68,8 @@ test("gh issue groups by repository, then full issue hierarchy and untracked", (
   assert.deepEqual(issueNumbers, [10, 20, 31, 5]);
   const runIds = index.rows.filter((row) => row.kind === "run").map((row) => row.run.id);
   assert.deepEqual(new Set(runIds), new Set(["a", "free", "plan", "b"]));
-  assert.deepEqual(index.untracked.map((entry) => entry.id), ["free"]);
-  assert.deepEqual(index.planning.map((entry) => entry.id), ["plan"]);
+  assert.deepEqual(index.untracked.map((entry) => entry.id), ["free", "plan"]);
+  assert.deepEqual(index.planning.map((entry) => entry.id), []);
   assert.equal(index.byRunId.get("a")?.run.status, "awaiting_input");
   assert.ok(index.attention >= 2);
 });

@@ -2,11 +2,10 @@
  * machine_code — agent configuration: presets, explicit overrides, ambiguity.
  *
  * Four separate axes (never conflated):
- *   role        — identity: general | architect | build | review | sudo
+ *   role        — identity: general | planner | build | review | sudo
  *   config      — behavior: delegate / verification / issues / ask / approval
- *   mode        — orchestration mode declared by the role (for example
- *                 architect: direct | verified | redundant); a role with no
- *                 modes runs alone, so there is no special "solo" value
+ *   mode        — legacy orchestration mode declared by a role; the
+ *                 Orchestrator now schedules Build and Review directly
  *   ambiguity   — clarification policy; independent of everything above
  *
  * Enforcement lives in the harness (capability filtering, tool gating), not in
@@ -243,7 +242,6 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   edit: "code:write",
   command: null,
   context: null,
-  task: "run:spawn",
   ask: null, // gated by askEnabled(config)
   issue: "issue:read", // per-action capabilities are checked inside the tool
   artifact: "artifact:provision",

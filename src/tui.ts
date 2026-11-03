@@ -170,7 +170,6 @@ const RUN_SECTION_LABEL: Record<RunSection, string> = {
 };
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 const NEW_RUN_SETTING_FIELDS = [
-  "mode",
   "preset",
   "verification",
   "issues",
@@ -197,7 +196,6 @@ interface NewRunState {
   agent: string;
   /** Explicit catalogue key override; undefined lets the selector choose. */
   model?: string;
-  mode: string;
   preset: string;
   verification: "direct" | "verified" | "redundant";
   issues: "required" | "optional" | "disabled";
@@ -451,7 +449,6 @@ function agentTone(agent: string): string {
   switch (agent) {
     case "sudo": return RED;
     case "general": return G;
-    case "architect": return BL;
     case "planner": return BL;
     case "build": return C;
     case "review": return M;
@@ -627,7 +624,6 @@ export async function runTui(): Promise<void> {
 
   let newrun: NewRunState = {
     agent: "general",
-    mode: "",
     preset: "unrestricted",
     verification: "verified",
     issues: "optional",
@@ -843,7 +839,6 @@ export async function runTui(): Promise<void> {
     const def = agentDef(l, agent);
     return {
       agent,
-      mode: def.defaultMode ?? def.modes[0] ?? "",
       preset: def.preset,
       verification: "verified",
       issues: "optional",
@@ -870,7 +865,6 @@ export async function runTui(): Promise<void> {
     };
     // Keep the selected agent's mode/preset coherent.
     const def = agentDef(l, newrun.agent);
-    newrun.mode = def.defaultMode ?? def.modes[0] ?? "";
     newrun.preset = def.preset;
     newRunInsert = false;
     newRunColon = false;
@@ -890,18 +884,10 @@ export async function runTui(): Promise<void> {
     const index = NEW_RUN_AGENTS.indexOf(newrun.agent);
     newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? newrun.agent;
     const def = agentDef(l, newrun.agent);
-    const modes = def.modes;
-    newrun.mode = modes.includes(newrun.mode) ? newrun.mode : (def.defaultMode ?? modes[0] ?? "");
     newrun.preset = def.preset;
   };
 
   const cycleNewRunSetting = (field: NewRunSettingField) => {
-    if (field === "mode") {
-      const modes = AGENT_META[newrun.agent]?.modes ?? [];
-      if (modes.length) newrun.mode = modes[(modes.indexOf(newrun.mode) + 1) % modes.length]!;
-      else notify("this agent runs alone; no mode to choose");
-      return;
-    }
     if (field === "preset") {
       const presets = ["plan", "orchestrate", "implement", "review", "assistant", "unrestricted"];
       newrun.preset = presets[(presets.indexOf(newrun.preset) + 1) % presets.length]!;
@@ -1061,7 +1047,7 @@ export async function runTui(): Promise<void> {
       machineOverrides: machine?.agents[newrun.agent],
     }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess;
     const selectedIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
-    const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
+    const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
     if (
       !planningAgent &&
       newrun.agent !== "general" &&
@@ -1075,7 +1061,6 @@ export async function runTui(): Promise<void> {
     const args = [
       "run",
       "--agent", newrun.agent,
-      ...(newrun.mode ? ["--mode", newrun.mode] : []),
       ...(newrun.model ? ["--model", newrun.model] : []),
       "--tier", newrun.tier,
       "--preset", newrun.preset,
@@ -1553,7 +1538,7 @@ export async function runTui(): Promise<void> {
         },
       });
       const issueAccess = resolvedAgent.config.issueAccess ?? def.issueAccess;
-      const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
+      const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
       const itemsFor = (kinds: readonly string[]) =>
         ctx.sources
@@ -1934,7 +1919,6 @@ export async function runTui(): Promise<void> {
         secondary = `${D}${list.length} issue(s)${issuePickText ? ` · “${issuePickText}”` : ""}${R}`;
       } else if (newRunSettings) {
         const labels: Record<NewRunSettingField, string> = {
-          mode: "Mode",
           preset: "Preset",
           verification: "Verify",
           issues: "GH issues",
@@ -1945,7 +1929,6 @@ export async function runTui(): Promise<void> {
           floors: "Floors",
         };
         const values: Record<NewRunSettingField, string> = {
-          mode: newrun.mode || "single",
           preset: newrun.preset,
           verification: newrun.verification,
           issues: newrun.issues,

@@ -1,8 +1,9 @@
 /**
- * machine_code — the six core tools.
+ * machine_code — the core tools.
  *
- * Exactly six: read, write, edit, search, command, task. Everything else is a
- * named typed command dispatched through `command`. Tools never get a shell.
+ * Read, write, edit, search, command, context, ask, issue, artifact, and pr.
+ * Everything else is a named typed command dispatched through `command`.
+ * Tools never get a shell.
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -34,7 +35,6 @@ import {
 } from "../map/deterministic.js";
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
 import { askTool, type AskContext } from "./ask.js";
-import { taskTool, type TaskContext } from "./task.js";
 import { issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { prTool, type PrToolContext } from "./pr.js";
@@ -48,8 +48,6 @@ export interface ToolContext {
   commands: ReadonlyMap<string, import("../commands/registry.js").CommandSpec>;
   /** When provided, the `ask` tool is live (suspends the run for input). */
   ask?: AskContext;
-  /** When provided, the `task` tool is live (capability-gated delegation). */
-  task?: TaskContext;
   /** When provided, the `issue` tool is live (capability-gated issue access). */
   issues?: IssueToolContext;
   /** When provided, the `artifact` tool is live (tools/scripts inventory). */
@@ -502,24 +500,6 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
   };
 }
 
-/* -------------------------------------------------------------------- task */
-
-const TaskUnavailableParams = Type.Object({
-  task: Type.String({ description: "Bounded child-task description." }),
-});
-
-function taskUnavailable(): AgentTool<typeof TaskUnavailableParams> {
-  return {
-    name: "task",
-    label: "task",
-    description: "Spawn a bounded child task in a fresh context.",
-    parameters: TaskUnavailableParams,
-    async execute() {
-      return fail("task delegation is not wired up in this run (no run context available)");
-    },
-  };
-}
-
 /* --------------------------------------------------------------------- ask */
 
 const AskUnavailableParams = Type.Object({
@@ -601,7 +581,6 @@ export type CoreToolName =
   | "search"
   | "command"
   | "context"
-  | "task"
   | "ask"
   | "issue"
   | "artifact"
@@ -615,7 +594,6 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     search: searchTool(ctx),
     command: commandTool(ctx),
     context: contextTool(ctx),
-    task: ctx.task ? taskTool(ctx.task) : taskUnavailable(),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     issue: ctx.issues ? issueTool(ctx.issues) : issueUnavailable(),
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),

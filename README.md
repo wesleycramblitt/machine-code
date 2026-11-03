@@ -22,12 +22,11 @@ node dist/cli.js run --agent general "summarize README.md"
 # plan an Epic/Feature/Task graph
 node dist/cli.js run --agent planner "plan the thermal model work"
 
-# implementation run in an isolated worktree on a Task branch
-node dist/cli.js run --agent architect --mode verified --issue 31 "implement the thermal model"
+# implementation run through the orchestrator (isolated Task worktree)
+node dist/cli.js orchestrate start --scope feature --feature 20
 
 # agent configuration (preset + explicit overrides)
-node dist/cli.js run --agent architect --mode verified --preset orchestrate \
-  --delegate true --ambiguity precise "plan the release"
+node dist/cli.js run --agent planner --preset plan --ambiguity precise "plan the release"
 
 # follow-ups, pause/fork, resume after a crash
 node dist/cli.js respond <run-id> "use leapfrog"
@@ -79,7 +78,7 @@ penalty, so they stay eligible (especially in the free tier) but do not outrank
 benchmark-backed rows by a hair. Free offers are judged by a looser
 `[agents.<role>.free]` floor (built-in `min_fit 5.5`, axes 5/5/5/3) in both
 tiers; paid offers keep the paid floors above. A build agent is therefore
-judged mainly on code/agentic, while an architect is judged mainly on
+judged mainly on code/agentic, while the Planner and Review roles are judged mainly on
 reasoning/agentic. `machine_code models --agent
 <role>` shows exactly what would be chosen.
 
@@ -228,15 +227,14 @@ closure cascades only where the parent's approval policy is `agent`.
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are
 also supervised, along with LSP servers, worktree creation/commit/remove/prune
-git helpers, and the synchronous git-status safety net. MCP spawns are the
-remaining supervision work when MCP support is added.
+git helpers, and the synchronous git-status safety net. There is no MCP client
+in this build; any future MCP spawn must use the same supervisor.
 
-Run modes belong to the selected agent. The Architect declares `direct`,
-`verified`, and `redundant` (default `verified`) plus the per-mode
-`verification`/`review` behavior in `data/agents/architect.toml`. A role with
-no modes runs alone, so `solo` is never passed. This keeps the
-coordinator/subagent chain data-driven instead of hardcoding a global mode
-enum.
+The Orchestrator schedules issue-backed work directly: it freezes a packet,
+runs Build in an isolated worktree, executes gates, runs an independent Review,
+then commits and publishes. Roles no longer declare orchestration modes, and
+there is no Architect delegation layer. `queue` remains a compatibility path
+for committed packets; new work should use `orchestrate`.
 
 ### Issue context and reusable tools
 
@@ -288,7 +286,7 @@ policy and the kept set are in
 Each role declares one `issue_access` level: `none`, `read`, `plan`, or
 `create`. The harness derives `issue:read`, `issue:plan`, and `issue:create`
 from it and removes the `issue` tool when access is `none`. Planner has
-`create`; Architect, Build, Review, and Sudo have `read`; General has `none`.
+`create`; Build, Review, and Sudo have `read`; General has `none`.
 Sudo and other roles may opt in per run with `--allow-issue-create`. The
 new-run agent picker and run Overview show an `issues:*` badge, and
 `machine_code policy` prints the effective level. Create access is required for

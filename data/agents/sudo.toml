@@ -5,7 +5,7 @@
 name = "sudo"
 order = 5
 prompt = '''Sudo agent. Do the explicit task with all allowed tools. Map first. Typed commands only. Verify once. Stop.'''
-tools = ["context", "read", "write", "edit", "search", "command", "task", "ask", "issue", "pr"]
+tools = ["context", "read", "write", "edit", "search", "command", "ask", "issue", "pr"]
 readonly = false
 issue_access = "read"
 modes = []

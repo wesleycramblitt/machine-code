@@ -447,29 +447,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       recorder,
       suspend: checkpoint,
     };
-    const taskContext =
-      input.layout && input.fullPolicy && input.agent.tools.includes("task")
-        ? {
-            layout: input.layout,
-            recorder,
-            parentRole: input.agent.name,
-            parentCapabilities: input.agentCapabilities ?? [],
-            parentConfig: input.agentConfig,
-            machine: input.machine,
-            policy: input.fullPolicy,
-            models: input.models,
-            catalogue: input.catalogue,
-            configuredProviders: input.configuredProviders,
-            commands: input.commands,
-            root: input.root,
-            toolRoot: input.toolRoot ?? input.root,
-            home: input.home,
-            requireModel: input.requireModel,
-            signal: input.signal,
-            processes,
-          }
-        : undefined;
-
     // Issue tool: constructed lazily per attempt (provider calls are cheap and
     // cached by the factory's gh availability check).
     let issueContext: import("./tools/issues.js").IssueToolContext | undefined;
@@ -514,7 +491,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         root: input.toolRoot ?? input.root,
         commands: input.commands,
         ask: askContext,
-        task: taskContext,
         issues: issueContext,
         artifacts: artifactContext,
         prs: prContext,

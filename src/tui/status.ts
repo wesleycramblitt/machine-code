@@ -246,8 +246,7 @@ export function buildIssueTree(
   const orphaned: RunSummary[] = [];
   for (const run of runs) {
     if (!run.issue) {
-      if (run.agent === "architect") planning.push(run);
-      else untracked.push(run);
+      untracked.push(run);
       continue;
     }
     if (!known.has(`${run.issue.repo}#${run.issue.number}`)) orphaned.push(run);

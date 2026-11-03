@@ -18,7 +18,6 @@ import {
 } from "../dist/agents/config.js";
 import { capabilitiesFor, hasCapability, issueAccessFromCapabilities } from "../dist/policy/capabilities.js";
 import { agentDef } from "../dist/agents.js";
-import { taskTool } from "../dist/tools/task.js";
 import { RunRecorder } from "../dist/state/runs.js";
 
 function fakeLayout(root) {
@@ -46,18 +45,10 @@ test("role presets resolve to the documented defaults", () => {
   assert.equal(planner.preset, "plan");
   assert.equal(planner.issueAccess, "create");
 
-  const architect = resolveAgentConfig({ role: "architect" });
-  assert.deepEqual(architect, {
-    preset: "orchestrate",
-    delegate: true,
-    verification: "verified",
-    issues: "optional",
-    issueAccess: "read",
-    artifactScripts: false,
-    ask: true,
-    approval: "human",
-    ambiguity: "precise",
-  });
+  const review = resolveAgentConfig({ role: "review" });
+  assert.equal(review.preset, "review");
+  assert.equal(review.issueAccess, "read");
+  assert.equal(review.delegate, false);
   const build = resolveAgentConfig({ role: "build" });
   assert.equal(build.preset, "implement");
   assert.equal(build.delegate, false);
@@ -82,7 +73,7 @@ test("override precedence: run flag > repo policy > machine > preset", () => {
   // run overrides win
   assert.equal(
     resolveAgentConfig({
-      role: "architect",
+      role: "build",
       agentPolicy: { preset: "plan" },
       machineOverrides: { ambiguity: "adaptive" },
       runOverrides: { ambiguity: "strict" },
@@ -92,15 +83,15 @@ test("override precedence: run flag > repo policy > machine > preset", () => {
   // repo policy beats machine
   assert.equal(
     resolveAgentConfig({
-      role: "architect",
+      role: "build",
       agentPolicy: { preset: "plan" },
-      machineOverrides: { preset: "orchestrate" },
+      machineOverrides: { preset: "implement" },
     }).preset,
     "plan",
   );
   // machine beats preset
   assert.equal(
-    resolveAgentConfig({ role: "architect", machineOverrides: { preset: "plan" } }).preset,
+    resolveAgentConfig({ role: "build", machineOverrides: { preset: "plan" } }).preset,
     "plan",
   );
 });
@@ -114,18 +105,13 @@ test("verification is an explicit agent override, not a global mode", () => {
 });
 
 
-test("roles own their mode vocabulary and default mode", () => {
+test("roles no longer declare orchestration modes", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-modes-"));
   try {
     const layout = fakeLayout(root);
-    assert.deepEqual(agentDef(layout, "general").modes, []);
-    assert.deepEqual(agentDef(layout, "sudo").modes, []);
-    assert.deepEqual(agentDef(layout, "build").modes, []);
-    const architect = agentDef(layout, "architect");
-    assert.deepEqual(architect.modes, ["direct", "verified", "redundant"]);
-    assert.equal(architect.defaultMode, "verified");
-    assert.deepEqual(architect.modeConfig.verified, { verification: "verified", review: false });
-    assert.deepEqual(architect.modeConfig.redundant, { verification: "redundant", review: true });
+    for (const role of ["general", "planner", "build", "review", "sudo"]) {
+      assert.deepEqual(agentDef(layout, role).modes, []);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -143,35 +129,12 @@ test("ask is disabled in autonomous mode regardless of the ask flag", () => {
 
 /* --------------------------------------------------------- capabilities */
 
-test("capability matrix matches the design (architect plan/orchestrate)", () => {
-  const plan = capabilitiesFor("architect", { ...PRESETS.plan });
-  assert.ok(hasCapability(plan, "artifact:write"));
-  assert.ok(!hasCapability(plan, "issue:write"));
-  assert.ok(!hasCapability(plan, "issue:plan"));
-  assert.ok(!hasCapability(plan, "issue:create"));
-  assert.ok(hasCapability(plan, "issue:read"));
-  assert.ok(!hasCapability(plan, "code:write"));
-  assert.ok(!hasCapability(plan, "run:spawn"));
-  assert.ok(!hasCapability(plan, "issue:close"));
-  assert.ok(hasCapability(plan, "pr:read"));
-  assert.ok(!hasCapability(plan, "pr:merge"));
-
-  const orch = capabilitiesFor("architect", { ...PRESETS.orchestrate });
-  assert.ok(hasCapability(orch, "run:spawn"));
-  assert.ok(hasCapability(orch, "run:coordinate"));
-  assert.ok(hasCapability(orch, "issue:close"));
-  assert.ok(hasCapability(orch, "pr:create"));
-  assert.ok(hasCapability(orch, "pr:merge"));
-  assert.ok(!hasCapability(orch, "code:write"));
-});
-
 test("capability matrix: build, review, general, sudo", () => {
   const build = capabilitiesFor("build", { ...PRESETS.implement });
   assert.ok(hasCapability(build, "code:write"));
   assert.ok(hasCapability(build, "issue:read"));
   assert.ok(!hasCapability(build, "issue:write"));
   assert.ok(!hasCapability(build, "issue:create"));
-  assert.ok(!hasCapability(build, "run:spawn"));
   assert.ok(!hasCapability(build, "issue:close"));
 
   const review = capabilitiesFor("review", { ...PRESETS.review });
@@ -193,7 +156,6 @@ test("capability matrix: build, review, general, sudo", () => {
   const sudo = capabilitiesFor("sudo", { ...PRESETS.unrestricted });
   assert.ok(hasCapability(sudo, "code:write"));
   assert.ok(hasCapability(sudo, "issue:close"));
-  assert.ok(hasCapability(sudo, "run:spawn"));
   assert.ok(hasCapability(sudo, "pr:merge"));
 });
 
@@ -206,10 +168,6 @@ test("issue_access is one resolved level and derives capabilities", () => {
     assert.ok(hasCapability(planner.capabilities, "issue:create"));
     assert.ok(hasCapability(planner.capabilities, "issue:plan"));
     assert.ok(planner.def.tools.includes("issue"));
-
-    const architect = resolveAgent(layout, "architect");
-    assert.equal(architect.config.issueAccess, "read");
-    assert.ok(!hasCapability(architect.capabilities, "issue:create"));
 
     const build = resolveAgent(layout, "build");
     assert.equal(build.config.issueAccess, "read");
@@ -239,17 +197,14 @@ test("issue_access is one resolved level and derives capabilities", () => {
 
 /* ------------------------------------------------------ tool registration */
 
-test("tools are capability-gated: plan has no task, orchestrate does", () => {
+test("tools are capability-gated and no role has the task tool", () => {
   const root = tempDir("tools");
   try {
     const layout = fakeLayout(root);
-    const plan = resolveAgent(layout, "architect", { runOverrides: { preset: "plan" } });
-    assert.ok(!plan.def.tools.includes("task"), "architect.plan cannot delegate");
+    const plan = resolveAgent(layout, "planner");
+    assert.ok(!plan.def.tools.includes("task"));
     assert.ok(plan.def.tools.includes("ask"));
     assert.ok(!plan.def.tools.includes("write"), "read-only roles never hold write");
-
-    const orch = resolveAgent(layout, "architect", { runOverrides: { preset: "orchestrate" } });
-    assert.ok(orch.def.tools.includes("task"), "architect.orchestrate can delegate");
 
     const build = resolveAgent(layout, "build");
     assert.ok(!build.def.tools.includes("task"));
@@ -270,76 +225,11 @@ test("composed prompt states preset and ambiguity", () => {
   const root = tempDir("prompt");
   try {
     const layout = fakeLayout(root);
-    const resolved = resolveAgent(layout, "architect", { runOverrides: { preset: "plan", ambiguity: "strict" } });
+    const resolved = resolveAgent(layout, "planner", { runOverrides: { ambiguity: "strict" } });
     assert.match(resolved.prompt, /preset plan/);
     assert.match(resolved.prompt, /Ambiguity policy STRICT/);
     assert.match(resolved.prompt, /core:map/);
     assert.match(resolved.prompt, /context note/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-/* --------------------------------------------------------- delegation gating */
-
-function taskCtx(root, overrides = {}) {
-  const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "parent", repoRoot: root });
-  return {
-    recorder,
-    ctx: {
-      layout,
-      recorder,
-      parentRole: "architect",
-      parentCapabilities: ["run:spawn", "run:coordinate"],
-      machine: { priceCaps: {}, vetoes: [], notify: {}, git: {}, agents: {} },
-      policy: { agents: {} },
-      models: {},
-      catalogue: [],
-      configuredProviders: new Set(),
-      commands: new Map(),
-      root,
-      toolRoot: root,
-      home: layout.home,
-      ...overrides,
-    },
-  };
-}
-
-test("task delegation is denied without capability or for the wrong role", async () => {
-  const root = tempDir("task-deny");
-  try {
-    const a = taskCtx(root, { parentCapabilities: [] });
-    const deniedCap = await taskTool(a.ctx).execute("c1", { agent: "build", prompt: "do it" });
-    assert.equal(deniedCap.isError, true);
-    assert.match(deniedCap.content[0].text, /run:spawn/);
-
-    const b = taskCtx(root, { parentRole: "build" });
-    const deniedRole = await taskTool(b.ctx).execute("c1", { agent: "build", prompt: "do it" });
-    assert.equal(deniedRole.isError, true);
-    assert.match(deniedRole.content[0].text, /role build cannot delegate/);
-
-    const c = taskCtx(root, { parentRole: "sudo" });
-    const sudoBuild = await taskTool(c.ctx).execute("c1", { agent: "build", prompt: "do it" });
-    assert.equal(sudoBuild.isError, true);
-    assert.match(sudoBuild.content[0].text, /sudo may only spawn sudo/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("task status/result require coordinate capability and a real child", async () => {
-  const root = tempDir("task-inspect");
-  try {
-    const a = taskCtx(root, { parentCapabilities: ["run:spawn"] });
-    const noCoord = await taskTool(a.ctx).execute("c1", { action: "status", runId: "nope" });
-    assert.equal(noCoord.isError, true);
-    assert.match(noCoord.content[0].text, /run:coordinate/);
-
-    const b = taskCtx(root);
-    const missing = await taskTool(b.ctx).execute("c1", { action: "result", runId: "no-such-run" });
-    assert.equal(missing.isError, true);
-    assert.match(missing.content[0].text, /no such child run/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

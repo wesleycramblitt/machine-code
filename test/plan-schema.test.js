@@ -3,6 +3,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   isReadyPlan,
@@ -140,4 +143,31 @@ test("plan graph detects dependency cycles", () => {
   const result = validatePlanGraph([a, b], { requireReady: true });
   assert.equal(result.ok, false);
   assert.match(result.errors.join("\n"), /dependency cycle/);
+});
+
+
+test("ready plan validation checks mc:context references", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-plan-ctx-"));
+  try {
+    const layout = {
+      home: join(root, "home"),
+      machineConfig: "",
+      curation: "",
+      catalogueFile: "",
+      repoRoot: root,
+      repoDir: join(root, ".machine_code"),
+      localDir: join(root, ".machine_code", "local"),
+      policyFile: "",
+      runsDir: join(root, ".machine_code", "local", "runs"),
+    };
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "present.ts"), "export const x = 1;\n", "utf8");
+    const body = `${marker(valid)}\n<!-- mc:context {"files":["src/present.ts","src/missing.ts"],"skills":["reference"]} -->`;
+    const result = validatePlanIssue(issue(20, body), { layout, requireReady: true });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join("\n"), /src\/missing\.ts/);
+    assert.match(result.errors.join("\n"), /skill reference/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

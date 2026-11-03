@@ -21,7 +21,7 @@ import { pick, axisWeights } from "./select.js";
 import { CAPABILITY_AXES } from "./config.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 // agents resolved inside orchestrate.ts
-import { orchestrate, type RunMode } from "./orchestrate.js";
+import { orchestrate } from "./orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, type RunStatus, type RunSummary } from "./state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "./state/question.js";
 import { loadTranscript, repairResumeTail } from "./state/transcript.js";
@@ -123,7 +123,7 @@ const HELP = `machine_code ${VERSION}
 Usage:
   machine_code run --agent general [--provider <id>] [--model <key>] "<question>"
   machine_code run --agent planner "<plan a project>" [--issue <n>]
-  machine_code run --agent architect [--mode direct|verified|redundant] "<task>" [--issue <n> [--auto-issue]]
+  machine_code run --agent planner|build|review|general|sudo "<task>" [--issue <n> [--auto-issue]]
   machine_code run --agent sudo "<rare task>" [--worktree]
                                     Sudo edits the main tree by default; --worktree isolates it.
                                     Build and orchestrated runs use an isolated worktree:
@@ -131,10 +131,9 @@ Usage:
                                     [--feature <n>] [--base <ref>]
                                     Agent config overrides:
                                     [--preset plan|orchestrate|implement|review|assistant|unrestricted]
-                                    [--delegate true|false] [--verify direct|verified|redundant]
+                                    [--verify direct|verified|redundant]
                                     [--issues required|optional|disabled] [--ask true|false]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
-                                    [--mode <agent mode>] (roles declare their own modes)
                                     [--allow-issue-create] explicit issue:create override
                                     [--allow-artifact-scripts] permit executable artifact scripts
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
@@ -873,7 +872,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   const baseFlag = flags.get("base");
   const request = positional.join(" ").trim();
 
-  if (request.length === 0) fail(`run needs a question, e.g. machine_code run --agent architect --mode verified "fix the parser panic"`);
+  if (request.length === 0) fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
   if (issueTypeFlag !== "task" && issueTypeFlag !== "feature") fail(`--issue-type must be task or feature`);
 
   let issueNumber: number | undefined;
@@ -904,8 +903,6 @@ async function cmdRun(argv: string[]): Promise<number> {
     if (v === "false" || v === "0" || v === "no") return false;
     fail(`--${name} must be true|false`);
   };
-  const delegateFlag = boolFlag("delegate");
-  if (delegateFlag !== undefined) agentOverrides.delegate = delegateFlag;
   const verifyFlag = flags.get("verify");
   if (verifyFlag !== undefined) {
     if (verifyFlag !== "direct" && verifyFlag !== "verified" && verifyFlag !== "redundant") {
@@ -995,22 +992,10 @@ async function cmdRun(argv: string[]): Promise<number> {
     fail(`provider "${requireProvider}" is not configured`);
   }
 
-  // The agent's data file owns the mode vocabulary. No global mode list is
-  // hardcoded here: a role with no modes simply runs alone (there is no
-  // special "solo" value), and a role with modes may declare a default.
-  const agentNameParsed = (agentName as AgentName | undefined) ?? (modeFlag ? "architect" : "general");
-  const selectedDef = agentDef(l, agentNameParsed);
   if (modeFlag !== undefined) {
-    if (!selectedDef.modes.includes(modeFlag)) {
-      const hint = selectedDef.modes.length === 0
-        ? `agent ${agentNameParsed} runs alone; omit --mode`
-        : `choose one of ${selectedDef.modes.join(", ")}`;
-      fail(`agent ${agentNameParsed} does not offer mode "${modeFlag}" (${hint})`);
-    }
+    fail("--mode was removed; use machine_code orchestrate to schedule Build and Review");
   }
-  const mode: string | undefined =
-    modeFlag ??
-    (selectedDef.modes.length > 0 ? selectedDef.defaultMode ?? selectedDef.modes[0] : undefined);
+  const agentNameParsed = (agentName as AgentName | undefined) ?? "general";
 
   const runIssueAccess =
     resolveAgentConfig({
@@ -1088,7 +1073,7 @@ async function cmdRun(argv: string[]): Promise<number> {
 
   const recorder = new RunRecorder(l, {
     agent: agentNameParsed,
-    mode: mode ?? "",
+    mode: "",
     request,
     repoRoot: l.repoRoot,
     ...(parentRun
@@ -1170,7 +1155,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   const mutating =
     agentNameParsed === "general" || agentNameParsed === "review"
       ? false
-      : forceWorktree || agentNameParsed === "build" || (!directExec && mode !== undefined);
+      : forceWorktree || agentNameParsed === "build";
   let toolRoot = l.repoRoot;
   if (mutating) {
     try {
@@ -1334,7 +1319,6 @@ async function cmdRun(argv: string[]): Promise<number> {
       layout: l,
       machine,
       policy,
-      mode,
       agentName: agentNameParsed,
       request,
       root: l.repoRoot,
@@ -1576,7 +1560,7 @@ async function cmdQueue(argv: string[]): Promise<number> {
   }
   process.stdout.write(`queue: ${packets.length} packet(s)\n`);
   const progress = await runQueue(l, async (packet) => {
-    const packetAgent = packet.agent ?? (packet.mode ? "architect" : "general");
+    const packetAgent = packet.agent ?? (packet.mode ? "build" : "general");
     const recorder = new RunRecorder(l, { agent: packetAgent, mode: packet.mode ?? "", request: packet.goal, repoRoot: l.repoRoot, packetId: packet.id });
     registerProject(l.home, l.repoRoot);
     const abort = new AbortController();
@@ -1641,7 +1625,6 @@ async function cmdQueue(argv: string[]): Promise<number> {
       layout: l,
       machine,
       policy,
-      mode: packet.mode as import("./orchestrate.js").RunMode,
       agentName: packet.agent ?? (packet.mode ? undefined : "general"),
       request: packet.goal,
       root: l.repoRoot,
@@ -1993,7 +1976,7 @@ async function cmdPr(argv: string[]): Promise<number> {
       .filter(Boolean)
       .map((command) => ({ command }));
     const recorder = new RunRecorder(l, {
-      agent: "architect",
+      agent: "build",
       mode: "",
       request: `publish feature #${n}`,
       repoRoot: l.repoRoot,
@@ -2152,7 +2135,6 @@ async function cmdFork(argv: string[]): Promise<number> {
     parent.id,
     "--agent",
     parent.agent,
-    ...(parent.mode ? ["--mode", parent.mode] : []),
     ...(flags.has("inherit-worktree") && parent.worktree ? ["--inherit-worktree"] : []),
     objective,
   ];
@@ -3253,7 +3235,7 @@ async function cmdMap(argv: string[]): Promise<number> {
       catalogue: runtime.catalogue.models,
       configuredProviders: runtime.configuredProviders,
       fundedProviders: fundedProviderIds(runtime.machine.providers),
-      policy: policyFor(l, "architect", runtime.policy),
+      policy: policyFor(l, "general", runtime.policy),
       machine: runtime.machine,
       availability: loadAvailability(l.home),
       home: l.home,
@@ -3453,7 +3435,6 @@ async function cmdCorrect(argv: string[]): Promise<number> {
   if (parent.worktree && existsSync(parent.worktree)) args.push("--inherit-worktree");
   if (parent.issue) args.push("--issue", String(parent.issue.number), "--auto-issue");
   args.push("--agent", parent.agent);
-  if (parent.mode) args.push("--mode", parent.mode);
   if (flags.get("tier")) args.push("--tier", flags.get("tier")!);
   args.push(correction);
   const child = spawn(process.execPath, [cliPath, ...args], {

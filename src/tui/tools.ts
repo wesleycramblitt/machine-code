@@ -26,7 +26,6 @@ const DESCRIPTIONS: Record<string, string> = {
   search: "map, outline, search",
   command: "typed commands",
   context: "run memory",
-  task: "delegated run",
   ask: "ask the human",
   artifact: "tools and scripts",
   pr: "pull requests",

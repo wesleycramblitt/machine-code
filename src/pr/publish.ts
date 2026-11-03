@@ -134,6 +134,12 @@ export async function maybePublish(input: PublishInput): Promise<PublishResult> 
   }
 
   try {
+    const latest = await prs.provider.status(pr.number);
+    if (latest?.mergeable === false) {
+      const error = `PR #${pr.number} has merge conflicts; rebase the Task branch before merging`;
+      recorder.event("merge_conflict", { pr: pr.number, branch, base: baseBranch });
+      return { status: "failed", pr: latest, error };
+    }
     await prs.provider.merge(pr.number, "squash");
     recorder.patchSummary({ prState: "merged" });
     recorder.event("pr_merged", { pr: pr.number, method: "squash" });

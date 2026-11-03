@@ -128,7 +128,7 @@ test("buildIssueTree nests epics→features→tasks and separates categories", (
   const runs = [
     run({ id: "t31", status: "running", issue: task.ref }),
     run({ id: "t0", status: "completed", issue: task0.ref }),
-    run({ id: "plan", agent: "architect" }),
+    run({ id: "plan", agent: "build" }),
     run({ id: "gen", agent: "general" }),
     run({ id: "orphan", issue: ref(999) }),
   ];
@@ -137,8 +137,8 @@ test("buildIssueTree nests epics→features→tasks and separates categories", (
   assert.equal(tree.epics[0].features.length, 1);
   assert.equal(tree.epics[0].features[0].tasks.length, 2);
   assert.ok(tree.epics[0].features[0].tasks[0].task.labels.includes("mc:reserved"), "reserved first");
-  assert.deepEqual(tree.planning.map((r) => r.id), ["plan"]);
-  assert.deepEqual(tree.untracked.map((r) => r.id), ["gen"]);
+  assert.deepEqual(tree.planning.map((r) => r.id), []);
+  assert.deepEqual(tree.untracked.map((r) => r.id), ["plan", "gen"]);
   assert.deepEqual(tree.orphaned.map((r) => r.id), ["orphan"]);
 });
 

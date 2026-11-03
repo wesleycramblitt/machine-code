@@ -265,7 +265,7 @@ function toolCtx(provider, capabilities, root) {
     policyFile: "",
     runsDir: join(root, ".machine_code", "local", "runs"),
   };
-  const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "r", repoRoot: root });
   return { recorder, layout, ctx: { provider, repo: "o/r", capabilities, recorder, layout, defaultApproval: "human" } };
 }
 

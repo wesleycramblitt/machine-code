@@ -76,6 +76,7 @@ class FakePrProvider {
     return pr;
   }
   async status(number) { return this.created.find((p) => p.number === number) ?? null; }
+  async setMergeable(number, mergeable) { const pr = this.created.find((p) => p.number === number); if (pr) pr.mergeable = mergeable; }
   async merge(number, method) { this.merged.push({ number, method }); }
   async list() { return []; }
 }
@@ -176,6 +177,27 @@ test("approval=agent merges the Task PR after publishing", async () => {
   }
 });
 
+test("agent merge surfaces a conflicting PR instead of attempting the merge", async () => {
+  const { root, repo } = tempRepoWithOrigin();
+  try {
+    const layout = fakeLayout(repo);
+    git(repo, ["branch", "mc/feature/20", "main"]);
+    git(repo, ["branch", "mc/task/31", "main"]);
+    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "mutating", repoRoot: repo });
+    recorder.patchSummary({ branch: "mc/task/31", baseBranch: "mc/feature/20" });
+    const prs = new FakePrProvider();
+    const created = await prs.create({ head: "mc/task/31", base: "mc/feature/20", title: "Task" });
+    prs.setMergeable(created.number, false);
+    prs.list = async () => [created];
+    const result = await maybePublish({ layout, machine: MACHINE, recorder, prs, issues: new FakeIssues("agent"), defaultApproval: "agent" });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /merge conflicts/);
+    assert.equal(prs.merged.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("maybePublish skips run-scoped branches (no Task/Feature pair)", async () => {
   const { root, repo } = tempRepoWithOrigin();
   try {
@@ -197,7 +219,7 @@ test("maybePublish skips run-scoped branches (no Task/Feature pair)", async () =
 function toolCtx(capabilities, approval, prs) {
   const root = mkdtempSync(join(tmpdir(), "mc-prt-"));
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "r", repoRoot: root });
   return { recorder, root, ctx: { provider: prs, capabilities, recorder, defaultApproval: approval } };
 }
 
@@ -296,7 +318,7 @@ test("feature PR is blocked while deliverable tasks are open", async () => {
   const { root, repo } = tempRepoWithOrigin();
   try {
     const layout = fakeLayout(repo);
-    const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "publish", repoRoot: repo });
+    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
     const issues = new FakeIssueGraph(featureIssue(), [taskIssue(31, "closed"), taskIssue(32, "open")]);
     const prs = new FakePrProvider();
     const result = await publishFeature({ layout, machine: MACHINE, recorder, feature: issues.feature.ref, issues, prs });
@@ -313,7 +335,7 @@ test("feature PR runs integration gates, pushes the branch, and opens to main", 
   try {
     const layout = fakeLayout(repo);
     git(repo, ["branch", "mc/feature/20", "main"]);
-    const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "publish", repoRoot: repo });
+    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
     const issues = new FakeIssueGraph(featureIssue("human"), [taskIssue(31, "closed"), taskIssue(32, "closed")]);
     const prs = new FakePrProvider();
     const result = await publishFeature({
@@ -343,7 +365,7 @@ test("feature PR blocks when an integration gate fails and merges with agent app
   try {
     const layout = fakeLayout(repo);
     git(repo, ["branch", "mc/feature/20", "main"]);
-    const recorder = new RunRecorder(layout, { agent: "architect", mode: "", request: "publish", repoRoot: repo });
+    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
     const issues = new FakeIssueGraph(featureIssue("agent"), [taskIssue(31, "closed")]);
     const prs = new FakePrProvider();
 

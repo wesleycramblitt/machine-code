@@ -278,7 +278,7 @@ test("RunRecorder records fork lineage and can be reopened for resume", () => {
   const root = tempDir("lineage");
   const layout = fakeLayout(root);
   try {
-    const parent = new RunRecorder(layout, { agent: "architect", mode: "", request: "parent", repoRoot: root });
+    const parent = new RunRecorder(layout, { agent: "build", mode: "", request: "parent", repoRoot: root });
     parent.finalize("completed");
 
     const child = new RunRecorder(layout, {

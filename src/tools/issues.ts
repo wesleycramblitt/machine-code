@@ -33,6 +33,7 @@ import {
 } from "../issues/reserved.js";
 import { checkCompletion, cascadeReserved } from "../issues/completion.js";
 import { renderPlanMarker, type PlanMarker, type PlanReview, type PlanRole, type PlanStatus, type PlanVerification, type PlanWorktree } from "../plan/schema.js";
+import { validatePlanIssue } from "../plan/validate.js";
 import type { Layout } from "../paths.js";
 import type { RunRecorder } from "../state/runs.js";
 
@@ -295,6 +296,10 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         const nextBody = /<!--\s*mc:plan[\s\S]*?-->/.test(target.body)
           ? target.body.replace(/<!--\s*mc:plan[\s\S]*?-->/, marker)
           : `${target.body.replace(/\s+$/, "")}\n\n${marker}\n`;
+        const validation = validatePlanIssue({ ...target, body: nextBody }, { layout: ctx.layout });
+        if (!validation.ok) {
+          return fail(`plan validation failed: ${validation.errors.join("; ")}`);
+        }
         const updated = await ctx.provider.update(target.ref, { body: nextBody });
         ctx.recorder.event("plan_updated", {
           issue: updated.ref.number,

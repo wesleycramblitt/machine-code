@@ -4,8 +4,13 @@
  * The Planner writes issues; this module checks the machine-readable parts
  * before the Orchestrator may dispatch them. It never calls a model.
  */
+import { existsSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { refKey, type Issue } from "../issues/provider.js";
 import { parsePlanMarker, type PlanMarker } from "./schema.js";
+import { parseArtifactReferences } from "../context/references.js";
+import { artifactExists, resolveArtifact } from "../artifacts/registry.js";
+import type { Layout } from "../paths.js";
 
 export interface PlanValidation {
   ok: boolean;
@@ -16,6 +21,52 @@ export interface PlanValidation {
 export interface ValidatePlanOptions {
   /** Require `status: ready`; drafts are otherwise structurally valid. */
   requireReady?: boolean;
+  /** When present, validate that mc:context references exist. */
+  layout?: Layout;
+}
+
+function withinRepo(root: string, path: string): string | null {
+  if (path.startsWith("/")) return null;
+  const base = resolve(root);
+  const abs = resolve(base, path);
+  return abs === base || abs.startsWith(base + sep) ? abs : null;
+}
+
+function skillExists(layout: Layout, name: string): boolean {
+  if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return false;
+  for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
+    if (existsSync(join(dir, "SKILL.md"))) return true;
+  }
+  return false;
+}
+
+/** Check only the references that can be resolved without network access. */
+function contextErrors(issue: Issue, layout: Layout): string[] {
+  const refs = parseArtifactReferences(issue.body);
+  const errors: string[] = [];
+  for (const [kind, paths] of [["file", refs.files], ["knowledge", refs.knowledge]] as const) {
+    for (const path of paths) {
+      const abs = withinRepo(layout.repoRoot, path);
+      if (!abs || !existsSync(abs)) errors.push(`referenced ${kind} ${path} is missing or outside the repo`);
+      else {
+        try {
+          if (!statSync(abs).isFile()) errors.push(`referenced ${kind} ${path} is not a file`);
+        } catch {
+          errors.push(`referenced ${kind} ${path} is unreadable`);
+        }
+      }
+    }
+  }
+  for (const [kind, names] of [["tool", refs.tools], ["script", refs.scripts]] as const) {
+    for (const name of names) {
+      const artifact = resolveArtifact(layout, name);
+      if (!artifact || !artifactExists(layout, artifact)) errors.push(`referenced ${kind} ${name} is missing`);
+    }
+  }
+  for (const name of refs.skills) {
+    if (!skillExists(layout, name)) errors.push(`referenced skill ${name} is missing`);
+  }
+  return errors;
 }
 
 export function validatePlanIssue(issue: Issue, options: ValidatePlanOptions = {}): PlanValidation {
@@ -38,6 +89,7 @@ export function validatePlanIssue(issue: Issue, options: ValidatePlanOptions = {
   if (options.requireReady && plan.status !== "ready") {
     errors.push("plan is still draft");
   }
+  if (options.layout) errors.push(...contextErrors(issue, options.layout));
   return { ok: errors.length === 0, errors, plan };
 }
 

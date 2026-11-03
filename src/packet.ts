@@ -1,7 +1,7 @@
 /**
  * machine_code — task packets.
  *
- * The unit of work, context, and verification. Architect compiles one; the
+ * The unit of work, context, and verification. The Planner or Orchestrator
  * runner saves it as an immutable snapshot before Build implements it.
  *
  * Canonical packets are committed JSON at .machine_code/tasks/<id>.json.
@@ -26,7 +26,7 @@ export interface TaskPacket {
   id: string;
   /** Omitted for a single-agent packet. */
   mode?: PacketMode;
-  agent?: "general" | "sudo" | "architect" | "build" | "review";
+  agent?: "general" | "sudo" | "build" | "review";
   budget_tokens?: number;
   goal: string;
   context: string[];

@@ -22,7 +22,7 @@ import { assembleContext } from "../context/assemble.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
 import { loadAvailability } from "../availability.js";
-import { orchestrate } from "../orchestrate.js";
+import { executePacket } from "../orchestrate.js";
 import type { PlanMarker } from "../plan/schema.js";
 import type { OrchestrationScope } from "./scheduler.js";
 
@@ -111,7 +111,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
   }
   const hash = snapshotHash(packet, plan);
   const recorder = new RunRecorder(layout, {
-    agent: "architect",
+    agent: "build",
     mode: plan.verification,
     request: packet.goal,
     repoRoot: layout.repoRoot,
@@ -182,7 +182,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
   }
 
   try {
-    const result = await orchestrate({
+    const result = await executePacket({
       models: input.models,
       catalogue: input.catalogue,
       configuredProviders: input.configuredProviders,
@@ -190,15 +190,22 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
       layout,
       machine: input.machine,
       policy: input.policy,
-      mode: plan.verification,
-      agentName: "architect",
+      packet,
+      verification: plan.verification,
+      review: true,
       request: packet.goal,
       root: layout.repoRoot,
       toolRoot,
       issueNumber: issue.ref.number,
+      issue: issue.ref,
+      orchestrationId: input.orchestrationId,
+      orchestrationScope: input.orchestrationScope,
+      ...(input.scopeRef ? { scopeRef: input.scopeRef } : {}),
+      attempt: input.attempt,
+      planReview: plan.planReview,
+      resultReview: plan.resultReview,
       home: input.home,
       recorder,
-      packet,
       ...(input.requireModel ? { requireModel: input.requireModel } : {}),
       ...(input.agentOverrides ? { agentOverrides: input.agentOverrides } : {}),
       contextText: context.text || undefined,

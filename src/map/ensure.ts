@@ -97,7 +97,7 @@ export async function ensureSemanticMap(input: EnsureSemanticInput): Promise<Sem
   const task = buildSemanticTask({ root: input.root, map: input.map, existing, dirtyPaths: dirty });
   if (task.prompt.length === 0) return existing;
   const picked = pick({
-    agent: "architect",
+    agent: "general",
     policy: input.policy,
     machine: input.machine,
     catalogue: input.catalogue,

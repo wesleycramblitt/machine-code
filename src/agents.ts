@@ -239,9 +239,6 @@ export function agentDef(layout: Layout, name: AgentName): AgentDef {
 export function generalAgent(layout: Layout): AgentDef {
   return agentDef(layout, "general");
 }
-export function architectAgent(layout: Layout): AgentDef {
-  return agentDef(layout, "architect");
-}
 export function buildAgent(layout: Layout): AgentDef {
   return agentDef(layout, "build");
 }

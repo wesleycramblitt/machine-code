@@ -165,9 +165,9 @@ test("role weights change the winner between code-heavy and reasoning-heavy mode
   const coder = row("p/coder", { scores: axes(5.5, 9.5, 9, 5) });
   const thinker = row("p/thinker", { scores: axes(10, 6, 7, 10) });
   const buildPolicy = { ...basePolicy, axisWeights: { code: 0.5, agentic: 0.3, reasoning: 0.15, general: 0.05 } };
-  const archPolicy = { ...basePolicy, axisWeights: { reasoning: 0.5, agentic: 0.3, code: 0.15, general: 0.05 } };
+  const planningPolicy = { ...basePolicy, axisWeights: { reasoning: 0.5, agentic: 0.3, code: 0.15, general: 0.05 } };
   assert.equal(pickOne([coder, thinker], buildPolicy, { agent: "build" }).selected.key, "p/coder");
-  assert.equal(pickOne([coder, thinker], archPolicy, { agent: "architect" }).selected.key, "p/thinker");
+  assert.equal(pickOne([coder, thinker], planningPolicy, { agent: "planner" }).selected.key, "p/thinker");
 });
 
 test("capability is a gradient above the floor: equal price prefers the better model", () => {

@@ -32,8 +32,6 @@ export type Capability =
   /** @deprecated compatibility alias for issue:plan */
   | "issue:hierarchy:write"
   | "issue:close"
-  | "run:spawn"
-  | "run:coordinate"
   | "pr:read"
   | "pr:create"
   | "pr:merge"
@@ -52,8 +50,6 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   "issue:write",
   "issue:hierarchy:write",
   "issue:close",
-  "run:spawn",
-  "run:coordinate",
   "pr:read",
   "pr:create",
   "pr:merge",
@@ -93,17 +89,12 @@ export function capabilitiesFor(role: AgentName, config: AgentConfig): Capabilit
   if (
     access !== "none" &&
     config.issues !== "disabled" &&
-    ((role === "architect" && config.preset === "orchestrate") || role === "sudo")
+    role === "sudo"
   ) {
     caps.add("issue:close");
   }
 
-  if (config.delegate) {
-    caps.add("run:spawn");
-    caps.add("run:coordinate");
-  }
-
-  if ((role === "architect" && config.preset === "orchestrate") || role === "sudo") {
+  if (role === "sudo") {
     caps.add("pr:create");
     caps.add("pr:merge");
   }

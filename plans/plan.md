@@ -12,7 +12,7 @@
 > `processes` CLI, and the run-detail Processes section with select, follow,
 > open-log, and kill controls. Detached delegated runs are supervised, and
 > orphan records are reconciled on read and during prune. Phase 4 has the
-> read-only Planner role with `issue_access=create`; Architect and Sudo now have
+> read-only Planner role with `issue_access=create`; Build, Review, and Sudo have
 > read access with an explicit `--allow-issue-create` override. The Planner has
 > artifact inventory/provisioning; executable scripts require explicit
 > `--allow-artifact-scripts` approval. The scheduler, dry-run and sequential
@@ -32,8 +32,11 @@
 > availability probes are coalesced and jittered, and the TUI refreshes cooling
 > models on a timer. The synchronous git-status safety net is supervised, and
 > run detail exposes Related lineage instead of Children, and agent-reviewed
-> results record acceptance evidence and close their Tasks. The suite has 254
-> tests.
+> results record acceptance evidence and close their Tasks. Phase 8 cleanup is
+> complete: the `task` tool, `run:spawn`, Architect, role modes, and the
+> Children section are gone; `queue` remains a compatibility path. Plan
+> references are validated before writing, and agent-reviewed results close
+> their Tasks. The suite has 254 passing tests plus one opt-in GitHub smoke.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -94,10 +97,13 @@ Rules:
 | Orchestrator | code | yes | manage | Schedule issue-backed runs |
 
 Build cannot close its own task or edit the plan. Review cannot mutate the
-worktree. Architect, `task` delegation, `run:spawn`, and the child-run
-`Children` view are removed in Phase 8.
+worktree. Architect, `task` delegation, `run:spawn`, role modes, and the
+child-run `Children` view are retired.
 
 ## 3. Phase 0 — Finish shipped validation
+
+Status: the opt-in read-only GitHub smoke is present. The model replay and the
+write/PR integration still require an external repository and provider keys.
 
 ### 3.1 Replay the context/map evidence run
 
@@ -293,8 +299,8 @@ process records and logs, `processes` CLI, run-detail Processes section with
 select/follow/open-log/kill controls, detached delegated-run tracking,
 SIGTERM→SIGKILL grace, and orphan reconciliation on read and during prune
 exist. Map, LSP, worktree-creation, worktree-commit, worktree remove/prune, and
-the synchronous git-status safety net are supervised. Remaining: MCP spawns
-when MCP support is introduced.
+the synchronous git-status safety net are supervised. No MCP client exists in
+this build; a future client must register through this supervisor.
 
 Ship this before orchestration; it is useful on its own.
 
@@ -343,17 +349,17 @@ with issue creation, issue editing, map/search/command/ask/pr tools, artifact
 inventory/provisioning, the issue `plan` action, and the compact planning
 prompt. New-Epic bootstrap works through `issue create`. Executable scripts
 require the explicit `--allow-artifact-scripts` run flag. Human packet and
-result review checkpoints are implemented. Remaining: Planner-specific fixture
-evals.
+result review checkpoints are implemented, and the deterministic Planner
+fixture matrix covers greenfield, draft, missing artifacts, dependencies, and
+replan bounds. Remaining: model-backed Planner eval runs.
 
 ```bash
 machine_code run --agent planner "<plan a new epic>"
 machine_code run --agent planner --issue 42 "<planning request>"
 ```
 
-- Add `data/agents/planner.toml`; keep `architect` as a deprecated alias until
-  Phase 8. While the alias remains, set its `issue_access` to `read`; only the
-  Planner creates issue structure.
+- Add `data/agents/planner.toml`. The Architect alias and role modes are
+  retired; only the Planner creates issue structure by default.
 - Planner tools: `read`, `search`, `command`, `ask`, `issue`, `artifact`, `pr`;
   read-only code access; no `task`.
 - Capabilities: `code:read`, `context:inherit`, `issue:read`, `issue:create`,
@@ -481,16 +487,14 @@ not silently reclassified as planning failures.
 
 ## 9. Phase 6 — Sequential execution
 
-Status: partially implemented. `executeTask` synthesizes a frozen packet, creates
-the Task worktree, and reuses the Build/gates/Review/commit/PR chain
-sequentially. Build outcomes and Review verdicts are typed and recorded;
-completion failures retry with evidence up to `retries_before_replan`.
-Before-build packet approval and after-review result approval are stored in the
-ledger and checked at their checkpoints. Human result approval records
-acceptance evidence and closes the Task; parent readiness is checked, agent-
-approved parents close automatically, and human-approved parents print the next
-approval/acceptance command. Remaining: making the Orchestrator the primary
-path and richer merge handling.
+Status: implemented. `executeTask` synthesizes a frozen packet, creates the Task
+worktree, runs Build, gates, an independent Review run record, then commits and
+publishes. Build outcomes and Review verdicts are typed and recorded; completion
+failures retry with evidence up to `retries_before_replan`. Before-build packet
+approval and after-review result approval are stored in the ledger and checked
+at their checkpoints. Human result approval records acceptance evidence and
+closes the Task; agent-reviewed results close automatically, and parent
+readiness is checked. Conflicting PRs are surfaced before a merge is attempted.
 
 - Dispatch Build and Review as separate runs. Build uses an isolated worktree;
   Review reads that worktree read-only.
@@ -502,14 +506,15 @@ path and richer merge handling.
 - Run gates, close tasks, and record evidence.
 - `needs_planning`, retry budgets, and failure-evidence handoff are implemented.
 - Implement before-build packet approval and after-review human approval.
-- Make the Orchestrator the primary path for issue-backed work; keep `queue`
-  as a compatibility path until Phase 8.
+- The Orchestrator is the primary issue-backed path; `queue` remains a
+  compatibility path for committed packets.
 
 ## 10. Phase 7 — Parallelism and checkpoints
 
 Status: execution runs up to `max_parallel`, serializes tasks sharing a Feature,
-and stops new dispatch on `--max-minutes` or `--max-spend-usd`. Remaining:
-additional named checkpoints and richer merge-conflict handling.
+stops new dispatch on `--max-minutes` or `--max-spend-usd`, and surfaces
+conflicting PRs before attempting a merge. Remaining: additional named
+checkpoints.
 
 - Dispatch up to `max_parallel` without duplicate task/phase runs.
 - Enforce wall-clock, spend, and checkpoint stops.
@@ -519,6 +524,11 @@ additional named checkpoints and richer merge-conflict handling.
 - Keep deterministic dependency order and idempotent ticks.
 
 ## 11. Phase 8 — TUI and cleanup
+
+Status: cleanup is complete. `task`, `run:spawn`, Architect, role modes, and
+Children are removed. `Related` replaces Children. `queue` remains a
+compatibility path for committed packets; new issue-backed work uses
+`orchestrate`.
 
 Primary tabs:
 
@@ -555,8 +565,8 @@ disabled with a reason when no eligible model is ready.
 
 Cleanup:
 
-- Remove `task`, `run:spawn`, Architect, and Architect modes.
-- Deprecate `queue` as the primary scheduler; document migration.
+- Removed `task`, `run:spawn`, Architect, and Architect modes.
+- `queue` is retained as a compatibility path; new work uses `orchestrate`.
 - Update README and data docs.
 - Keep all existing behavior for runs, issues, worktrees, spend, models, and
   settings.
@@ -650,7 +660,7 @@ Keep the existing 254 tests green. Add:
 | General issue access | none |
 | Sudo issue access | read; create opt-in with confirmation |
 | Process log retention | same as run retention |
-| LSP/MCP supervision | included |
+| LSP supervision | included; MCP has no client in this build |
 | Artifact promotion | 2 different tasks/features |
 | Plan audit | record each accepted revision as an issue comment |
 | Cross-repo dependencies | deferred |
