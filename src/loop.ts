@@ -811,7 +811,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             tool.name === "issue" ? String((params as { action?: unknown }).action ?? "") : "";
           const issueWrite =
             tool.name === "issue" &&
-            ["create", "edit", "plan", "link", "ensure", "close"].includes(issueAction);
+            ["create", "graph", "edit", "plan", "link", "ensure", "close"].includes(issueAction);
           const mutatingProgress =
             tool.name === "edit" ||
             tool.name === "write" ||

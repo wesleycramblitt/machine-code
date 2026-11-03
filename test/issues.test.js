@@ -342,6 +342,27 @@ test("empty issue list does not tell a read-only role to create", async () => {
   }
 });
 
+test("graph action rejects tasks without acceptance before creating anything", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-accept-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueTool(ctx).execute("g0", {
+      action: "graph",
+      graph: {
+        epic: { key: "epic", title: "Epic" },
+        features: [{ key: "f", title: "Feature" }],
+        tasks: [{ key: "t", feature: "f", title: "Task" }],
+      },
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /acceptance criteria/);
+    assert.equal(p.issues.size, 0, "no partial graph is created");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("graph action creates the Epic, Features, Tasks, and dependencies in one call", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-"));
   try {

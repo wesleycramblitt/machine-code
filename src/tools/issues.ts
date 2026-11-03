@@ -18,6 +18,7 @@ import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   IssueError,
+  parseAcceptance,
   parseIssueRef,
   refKey,
   type Issue,
@@ -375,6 +376,15 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           if (!featureKeys.has(task.feature)) {
             throw new IssueError("graph_parent_missing", `task ${task.key} references unknown feature ${task.feature}`);
           }
+        }
+        const missingAcceptance = graph.tasks.filter(
+          (task) => parseAcceptance(task.body ?? "").length === 0,
+        );
+        if (missingAcceptance.length > 0) {
+          return fail(
+            `graph tasks need acceptance criteria: ${missingAcceptance.map((task) => task.key).join(", ")}. ` +
+              'Add a body with "## Acceptance criteria" bullets to each task and retry.',
+          );
         }
         const createdNodes = new Map<string, Issue>();
         const resolveDependencies = (values: string[] | undefined): IssueRef[] | undefined => {

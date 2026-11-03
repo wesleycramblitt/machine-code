@@ -193,6 +193,49 @@ test("search facts count file, outline, and map matches", () => {
   }
 });
 
+test("ingestTurn ignores harness errors from read and search", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-errors", goal: "plan" });
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "e1", name: "search", args: { mode: "files", pattern: "src/tools" } }),
+        result({
+          id: "e1",
+          name: "search",
+          text: "Planner has made 10 research/verification calls without an issue write.",
+          isError: true,
+        }),
+      ],
+      1,
+    );
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "e2", name: "read", args: { path: "src/tools/index.ts" } }),
+        result({
+          id: "e2",
+          name: "read",
+          text: "Read limit reached for src/tools/index.ts.",
+          isError: true,
+        }),
+      ],
+      2,
+    );
+    const block = store.renderBlock();
+    assert.doesNotMatch(block, /Planner has made/);
+    assert.doesNotMatch(block, /Read limit reached/);
+    assert.equal(store.getState().workingSet.length, 0);
+    assert.equal(store.getState().facts.filter((fact) => fact.key.startsWith("search:")).length, 0);
+    assert.equal(store.getState().facts.filter((fact) => fact.key.startsWith("read:")).length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("explicit context focus survives automatic ingestion", () => {
   const dir = tempDir();
   try {

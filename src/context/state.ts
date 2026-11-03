@@ -622,6 +622,9 @@ export class RunStateStore {
         if (args.action === "focus") explicitFocus = true;
         continue;
       }
+      // Harness guard errors are not research evidence. Ingesting them would
+      // turn warning text into working-set paths and artifacts.
+      if (message.isError === true && toolName !== "command") continue;
       const resultText = textOf(message);
       const artifact = this.putArtifact(resultText);
       artifacts += 1;
