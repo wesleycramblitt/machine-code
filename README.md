@@ -313,8 +313,8 @@ free_completion_max_per_hour = 2
 
 Runs probe cooling models before creating the run record, then select only from
 models that are ready. The TUI refreshes cooling models on a timer, coalesces
-concurrent probes for one model, and adds jitter when probing several at once.
-Metadata can clear a missing-model cooldown, but not a rate-limit or timeout
+concurrent probes for one model, adds jitter when probing several at once, and
+shows `probing` while a manual probe is in flight. Metadata can clear a missing-model cooldown, but not a rate-limit or timeout
 cooldown; those require the opt-in free completion probe. An unknown result
 leaves the cooldown in place.
 

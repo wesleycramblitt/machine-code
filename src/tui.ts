@@ -590,6 +590,7 @@ export async function runTui(): Promise<void> {
   let modelsCoding = true;
   let modelSel = 0;
   let modelScroll = 0;
+  const probingModels = new Set<string>();
   /** Rows in the exact order they are rendered (grouped), used by Enter/selection. */
   let modelVisible: CatalogueRow[] = [];
   let selectedModelKey: string | null = null;
@@ -2022,11 +2023,13 @@ export async function runTui(): Promise<void> {
       const lastProbe = modelHealth?.lastProbeResult;
       const probeTone =
         lastProbe === "ready" ? G : lastProbe === "cooling" ? Y : lastProbe === "unknown" || lastProbe === "skipped" ? D : RED;
-      const healthText = coolingUntil > Date.now()
-        ? `${Y}cooling ${Math.max(1, Math.ceil((coolingUntil - Date.now()) / 60_000))}m${R}`
-        : lastProbe
-          ? `${probeTone}${lastProbe}${R}`
-          : `${D}not probed${R}`;
+      const healthText = probingModels.has(model.key)
+        ? `${C}probing${R}`
+        : coolingUntil > Date.now()
+          ? `${Y}cooling ${Math.max(1, Math.ceil((coolingUntil - Date.now()) / 60_000))}m${R}`
+          : lastProbe
+            ? `${probeTone}${lastProbe}${R}`
+            : `${D}not probed${R}`;
       lines.push("", ` ${B}${C}Availability${R}`);
       lines.push(`   ${healthText}${modelHealth?.lastProbeAt ? ` ${D}· ${ago(new Date(modelHealth.lastProbeAt).toISOString())}${R}` : ""}`);
       lines.push("", ` ${B}${C}Providers offering this model${R}`);
@@ -2060,6 +2063,7 @@ export async function runTui(): Promise<void> {
           if (isSelected) selectedLine = lines.length;
           const free = row.free || (row.pricing.input === 0 && row.pricing.output === 0) ? ` ${G}free${R}` : "";
           const cooling = (() => {
+            if (probingModels.has(row.key)) return ` ${C}…${R}`;
             const avail = loadAvailability(l.home);
             const phase = avail.models[row.key];
             if (!phase?.cooldownUntil || phase.cooldownUntil <= Date.now()) return "";
@@ -3256,14 +3260,19 @@ export async function runTui(): Promise<void> {
       if (data === "t") {
         const row = loadCatalogue(l.catalogueFile)?.models.find((entry) => entry.key === selectedModelKey);
         if (row) {
+          probingModels.add(row.key);
           void (async () => {
-            const machine = loadMachineConfig(l);
-            const state = loadAvailability(l.home);
-            const result = await probeTarget(targetFor(row), machine.availability, state);
-            applyProbeResult(state, result);
-            saveAvailability(l.home, state);
-            notify(`${row.key}: ${result.status}${result.message ? ` (${result.message})` : ""}`);
-            draw();
+            try {
+              const machine = loadMachineConfig(l);
+              const state = loadAvailability(l.home);
+              const result = await probeTarget(targetFor(row), machine.availability, state);
+              applyProbeResult(state, result);
+              saveAvailability(l.home, state);
+              notify(`${row.key}: ${result.status}${result.message ? ` (${result.message})` : ""}`);
+            } finally {
+              probingModels.delete(row.key);
+              draw();
+            }
           })();
         }
         draw();

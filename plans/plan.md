@@ -220,8 +220,8 @@ whether tracking is required. `issue_access` controls what the role may do.
 ## 5. Phase 2 — Availability heartbeat and preflight
 
 Status: metadata and opt-in free-model probes, run preflight, CLI commands, a
-manual and automatic TUI probe, coalescing, and jitter are implemented.
-Remaining: richer provider health statuses.
+manual and automatic TUI probe, coalescing, jitter, and a `probing` status
+are implemented. Remaining: deeper provider-level health details.
 
 Goal: do not start a run on a model that is known unavailable, and recover a
 cooldown as soon as evidence permits. A heartbeat is evidence, not a guarantee.
