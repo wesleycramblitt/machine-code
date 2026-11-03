@@ -165,6 +165,59 @@ function sortIssues(issues: readonly Issue[]): Issue[] {
   });
 }
 
+export interface PickerIssueRow {
+  issue: Issue;
+  /** Real parent depth, not a kind-based indent. */
+  depth: number;
+}
+
+/**
+ * Parent-first issue order for the new-run picker. The cache is written in
+ * provider order (often newest first); this restores the tree and keeps
+ * ancestors visible when the filter matches a child.
+ */
+export function orderIssueTree(issues: readonly Issue[], text = ""): PickerIssueRow[] {
+  const byKey = new Map(issues.map((issue) => [keyOf(issue.ref), issue]));
+  const children = new Map<string, Issue[]>();
+  const roots: Issue[] = [];
+  for (const issue of issues) {
+    const parentKey = issue.parent ? keyOf(issue.parent) : "";
+    if (parentKey && byKey.has(parentKey)) {
+      const list = children.get(parentKey) ?? [];
+      list.push(issue);
+      children.set(parentKey, list);
+    } else {
+      roots.push(issue);
+    }
+  }
+  const query = text.trim().toLowerCase();
+  const matches = (issue: Issue): boolean =>
+    !query || `#${issue.ref.number} ${issue.title} ${issue.kind}`.toLowerCase().includes(query);
+  const relevance = new Map<string, boolean>();
+  const mark = (issue: Issue): boolean => {
+    const key = keyOf(issue.ref);
+    const cached = relevance.get(key);
+    if (cached !== undefined) return cached;
+    let childKept = false;
+    for (const child of children.get(key) ?? []) {
+      if (mark(child)) childKept = true;
+    }
+    const keep = matches(issue) || childKept;
+    relevance.set(key, keep);
+    return keep;
+  };
+  for (const root of roots) mark(root);
+
+  const out: PickerIssueRow[] = [];
+  const walk = (issue: Issue, depth: number): void => {
+    if (!relevance.get(keyOf(issue.ref))) return;
+    out.push({ issue, depth });
+    for (const child of sortIssues(children.get(keyOf(issue.ref)) ?? [])) walk(child, depth + 1);
+  };
+  for (const root of sortIssues(roots)) walk(root, 0);
+  return out;
+}
+
 export function buildRunIndex(options: RunOptions): RunIndex {
   const now = options.now ?? Date.now();
   const collapsed = options.collapsed ?? new Set<string>();
@@ -276,7 +329,6 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       list.push(run);
       byIssue.set(key, list);
     }
-    const known = new Set(issues.map((issue) => keyOf(issue.ref)));
     const childrenOf = (issue: Issue): Issue[] =>
       sortIssues(
         issues.filter(
@@ -293,18 +345,20 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       const key = keyOf(issue.ref);
       const cached = relevantCache.get(key);
       if (cached !== undefined) return cached;
+      const hasRun = issueRuns(issue).length > 0;
+      // Reserved anchors stay hidden unless a run is attached. Every other
+      // issue is part of the repo's plan, even when it has no run yet.
       const relevant =
-        ownMatch(issue) ||
-        issueRuns(issue).length > 0 ||
-        childrenOf(issue).some((child) => issueRelevant(child));
+        (!issue.reserved || hasRun) &&
+        (text.length === 0 || ownMatch(issue) || hasRun || childrenOf(issue).some((child) => issueRelevant(child)));
       relevantCache.set(key, relevant);
       return relevant;
     };
 
     const roots = sortIssues(issueRoots(issues));
-    const issueRunCount = repoRuns.filter((run) => run.issue && known.has(keyOf(run.issue))).length;
+    const issueCount = issues.filter((issue) => issueRelevant(issue)).length;
     const sectionId = `issues:${repoRoot}`;
-    if (!pushSection(sectionId, "Git issues", issueRunCount, depth, "issues")) return;
+    if (!pushSection(sectionId, "Git issues", issueCount, depth, "issues")) return;
 
     const walk = (issue: Issue, issueDepth: number, parent?: string): void => {
       if (!issueRelevant(issue)) return;

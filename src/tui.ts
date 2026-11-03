@@ -24,6 +24,7 @@ import {
   RUN_GROUPS,
   RUN_GROUP_LABELS,
   buildRunIndex,
+  orderIssueTree,
   repoLabel,
   repoOf,
   type RunGroup,
@@ -1910,9 +1911,11 @@ export async function runTui(): Promise<void> {
         if (issuePickSel >= list.length) issuePickSel = Math.max(0, list.length - 1);
         const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link an issue${R} ${D}(type to filter; Enter selects)${R}`, ""];
         for (let i = 0; i < list.length; i++) {
-          const issue = list[i]!;
-          const indent = issue.kind === "epic" ? "" : issue.kind === "feature" ? "  " : "    ";
-          const line = ` ${indent}${issue.ref.number === newrun.issue?.number ? C + "▸" : " "} ${BL}#${issue.ref.number}${R} ${D}${issue.kind}${R} ${W}${issue.title}${R}`;
+          const { issue, depth } = list[i]!;
+          const indent = "  ".repeat(depth);
+          const selectedIssue = newrun.issue && refKey(issue.ref) === refKey(newrun.issue);
+          const reserved = issue.reserved ? ` ${M}[P&R]${R}` : "";
+          const line = ` ${indent}${selectedIssue ? C + "▸" : " "} ${BL}#${issue.ref.number}${R} ${D}${issue.kind}${R} ${W}${issue.title}${R}${reserved}`;
           picker.push(selected(line, i === issuePickSel));
         }
         picker.push("", ` ${D}filter: ${issuePickText || "(all)"}${R}`);
@@ -2784,12 +2787,10 @@ export async function runTui(): Promise<void> {
     issuePickText = "";
   };
 
-  const pickerIssues = (): Issue[] => {
+  const pickerIssues = () => {
     const cache = readIssueCache(layout(newRunRepo));
     if (!cache) return [];
-    if (!issuePickText.trim()) return cache.issues;
-    const q = issuePickText.toLowerCase();
-    return cache.issues.filter((issue) => `#${issue.ref.number} ${issue.title} ${issue.kind}`.toLowerCase().includes(q));
+    return orderIssueTree(cache.issues, issuePickText);
   };
 
   const chooseIssue = (issue: Issue) => {
@@ -2929,7 +2930,7 @@ export async function runTui(): Promise<void> {
         if (data === "\x1b") { issuePick = null; draw(); return; }
         if (data === "\x1b[A" || data === "k") { issuePickSel = Math.max(0, issuePickSel - 1); draw(); return; }
         if (data === "\x1b[B" || data === "j") { const list = pickerIssues(); issuePickSel = Math.min(Math.max(0, list.length - 1), issuePickSel + 1); draw(); return; }
-        if (data === "\r" || data === "\n") { const list = pickerIssues(); const issue = list[issuePickSel]; if (issue) chooseIssue(issue); draw(); return; }
+        if (data === "\r" || data === "\n") { const list = pickerIssues(); const picked = list[issuePickSel]; if (picked) chooseIssue(picked.issue); draw(); return; }
         if (data === "\x7f" || data === "\b") { issuePickText = issuePickText.slice(0, -1); issuePickSel = 0; draw(); return; }
         if (!data.startsWith("\x1b")) { issuePickText += printable(data); issuePickSel = 0; draw(); return; }
         draw();

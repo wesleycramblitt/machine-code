@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildRunIndex } from "../dist/tui/runs.js";
+import { buildRunIndex, orderIssueTree } from "../dist/tui/runs.js";
 
 const repoA = "/work/alpha";
 const repoB = "/work/beta";
@@ -172,4 +172,57 @@ test("runs with an unknown issue fall under orphaned, not untracked", () => {
   assert.deepEqual(index.orphaned.map((entry) => entry.id), ["orphan"]);
   assert.deepEqual(index.untracked.map((entry) => entry.id), ["free"]);
   assert.ok(index.rows.some((row) => row.kind === "section" && row.label === "Orphaned issue"));
+});
+
+test("gh issue grouping shows the plan even when no run is linked", () => {
+  const epic = issue(8, "epic", "Epic");
+  const feature = issue(34, "feature", "Lifecycle", { parent: epic.ref });
+  const task36 = issue(36, "task", "GitHub lifecycle", { parent: feature.ref });
+  const task37 = issue(37, "task", "Recovery", { parent: feature.ref });
+  const task0 = issue(35, "task", "Task 0: Planning & Review", {
+    parent: feature.ref,
+    reserved: { for: feature.ref, kind: "feature-pr" },
+    labels: ["mc:reserved"],
+  });
+  const runs = [run({ id: "free", agent: "general", mode: "", status: "completed" })];
+  const index = buildRunIndex({
+    runs,
+    issuesByRepo: new Map([[repoA, [task37, task36, task0, feature, epic]]]),
+  });
+
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
+    [8, 34, 36, 37],
+  );
+  const section = index.rows.find((row) => row.kind === "section" && row.label === "Git issues");
+  assert.ok(section);
+  assert.equal(section.count, 4);
+  assert.deepEqual(
+    index.rows
+      .filter((row) => row.kind === "issue")
+      .map((row) => [row.issue.ref.number, row.depth]),
+    [[8, 2], [34, 3], [36, 4], [37, 4]],
+  );
+});
+
+test("picker orders issues parent-first with real depth", () => {
+  const epic = issue(8, "epic", "Epic");
+  const feature = issue(34, "feature", "Lifecycle", { parent: epic.ref });
+  const task36 = issue(36, "task", "GitHub lifecycle", { parent: feature.ref });
+  const task37 = issue(37, "task", "Recovery", { parent: feature.ref });
+  const task0 = issue(35, "task", "Task 0: Planning & Review", {
+    parent: feature.ref,
+    reserved: { for: feature.ref, kind: "feature-pr" },
+    labels: ["mc:reserved"],
+  });
+  const issues = [task37, task36, task0, feature, epic];
+
+  assert.deepEqual(
+    orderIssueTree(issues).map((row) => [row.issue.ref.number, row.depth]),
+    [[8, 0], [34, 1], [35, 2], [36, 2], [37, 2]],
+  );
+  assert.deepEqual(
+    orderIssueTree(issues, "recovery").map((row) => [row.issue.ref.number, row.depth]),
+    [[8, 0], [34, 1], [37, 2]],
+  );
 });
