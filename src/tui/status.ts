@@ -143,6 +143,20 @@ function runsFor(issue: Issue, byIssue: Map<string, RunSummary[]>): RunSummary[]
   return byIssue.get(`${issue.ref.repo}#${issue.ref.number}`) ?? [];
 }
 
+/** Issue-row glyphs stay about the issue, not about the runs below it. */
+export type IssueGlyphKind = "closed" | "blocked" | "ready" | "draft" | "open";
+
+export function issueGlyphKind(issue: Issue): IssueGlyphKind {
+  if (issue.state === "closed") return "closed";
+  if (issue.kind === "epic") return "open";
+  if (issue.blockedBy.length > 0) return "blocked";
+  if (issue.kind === "task") {
+    if (issue.plan?.status === "ready") return "ready";
+    if (issue.plan?.status === "draft") return "draft";
+  }
+  return "open";
+}
+
 export function healthOf(
   issue: Issue,
   runs: readonly RunSummary[],

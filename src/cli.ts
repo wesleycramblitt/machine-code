@@ -53,7 +53,7 @@ import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
 import { acquireLease, createOrchestration, listOrchestrations, readOrchestration, releaseLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
-import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
+import { filterRuns, issueGlyphKind, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
@@ -2509,16 +2509,13 @@ function cell(value: string, width: number): string {
   return value + " ".repeat(width - v);
 }
 
-function healthGlyph(health: string): string {
-  switch (health) {
-    case "attention": return "✗";
+function issueGlyph(issue: Issue): string {
+  switch (issueGlyphKind(issue)) {
+    case "closed": return "✓";
     case "blocked": return "⊘";
-    case "awaiting-human": return "?";
-    case "paused": return "⏸";
-    case "review": return "◎";
-    case "stalled": return "◌";
-    case "done": return "✓";
-    default: return "●";
+    case "ready": return "●";
+    case "draft": return "◐";
+    case "open": return "○";
   }
 }
 
@@ -2576,7 +2573,7 @@ function rowText(row: RunRow, width: number, group: RunGroup): string {
     const badge = row.issue.reserved ? " [P&R]" : "";
     const runs = row.rollup.runsTotal > 0 ? `runs ${row.rollup.runsTotal}` : "runs 0";
     const tasks = row.issue.kind === "task" ? "" : ` ${row.rollup.tasksClosed}/${row.rollup.tasksTotal} ·`;
-    const head = `${indent}${fold} ${healthGlyph(row.rollup.health)} #${row.issue.ref.number} ${row.issue.kind}${badge} ${row.issue.title}`;
+    const head = `${indent}${fold} ${issueGlyph(row.issue)} #${row.issue.ref.number} ${row.issue.kind}${badge} ${row.issue.title}`;
     const tail = `  ${pct}${tasks} ${runs}${row.rollup.runsActive ? ` (${row.rollup.runsActive})` : ""} · ${fmtMoney(row.rollup.cost)}`;
     if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
     return cell(head, width - visibleWidth(tail)) + tail;

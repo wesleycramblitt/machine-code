@@ -13,6 +13,7 @@ import {
   filterRuns,
   sortRuns,
   healthOf,
+  issueGlyphKind,
   rollupIssue,
   headerCounts,
   awaitingHuman,
@@ -88,6 +89,28 @@ test("health classification covers the priority order", () => {
   const old = new Date(now - 48 * 3600 * 1000).toISOString();
   assert.equal(healthOf(open, [run({ lastActivityAt: old })], now), "stalled");
   assert.equal(healthOf(open, [run({ status: "running" })], now), "on-track");
+});
+
+test("issue glyphs show issue state and plan state, not run health", () => {
+  assert.equal(issueGlyphKind(issue(10, "epic", "Epic")), "open");
+  assert.equal(issueGlyphKind(issue(10, "epic", "Epic", { state: "closed" })), "closed");
+  assert.equal(issueGlyphKind(issue(10, "epic", "Epic", { blockedBy: [ref(9)] })), "open");
+  assert.equal(issueGlyphKind(issue(20, "feature", "Feature")), "open");
+  assert.equal(issueGlyphKind(issue(20, "feature", "Feature", { blockedBy: [ref(9)] })), "blocked");
+  assert.equal(issueGlyphKind(issue(20, "feature", "Feature", { state: "closed" })), "closed");
+  assert.equal(issueGlyphKind(issue(30, "task", "Task")), "open");
+  assert.equal(
+    issueGlyphKind(issue(30, "task", "Task", { plan: { status: "draft" } })),
+    "draft",
+  );
+  assert.equal(
+    issueGlyphKind(issue(30, "task", "Task", { plan: { status: "ready" } })),
+    "ready",
+  );
+  assert.equal(
+    issueGlyphKind(issue(30, "task", "Task", { plan: { status: "ready" }, blockedBy: [ref(9)] })),
+    "blocked",
+  );
 });
 
 test("rollups exclude reserved tasks and aggregate runs/cost", () => {

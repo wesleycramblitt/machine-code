@@ -19,7 +19,7 @@ import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { readIssueCache, writeIssueCache } from "./issues/cache.js";
 import type { Issue, IssueRef } from "./issues/provider.js";
-import { filterRuns, headerCounts, sortRuns, type RunFilter } from "./tui/status.js";
+import { filterRuns, headerCounts, issueGlyphKind, sortRuns, type RunFilter } from "./tui/status.js";
 import {
   RUN_GROUPS,
   RUN_GROUP_LABELS,
@@ -424,24 +424,14 @@ function icon(status: string): string {
   }
 }
 
-function healthIcon(health: string): string {
-  switch (health) {
-    case "done": return `${G}✓${R}`;
-    case "attention": return `${RED}✗${R}`;
+function issueIcon(issue: Issue): string {
+  switch (issueGlyphKind(issue)) {
+    case "closed": return `${G}✓${R}`;
     case "blocked": return `${Y}⊘${R}`;
-    case "awaiting-human": return `${Y}?${R}`;
-    case "paused": return `${Y}⏸${R}`;
-    case "review": return `${M}◎${R}`;
-    case "stalled": return `${GR}◌${R}`;
-    default: return `${G}●${R}`;
+    case "ready": return `${G}●${R}`;
+    case "draft": return `${Y}◐${R}`;
+    case "open": return issue.kind === "epic" ? `${C}○${R}` : `${GR}○${R}`;
   }
-}
-
-function healthColor(health: string): string {
-  if (health === "done") return G;
-  if (health === "attention") return RED;
-  if (["blocked", "awaiting-human", "paused", "review", "stalled"].includes(health)) return Y;
-  return C;
 }
 
 function statusColor(status: string): string {
@@ -1531,7 +1521,7 @@ export async function runTui(): Promise<void> {
           const pr = roll.prState ? ` ${Y}PR ${roll.prState}${R}` : "";
           const runCount = narrow ? `${roll.runsTotal}r` : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`;
           const taskCount = row.issue.kind === "task" ? "" : `  ${D}${roll.tasksClosed}/${roll.tasksTotal} tasks${R}`;
-          const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${healthIcon(roll.health)} ${BL}#${row.issue.ref.number}${R} ${D}${row.issue.kind}${R} ${badge}${B}${W}${row.issue.title}${R}`;
+          const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${issueIcon(row.issue)} ${BL}#${row.issue.ref.number}${R} ${D}${row.issue.kind}${R} ${badge}${B}${W}${row.issue.title}${R}`;
           const right = `${pct}${taskCount} ${runCount}${pr}  ${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`;
           const text = ` ${narrow ? trunc(left, Math.max(18, cols - 16)) + " " + right : pad(left, Math.max(30, cols - visible(right) - 2)) + right}`;
           rendered.push(selected(text, isSelected));
@@ -1609,7 +1599,7 @@ export async function runTui(): Promise<void> {
         parentRef = parent.parent;
       }
       const lines: string[] = [];
-      lines.push(` ${healthIcon(issue.state === "closed" ? "done" : "on-track")} ${BL}#${issue.ref.number}${R} ${B}${W}${issue.title}${R} ${D}${issue.kind} · ${issue.state}${R}${issue.reserved ? ` ${M}[P&R]${R}` : ""}`);
+      lines.push(` ${issueIcon(issue)} ${BL}#${issue.ref.number}${R} ${B}${W}${issue.title}${R} ${D}${issue.kind} · ${issue.state}${R}${issue.reserved ? ` ${M}[P&R]${R}` : ""}`);
       if (ancestors.length) lines.push(` ${D}${ancestors.reverse().map((parent) => `#${parent.ref.number} ${parent.title}`).join("  ←  ")}${R}`);
       lines.push(` ${D}${issue.labels.join(" · ") || "no labels"}${R}`);
       if (issue.blockedBy.length) lines.push(` ${Y}blocked by ${issue.blockedBy.map((ref) => `#${ref.number}`).join(", ")}${R}`);
