@@ -40,6 +40,7 @@ import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { listOrchestrations } from "./orchestrator/state.js";
 import { toolListItems, tokensForChars } from "./tui/tools.js";
+import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
@@ -974,6 +975,21 @@ export async function runTui(): Promise<void> {
     if (!policy || !machine || !catalogue) return { context, error: "configuration/catalogue unavailable", machine };
     const ap = policy.agents[newrun.agent];
     if (!ap) return { context, error: `unknown agent ${newrun.agent}`, machine };
+    const resolved = resolveAgent(newRunLayout, newrun.agent, {
+      agentPolicy: ap,
+      machineOverrides: machine.agents[newrun.agent],
+      runOverrides: {
+        preset: newrun.preset,
+        verification: newrun.verification,
+        issues: newrun.issues,
+        ask: newrun.ask,
+        approval: newrun.approval,
+        ambiguity: newrun.ambiguity,
+      },
+    });
+    const toolChars = toolSchemaChars(
+      resolved.def.tools.filter((tool) => tool !== "issue" || newrun.issues !== "disabled"),
+    );
     const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
     if (newrun.minFit !== undefined) effective.minFit = newrun.minFit ?? 0;
     if (newrun.floors === "off") {
@@ -994,7 +1010,7 @@ export async function runTui(): Promise<void> {
       configuredProviders: base.configured,
       availability: base.availability,
       fundedProviders: fundedProviderIds(machine.providers),
-      contextChars: context.chars + context.promptChars,
+      contextChars: context.chars + context.promptChars + toolChars,
       tier: newrun.tier,
       requireModel: newrun.model,
     });
@@ -1518,12 +1534,16 @@ export async function runTui(): Promise<void> {
       const issueAccess = resolvedAgent.config.issueAccess ?? def.issueAccess;
       const planningAgent = newrun.agent === "planner" || newrun.agent === "architect" || newrun.agent === "review";
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
+      const referencedToolChars = new Map(
+        ctx.sources.filter((source) => source.kind === "tool").map((source) => [source.ref, source.chars]),
+      );
       const toolItems = toolListItems(
         resolvedAgent.def.tools.filter((tool) => tool !== "issue" || newrun.issues !== "disabled"),
         issueAccess,
         listArtifacts(layout(newRunRepo))
           .filter((artifact) => artifact.kind === "tool")
           .map((artifact) => ({ name: artifact.name, description: artifact.description })),
+        referencedToolChars,
       );
       const floorText = newrun.floors === "role" ? `role${ap ? ` (+${ap.minFit})` : ""}` : newrun.floors;
       const fitText = newrun.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(newrun.minFit);
@@ -1625,11 +1645,12 @@ export async function runTui(): Promise<void> {
       ];
       if (newRunContextTab >= sections.length) newRunContextTab = 0;
       const excludedChars = sections.reduce((sum, section) => {
-        if (newRunContextExcluded.has(section.sectionKey)) {
-          return sum + section.items.reduce((itemSum, item) => itemSum + item.chars, 0);
-        }
+        const sectionOff = newRunContextExcluded.has(section.sectionKey);
         return sum + section.items
-          .filter((item) => newRunContextExcluded.has(item.key))
+          .filter((item) => {
+            if ((item as { fixed?: boolean }).fixed) return false;
+            return sectionOff || newRunContextExcluded.has(item.key);
+          })
           .reduce((itemSum, item) => itemSum + item.chars, 0);
       }, 0);
       const totalChars = sections.reduce(
@@ -1660,9 +1681,10 @@ export async function runTui(): Promise<void> {
       newRunContextItemKeys = activeSection.items.map((item) => item.key);
       newRunContextItem = Math.min(newRunContextItem, Math.max(0, activeSection.items.length - 1));
       const sectionOff = newRunContextExcluded.has(activeSection.sectionKey);
-      const keptItems = sectionOff
-        ? []
-        : activeSection.items.filter((item) => !newRunContextExcluded.has(item.key));
+      const keptItems = activeSection.items.filter((item) => {
+        if ((item as { fixed?: boolean }).fixed) return true;
+        return !sectionOff && !newRunContextExcluded.has(item.key);
+      });
       const sectionTokens = keptItems.reduce((sum, item) => sum + tokensForChars(item.chars), 0);
       const sectionHeader = panelLine(
         `${B}${activeSection.tone}${activeSection.label}${R} ${D}·${R} ${C}${fmtTokens(sectionTokens)}${R}` +
@@ -1681,7 +1703,8 @@ export async function runTui(): Promise<void> {
       for (let offset = 0; offset < visibleItems.length; offset++) {
         const item = visibleItems[offset]!;
         const index = itemStart + offset;
-        const excluded = sectionOff || newRunContextExcluded.has(item.key);
+        const fixed = (item as { fixed?: boolean }).fixed === true;
+        const excluded = !fixed && (sectionOff || newRunContextExcluded.has(item.key));
         const mark = excluded ? `${RED}✕${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
         const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 24))}${R} ${D}${fmtTokens(tokensForChars(item.chars))}${R}`;
         itemLines.push(panelLine(line, index === newRunContextItem));
@@ -2800,7 +2823,7 @@ export async function runTui(): Promise<void> {
       if (data === "k") { newRunContextItem = Math.max(0, newRunContextItem - 1); draw(); return; }
       if (data === " ") {
         const key = newRunContextItemKeys[newRunContextItem];
-        if (key) {
+        if (key && !key.startsWith("core-tool:")) {
           if (newRunContextExcluded.has(key)) newRunContextExcluded.delete(key);
           else newRunContextExcluded.add(key);
         }

@@ -257,7 +257,9 @@ explicit `--allow-artifact-scripts` run flag. Planner writes task policy with th
 composer previews exactly which files, tools, scripts, and issues the selected
 run will inherit before it starts. The **Tools** subtab lists every tool
 available to the selected agent, including `issue` with its access level, plus
-custom repository/machine tools.
+custom repository/machine tools. Core tool definitions are sent with every
+request, so their schema tokens are included in the estimate and cannot be
+excluded as context.
 
 Skills live in `.machine_code/skills/<name>/SKILL.md`. Only descriptions are
 always visible; the body loads when an issue references the skill. The curation

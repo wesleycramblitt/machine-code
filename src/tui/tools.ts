@@ -3,12 +3,16 @@
  * repository/machine custom tool manifests.
  */
 import type { IssueAccess } from "../agents.js";
+import type { CoreToolName } from "../tools/index.js";
+import { toolSchemaCharsByName } from "../tools/schema.js";
 
 export interface ToolListItem {
   text: string;
   chars: number;
   exists: boolean;
   key: string;
+  /** Tool definitions are always sent; they cannot be excluded as context. */
+  fixed?: boolean;
 }
 
 const DESCRIPTIONS: Record<string, string> = {
@@ -28,18 +32,22 @@ export function toolListItems(
   tools: readonly string[],
   issueAccess: IssueAccess,
   customTools: ReadonlyArray<{ name: string; description?: string }>,
+  customChars?: ReadonlyMap<string, number>,
 ): ToolListItem[] {
+  const names = tools as readonly CoreToolName[];
+  const schemaChars = toolSchemaCharsByName(names);
   const core = tools.map((tool) => ({
     text: `${tool} · ${tool === "issue" ? `GitHub issues · issues:${issueAccess}` : (DESCRIPTIONS[tool] ?? "tool")}`,
-    chars: 0,
+    chars: schemaChars.get(tool) ?? 0,
     exists: true,
     key: `core-tool:${tool}`,
+    fixed: true,
   }));
   const custom = customTools.map((artifact) => ({
     text: `${artifact.name} · custom tool${artifact.description ? ` · ${artifact.description}` : ""}`,
-    chars: 0,
+    chars: customChars?.get(artifact.name) ?? 0,
     exists: true,
-    key: `custom-tool:${artifact.name}`,
+    key: `tool:${artifact.name}`,
   }));
   return [...core, ...custom];
 }

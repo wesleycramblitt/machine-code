@@ -21,6 +21,7 @@ import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
 import type { MutableModels } from "./models.js";
 import { coreTools } from "./tools/index.js";
+import { toolDefinitionChars, toolSchemaChars } from "./tools/schema.js";
 import type { AgentConfig } from "./agents/config.js";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -98,8 +99,6 @@ function convertToLlm(messages: AgentMessage[]): Message[] {
   );
 }
 
-
-const TOOL_SCHEMA_CHARS = 1_500;
 
 /** Never ask a provider for the model's full (possibly 384k) output ceiling. */
 const MAX_REQUESTED_OUTPUT_TOKENS = 32_000;
@@ -326,7 +325,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     })();
   };
 
-  const initialChars = input.agent.prompt.length + input.request.length + mapIndex.length + 2_000;
+  const initialChars =
+    input.agent.prompt.length +
+    input.request.length +
+    mapIndex.length +
+    toolSchemaChars(input.agent.tools) +
+    2_000;
 
   const zeroUsage: Usage = {
     input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
@@ -504,25 +508,28 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       };
     }
 
+    const tools = coreTools(
+      {
+        root: input.toolRoot ?? input.root,
+        commands: input.commands,
+        ask: askContext,
+        task: taskContext,
+        issues: issueContext,
+        artifacts: artifactContext,
+        prs: prContext,
+        state: memory,
+        processes,
+      },
+      input.agent.tools,
+    );
+    const toolChars = toolDefinitionChars(tools);
+
     agent = new Agent({
       initialState: {
         model: currentModel,
         thinkingLevel: "low",
         systemPrompt: input.agent.prompt,
-        tools: coreTools(
-          {
-            root: input.toolRoot ?? input.root,
-            commands: input.commands,
-            ask: askContext,
-            task: taskContext,
-            issues: issueContext,
-            artifacts: artifactContext,
-            prs: prContext,
-            state: memory,
-            processes,
-          },
-          input.agent.tools,
-        ),
+        tools,
         ...(input.initialMessages && input.initialMessages.length > 0 ? { messages: input.initialMessages } : {}),
       },
       sessionId: recorder.id,
@@ -658,7 +665,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         const rendered = renderPromptMessages(context.messages, memory, mapIndex, input.contextText);
         pendingMessages = rendered.messages;
         lastPromptChars = rendered.chars;
-        const chars = rendered.chars + input.agent.tools.length * TOOL_SCHEMA_CHARS;
+        const chars = rendered.chars + toolChars;
         lastRequestChars = chars;
         recorder.recordContext(chars);
         const result = selectFor(chars);

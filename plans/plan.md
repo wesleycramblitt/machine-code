@@ -24,7 +24,8 @@
 > packet approval is wired to the ledger. Execution honors wall-clock and spend
 > budgets. Worktree-creation git helpers are supervised. The Tools subtab lists
 > all agent tools and custom tools. Context item token counts use the same
-> chars/4 estimate as their section totals. The suite has 243 tests.
+> chars/4 estimate as their section totals, and core tool schemas are counted
+> as always-sent request overhead. The suite has 244 tests.
 >
 > Goal: complete real repository work with runner-owned evidence, low context
 > cost, and deterministic scheduling. Success measures: ≥80% on the fixed
@@ -581,7 +582,7 @@ Run summary additions: `orchestrationId`, `orchestrationScope`, `scopeRef`,
 
 ## 13. Test plan
 
-Keep the existing 243 tests green. Add:
+Keep the existing 244 tests green. Add:
 
 | Area | Cases |
 |---|---|
