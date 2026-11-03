@@ -384,14 +384,17 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           if (auto.issue) {
             remember(auto.issue, "plan ready");
             ctx.state?.addIssueBodyFact(auto.issue.ref.number, auto.issue.body);
-            note = `\nplan ready on #${auto.issue.ref.number}. Next: create the next Task or stop.`;
+            note =
+              `\nplan ready on #${auto.issue.ref.number}. ` +
+              "Add an mc:context marker with files if known; then create the next Task or stop.";
           } else if (created.acceptance.length > 0) {
             note =
-              `\nNext: plan failed (${auto.error ?? "unknown error"}); fix the body, ` +
-              `then action=plan issue=#${created.ref.number} status=ready.`;
+              `\nNext: plan failed (${auto.error ?? "unknown error"}); fix the body ` +
+              `(acceptance and mc:context files), then action=plan issue=#${created.ref.number} status=ready.`;
           } else {
             note =
-              `\nNext: add acceptance criteria to the body, then action=plan issue=#${created.ref.number} status=ready.`;
+              `\nNext: add acceptance criteria and an mc:context marker with files, ` +
+              `then action=plan issue=#${created.ref.number} status=ready.`;
           }
         }
         return ok(`created #${created.ref.number} (${created.kind}): ${created.title}${note}`);

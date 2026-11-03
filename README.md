@@ -291,7 +291,10 @@ Planner can inspect them and provision tool manifests with the `artifact` tool
 explicit `--allow-artifact-scripts` run flag. Planner writes task policy with the issue
 `plan` action, which inserts or replaces the `mc:plan` marker. The new-run
 composer previews exactly which files, tools, scripts, and issues the selected
-run will inherit before it starts. The **Tools** subtab lists every tool
+run will inherit before it starts. The **Issues** subtab nests each issue's
+`mc:context` files under that issue; there is no separate Files subtab. An
+issue with no marker shows `no mc:context files`, because files enter the
+prompt only when the issue body declares them. The **Tools** subtab lists every tool
 available to the selected agent, including `issue` with its access level, plus
 custom repository/machine tools. Core tool definitions are sent with every
 request, so their schema tokens are included in the estimate and cannot be

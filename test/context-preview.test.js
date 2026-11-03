@@ -40,6 +40,44 @@ test("preview includes always-visible skill descriptions", () => {
   }
 });
 
+test("preview groups issue context files by hierarchy depth", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-preview-files-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "task.ts"), "export const task = 1;\n", "utf8");
+    writeFileSync(join(root, "src", "feature.ts"), "export const feature = 1;\n", "utf8");
+    const ref = (n) => ({ provider: "github", repo: "o/r", number: n });
+    const issue = (n, kind, parent, files) => ({
+      ref: ref(n),
+      title: `${kind} ${n}`,
+      body: `<!-- mc:context {"files":${JSON.stringify(files)}} -->\n`,
+      state: "open",
+      kind,
+      labels: [],
+      children: [],
+      blockedBy: [],
+      blocking: [],
+      acceptance: [],
+      ...(parent ? { parent: parent.ref } : {}),
+    });
+    const epic = issue(1, "epic", undefined, []);
+    const feature = issue(2, "feature", epic, ["src/feature.ts"]);
+    const task = issue(3, "task", feature, ["src/task.ts"]);
+    const preview = previewContext(fakeLayout(root), [task, feature, epic], task.ref);
+    assert.deepEqual(
+      preview.sources
+        .filter((source) => source.kind === "file")
+        .map((source) => [source.ref, source.depth, source.origin]),
+      [
+        ["src/task.ts", 0, "explicit"],
+        ["src/feature.ts", 1, "inherited"],
+      ],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("repository knowledge index fits the context cap and links deeper notes", () => {
   const text = readFileSync(new URL("../knowledge/index.md", import.meta.url), "utf8");
   assert.ok(Buffer.byteLength(text, "utf8") <= 2048, "knowledge/index.md must fit the 2 KiB inherited cap");

@@ -192,7 +192,7 @@ interface ContextPanelItem {
   available?: boolean;
   counted?: boolean;
 }
-const NEW_RUN_CONTEXT_TABS = ["Issues", "Files", "Knowledge", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
+const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
 
 interface NewRunState {
   agent: string;
@@ -1671,16 +1671,40 @@ export async function runTui(): Promise<void> {
             ` ${modelIdentity}`,
           ].find((line) => visible(line) <= cols) ?? ` ${modelIdentity}`;
       const issueSources = ctx.sources.filter((source) => source.kind === "issue");
-      const issueItems = issueChain.map((issue, index) => {
+      const issueItems: ContextPanelItem[] = [];
+      for (let index = 0; index < issueChain.length; index++) {
+        const issue = issueChain[index]!;
         const source = issueSources[index];
         const contextKind = index === 0 ? "task" : index === 1 ? "feature" : "epic";
-        return {
-          text: `#${issue.ref.number} ${issue.kind} ${issue.title}`,
+        const files = ctx.sources.filter((item) => item.kind === "file" && item.depth === index);
+        const otherContext = ctx.sources.filter(
+          (item) =>
+            item.depth === index &&
+            (item.kind === "knowledge" ||
+              item.kind === "tool" ||
+              item.kind === "script" ||
+              (item.kind === "skill" && !/^\d+ skills$/.test(item.ref))),
+        );
+        const fileSummary = files.length > 0
+          ? `${files.length} file${files.length === 1 ? "" : "s"}`
+          : "no mc:context files";
+        issueItems.push({
+          text:
+            `#${issue.ref.number} ${issue.kind} ${issue.title} · ${fileSummary}` +
+            (otherContext.length > 0 ? ` · ${otherContext.length} other context` : ""),
           chars: source?.chars ?? 0,
           exists: source?.exists ?? true,
           key: `${contextKind}:${issue.ref.repo}#${issue.ref.number}`,
-        };
-      });
+        });
+        for (const file of files) {
+          issueItems.push({
+            text: `  ${file.ref}${file.note ? ` · ${file.note}` : ""}`,
+            chars: file.chars,
+            exists: file.exists,
+            key: `file:${file.ref}`,
+          });
+        }
+      }
       const mapEnabled = preview.machine?.map.enabled !== false;
       const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
       const cachedMap = readCachedMap(newRunRepo);
@@ -1712,7 +1736,6 @@ export async function runTui(): Promise<void> {
       ];
       const sections = [
         { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
-        { label: "Files", tone: contextTone("file"), sectionKey: "section:files", items: itemsFor(["file"]) },
         { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
         { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
         { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
