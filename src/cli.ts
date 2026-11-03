@@ -201,6 +201,7 @@ Usage:
   machine_code orchestrate status|tick|start [--dry-run]
                                     [--scope project|epic|feature] [--epic <n>|--feature <n>]
                                     [--max-parallel N] [--max-minutes N] [--max-spend-usd N]
+                                    [--checkpoint after-task]
                                     Compute or execute ready issue-graph tasks
   machine_code orchestrate approve --orchestration <id> --task <n> [--result]
                                     Approve a packet or result checkpoint
@@ -2790,6 +2791,10 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   if (maxSpendUsd !== undefined && (!Number.isFinite(maxSpendUsd) || maxSpendUsd < 0)) {
     fail("--max-spend-usd must be a non-negative number");
   }
+  const checkpointFlag = flags.get("checkpoint");
+  if (checkpointFlag !== undefined && checkpointFlag !== "after-task") {
+    fail("--checkpoint must be after-task");
+  }
 
   const issues = await bundle.provider.list({ state: "all", limit: 500 });
   const runs = listRuns(l);
@@ -2922,6 +2927,9 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
               return { stop: `task #${task.issue.ref.number} closure failed: ${(error as Error).message}` };
             }
           }
+        }
+        if (checkpointFlag === "after-task") {
+          return { checkpoint: "after-task" };
         }
         return {};
       }

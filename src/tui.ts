@@ -2001,7 +2001,9 @@ export async function runTui(): Promise<void> {
       if (model.benchmarks) {
         lines.push(`   benchmarks ${D}${Object.entries(model.benchmarks).filter(([, value]) => typeof value === "number").slice(0, 6).map(([key, value]) => `${key} ${value}`).join("  ")}${R}`);
       }
-      const modelHealth = loadAvailability(l.home).models[model.key];
+      const availabilityState = loadAvailability(l.home);
+      const modelHealth = availabilityState.models[model.key];
+      const providerHealth = availabilityState.providers[model.providerID];
       const coolingUntil = modelHealth?.cooldownUntil ?? 0;
       const lastProbe = modelHealth?.lastProbeResult;
       const probeTone =
@@ -2015,6 +2017,14 @@ export async function runTui(): Promise<void> {
             : `${D}not probed${R}`;
       lines.push("", ` ${B}${C}Availability${R}`);
       lines.push(`   ${healthText}${modelHealth?.lastProbeAt ? ` ${D}· ${ago(new Date(modelHealth.lastProbeAt).toISOString())}${R}` : ""}`);
+      const providerBits = [
+        providerHealth?.disabled ? `${RED}funds${R}` : "",
+        providerHealth?.needsAuth ? `${RED}auth${R}` : "",
+        (providerHealth?.cooldownUntil ?? 0) > Date.now()
+          ? `${Y}provider cooling ${Math.max(1, Math.ceil(((providerHealth?.cooldownUntil ?? 0) - Date.now()) / 60_000))}m${R}`
+          : "",
+      ].filter(Boolean);
+      if (providerBits.length > 0) lines.push(`   provider ${model.providerID} · ${providerBits.join(" · ")}`);
       lines.push("", ` ${B}${C}Providers offering this model${R}`);
       for (const offer of offers.slice(0, Math.max(3, Math.floor(bodyH / 2)))) {
         lines.push(`   ${offer.providerID === model.providerID ? C + "▸" : " "} ${pad(offer.providerID, 18)} ${Y}$${offer.pricing.input}${R}/${Y}$${offer.pricing.output}${R}  ${D}ctx ${fmtContext(offer.context)}${R}`);

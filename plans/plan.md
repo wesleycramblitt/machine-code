@@ -227,8 +227,8 @@ whether tracking is required. `issue_access` controls what the role may do.
 ## 5. Phase 2 — Availability heartbeat and preflight
 
 Status: metadata and opt-in free-model probes, run preflight, CLI commands, a
-manual and automatic TUI probe, coalescing, jitter, and a `probing` status
-are implemented. Remaining: deeper provider-level health details.
+manual and automatic TUI probe, coalescing, jitter, a `probing` status, and
+provider-level funds/auth/cooling details are implemented.
 
 Goal: do not start a run on a model that is known unavailable, and recover a
 cooldown as soon as evidence permits. A heartbeat is evidence, not a guarantee.
@@ -407,8 +407,8 @@ preflight/controls exist: scopes, readiness, dependency order, active-run suppre
 cycle reporting, JSON output, durable ledger/lease state, parallel execution
 through the existing Build/gates/Review/commit/PR pipeline, TUI
 start/approve/checkpoint controls, typed retry policy, and task
-closure/acceptance automation for agent-reviewed results. Remaining: make the
-Orchestrator the primary issue-backed path and finish richer merge handling.
+closure/acceptance automation for agent-reviewed results. The Orchestrator is
+the primary issue-backed path, and conflicting PRs are surfaced before merge.
 
 ### Scopes
 
@@ -513,8 +513,8 @@ readiness is checked. Conflicting PRs are surfaced before a merge is attempted.
 
 Status: execution runs up to `max_parallel`, serializes tasks sharing a Feature,
 stops new dispatch on `--max-minutes` or `--max-spend-usd`, and surfaces
-conflicting PRs before attempting a merge. Remaining: additional named
-checkpoints.
+conflicting PRs before attempting a merge, and supports the `after-task`
+checkpoint for one-task-at-a-time execution.
 
 - Dispatch up to `max_parallel` without duplicate task/phase runs.
 - Enforce wall-clock, spend, and checkpoint stops.
@@ -647,7 +647,7 @@ Keep the existing 254 tests green. Add:
 | Retries before replan | 2 |
 | Plan review | agent |
 | Result review | agent |
-| Checkpoints | after plan approval, before Feature merge |
+| Checkpoints | after plan approval, before Feature merge, optional `after-task` |
 | `on_needs_planning` | stop |
 | `on_build_failure` | stop |
 | Availability probe | metadata only |
