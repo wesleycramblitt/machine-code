@@ -962,8 +962,10 @@ async function cmdRun(argv: string[]): Promise<number> {
     for (const ap of Object.values(policy.agents)) ap.minCapability = n;
   }
   const minAxes = flags.get("min-axes");
+  let minAxesSnapshot: Record<string, number> | undefined;
   if (minAxes !== undefined) {
     const axes = parseAxisOverrides(minAxes);
+    minAxesSnapshot = axes;
     for (const ap of Object.values(policy.agents)) ap.minAxes = { ...(ap.minAxes ?? {}), ...axes };
   }
   const contextExcludeFlag = flags.get("context-exclude");
@@ -1052,6 +1054,12 @@ async function cmdRun(argv: string[]): Promise<number> {
   if ("error" in preflight) {
     fail(`no model is ready before run start: ${preflight.error}${preflight.rejected[0] ? ` (${preflight.rejected[0].key}: ${preflight.rejected[0].reason})` : ""}`);
   }
+  const runSettings: import("./state/run-schema.js").RunSettingsSnapshot = {
+    tier: machine.selection.tier,
+    ...(requireModel ? { model: preflight.selected.key } : {}),
+    ...(minFit !== undefined ? { minFit: Number(minFit) } : {}),
+    ...(minAxesSnapshot ? { minAxes: minAxesSnapshot } : {}),
+  };
 
   // Fork lineage: resolve the parent before the recorder exists so the child
   // is born with its lineage (never patched in after the fact).
@@ -1083,6 +1091,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     mode: "",
     request,
     repoRoot: l.repoRoot,
+    settings: runSettings,
     ...(parentRun
       ? {
           parentRunId: parentRun.id,

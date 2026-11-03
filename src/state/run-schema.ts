@@ -98,6 +98,17 @@ export interface RunCost {
   estimated: number;
 }
 
+/** Selection settings captured at run start so a fork can reproduce them. */
+export interface RunSettingsSnapshot {
+  tier?: "free" | "paid";
+  /** Explicit model pin. Absent means the selector chose the model. */
+  model?: string;
+  /** Explicit minimum fit; null is an explicit zero. */
+  minFit?: number | null;
+  /** Explicit per-axis floors. */
+  minAxes?: Record<string, number>;
+}
+
 export interface RunSummary {
   schemaVersion: typeof SCHEMA_VERSION;
   id: string;
@@ -115,6 +126,8 @@ export interface RunSummary {
   approval?: string;
   ambiguity?: string;
   capabilities?: string[];
+  /** Selection settings captured at start; absent on old runs. */
+  settings?: RunSettingsSnapshot;
   request: string;
   status: RunStatus;
   pid: number;
@@ -209,6 +222,24 @@ function migrateIssue(value: unknown): IssueRef | undefined {
   return { provider: r.provider, repo: r.repo, number: r.number };
 }
 
+function migrateRunSettings(value: unknown): RunSettingsSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const r = value as Record<string, unknown>;
+  const out: RunSettingsSnapshot = {};
+  if (r.tier === "free" || r.tier === "paid") out.tier = r.tier;
+  if (typeof r.model === "string" && r.model.trim().length > 0) out.model = r.model;
+  if (typeof r.minFit === "number" && Number.isFinite(r.minFit)) out.minFit = r.minFit;
+  else if (r.minFit === null) out.minFit = null;
+  if (r.minAxes && typeof r.minAxes === "object" && !Array.isArray(r.minAxes)) {
+    const axes: Record<string, number> = {};
+    for (const [axis, raw] of Object.entries(r.minAxes as Record<string, unknown>)) {
+      if (typeof raw === "number" && Number.isFinite(raw)) axes[axis] = raw;
+    }
+    if (Object.keys(axes).length > 0) out.minAxes = axes;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /**
  * Parse + migrate any stored summary (v1 or v2) into the v2 shape.
  * Returns null when the record is unusable (missing id, not an object).
@@ -237,6 +268,7 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     capabilities: Array.isArray(r.capabilities)
       ? (r.capabilities as unknown[]).filter((v): v is string => typeof v === "string")
       : undefined,
+    settings: migrateRunSettings(r.settings),
     request: str(r.request) ?? "",
     status: normalizeStatus(r.status),
     pid: num(r.pid),

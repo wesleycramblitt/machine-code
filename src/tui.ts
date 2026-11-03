@@ -33,6 +33,7 @@ import {
 import { selectableLines } from "./tui/scroll.js";
 import { describeTimelineEvent, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
+import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
 import { axisWeights, isMetaRouter, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
@@ -194,23 +195,7 @@ interface ContextPanelItem {
 }
 const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
 
-interface NewRunState {
-  agent: string;
-  /** Explicit catalogue key override; undefined lets the selector choose. */
-  model?: string;
-  preset: string;
-  verification: "direct" | "verified" | "redundant";
-  issues: "required" | "optional" | "disabled";
-  ask: boolean;
-  approval: "human" | "agent";
-  ambiguity: "strict" | "precise" | "adaptive" | "autonomous";
-  tier: "free" | "paid";
-  /** undefined = use the role policy; null = explicit zero. */
-  minFit: number | null | undefined;
-  floors: "role" | "strict" | "off";
-  issue?: IssueRef;
-  prompt: string;
-}
+type NewRunState = ForkedRunSettings;
 
 interface RunDetail {
   layout: Layout;
@@ -642,6 +627,8 @@ export async function runTui(): Promise<void> {
     prompt: "",
   };
   let newRunRepo = l.repoRoot;
+  /** Parent run id when the composer was opened with fork[f]. */
+  let newRunParentId: string | null = null;
   let issuePick: "newrun" | null = null;
   let issuePickSel = 0;
   let issuePickText = "";
@@ -860,6 +847,25 @@ export async function runTui(): Promise<void> {
 
   newrun = defaultNewRun();
 
+  const resetNewRunUi = () => {
+    newRunInsert = false;
+    newRunColon = false;
+    newRunSettings = false;
+    newRunSettingsSel = 0;
+    newRunContextTab = 0;
+    newRunContextItem = 0;
+    newRunContextExcluded.clear();
+    newRunContextIncluded.clear();
+    newRunPreviewCache = null;
+    newRunParentId = null;
+    modelPick = null;
+    modelPickSel = 0;
+    modelPickText = "";
+    issuePick = null;
+    issuePickSel = 0;
+    issuePickText = "";
+  };
+
   const startNewRun = (issue?: IssueRef, repoRoot = l.repoRoot) => {
     const previous = newrun;
     newRunRepo = repoRoot;
@@ -870,26 +876,48 @@ export async function runTui(): Promise<void> {
       ...(issue ? { issue } : {}),
     };
     // Keep the selected agent's mode/preset coherent.
-    const def = agentDef(l, newrun.agent);
+    const def = agentDef(layout(newRunRepo), newrun.agent);
     newrun.preset = def.preset;
-    newRunInsert = false;
-    newRunColon = false;
-    newRunSettings = false;
-    newRunSettingsSel = 0;
-    newRunContextTab = 0;
-    newRunContextItem = 0;
-    newRunContextExcluded.clear();
-    newRunContextIncluded.clear();
-    modelPick = null;
-    modelPickSel = 0;
-    modelPickText = "";
+    resetNewRunUi();
     screen = "newrun";
+  };
+
+  const forkRun = (detail: RunDetail) => {
+    const summary = detail.summary;
+    const repoLayout = layout(summary.repoRoot);
+    const agent = AGENT_NAMES.includes(summary.agent) ? summary.agent : "general";
+    const policy = effectivePolicy(summary.repoRoot);
+    const machine = (() => {
+      try { return loadMachineConfig(repoLayout); } catch { return undefined; }
+    })();
+    const defaults = resolveAgentConfig({
+      role: agent,
+      agentPolicy: policy?.agents[agent],
+      machineOverrides: machine?.agents[agent],
+    });
+    const configured = new Set(
+      providerStatuses(createModelsCollection())
+        .filter((status) => status.configured)
+        .map((status) => status.id),
+    );
+    newRunRepo = summary.repoRoot;
+    newrun = forkSettingsFromRun({
+      summary,
+      events: detail.events,
+      catalogue: loadCatalogue(repoLayout.catalogueFile),
+      defaults,
+      configuredProviders: configured,
+    });
+    resetNewRunUi();
+    newRunParentId = summary.id;
+    screen = "newrun";
+    notify(`forked settings from ${summary.id.slice(-8)}; edit the request and start`);
   };
 
   const cycleAgent = () => {
     const index = NEW_RUN_AGENTS.indexOf(newrun.agent);
     newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? newrun.agent;
-    const def = agentDef(l, newrun.agent);
+    const def = agentDef(layout(newRunRepo), newrun.agent);
     newrun.preset = def.preset;
   };
 
@@ -1084,6 +1112,7 @@ export async function runTui(): Promise<void> {
       "--ask", String(newrun.ask),
       "--approval", newrun.approval,
       "--ambiguity", newrun.ambiguity,
+      ...(newRunParentId ? ["--parent", newRunParentId] : []),
     ];
     if (newrun.floors === "off") {
       args.push("--min-fit", "0");
@@ -2339,11 +2368,11 @@ export async function runTui(): Promise<void> {
         }
         const touched = touchedPaths(ev);
         runFooter =
-          `${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}` +
+          `${Y}fork[f]${R}  ·  ${s.worktree ?? s.repoRoot}  ${s.worktree ? "worktree" : "read-only"}` +
           (runSection === "timeline"
-            ? `  ·  j/k events · space expand · PgUp/Dn scroll · f follow ${timelineFollow ? "ON" : "OFF"} · v ${timelineVerbose ? "all" : "key events"}`
+            ? `  ·  j/k events · space expand · PgUp/Dn scroll · F follow ${timelineFollow ? "ON" : "OFF"} · v ${timelineVerbose ? "all" : "key events"}`
             : runSection === "processes"
-              ? "  ·  j/k select · f follow · o log · x kill · X kill all"
+              ? "  ·  j/k select · F follow · o log · x kill · X kill all"
               : "");
         footerMapTokens = mapStatusTokens(s.worktree ?? s.repoRoot);
         const sectionBar = wrapTokenList(
@@ -3320,7 +3349,8 @@ export async function runTui(): Promise<void> {
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
       };
       if (data === " ") { toggleEvent(); draw(); return; }
-      if (runSection === "timeline" && data === "f") {
+      if (data === "f") { forkRun(detail); draw(); return; }
+      if (runSection === "timeline" && data === "F") {
         timelineFollow = !timelineFollow;
         if (timelineFollow) {
           const last = lastTimelineIndex(detail.events, timelineVerbose);
@@ -3354,7 +3384,7 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (runSection === "processes" && data === "f") {
+      if (runSection === "processes" && data === "F") {
         processFollow = !processFollow;
         if (processFollow) processSel = Math.max(0, reconcileProcessRecords(detail.dir).length - 1);
         notify(processFollow ? "following latest process" : "follow off");

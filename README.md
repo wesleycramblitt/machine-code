@@ -208,10 +208,16 @@ read/create/plan steps.
 
 In the run detail Timeline, `j`/`k` moves between timestamp events. The timeline
 follows the newest event by default; `j`/`k` or `PgUp`/`PgDn` turns follow off,
-and `f` turns it back on. `v` toggles between key events and all raw events.
+and `F` turns it back on. `v` toggles between key events and all raw events.
 `space` expands the selected input, output, reasoning, tool args, or tool
 result; `PgUp`/`PgDn` scroll inside a long expanded block. The Overview shows
 the outcome summary, a live activity tail, and the latest thinking text.
+
+Press `f` on any run detail section to fork the run settings into a new run.
+The New Run composer opens with the same agent, model setting, tier, preset,
+verification, issue tracking, ask, approval, ambiguity, min-fit, floors, issue,
+and request. Edit the request, change any setting, and start the run. The fork
+keeps parent lineage; it does not inherit the parent worktree.
 
 The harness blocks a third identical tool call with the same arguments and
 returns a corrective message; three blocked repeats end the run with a
@@ -222,7 +228,7 @@ command.
 
 Typed commands and runner gates run through the per-run process supervisor. The
 run detail **Processes** section shows each process, its status, pid, and output
-tail; `j`/`k` selects one, `f` follows the latest, `o` or Enter opens the log,
+tail; `j`/`k` selects one, `F` follows the latest, `o` or Enter opens the log,
 `x` kills the selected process, and `X` kills all live processes for the run.
 Kill sends SIGTERM, waits briefly, then sends SIGKILL if the process group is
 still alive. The record and full logs live under the run

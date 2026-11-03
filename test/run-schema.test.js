@@ -411,3 +411,61 @@ test("migrateRunSummary fills context usage fields for old runs", () => {
   assert.equal(migrated.usage.peakContextChars, 0);
   assert.equal(migrated.usage.peakContextTokens, 0);
 });
+
+test("migrateRunSummary keeps validated selection settings", () => {
+  const migrated = migrateRunSummary({
+    id: "settings-run",
+    status: "running",
+    startedAt: "2026-10-31T00:00:00.000Z",
+    settings: {
+      tier: "free",
+      model: "p/model",
+      minFit: 6.5,
+      minAxes: { code: 6, agentic: 6, ignored: "nope" },
+    },
+  });
+  assert.ok(migrated);
+  assert.deepEqual(migrated.settings, {
+    tier: "free",
+    model: "p/model",
+    minFit: 6.5,
+    minAxes: { code: 6, agentic: 6 },
+  });
+
+  const invalid = migrateRunSummary({
+    id: "bad-settings",
+    status: "running",
+    startedAt: "2026-10-31T00:00:00.000Z",
+    settings: { tier: "galaxy", model: 4, minFit: "high", minAxes: [] },
+  });
+  assert.ok(invalid);
+  assert.equal(invalid.settings, undefined);
+});
+
+test("RunRecorder persists selection settings for a fork", () => {
+  const root = tempDir("settings");
+  const layout = fakeLayout(root);
+  const recorder = new RunRecorder(layout, {
+    agent: "build",
+    mode: "",
+    request: "settings test",
+    repoRoot: root,
+    settings: {
+      tier: "paid",
+      model: "p/strong",
+      minFit: 7,
+      minAxes: { reasoning: 7, code: 7 },
+    },
+  });
+  try {
+    const raw = JSON.parse(readFileSync(join(recorder.dir, "run.json"), "utf8"));
+    assert.deepEqual(raw.settings, {
+      tier: "paid",
+      model: "p/strong",
+      minFit: 7,
+      minAxes: { reasoning: 7, code: 7 },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -16,12 +16,13 @@ import {
   isTerminalStatus,
   migrateRunSummary,
   writeJsonAtomic,
+  type RunSettingsSnapshot,
   type RunStatus,
   type RunSummary,
 } from "./run-schema.js";
 
 export { SCHEMA_VERSION, isActiveStatus, isTerminalStatus, normalizeStatus } from "./run-schema.js";
-export type { RunCost, RunStatus, RunSummary, RunUsage } from "./run-schema.js";
+export type { RunCost, RunSettingsSnapshot, RunStatus, RunSummary, RunUsage } from "./run-schema.js";
 
 const PROJECTS_FILE = (home: string) => join(home, "projects.jsonl");
 
@@ -233,6 +234,7 @@ export class RunRecorder {
       approval?: string;
       ambiguity?: string;
       capabilities?: string[];
+      settings?: RunSettingsSnapshot;
       issue?: import("../issues/provider.js").IssueRef;
       orchestrationId?: string;
       orchestrationScope?: "project" | "epic" | "feature";
@@ -313,6 +315,7 @@ export class RunRecorder {
       ...(init.approval !== undefined ? { approval: init.approval } : {}),
       ...(init.ambiguity !== undefined ? { ambiguity: init.ambiguity } : {}),
       ...(init.capabilities !== undefined ? { capabilities: init.capabilities } : {}),
+      ...(init.settings !== undefined ? { settings: init.settings } : {}),
       ...(init.issue !== undefined ? { issue: init.issue } : {}),
       ...(init.orchestrationId !== undefined ? { orchestrationId: init.orchestrationId } : {}),
       ...(init.orchestrationScope !== undefined ? { orchestrationScope: init.orchestrationScope } : {}),
