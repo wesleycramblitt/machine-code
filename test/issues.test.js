@@ -132,6 +132,18 @@ class FakeProvider {
 
 const ref = (n) => ({ provider: "github", repo: "o/r", number: n });
 
+const CONTEXT = "## Context\nParent scope, relevant files and symbols, and constraints for this issue.";
+
+function issueBody(kind, extra = "") {
+  if (kind === "epic") {
+    return `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope\n${extra ? `\n${extra}` : ""}`;
+  }
+  if (kind === "feature") {
+    return `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope\n\n## Success measures\nMeasured.\n${extra ? `\n${extra}` : ""}`;
+  }
+  return `${CONTEXT}\n\n## Deliverable\nOne file-level change.\n\n## Acceptance criteria\n- one\n${extra ? `\n${extra}` : ""}`;
+}
+
 /* ------------------------------------------------------------- parsing */
 
 test("parseIssueRef accepts bare numbers, owner/repo#n, and URLs", () => {
@@ -356,7 +368,7 @@ test("empty issue list does not tell a read-only role to create", async () => {
   }
 });
 
-test("graph action rejects tasks without acceptance before creating anything", async () => {
+test("graph action rejects incomplete task bodies before creating anything", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-accept-"));
   try {
     const p = new FakeProvider();
@@ -377,6 +389,68 @@ test("graph action rejects tasks without acceptance before creating anything", a
   }
 });
 
+test("create rejects issue bodies without the required context shape", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-context-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const epic = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: "## Goal\nEpic\n\n## Scope\nScope",
+    });
+    assert.equal(epic.isError, true);
+    assert.match(epic.content[0].text, /missing ## Context/);
+    assert.equal(p.issues.size, 0);
+
+    const feature = await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "feature",
+      title: "Feature",
+      body: `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope`,
+    });
+    assert.equal(feature.isError, true);
+    assert.match(feature.content[0].text, /missing ## Success measures/);
+
+    const created = await issueTool(ctx).execute("c3", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
+    assert.equal(created.isError, undefined);
+    const edited = await issueTool(ctx).execute("c4", {
+      action: "edit",
+      issue: "#1",
+      body: "## Goal\nEpic\n\n## Scope\nScope",
+    });
+    assert.equal(edited.isError, true);
+    assert.match(edited.content[0].text, /missing ## Context/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tree reports legacy issues that lack required context", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-context-tree-"));
+  try {
+    const p = new FakeProvider();
+    const epic = p.addRaw({
+      title: "Legacy epic",
+      kind: "epic",
+      body: "## Goal\nLegacy\n\n## Scope\nLegacy scope",
+    });
+    const { ctx } = toolCtx(p, ["issue:read"], root);
+    const tree = await issueTool(ctx).execute("c1", { action: "tree", issue: `#${epic.ref.number}`, depth: 1 });
+    assert.equal(tree.isError, undefined);
+    assert.match(tree.content[0].text, /Context incomplete: 1 issue/);
+    assert.match(tree.content[0].text, /Repair them with action=edit/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("graph action creates the Epic, Features, Tasks, and dependencies in one call", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-"));
   try {
@@ -385,23 +459,23 @@ test("graph action creates the Epic, Features, Tasks, and dependencies in one ca
     const result = await issueTool(ctx).execute("g1", {
       action: "graph",
       graph: {
-        epic: { key: "epic", title: "Epic", body: "## Goal\nEpic" },
+        epic: { key: "epic", title: "Epic", body: issueBody("epic", "## Feature plan\nDeliver as Features.") },
         features: [
-          { key: "a", title: "Feature A", body: "## Problem\nA" },
-          { key: "b", title: "Feature B", body: "## Problem\nB" },
+          { key: "a", title: "Feature A", body: issueBody("feature", "## Problem\nA") },
+          { key: "b", title: "Feature B", body: issueBody("feature", "## Problem\nB") },
         ],
         tasks: [
           {
             key: "a1",
             feature: "a",
             title: "Task A1",
-            body: "## Goal\nA1\n\nAcceptance criteria:\n- one",
+            body: issueBody("task", "## Notes\nA1"),
           },
           {
             key: "b1",
             feature: "b",
             title: "Task B1",
-            body: "## Goal\nB1\n\nAcceptance criteria:\n- two",
+            body: issueBody("task", "## Notes\nB1"),
             blocked_by: ["a1"],
           },
         ],
@@ -420,8 +494,8 @@ test("graph action creates the Epic, Features, Tasks, and dependencies in one ca
     const tree = await issueTool(ctx).execute("c3", { action: "tree", depth: 3 });
     assert.equal(tree.isError, undefined);
     assert.match(tree.content[0].text, /Graph complete/);
-    assert.match(tree.content[0].text, /create it now with issue action=graph/);
-    assert.match(tree.content[0].text, /Do not inspect source/);
+    assert.match(tree.content[0].text, /Create a named Epic\/Feature\/Task only when the request asks/);
+    assert.doesNotMatch(tree.content[0].text, /Context incomplete/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -432,7 +506,12 @@ test("tree without an issue shows every root and its reserved anchors", async ()
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const created = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    const created = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
     assert.equal(created.isError, undefined);
     const result = await issueTool(ctx).execute("c2", { action: "tree", depth: 3 });
     assert.equal(result.isError, undefined);
@@ -468,7 +547,12 @@ test("issue creation is remembered in run state", async () => {
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
     const state = new RunStateStore({ runDir: join(root, "state"), runId: "r", goal: "plan" });
     ctx.state = state;
-    const created = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    const created = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
     assert.equal(created.isError, undefined);
     const block = state.renderBlock();
     assert.match(block, /Issues:/);
@@ -486,7 +570,12 @@ test("planner creation links the run to the new Epic's reserved Task 0", async (
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root, "planner");
-    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
     const epic = [...p.issues.values()].find((issue) => issue.kind === "epic");
     const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
     const task0 = [...p.issues.values()].find(
@@ -499,6 +588,7 @@ test("planner creation links the run to the new Epic's reserved Task 0", async (
       kind: "feature",
       parent: `#${epic.ref.number}`,
       title: "Feature",
+      body: issueBody("feature"),
     });
     assert.equal(ctx.recorder.current.issue.number, task0.ref.number, "the Epic anchor is not replaced");
   } finally {
@@ -517,6 +607,7 @@ test("planner creating a Feature under an existing Epic links to the Epic's Task
       kind: "feature",
       parent: `#${epic.ref.number}`,
       title: "Feature",
+      body: issueBody("feature"),
     });
     const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
     const epicTask0 = [...p.issues.values()].find(
@@ -540,7 +631,7 @@ test("planner creating a Task links to that Feature's reserved Task 0", async ()
       kind: "task",
       parent: `#${feature.ref.number}`,
       title: "Task",
-      body: "## Acceptance criteria\n- one\n",
+      body: issueBody("task"),
     });
     const task0 = [...p.issues.values()].find(
       (issue) => issue.reserved?.kind === "feature-pr" && issue.parent?.number === feature.ref.number,
@@ -556,7 +647,12 @@ test("a Task cannot be created under the reserved Feature 0 anchor", async () =>
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const created = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    const created = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
     assert.equal(created.isError, undefined);
     const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
     assert.ok(feature0, "Epic creation reserves Feature 0");
@@ -565,6 +661,7 @@ test("a Task cannot be created under the reserved Feature 0 anchor", async () =>
       kind: "task",
       parent: `#${feature0.ref.number}`,
       title: "Task",
+      body: issueBody("task"),
     });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /reserved planning anchor/);
@@ -578,12 +675,18 @@ test("creating a Task with acceptance auto-writes a ready plan", async () => {
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
     const feature = await issueTool(ctx).execute("c2", {
       action: "create",
       kind: "feature",
       parent: "#1",
       title: "Feature",
+      body: issueBody("feature"),
     });
     assert.equal(feature.isError, undefined);
     const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
@@ -592,7 +695,7 @@ test("creating a Task with acceptance auto-writes a ready plan", async () => {
       kind: "task",
       parent: `#${featureIssue.ref.number}`,
       title: "Task",
-      body: "## Acceptance criteria\n- one\n- two\n",
+      body: issueBody("task", "## Acceptance criteria\n- two\n"),
     });
     assert.equal(task.isError, undefined);
     assert.match(task.content[0].text, /plan ready/);
@@ -612,13 +715,13 @@ test("graph rejects a feature-sized Task before creating anything", async () => 
     const result = await issueTool(ctx).execute("g0", {
       action: "graph",
       graph: {
-        epic: { key: "epic", title: "Epic" },
-        features: [{ key: "f", title: "Feature" }],
+        epic: { key: "epic", title: "Epic", body: issueBody("epic") },
+        features: [{ key: "f", title: "Feature", body: issueBody("feature") }],
         tasks: [{
           key: "t",
           feature: "f",
           title: "Feature-sized Task",
-          body: "## Acceptance criteria\n- one\n- two\n- three\n- four\n",
+          body: issueBody("task").replace("- one", "- one\n- two\n- three\n- four"),
         }],
       },
     });
@@ -636,15 +739,26 @@ test("creating a feature-sized Task is rejected before it exists", async () => {
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
-    await issueTool(ctx).execute("c2", { action: "create", kind: "feature", parent: "#1", title: "Feature" });
+    await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
+    await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "feature",
+      parent: "#1",
+      title: "Feature",
+      body: issueBody("feature"),
+    });
     const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
     const task = await issueTool(ctx).execute("c3", {
       action: "create",
       kind: "task",
       parent: `#${featureIssue.ref.number}`,
       title: "Feature-sized Task",
-      body: "## Acceptance criteria\n- one\n- two\n- three\n- four\n",
+      body: issueBody("task").replace("- one", "- one\n- two\n- three\n- four"),
     });
     assert.equal(task.isError, true);
     assert.match(task.content[0].text, /too large/);
@@ -655,25 +769,35 @@ test("creating a feature-sized Task is rejected before it exists", async () => {
   }
 });
 
-test("creating a Task without acceptance leaves it unplanned", async () => {
+test("creating a Task without acceptance is rejected", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-autoplan-none-"));
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
-    await issueTool(ctx).execute("c2", { action: "create", kind: "feature", parent: "#1", title: "Feature" });
+    await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Epic",
+      body: issueBody("epic"),
+    });
+    await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "feature",
+      parent: "#1",
+      title: "Feature",
+      body: issueBody("feature"),
+    });
     const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
     const task = await issueTool(ctx).execute("c3", {
       action: "create",
       kind: "task",
       parent: `#${featureIssue.ref.number}`,
       title: "Task",
-      body: "No criteria yet.",
+      body: `${CONTEXT}\n\n## Deliverable\nOne file-level change.\n`,
     });
-    assert.equal(task.isError, undefined);
-    assert.match(task.content[0].text, /add acceptance criteria/);
-    const created = [...p.issues.values()].find((issue) => issue.title === "Task");
-    assert.equal(created.plan, undefined);
+    assert.equal(task.isError, true);
+    assert.match(task.content[0].text, /missing acceptance criteria/);
+    assert.equal([...p.issues.values()].some((issue) => issue.title === "Task"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -714,7 +838,12 @@ test("issue tool creates an Epic with its reserved chain", async () => {
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan", "issue:write", "issue:hierarchy:write"], root);
-    const result = await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Propulsion" });
+    const result = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "epic",
+      title: "Propulsion",
+      body: issueBody("epic"),
+    });
     assert.equal(result.isError, undefined);
     assert.match(result.content[0].text, /reserved: Feature 0 #/);
     assert.match(result.content[0].text, /Feature 0: Planning & Review/);
@@ -729,6 +858,7 @@ test("issue tool creates an Epic with its reserved chain", async () => {
       kind: "feature",
       parent: `#${epic.ref.number}`,
       title: "Gates",
+      body: issueBody("feature"),
     });
     assert.equal(feature.isError, undefined);
     assert.match(feature.content[0].text, /reserved: Task 0 #/);
@@ -751,6 +881,7 @@ test("issue tool records dependencies on create and edit", async () => {
       action: "create",
       kind: "epic",
       title: "Dependent epic",
+      body: issueBody("epic"),
       depends_on: [String(blocker.ref.number)],
     });
     assert.equal(created.isError, undefined);

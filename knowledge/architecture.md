@@ -75,8 +75,11 @@ the remaining probe work.
 - Tool calls are structured. Text tool-call markup is malformed; rotate models
   or fail, never complete.
 - A Task is one deliverable: one file-level change, at most three acceptance
-  criteria, and a body under 4,000 chars. Oversized Tasks are rejected before
-  creation or build.
+  criteria, and a body under 4,000 chars. Task bodies carry `## Context`,
+  `## Deliverable`, and acceptance; Epic/Feature bodies carry `## Context`,
+  `## Goal`, and `## Scope` (Feature also `## Success measures`). The issue tool
+  rejects create/graph/body-edit requests that miss these sections. Oversized
+  Tasks are rejected before creation or build.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
 - A completed run stays completed even when a recoverable plan checkpoint fired.
 - An edit invalidates only overlapping read ranges; read coverage carries

@@ -385,6 +385,14 @@ reserved **Task 0: Planning & Review**. These are coordination anchors, not
 deliverables. The Planner is told to ignore them; the issue tool marks them
 `[reserved]` in run state and rejects a Task created under reserved Feature 0.
 
+Every issue body must carry its context when it is created or edited. All
+issues need `## Context`: why the issue exists, the parent scope, relevant
+files/symbols, and constraints. Epic and Feature bodies also need `## Goal` and
+`## Scope`; Features need `## Success measures`; Tasks need `## Deliverable` and
+acceptance criteria. The `issue` tool rejects a create, graph, or body edit that
+misses these sections. This keeps context at creation time instead of requiring
+a later review. Legacy issues can be repaired with `issue action=edit`.
+
 `machine_code availability` shows cooling models and provider health.
 `machine_code model probe <key>` checks one model. Metadata probes use free
 provider endpoints and never send a paid inference request. The optional
@@ -489,15 +497,17 @@ ambiguity policy says to stop and report the question instead of asking.
 
 The Planner holds only `context`, `read`, `search`, `ask`, and `issue`. It
 inspects the issue list/tree, reuses a suitable Epic or Feature, creates the
-missing level, adds acceptance criteria and dependencies, and applies
-`mc:plan` to Tasks. It does not hold `command`, `artifact`, or `pr`, so the
+missing level with body context, adds acceptance criteria and dependencies, and
+applies `mc:plan` to Tasks. It does not hold `command`, `artifact`, or `pr`, so the
 `command describe issue` detour is impossible. Build and Review say `ask off`
 and report blockers; their ambiguity policy matches.
 
 A Task is one deliverable: one file-level change and at most **three**
-acceptance criteria, with a body under 4,000 chars. The harness enforces this
-when a Task is created, edited, or planned as ready, including graph creation.
-An oversized Task fails before it exists. A build run refuses an existing
+acceptance criteria, with a body under 4,000 chars. Its body carries
+`## Context`, `## Deliverable`, and acceptance criteria. The harness enforces
+size when a Task is created, edited, or planned as ready, including graph
+creation. It enforces body context on create, graph, and body edit. An
+oversized Task fails before it exists. A build run refuses an existing
 oversized Task and tells the operator to run the Planner. The Planner splits
 an oversized Task by editing it to one slice and creating sibling Tasks under
 the same Feature.
