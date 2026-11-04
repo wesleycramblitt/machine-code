@@ -18,7 +18,7 @@ import type { Context, Usage } from "@earendil-works/pi-ai";
 import type { MutableModels, ChatModel } from "../models.js";
 import { truncateToBytes } from "../tools/safety.js";
 import { readSemanticChanges } from "./changes.js";
-import { renderRepoMap, type MapFile, type RepoMap } from "./deterministic.js";
+import { readCachedMap, renderRepoMap, type MapFile, type RepoMap } from "./deterministic.js";
 
 export const SEMANTIC_SCHEMA = 1 as const;
 const SEMANTIC_CAP_BYTES = 16 * 1024;
@@ -30,6 +30,8 @@ export interface SemanticEntry {
   editHints?: string[];
   /** Concrete search terms: filenames, symbols, concepts. */
   keywords?: string[];
+  /** Deterministic module edges from imports, outermost module names. */
+  deps?: string[];
   /** True for a large-file entry; module entries omit it. */
   file?: boolean;
 }
@@ -108,6 +110,22 @@ export interface SemanticModelResult {
   error?: string;
 }
 
+function usefulDoc(doc: string | undefined): string | undefined {
+  if (!doc) return undefined;
+  const clean = doc.replace(/\s+/g, " ").trim();
+  if (clean.length < 12) return undefined;
+  if (/^(?:copyright|license|spdx-license|mit license|apache license|gpl)\b/i.test(clean)) return undefined;
+  return clean;
+}
+
+/** One readable sentence for a module overview, not a whole file header. */
+function firstSentence(doc: string, max = 140): string {
+  const clean = doc.replace(/^machine_code\s*[—-]\s*/i, "").trim();
+  const match = /^(.{8,}?[.!?])(?:\s|$)/.exec(clean);
+  const sentence = match?.[1] ?? clean;
+  return sentence.length <= max ? sentence : `${sentence.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
 /** Build a deterministic, always-fresh module index from the repo map. */
 export function buildModuleIndex(map: RepoMap): SemanticMap {
   // Large files carry their comment banners in the repo map. This gives the
@@ -141,23 +159,42 @@ export function buildModuleIndex(map: RepoMap): SemanticMap {
     const sections = [...new Set(
       files.flatMap((file) => sectionsByFile.get(file.path) ?? []),
     )].slice(0, 12);
+    const deps = [...new Set(
+      files.flatMap((file) => (file.imports ?? []).map((imported) => moduleOf(imported))),
+    )].filter((target) => target !== module).sort().slice(0, 16);
     const basenames = keyFiles.map((path) => path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? path);
+    const fileDocs = files.map((file) => usefulDoc(file.doc)).filter((doc): doc is string => Boolean(doc));
+    const symbolDocs = sorted
+      .flatMap((file) => file.symbols.map((symbol) => usefulDoc(symbol.doc)))
+      .filter((doc): doc is string => Boolean(doc));
+    const docText = [...fileDocs, ...symbolDocs].join(" ");
+    const docKeywords = semanticTokens(docText).slice(0, 16);
     const keywords = [...new Set([
       module,
       ...module.split("/"),
       ...basenames,
+      ...docKeywords,
       ...sections.flatMap((heading) => semanticTokens(heading)),
       ...symbols,
     ].filter(Boolean))].slice(0, 24);
-    const summary = [
+    const symbolSummary = [
       basenames.join(", "),
       symbols.length > 0 ? symbols.slice(0, 8).join(", ") : "",
       sections.length > 0 ? `sections: ${sections.slice(0, 6).join(", ")}` : "",
     ].filter(Boolean).join(" — ");
+    const keyDocs = keyFiles
+      .map((path) => files.find((file) => file.path === path))
+      .map((file) => usefulDoc(file?.doc))
+      .filter((doc): doc is string => Boolean(doc));
+    const docSummary = keyDocs.length > 0
+      ? keyDocs.slice(0, 3).map((doc) => firstSentence(doc)).join(" · ")
+      : symbolDocs[0];
+    const summary = docSummary ? clip(docSummary, 240) : clip(symbolSummary || module, 240);
     modules[module] = {
-      summary: clip(summary || module, 240),
+      summary,
       keyFiles,
       keywords,
+      ...(deps.length > 0 ? { deps } : {}),
     };
   }
 
@@ -173,18 +210,22 @@ export function buildModuleIndex(map: RepoMap): SemanticMap {
       .slice(0, 12);
     const sections = sectionsByFile.get(file.path) ?? [];
     const basename = file.path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? file.path;
+    const doc = usefulDoc(file.doc);
+    const symbolDocs = file.symbols.map((symbol) => usefulDoc(symbol.doc)).filter((value): value is string => Boolean(value));
+    const docKeywords = semanticTokens([doc ?? "", ...symbolDocs].join(" ")).slice(0, 16);
     const keywords = [...new Set([
       basename,
+      ...docKeywords,
       ...sections.flatMap((heading) => semanticTokens(heading)),
       ...symbols,
     ].filter(Boolean))].slice(0, 40);
-    const summary = [
+    const symbolSummary = [
       basename,
       symbols.length > 0 ? symbols.slice(0, 6).join(", ") : "",
       sections.length > 0 ? `sections: ${sections.slice(0, 5).join(", ")}` : "",
     ].filter(Boolean).join(" — ");
     modules[file.path] = {
-      summary: clip(summary, 240),
+      summary: clip(doc ? firstSentence(doc) : symbolSummary, 240),
       keyFiles: [file.path],
       keywords,
       file: true,
@@ -212,6 +253,7 @@ export function mergeModuleIndex(base: SemanticMap, overlay: SemanticMap | null)
       summary: entry.summary?.trim() || current.summary,
       ...(entry.keyFiles?.length ? { keyFiles: entry.keyFiles } : current.keyFiles ? { keyFiles: current.keyFiles } : {}),
       ...(entry.editHints?.length ? { editHints: entry.editHints } : current.editHints ? { editHints: current.editHints } : {}),
+      ...(current.deps?.length ? { deps: current.deps } : {}),
       keywords: [...new Set([...(current.keywords ?? []), ...(entry.keywords ?? [])])].slice(0, 16),
     };
   }
@@ -296,13 +338,28 @@ export function loadSemantic(root: string): SemanticMap | null {
   }
 }
 
+/**
+ * Load the persisted semantic map, or build the deterministic index from the
+ * cached repo map. This keeps the TUI and semantic search useful before an
+ * annotation refresh has run.
+ */
+export function loadSemanticOrDeterministic(root: string): SemanticMap | null {
+  const saved = loadSemantic(root);
+  const map = readCachedMap(root);
+  if (!map) return saved;
+  const dirty = readSemanticDirty(root);
+  if (saved && isSemanticFresh(saved, map, dirty)) return saved;
+  return buildModuleIndex(map);
+}
+
 export function isSemanticFresh(semantic: SemanticMap | null, map: RepoMap, dirty: readonly string[]): boolean {
   if (!semantic) return false;
   if (dirty.length > 0) return false;
   return semantic.baseCommit === map.head && semantic.mapHash === mapHashOf(map);
 }
 
-function writeSemantic(root: string, semantic: SemanticMap): void {
+/** Persist a complete semantic map. Deterministic maps use this too. */
+export function saveSemanticMap(root: string, semantic: SemanticMap): void {
   const file = semanticPath(root);
   mkdirSync(cacheDir(root), { recursive: true });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
@@ -455,6 +512,8 @@ export function mergeSemantic(input: MergeInput): SemanticMap | null {
   for (const module of input.modules) {
     const entry = validEntry(parsed.modules[module], input.map, module);
     if (entry) {
+      const deterministic = fresh.modules[module];
+      if (deterministic?.deps?.length) entry.deps = deterministic.deps;
       modules[module] = entry;
       acceptedModules.add(module);
     }
@@ -483,7 +542,7 @@ export function mergeSemantic(input: MergeInput): SemanticMap | null {
     text = JSON.stringify(semantic, null, 2);
   }
   if (Buffer.byteLength(text, "utf8") > SEMANTIC_CAP_BYTES) return null;
-  writeSemantic(input.root, semantic);
+  saveSemanticMap(input.root, semantic);
   const cutoff = input.changeCutoff ?? new Date().toISOString();
   const handled = input.dirtyPaths.filter((path) => {
     if (!acceptedModules.has(moduleOf(path))) return false;
@@ -512,13 +571,60 @@ export function renderSemanticIndex(semantic: SemanticMap | null, maxBytes = 3_0
   const lines = ["<semantic-map>"];
   for (const [module, entry] of modules) {
     const files = entry.keyFiles?.length ? ` · files: ${entry.keyFiles.join(", ")}` : "";
+    const deps = entry.deps?.length ? ` · deps: ${entry.deps.join(", ")}` : "";
     const hints = entry.editHints?.length ? ` · hints: ${entry.editHints.join("; ")}` : "";
-    lines.push(`${module} — ${entry.summary}${files}${hints}`);
+    lines.push(`${module} — ${entry.summary}${files}${deps}${hints}`);
   }
   lines.push("</semantic-map>");
   const text = lines.join("\n");
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
   return `${truncateToBytes(text, Math.max(0, maxBytes - 20))}\n[truncated]`;
+}
+
+/**
+ * Compact module dependency graph. Edges are deterministic imports; semantic
+ * summaries and query ranking make the overview readable.
+ */
+export function renderModuleGraph(
+  map: RepoMap,
+  semantic: SemanticMap | null,
+  query = "",
+  maxBytes = 6 * 1024,
+): string {
+  const deps = new Map<string, Set<string>>();
+  for (const file of map.files) {
+    const module = moduleOf(file.path);
+    const targets = deps.get(module) ?? new Set<string>();
+    for (const imported of file.imports ?? []) {
+      const target = moduleOf(imported);
+      if (target !== module) targets.add(target);
+    }
+    deps.set(module, targets);
+  }
+  const ranked = new Set(
+    query.trim() && semantic ? searchSemantic(semantic, query, 16).map((match) => match.module) : [],
+  );
+  const modules = [...deps.keys()]
+    .filter((module) => (deps.get(module)?.size ?? 0) > 0 || ranked.has(module))
+    .sort((a, b) => {
+      const rankA = ranked.has(a) ? 0 : 1;
+      const rankB = ranked.has(b) ? 0 : 1;
+      return rankA - rankB || a.localeCompare(b);
+    });
+  const lines = ["<module-graph>"];
+  for (const module of modules) {
+    const allTargets = [...(deps.get(module) ?? new Set<string>())].sort();
+    if (allTargets.length === 0) continue;
+    const targets = allTargets.slice(0, 12);
+    const more = allTargets.length > targets.length ? ` +${allTargets.length - targets.length}` : "";
+    const summary = semantic?.modules[module]?.summary;
+    const label = summary ? summary.split(" — ")[0]!.slice(0, 80) : "";
+    lines.push(`${module}${label ? ` (${label})` : ""} → ${targets.join(", ")}${more}`);
+  }
+  lines.push("</module-graph>");
+  const text = lines.join("\n");
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  return `${truncateToBytes(text, Math.max(0, maxBytes - 24))}\n[graph truncated]`;
 }
 
 /** One bounded completion. Caller owns model selection and accounting. */

@@ -56,6 +56,96 @@ test("map is deterministic and excludes secrets and ignored dirs", async () => {
   }
 });
 
+test("map extracts file docs and symbol docs from comments", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-map-docs-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "a.ts"),
+      "/** File documentation for the module. */\n/** Adds two values. */\nexport function add(a: number, b: number) { return a + b; }\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "src", "a.py"),
+      '"""Python module documentation."""\n\ndef compute():\n    """Computes the result."""\n    return 1\n',
+      "utf8",
+    );
+    const built = await buildRepoMap(root, { refresh: true });
+    const ts = built.map.files.find((file) => file.path === "src/a.ts");
+    const py = built.map.files.find((file) => file.path === "src/a.py");
+    assert.match(ts.doc, /File documentation/);
+    assert.match(ts.symbols.find((symbol) => symbol.name === "add").doc, /Adds two values/);
+    assert.match(py.doc, /Python module documentation/);
+    assert.match(py.symbols.find((symbol) => symbol.name === "compute").doc, /Computes the result/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("map resolves relative imports into module edges", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-map-imports-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), 'import { b } from "./b.js";\nexport const a = b;\n', "utf8");
+    writeFileSync(join(root, "src", "b.ts"), "export const b = 1;\n", "utf8");
+    const built = await buildRepoMap(root, { refresh: true });
+    assert.deepEqual(built.map.files.find((file) => file.path === "src/a.ts").imports, ["src/b.ts"]);
+    assert.equal(built.map.files.find((file) => file.path === "src/b.ts").imports, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("map extracts symbols and docs for Java, Ruby, and C", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-map-langs-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "Service.java"),
+      "/** Service docs. */\npublic class Service {\n  /** Runs the service. */\n  public void run() {}\n}\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "src", "service.rb"),
+      "# Ruby service docs.\nclass Service\n  # Runs it.\n  def run\n  end\nend\n",
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "src", "add.c"),
+      "/** Adds two numbers. */\nint add(int a, int b) { return a + b; }\n",
+      "utf8",
+    );
+    const built = await buildRepoMap(root, { refresh: true });
+    const java = built.map.files.find((file) => file.path === "src/Service.java");
+    const ruby = built.map.files.find((file) => file.path === "src/service.rb");
+    const c = built.map.files.find((file) => file.path === "src/add.c");
+    assert.match(java.symbols.find((symbol) => symbol.name === "Service")?.doc ?? "", /Service docs/);
+    assert.match(java.symbols.find((symbol) => symbol.name === "run")?.doc ?? "", /Runs the service/);
+    assert.match(ruby.symbols.find((symbol) => symbol.name === "run")?.doc ?? "", /Runs it/);
+    assert.match(c.symbols.find((symbol) => symbol.name === "add")?.doc ?? "", /Adds two numbers/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("map resolves Python and Rust local imports", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-map-imports-lang-"));
+  try {
+    mkdirSync(join(root, "src", "pkg"), { recursive: true });
+    mkdirSync(join(root, "src", "baz"), { recursive: true });
+    writeFileSync(join(root, "src", "pkg", "a.py"), "from .b import value\n", "utf8");
+    writeFileSync(join(root, "src", "pkg", "b.py"), "value = 1\n", "utf8");
+    writeFileSync(join(root, "src", "foo.rs"), "mod bar;\nuse crate::baz::qux;\n", "utf8");
+    writeFileSync(join(root, "src", "bar.rs"), "pub fn bar() {}\n", "utf8");
+    writeFileSync(join(root, "src", "baz", "qux.rs"), "pub fn qux() {}\n", "utf8");
+    const built = await buildRepoMap(root, { refresh: true });
+    assert.deepEqual(built.map.files.find((file) => file.path === "src/pkg/a.py").imports, ["src/pkg/b.py"]);
+    assert.deepEqual(built.map.files.find((file) => file.path === "src/foo.rs").imports, ["src/bar.rs", "src/baz/qux.rs"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("map render filters by path and includes symbols", async () => {
   const root = tempRepo();
   try {

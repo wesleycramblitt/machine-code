@@ -83,6 +83,8 @@ the remaining probe work.
   artifact ids for recall.
 - Build and sudo seed task-named files and inferred tests into a bounded
   working context. The working context is re-read from disk after edits.
+- The deterministic semantic index persists to `semantic.json`; module edges
+  come from resolved TS/JS imports. LSP remains the exact symbol layer.
 - Read-only commands are cached until the next edit, write, or mutating command.
 - Prompts use ASD-STE100 and end with the role's typed terminal line.
 

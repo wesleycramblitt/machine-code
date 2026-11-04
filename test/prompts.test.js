@@ -71,7 +71,7 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.match(build.prompt, /if empty, stop/);
     assert.match(build.prompt, /3-line change plan/);
     assert.match(build.prompt, /Next must be an edit or needs_planning/);
-    assert.match(build.prompt, /map\/outline\/sections/);
+    assert.match(build.prompt, /map\/sections/);
 
     const sudo = resolveAgent(l, "sudo");
     assert.match(sudo.prompt, /use its Deliverable and Acceptance/);

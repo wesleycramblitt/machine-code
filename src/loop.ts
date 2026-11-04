@@ -29,7 +29,7 @@ import type { Layout } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
 import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { ensureSemanticMap } from "./map/ensure.js";
-import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, type SemanticMap } from "./map/semantic.js";
+import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
 import { inferPreloadFiles } from "./context/preload.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
@@ -407,6 +407,16 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const deterministic = wantSemantic ? buildModuleIndex(built.map) : null;
     const cached = wantSemantic ? loadSemantic(mapRoot) : null;
     const cachedFresh = cached && isSemanticFresh(cached, built.map, dirty) ? cached : null;
+    // Persist the deterministic index immediately when there is no fresh
+    // annotation overlay. The TUI and `search semantic` then see a current
+    // semantic map even when LLM annotations are disabled or pending.
+    if (wantSemantic && deterministic && !cachedFresh) {
+      try {
+        saveSemanticMap(mapRoot, deterministic);
+      } catch {
+        // A cache write failure must not block the run.
+      }
+    }
     semanticMap = deterministic ? mergeModuleIndex(deterministic, cachedFresh) : null;
     const fresh = Boolean(cachedFresh);
     mapIndex = renderIndex(built.map, semanticMap);

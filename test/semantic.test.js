@@ -16,12 +16,15 @@ import {
   clearSemanticDirty,
   isSemanticFresh,
   loadSemantic,
+  loadSemanticOrDeterministic,
   markSemanticDirty,
   mergeModuleIndex,
   mergeSemantic,
   readSemanticDirty,
+  renderModuleGraph,
   renderSemanticIndex,
   runSemanticModel,
+  saveSemanticMap,
   searchSemantic,
 } from "../dist/map/semantic.js";
 
@@ -33,6 +36,65 @@ function tempRepo() {
   writeFileSync(join(root, "lib", "b.ts"), "export function beta() {}\n", "utf8");
   return root;
 }
+
+test("semantic loading falls back to the cached deterministic map", async () => {
+  const root = tempRepo();
+  try {
+    await buildRepoMap(root, { refresh: true });
+    const semantic = loadSemanticOrDeterministic(root);
+    assert.ok(semantic);
+    assert.equal(semantic.model, "deterministic");
+    assert.ok(semantic.modules.src);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic summaries prefer file documentation", async () => {
+  const root = tempRepo();
+  try {
+    writeFileSync(
+      join(root, "src", "a.ts"),
+      "/** Authentication broker service. */\nexport function alpha() { return 1; }\n",
+      "utf8",
+    );
+    const built = await buildRepoMap(root, { refresh: true });
+    const index = buildModuleIndex(built.map);
+    assert.match(index.modules.src.summary, /Authentication broker service/);
+    assert.ok(index.modules.src.keywords?.includes("authentication"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("module index and graph include deterministic import edges", async () => {
+  const root = tempRepo();
+  try {
+    writeFileSync(join(root, "src", "a.ts"), 'import { beta } from "../lib/b.js";\nexport function alpha() { return beta(); }\n', "utf8");
+    const built = await buildRepoMap(root, { refresh: true });
+    const index = buildModuleIndex(built.map);
+    assert.ok(index.modules.src.deps?.includes("lib"));
+    const graph = renderModuleGraph(built.map, index, "alpha");
+    assert.match(graph, /src .*→.*lib/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the deterministic semantic map persists for the TUI and search", async () => {
+  const root = tempRepo();
+  try {
+    const built = await buildRepoMap(root, { refresh: true });
+    const index = buildModuleIndex(built.map);
+    saveSemanticMap(root, index);
+    const loaded = loadSemantic(root);
+    assert.ok(loaded);
+    assert.equal(loaded.model, "deterministic");
+    assert.ok(isSemanticFresh(loaded, built.map, []));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("semantic dirty tracking and freshness", async () => {
   const root = tempRepo();

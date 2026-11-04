@@ -47,6 +47,23 @@ test("command describe reports a tool the role does not have", async () => {
   assert.match(text, /read, search/);
 });
 
+test("search graph renders module import edges", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-graph-"));
+  try {
+    mkdirSync(join(root, "src", "a"), { recursive: true });
+    mkdirSync(join(root, "src", "b"), { recursive: true });
+    writeFileSync(join(root, "src", "a", "index.ts"), 'import { b } from "../b/index.js";\nexport const a = b;\n', "utf8");
+    writeFileSync(join(root, "src", "b", "index.ts"), "export const b = 1;\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "graph", pattern: "a" });
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /<module-graph>/);
+    assert.match(text, /src\/a .*→.*src\/b/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("semantic search returns module summaries and key files", async () => {
   const semantic = {
     schema: 1,

@@ -414,19 +414,42 @@ cached under `.machine_code/local/cache/map.json`; `--status` shows map, semanti
 and LSP health; `--semantic` adds module annotations; `--refresh` rebuilds the
 deterministic cache.
 
+The index has three layers:
+
+- **Deterministic map** — file inventory, line counts, top-level symbols,
+  large-file section headings, and resolved TS/JS import edges. Always
+  available; no model call.
+- **Semantic index** — module summaries, key files, search keywords, and
+  dependency edges. Deterministic by default; LLM annotations are an optional
+  overlay. It is persisted as `semantic.json` and powers the TUI `SEM` token.
+- **LSP** — exact symbol definitions, references, hover, diagnostics, and
+  rename for the current language server. On demand; never required for the
+  deterministic or semantic layers.
+
+Deterministic symbol and documentation extraction covers TypeScript/JavaScript,
+Python, Rust, Go, Shell, Java, C#, Kotlin, Swift, Ruby, PHP, Lua, C/C++, Dart,
+Elixir, and Scala. Import edges resolve for TypeScript/JavaScript, Python, and
+Rust; LSP provides exact references for other languages. Module summaries prefer
+file headers and doc comments, so a documented codebase gets a conceptual
+semantic overview without an LLM call.
+
 Semantic annotations are module-level summaries with key files, edit hints, and
 search keywords. Files over 400 lines also get a file-level entry whose
 keywords include their comment section headings, so a monolithic file such as
 `src/tui.ts` is searchable by section. Every run builds a deterministic module
 index immediately from the repo map, so the semantic index is always fresh and
-costs no model call. LLM annotations are optional: they refresh only when
-`map.semantic_model` is pinned or `map.refresh = "always"`; otherwise the
-deterministic index is used. Generate them on demand with
+costs no model call. The deterministic index is persisted to
+`semantic.json` when no fresh annotation overlay exists, so the TUI `SEM` token
+and `search semantic` see it without an LLM call. Module entries also carry
+deterministic `deps` from TS/JS imports. LLM annotations are optional: they
+refresh only when `map.semantic_model` is pinned or `map.refresh = "always"`;
+otherwise the deterministic index is used. Generate them on demand with
 `machine_code map --semantic --refresh`. The startup semantic map is
 module-level and capped at 3 KiB; file entries appear in `search` results.
 `search { mode: "semantic" }` ranks modules and large files by keyword overlap
-and returns their key files, so an agent can go from a concept or filename to
-the right file in one call.
+and returns their key files and dependency edges, so an agent can go from a
+concept or filename to the right file in one call. `search { mode: "graph" }`
+renders the deterministic module import graph, optionally ranked by a query.
 
 Each run keeps its working memory outside the transcript:
 
@@ -517,6 +540,8 @@ Tool modes:
 - `search { mode: "sections", path: "src/tui.ts" }` lists comment headings
   inside one file. Use it for large files whose useful blocks live inside one
   giant function.
+- `search { mode: "graph", pattern: "context" }` renders the module import
+  graph, with semantic summaries and query-ranked modules.
 - `search { mode: "symbols", path: "src/loop.ts", pattern: "RunRecorder" }`
   uses LSP document symbols when a path is given, workspace symbols otherwise,
   then falls back to the repo map.

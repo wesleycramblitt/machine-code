@@ -61,7 +61,7 @@ import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPr
 import { skillMetas } from "./context/references.js";
 import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
-import { loadSemantic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
+import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
 
@@ -447,7 +447,7 @@ function statusColor(status: string): string {
 /** Compact codebase-index health tokens for bottom footers. */
 function mapStatusTokens(root: string): string[] {
   const mapCached = existsSync(join(root, ".machine_code", "local", "cache", "map.json"));
-  const semantic = loadSemantic(root);
+  const semantic = loadSemanticOrDeterministic(root);
   const semanticDirty = readSemanticDirty(root);
   const lspReady = serverAvailable("typescript");
   return [
@@ -1989,7 +1989,7 @@ export async function runTui(): Promise<void> {
       const mapEnabled = preview.machine?.map.enabled !== false;
       const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
       const cachedMap = readCachedMap(newRunRepo);
-      const semantic = loadSemantic(newRunRepo);
+      const semantic = loadSemanticOrDeterministic(newRunRepo);
       const semanticDirty = readSemanticDirty(newRunRepo);
       const mapChars = mapEnabled ? (cachedMap ? renderMapIndex(cachedMap).length : 1024) : 0;
       const semanticChars = semanticEnabled ? (semantic ? renderSemanticIndex(semantic).length : 1024) : 0;
@@ -2742,7 +2742,7 @@ export async function runTui(): Promise<void> {
           }
           lines.push("", ` ${B}${G}Progress${R}`);
           const mapRoot = s.worktree ?? s.repoRoot;
-          const semantic = loadSemantic(mapRoot);
+          const semantic = loadSemanticOrDeterministic(mapRoot);
           const semanticDirty = readSemanticDirty(mapRoot);
           const mapCached = existsSync(join(mapRoot, ".machine_code", "local", "cache", "map.json"));
           const mapTone = mapCached ? G : Y;

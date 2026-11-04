@@ -16,7 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, posix } from "node:path";
 import { runProc, type ProcOptions, type ProcResult } from "../proc.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
 import {
@@ -28,7 +28,7 @@ import {
 import { sectionHeadings, sectionTitle } from "./sections.js";
 
 export const MAP_SCHEMA = 1 as const;
-export const MAP_VERSION = 2 as const;
+export const MAP_VERSION = 3 as const;
 export const MAP_CAP_BYTES = 32 * 1024;
 /** Files larger than this are listed but not scanned for symbols. */
 const SYMBOL_SCAN_BYTES = 1024 * 1024;
@@ -39,6 +39,8 @@ export interface MapSymbol {
   line: number;
   /** Last line of the symbol's block, trimmed of trailing blank lines. */
   end: number;
+  /** Documentation comment or docstring immediately above/inside the symbol. */
+  doc?: string;
 }
 
 export interface MapFile {
@@ -47,6 +49,10 @@ export interface MapFile {
   bytes: number;
   lines: number;
   symbols: MapSymbol[];
+  /** Repo-relative files this file imports, when resolvable. */
+  imports?: string[];
+  /** File-level documentation comment or module docstring, capped. */
+  doc?: string;
   /** Comment banners in large files; used by the semantic file index. */
   sections?: string[];
 }
@@ -190,15 +196,173 @@ function language(path: string): string {
       return "yaml";
     case ".md":
       return "md";
+    case ".java":
+      return "java";
+    case ".cs":
+      return "cs";
+    case ".kt":
+    case ".kts":
+      return "kt";
+    case ".swift":
+      return "swift";
+    case ".rb":
+      return "rb";
+    case ".php":
+      return "php";
+    case ".lua":
+      return "lua";
+    case ".c":
+    case ".h":
+      return "c";
+    case ".cc":
+    case ".cpp":
+    case ".cxx":
+    case ".hh":
+    case ".hpp":
+      return "cpp";
+    case ".dart":
+      return "dart";
+    case ".ex":
+    case ".exs":
+      return "ex";
+    case ".scala":
+      return "scala";
     default:
       return "other";
   }
 }
 
 function addSymbol(out: MapSymbol[], name: string | undefined, kind: string, line: number): void {
-  if (!name || !/^[A-Za-z_$][\w$]*$/.test(name)) return;
+  if (!name || !/^[A-Za-z_$][\w$!?=]*$/.test(name)) return;
   if (out.some((symbol) => symbol.name === name && symbol.line === line)) return;
   out.push({ name, kind, line, end: line });
+}
+
+const DOC_CAP = 800;
+const SYMBOL_DOC_CAP = 400;
+
+function cleanDoc(text: string, cap: number): string {
+  const cleaned = text
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s*\/\*\*?/, "")
+        .replace(/\*\/\s*$/, "")
+        .replace(/^\s*\*+\s?/, "")
+        .replace(/^\s*\/\/[/!]?\s?/, "")
+        .replace(/^\s*#\s?/, "")
+        .replace(/^\s*--\s?/, "")
+        .trimEnd(),
+    )
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (/^[-=*_]{3,}$/.test(trimmed)) return false;
+      return !/^@(?:param|returns?|throws?|see|deprecated|example|type|template)\b/i.test(trimmed);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return cleaned.length <= cap ? cleaned : `${cleaned.slice(0, Math.max(0, cap - 1)).trimEnd()}…`;
+}
+
+function cleanDocstring(text: string, cap: number): string {
+  let body = text.trim();
+  const quote = body.startsWith('"""') ? '"""' : body.startsWith("'''") ? "'''" : "";
+  if (quote) {
+    body = body.slice(3);
+    const end = body.lastIndexOf(quote);
+    if (end >= 0) body = body.slice(0, end);
+  }
+  return cleanDoc(body, cap);
+}
+
+function commentPrefixes(lang: string): string[] {
+  if (lang === "py" || lang === "sh" || lang === "rb" || lang === "ex") return ["#"];
+  if (lang === "lua") return ["--"];
+  if (lang === "php") return ["//", "#"];
+  return ["//"];
+}
+
+function docAbove(lines: readonly string[], lineIndex: number, lang: string, cap: number): string | undefined {
+  let index = lineIndex - 1;
+  while (index >= 0 && (lines[index] ?? "").trim() === "") index -= 1;
+  if (index < 0) return undefined;
+  const trimmed = (lines[index] ?? "").trim();
+  if (trimmed.endsWith("*/")) {
+    let start = index;
+    while (start >= 0 && !(lines[start] ?? "").includes("/*")) start -= 1;
+    if (start >= 0) return cleanDoc(lines.slice(start, index + 1).join("\n"), cap);
+  }
+  const prefixes = commentPrefixes(lang);
+  if (!prefixes.some((prefix) => trimmed.startsWith(prefix))) return undefined;
+  const collected: string[] = [];
+  while (index >= 0) {
+    const current = (lines[index] ?? "").trim();
+    if (!prefixes.some((prefix) => current.startsWith(prefix))) break;
+    collected.unshift(current);
+    index -= 1;
+  }
+  return cleanDoc(collected.join("\n"), cap) || undefined;
+}
+
+function docstringAfter(lines: readonly string[], lineIndex: number, cap: number): string | undefined {
+  for (let index = lineIndex; index < Math.min(lines.length, lineIndex + 5); index += 1) {
+    const line = lines[index] ?? "";
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const quote = trimmed.startsWith('"""') ? '"""' : trimmed.startsWith("'''") ? "'''" : "";
+    if (!quote) return undefined;
+    const collected = [trimmed];
+    if (trimmed.indexOf(quote, 3) < 0) {
+      for (let next = index + 1; next < Math.min(lines.length, index + 80); next += 1) {
+        collected.push(lines[next] ?? "");
+        if ((lines[next] ?? "").includes(quote)) break;
+      }
+    }
+    return cleanDocstring(collected.join("\n"), cap) || undefined;
+  }
+  return undefined;
+}
+
+function symbolDoc(lines: readonly string[], lineIndex: number, lang: string): string | undefined {
+  if (lang === "py") {
+    return docstringAfter(lines, lineIndex + 1, SYMBOL_DOC_CAP) ?? docAbove(lines, lineIndex, lang, SYMBOL_DOC_CAP);
+  }
+  return docAbove(lines, lineIndex, lang, SYMBOL_DOC_CAP);
+}
+
+function fileDoc(lines: readonly string[], lang: string): string | undefined {
+  if (lang === "py") {
+    for (let index = 0; index < Math.min(lines.length, 40); index += 1) {
+      const trimmed = (lines[index] ?? "").trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (trimmed.startsWith('"""') || trimmed.startsWith("'''")) {
+        return docstringAfter(lines, index, DOC_CAP);
+      }
+      break;
+    }
+  }
+  const prefixes = commentPrefixes(lang);
+  let index = 0;
+  while (index < lines.length && !(lines[index] ?? "").trim()) index += 1;
+  if (index >= lines.length) return undefined;
+  const first = (lines[index] ?? "").trim();
+  if (first.startsWith("#!")) return undefined;
+  if (first.startsWith("/*")) {
+    let end = index;
+    while (end < lines.length && !(lines[end] ?? "").includes("*/")) end += 1;
+    if (end < lines.length) return cleanDoc(lines.slice(index, end + 1).join("\n"), DOC_CAP) || undefined;
+  }
+  if (!prefixes.some((prefix) => first.startsWith(prefix))) return undefined;
+  const collected: string[] = [];
+  while (index < lines.length) {
+    const current = (lines[index] ?? "").trim();
+    if (!prefixes.some((prefix) => current.startsWith(prefix))) break;
+    collected.push(current);
+    index += 1;
+  }
+  return cleanDoc(collected.join("\n"), DOC_CAP) || undefined;
 }
 
 /** Regex baseline. It is deliberately top-level only and machine-stable. */
@@ -244,6 +408,61 @@ export function extractSymbols(path: string, text: string): MapSymbol[] {
     } else if (lang === "sh") {
       const match = /^(?:function\s+)?([A-Za-z_]\w*)\s*\(\)/.exec(line);
       if (match) addSymbol(out, match[1], "shell", lineNo);
+    } else if (lang === "java" || lang === "cs") {
+      let match = /^\s*(?:(?:public|private|protected|static|final|abstract|sealed|non-sealed|synchronized|native|transient|volatile|partial|internal|readonly|virtual|override|async)\s+)*(?:class|interface|enum|record|struct)\s+([A-Za-z_]\w*)/.exec(line);
+      if (match) {
+        addSymbol(out, match[1], "type", lineNo);
+        continue;
+      }
+      match = /^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native|internal|override|virtual|async|partial)\s+)+[\w<>\[\],.?]+\s+([A-Za-z_]\w*)\s*\(/.exec(line);
+      if (match) addSymbol(out, match[1], "method", lineNo);
+    } else if (lang === "kt") {
+      const match = /^\s*(?:(?:public|private|internal|protected|open|final|abstract|sealed|data|inline|suspend|override|operator|infix|tailrec|external|actual|expect|const)\s+)*(fun|class|interface|object|typealias)\s+([A-Za-z_]\w*)/.exec(line);
+      if (match) addSymbol(out, match[2], match[1] === "fun" ? "fun" : "type", lineNo);
+    } else if (lang === "swift") {
+      const match = /^\s*(?:(?:public|private|internal|fileprivate|open|static|final|override|mutating|nonmutating|async|throws)\s+)*(func|class|struct|enum|protocol|extension)\s+([A-Za-z_]\w*)/.exec(line);
+      if (match) addSymbol(out, match[2], match[1] === "func" ? "func" : "type", lineNo);
+    } else if (lang === "rb") {
+      let match = /^\s*def\s+(?:self\.)?([A-Za-z_]\w*[!?=]?)/.exec(line);
+      if (match) {
+        addSymbol(out, match[1], "def", lineNo);
+        continue;
+      }
+      match = /^\s*(?:class|module)\s+([A-Z]\w*)/.exec(line);
+      if (match) addSymbol(out, match[1], "class", lineNo);
+    } else if (lang === "php") {
+      const match = /^\s*(?:(?:public|private|protected|static|final|abstract)\s+)*(function|class|interface|trait|enum)\s+([A-Za-z_]\w*)/.exec(line);
+      if (match) addSymbol(out, match[2], match[1] === "function" ? "function" : "type", lineNo);
+    } else if (lang === "lua") {
+      const match = /^\s*(?:local\s+)?function\s+([A-Za-z_]\w*(?:[.:]\w+)?)/.exec(line);
+      if (match) addSymbol(out, match[1]!.split(/[.:]/).pop(), "function", lineNo);
+    } else if (lang === "c" || lang === "cpp") {
+      let match = /^\s*(?:template\s*<[^>]*>\s*)?(?:class|struct|enum|namespace|union)\s+([A-Za-z_]\w*)/.exec(line);
+      if (match) {
+        addSymbol(out, match[1], "type", lineNo);
+        continue;
+      }
+      match = /^\s*(?!if\b|for\b|while\b|switch\b|return\b|catch\b)(?:[\w:*&<>]+\s+)+([A-Za-z_]\w*)\s*\([^;]*\)\s*(?:const\s*)?\{/.exec(line);
+      if (match) addSymbol(out, match[1], "function", lineNo);
+    } else if (lang === "dart") {
+      let match = /^\s*(?:(?:abstract|base|final|interface|sealed|mixin)\s+)*(?:class|mixin|enum|extension|typedef)\s+([A-Za-z_]\w*)/.exec(line);
+      if (match) {
+        addSymbol(out, match[1], "type", lineNo);
+        continue;
+      }
+      match = /^\s*(?:Future|Stream|void|int|String|bool|double|dynamic|[\w<>?]+)\s+([A-Za-z_]\w*)\s*\(/.exec(line);
+      if (match) addSymbol(out, match[1], "function", lineNo);
+    } else if (lang === "ex") {
+      let match = /^\s*def(?:p)?\s+([A-Za-z_]\w*[!?]?)/.exec(line);
+      if (match) {
+        addSymbol(out, match[1], "def", lineNo);
+        continue;
+      }
+      match = /^\s*defmodule\s+([A-Z][\w.]*)/.exec(line);
+      if (match) addSymbol(out, match[1]!.split(".").pop(), "module", lineNo);
+    } else if (lang === "scala") {
+      const match = /^\s*(?:case\s+)?(def|class|object|trait)\s+([A-Za-z_]\w*)/.exec(line);
+      if (match) addSymbol(out, match[2], match[1] === "def" ? "def" : "type", lineNo);
     }
   }
   out.sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
@@ -253,7 +472,125 @@ export function extractSymbols(path: string, text: string): MapSymbol[] {
     while (end > out[i]!.line && (lines[end - 1] ?? "").trim() === "") end -= 1;
     out[i]!.end = end;
   }
+  for (const symbol of out) {
+    const doc = symbolDoc(lines, symbol.line - 1, lang);
+    if (doc) symbol.doc = doc;
+  }
   return out;
+}
+
+const RESOLVE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".json"];
+
+function resolveImport(
+  fromPath: string,
+  specifier: string,
+  known: ReadonlySet<string>,
+  lang: string,
+): string | null {
+  const candidates: string[] = [];
+  const add = (path: string): void => {
+    const normalized = posix.normalize(path);
+    if (normalized === ".." || normalized.startsWith("../")) return;
+    if (known.has(normalized) && !candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  if (lang === "ts" || lang === "js") {
+    if (!specifier.startsWith(".")) return null;
+    const base = posix.normalize(posix.join(posix.dirname(fromPath), specifier));
+    add(base);
+    const withoutJs = base.replace(/\.(?:js|jsx|mjs|cjs)$/i, "");
+    for (const ext of RESOLVE_EXTENSIONS) add(`${withoutJs}${ext}`);
+    for (const ext of RESOLVE_EXTENSIONS) add(`${base}${ext}`);
+    for (const ext of RESOLVE_EXTENSIONS) add(posix.join(base, `index${ext}`));
+    return candidates[0] ?? null;
+  }
+
+  if (lang === "py") {
+    if (specifier.startsWith(".")) {
+      const dots = /^\.+/.exec(specifier)?.[0].length ?? 1;
+      const module = specifier.slice(dots).replaceAll(".", "/");
+      let dir = posix.dirname(fromPath);
+      for (let index = 1; index < dots; index += 1) dir = posix.dirname(dir);
+      const base = posix.normalize(posix.join(dir, module));
+      add(`${base}.py`);
+      add(posix.join(base, "__init__.py"));
+    } else {
+      const base = specifier.replaceAll(".", "/");
+      add(`${base}.py`);
+      add(posix.join(base, "__init__.py"));
+      add(posix.join("src", `${base}.py`));
+      add(posix.join("src", base, "__init__.py"));
+    }
+    return candidates[0] ?? null;
+  }
+
+  if (lang === "rs") {
+    const current = posix.dirname(fromPath);
+    if (specifier.startsWith("mod:")) {
+      const name = specifier.slice(4);
+      add(posix.join(current, `${name}.rs`));
+      add(posix.join(current, name, "mod.rs"));
+      return candidates[0] ?? null;
+    }
+    if (specifier.startsWith("self:")) {
+      const name = specifier.slice(5).replaceAll("::", "/");
+      add(posix.join(current, `${name}.rs`));
+      add(posix.join(current, name, "mod.rs"));
+      return candidates[0] ?? null;
+    }
+    if (specifier.startsWith("super:")) {
+      const name = specifier.slice(6).replaceAll("::", "/");
+      const base = posix.join(posix.dirname(current), name);
+      add(`${base}.rs`);
+      add(posix.join(base, "mod.rs"));
+      return candidates[0] ?? null;
+    }
+    if (specifier.startsWith("crate:")) {
+      const name = specifier.slice(6).replaceAll("::", "/");
+      const base = posix.join("src", name);
+      add(`${base}.rs`);
+      add(posix.join(base, "mod.rs"));
+      add(posix.join("src", `${name.split("/")[0]}.rs`));
+      return candidates[0] ?? null;
+    }
+  }
+  return null;
+}
+
+/** Resolve local imports to repo files for the module graph. */
+export function extractImports(path: string, text: string, known: ReadonlySet<string>): string[] {
+  const lang = language(path);
+  const specifiers = new Set<string>();
+  if (lang === "ts" || lang === "js") {
+    for (const match of text.matchAll(/\b(?:from\s*|require\s*\(\s*|import\s*\(\s*)["']([^"']+)["']/g)) {
+      if (match[1]) specifiers.add(match[1]);
+    }
+    for (const match of text.matchAll(/\bimport\s+["']([^"']+)["']/g)) {
+      if (match[1]) specifiers.add(match[1]);
+    }
+  } else if (lang === "py") {
+    for (const match of text.matchAll(/^\s*from\s+(\.[\w.]*)\s+import\b/gm)) {
+      if (match[1]) specifiers.add(match[1]);
+    }
+    for (const match of text.matchAll(/^\s*import\s+([\w.]+)(?:\s+as\s+\w+)?/gm)) {
+      if (match[1]) specifiers.add(match[1]);
+    }
+  } else if (lang === "rs") {
+    for (const match of text.matchAll(/^\s*use\s+(crate|self|super)::([\w:]+)/gm)) {
+      if (match[1] && match[2]) specifiers.add(`${match[1]}:${match[2]}`);
+    }
+    for (const match of text.matchAll(/^\s*mod\s+(\w+)\s*;/gm)) {
+      if (match[1]) specifiers.add(`mod:${match[1]}`);
+    }
+  } else {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const specifier of specifiers) {
+    const resolved = resolveImport(path, specifier, known, lang);
+    if (resolved) out.add(resolved);
+  }
+  return [...out].sort();
 }
 
 function isBinary(text: string): boolean {
@@ -329,11 +666,15 @@ export async function buildRepoMap(root: string, options: BuildMapOptions = {}):
     if (cached && cached.sourceKey === sourceKey) return { map: cached.map, cachePath, cached: true };
   }
 
+  const known = new Set(stats.map((stat) => stat.path));
   const files: MapFile[] = stats.map((stat) => {
     const text = readCapped(join(root, stat.path));
     const binary = text !== null && isBinary(text);
     const symbols = text && !binary ? extractSymbols(stat.path, text) : [];
-    const lines = text ? text.split("\n").length : 0;
+    const imports = text && !binary ? extractImports(stat.path, text, known) : [];
+    const lineList = text ? text.split("\n") : [];
+    const lines = lineList.length;
+    const doc = text && !binary ? fileDoc(lineList, language(stat.path)) : undefined;
     const sections = text && !binary ? sectionsFor(text, lines, stat.bytes) : undefined;
     return {
       path: stat.path,
@@ -341,6 +682,8 @@ export async function buildRepoMap(root: string, options: BuildMapOptions = {}):
       bytes: stat.bytes,
       lines,
       symbols,
+      ...(imports.length > 0 ? { imports } : {}),
+      ...(doc ? { doc } : {}),
       ...(sections ? { sections } : {}),
     };
   });

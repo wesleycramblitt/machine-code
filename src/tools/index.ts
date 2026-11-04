@@ -41,7 +41,7 @@ import { issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { prTool, type PrToolContext } from "./pr.js";
 import { contextTool } from "./context.js";
-import { loadSemantic, searchSemantic, type SemanticMap } from "../map/semantic.js";
+import { loadSemanticOrDeterministic, renderModuleGraph, searchSemantic, type SemanticMap } from "../map/semantic.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
 import type { RunStateStore } from "../context/state.js";
 
@@ -243,7 +243,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
 
 const SEARCH_MODES: readonly string[] = [
   "map", "files", "outline", "sections", "text", "structure", "json", "yaml",
-  "definition", "references", "symbols", "info", "semantic",
+  "definition", "references", "symbols", "info", "semantic", "graph",
 ];
 
 const SearchParams = Type.Object({
@@ -263,11 +263,12 @@ const SearchParams = Type.Object({
         Type.Literal("symbols"),
         Type.Literal("info"),
         Type.Literal("semantic"),
+        Type.Literal("graph"),
       ],
       { description: "Search mode (default text)." },
     ),
   ),
-  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic, symbol filter for LSP modes. outline/sections use path." })),
+  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic/graph, symbol filter for LSP modes. outline/sections use path." })),
   path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
   paths: Type.Optional(
     Type.Array(Type.String(), {
@@ -311,8 +312,9 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
       "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing, globs support {a,b}), outline (one file's symbols; path or pattern), " +
       "sections (comment headings inside one file, e.g. `/* ---- run keys ---- */`; path required), text (regex), " +
       "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), semantic (rank modules/key files by concept or filename), " +
+      "graph (module import overview; optional pattern query), " +
       "symbols (LSP document/workspace symbols when a server is available, else repo map), and LSP definition/references/info (needs path+line+column). " +
-      "text accepts paths to search a specific file list. Examples: {\"mode\":\"sections\",\"path\":\"src/tui.ts\"}; {\"mode\":\"outline\",\"path\":\"src/tui.ts\"}. " +
+      "text accepts paths to search a specific file list. Examples: {\"mode\":\"sections\",\"path\":\"src/tui.ts\"}; {\"mode\":\"outline\",\"path\":\"src/tui.ts\"}; {\"mode\":\"graph\",\"pattern\":\"context\"}. " +
       "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
     parameters: SearchParams,
     async execute(_id, params: Static<typeof SearchParams>) {
@@ -419,7 +421,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
           case "semantic": {
             if (!params.pattern) return fail("semantic mode requires a query");
-            const semantic = ctx.semantic?.() ?? loadSemantic(ctx.root);
+            const semantic = ctx.semantic?.() ?? loadSemanticOrDeterministic(ctx.root);
             if (!semantic) {
               return fail(
                 "semantic map is not available; use map, outline, or text search, or refresh with machine_code map --semantic",
@@ -435,12 +437,22 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                   const files = match.entry.keyFiles?.length
                     ? `\n  files: ${match.entry.keyFiles.join(", ")}`
                     : "";
+                  const deps = match.entry.deps?.length
+                    ? `\n  deps: ${match.entry.deps.join(", ")}`
+                    : "";
                   const hints = match.entry.editHints?.length
                     ? `\n  hints: ${match.entry.editHints.join("; ")}`
                     : "";
-                  return `${match.module} (score ${match.score})\n  ${match.entry.summary}${files}${hints}`;
+                  return `${match.module} (score ${match.score})\n  ${match.entry.summary}${files}${deps}${hints}`;
                 })
                 .join("\n\n"),
+            );
+          }
+          case "graph": {
+            const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+            const semantic = ctx.semantic?.() ?? loadSemanticOrDeterministic(ctx.root);
+            return ok(
+              renderModuleGraph(built.map, semantic, params.pattern ?? params.path ?? "", 16 * 1024),
             );
           }
           case "sections": {

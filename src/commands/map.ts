@@ -5,7 +5,7 @@
  * status first and appends map/LSP health so the model can see what is fresh.
  */
 import { buildRepoMap, mapBytes, renderRepoMap, symbolCount } from "../map/deterministic.js";
-import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex } from "../map/semantic.js";
+import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap } from "../map/semantic.js";
 import { formatLspStatus, lspStatusForPaths } from "../lsp/index.js";
 import { runProc } from "../proc.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
@@ -30,6 +30,13 @@ export async function runMapCommand(
     const semanticDirty = readSemanticDirty(root);
     const semanticFresh = isSemanticFresh(semantic, built.map, semanticDirty);
     const deterministic = buildModuleIndex(built.map);
+    if (!semanticFresh) {
+      try {
+        saveSemanticMap(root, deterministic);
+      } catch {
+        // A cache write failure must not break the map command.
+      }
+    }
     const merged = mergeModuleIndex(deterministic, semanticFresh ? semantic : null);
     if (action === "status") {
       return {
@@ -41,7 +48,7 @@ export async function runMapCommand(
           `bytes: ${mapBytes(built.map)}`,
           `cache: ${built.cachePath}`,
           `cache: ${built.cached ? "fresh" : "rebuilt"}`,
-          `semantic: ${semanticFresh ? "annotated" : semantic ? "deterministic (stale annotations)" : "deterministic"} · ` +
+          `semantic: ${semanticFresh && semantic?.model !== "deterministic" ? "annotated" : "deterministic"} · ` +
             `${Object.keys(merged.modules).length} modules` +
             `${semanticDirty.length ? ` · ${semanticDirty.length} dirty` : ""}`,
           formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path))),
@@ -89,9 +96,10 @@ export async function runStatusCommand(root: string, processes?: ProcessSupervis
     const semantic = loadSemantic(root);
     const dirty = readSemanticDirty(root);
     const semanticFresh = isSemanticFresh(semantic, built.map, dirty);
+    const semanticMode = semanticFresh && semantic?.model !== "deterministic" ? "annotated" : "deterministic";
     const merged = mergeModuleIndex(buildModuleIndex(built.map), semanticFresh ? semantic : null);
     const semanticLine =
-      `semantic ${semanticFresh ? "annotated" : "deterministic"} · ` +
+      `semantic ${semanticMode} · ` +
       `${Object.keys(merged.modules).length} modules` +
       `${dirty.length ? ` · ${dirty.length} dirty` : ""}`;
     const lspLine = formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path)));
