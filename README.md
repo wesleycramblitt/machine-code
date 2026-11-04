@@ -437,9 +437,10 @@ Each run keeps its working memory outside the transcript:
 The model sees the run state plus the last step, not the full tool history. The
 state block includes merged Read coverage per file, so the model can see what
 it already knows. A next action older than six turns expires and is shown as
-unset. Re-reading the same 100-line band returns a nudge instead of the same
-bytes. The `context` tool records decisions, focuses ranges, recalls artifacts,
-and resolves facts. A prompt that exceeds the run envelope or 90% of the selected model's
+unset. A back-to-back re-read of the same 100-line band returns a nudge with the
+artifact id instead of the same bytes; a later re-read after other work is
+allowed. The `context` tool records decisions, focuses ranges, recalls
+artifacts, and resolves facts. A prompt that exceeds the run envelope or 90% of the selected model's
 window blocks and writes a split report instead of truncating.
 
 `machine_code prompts [role]` prints the rendered agent prompt with its size.

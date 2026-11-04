@@ -710,8 +710,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     let researchCalls = 0;
     let planBlocked = 0;
     let planBlockedTurn = -1;
-    const callCounts = new Map<string, { count: number; preview: string }>();
-    const readBuckets = new Map<string, number>();
+    /** Consecutive identical calls; a different call resets the streak. */
+    let lastCallKey = "";
+    let lastCallCount = 0;
+    let lastCallPreview = "";
+    /** Consecutive reads of the same range; another tool resets the streak. */
+    let lastReadUnit = "";
+    let lastReadCount = 0;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -958,30 +963,40 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             );
           }
 
-          // A re-read of the same 100-line band is not new evidence. Return a
-          // nudge, not a terminal block: the model can read a new range or edit.
+          // A re-read of the same 100-line band is not new evidence when it
+          // happens back to back. A later read after other work is allowed:
+          // the context keeps only the last step, so the model may need the
+          // bytes again.
           const readUnit = tool.name === "read" ? readBucket(params as Record<string, unknown>) : "";
-          if (readUnit) {
-            const priorRead = readBuckets.get(readUnit) ?? 0;
-            if (priorRead >= READ_REPEAT_LIMIT) {
-              return block(
-                `Already read ${readUnit} (${priorRead} times). ` +
-                  "Use the earlier result, the Read coverage in run state, or edit.",
-                { args: capJson(params), readUnit, repeats: priorRead },
-              );
-            }
+          if (readUnit && readUnit === lastReadUnit && lastReadCount >= READ_REPEAT_LIMIT) {
+            const artifact = (() => {
+              const facts = memory.getState().facts;
+              for (let i = facts.length - 1; i >= 0; i -= 1) {
+                const fact = facts[i]!;
+                if (fact.kind !== "finding" || fact.status !== "active" || !fact.key.startsWith("read:")) continue;
+                const ref = fact.refs[0];
+                if (ref?.path === readPath && ref.artifact) return ref.artifact;
+              }
+              return undefined;
+            })();
+            return block(
+              `Already read ${readUnit} (${lastReadCount} times in a row). ` +
+                (artifact
+                  ? `Use context {"action":"recall","id":"${artifact}"} for the same bytes, or edit.`
+                  : "Use context recall for the earlier bytes, or edit."),
+              { args: capJson(params), readUnit, repeats: lastReadCount },
+            );
           }
           const keyParams =
             tool.name === "issue"
               ? normalizedIssueKey(params as Record<string, unknown>)
               : params;
           const key = `${tool.name}:${stableKey(keyParams)}`;
-          const prior = callCounts.get(key);
-          if (prior && prior.count >= REPEAT_LIMIT) {
+          if (key === lastCallKey && lastCallCount >= REPEAT_LIMIT) {
             return block(
-              `Repeated identical ${tool.name} call blocked (${prior.count} earlier identical call(s)). ` +
-                `${repeatHint(tool.name)}${prior.preview ? ` Previous result: ${prior.preview}` : ""}`,
-              { args: capJson(params), repeats: prior.count },
+              `Repeated identical ${tool.name} call blocked (${lastCallCount} earlier identical call(s)). ` +
+                `${repeatHint(tool.name)}${lastCallPreview ? ` Previous result: ${lastCallPreview}` : ""}`,
+              { args: capJson(params), repeats: lastCallCount },
             );
           }
           const result = await execute(id, params, signal, onUpdate);
@@ -990,16 +1005,26 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             // note survive and steer the model back into reading.
             memory.note("next", "Execute the plan: make the first edit.", [], memory.currentTurn());
           }
-          if (!result.isError && readUnit) {
-            readBuckets.set(readUnit, (readBuckets.get(readUnit) ?? 0) + 1);
+          if (tool.name !== "read") {
+            lastReadUnit = "";
+            lastReadCount = 0;
+          } else if (!result.isError && readUnit) {
+            if (readUnit === lastReadUnit) lastReadCount += 1;
+            else {
+              lastReadUnit = readUnit;
+              lastReadCount = 1;
+            }
           }
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
             const changed = (params as { path?: unknown }).path;
             if (typeof changed === "string") {
-              for (const unit of [...readBuckets.keys()]) {
-                if (unit === changed || unit.startsWith(`${changed}@`) || unit.startsWith(`${changed}#`)) {
-                  readBuckets.delete(unit);
-                }
+              if (
+                lastReadUnit === changed ||
+                lastReadUnit.startsWith(`${changed}@`) ||
+                lastReadUnit.startsWith(`${changed}#`)
+              ) {
+                lastReadUnit = "";
+                lastReadCount = 0;
               }
             }
           }
@@ -1009,7 +1034,14 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             .join("\n")
             .replace(/\s+/g, " ")
             .slice(0, 300);
-          callCounts.set(key, { count: (prior?.count ?? 0) + 1, preview });
+          if (key === lastCallKey) {
+            lastCallCount += 1;
+            lastCallPreview = preview;
+          } else {
+            lastCallKey = key;
+            lastCallCount = 1;
+            lastCallPreview = preview;
+          }
           return result;
         },
       } as AgentTool;

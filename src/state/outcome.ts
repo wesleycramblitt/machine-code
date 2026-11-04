@@ -171,7 +171,7 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
   const stopReason = input.stopReason ?? inferStopReason(status, events);
   const capEvent = events.find((event) => event.type === "turn_cap");
   const capTurns = num(capEvent?.turns);
-  const loopReason = text(events.find((event) => event.type === "loop_blocked")?.reason) || undefined;
+  const loopReason = text(events.findLast((event) => event.type === "loop_blocked")?.reason) || undefined;
   // The cap event is authoritative for a capped run. Otherwise use the
   // recorder's turn count (old records counted model calls here).
   const turns = capTurns || summary.turns;

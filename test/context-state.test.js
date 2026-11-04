@@ -333,6 +333,25 @@ test("state renders read coverage and expires a stale next action", () => {
   }
 });
 
+test("the first change replaces the plan's first-edit next action", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-plan-next", goal: "goal" });
+    store.note("decision", "Plan: 1) Edit src/a.ts. 2) Add a test.", [], 1);
+    store.note("next", "Execute the plan: make the first edit.", [], 1);
+    assert.match(store.renderBlock(), /Next: Execute the plan: make the first edit/);
+
+    store.addChangeFact("src/a.ts", { path: "src/a.ts" }, 2, "edited src/a.ts");
+    const block = store.renderBlock();
+    assert.doesNotMatch(block, /make the first edit/);
+    assert.match(block, /Next: Verify the change/);
+    assert.match(block, /Changes:/);
+    assert.match(block, /change src\/a\.ts/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("render never sends an orphan tool call", () => {
   const dir = tempDir();
   try {

@@ -73,6 +73,19 @@ test("a repeated tool call block is reported as the stop reason", () => {
   assert.match(outcome.text, /repeated identical tool calls/);
 });
 
+test("the terminal loop block decides the headline", () => {
+  const outcome = summarizeRun({
+    summary: summary({ status: "blocked", error: "repeated identical tool calls detected" }),
+    events: [
+      { type: "loop_blocked", tool: "read", reason: "plan-required", plan: true },
+      { type: "loop_blocked", tool: "read", reason: "repeat", repeats: 2 },
+    ],
+  });
+  assert.equal(outcome.stopReason, "loop");
+  assert.match(outcome.headline, /repeated identical tool calls/);
+  assert.doesNotMatch(outcome.headline, /no concrete build plan/);
+});
+
 test("a no-progress block is not reported as a repeated identical call", () => {
   const outcome = summarizeRun({
     summary: summary({ status: "blocked", error: "research continued without an edit, write, or command" }),

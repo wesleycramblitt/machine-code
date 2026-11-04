@@ -23,6 +23,8 @@ import { recordSemanticChange } from "../map/changes.js";
 
 /** Keep the model-facing state block compact; full facts remain in state.jsonl. */
 const MAX_STATE_CHARS = 10_000;
+const PLAN_NEXT = /^(?:execute the plan|make the first edit)\b/i;
+const VERIFY_NEXT = "Verify the change: run the task's tests and typecheck.";
 
 export type FactKind = "finding" | "decision" | "change" | "issue";
 export type RefKind = "read" | "search" | "edit" | "focus";
@@ -528,6 +530,13 @@ export class RunStateStore {
     return changed;
   }
 
+  /** Replace a plan's "first edit" next action once a change exists. */
+  private settleNextAfterChange(turn: number): void {
+    if (!this.state.nextAction || PLAN_NEXT.test(this.state.nextAction)) {
+      this.append({ type: "next", text: VERIFY_NEXT, turn });
+    }
+  }
+
   private addGitChangeFact(
     items: ReadonlyArray<{ path: string; code: string }>,
     turn: number,
@@ -561,6 +570,7 @@ export class RunStateStore {
         key: `change:git:${sha1(paths.join("\0"))}`,
       },
     });
+    this.settleNextAfterChange(turn);
   }
 
   addChangeFact(
@@ -594,6 +604,7 @@ export class RunStateStore {
         key: `change:${path}`,
       },
     });
+    this.settleNextAfterChange(turn);
   }
 
   /** Ingest the assistant message and its tool results once per completed turn. */
@@ -780,7 +791,10 @@ export class RunStateStore {
       // exists, the next action is the first edit, not more reading.
       const nextTurn = this.state.nextActionTurn;
       const nextAge = nextTurn === undefined ? 0 : this.currentTurn() - nextTurn;
-      if (planDecision && changes.length === 0) {
+      const planNext = PLAN_NEXT.test(this.state.nextAction ?? "");
+      if (changes.length > 0 && (planNext || !this.state.nextAction || nextAge > 6)) {
+        lines.push(`Next: ${VERIFY_NEXT}`);
+      } else if (planDecision && changes.length === 0) {
         lines.push("Next: Execute the plan: make the first edit.");
       } else if (this.state.nextAction && nextAge <= 6) {
         lines.push(`Next: ${this.state.nextAction}`);
