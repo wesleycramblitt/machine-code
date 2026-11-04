@@ -7,6 +7,7 @@
  * buildable: Goal/Scope for parents and Deliverable/Acceptance for Tasks.
  */
 import { parseAcceptance, type IssueKind } from "./provider.js";
+import { inferPreloadFiles } from "../context/preload.js";
 
 export const MIN_CONTEXT_CHARS = 20;
 
@@ -74,4 +75,17 @@ export function issueContextErrors(input: IssueContextInput): string[] {
     if (parseAcceptance(input.body).length === 0) errors.push("missing acceptance criteria");
   }
   return errors;
+}
+
+/**
+ * Attach an `mc:context` file list inferred from the issue body. The Planner
+ * should not have to write JSON by hand when the body already names the files
+ * or the semantic map can identify them. Existing markers are left alone.
+ */
+export function withInferredContext(body: string, repoRoot: string): string {
+  if (/<!--\s*mc:context\b/.test(body)) return body;
+  const files = inferPreloadFiles(repoRoot, body, 6);
+  if (files.length === 0) return body;
+  const marker = `<!-- mc:context\n${JSON.stringify({ files }, null, 2)}\n-->`;
+  return `${body.replace(/\s+$/, "")}\n\n${marker}\n`;
 }

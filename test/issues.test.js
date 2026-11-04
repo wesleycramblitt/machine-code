@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -25,6 +25,7 @@ import {
   isReservedTask,
 } from "../dist/issues/reserved.js";
 import { issueTool } from "../dist/tools/issues.js";
+import { parseArtifactReferences } from "../dist/context/references.js";
 import { RunStateStore } from "../dist/context/state.js";
 import { parsePlanMarker } from "../dist/plan/schema.js";
 import { RunRecorder } from "../dist/state/runs.js";
@@ -427,6 +428,30 @@ test("create rejects issue bodies without the required context shape", async () 
     });
     assert.equal(edited.isError, true);
     assert.match(edited.content[0].text, /missing ## Context/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue create infers mc:context files from the body", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-infer-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src/tui.ts"), "export const value = 1;\n");
+    const p = new FakeProvider();
+    const epic = await p.create({ title: "Epic", body: issueBody("epic"), kind: "epic" });
+    const feature = await p.create({ title: "Feature", body: issueBody("feature"), kind: "feature", parent: epic.ref });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const task = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "task",
+      parent: `#${feature.ref.number}`,
+      title: "Task",
+      body: `${issueBody("task")}\n\n## Relevant files\n\nChange \`src/tui.ts\`.\n`,
+    });
+    assert.equal(task.isError, undefined);
+    const created = [...p.issues.values()].find((issue) => issue.title === "Task");
+    assert.deepEqual(parseArtifactReferences(created.body).files, ["src/tui.ts"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

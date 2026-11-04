@@ -78,8 +78,9 @@ the remaining probe work.
   criteria, and a body under 4,000 chars. Task bodies carry `## Context`,
   `## Deliverable`, and acceptance; Epic/Feature bodies carry `## Context`,
   `## Goal`, and `## Scope` (Feature also `## Success measures`). The issue tool
-  rejects create/graph/body-edit requests that miss these sections. Oversized
-  Tasks are rejected before creation or build.
+  rejects create/graph/body-edit requests that miss these sections, and infers
+  an `mc:context` file list from body paths and the semantic map when the body
+  has no marker. Oversized Tasks are rejected before creation or build.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
 - A completed run stays completed even when a recoverable plan checkpoint fired.
 - An edit invalidates only overlapping read ranges; read coverage carries

@@ -25,7 +25,7 @@ import {
   type IssueProvider,
   type IssueRef,
 } from "../issues/provider.js";
-import { issueContextErrors } from "../issues/context.js";
+import { issueContextErrors, withInferredContext } from "../issues/context.js";
 import {
   ensureEpicReserved,
   ensureFeatureReserved,
@@ -272,7 +272,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       "Every created/edited body needs ## Context; Epic/Feature also need ## Goal and ## Scope (Feature: ## Success measures); Task needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
-      "mc:context is optional; add only exact known files and do not research it. " +
+      "mc:context files are inferred from body paths when absent; add exact known files only and do not research it. " +
       "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
       "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
     parameters: IssueParams,
@@ -383,6 +383,13 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         requireCreate();
         if (!params.graph) return fail("graph action requires graph");
         const graph = params.graph;
+        graph.epic.body = withInferredContext(graph.epic.body ?? "", ctx.layout.repoRoot);
+        for (const feature of graph.features) {
+          feature.body = withInferredContext(feature.body ?? "", ctx.layout.repoRoot);
+        }
+        for (const task of graph.tasks) {
+          task.body = withInferredContext(task.body ?? "", ctx.layout.repoRoot);
+        }
         const keys = new Set<string>();
         const addKey = (key: string): void => {
           if (!key) throw new IssueError("graph_key_missing", "every graph node needs a key");
@@ -524,7 +531,10 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         treeCache.clear();
         if (!params.kind) return fail("create requires kind (epic|feature|task)");
         if (!params.title) return fail("create requires title");
-        const body = withApproval(params.body ?? "", ctx.defaultApproval);
+        const body = withInferredContext(
+          withApproval(params.body ?? "", ctx.defaultApproval),
+          ctx.layout.repoRoot,
+        );
         const contextErrors = issueContextErrors({ kind: params.kind, body });
         if (contextErrors.length > 0) {
           return fail(
@@ -610,7 +620,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             remember(auto.issue, "plan ready");
             note =
               `\nplan ready on #${auto.issue.ref.number}. ` +
-              "mc:context is optional; add only exact known files and do not research it. " +
+              "mc:context files are inferred from body paths when absent; add exact known files only and do not research it. " +
               "Then create the next Task or stop.";
           } else if (created.acceptance.length > 0) {
             note =
@@ -632,8 +642,13 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (target.reserved && params.title !== undefined) {
           return fail("reserved issues cannot be retitled (their identity is the reserved role)");
         }
-        if (!target.reserved && params.body !== undefined) {
-          const contextErrors = issueContextErrors({ kind: target.kind, body: params.body });
+        const nextBody = params.body === undefined
+          ? undefined
+          : target.reserved
+            ? params.body
+            : withInferredContext(params.body, ctx.layout.repoRoot);
+        if (!target.reserved && nextBody !== undefined) {
+          const contextErrors = issueContextErrors({ kind: target.kind, body: nextBody });
           if (contextErrors.length > 0) {
             return fail(
               `${target.kind} body needs context: ${contextErrors.join("; ")}. ` +
@@ -641,8 +656,8 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             );
           }
         }
-        if (target.kind === "task" && params.body !== undefined) {
-          const errors = taskSizeErrors({ acceptance: parseAcceptance(params.body), body: params.body });
+        if (target.kind === "task" && nextBody !== undefined) {
+          const errors = taskSizeErrors({ acceptance: parseAcceptance(nextBody), body: nextBody });
           if (errors.length > 0) {
             return fail(`Task is too large: ${errors.join("; ")}. Split it into smaller Tasks and retry.`);
           }
@@ -650,7 +665,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         const blockedBy = await dependencies([params.blocked_by, params.depends_on], target.ref);
         const updated = await ctx.provider.update(target.ref, {
           ...(params.title !== undefined ? { title: params.title } : {}),
-          ...(params.body !== undefined ? { body: params.body } : {}),
+          ...(nextBody !== undefined ? { body: nextBody } : {}),
           ...(params.labels !== undefined ? { labels: params.labels } : {}),
           ...(blockedBy ? { blockedBy } : {}),
         });

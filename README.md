@@ -391,7 +391,10 @@ files/symbols, and constraints. Epic and Feature bodies also need `## Goal` and
 `## Scope`; Features need `## Success measures`; Tasks need `## Deliverable` and
 acceptance criteria. The `issue` tool rejects a create, graph, or body edit that
 misses these sections. This keeps context at creation time instead of requiring
-a later review. Legacy issues can be repaired with `issue action=edit`.
+a later review. When the body names files, the issue tool also infers an
+`mc:context` file list from those paths and the semantic map. That list is what
+the context cascade shows and what Build preloads. Legacy issues can be repaired
+with `issue action=edit`.
 
 `machine_code availability` shows cooling models and provider health.
 `machine_code model probe <key>` checks one model. Metadata probes use free
