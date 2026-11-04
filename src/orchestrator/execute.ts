@@ -16,7 +16,7 @@ import type { CatalogueRow } from "../catalogue/types.js";
 import type { AgentConfig } from "../agents/config.js";
 import { RunRecorder, registerProject, type RunStatus } from "../state/runs.js";
 import { createWorktree, WorktreeError } from "../worktree.js";
-import { writePacket, type PacketAcceptance, type TaskPacket } from "../packet.js";
+import { parseVerificationCommands, writePacket, type PacketAcceptance, type TaskPacket } from "../packet.js";
 import { parseArtifactReferences } from "../context/references.js";
 import { assembleContext } from "../context/assemble.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
@@ -37,13 +37,17 @@ export interface ExecuteTaskInput {
   provider: IssueProvider;
   issue: Issue;
   plan: PlanMarker;
-  orchestrationId: string;
-  orchestrationScope: OrchestrationScope;
+  orchestrationId?: string;
+  orchestrationScope?: OrchestrationScope;
   scopeRef?: IssueRef;
-  attempt: number;
+  attempt?: number;
   requireModel?: string;
   agentOverrides?: Partial<AgentConfig>;
   signal?: AbortSignal;
+  /** Run the independent Review agent after gates. Defaults to true. */
+  review?: boolean;
+  /** Worktree base override; defaults to the parent Feature branch. */
+  base?: string;
   /** Prior failed-attempt evidence passed to the next Build. */
   retryEvidence?: string;
 }
@@ -54,41 +58,54 @@ export interface ExecuteTaskResult {
   error?: string;
 }
 
+function packetAcceptance(line: string): PacketAcceptance | null {
+  const trimmed = line.trim();
+  const match = /^(\S+)(?:\s+(.*))?$/.exec(trimmed);
+  const command = match?.[1] ?? trimmed;
+  if (!/^[a-z][a-z0-9-]*:[a-z0-9-]+$/.test(command)) return null;
+  const rest = match?.[2]?.trim() ?? "";
+  if (!rest) return { command };
+  if (rest.startsWith("{")) {
+    try {
+      return { command, args: JSON.parse(rest) as Record<string, unknown> };
+    } catch {
+      // fall through to key=value parsing
+    }
+  }
+  const args: Record<string, unknown> = {};
+  const tokens = rest.split(/\s+/).filter(Boolean);
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.startsWith("--")) {
+      const key = token.slice(2);
+      const next = tokens[index + 1];
+      if (next && !next.startsWith("--")) {
+        args[key] = next;
+        index += 1;
+      } else {
+        args[key] = true;
+      }
+      continue;
+    }
+    const [key, ...value] = token.split("=");
+    if (key && value.length > 0) args[key] = value.join("=");
+  }
+  return { command, ...(Object.keys(args).length > 0 ? { args } : {}) };
+}
+
 export function packetForTask(issue: Issue, plan: PlanMarker, attempt: number): TaskPacket {
   const references = parseArtifactReferences(issue.body);
-  const acceptance: PacketAcceptance[] = issue.acceptance.map((line) => {
-    const trimmed = line.trim();
-    const match = /^(\S+)(?:\s+(.*))?$/.exec(trimmed);
-    const command = match?.[1] ?? trimmed;
-    const rest = match?.[2]?.trim() ?? "";
-    if (!rest) return { command };
-    if (rest.startsWith("{")) {
-      try {
-        return { command, args: JSON.parse(rest) as Record<string, unknown> };
-      } catch {
-        // fall through to key=value parsing
-      }
-    }
-    const args: Record<string, unknown> = {};
-    const tokens = rest.split(/\s+/).filter(Boolean);
-    for (let index = 0; index < tokens.length; index++) {
-      const token = tokens[index]!;
-      if (token.startsWith("--")) {
-        const key = token.slice(2);
-        const next = tokens[index + 1];
-        if (next && !next.startsWith("--")) {
-          args[key] = next;
-          index += 1;
-        } else {
-          args[key] = true;
-        }
-        continue;
-      }
-      const [key, ...value] = token.split("=");
-      if (key && value.length > 0) args[key] = value.join("=");
-    }
-    return { command, ...(Object.keys(args).length > 0 ? { args } : {}) };
-  });
+  const acceptance: PacketAcceptance[] = [];
+  const seen = new Set<string>();
+  const lines = [...issue.acceptance, ...parseVerificationCommands(issue.body)];
+  for (const line of lines) {
+    const parsed = packetAcceptance(line);
+    if (!parsed) continue;
+    const key = JSON.stringify(parsed);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    acceptance.push(parsed);
+  }
   return {
     id: `issue-${issue.ref.number}-${attempt}`,
     mode: plan.verification,
@@ -105,7 +122,8 @@ function snapshotHash(packet: TaskPacket, plan: PlanMarker): string {
 
 export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskResult> {
   const { layout, issue, plan } = input;
-  const packet = packetForTask(issue, plan, input.attempt);
+  const attempt = input.attempt ?? 1;
+  const packet = packetForTask(issue, plan, attempt);
   if (input.retryEvidence) {
     packet.constraints = [...packet.constraints, `Previous attempt failed:\n${input.retryEvidence.slice(0, 4_000)}`];
   }
@@ -116,18 +134,18 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
     request: packet.goal,
     repoRoot: layout.repoRoot,
     issue: issue.ref,
-    orchestrationId: input.orchestrationId,
-    orchestrationScope: input.orchestrationScope,
+    ...(input.orchestrationId ? { orchestrationId: input.orchestrationId } : {}),
+    ...(input.orchestrationScope ? { orchestrationScope: input.orchestrationScope } : {}),
     ...(input.scopeRef ? { scopeRef: input.scopeRef } : {}),
     taskIssue: issue.ref,
-    attempt: input.attempt,
+    attempt,
     phase: "build",
     planSnapshotHash: hash,
     planReview: plan.planReview,
     resultReview: plan.resultReview,
   });
   registerProject(layout.home, layout.repoRoot);
-  recorder.event("task_snapshot", { issue: issue.ref.number, hash, attempt: input.attempt });
+  recorder.event("task_snapshot", { issue: issue.ref.number, hash, attempt });
   writePacket(layout, packet, { local: true });
   recorder.event("packet_persisted", { id: packet.id, local: true });
 
@@ -144,6 +162,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
       kind: "task",
       issueNumber: issue.ref.number,
       ...(issue.parent ? { featureNumber: issue.parent.number } : {}),
+      ...(input.base ? { base: input.base } : {}),
       processes: setupProcesses,
     });
     toolRoot = spec.path;
@@ -192,16 +211,16 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
       policy: input.policy,
       packet,
       verification: plan.verification,
-      review: true,
+      review: input.review ?? true,
       request: packet.goal,
       root: layout.repoRoot,
       toolRoot,
       issueNumber: issue.ref.number,
       issue: issue.ref,
-      orchestrationId: input.orchestrationId,
-      orchestrationScope: input.orchestrationScope,
+      ...(input.orchestrationId ? { orchestrationId: input.orchestrationId } : {}),
+      ...(input.orchestrationScope ? { orchestrationScope: input.orchestrationScope } : {}),
       ...(input.scopeRef ? { scopeRef: input.scopeRef } : {}),
-      attempt: input.attempt,
+      attempt,
       planReview: plan.planReview,
       resultReview: plan.resultReview,
       home: input.home,

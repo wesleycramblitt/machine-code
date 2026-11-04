@@ -132,6 +132,64 @@ export function listCommittedPackets(layout: Layout): TaskPacket[] {
   );
 }
 
+/** Common prose verification commands mapped to the typed command registry. */
+const VERIFICATION_ALIASES: Record<string, string> = {
+  "npm run build": "typescript:build",
+  "npm run typecheck": "typescript:typecheck",
+  "npm run test": "typescript:test",
+  "npm test": "typescript:test",
+  "npm run lint": "typescript:lint",
+};
+
+/** A named command, optionally followed by inline or key=value arguments. */
+const NAMED_COMMAND = /^[a-z][a-z0-9-]*:[a-z0-9-]+(?:\s|$)/;
+
+function verificationCommand(value: string): string | null {
+  const trimmed = value.trim().replace(/^`+|`+$/g, "").trim();
+  if (!trimmed) return null;
+  const alias = VERIFICATION_ALIASES[trimmed.toLowerCase()];
+  if (alias) return alias;
+  return NAMED_COMMAND.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * Extract commands from a `## Verification` section. Planners write either a
+ * fenced block, inline code, or plain command lines. Only known command names
+ * and the small npm alias table are accepted; prose is ignored.
+ */
+export function parseVerificationCommands(body: string): string[] {
+  const lines = body.split("\n");
+  const out: string[] = [];
+  let inSection = false;
+  let inFence = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s+(.*)$/);
+    if (heading) {
+      inSection = /^verification$/i.test((heading[1] ?? "").trim());
+      inFence = false;
+      continue;
+    }
+    if (!inSection) continue;
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    const candidates = inFence
+      ? [line]
+      : [...line.matchAll(/`([^`]+)`/g)].map((match) => match[1] ?? "");
+    if (candidates.length === 0) {
+      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+      if (bullet?.[1]) candidates.push(bullet[1]);
+      else candidates.push(line);
+    }
+    for (const candidate of candidates) {
+      const command = verificationCommand(candidate);
+      if (command && !out.includes(command)) out.push(command);
+    }
+  }
+  return out;
+}
+
 export function newPacketId(request: string): string {
   const stamp = new Date()
     .toISOString()

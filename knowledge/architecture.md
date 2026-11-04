@@ -35,6 +35,9 @@ state, selection, and verification; the model owns decisions and edits.
   inventory, module index, optional LLM annotations, language servers.
 - **Orchestrator** (`src/orchestrate.ts`, `src/orchestrator/`): issue-backed
   scheduling, worktrees, gates, review, commit, PR.
+- **Task lifecycle** (`src/tasks/lifecycle.ts`): one-task status, review
+  checks, approval, closure, and worktree cleanup for both direct Build runs
+  and Orchestrator runs.
 
 ## Tool-call protocol
 
@@ -76,8 +79,9 @@ the remaining probe work.
   or fail, never complete.
 - A Task is one deliverable: one file-level change, at most three acceptance
   criteria, and a body under 4,000 chars. Task bodies carry `## Context`,
-  `## Deliverable`, and acceptance; Epic/Feature bodies carry `## Context`,
-  `## Goal`, and `## Scope` (Feature also `## Success measures`). The issue tool
+  `## Deliverable`, and acceptance; runtime gates come from named acceptance
+  commands or a `## Verification` section. Epic/Feature bodies carry
+  `## Context`, `## Goal`, and `## Scope` (Feature also `## Success measures`). The issue tool
   rejects create/graph/body-edit requests that miss these sections, and infers
   an `mc:context` file list from body paths and the semantic map when the body
   has no marker. Oversized Tasks are rejected before creation or build.

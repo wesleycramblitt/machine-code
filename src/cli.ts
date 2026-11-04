@@ -27,7 +27,7 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "./state/questi
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { isTimelineEvent } from "./tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "./state/transcript.js";
-import { packetPath, readPacket } from "./packet.js";
+import { packetPath, parseVerificationCommands, readPacket } from "./packet.js";
 import { agentDef, type AgentName } from "./agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
@@ -37,6 +37,7 @@ import { resolveGates, runGates } from "./verify.js";
 import { allCommands } from "./commands/profiles.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, reusableWorktreeOwner, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
+import { createPrProviderFor } from "./pr/factory.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved, isReserved } from "./issues/reserved.js";
 import { isGenericTaskRequest, issueRequestVerb, issueRunRequest, resolveRunTarget } from "./issues/work.js";
@@ -50,6 +51,8 @@ import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { executeTask } from "./orchestrator/execute.js";
+import { approveTask, cleanupTask, runTaskChecks, suggestedReviewChecks, taskRuns, taskStatus } from "./tasks/lifecycle.js";
+import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
 import { acquireLease, createOrchestration, listOrchestrations, readOrchestration, releaseLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
@@ -197,6 +200,16 @@ Usage:
                                     GitHub issue operations (hierarchy enforced)
   machine_code approve <issue|pr>   Approve a pending human close/merge request
   machine_code accept <issue>       Record a human acceptance verdict (needed to close)
+  machine_code task status <issue>  Show the task lifecycle and the next action
+  machine_code task start <issue>   Build, review, commit, and open the Task PR
+                                    [--review agent|human] [--no-review] [--base <ref>] [--dry-run]
+  machine_code task review <issue>  Review the PR/worktree and run verification checks
+                                    [--check <cmd>|--checks a,b] [--no-checks]
+  machine_code task approve <issue> Merge, accept, close, and clean up the Task
+                                    [--run <id>] [--no-commit] [--no-merge]
+                                    [--keep-worktree] [--keep-branch] [--force]
+  machine_code task cleanup <issue> Remove the Task worktree after closure
+                                    [--force] [--keep-branch]
   machine_code pr feature <n>       Open the Feature PR to main after tasks/gates
   machine_code pr list|status <n>   Inspect pull requests
   machine_code provider disable|enable <name>
@@ -255,6 +268,12 @@ const BOOLEAN_FLAGS = new Set([
   "no-symbols",
   "semantic",
   "state",
+  "no-review",
+  "no-commit",
+  "no-merge",
+  "no-checks",
+  "keep-worktree",
+  "keep-branch",
 ]);
 
 function parseFlags(argv: string[]): { flags: Map<string, string>; positional: string[] } {
@@ -2208,6 +2227,259 @@ async function cmdPr(argv: string[]): Promise<number> {
   fail("usage: machine_code pr feature <n> | list | status <n>");
 }
 
+/* -------------------------------------------------------------------- task */
+
+function taskRefNumber(value: string | undefined): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code task <status|start|review|approve|cleanup> <issue>");
+  return n;
+}
+
+function printTaskStatus(status: Awaited<ReturnType<typeof taskStatus>>): void {
+  const issue = status.issue;
+  process.stdout.write(`#${issue.ref.number} ${issue.title}  [${issue.kind}, ${issue.state}]\n`);
+  process.stdout.write(`Stage: ${status.stage}\n`);
+  if (status.plan) {
+    process.stdout.write(
+      `Plan: ${status.plan.status}/${status.plan.verification} · review ${status.plan.planReview}/${status.plan.resultReview}\n`,
+    );
+  } else {
+    process.stdout.write("Plan: missing\n");
+  }
+  if (status.latest) {
+    process.stdout.write(
+      `Run: ${status.latest.id} · ${status.latest.status}${status.latest.phase ? `/${status.latest.phase}` : ""} · ${status.latest.agent}\n`,
+    );
+  } else {
+    process.stdout.write("Run: none\n");
+  }
+  if (status.worktree) {
+    const files = status.changedFiles.length;
+    process.stdout.write(
+      `Worktree: ${status.worktree}${status.worktreeExists ? (status.worktreeDirty ? ` · ${files} changed file(s)` : " · clean") : " · missing"}\n`,
+    );
+  }
+  if (status.branch) process.stdout.write(`Branch: ${status.branch}${status.baseBranch ? ` → ${status.baseBranch}` : ""}\n`);
+  if (status.commit) process.stdout.write(`Commit: ${status.commit.slice(0, 12)}\n`);
+  if (status.pr) process.stdout.write(`PR: #${status.pr.number} ${status.pr.state}${status.pr.url ? ` ${status.pr.url}` : ""}\n`);
+  else process.stdout.write("PR: none\n");
+  process.stdout.write(`Acceptance: ${status.acceptance ? "recorded" : "not recorded"}\n`);
+  if (status.checks.length > 0) {
+    process.stdout.write("Checks:\n");
+    for (const check of status.checks) {
+      process.stdout.write(`  ${check.passed ? "PASS" : "FAIL"}  ${check.command}  ${check.durationMs}ms\n`);
+    }
+  }
+  if (status.next.length > 0) {
+    process.stdout.write("Next:\n");
+    for (const next of status.next) process.stdout.write(`  ${next}\n`);
+  }
+}
+
+async function taskIssue(l: ReturnType<typeof layout>, number: number): Promise<{
+  machine: ReturnType<typeof loadMachineConfig>;
+  bundle: Awaited<ReturnType<typeof createIssueProvider>>;
+  issue: Issue;
+}> {
+  const machine = loadMachineConfig(l);
+  const bundle = await createIssueProvider(l, machine);
+  if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
+  const ref = parseIssueRef(String(number), bundle.repo, "github");
+  const issue = await bundle.provider.get(ref);
+  if (!issue) fail(`issue not found: #${number}`);
+  if (issue.kind !== "task") fail(`#${number} is a ${issue.kind}; task commands require a Task`);
+  return { machine, bundle, issue };
+}
+
+async function prProviderForTask(l: ReturnType<typeof layout>) {
+  const bundle = await createPrProviderFor(l);
+  return bundle.provider.kind === "none" ? undefined : bundle.provider;
+}
+
+async function cmdTask(argv: string[]): Promise<number> {
+  const sub = argv[0];
+  if (!sub || !["status", "start", "review", "approve", "cleanup"].includes(sub)) {
+    fail("usage: machine_code task status|start|review|approve|cleanup <issue>");
+  }
+  const { flags, positional } = parseFlags(argv.slice(1));
+  const number = taskRefNumber(positional[0] ?? flags.get("issue"));
+  const l = layout();
+  const { machine, bundle, issue } = await taskIssue(l, number);
+  const prs = await prProviderForTask(l);
+
+  if (sub === "status") {
+    const status = await taskStatus(l, issue, prs ? { prs } : {});
+    if (flags.has("json")) {
+      process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+    } else {
+      printTaskStatus(status);
+    }
+    return 0;
+  }
+
+  if (sub === "start") {
+    const parsed = parsePlanMarker(issue.body);
+    if (!parsed.plan || !isReadyPlan(parsed.plan)) fail(`task #${number} does not have a ready plan`);
+    if (issue.state !== "open") fail(`task #${number} is ${issue.state}`);
+    const runs = taskRuns(l, issue.ref);
+    const active = runs.find((run) => ["created", "running", "awaiting_input", "paused", "interrupted"].includes(run.status));
+    if (active) {
+      fail(
+        `task #${number} already has an active run: ${active.id}` +
+          (active.status === "interrupted" ? `; resume it with "machine_code resume ${active.id}"` : ""),
+      );
+    }
+    const latest = runs[0];
+    if (latest && latest.status !== "failed" && latest.status !== "blocked" && latest.status !== "cancelled") {
+      fail(
+        `task #${number} already has run ${latest.id} (${latest.status}); ` +
+          `use "machine_code task status ${number}" and "machine_code task review ${number}"`,
+      );
+    }
+    if (latest?.worktree && existsSync(latest.worktree)) {
+      fail(
+        `task #${number} already has a worktree at ${latest.worktree}; ` +
+          `use "machine_code task cleanup ${number}" or finish the existing run`,
+      );
+    }
+    const reviewFlag = flags.get("review");
+    if (reviewFlag !== undefined && reviewFlag !== "agent" && reviewFlag !== "human") {
+      fail("--review must be agent or human");
+    }
+    if (flags.has("no-review") && reviewFlag === "agent") {
+      fail("--no-review conflicts with --review agent");
+    }
+    const plan: PlanMarker = {
+      ...parsed.plan,
+      ...(reviewFlag === "agent" || reviewFlag === "human" ? { resultReview: reviewFlag } : {}),
+    };
+    const checks = suggestedReviewChecks(issue);
+    if (flags.has("dry-run")) {
+      process.stdout.write(`#${number} ${issue.title}\n`);
+      process.stdout.write(`Plan: ${plan.status}/${plan.verification} · review ${plan.planReview}/${plan.resultReview}\n`);
+      process.stdout.write(`Branch: mc/task/${number}${issue.parent ? ` → mc/feature/${issue.parent.number}` : ""}\n`);
+      process.stdout.write(`Review agent: ${flags.has("no-review") ? "off" : "on"}\n`);
+      process.stdout.write(`Verification: ${checks.join(", ") || "(none; pass --check during task review)"}\n`);
+      process.stdout.write(`Human approval: ${issue.approval ?? "human"}\n`);
+      return 0;
+    }
+    const runtime = await loadRuntime(l);
+    if (checks.length === 0) {
+      process.stderr.write(
+        `warning: task #${number} has no ## Verification commands; task review needs --check <command>\n`,
+      );
+    }
+    const result = await executeTask({
+      layout: l,
+      machine: runtime.machine,
+      policy: runtime.policy,
+      models: runtime.models,
+      catalogue: runtime.catalogue.models,
+      configuredProviders: runtime.configuredProviders,
+      home: l.home,
+      provider: bundle.provider,
+      issue,
+      plan,
+      attempt: 1,
+      review: !flags.has("no-review"),
+      ...(flags.get("base") ? { base: flags.get("base") } : {}),
+      ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
+    });
+    const detail = readRun(l, result.runId);
+    if (detail?.summary.finalText) process.stdout.write(`${detail.summary.finalText}\n`);
+    if (result.status !== "completed") {
+      process.stdout.write(`task #${number} stopped: ${result.status}${result.error ? ` · ${result.error}` : ""}\n`);
+      return EXIT[result.status];
+    }
+    const status = await taskStatus(l, issue, prs ? { prs } : {});
+    printTaskStatus(status);
+    if (plan.resultReview === "agent" && (issue.approval ?? "human") === "agent" && !flags.has("no-review")) {
+      const approved = await approveTask({
+        layout: l,
+        machine: runtime.machine,
+        provider: bundle.provider,
+        issue,
+        runId: result.runId,
+        ...(prs ? { prs } : {}),
+        clean: true,
+      });
+      process.stdout.write(
+        `task #${number} agent-approved and closed${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+      );
+    } else {
+      process.stdout.write(`task #${number} is awaiting human review.\n`);
+    }
+    return 0;
+  }
+
+  if (sub === "review") {
+    const status = await taskStatus(l, issue, prs ? { prs } : {});
+    printTaskStatus(status);
+    const explicit = flags.get("checks") ?? flags.get("check");
+    const checks = flags.has("no-checks")
+      ? []
+      : explicit
+        ? explicit.split(",").map((value) => value.trim()).filter(Boolean)
+        : suggestedReviewChecks(issue);
+    if (checks.length === 0) {
+      process.stdout.write("No verification commands found. Pass --check <command> to run one.\n");
+      return 0;
+    }
+    process.stdout.write(`Running ${checks.length} review check(s) in ${status.worktree ?? "the worktree"}:\n`);
+    const results = await runTaskChecks(l, issue, checks);
+    for (const result of results) {
+      process.stdout.write(`  ${result.passed ? "PASS" : "FAIL"}  ${result.command}  ${result.durationMs}ms\n`);
+      if (!result.passed && result.output.trim()) {
+        process.stdout.write(`${result.output.trim().split("\n").slice(-12).join("\n")}\n`);
+      }
+    }
+    const failed = results.filter((result) => !result.passed);
+    process.stdout.write(
+      failed.length === 0
+        ? `All review checks passed. Approve with: machine_code task approve ${number}\n`
+        : `Review failed: ${failed.map((result) => result.command).join(", ")}\n`,
+    );
+    return failed.length === 0 ? 0 : 2;
+  }
+
+  if (sub === "approve") {
+    const approved = await approveTask({
+      layout: l,
+      machine,
+      provider: bundle.provider,
+      issue,
+      ...(flags.get("run") ? { runId: flags.get("run")! } : {}),
+      ...(prs ? { prs } : {}),
+      commit: !flags.has("no-commit"),
+      merge: !flags.has("no-merge"),
+      clean: !flags.has("keep-worktree"),
+      deleteBranch: !flags.has("keep-branch"),
+      force: flags.has("force"),
+    });
+    process.stdout.write(
+      `task #${number} closed${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
+        `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
+        `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+    );
+    return 0;
+  }
+
+  const status = await taskStatus(l, issue, prs ? { prs } : {});
+  const cleaned = await cleanupTask({
+    layout: l,
+    issue,
+    ...(status.latest ? { run: status.latest } : {}),
+    force: flags.has("force"),
+    deleteBranch: !flags.has("keep-branch"),
+  });
+  if (!cleaned.removed) {
+    process.stdout.write(`cleanup skipped: ${cleaned.reason ?? "unknown reason"}\n`);
+    return 1;
+  }
+  process.stdout.write(`removed worktree for #${number}\n`);
+  return 0;
+}
+
 /* ------------------------------------------------------------------ accept */
 
 /** Record a human acceptance verdict for an issue (required before closure). */
@@ -3809,6 +4081,9 @@ async function main(): Promise<void> {
       break;
     case "accept":
       code = await cmdAccept(rest);
+      break;
+    case "task":
+      code = await cmdTask(rest);
       break;
     case "pr":
       code = await cmdPr(rest);

@@ -45,3 +45,32 @@ test("task packets carry goal, context, and typed acceptance", () => {
     { command: "core:status", args: { mode: "short" } },
   ]);
 });
+
+test("prose acceptance criteria use the Verification section as gates", () => {
+  const packet = packetForTask(
+    {
+      ref: { provider: "github", repo: "o/r", number: 31 },
+      title: "Implement thermal model",
+      body: [
+        "## Acceptance criteria",
+        "- The model returns temperatures.",
+        "",
+        "## Verification",
+        "```",
+        "npm run typecheck",
+        "npm test",
+        "```",
+      ].join("\n"),
+      state: "open",
+      kind: "task",
+      labels: [],
+      children: [],
+      blockedBy: [],
+      blocking: [],
+      acceptance: ["The model returns temperatures."],
+    },
+    plan,
+    1,
+  );
+  assert.deepEqual(packet.acceptance, [{ command: "typescript:typecheck" }, { command: "typescript:test" }]);
+});

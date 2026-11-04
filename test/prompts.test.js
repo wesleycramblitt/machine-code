@@ -63,7 +63,7 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.match(planner.prompt, /Every body needs ## Context/);
     assert.match(planner.prompt, /tool's section rules/);
     assert.match(planner.prompt, /repair legacy context/);
-    assert.match(planner.prompt, /tasks \(acceptance each\)/);
+    assert.match(planner.prompt, /tasks \(acceptance \+ ## Verification each\)/);
     assert.match(planner.prompt, /at most 3 acceptance criteria/);
     assert.match(planner.prompt, /Split an oversized Task/);
     assert.match(planner.prompt, /create named issues/);

@@ -40,6 +40,12 @@ node dist/cli.js issue ensure 10
 node dist/cli.js accept 31
 node dist/cli.js approve 31
 
+# one task at a time, without the scheduler
+node dist/cli.js task status 31
+node dist/cli.js task start 31
+node dist/cli.js task review 31
+node dist/cli.js task approve 31
+
 # pull requests (runner-owned: Task→Feature, Feature→main)
 node dist/cli.js pr feature 20 --gates typescript:test,typescript:typecheck
 node dist/cli.js pr list
@@ -295,6 +301,11 @@ approval counts. Agent result review records acceptance evidence and closes the
 Task automatically; human result review waits for `approve --result`. Parent
 closure cascades only where the parent's approval policy is `agent`.
 
+In the TUI, `p` on a Task or task run runs `task approve`: commit any remaining
+changes, open or merge the Task PR, record acceptance, close the Task, and
+remove the worktree. `A` on the Orchestrate page does the same for the selected
+task and updates the orchestration ledger.
+
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are
 also supervised, along with LSP servers, worktree creation/commit/remove/prune
@@ -305,7 +316,59 @@ The Orchestrator schedules issue-backed work directly: it freezes a packet,
 runs Build in an isolated worktree, executes gates, runs an independent Review,
 then commits and publishes. Roles no longer declare orchestration modes, and
 there is no Architect delegation layer. `queue` remains a compatibility path
-for committed packets; new work should use `orchestrate`.
+for committed packets; new work should use `orchestrate` for a graph or
+`task start` for one Task.
+
+### Manual Task lifecycle
+
+The Orchestrator is the right path for a ready graph. The `task` commands are
+the same lifecycle for one Task at a time, with a human decision between Build
+and closure. They work on both direct Build runs and Orchestrator runs.
+
+```bash
+machine_code task status 31
+machine_code task start 31
+machine_code task review 31
+machine_code task approve 31
+machine_code task cleanup 31
+```
+
+- `task status` shows the plan, latest Build/Review run, worktree, branch,
+  commit, PR, acceptance evidence, review checks, the current stage, and the
+  exact next command. It never mutates state.
+- `task start` requires a ready `mc:plan`. It creates the isolated Task
+  worktree and `mc/task/<n>` branch, runs Build, gates, an independent Review,
+  commits, and opens the Task PR. It honors `result_review`: `agent` approves
+  and closes, `human` stops for review. `--review` overrides the plan and
+  `--no-review` skips the Review agent.
+- `task review` shows the same state, then runs the Task's `## Verification`
+  commands in the worktree. Use `--check <command>` or
+  `--checks a,b` to run exact commands. Named commands (`typescript:test`) go
+  through the command registry; other strings run in a shell inside the
+  worktree. Checks are recorded on the run. A failed check blocks
+  `task approve` unless `--force` is used.
+- `task approve` is the human finish step. If the worktree has uncommitted
+  changes it commits them, then opens the Task PR if needed, merges it, records
+  acceptance, closes the Task, and removes the worktree. Use `--no-commit`,
+  `--no-merge`, `--keep-worktree`, or `--keep-branch` to narrow it.
+- `task cleanup` removes a worktree without closing the Task. It refuses an
+  open Task unless `--force` is used.
+
+A Task body can keep acceptance in prose. Runtime gates come from a
+`## Verification` section:
+
+````markdown
+## Verification
+
+```
+npm run typecheck
+npm test
+```
+````
+
+The runner maps common npm commands to the typed registry
+(`typescript:typecheck`, `typescript:test`, and so on). Acceptance lines that
+are named commands remain supported.
 
 ### Issue context and reusable tools
 

@@ -1384,17 +1384,23 @@ export async function runTui(): Promise<void> {
   };
 
   const approveSelected = (issue: Issue | undefined, run: RunSummary | undefined, repoRoot = l.repoRoot) => {
-    const target = run?.prNumber && run.prState === "open" ? run.prNumber : issue?.ref.number;
-    if (!target) { notify("nothing to approve"); return; }
+    const task = issue?.kind === "task"
+      ? issue
+      : issueByRef(run?.taskIssue ?? run?.issue);
+    if (task && !run) { notify(`no run to approve for #${task.ref.number}`); return; }
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-    const child = spawn(process.execPath, [cliPath, "approve", String(target)], {
-      cwd: repoRoot,
+    const args = task
+      ? ["task", "approve", String(task.ref.number)]
+      : ["approve", String(run?.prNumber && run.prState === "open" ? run.prNumber : issue?.ref.number ?? "")];
+    if (args[1] === "approve" && !args[2]) { notify("nothing to approve"); return; }
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd: task ? (issueRepoOf(task.ref) ?? repoRoot) : repoRoot,
       detached: true,
       stdio: "ignore",
       env: process.env,
     });
     child.unref();
-    notify(`approval requested for ${target}`);
+    notify(task ? `task approval queued for #${task.ref.number}` : `approval requested for ${args[2]}`);
   };
 
   const runDetailData = (): RunDetail | null => (selectedRunId ? findRunDetail(selectedRunId) : null);
@@ -3665,7 +3671,7 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[B" || data === "j") { issueRunSel = Math.min(Math.max(0, issueRuns.length - 1), issueRunSel + 1); draw(); return; }
       if (data === "\r" || data === "\n") { const run = issueRuns[issueRunSel]; if (run) { selectedRunId = run.id; runSection = "overview"; screen = "run"; } draw(); return; }
       if (data === "n") { startNewRun(issue.ref, issueRoot, issue); draw(); return; }
-      if (data === "p") { approveSelected(issue, undefined, issueRoot); draw(); return; }
+      if (data === "p") { approveSelected(issue, issueRuns[issueRunSel] ?? issueRuns[0], issueRoot); draw(); return; }
       if (data === "o") { openUrl(issue.url); draw(); return; }
       draw();
       return;
@@ -4006,11 +4012,20 @@ export async function runTui(): Promise<void> {
                   candidate.scopeRef.number === orchestrateRef.number)),
           ) ?? states[0];
         if (!task) notify("no task selected");
-        else if (!state) notify("no orchestration state");
+        else if (data === "A") {
+          const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+          const child = spawn(process.execPath, [cliPath, "task", "approve", String(task.issue.ref.number)], {
+            cwd: l.repoRoot,
+            detached: true,
+            stdio: "ignore",
+            env: process.env,
+          });
+          child.unref();
+          notify(`task approval queued for #${task.issue.ref.number} (merge, close, cleanup)`);
+        } else if (!state) notify("no orchestration state");
         else {
           const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
           const args = ["orchestrate", "approve", "--orchestration", state.id, "--task", String(task.issue.ref.number)];
-          if (data === "A") args.push("--result");
           const child = spawn(process.execPath, [cliPath, ...args], {
             cwd: l.repoRoot,
             detached: true,
@@ -4018,7 +4033,7 @@ export async function runTui(): Promise<void> {
             env: process.env,
           });
           child.unref();
-          notify(`${data === "A" ? "result" : "packet"} approval for #${task.issue.ref.number}`);
+          notify(`packet approval for #${task.issue.ref.number}`);
         }
         draw();
         return;
