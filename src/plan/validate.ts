@@ -74,6 +74,40 @@ function contextErrors(issue: Issue, layout: Layout): string[] {
   return errors;
 }
 
+/** A Task is one deliverable, not a feature. */
+export const TASK_MAX_ACCEPTANCE = 3;
+export const TASK_MAX_BODY_CHARS = 4_000;
+export const TASK_MAX_ACCEPTANCE_CHARS = 240;
+
+export interface TaskSizeInput {
+  acceptance: readonly string[];
+  body: string;
+}
+
+/** Structural size limits for a Task packet. */
+export function taskSizeErrors(task: TaskSizeInput): string[] {
+  const errors: string[] = [];
+  if (task.acceptance.length > TASK_MAX_ACCEPTANCE) {
+    errors.push(
+      `task has ${task.acceptance.length} acceptance criteria; split it into smaller Tasks ` +
+        `with at most ${TASK_MAX_ACCEPTANCE} each`,
+    );
+  }
+  const broad = task.acceptance.filter((item) => item.length > TASK_MAX_ACCEPTANCE_CHARS);
+  if (broad.length > 0) {
+    errors.push(
+      `${broad.length} acceptance criterion/criteria exceed ${TASK_MAX_ACCEPTANCE_CHARS} chars; ` +
+        "make each a single verifiable result",
+    );
+  }
+  if (task.body.length > TASK_MAX_BODY_CHARS) {
+    errors.push(
+      `task body is ${task.body.length} chars; keep a Task packet under ${TASK_MAX_BODY_CHARS} chars and split the work`,
+    );
+  }
+  return errors;
+}
+
 export function validatePlanIssue(issue: Issue, options: ValidatePlanOptions = {}): PlanValidation {
   const parsed = parsePlanMarker(issue.body);
   if (!parsed.present) return { ok: false, errors: ["missing mc:plan marker"] };
@@ -83,6 +117,7 @@ export function validatePlanIssue(issue: Issue, options: ValidatePlanOptions = {
   if (issue.kind !== "task") errors.push("mc:plan applies to Task issues");
   if (issue.reserved) errors.push("reserved anchors cannot be deliverable plans");
   if (issue.acceptance.length === 0) errors.push("missing acceptance criteria");
+  errors.push(...taskSizeErrors(issue));
   for (const blocker of issue.blockedBy) {
     if (blocker.repo !== issue.ref.repo) {
       errors.push(`blocker ${blocker.repo}#${blocker.number} is in another repository`);

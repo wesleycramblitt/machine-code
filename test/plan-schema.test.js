@@ -118,6 +118,12 @@ test("plan issue validation checks task shape, readiness, and dependencies", () 
   const noAcceptance = validatePlanIssue(issue(15, marker(valid), { acceptance: [] }));
   assert.match(noAcceptance.errors.join("\n"), /acceptance/);
 
+  const oversized = validatePlanIssue(
+    issue(15.5, marker(valid), { acceptance: ["one", "two", "three", "four"] }),
+  );
+  assert.equal(oversized.ok, false);
+  assert.match(oversized.errors.join("\n"), /split it into smaller Tasks/);
+
   const crossRepo = validatePlanIssue(
     issue(16, marker(valid), {
       blockedBy: [{ provider: "github", repo: "other/repo", number: 1 }],

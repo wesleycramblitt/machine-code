@@ -48,6 +48,75 @@ export function objectiveTitle(request: string, fallback = "machine_code task"):
   return title.length > 120 ? `${title.slice(0, 117).trimEnd()}…` : title;
 }
 
+/** One `## Heading` section from an issue body, without the heading. */
+function bodySection(body: string, heading: string): string {
+  const lines = body.split("\n");
+  const pattern = new RegExp(`^##\\s+${heading}\\b`, "i");
+  const start = lines.findIndex((line) => pattern.test(line.trim()));
+  if (start < 0) return "";
+  const out: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^#{1,6}\s+/.test(line) || line.trim().startsWith("<!--")) break;
+    out.push(line);
+  }
+  return out.join("\n").trim();
+}
+
+/** First prose paragraph after any leading headings and comments. */
+function firstParagraph(body: string): string {
+  const out: string[] = [];
+  let started = false;
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (started) break;
+      continue;
+    }
+    if (!started && (trimmed.startsWith("#") || trimmed.startsWith("<!--"))) continue;
+    started = true;
+    out.push(trimmed);
+  }
+  return out.join(" ").trim();
+}
+
+/** A placeholder prompt that names no work, e.g. "Build the task." */
+export function isGenericTaskRequest(request: string): boolean {
+  return /^(?:build|do|run|implement|work on)\s+(?:the\s+)?(?:task|issue)\.?$/i.test(request.trim());
+}
+
+export type IssueRequestVerb = "Implement" | "Plan" | "Review" | "Investigate";
+
+export function issueRequestVerb(agent: string): IssueRequestVerb {
+  switch (agent) {
+    case "planner":
+      return "Plan";
+    case "review":
+      return "Review";
+    case "general":
+      return "Investigate";
+    default:
+      return "Implement";
+  }
+}
+
+/**
+ * The default run objective for a task-attached run. A human can start a run
+ * from a Task without typing a prompt; the issue title and Deliverable become
+ * the request, so the run state names the actual work.
+ */
+export function issueRunRequest(issue: Issue, verb: IssueRequestVerb = "Implement"): string {
+  const ref = `${issue.ref.repo}#${issue.ref.number}`;
+  const title = issue.title.trim() || `Task ${ref}`;
+  const deliverable = bodySection(issue.body, "Deliverable") || firstParagraph(issue.body);
+  const lines = [`${verb} ${ref}: ${title}`];
+  if (deliverable) lines.push("", `Deliverable: ${deliverable.replace(/\s+/g, " ").slice(0, 800)}`);
+  if (issue.acceptance.length > 0) {
+    lines.push("", "Acceptance:");
+    for (const item of issue.acceptance.slice(0, 6)) lines.push(`- ${item}`);
+  }
+  return lines.join("\n").slice(0, 2_000);
+}
+
 function objectiveBody(request: string): string {
   return [
     "<!-- mc:task {\"createdBy\":\"machine_code\",\"auto\":true} -->",

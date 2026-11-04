@@ -281,6 +281,58 @@ test("render keeps only state plus the last step", () => {
   }
 });
 
+test("render puts the task packet before the repo map", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r4b", goal: "the goal" });
+    const rendered = renderPromptMessages(
+      [system, user, assistant()],
+      store,
+      "MAP-INDEX",
+      "<context-block kind=\"task\">PACKET-BODY</context-block>",
+    );
+    const first = rendered.messages[1];
+    const block = String(first.content ?? "");
+    assert.ok(block.indexOf("PACKET-BODY") < block.indexOf("MAP-INDEX"), "packet leads the map");
+    assert.match(block, /run-state/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("state renders read coverage and expires a stale next action", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-coverage", goal: "goal" });
+    store.note("next", "Explore the whole tree", [], 1);
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "r1", name: "read", args: { path: "src/a.ts", offset: 1, limit: 100 } }),
+        result({ id: "r1", name: "read", text: "1: first\n100: last" }),
+      ],
+      2,
+    );
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "r2", name: "read", args: { path: "src/a.ts", offset: 50, limit: 100 } }),
+        result({ id: "r2", name: "read", text: "50: mid\n150: last" }),
+      ],
+      10,
+    );
+    const block = store.renderBlock();
+    assert.match(block, /Read coverage:/);
+    assert.match(block, /src\/a\.ts: 1-149/);
+    assert.match(block, /Next: unset/);
+    assert.doesNotMatch(block, /Next: Explore the whole tree/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("render never sends an orphan tool call", () => {
   const dir = tempDir();
   try {

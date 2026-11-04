@@ -1,9 +1,9 @@
 /**
  * machine_code — the local `Loop` interface: a thin wrapper over pi-agent-core.
  *
- * Selection happens per provider call in prepareRequest: estimate context
- * size, run pick(), log the selection, and hand the loop the chosen model.
- * No stickiness — every call is selected and logged independently.
+ * Selection is sticky within a provider attempt: the first eligible model
+ * handles every turn so a run keeps one plan and one behavior. Re-pick only
+ * when the context outgrows that model or a retry rotates to a new attempt.
  *
  * Retry: retryable provider errors (rate limit, free-tier limit, outage,
  * timeout, malformed) cool the failed target and rotate to the next eligible
@@ -14,7 +14,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-age
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
-import { pick, providerMultiplier, isFreeRow } from "./select.js";
+import { estimateTokens, pick, providerMultiplier, isFreeRow } from "./select.js";
 import { applyClassification, classifyError, loadAvailability, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
@@ -42,14 +42,37 @@ export const MAX_TURNS = 0;
 const REPEAT_LIMIT = 2;
 /** Blocked repeats allowed before the run terminates. */
 const REPEAT_BLOCK_LIMIT = 3;
-/** Reads of one path allowed before the harness forces the model to act. */
-const READ_PATH_LIMIT = 3;
-/** Planner research/verification calls allowed without an issue write. */
-const PLANNER_NO_PROGRESS_LIMIT = 10;
-/** Build/sudo research calls allowed without an edit, write, or command. */
-const MUTATING_NO_PROGRESS_LIMIT = 12;
-/** Read-only research calls allowed without a decision/focus note or command. */
-const READONLY_NO_PROGRESS_LIMIT = 20;
+/** Re-reads of one 100-line band allowed before the harness returns a nudge. */
+const READ_REPEAT_LIMIT = 2;
+/** Build research allowed before a concrete change plan is required. */
+const BUILD_PLAN_RESEARCH_LIMIT = 12;
+/** Plan-checkpoint blocked turns allowed before the run stops. */
+const PLAN_BLOCK_LIMIT = 3;
+
+/** Files named by recorded plan decisions. */
+function planFileTargets(facts: ReadonlyArray<{ text: string; status: string; kind: string }>): Set<string> {
+  const file = /[\w./-]+\.(?:ts|tsx|js|jsx|py|rs|go|java|kt|swift|md|toml|yaml|yml)/gi;
+  const out = new Set<string>();
+  for (const fact of facts) {
+    if (fact.kind !== "decision" || fact.status !== "active") continue;
+    for (const path of fact.text.match(file) ?? []) out.add(path);
+  }
+  return out;
+}
+
+/** A plan is a recorded decision that names a plan or concrete file changes. */
+function hasPlanDecision(facts: ReadonlyArray<{ text: string; status: string; kind: string }>): boolean {
+  const file = /[\w./-]+\.(?:ts|tsx|js|jsx|py|rs|go|java|kt|swift|md|toml|yaml|yml)/gi;
+  const verb = /(?:edit|add|remove|delete|update|change|write|replace|move|wire|fix|test|implement|drop)\b/gi;
+  return facts.some((fact) => {
+    if (fact.kind !== "decision" || fact.status !== "active") return false;
+    const text = fact.text.trim();
+    if (text.length >= 40 && /\bplan\b/i.test(text)) return true;
+    const files = new Set(text.match(file) ?? []);
+    const verbs = text.match(verb) ?? [];
+    return files.size >= 2 && verbs.length >= 2;
+  });
+}
 
 function issueRefKey(value: string): string {
   const url = /\/issues\/(\d+)(?:$|[?#])/.exec(value);
@@ -82,6 +105,20 @@ function normalizedIssueKey(params: Record<string, unknown>): Record<string, unk
     if (out.limit === undefined || out.limit === 100) delete out.limit;
   }
   return out;
+}
+
+/**
+ * Coarse read key: different ranges of one large file are different units.
+ * Reads within the same 100-line band count as the same read.
+ */
+function readBucket(params: Record<string, unknown>): string {
+  const path = typeof params.path === "string" ? params.path : "";
+  if (!path) return "";
+  if (typeof params.symbol === "string") return `${path}#${params.symbol}`;
+  if (typeof params.around === "number") return `${path}@${Math.floor(params.around / 100)}`;
+  const offset = typeof params.offset === "number" && Number.isFinite(params.offset) ? Math.max(1, params.offset) : 1;
+  const limit = typeof params.limit === "number" && Number.isFinite(params.limit) ? Math.max(1, params.limit) : 2000;
+  return `${path}@${Math.floor(offset / 100)}-${Math.floor((offset + limit) / 100)}`;
 }
 
 /** Stable JSON key for a tool call; argument order must not defeat the guard. */
@@ -309,6 +346,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // cooldowns. Loading here also keeps the in-memory state current.
   const availability = input.availability ?? loadAvailability(input.home);
   const triedModels = new Set<string>();
+  /** A build run that cannot plan gets one plan-only model call, then a fresh attempt. */
+  let planRecovered = false;
+  let recoveryPlan = "";
 
   const applyErrorState = (
     provider: string,
@@ -526,7 +566,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * still gets an answer from the evidence in run state instead of only a
    * blocked summary.
    */
-  const finalAnswer = async (model: Model<Api>, reason: string): Promise<string> => {
+  const finalAnswer = async (
+    model: Model<Api>,
+    reason: string,
+    maxTokens = 1_200,
+    systemPrompt = "You summarize a coding run that stopped early. Be concise and factual. Do not call tools.",
+  ): Promise<string> => {
     const prompt = [
       memory.renderBlock(),
       issueEvidenceText(readIssueEvidence(recorder.dir)),
@@ -539,12 +584,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       const source = input.models.streamSimple(
         model,
         {
-          systemPrompt:
-            "You summarize a coding run that stopped early. Be concise and factual. Do not call tools.",
+          systemPrompt,
           messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
         },
         {
-          maxTokens: 1200,
+          maxTokens,
           reasoning: "minimal",
           sessionId: recorder.id,
           signal: input.signal,
@@ -660,13 +704,14 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     let appliedError: { key: string; message: string } | undefined;
     let turnCapHit = false;
     let loopBlocked = false;
+    let loopBlockedReason: "repeat" | "plan-required" | undefined;
     let repeatBlocked = 0;
     let repeatBlockedTurn = -1;
+    let researchCalls = 0;
+    let planBlocked = 0;
+    let planBlockedTurn = -1;
     const callCounts = new Map<string, { count: number; preview: string }>();
-    const readPaths = new Map<string, number>();
-    const searchKeys = new Map<string, number>();
-    let treeCalls = 0;
-    let noProgressCalls = 0;
+    const readBuckets = new Map<string, number>();
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -778,129 +823,154 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       },
       input.agent.tools,
     );
-    // Guard against loops: a weak model can burn the whole turn budget repeating
-    // the same read/search/issue call. The first two calls run normally; later
-    // identical calls return a corrective error, and repeated blocks terminate
-    // the turn batch.
+    // One safety net: an exact repeat with the same arguments is a loop.
+    // Everything else is left to the model and the prompt. The old
+    // no-progress, next-action, read-path, and search-scope guards blocked
+    // productive orientation, so they are gone.
     const tools: AgentTool[] = rawTools.map((tool) => {
       const execute = tool.execute.bind(tool);
       return {
         ...tool,
         async execute(id, params, signal, onUpdate) {
           const block = (message: string, detail: Record<string, unknown>) => {
-            // A parallel batch can block several calls in one turn. Count one
-            // strike per turn so a single batch does not terminate the run.
+            // One strike per turn; a parallel batch is one turn.
             const turn = memory.currentTurn();
             if (turn !== repeatBlockedTurn) {
               repeatBlockedTurn = turn;
               repeatBlocked += 1;
             }
             if (repeatBlocked >= REPEAT_BLOCK_LIMIT) {
-              loopBlocked = true;
-              recorder.event("loop_blocked", { tool: tool.name, ...detail });
+              if (!loopBlocked) {
+                loopBlocked = true;
+                loopBlockedReason = "repeat";
+                recorder.event("loop_blocked", { tool: tool.name, reason: "repeat", ...detail });
+              }
+              return {
+                content: [{ type: "text" as const, text: message }],
+                details: undefined,
+                isError: true,
+                terminate: true,
+              };
             }
             return {
-              content: [{ type: "text", text: message }],
+              content: [{ type: "text" as const, text: message }],
               details: undefined,
               isError: true,
-              ...(loopBlocked ? { terminate: true } : {}),
+            };
+          };
+
+          const planBlock = (message: string, detail: Record<string, unknown>) => {
+            const turn = memory.currentTurn();
+            if (turn !== planBlockedTurn) {
+              planBlockedTurn = turn;
+              planBlocked += 1;
+            }
+            if (planBlocked >= PLAN_BLOCK_LIMIT) {
+              if (!loopBlocked) {
+                loopBlocked = true;
+                loopBlockedReason = "plan-required";
+                recorder.event("loop_blocked", { tool: tool.name, reason: "plan-required", ...detail });
+              }
+              return {
+                content: [{ type: "text" as const, text: message }],
+                details: undefined,
+                isError: true,
+                terminate: true,
+              };
+            }
+            return {
+              content: [{ type: "text" as const, text: message }],
+              details: undefined,
+              isError: true,
             };
           };
 
           const issueAction =
             tool.name === "issue" ? String((params as { action?: unknown }).action ?? "") : "";
-          const issueWrite =
-            tool.name === "issue" &&
-            ["create", "graph", "edit", "plan", "link", "ensure", "close"].includes(issueAction);
-          const mutatingProgress =
-            tool.name === "edit" ||
-            tool.name === "write" ||
-            tool.name === "command" ||
-            tool.name === "artifact";
           const contextAction =
             tool.name === "context" ? String((params as { action?: unknown }).action ?? "") : "";
-          const readonlyProgress =
-            tool.name === "context" && ["note", "focus", "forget"].includes(contextAction);
-          const research =
+          const contextKind =
+            tool.name === "context" ? String((params as { kind?: unknown }).kind ?? "finding") : "";
+          const planNote = tool.name === "context" && contextAction === "note" && contextKind === "decision";
+          const researchTool =
             tool.name === "read" ||
             tool.name === "search" ||
             tool.name === "context" ||
             (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
-          const readonlyAgent = input.agent.name === "general" || input.agent.name === "review";
-          const noProgressLimit =
-            input.agent.name === "planner"
-              ? PLANNER_NO_PROGRESS_LIMIT
-              : input.agent.name === "build" || input.agent.name === "sudo"
-                ? MUTATING_NO_PROGRESS_LIMIT
-                : readonlyAgent
-                  ? READONLY_NO_PROGRESS_LIMIT
-                  : 0;
-          if (noProgressLimit > 0) {
-            if (issueWrite || mutatingProgress || (readonlyAgent && readonlyProgress)) {
-              noProgressCalls = 0;
-            } else if (research) {
-              noProgressCalls += 1;
-              if (noProgressCalls >= noProgressLimit) {
-                return block(
-                  input.agent.name === "planner"
-                    ? `Planner has made ${noProgressCalls} research/verification calls without an issue write. Stop research and create the missing Epic/Features/Tasks with issue action=graph or action=create, or stop with issue numbers.`
-                    : readonlyAgent
-                      ? `${noProgressCalls} research calls without a decision, focus note, or command. Record what you know and answer, or ask one precise question.`
-                      : `${noProgressCalls} research calls without an edit, write, or command. Act on the evidence or stop.`,
-                  { args: capJson(params), noProgressCalls },
-                );
-              }
-            }
+          if (researchTool) researchCalls += 1;
+          const needsPlan = input.agent.name === "build" || input.agent.name === "sudo";
+          const planReady = needsPlan && hasPlanDecision(memory.getState().facts);
+          const planFiles = planReady ? planFileTargets(memory.getState().facts) : new Set<string>();
+          const readPath = tool.name === "read" ? String((params as { path?: unknown }).path ?? "") : "";
+          const planRead = readPath.length > 0 && planFiles.has(readPath);
+          const blocksAfterPlan =
+            tool.name === "search" ||
+            (tool.name === "read" && (!planRead || researchCalls >= BUILD_PLAN_RESEARCH_LIMIT + 8)) ||
+            (tool.name === "context" && ["state", "recall"].includes(contextAction)) ||
+            (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
+          const hasChanges = memory.getState().facts.some(
+            (fact) => fact.kind === "change" && fact.status === "active",
+          );
+          const nextNote = tool.name === "context" && contextAction === "note" && contextKind === "next";
+          const nextText = nextNote ? String((params as { text?: unknown }).text ?? "").trim() : "";
+          if (
+            needsPlan &&
+            planReady &&
+            !hasChanges &&
+            nextNote &&
+            /^(?:read|search|explore|inspect|find|look|verify|check|review|map|outline)\b/i.test(nextText)
+          ) {
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  "Plan is recorded. Next must be an edit or needs_planning. " +
+                  'Example: {"action":"note","kind":"next","text":"Edit src/tui.ts to remove the orchestrator tab."}',
+              }],
+              details: undefined,
+              isError: true,
+            };
+          }
+          if (
+            needsPlan &&
+            researchTool &&
+            !planNote &&
+            researchCalls >= BUILD_PLAN_RESEARCH_LIMIT &&
+            !planReady
+          ) {
+            return planBlock(
+              `Plan checkpoint: ${researchCalls} research calls without a concrete change plan. ` +
+                `Call context now: {"action":"note","kind":"decision","text":"1) Edit src/file.ts to ... 2) Edit src/file.ts to ... 3) Add test/file.ts ..."}. ` +
+                `Then make the first edit. Do not read or search again.`,
+              { args: capJson(params), researchCalls },
+            );
+          }
+          if (
+            needsPlan &&
+            planReady &&
+            !hasChanges &&
+            blocksAfterPlan &&
+            researchCalls >= BUILD_PLAN_RESEARCH_LIMIT
+          ) {
+            return planBlock(
+              "Plan recorded and research budget spent. Make the first edit now with edit or write. Do not read or search.",
+              { args: capJson(params), plan: true },
+            );
           }
 
-          // The planner needs one tree to inspect and one to verify. More is
-          // repeated work: GitHub tree calls are slow and the result is large.
-          if (tool.name === "issue" && issueAction === "tree") {
-            treeCalls += 1;
-            if (treeCalls > 2) {
+          // A re-read of the same 100-line band is not new evidence. Return a
+          // nudge, not a terminal block: the model can read a new range or edit.
+          const readUnit = tool.name === "read" ? readBucket(params as Record<string, unknown>) : "";
+          if (readUnit) {
+            const priorRead = readBuckets.get(readUnit) ?? 0;
+            if (priorRead >= READ_REPEAT_LIMIT) {
               return block(
-                "Tree already inspected twice. Use the last tree result and stop.",
-                { args: capJson(params), treeCalls },
+                `Already read ${readUnit} (${priorRead} times). ` +
+                  "Use the earlier result, the Read coverage in run state, or edit.",
+                { args: capJson(params), readUnit, repeats: priorRead },
               );
             }
           }
-
-          // Search loops often vary only the limit or scope. Key on the mode,
-          // scope, and pattern so the third equivalent search is blocked.
-          let searchKey: string | undefined;
-          if (tool.name === "search") {
-            const args = params as { mode?: unknown; pattern?: unknown; path?: unknown; paths?: unknown };
-            const mode = typeof args.mode === "string" ? args.mode : "text";
-            const pattern = typeof args.pattern === "string" ? args.pattern : "";
-            const path = typeof args.path === "string" ? args.path : "";
-            const paths = Array.isArray(args.paths)
-              ? args.paths.filter((item): item is string => typeof item === "string").sort().join(",")
-              : "";
-            searchKey = `${mode}:${path}:${paths}:${pattern}`;
-            const prior = searchKeys.get(searchKey) ?? 0;
-            if (prior >= REPEAT_LIMIT) {
-              return block(
-                `Repeated ${mode} search blocked (${prior} earlier call(s) for this pattern and scope). ${repeatHint("search")}`,
-                { args: capJson(params), repeats: prior },
-              );
-            }
-          }
-
-          // Reads of the same path are capped separately from identical calls.
-          const readPath =
-            tool.name === "read" && typeof (params as { path?: unknown }).path === "string"
-              ? (params as { path: string }).path
-              : "";
-          if (readPath) {
-            const prior = readPaths.get(readPath) ?? 0;
-            if (prior >= READ_PATH_LIMIT) {
-              return block(
-                `Read limit reached for ${readPath} (${prior} earlier reads). Use the earlier results or answer. ${repeatHint("read")}`,
-                { args: capJson(params), repeats: prior },
-              );
-            }
-          }
-
           const keyParams =
             tool.name === "issue"
               ? normalizedIssueKey(params as Record<string, unknown>)
@@ -908,28 +978,29 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const key = `${tool.name}:${stableKey(keyParams)}`;
           const prior = callCounts.get(key);
           if (prior && prior.count >= REPEAT_LIMIT) {
-            const preview = prior.preview ? ` Previous result: ${prior.preview}` : "";
             return block(
               `Repeated identical ${tool.name} call blocked (${prior.count} earlier identical call(s)). ` +
-                `${repeatHint(tool.name)}${preview}`,
+                `${repeatHint(tool.name)}${prior.preview ? ` Previous result: ${prior.preview}` : ""}`,
               { args: capJson(params), repeats: prior.count },
             );
           }
-
           const result = await execute(id, params, signal, onUpdate);
-          if (!result.isError && tool.name === "search" && searchKey) {
-            searchKeys.set(searchKey, (searchKeys.get(searchKey) ?? 0) + 1);
+          if (planNote && !result.isError && hasPlanDecision(memory.getState().facts)) {
+            // The plan is the next action. Do not let the old "explore" next
+            // note survive and steer the model back into reading.
+            memory.note("next", "Execute the plan: make the first edit.", [], memory.currentTurn());
           }
-          if (!result.isError && readPath) {
-            const count = (readPaths.get(readPath) ?? 0) + 1;
-            readPaths.set(readPath, count);
-            if (count >= READ_PATH_LIMIT) {
-              result.content.push({
-                type: "text",
-                text:
-                  `[harness] ${readPath} has been read ${count} times. ` +
-                  "Use the run state and act; do not re-read unchanged ranges.",
-              });
+          if (!result.isError && readUnit) {
+            readBuckets.set(readUnit, (readBuckets.get(readUnit) ?? 0) + 1);
+          }
+          if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
+            const changed = (params as { path?: unknown }).path;
+            if (typeof changed === "string") {
+              for (const unit of [...readBuckets.keys()]) {
+                if (unit === changed || unit.startsWith(`${changed}@`) || unit.startsWith(`${changed}#`)) {
+                  readBuckets.delete(unit);
+                }
+              }
             }
           }
           const preview = result.content
@@ -1090,6 +1161,32 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         const chars = rendered.chars + toolChars;
         lastRequestChars = chars;
         recorder.recordContext(chars);
+        const estimate = estimateTokens(chars, policy.expectedOutputTokens);
+        let repickReason: "initial" | "retry" | "context" | "model-missing" | undefined =
+          !currentRow
+            ? "initial"
+            : triedModels.has(currentRow.key)
+              ? "retry"
+              : currentRow.context > 0 && currentRow.context < estimate.inputTokens + estimate.outputTokens
+                ? "context"
+                : undefined;
+        if (!repickReason && currentRow) {
+          const stickyModel = input.models.getModel(currentRow.providerID, currentRow.id);
+          if (stickyModel) {
+            callIndex += 1;
+            recorder.event("model_select", {
+              call: callIndex,
+              key: currentRow.key,
+              estimate,
+              candidates: [],
+              rejectedCount: 0,
+              sticky: true,
+            });
+            currentModel = stickyModel;
+            return { model: stickyModel };
+          }
+          repickReason = "model-missing";
+        }
         const result = selectFor(chars);
         if ("error" in result) {
           recorder.event("model_select", { call: callIndex + 1, error: result.error, rejected: result.rejected });
@@ -1104,6 +1201,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           estimate: result.estimate,
           candidates: result.candidates,
           rejectedCount: result.rejectedCount,
+          ...(repickReason ? { repick: repickReason } : {}),
         });
         if (!model) return undefined;
         currentModel = model;
@@ -1286,7 +1384,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         // Resume: the reconstructed transcript tail is already continuable.
         await agent.continue();
       } else {
-        const promptText = [mapIndex, input.contextText, input.request].filter(Boolean).join("\n\n");
+        const promptText = [
+          input.contextText,
+          recoveryPlan ? `Change plan:\n${recoveryPlan}\n\nExecute this plan. Make the first edit now.` : "",
+          mapIndex,
+          input.request,
+        ].filter(Boolean).join("\n\n");
         await agent.prompt(promptText);
       }
       await agent.waitForIdle();
@@ -1332,17 +1435,27 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     // that as a final answer: cool the model and rotate to another one.
     const malformed = lastAssistant as AssistantMessage | undefined;
     const malformedText = assistantText(malformed);
+    const toolArgText = (malformed?.content ?? [])
+      .map((block) =>
+        block.type === "toolCall"
+          ? JSON.stringify((block as { arguments?: unknown }).arguments ?? {})
+          : "",
+      )
+      .filter(Boolean)
+      .join("\n");
     const hasNativeToolCall = malformed?.content.some((block) => block.type === "toolCall") ?? false;
+    const badArgs = toolArgText.length > 0 && hasToolCallMarkup(toolArgText);
     if (
       malformed &&
       malformed.stopReason !== "error" &&
       malformed.stopReason !== "aborted" &&
-      !hasNativeToolCall &&
-      hasToolCallMarkup(malformedText)
+      (badArgs || (!hasNativeToolCall && hasToolCallMarkup(malformedText)))
     ) {
       const provider = currentRow?.providerID ?? malformed.provider;
       const failedKey = currentRow?.key ?? `${malformed.provider}/${malformed.model}`;
-      const message = `model ${failedKey} returned tool-call markup as plain text`;
+      const message = badArgs
+        ? `model ${failedKey} returned provider markup inside tool arguments`
+        : `model ${failedKey} returned tool-call markup as plain text`;
       triedModels.add(failedKey);
       lastFailure = message;
       try {
@@ -1361,7 +1474,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       recorder.event("malformed_tool_call", {
         provider,
         model: failedKey,
-        text: malformedText.slice(0, 1_000),
+        text: `${malformedText}\n${toolArgText}`.trim().slice(0, 1_000),
       });
       recorder.event("retry", {
         failedModel: failedKey,
@@ -1373,6 +1486,23 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
     const la2 = lastAssistant as AssistantMessage | undefined;
     let finalText = assistantText(la2);
+    if (loopBlocked && loopBlockedReason === "plan-required" && !planRecovered && currentModel) {
+      planRecovered = true;
+      const plan = await finalAnswer(
+        currentModel,
+        "Return a concrete 3-line change plan. Name exact files and edits. Do not call tools.",
+        4_000,
+        "You plan a code change. Return only a 3-line change plan naming exact files and edits. Do not call tools.",
+      );
+      const trimmed = plan.trim();
+      if (trimmed) {
+        memory.note("decision", trimmed, [], turns + 1);
+        recoveryPlan = trimmed;
+        recorder.event("plan_recovered", { chars: trimmed.length });
+        // Fresh attempt with the plan in context. Per-attempt guards reset.
+        continue;
+      }
+    }
     const stop = la2?.stopReason;
     let status: RunLoopResult["status"] = "completed";
     let error: string | undefined;
@@ -1384,7 +1514,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       status = "interrupted";
     } else if (loopBlocked) {
       status = "blocked";
-      error = "repeated identical tool calls detected";
+      error =
+        loopBlockedReason === "plan-required"
+          ? "build plan required before more research"
+          : "repeated identical tool calls detected";
     } else if (budgetExhausted) {
       status = "blocked";
       error = `token budget exhausted (${policy.budgetTokens})`;
@@ -1402,7 +1535,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       const reason = turnCapHit
         ? "You have reached the turn cap."
         : loopBlocked
-          ? "The harness stopped repeated tool calls."
+          ? loopBlockedReason === "plan-required"
+            ? "The harness stopped the run: no concrete build plan was recorded. Return a 3-line change plan and stop."
+            : "The harness stopped repeated tool calls."
           : "The token budget is exhausted.";
       finalText = await finalAnswer(currentModel, reason);
     }

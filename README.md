@@ -186,6 +186,12 @@ entirely and groups every run on the machine by status, so blocked, failed, and
 running work is visible at a glance. `machine_code status` is shorthand for the
 overall view. In the TUI, `g` cycles GH issue → Status → Overall status.
 
+In the GH issue view, the highlighted row keeps its branch bright: the selected
+issue or run, its parent issues, its peers at the same level, and its immediate
+children (features under an epic, tasks under a feature, runs under a task).
+Unrelated rows dim to gray. Repository and section headings stay bright so the
+page structure remains readable.
+
 `machine_code show <run-id>` exposes the same overview, summary, context,
 changes, related lineage, and event stream as the run detail screen.
 `machine_code spend` and `machine_code models` cover the catalogue and cost
@@ -202,11 +208,11 @@ not `completed`, and says so in the summary.
 
 `max_turns` in `[agents.<role>]` sets an optional assistant-turn cap. The
 default is `0` (no cap); set it only when a role needs a bound.
-`budget_tokens` is also unset by default and is opt-in. The repeat-call and
-read guards still stop loops; provider retries and model rotations do not
-refill a configured turn or token budget. A token budget counts total tokens,
-including cache reads, so a cache-heavy run can hit it sooner than its cost
-suggests.
+`budget_tokens` is also unset by default and is opt-in. The only loop guard is
+an exact repeat: the same tool call with the same arguments three times in a
+row. Provider retries and model rotations do not refill a configured turn or
+token budget. A token budget counts total tokens, including cache reads, so a
+cache-heavy run can hit it sooner than its cost suggests.
 
 In the run detail Timeline, `j`/`k` moves between timestamp events. The timeline
 follows the newest event by default; `j`/`k` or `PgUp`/`PgDn` turns follow off,
@@ -222,7 +228,9 @@ and request. An explicit parent model pin is copied; a parent that used
 auto-selection stays on auto. A fork of a finished build run reuses the parent
 worktree on the same issue branch, so one branch is not checked out twice.
 Edit the request, change any setting, and start the run. The fork keeps parent
-lineage.
+lineage. A blocked or failed parent contributes its objective, status, and
+error, but not its closing summary as authoritative context. Only a completed
+parent contributes a result.
 
 The New Run **Model[m]** picker lists every model from configured providers
 with a status: `✓` eligible, `⏸` cooling with the remaining time, or `✕` with
@@ -234,14 +242,10 @@ the role mode, the effective agent parameters, and the policy floors.
 
 The harness blocks a third identical tool call with the same arguments and
 returns a corrective message; three blocked repeats end the run with a
-`loop_blocked` event and a summary that says so. After four reads of the same
-path, a read result also carries a short nudge to use the run state and act.
-It also limits repeated issue trees and stops a planner after a bounded number
-of research/verification calls without an issue write. Planner guidance tells
-it to plan from the request and tree, and to create a named new issue instead
-of researching source. Build and sudo get the same no-progress guard for
-edits, writes, and commands. `command describe issue` returns a direct hint
-that `issue` is a tool, not a command.
+`loop_blocked` event and a summary that says so. That is the only research
+guard: different ranges, new files, and new search scopes are left to the
+model and the prompt. `command describe issue` returns a direct hint that
+`issue` is a tool, not a command.
 
 Typed commands and runner gates run through the per-run process supervisor. The
 run detail **Processes** section shows each process, its status, pid, and output
@@ -408,27 +412,34 @@ and LSP health; `--semantic` adds module annotations; `--refresh` rebuilds the
 deterministic cache.
 
 Semantic annotations are module-level summaries with key files, edit hints, and
-search keywords. Every run builds a deterministic module index immediately from
-the repo map, so the semantic index is always fresh and costs no model call. LLM
-annotations are optional: they refresh only when `map.semantic_model` is pinned
-or `map.refresh = "always"`; otherwise the deterministic index is used. Generate
-them on demand with `machine_code map --semantic --refresh`. The semantic index
-is ranked by the request and capped at 3 KiB. `search { mode: "semantic" }`
-ranks modules by keyword overlap and returns their key files, so an agent can go
-from a concept or filename to the right file in one call.
+search keywords. Files over 400 lines also get a file-level entry whose
+keywords include their comment section headings, so a monolithic file such as
+`src/tui.ts` is searchable by section. Every run builds a deterministic module
+index immediately from the repo map, so the semantic index is always fresh and
+costs no model call. LLM annotations are optional: they refresh only when
+`map.semantic_model` is pinned or `map.refresh = "always"`; otherwise the
+deterministic index is used. Generate them on demand with
+`machine_code map --semantic --refresh`. The startup semantic map is
+module-level and capped at 3 KiB; file entries appear in `search` results.
+`search { mode: "semantic" }` ranks modules and large files by keyword overlap
+and returns their key files, so an agent can go from a concept or filename to
+the right file in one call.
 
 Each run keeps its working memory outside the transcript:
 
 ```text
 .machine_code/local/runs/<id>/
-  state.jsonl   facts, decisions, changes, next action
+  state.jsonl   facts, decisions, changes, next action, read coverage
   state.md      readable snapshot
   artifacts/    content-addressed tool bodies
 ```
 
 The model sees the run state plus the last step, not the full tool history. The
-`context` tool records decisions, focuses ranges, recalls artifacts, and resolves
-facts. A prompt that exceeds the run envelope or 90% of the selected model's
+state block includes merged Read coverage per file, so the model can see what
+it already knows. A next action older than six turns expires and is shown as
+unset. Re-reading the same 100-line band returns a nudge instead of the same
+bytes. The `context` tool records decisions, focuses ranges, recalls artifacts,
+and resolves facts. A prompt that exceeds the run envelope or 90% of the selected model's
 window blocks and writes a split report instead of truncating.
 
 `machine_code prompts [role]` prints the rendered agent prompt with its size.
@@ -445,6 +456,14 @@ missing level, adds acceptance criteria and dependencies, and applies
 `mc:plan` to Tasks. It does not hold `command`, `artifact`, or `pr`, so the
 `command describe issue` detour is impossible. Build and Review say `ask off`
 and report blockers; their ambiguity policy matches.
+
+A Task is one deliverable: one file-level change and at most **three**
+acceptance criteria, with a body under 4,000 chars. The harness enforces this
+when a Task is created, edited, or planned as ready, including graph creation.
+An oversized Task fails before it exists. A build run refuses an existing
+oversized Task and tells the operator to run the Planner. The Planner splits
+an oversized Task by editing it to one slice and creating sibling Tasks under
+the same Feature.
 
 LLM annotations are optional. An `edit`/`write` appends its path to
 `semantic.dirty` and a bounded entry to `changes.jsonl` with the turn, changing
@@ -475,7 +494,7 @@ LSP is optional and lazy. The registry covers TypeScript/JavaScript, Python,
 Rust, Go, C/C++, Java, Bash, Lua, YAML, JSON, HTML, CSS, Vue, Svelte, Ruby, PHP,
 C#, Kotlin, Swift, Zig, Terraform, Dockerfile, Nix, CMake, LaTeX, Markdown,
 Clojure, and Dart. A missing server disables only that language; map, outline,
-text, and structure search still work.
+sections, text, and structure search still work.
 
 `machine_code lsp list` shows every server, its file types, whether its binary
 is on PATH, and the install hint. `machine_code lsp status` shows only the
@@ -483,6 +502,12 @@ servers whose languages appear in the current repo.
 
 Tool modes:
 
+- `search { mode: "outline", path: "src/tui.ts" }` uses LSP document symbols
+  when a server is available, then falls back to the deterministic top-level
+  outline.
+- `search { mode: "sections", path: "src/tui.ts" }` lists comment headings
+  inside one file. Use it for large files whose useful blocks live inside one
+  giant function.
 - `search { mode: "symbols", path: "src/loop.ts", pattern: "RunRecorder" }`
   uses LSP document symbols when a path is given, workspace symbols otherwise,
   then falls back to the repo map.

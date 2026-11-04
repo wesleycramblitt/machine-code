@@ -14,7 +14,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
 import { readGitStatus, type GitStatusEntry } from "./git-status.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
@@ -59,6 +59,8 @@ export interface RunState {
   goal: string;
   phase: "orient" | "target" | "act" | "verify" | "done";
   nextAction?: string;
+  /** Turn that recorded the current next action. */
+  nextActionTurn?: number;
   facts: Fact[];
   workingSet: Ref[];
   open: OpenQuestion[];
@@ -70,7 +72,7 @@ type Entry =
   | { type: "fact"; fact: Fact }
   | { type: "stale"; id: string }
   | { type: "resolve"; id: string }
-  | { type: "next"; text: string }
+  | { type: "next"; text: string; turn?: number }
   | { type: "focus"; refs: Ref[] }
   | { type: "phase"; phase: RunState["phase"] }
   | { type: "open"; question: OpenQuestion }
@@ -165,6 +167,21 @@ function refLabel(ref: Ref): string {
   const symbol = ref.symbol ? ` (${ref.symbol})` : "";
   const artifact = ref.artifact ? ` · ${ref.artifact}` : "";
   return `${ref.path}${range}${symbol}${artifact}`;
+}
+
+/** Merge overlapping or adjacent line ranges for the compact read coverage. */
+function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const out: Array<[number, number]> = [];
+  for (const [start, end] of sorted) {
+    const last = out[out.length - 1];
+    if (last && start <= last[1] + 1) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      out.push([start, end]);
+    }
+  }
+  return out;
 }
 
 function writeTextAtomic(file: string, text: string): void {
@@ -303,6 +320,7 @@ export class RunStateStore {
       }
       case "next":
         this.state.nextAction = entry.text.trim() || undefined;
+        this.state.nextActionTurn = entry.turn ?? this.state.counters.turn;
         break;
       case "focus":
         this.state.workingSet = entry.refs.slice();
@@ -325,7 +343,7 @@ export class RunStateStore {
     if (!clean) return;
     const at = turn ?? this.currentTurn();
     if (kind === "next") {
-      this.append({ type: "next", text: clean.slice(0, 240) });
+      this.append({ type: "next", text: clean.slice(0, 240), turn: at });
       this.saveMarkdown();
       return;
     }
@@ -339,12 +357,14 @@ export class RunStateStore {
     }
     const refsParsed = refs.map(parseRef);
     const key = `${kind}:${sha1(`${clean}\0${refsParsed.map((ref) => ref.path).join("\0")}`)}`;
+    // Plans are decisions and need room for numbered steps. Findings stay small.
+    const cap = kind === "decision" ? 2_000 : 240;
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind,
-        text: clean.slice(0, 240),
+        text: clean.slice(0, cap),
         refs: refsParsed,
         turn: at,
         status: "active",
@@ -403,13 +423,18 @@ export class RunStateStore {
 
   addSearchFact(query: string, refs: Ref[], turn: number, hits = ""): void {
     const key = `search:${sha1(query)}`;
+    const normalized = refs.slice(0, 10).map((ref): Ref =>
+      this.repoRoot && isAbsolute(ref.path)
+        ? { ...ref, path: relative(this.repoRoot, ref.path) }
+        : ref,
+    );
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind: "finding",
         text: `search "${query}" -> ${refs.length} ref${refs.length === 1 ? "" : "s"}${hits ? `: ${hits}` : ""}`,
-        refs: refs.slice(0, 10),
+        refs: normalized,
         turn,
         status: "active",
         key,
@@ -587,21 +612,10 @@ export class RunStateStore {
     }
     if (assistantIndex < 0) return { changed: false };
     const assistant = messages[assistantIndex]!;
+    // Keep assistant prose for change intent, but do not store it as a state
+    // finding. Models write orientation chatter ("I'll start by...") that
+    // crowds out the tool evidence in the state block.
     const assistantText = textOf(assistant).replace(/\s+/g, " ").trim();
-    if (assistantText) {
-      this.append({
-        type: "fact",
-        fact: {
-          id: this.id(),
-          kind: "finding",
-          text: assistantText.slice(0, 240),
-          refs: [],
-          turn,
-          status: "active",
-          key: `finding:${sha1(assistantText.slice(0, 240))}`,
-        },
-      });
-    }
 
     const calls = toolCalls(assistant);
     const refs: Ref[] = [];
@@ -752,12 +766,54 @@ export class RunStateStore {
       const decisions = active.filter((fact) => fact.kind === "decision");
       const issues = active.filter((fact) => fact.kind === "issue");
       const findings = active.filter((fact) => fact.kind === "finding");
+      const readFacts = findings.filter((fact) => fact.key.startsWith("read:") && fact.refs.length > 0);
+      const otherFindings = findings.filter((fact) => !fact.key.startsWith("read:"));
       const changes = active.filter((fact) => fact.kind === "change");
+      const planDecision = decisions.some((fact) => /\bplan\b/i.test(fact.text));
       const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`];
-      if (this.state.nextAction) lines.push(`Next: ${this.state.nextAction}`);
       if (decisions.length > 0) {
         lines.push("Decisions:");
         for (const fact of decisions) lines.push(`- ${fact.text}`);
+      }
+      // A plan that has not changed for several turns is stale. Do not let the
+      // model follow yesterday's "explore" instruction forever. Once a plan
+      // exists, the next action is the first edit, not more reading.
+      const nextTurn = this.state.nextActionTurn;
+      const nextAge = nextTurn === undefined ? 0 : this.currentTurn() - nextTurn;
+      if (planDecision && changes.length === 0) {
+        lines.push("Next: Execute the plan: make the first edit.");
+      } else if (this.state.nextAction && nextAge <= 6) {
+        lines.push(`Next: ${this.state.nextAction}`);
+      } else {
+        lines.push(`Next: unset — record the next action with context note kind "next".`);
+      }
+      if (readFacts.length > 0) {
+        lines.push("Read coverage:");
+        const coverage = new Map<string, { ranges: Array<[number, number]>; symbols: Set<string>; all: boolean }>();
+        for (const fact of readFacts) {
+          const ref = fact.refs[0]!;
+          const entry = coverage.get(ref.path) ?? { ranges: [], symbols: new Set<string>(), all: false };
+          if (ref.range) entry.ranges.push([ref.range[0], ref.range[1]]);
+          else if (ref.symbol) entry.symbols.add(ref.symbol);
+          else entry.all = true;
+          coverage.set(ref.path, entry);
+        }
+        let shownPaths = 0;
+        for (const [path, entry] of coverage) {
+          if (shownPaths >= 12) {
+            lines.push(`- … ${coverage.size - shownPaths} more file(s) read`);
+            break;
+          }
+          shownPaths += 1;
+          const merged = mergeRanges(entry.ranges);
+          const parts = [
+            ...(entry.all ? ["all"] : []),
+            ...merged.slice(-10).map(([start, end]) => `${start}-${end}`),
+            ...[...entry.symbols].slice(0, 4).map((symbol) => `symbol ${symbol}`),
+          ];
+          const older = merged.length > 10 ? ` (+${merged.length - 10} earlier range(s))` : "";
+          lines.push(`- ${path}: ${parts.join(", ") || "seen"}${older}`);
+        }
       }
       if (issues.length > 0) {
         lines.push("Issues:");
@@ -767,9 +823,9 @@ export class RunStateStore {
           lines.push(`- … ${issues.length - shown.length} older issue(s) omitted; use issue list or tree to inspect`);
         }
       }
-      if (findings.length > 0) {
+      if (otherFindings.length > 0) {
         lines.push("Findings:");
-        for (const fact of findings) lines.push(`- t${fact.turn}: ${fact.text}`);
+        for (const fact of otherFindings) lines.push(`- t${fact.turn}: ${fact.text}`);
       }
       if (this.state.workingSet.length > 0) {
         lines.push("Working set:");

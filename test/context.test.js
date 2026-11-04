@@ -374,3 +374,30 @@ test("fork context keeps the whole parent chain", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a blocked parent's closing summary is not inherited as truth", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-context-"));
+  try {
+    mkdirSync(join(root, ".machine_code"), { recursive: true });
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      parentRuns: [
+        {
+          id: "blocked-parent",
+          request: "Build the task.",
+          status: "blocked",
+          stopReason: "loop",
+          error: "repeated identical tool calls detected",
+          finalText: "The task details are missing and no concrete task definition was produced.",
+        },
+      ],
+    });
+    assert.match(bundle.text, /status: blocked \(loop\)/);
+    assert.match(bundle.text, /error: repeated identical tool calls detected/);
+    assert.match(bundle.text, /previous attempt stopped early/);
+    assert.doesNotMatch(bundle.text, /result: The task details are missing/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

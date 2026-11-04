@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildRunIndex, orderIssueTree } from "../dist/tui/runs.js";
+import { buildRunIndex, focusRowIds, orderIssueTree } from "../dist/tui/runs.js";
 
 const repoA = "/work/alpha";
 const repoB = "/work/beta";
@@ -284,6 +284,52 @@ test("planning runs appear under the reserved Task 0 anchor", () => {
   const epicRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 8);
   assert.ok(epicRow && epicRow.kind === "issue");
   assert.equal(epicRow.rollup.runsTotal, 1);
+});
+
+test("focus keeps the selected branch, its peers, and descendants bright", () => {
+  const epicA = issue(10, "epic", "Epic A");
+  const epicB = issue(11, "epic", "Epic B");
+  const featureA = issue(20, "feature", "Feature A", { parent: epicA.ref });
+  const featureA2 = issue(21, "feature", "Feature A2", { parent: epicA.ref });
+  const featureB = issue(22, "feature", "Feature B", { parent: epicB.ref });
+  const taskA = issue(30, "task", "Task A", { parent: featureA.ref });
+  const taskB = issue(31, "task", "Task B", { parent: featureA.ref });
+  const taskB2 = issue(32, "task", "Task B2", { parent: featureB.ref });
+  const now = "2026-01-01T00:00:00.000Z";
+  const runs = [
+    run({ id: "a", issue: taskA.ref, startedAt: now, lastActivityAt: now }),
+    run({ id: "a2", issue: taskA.ref, startedAt: now, lastActivityAt: now }),
+    run({ id: "b", issue: taskB.ref, startedAt: now, lastActivityAt: now }),
+    run({ id: "b2", issue: taskB2.ref, startedAt: now, lastActivityAt: now }),
+  ];
+  const index = buildRunIndex({
+    runs,
+    issuesByRepo: new Map([[repoA, [epicA, epicB, featureA, featureA2, featureB, taskA, taskB, taskB2]]]),
+  });
+  const issueRow = (number) => {
+    const row = index.rows.find((candidate) => candidate.kind === "issue" && candidate.issue.ref.number === number);
+    assert.ok(row, `missing issue row #${number}`);
+    return row;
+  };
+  const runRow = (id) => {
+    const row = index.rows.find((candidate) => candidate.kind === "run" && candidate.run.id === id);
+    assert.ok(row, `missing run row ${id}`);
+    return row;
+  };
+  const bright = (selected) => {
+    const focus = focusRowIds(index.rows, selected);
+    assert.ok(focus);
+    return index.rows
+      .filter((row) => (row.kind === "issue" || row.kind === "run") && focus.has(row.id))
+      .map((row) => (row.kind === "issue" ? `#${row.issue.ref.number}` : row.run.id))
+      .sort();
+  };
+
+  assert.deepEqual(bright(issueRow(10)), ["#10", "#11", "#20", "#21"]);
+  assert.deepEqual(bright(issueRow(20)), ["#10", "#20", "#21", "#30", "#31"]);
+  assert.deepEqual(bright(issueRow(30)), ["#10", "#20", "#30", "#31", "a", "a2"]);
+  assert.deepEqual(bright(runRow("a")), ["#10", "#20", "#30", "a", "a2"]);
+  assert.equal(focusRowIds(index.rows, index.rows[0]), null);
 });
 
 test("a Task lists every run associated with it", () => {

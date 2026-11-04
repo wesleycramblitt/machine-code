@@ -34,7 +34,7 @@ import {
 } from "../issues/reserved.js";
 import { checkCompletion, cascadeReserved } from "../issues/completion.js";
 import { renderPlanMarker, type PlanMarker, type PlanReview, type PlanRole, type PlanStatus, type PlanVerification, type PlanWorktree } from "../plan/schema.js";
-import { validatePlanIssue } from "../plan/validate.js";
+import { taskSizeErrors, validatePlanIssue } from "../plan/validate.js";
 import type { Layout } from "../paths.js";
 import type { RunRecorder } from "../state/runs.js";
 import type { RunStateStore } from "../context/state.js";
@@ -386,6 +386,22 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
               'Add a body with "## Acceptance criteria" bullets to each task and retry.',
           );
         }
+        const oversized = graph.tasks
+          .map((task) => ({
+            key: task.key,
+            errors: taskSizeErrors({
+              acceptance: parseAcceptance(task.body ?? ""),
+              body: task.body ?? "",
+            }),
+          }))
+          .filter((task) => task.errors.length > 0);
+        if (oversized.length > 0) {
+          return fail(
+            `graph has oversized Tasks: ${oversized
+              .map((task) => `${task.key} (${task.errors.join("; ")})`)
+              .join(" | ")}. Split each into smaller Tasks and retry.`,
+          );
+        }
         const createdNodes = new Map<string, Issue>();
         const resolveDependencies = (values: string[] | undefined): IssueRef[] | undefined => {
           const refs = (values ?? []).map((value) => {
@@ -511,6 +527,12 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           const reserved = await ensureEpicReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
           parentEpicTask0 = reserved.task0;
         }
+        if (params.kind === "task") {
+          const errors = taskSizeErrors({ acceptance: parseAcceptance(body), body });
+          if (errors.length > 0) {
+            return fail(`Task is too large: ${errors.join("; ")}. Split it into smaller Tasks and retry.`);
+          }
+        }
         const blockedBy = await dependencies([params.blocked_by, params.depends_on]);
         const created = await ctx.provider.create({
           title: params.title,
@@ -577,6 +599,12 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.reserved && params.title !== undefined) {
           return fail("reserved issues cannot be retitled (their identity is the reserved role)");
+        }
+        if (target.kind === "task" && params.body !== undefined) {
+          const errors = taskSizeErrors({ acceptance: parseAcceptance(params.body), body: params.body });
+          if (errors.length > 0) {
+            return fail(`Task is too large: ${errors.join("; ")}. Split it into smaller Tasks and retry.`);
+          }
         }
         const blockedBy = await dependencies([params.blocked_by, params.depends_on], target.ref);
         const updated = await ctx.provider.update(target.ref, {

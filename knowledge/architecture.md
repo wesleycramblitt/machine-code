@@ -21,8 +21,8 @@ state, selection, and verification; the model owns decisions and edits.
 ## Layers
 
 - **CLI** (`src/cli.ts`): commands, flags, TUI, run/report entry points.
-- **Run loop** (`src/loop.ts`): turn budget, token budget, guards, retries,
-  final-answer fallback, semantic refresh scheduling.
+- **Run loop** (`src/loop.ts`): turn budget, token budget, exact-repeat guard,
+  retries, final-answer fallback, semantic refresh scheduling.
 - **Context** (`src/context/`): issue hierarchy, packets, knowledge files,
   plans, skills, tool index, run-state rendering, manifest/provenance.
 - **Selection** (`src/select.ts`, `src/catalogue/`): capability floors, cost,
@@ -42,9 +42,10 @@ Tool-using roles use native structured tool calls from the provider API. The
 provider returns `toolCall` blocks (or the provider-equivalent); the loop
 executes them and returns tool results in the next request.
 
-A text-only response that contains tool-call markup is malformed. The loop
-records `malformed_tool_call`, cools the model, and rotates to another model.
-If no model remains, the run fails. It never marks that response completed.
+A text-only response that contains tool-call markup, or a tool call with
+provider markup inside its arguments, is malformed. The loop records
+`malformed_tool_call`, cools the model, and rotates to another model. If no
+model remains, the run fails. It never marks that response completed.
 
 Catalogue `toolCall` flags are metadata, not proof. OpenRouter rows infer the
 flag from endpoint parameters. A model can accept `tools` and still return text
@@ -56,9 +57,14 @@ the remaining probe work.
 1. **Git** gives the file set, head, and dirty paths.
 2. **Repo map** gives paths, line counts, languages, and top-level symbols.
 3. **Semantic/module index** routes a concept or filename to modules and key
-   files. It is deterministic and always fresh; LLM annotations are optional.
+   files. Large files get a file-level entry with keywords from their comment
+   section headings. It is deterministic and always fresh; LLM annotations are
+   optional.
 4. **LSP** gives exact definition, references, hover, diagnostics, and rename
-   for a file position. It is lazy and language-specific.
+   for a file position. It backs `outline` with document symbols when a run's
+   process supervisor is available. It is lazy and language-specific.
+5. **Sections** lists comment headings inside one file for blocks that live
+   inside one giant function and cannot appear in a top-level outline.
 
 ## Invariants
 
@@ -67,6 +73,9 @@ the remaining probe work.
 - One logical change per tool call; read the smallest unit that justifies it.
 - Tool calls are structured. Text tool-call markup is malformed; rotate models
   or fail, never complete.
+- A Task is one deliverable: one file-level change, at most three acceptance
+  criteria, and a body under 4,000 chars. Oversized Tasks are rejected before
+  creation or build.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
 - Prompts use ASD-STE100 and end with the role's typed terminal line.
 

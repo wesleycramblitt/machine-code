@@ -39,7 +39,8 @@ import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBra
 import { createIssueProvider } from "./issues/index.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved, isReserved } from "./issues/reserved.js";
-import { resolveRunTarget } from "./issues/work.js";
+import { isGenericTaskRequest, issueRequestVerb, issueRunRequest, resolveRunTarget } from "./issues/work.js";
+import { taskSizeErrors } from "./plan/validate.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
 import { closeCompletedTask } from "./orchestrator/closure.js";
 import { loadAvailability, saveAvailability } from "./availability.js";
@@ -127,6 +128,9 @@ Usage:
   machine_code run --agent general [--provider <id>] [--model <key>] "<question>"
   machine_code run --agent planner "<plan a project>" [--issue <n>]
   machine_code run --agent planner|build|review|general|sudo "<task>" [--issue <n> [--auto-issue]]
+  machine_code run --agent build --issue <n>
+                                    Run the task attached to issue <n> without a prompt.
+                                    The issue title and Deliverable become the objective.
   machine_code run --agent sudo "<rare task>" [--worktree]
                                     Sudo edits the main tree by default; --worktree isolates it.
                                     Build and orchestrated runs use an isolated worktree:
@@ -877,9 +881,13 @@ async function cmdRun(argv: string[]): Promise<number> {
   const issueTypeFlag = flags.get("issue-type") ?? "task";
   const featureFlag = flags.get("feature");
   const baseFlag = flags.get("base");
-  const request = positional.join(" ").trim();
+  let request = positional.join(" ").trim();
 
-  if (request.length === 0) fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
+  // A task-attached run can derive its objective from the issue. Only an
+  // untracked run needs the human to type one.
+  if (request.length === 0 && issueFlag === undefined) {
+    fail(`run needs a question, or pass --issue N to run a task`);
+  }
   if (issueTypeFlag !== "task" && issueTypeFlag !== "feature") fail(`--issue-type must be task or feature`);
 
   let issueNumber: number | undefined;
@@ -1020,6 +1028,65 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
   }
 
+  // Issue association: runs attach to Tasks only. Resolve before the run
+  // record so a task-attached run can derive its request from the issue
+  // instead of a typed prompt.
+  const planningAgent = agentNameParsed === "planner" || agentNameParsed === "review";
+  let issueRef: IssueRef | undefined;
+  let linkedIssue: Issue | undefined;
+  let createdIssues: Issue[] = [];
+  const issueBundle = await createIssueProvider(l, machine);
+  if (issueFlag !== undefined) {
+    if (issueBundle.provider.kind === "none") {
+      if (machine.issues.policy === "required") {
+        fail(`issue tracking is required but unavailable: ${issueBundle.reason ?? "unknown reason"}`);
+      }
+      process.stderr.write(`warning: issue tracking unavailable (${issueBundle.reason ?? "unknown"}); --issue ignored for association\n`);
+    } else {
+      const rawRef = parseIssueRef(issueFlag, issueBundle.repo, "github");
+      if (request.length === 0 && flags.has("auto-issue")) {
+        fail("--auto-issue needs a task description");
+      }
+      let resolved;
+      try {
+        resolved = await resolveRunTarget({
+          provider: issueBundle.provider,
+          ref: rawRef,
+          request: request || "task",
+          agent: agentNameParsed,
+          autoCreate: flags.has("auto-issue"),
+          reserved: { runCounts: new Map(), autoCloseEmpty: true },
+        });
+      } catch (error) {
+        if (error instanceof Error && "code" in error) fail((error as { message: string }).message);
+        throw error;
+      }
+      linkedIssue = resolved.issue;
+      issueRef = linkedIssue.ref;
+      issueNumber = linkedIssue.ref.number;
+      if (featureNumber === undefined && linkedIssue.parent?.number) featureNumber = linkedIssue.parent.number;
+      createdIssues = resolved.created;
+    }
+  }
+  if (linkedIssue && !planningAgent && (request.length === 0 || isGenericTaskRequest(request))) {
+    request = issueRunRequest(linkedIssue, issueRequestVerb(agentNameParsed));
+  }
+  if (request.length === 0) {
+    fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
+  }
+  if (
+    linkedIssue?.kind === "task" &&
+    (agentNameParsed === "build" || agentNameParsed === "sudo")
+  ) {
+    const errors = taskSizeErrors(linkedIssue);
+    if (errors.length > 0) {
+      fail(
+        `Task #${linkedIssue.ref.number} is not task-sized: ${errors.join("; ")}. ` +
+          `Run the planner to split it into smaller Tasks, then build one Task.`,
+      );
+    }
+  }
+
   // Probe cooling models with free metadata before a run record exists. A
   // recovered model can rejoin selection; if nothing is ready, block here
   // instead of starting a run that cannot make its first call.
@@ -1067,7 +1134,14 @@ async function cmdRun(argv: string[]): Promise<number> {
   const inheritWorktree = flags.has("inherit-worktree");
   let parentRun: import("./state/runs.js").RunSummary | undefined;
   /** Parent, grandparent, … nearest first, so a fork of a fork keeps the whole chain. */
-  const parentChain: Array<{ id: string; request: string; finalText?: string }> = [];
+  const parentChain: Array<{
+    id: string;
+    request: string;
+    finalText?: string;
+    status?: string;
+    stopReason?: string;
+    error?: string;
+  }> = [];
   const parentChainRuns: RunSummary[] = [];
   if (parentFlag !== undefined) {
     const allRuns = listAllRuns(l.home);
@@ -1083,6 +1157,9 @@ async function cmdRun(argv: string[]): Promise<number> {
         id: cursor.id,
         request: cursor.request,
         ...(cursor.finalText ? { finalText: cursor.finalText } : {}),
+        ...(cursor.status ? { status: cursor.status } : {}),
+        ...(cursor.stopReason ? { stopReason: cursor.stopReason } : {}),
+        ...(cursor.error ? { error: cursor.error } : {}),
       });
       cursor = cursor.parentRunId ? byId.get(cursor.parentRunId) : undefined;
     }
@@ -1119,49 +1196,17 @@ async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Issue association: runs attach to Tasks only. Epic/Feature input resolves
-  // to the reserved Task 0 for planning/review; implementation runs require a
-  // deliverable Task.
-  let issueRef: IssueRef | undefined;
-  const issueBundle = await createIssueProvider(l, machine);
-  if (issueFlag !== undefined) {
-    const bundle = issueBundle;
-    if (bundle.provider.kind === "none") {
-      if (machine.issues.policy === "required") {
-        fail(`issue tracking is required but unavailable: ${bundle.reason ?? "unknown reason"}`);
-      }
-      process.stderr.write(`warning: issue tracking unavailable (${bundle.reason ?? "unknown"}); --issue ignored for association\n`);
-    } else {
-      const rawRef = parseIssueRef(issueFlag, bundle.repo, "github");
-      const role = agentNameParsed;
-      let resolved;
-      try {
-        resolved = await resolveRunTarget({
-          provider: bundle.provider,
-          ref: rawRef,
-          request,
-          agent: role,
-          autoCreate: flags.has("auto-issue"),
-          reserved: { runCounts: new Map(), autoCloseEmpty: true },
-        });
-      } catch (error) {
-        if (error instanceof Error && "code" in error) fail((error as { message: string }).message);
-        throw error;
-      }
-      const resolvedIssue = resolved.issue;
-      issueRef = resolvedIssue.ref;
-      issueNumber = resolvedIssue.ref.number;
-      if (featureNumber === undefined && resolvedIssue.parent?.number) featureNumber = resolvedIssue.parent.number;
-      recorder.patchSummary({ issue: issueRef });
-      recorder.event("issue_linked", { issue: resolvedIssue.ref.number, kind: resolvedIssue.kind, source: "cli" });
-      for (const created of resolved.created) {
-        recorder.event("issue_created", {
-          issue: created.ref.number,
-          kind: created.kind,
-          parent: created.parent?.number,
-          auto: true,
-        });
-      }
+  // Record the resolved issue on the run after the recorder exists.
+  if (issueRef) {
+    recorder.patchSummary({ issue: issueRef });
+    recorder.event("issue_linked", { issue: issueRef.number, kind: linkedIssue?.kind ?? "task", source: "cli" });
+    for (const created of createdIssues) {
+      recorder.event("issue_created", {
+        issue: created.ref.number,
+        kind: created.kind,
+        parent: created.parent?.number,
+        auto: true,
+      });
     }
   }
 
@@ -1811,7 +1856,17 @@ function fmtEvent(event: Record<string, unknown>, verbose = false): string {
   }
   if (type === "turn_cap") return head(type, `reached ${rest.turns} turns`);
   if (type === "budget_exhausted") return head(type, `${rest.totalTokens} tokens (budget ${rest.budget})`);
-  if (type === "loop_blocked") return head(type, `${rest.tool} repeated ${rest.repeats} times`);
+  if (type === "loop_blocked") {
+    const detail =
+      rest.reason === "no-progress"
+        ? `no progress after ${rest.noProgressCalls ?? "?"} research call(s)`
+        : rest.reason === "next-required"
+          ? "no next action recorded"
+          : rest.reason === "plan-required"
+            ? "no concrete build plan recorded"
+            : `${rest.tool} repeated ${rest.repeats ?? "?"} times`;
+    return head(type, detail);
+  }
   if (type === "issue_created") return head(type, `#${rest.number} ${rest.kind} ${rest.title ?? ""}`);
   if (type === "issue_linked") return head(type, `#${rest.issue} under #${rest.parent}`);
   if (type === "plan_updated") return head(type, `#${rest.issue} ${rest.status} (${rest.verification})`);

@@ -28,7 +28,7 @@ import { issueTool } from "../dist/tools/issues.js";
 import { RunStateStore } from "../dist/context/state.js";
 import { parsePlanMarker } from "../dist/plan/schema.js";
 import { RunRecorder } from "../dist/state/runs.js";
-import { resolveRunTarget } from "../dist/issues/work.js";
+import { isGenericTaskRequest, issueRunRequest, resolveRunTarget } from "../dist/issues/work.js";
 
 class FakeProvider {
   constructor() {
@@ -590,6 +590,57 @@ test("creating a Task with acceptance auto-writes a ready plan", async () => {
   }
 });
 
+test("graph rejects a feature-sized Task before creating anything", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-size-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueTool(ctx).execute("g0", {
+      action: "graph",
+      graph: {
+        epic: { key: "epic", title: "Epic" },
+        features: [{ key: "f", title: "Feature" }],
+        tasks: [{
+          key: "t",
+          feature: "f",
+          title: "Feature-sized Task",
+          body: "## Acceptance criteria\n- one\n- two\n- three\n- four\n",
+        }],
+      },
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /oversized Tasks/);
+    assert.match(result.content[0].text, /max at most 3|at most 3/i);
+    assert.equal(p.issues.size, 0, "no partial graph is created");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("creating a feature-sized Task is rejected before it exists", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-oversized-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    await issueTool(ctx).execute("c1", { action: "create", kind: "epic", title: "Epic" });
+    await issueTool(ctx).execute("c2", { action: "create", kind: "feature", parent: "#1", title: "Feature" });
+    const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
+    const task = await issueTool(ctx).execute("c3", {
+      action: "create",
+      kind: "task",
+      parent: `#${featureIssue.ref.number}`,
+      title: "Feature-sized Task",
+      body: "## Acceptance criteria\n- one\n- two\n- three\n- four\n",
+    });
+    assert.equal(task.isError, true);
+    assert.match(task.content[0].text, /too large/);
+    assert.match(task.content[0].text, /split it into smaller Tasks/);
+    assert.equal([...p.issues.values()].some((issue) => issue.title === "Feature-sized Task"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("creating a Task without acceptance leaves it unplanned", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-autoplan-none-"));
   try {
@@ -876,6 +927,37 @@ test("auto-issue fills Epic → Feature → Task and reuses exact open children"
   });
   assert.equal(second.issue.ref.number, first.issue.ref.number);
   assert.equal(second.created.length, 0, "the exact-title open task is reused");
+});
+
+test("issueRunRequest derives a concrete objective from the task packet", () => {
+  const issue = {
+    ref: { provider: "github", repo: "o/r", number: 100 },
+    title: "Improve run tab hierarchy and integrate orchestrator kickoff",
+    body: [
+      "## Deliverable",
+      "",
+      "Improve run tab readability for orchestrator items.",
+      "",
+      "## Acceptance criteria",
+      "",
+      "- Run tab displays the hierarchy.",
+    ].join("\n"),
+    state: "open",
+    kind: "task",
+    labels: ["mc:task"],
+    children: [],
+    blockedBy: [],
+    blocking: [],
+    acceptance: ["Run tab displays the hierarchy."],
+  };
+  const request = issueRunRequest(issue);
+  assert.match(request, /^Implement o\/r#100: Improve run tab hierarchy/);
+  assert.match(request, /Deliverable: Improve run tab readability/);
+  assert.match(request, /Acceptance:\n- Run tab displays the hierarchy/);
+  assert.doesNotMatch(request, /## Deliverable/);
+  assert.equal(isGenericTaskRequest("Build the task."), true);
+  assert.equal(isGenericTaskRequest("Do the issue"), true);
+  assert.equal(isGenericTaskRequest("Implement #100 in the run tab"), false);
 });
 
 test("gh relation objects and arrays both normalize to node lists", async () => {

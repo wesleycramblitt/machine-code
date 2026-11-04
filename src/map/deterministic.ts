@@ -25,9 +25,10 @@ import {
   isSecretPath,
   truncateToBytes,
 } from "../tools/safety.js";
+import { sectionHeadings, sectionTitle } from "./sections.js";
 
 export const MAP_SCHEMA = 1 as const;
-export const MAP_VERSION = 1 as const;
+export const MAP_VERSION = 2 as const;
 export const MAP_CAP_BYTES = 32 * 1024;
 /** Files larger than this are listed but not scanned for symbols. */
 const SYMBOL_SCAN_BYTES = 1024 * 1024;
@@ -46,6 +47,18 @@ export interface MapFile {
   bytes: number;
   lines: number;
   symbols: MapSymbol[];
+  /** Comment banners in large files; used by the semantic file index. */
+  sections?: string[];
+}
+
+/** Comment section names for large files, or undefined for small files. */
+function sectionsFor(text: string, lines: number, bytes: number): string[] | undefined {
+  if (lines < 400 && bytes < 20 * 1024) return undefined;
+  const sections = sectionHeadings(text)
+    .map((heading) => sectionTitle(heading.text))
+    .filter(Boolean)
+    .slice(0, 24);
+  return sections.length > 0 ? sections : undefined;
 }
 
 export interface RepoMap {
@@ -318,13 +331,17 @@ export async function buildRepoMap(root: string, options: BuildMapOptions = {}):
 
   const files: MapFile[] = stats.map((stat) => {
     const text = readCapped(join(root, stat.path));
-    const symbols = text && !isBinary(text) ? extractSymbols(stat.path, text) : [];
+    const binary = text !== null && isBinary(text);
+    const symbols = text && !binary ? extractSymbols(stat.path, text) : [];
+    const lines = text ? text.split("\n").length : 0;
+    const sections = text && !binary ? sectionsFor(text, lines, stat.bytes) : undefined;
     return {
       path: stat.path,
       lang: language(stat.path),
       bytes: stat.bytes,
-      lines: text ? text.split("\n").length : 0,
+      lines,
       symbols,
+      ...(sections ? { sections } : {}),
     };
   });
   files.sort((a, b) => a.path.localeCompare(b.path));
@@ -445,12 +462,16 @@ export async function outlineFile(root: string, path: string): Promise<MapFile |
   // The file may be untracked or excluded from the map; parse it directly.
   const text = readCapped(join(root, path));
   if (text === null || isBinary(text)) return null;
+  const bytes = Buffer.byteLength(text, "utf8");
+  const lines = text.split("\n").length;
+  const sections = sectionsFor(text, lines, bytes);
   return {
     path: relative(path),
     lang: language(path),
-    bytes: Buffer.byteLength(text, "utf8"),
-    lines: text.split("\n").length,
+    bytes,
+    lines,
     symbols: extractSymbols(path, text),
+    ...(sections ? { sections } : {}),
   };
 }
 

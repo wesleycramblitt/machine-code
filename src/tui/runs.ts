@@ -464,6 +464,74 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   };
 }
 
+/**
+ * Rows that stay bright while the cursor sits on an issue or run.
+ *
+ * A focus keeps the selected row, its issue ancestors, its peers at the same
+ * level, and its immediate children bright: features under an epic, tasks
+ * under a feature, and runs under a task. Repo and section headings always
+ * stay bright; selecting one disables dimming.
+ */
+export function focusRowIds(
+  rows: readonly RunRow[],
+  selected: RunRow | undefined,
+): Set<string> | null {
+  if (!selected || (selected.kind !== "issue" && selected.kind !== "run")) return null;
+  const byId = new Map(rows.map((row) => [row.id, row] as const));
+  const focus = new Set<string>([selected.id]);
+
+  const ancestorsOf = (row: RunRow & { parent?: string }): RunRow[] => {
+    const out: RunRow[] = [];
+    const seen = new Set<string>();
+    let parent = row.parent;
+    while (parent && !seen.has(parent)) {
+      seen.add(parent);
+      const candidate = byId.get(parent);
+      if (!candidate) break;
+      out.push(candidate);
+      parent = "parent" in candidate ? candidate.parent : undefined;
+    }
+    return out;
+  };
+
+  for (const ancestor of ancestorsOf(selected)) focus.add(ancestor.id);
+
+  if (selected.kind === "issue") {
+    for (const row of rows) {
+      if (
+        row.kind === "issue" &&
+        row.parent === selected.parent &&
+        row.issue.kind === selected.issue.kind
+      ) {
+        focus.add(row.id);
+      }
+    }
+  } else {
+    for (const row of rows) {
+      if (row.kind === "run" && row.parent === selected.parent) focus.add(row.id);
+    }
+  }
+
+  const childKind =
+    selected.kind === "issue"
+      ? selected.issue.kind === "epic"
+        ? "feature"
+        : selected.issue.kind === "feature"
+          ? "task"
+          : selected.issue.kind === "task"
+            ? "run"
+            : undefined
+      : undefined;
+  for (const row of rows) {
+    if (row.kind !== "issue" && row.kind !== "run") continue;
+    if (row.parent !== selected.id) continue;
+    if (childKind === "run" ? row.kind === "run" : row.kind === "issue" && row.issue.kind === childKind) {
+      focus.add(row.id);
+    }
+  }
+  return focus;
+}
+
 /** Next/previous cursor row. Section headings are normal cursor stops. */
 export function moveSelection(index: number, delta: number, selectable: readonly RunRow[]): number {
   if (selectable.length === 0) return 0;

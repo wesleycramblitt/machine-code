@@ -54,20 +54,24 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.ok(!planner.def.tools.includes("command"), "planner must not hold command");
     assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
     assert.match(planner.prompt, /Inspect tree/);
-    assert.match(planner.prompt, /Reuse a non-reserved Epic\/Feature; else create the chain/);
-    assert.match(planner.prompt, /create Tasks under each Feature/i);
+    assert.match(planner.prompt, /Reuse an Epic\/Feature; else create the chain/);
+    assert.match(planner.prompt, /create missing Tasks under each Feature/i);
     assert.match(planner.prompt, /Ignore reserved anchors/);
     assert.match(planner.prompt, /do not write files/);
-    assert.match(planner.prompt, /do not read\/search source or call issue list/);
-    assert.match(planner.prompt, /tasks \(each with acceptance criteria\)/);
+    assert.match(planner.prompt, /do not read\/search source or issue list/);
+    assert.match(planner.prompt, /tasks \(acceptance each\)/);
+    assert.match(planner.prompt, /at most 3 acceptance criteria/);
+    assert.match(planner.prompt, /Split an oversized Task/);
     assert.match(planner.prompt, /request names a new Epic\/Feature\/Task/);
     assert.match(planner.prompt, /Verify every Task is plan ready/);
     assert.match(planner.prompt, /issue access create/);
 
     const build = resolveAgent(l, "build");
-    assert.match(build.prompt, /Task issue body is the packet/);
+    assert.match(build.prompt, /Task packet/);
     assert.match(build.prompt, /if empty, stop/);
-    assert.match(build.prompt, /do not list files or read whole large files/);
+    assert.match(build.prompt, /3-line change plan/);
+    assert.match(build.prompt, /Next must be an edit or needs_planning/);
+    assert.match(build.prompt, /map\/outline\/sections/);
 
     const sudo = resolveAgent(l, "sudo");
     assert.match(sudo.prompt, /use its Deliverable and Acceptance/);

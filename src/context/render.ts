@@ -69,7 +69,8 @@ export function renderPromptMessages(
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
-  const block = [mapIndex, startupContext, state.renderBlock()].filter(Boolean).join("\n\n");
+  // The bound task packet leads. It names the work; the repo map is reference.
+  const block = [startupContext, mapIndex, state.renderBlock()].filter(Boolean).join("\n\n");
   const user: MessageLike = {
     role: "user",
     content: block,

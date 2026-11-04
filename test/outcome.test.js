@@ -73,6 +73,32 @@ test("a repeated tool call block is reported as the stop reason", () => {
   assert.match(outcome.text, /repeated identical tool calls/);
 });
 
+test("a no-progress block is not reported as a repeated identical call", () => {
+  const outcome = summarizeRun({
+    summary: summary({ status: "blocked", error: "research continued without an edit, write, or command" }),
+    events: [
+      { type: "tool_call_start", toolCallId: "s1", tool: "search", args: { mode: "files", pattern: "src/tui*" } },
+      { type: "loop_blocked", tool: "search", reason: "no-progress", noProgressCalls: 12 },
+    ],
+  });
+  assert.equal(outcome.stopReason, "loop");
+  assert.match(outcome.headline, /research continued without an edit, write, or command/);
+  assert.match(outcome.text, /research continued without an edit, write, or command/);
+  assert.doesNotMatch(outcome.text, /repeated identical tool calls/);
+});
+
+test("a next-action block says the next action is missing", () => {
+  const outcome = summarizeRun({
+    summary: summary({ status: "blocked", error: "research continued without a next action" }),
+    events: [
+      { type: "tool_call_start", toolCallId: "s1", tool: "read", args: { path: "src/tui.ts" } },
+      { type: "loop_blocked", tool: "read", reason: "next-required", noProgressCalls: 6 },
+    ],
+  });
+  assert.equal(outcome.stopReason, "loop");
+  assert.match(outcome.text, /research continued without a next action/);
+});
+
 test("summary falls back to the last thinking when the model produced no text", () => {
   const outcome = summarizeRun({
     summary: summary({ status: "blocked", error: "turn cap reached (25) before the run finished" }),

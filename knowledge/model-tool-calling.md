@@ -72,9 +72,11 @@ The selector only checks the catalogue flag (`src/select.ts`,
 
 - `src/state/tool-call-text.ts` detects `<tool_call>`, `<tool_use>`,
   `<function_call>`, and `<invoke>` markup. It requires two tags, or one tag
-  plus `<param_key>`.
+  plus `<param_key>`. It also detects provider envelopes (`</rfl:parameter>`,
+  `<|start|>`, `<|end|>`, `<|channel|>`, `<|constrain|>`, `<|message|>`).
 - `src/loop.ts` checks the last assistant message after the agent goes idle. If
-  it has no native `toolCall` block and contains markup, the loop records
+  it has no native `toolCall` block and contains markup, or a native tool call
+  has provider markup inside its arguments, the loop records
   `malformed_tool_call`, classifies the response as malformed, cools the
   model, and retries.
 - `src/tui/timeline.ts` and the run detail show `malformed tool call`.

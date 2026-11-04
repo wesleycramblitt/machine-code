@@ -131,7 +131,13 @@ export function describeTimelineEvent(event: TimelineEventLike): string {
     case "budget_exhausted":
       return `budget exhausted ${num(event.totalTokens)} tok`;
     case "loop_blocked":
-      return `loop blocked ${text(event.tool)}`;
+      return event.reason === "no-progress"
+        ? "loop blocked no progress"
+        : event.reason === "next-required"
+          ? "loop blocked no next action"
+          : event.reason === "plan-required"
+            ? "loop blocked no build plan"
+            : `loop blocked ${text(event.tool)}`;
     case "child_spawned":
       return `child ${text(event.childRunId).slice(-8)} ${text(event.role)}`;
     case "child_completed":

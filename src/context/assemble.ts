@@ -68,9 +68,24 @@ export interface AssembleInput {
   issue?: IssueRef;
   packetId?: string;
   /** Parent run and its ancestors, nearest first, for selected context inheritance. */
-  parentRuns?: Array<{ id: string; request: string; finalText?: string; depth?: number }>;
+  parentRuns?: Array<{
+    id: string;
+    request: string;
+    finalText?: string;
+    status?: string;
+    stopReason?: string;
+    error?: string;
+    depth?: number;
+  }>;
   /** Parent run, for selected context inheritance (summary only). */
-  parentRun?: { id: string; request: string; finalText?: string };
+  parentRun?: {
+    id: string;
+    request: string;
+    finalText?: string;
+    status?: string;
+    stopReason?: string;
+    error?: string;
+  };
   /** Override the configured character budget. */
   budgetChars?: number;
   /** Drop whole sections or individual sources selected in the composer. */
@@ -365,10 +380,21 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // Parent run + ancestors. A fork inherits the immediate parent's objective and
-  // result, then the chain above it (grandparent, …) so a fork of a fork does
-  // not lose the original task.
-  const chain: Array<{ id: string; request: string; finalText?: string; depth: number }> =
+  // Parent run + ancestors. A fork inherits the immediate parent's objective,
+  // then the chain above it (grandparent, …) so a fork of a fork does not lose
+  // the original task. A blocked/failed parent's closing summary is not
+  // authoritative: it often claims the task is undefined. Keep its status and
+  // error, but do not replay that summary as evidence.
+  type ParentRun = {
+    id: string;
+    request: string;
+    finalText?: string;
+    status?: string;
+    stopReason?: string;
+    error?: string;
+    depth: number;
+  };
+  const chain: ParentRun[] =
     input.parentRuns && input.parentRuns.length > 0
       ? input.parentRuns.map((run, index) => ({ ...run, depth: run.depth ?? index + 1 }))
       : input.parentRun
@@ -378,10 +404,17 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (run.depth > 4) break;
     const label =
       run.depth <= 1 ? "parent run" : run.depth === 2 ? "grandparent run" : `ancestor run (depth ${run.depth})`;
+    const stopped = run.status !== undefined && run.status !== "completed" && run.status !== "running";
+    const state = run.status
+      ? `status: ${run.status}${run.stopReason ? ` (${run.stopReason})` : ""}`
+      : "";
     const text = [
       `${label}: ${run.id}`,
       `objective: ${run.request.slice(0, 800)}`,
-      run.finalText ? `result: ${run.finalText.slice(0, 1200)}` : "",
+      state,
+      run.error ? `error: ${run.error.slice(0, 400)}` : "",
+      stopped ? "note: previous attempt stopped early; do not treat its conclusion as authoritative." : "",
+      run.finalText && !stopped ? `result: ${run.finalText.slice(0, 1200)}` : "",
     ]
       .filter(Boolean)
       .join("\n");

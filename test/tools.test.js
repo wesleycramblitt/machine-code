@@ -221,6 +221,34 @@ test("search files expands brace globs and outline accepts a pattern path", asyn
   }
 });
 
+test("sections mode finds comment headings inside a large file", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-sections-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "big.ts"),
+      [
+        "/* ------------------------------------------------------------- runs */",
+        "const x = 1;",
+        "  /* --------------------------------------------------------- run keys */",
+        "// ---- orchestrate keys ----",
+        "## not a section in ts",
+      ].join("\n"),
+      "utf8",
+    );
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "sections", path: "src/big.ts" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /1: \/\* -+ runs \*\//);
+    assert.match(text, /3: \/\* -+ run keys \*\//);
+    assert.match(text, /4: \/\/ ---- orchestrate keys ----/);
+    assert.doesNotMatch(text, /not a section/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("text search respects ignore rules and a specific paths list", async () => {
   const root = initRepoWithSecrets();
   try {

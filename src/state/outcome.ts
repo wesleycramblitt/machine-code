@@ -113,14 +113,32 @@ function inferStopReason(status: RunStatus, events: readonly RunEvent[]): StopRe
   }
 }
 
-function headlineFor(reason: StopReason, error: string | undefined, capTurns: number): string {
+function loopHeadline(loopReason: string | undefined): string {
+  switch (loopReason) {
+    case "no-progress":
+      return "Stopped: research continued without an edit, write, or command.";
+    case "next-required":
+      return "Stopped: research continued without a next action.";
+    case "plan-required":
+      return "Stopped: no concrete build plan was recorded.";
+    default:
+      return "Stopped: repeated identical tool calls detected.";
+  }
+}
+
+function headlineFor(
+  reason: StopReason,
+  error: string | undefined,
+  capTurns: number,
+  loopReason?: string,
+): string {
   switch (reason) {
     case "turn-cap":
       return `Stopped at the turn cap (${capTurns || "?"}) before finishing.`;
     case "budget":
       return "Stopped: token budget exhausted.";
     case "loop":
-      return "Stopped: repeated identical tool calls detected.";
+      return loopHeadline(loopReason);
     case "completed":
       return "Completed.";
     case "error":
@@ -153,6 +171,7 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
   const stopReason = input.stopReason ?? inferStopReason(status, events);
   const capEvent = events.find((event) => event.type === "turn_cap");
   const capTurns = num(capEvent?.turns);
+  const loopReason = text(events.find((event) => event.type === "loop_blocked")?.reason) || undefined;
   // The cap event is authoritative for a capped run. Otherwise use the
   // recorder's turn count (old records counted model calls here).
   const turns = capTurns || summary.turns;
@@ -234,7 +253,7 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
     }
   }
 
-  const lines: string[] = [`Outcome: ${headlineFor(stopReason, summary.error, capTurns)}`];
+  const lines: string[] = [`Outcome: ${headlineFor(stopReason, summary.error, capTurns, loopReason)}`];
   if (summary.status === "completed" && stopReason !== "completed") {
     lines.push(`Recorded status: ${summary.status} (the run did not finish cleanly)`);
   } else if (summary.status !== "completed") {
@@ -334,7 +353,7 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
 
   const textOut = lines.join("\n");
   return {
-    headline: headlineFor(stopReason, summary.error, capTurns),
+    headline: headlineFor(stopReason, summary.error, capTurns, loopReason),
     text: textOut.length <= SUMMARY_CAP ? textOut : `${textOut.slice(0, SUMMARY_CAP).replace(/\s+$/, "")}\n…[summary truncated]`,
     stopReason,
   };

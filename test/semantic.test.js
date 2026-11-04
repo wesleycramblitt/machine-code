@@ -108,6 +108,30 @@ test("deterministic module index gives key files, symbols, and searchable keywor
   }
 });
 
+test("large files get a searchable file entry with section keywords", async () => {
+  const root = tempRepo();
+  try {
+    const body = ["/* ------------------------------------------------------------- runs */"];
+    for (let i = 0; i < 420; i += 1) body.push(`const filler${i} = ${i};`);
+    body.push("/* ------------------------------------------------- orchestrate keys */");
+    writeFileSync(join(root, "src", "big.ts"), body.join("\n"), "utf8");
+    const built = await buildRepoMap(root, { refresh: true });
+    const index = buildModuleIndex(built.map);
+    const entry = index.modules["src/big.ts"];
+    assert.ok(entry, "large file has a file-level entry");
+    assert.equal(entry.file, true);
+    assert.ok(entry.keywords?.includes("orchestrate"));
+    const matches = searchSemantic(index, "orchestrate run keys");
+    assert.equal(matches[0].module, "src/big.ts");
+    // Startup map stays module-level; file entries are search results.
+    const rendered = renderSemanticIndex(index);
+    assert.doesNotMatch(rendered, /src\/big\.ts —/);
+    assert.match(rendered, /src —/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("semantic validation drops unknown paths and empty responses", async () => {
   const root = tempRepo();
   try {

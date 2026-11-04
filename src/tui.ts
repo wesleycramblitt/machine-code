@@ -24,6 +24,7 @@ import {
   RUN_GROUPS,
   RUN_GROUP_LABELS,
   buildRunIndex,
+  focusRowIds,
   orderIssueTree,
   repoLabel,
   repoOf,
@@ -50,6 +51,7 @@ import { terminateAllProcesses, terminateProcessRecord } from "./processes/super
 import { AGENT_META, AGENT_NAMES, agentDef, type AgentDef, type IssueAccess } from "./agents.js";
 import { PRESETS, resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
+import { isGenericTaskRequest, issueRequestVerb, issueRunRequest } from "./issues/work.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
 import { loadCatalogue } from "./catalogue/load.js";
@@ -603,6 +605,18 @@ function selected(value: string, isSelected: boolean): string {
   return `${BG}${value.replaceAll(R, `${R}${BG}`)}${R}`;
 }
 
+/** Dimmed hierarchy text: darker than D, still readable on the body surface. */
+const DIM = "\x1b[38;2;96;102;112m";
+
+/** Replace every foreground color and attribute with one dark gray. */
+function dim(value: string): string {
+  return `${DIM}${value.replace(/\x1b\[[0-9;]*m/g, (seq) => {
+    if (seq === R) return `${R}${DIM}`;
+    if (seq === BG || seq.startsWith("\x1b[48;")) return seq;
+    return DIM;
+  })}${R}`;
+}
+
 function printable(data: string): string {
   let out = "";
   for (const ch of data) {
@@ -816,6 +830,10 @@ export async function runTui(): Promise<void> {
     return undefined;
   };
 
+  /** Objective text for an issue, using the verb for the current agent. */
+  const issuePrompt = (issue: Issue | undefined, agent: string): string =>
+    issue ? issueRunRequest(issue, issueRequestVerb(agent)) : "";
+
   const refreshIssues = async (scope: "current" | "all" = "current") => {
     if (issueRefreshing) return;
     issueRefreshing = true;
@@ -959,18 +977,31 @@ export async function runTui(): Promise<void> {
     issuePickText = "";
   };
 
-  const startNewRun = (issue?: IssueRef, repoRoot = l.repoRoot) => {
+  const startNewRun = (issue?: IssueRef, repoRoot = l.repoRoot, issueObj?: Issue) => {
     const previous = newrun;
     newRunRepo = repoRoot;
+    const knownIssue = issueObj ?? issueByRef(issue);
+    // A Task is implementation work: start with Build. A Feature or Epic is
+    // planning work: start with Planner. Untracked runs keep the last agent.
+    const preferredAgent = knownIssue
+      ? knownIssue.kind === "task"
+        ? "build"
+        : "planner"
+      : issue
+        ? "build"
+        : previous.agent;
     newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
-      ...(previous.agent ? { agent: previous.agent } : {}),
+      ...(preferredAgent ? { agent: preferredAgent } : {}),
       ...(issue ? { issue } : {}),
     };
     // Keep the selected agent's mode/preset coherent.
     const def = agentDef(layout(newRunRepo), newrun.agent);
     applyPreset(def.preset);
+    // A task-attached run starts with a concrete objective. The prompt stays
+    // editable, but the human no longer has to type one.
+    if (knownIssue) newrun.prompt = issuePrompt(knownIssue, newrun.agent);
     resetNewRunUi();
     screen = "newrun";
   };
@@ -1005,6 +1036,12 @@ export async function runTui(): Promise<void> {
       defaults,
       configuredProviders: configured,
     });
+    // A generic inherited request ("Build the task.") hides the real objective.
+    // When the run is attached to an issue, derive the request from it instead.
+    const forkIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
+    if (forkIssue && (!newrun.prompt.trim() || isGenericTaskRequest(newrun.prompt))) {
+      newrun.prompt = issuePrompt(forkIssue, agent);
+    }
     resetNewRunUi();
     newRunParentId = summary.id;
     screen = "newrun";
@@ -1012,10 +1049,18 @@ export async function runTui(): Promise<void> {
   };
 
   const cycleAgent = () => {
-    const index = NEW_RUN_AGENTS.indexOf(newrun.agent);
-    newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? newrun.agent;
+    const previousAgent = newrun.agent;
+    const issue = issueByRef(newrun.issue);
+    const previousPrompt = issuePrompt(issue, previousAgent);
+    const index = NEW_RUN_AGENTS.indexOf(previousAgent);
+    newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
     const def = agentDef(layout(newRunRepo), newrun.agent);
     applyPreset(def.preset);
+    // Keep an auto-derived objective in sync with the agent verb. A prompt the
+    // human edited stays untouched.
+    if (issue && (!newrun.prompt.trim() || newrun.prompt === previousPrompt)) {
+      newrun.prompt = issuePrompt(issue, newrun.agent);
+    }
   };
 
   const cycleNewRunSetting = (field: NewRunSettingField) => {
@@ -1101,7 +1146,11 @@ export async function runTui(): Promise<void> {
       };
     }
     const base = newRunPreviewCache;
-    const context: ContextPreview = { ...base.context, promptChars: newrun.prompt.length };
+    const previewIssue = issueByRef(newrun.issue);
+    const previewPrompt =
+      newrun.prompt.trim() ||
+      (previewIssue ? issuePrompt(previewIssue, newrun.agent) : "");
+    const context: ContextPreview = { ...base.context, promptChars: previewPrompt.length };
     const policy = base.policy;
     const machine = base.machine;
     const catalogue = base.catalogue;
@@ -1185,7 +1234,7 @@ export async function runTui(): Promise<void> {
   };
 
   const buildNewRunArgs = (): string[] | null => {
-    if (newrun.prompt.trim().length === 0) {
+    if (newrun.prompt.trim().length === 0 && !newrun.issue) {
       notify("type a task before starting");
       return null;
     }
@@ -1270,7 +1319,7 @@ export async function runTui(): Promise<void> {
     if (includedKnowledge.length > 0) {
       args.push("--context-include", JSON.stringify({ knowledge: includedKnowledge }));
     }
-    args.push(newrun.prompt);
+    if (newrun.prompt.trim().length > 0) args.push(newrun.prompt);
     return args;
   };
 
@@ -1511,6 +1560,7 @@ export async function runTui(): Promise<void> {
     });
     if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
     const selectedRow = runIndex.selectable[runsSel];
+    const focus = focusRowIds(runIndex.rows, selectedRow);
 
     let body: string[] = [];
     let actions = "";
@@ -1604,6 +1654,9 @@ export async function runTui(): Promise<void> {
             const context = `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}`;
             rendered.push(selected(` ${pad(left, Math.max(30, cols - visible(right) - visible(context) - 2))}${context}${right}`, isSelected));
           }
+        }
+        if (focus && !focus.has(row.id) && (row.kind === "issue" || row.kind === "run")) {
+          for (let i = 0; i < rendered.length; i++) rendered[i] = dim(rendered[i]!);
         }
         if (isSelected) {
           selectedEndLine = lines.length + rendered.length - 1;
@@ -1954,7 +2007,7 @@ export async function runTui(): Promise<void> {
         {
           text: semanticEnabled
             ? semantic
-              ? `semantic index · ${Object.keys(semantic.modules).length} modules${semanticDirty.length ? ` · ${semanticDirty.length} dirty` : ""}`
+              ? `semantic index · ${Object.values(semantic.modules).filter((entry) => !entry.file).length} modules${semanticDirty.length ? ` · ${semanticDirty.length} dirty` : ""}`
               : "semantic index · builds when available"
             : "semantic index · disabled",
           chars: semanticChars,
@@ -2099,7 +2152,7 @@ export async function runTui(): Promise<void> {
 
       const boxWidth = panelWidth;
       const inner = Math.max(12, boxWidth - 2);
-      const promptText = newrun.prompt || (newRunInsert ? "" : "Press p to type the task");
+      const promptText = newrun.prompt || (newRunInsert ? "" : newrun.issue ? "Press :! to run the selected task" : "Press p to type the task");
       // Include the cursor before wrapping so a freshly typed trailing space is
       // not trimmed away until the next keystroke.
       const promptLines = wrapText(newRunInsert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
@@ -2111,7 +2164,7 @@ export async function runTui(): Promise<void> {
           ])
         : joinCommands([
             command("p", "Prompt", undefined, M),
-            newrun.prompt.trim() ? commandBadge("Start", ":!", START_BG, WHITE) : "",
+            newrun.prompt.trim() || newrun.issue ? commandBadge("Start", ":!", START_BG, WHITE) : "",
           ]);
       const promptControls = newRunInsert
         ? promptActions
@@ -2695,7 +2748,7 @@ export async function runTui(): Promise<void> {
           const mapTone = mapCached ? G : Y;
           const semanticTone = semantic && semanticDirty.length === 0 ? G : Y;
           const semanticText = semantic
-            ? `${semanticDirty.length ? `stale (${semanticDirty.length})` : "cached"} · ${Object.keys(semantic.modules).length} modules`
+            ? `${semanticDirty.length ? `stale (${semanticDirty.length})` : "cached"} · ${Object.values(semantic.modules).filter((entry) => !entry.file).length} modules`
             : "missing";
           const lspReady = serverAvailable("typescript");
           lines.push(
@@ -2869,7 +2922,17 @@ export async function runTui(): Promise<void> {
             else if (type === "run_summary") eventLines.push(`${prefix} ${GR}${time}${R} ${B}${G}summary${R} ${D}${String(event.headline ?? event.stopReason ?? "")}${R}`);
             else if (type === "turn_cap") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}turn cap${R} ${D}${String(event.turns ?? "")} turns${R}`);
             else if (type === "budget_exhausted") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}budget exhausted${R} ${D}${String(event.totalTokens ?? "")} tok${R}`);
-            else if (type === "loop_blocked") eventLines.push(`${prefix} ${GR}${time}${R} ${RED}loop blocked${R} ${D}${String(event.tool ?? "")}${R}`);
+            else if (type === "loop_blocked") {
+              const reason =
+                event.reason === "no-progress"
+                  ? `no progress after ${String(event.noProgressCalls ?? "?")} research call(s)`
+                  : event.reason === "next-required"
+                    ? "no next action recorded"
+                    : event.reason === "plan-required"
+                      ? "no concrete build plan recorded"
+                      : String(event.tool ?? "");
+              eventLines.push(`${prefix} ${GR}${time}${R} ${RED}loop blocked${R} ${D}${reason}${R}`);
+            }
             else if (type === "context_assembled") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}context${R} ${D}${fmtTokens(Number(event.chars ?? 0))} chars${R}`);
             else eventLines.push(`${prefix} ${GR}${time}${R} ${D}${type}${R}`);
           }
@@ -3160,7 +3223,19 @@ export async function runTui(): Promise<void> {
   };
 
   const chooseIssue = (issue: Issue) => {
+    const previousIssue = issueByRef(newrun.issue);
+    const previousPrompt = issuePrompt(previousIssue, newrun.agent);
+    const hadIssue = Boolean(newrun.issue);
     newrun.issue = issue.ref;
+    // A blank composer that was opened with `N` still starts as general. Once
+    // a Task is attached, default to the agent that does the work.
+    if (!hadIssue && newrun.agent === "general") {
+      newrun.agent = issue.kind === "task" ? "build" : "planner";
+      applyPreset(agentDef(layout(newRunRepo), newrun.agent).preset);
+    }
+    if (!newrun.prompt.trim() || newrun.prompt === previousPrompt) {
+      newrun.prompt = issuePrompt(issue, newrun.agent);
+    }
     issuePick = null;
     const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
     let outcome: string;
@@ -3547,7 +3622,7 @@ export async function runTui(): Promise<void> {
       if (data === "n") {
         const row = index.selectable[runsSel];
         const issue = row?.kind === "issue" ? row.issue.ref : row?.kind === "run" ? row.run.issue : undefined;
-        startNewRun(issue, repoForRow(row));
+        startNewRun(issue, repoForRow(row), row?.kind === "issue" ? row.issue : undefined);
         draw();
         return;
       }
@@ -3583,7 +3658,7 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[A" || data === "k") { issueRunSel = Math.max(0, issueRunSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { issueRunSel = Math.min(Math.max(0, issueRuns.length - 1), issueRunSel + 1); draw(); return; }
       if (data === "\r" || data === "\n") { const run = issueRuns[issueRunSel]; if (run) { selectedRunId = run.id; runSection = "overview"; screen = "run"; } draw(); return; }
-      if (data === "n") { startNewRun(issue.ref, issueRoot); draw(); return; }
+      if (data === "n") { startNewRun(issue.ref, issueRoot, issue); draw(); return; }
       if (data === "p") { approveSelected(issue, undefined, issueRoot); draw(); return; }
       if (data === "o") { openUrl(issue.url); draw(); return; }
       draw();

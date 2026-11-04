@@ -49,7 +49,8 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     description:
       "Control run state. note records a finding, decision, open question, or next action. " +
       "focus sets the working set. recall returns an artifact by id. forget closes a fact or question. " +
-      "state returns the current rendered state.",
+      "state returns the current rendered state. " +
+      "Example: {\"action\":\"note\",\"kind\":\"next\",\"text\":\"Edit src/tui.ts to ...\"}.",
     parameters: ContextParams,
     async execute(_id, params: Static<typeof ContextParams>) {
       const memory = ctx.state;

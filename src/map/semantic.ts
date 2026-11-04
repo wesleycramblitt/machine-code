@@ -30,6 +30,8 @@ export interface SemanticEntry {
   editHints?: string[];
   /** Concrete search terms: filenames, symbols, concepts. */
   keywords?: string[];
+  /** True for a large-file entry; module entries omit it. */
+  file?: boolean;
 }
 
 export interface SemanticMatch {
@@ -74,6 +76,8 @@ export function searchSemantic(semantic: SemanticMap, query: string, limit = 10)
       if (hints.includes(token)) score += 2;
       if (keywords.includes(token)) score += 8;
     }
+    // A concrete file is more actionable than the module that contains it.
+    if (score > 0 && entry.file) score += 8;
     if (score > 0) matches.push({ module, entry, score });
   }
   return matches
@@ -106,6 +110,13 @@ export interface SemanticModelResult {
 
 /** Build a deterministic, always-fresh module index from the repo map. */
 export function buildModuleIndex(map: RepoMap): SemanticMap {
+  // Large files carry their comment banners in the repo map. This gives the
+  // semantic index section names that a top-level symbol map cannot see.
+  const sectionsByFile = new Map<string, string[]>();
+  for (const file of map.files) {
+    if (file.sections?.length) sectionsByFile.set(file.path, file.sections);
+  }
+
   const byModule = new Map<string, MapFile[]>();
   for (const file of map.files) {
     const module = moduleOf(file.path);
@@ -120,17 +131,28 @@ export function buildModuleIndex(map: RepoMap): SemanticMap {
     );
     const byBytes = [...files].sort((a, b) => b.bytes - a.bytes || a.path.localeCompare(b.path)).slice(0, 2);
     const keyFiles = [...new Set([...sorted.slice(0, 3), ...byBytes].map((file) => file.path))].slice(0, 4);
-    const symbols = [...new Set(sorted.flatMap((file) => file.symbols.map((symbol) => symbol.name)))].slice(0, 12);
+    const symbols = [...new Set(
+      sorted
+        .flatMap((file) => file.symbols.map((symbol) => symbol.name))
+        .filter((name) => name.length >= 4),
+    )]
+      .sort((a, b) => b.length - a.length || a.localeCompare(b))
+      .slice(0, 12);
+    const sections = [...new Set(
+      files.flatMap((file) => sectionsByFile.get(file.path) ?? []),
+    )].slice(0, 12);
     const basenames = keyFiles.map((path) => path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? path);
     const keywords = [...new Set([
       module,
       ...module.split("/"),
       ...basenames,
+      ...sections.flatMap((heading) => semanticTokens(heading)),
       ...symbols,
-    ].filter(Boolean))].slice(0, 16);
+    ].filter(Boolean))].slice(0, 24);
     const summary = [
       basenames.join(", "),
       symbols.length > 0 ? symbols.slice(0, 8).join(", ") : "",
+      sections.length > 0 ? `sections: ${sections.slice(0, 6).join(", ")}` : "",
     ].filter(Boolean).join(" — ");
     modules[module] = {
       summary: clip(summary || module, 240),
@@ -138,6 +160,37 @@ export function buildModuleIndex(map: RepoMap): SemanticMap {
       keywords,
     };
   }
+
+  // File-level entries let `search semantic` return a monolithic file
+  // directly, without inventing a fake directory for it.
+  for (const file of map.files) {
+    if (file.lines < 400 && file.bytes < 20 * 1024) continue;
+    if (modules[file.path]) continue;
+    const symbols = file.symbols
+      .map((symbol) => symbol.name)
+      .filter((name) => name.length >= 4)
+      .sort((a, b) => b.length - a.length || a.localeCompare(b))
+      .slice(0, 12);
+    const sections = sectionsByFile.get(file.path) ?? [];
+    const basename = file.path.split("/").pop()?.replace(/\.[^.]+$/, "") ?? file.path;
+    const keywords = [...new Set([
+      basename,
+      ...sections.flatMap((heading) => semanticTokens(heading)),
+      ...symbols,
+    ].filter(Boolean))].slice(0, 40);
+    const summary = [
+      basename,
+      symbols.length > 0 ? symbols.slice(0, 6).join(", ") : "",
+      sections.length > 0 ? `sections: ${sections.slice(0, 5).join(", ")}` : "",
+    ].filter(Boolean).join(" — ");
+    modules[file.path] = {
+      summary: clip(summary, 240),
+      keyFiles: [file.path],
+      keywords,
+      file: true,
+    };
+  }
+
   return {
     schema: SEMANTIC_SCHEMA,
     baseCommit: map.head,
@@ -387,8 +440,17 @@ export function mergeSemantic(input: MergeInput): SemanticMap | null {
   const parsed = parseJson(input.response) as { modules?: Record<string, unknown> } | null;
   if (!parsed?.modules) return null;
   const modules: Record<string, SemanticEntry> = { ...(input.existing?.modules ?? {}) };
+  // Refresh deterministic file entries (section headings change with edits)
+  // and add any module entry that is missing.
+  const fresh = buildModuleIndex(input.map);
+  for (const [key, entry] of Object.entries(fresh.modules)) {
+    if (entry.file || !modules[key]) modules[key] = entry;
+  }
   const allowed = new Set(moduleNames(input.map));
-  for (const module of Object.keys(modules)) if (!allowed.has(module)) delete modules[module];
+  const files = new Set(input.map.files.map((file) => file.path));
+  for (const [module, entry] of Object.entries(modules)) {
+    if (entry.file ? !files.has(module) : !allowed.has(module)) delete modules[module];
+  }
   const acceptedModules = new Set<string>();
   for (const module of input.modules) {
     const entry = validEntry(parsed.modules[module], input.map, module);
@@ -437,12 +499,16 @@ export function renderSemanticIndex(semantic: SemanticMap | null, maxBytes = 3_0
   const ranked = new Map(
     (query.trim() ? searchSemantic(semantic, query, 16) : []).map((match) => [match.module, match.score]),
   );
-  const modules = Object.entries(semantic.modules).sort(([a], [b]) => {
-    const scoreA = ranked.get(a) ?? 0;
-    const scoreB = ranked.get(b) ?? 0;
-    if (scoreA !== scoreB) return scoreB - scoreA;
-    return a.localeCompare(b);
-  });
+  // The startup map stays module-level. File entries are search results, not
+  // index lines; including them would crowd the 3 KiB budget.
+  const modules = Object.entries(semantic.modules)
+    .filter(([, entry]) => !entry.file)
+    .sort(([a], [b]) => {
+      const scoreA = ranked.get(a) ?? 0;
+      const scoreB = ranked.get(b) ?? 0;
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return a.localeCompare(b);
+    });
   const lines = ["<semantic-map>"];
   for (const [module, entry] of modules) {
     const files = entry.keyFiles?.length ? ` · files: ${entry.keyFiles.join(", ")}` : "";

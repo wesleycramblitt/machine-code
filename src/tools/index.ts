@@ -35,6 +35,7 @@ import {
   rangeAround,
 } from "../map/deterministic.js";
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
+import { sectionHeadings } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
 import { issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
@@ -91,7 +92,8 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     label: "read",
     description:
       "Read a file inside the worktree. Use symbol or around for a surgical range; offset/limit page. " +
-      "Capped at 24 KiB per call; a bare full read of a larger file returns its outline. Binary files are rejected.",
+      "Capped at 24 KiB per call; a bare full read of a larger file returns its outline. Binary files are rejected. " +
+      "Examples: {\"path\":\"src/tui.ts\",\"offset\":2400,\"limit\":120}; {\"path\":\"src/tui.ts\",\"symbol\":\"runTui\"}.",
     parameters: ReadParams,
     async execute(_id, params: Static<typeof ReadParams>) {
       try {
@@ -240,7 +242,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
 /* ------------------------------------------------------------------ search */
 
 const SEARCH_MODES: readonly string[] = [
-  "map", "files", "outline", "text", "structure", "json", "yaml",
+  "map", "files", "outline", "sections", "text", "structure", "json", "yaml",
   "definition", "references", "symbols", "info", "semantic",
 ];
 
@@ -251,6 +253,7 @@ const SearchParams = Type.Object({
         Type.Literal("map"),
         Type.Literal("files"),
         Type.Literal("outline"),
+        Type.Literal("sections"),
         Type.Literal("text"),
         Type.Literal("structure"),
         Type.Literal("json"),
@@ -264,7 +267,7 @@ const SearchParams = Type.Object({
       { description: "Search mode (default text)." },
     ),
   ),
-  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic, symbol name for LSP modes." })),
+  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic, symbol filter for LSP modes. outline/sections use path." })),
   path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
   paths: Type.Optional(
     Type.Array(Type.String(), {
@@ -305,11 +308,12 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     name: "search",
     label: "search",
     description:
-      "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing, globs support {a,b}), outline (one file's symbols; path or pattern), text (regex), " +
+      "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing, globs support {a,b}), outline (one file's symbols; path or pattern), " +
+      "sections (comment headings inside one file, e.g. `/* ---- run keys ---- */`; path required), text (regex), " +
       "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), semantic (rank modules/key files by concept or filename), " +
       "symbols (LSP document/workspace symbols when a server is available, else repo map), and LSP definition/references/info (needs path+line+column). " +
-      "text accepts paths to search a specific file list. Never touches excluded directories " +
-      "(node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
+      "text accepts paths to search a specific file list. Examples: {\"mode\":\"sections\",\"path\":\"src/tui.ts\"}; {\"mode\":\"outline\",\"path\":\"src/tui.ts\"}. " +
+      "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
     parameters: SearchParams,
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
@@ -384,7 +388,14 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               const visible = targets.filter((target) => !isSecretPath(toRelative(ctx.root, target)));
               if (visible.length === 0) return ok("no matches");
               args.push(...visible);
-              return await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
+              const result = await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
+              if (result.isError) return result;
+              // rg prints absolute targets; keep state and model paths repo-relative.
+              const text = result.content
+                .map((item) => (item.type === "text" ? item.text : ""))
+                .join("\n")
+                .replaceAll(`${ctx.root}/`, "");
+              return ok(text);
             }
             if (scopeIsFile) args.push(params.path ?? scope);
             return await exec("rg", args, scopeIsFile ? ctx.root : scope, SEARCH_CAP_BYTES);
@@ -424,11 +435,52 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 .join("\n\n"),
             );
           }
+          case "sections": {
+            // Comment headings inside one large file. A giant function can
+            // hide every useful block from a top-level outline.
+            const sectionPath = params.path ?? params.pattern;
+            if (!sectionPath) return fail('sections mode requires a path (e.g. "src/tui.ts")');
+            const abs = resolveWithin(ctx.root, sectionPath);
+            if (isSecretPath(toRelative(ctx.root, abs))) return ok("no matches");
+            assertRegularFile(abs);
+            if (isBinaryFile(abs)) return fail(`refusing to read a binary file: ${sectionPath}`);
+            const text = readFileSync(abs, "utf8");
+            const lines = text.split("\n");
+            const found = sectionHeadings(text).map((heading) => `${heading.line}: ${heading.text}`);
+            if (found.length === 0) return ok(`no section headings in ${sectionPath}; use outline or text`);
+            return ok(`${sectionPath} (${lines.length} lines)\n${found.slice(0, limit).join("\n")}`);
+          }
           case "outline": {
             // Accept the path in `pattern` too: models often put the filename
             // there before they learn the schema.
             const outlinePath = params.path ?? params.pattern;
             if (!outlinePath) return fail('outline mode requires a path (e.g. "src/file.ts")');
+            // LSP document symbols see nested containers and give line:column
+            // positions. Fall back to the deterministic top-level outline.
+            const language = params.language ?? languageForPath(outlinePath);
+            // A real run supplies the process supervisor. Without it, do not
+            // start a detached LSP server from a library call or a test.
+            if (language && ctx.processes) {
+              const { formatDocumentSymbols, lspClientFor, serverAvailable } = await import("../lsp/index.js");
+              if (serverAvailable(language)) {
+                const client = lspClientFor(ctx.root, language, ctx.processes);
+                if (client) {
+                  const symbols = await client.documentSymbols(resolveWithin(ctx.root, outlinePath));
+                  if (symbols && symbols.length > 0) {
+                    const formatted = formatDocumentSymbols(symbols, outlinePath);
+                    if (formatted.length > 0) {
+                      const query = params.path ? (params.pattern ?? "").toLowerCase() : "";
+                      const filtered = query
+                        ? formatted.filter((line) => line.toLowerCase().includes(query))
+                        : formatted;
+                      return ok(
+                        `${outlinePath} (LSP symbols)\n${(filtered.length > 0 ? filtered : formatted).slice(0, limit).join("\n")}`,
+                      );
+                    }
+                  }
+                }
+              }
+            }
             const file = await outlineFile(ctx.root, outlinePath);
             if (!file) return fail(`no outline for ${outlinePath} (binary or unreadable)`);
             return ok(
