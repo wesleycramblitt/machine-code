@@ -15,6 +15,7 @@ under `.machine_code/agents/<role>.md`.
 | `model-overrides.toml` | Hand-authored capability/pricing corrections. |
 | `models/<owner>.toml` | Generated canonical model snapshot. |
 | `offers/<provider>/<owner>.toml` | Generated provider offers for those models. |
+| `scripts/reference-index.py` | Shipped reference-store index generator (Python 3 + PyYAML). |
 
 `models/` and `offers/` are regenerated; do not hand-edit them.
 
@@ -40,9 +41,12 @@ Task wins, then its Feature, then its Epic:
 ```markdown
 <!-- mc:context
 {"files":["src/parser.ts"],"knowledge":["knowledge/parser.md"],
+ "references":["glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions"],
  "skills":["reference"],"tools":["bench"],"scripts":["release-check"]}
 -->
 ```
+
+`references` cites exact files/anchors in `~/.machine_code/references/`.
 
 Tools live in `.machine_code/tools/<name>.toml`; plain scripts under
 `.machine_code/scripts/` are discovered too. Scaffold one with

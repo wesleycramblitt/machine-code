@@ -12,10 +12,11 @@ import type { Layout } from "../paths.js";
 import type { Issue, IssueRef } from "../issues/provider.js";
 import { artifactExists, artifactPath, listArtifacts, resolveArtifact, type ArtifactDef } from "../artifacts/registry.js";
 import { parseArtifactReferences, skillMetas } from "./references.js";
+import { readReference, referenceFileSize } from "../references/store.js";
 import { discoverPlanFiles } from "./plans.js";
 
 export interface PreviewSource {
-  kind: "issue" | "file" | "knowledge" | "skill" | "tool" | "script" | "plan" | "project";
+  kind: "issue" | "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;
@@ -32,6 +33,7 @@ export interface ContextPreview {
   artifacts: {
     files: string[];
     knowledge: string[];
+    references: string[];
     skills: string[];
     tools: ArtifactDef[];
     scripts: ArtifactDef[];
@@ -96,6 +98,7 @@ export function previewContext(
   const warnings: string[] = [];
   const files: string[] = [];
   const knowledge: string[] = [];
+  const references: string[] = [];
   const skills: string[] = [];
   const tools: ArtifactDef[] = [];
   const scripts: ArtifactDef[] = [];
@@ -131,6 +134,23 @@ export function previewContext(
       chars += size;
       sources.push({ kind: "knowledge", ref: path, origin, depth, chars: size, exists });
       if (!exists) warnings.push(`knowledge ${path} is missing`);
+    }
+    for (const citation of refs.references) {
+      if (references.includes(citation)) continue;
+      references.push(citation);
+      const read = readReference(layout, citation, 8 * 1024);
+      const size = read.ok ? read.text.length : 0;
+      chars += size;
+      sources.push({
+        kind: "reference",
+        ref: read.ok ? `${read.path}${read.anchor ? `#${read.anchor}` : ""}` : citation,
+        origin,
+        depth,
+        chars: size,
+        exists: read.ok,
+      });
+      if (!read.ok) warnings.push(`reference ${citation} is missing`);
+      else if (referenceFileSize(layout, citation) > 8 * 1024) warnings.push(`reference ${citation} is truncated`);
     }
     for (const name of refs.skills) {
       if (skills.includes(name)) continue;
@@ -209,7 +229,7 @@ export function previewContext(
     promptChars: prompt.length,
     sources,
     issueChain: chain,
-    artifacts: { files, knowledge, skills, tools, scripts },
+    artifacts: { files, knowledge, references, skills, tools, scripts },
     warnings,
   };
 }

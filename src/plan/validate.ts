@@ -9,6 +9,7 @@ import { join, resolve, sep } from "node:path";
 import { refKey, type Issue } from "../issues/provider.js";
 import { parsePlanMarker, type PlanMarker } from "./schema.js";
 import { parseArtifactReferences } from "../context/references.js";
+import { readReference } from "../references/store.js";
 import { artifactExists, resolveArtifact } from "../artifacts/registry.js";
 import type { Layout } from "../paths.js";
 
@@ -56,6 +57,10 @@ function contextErrors(issue: Issue, layout: Layout): string[] {
         }
       }
     }
+  }
+  for (const citation of refs.references) {
+    const read = readReference(layout, citation, 1);
+    if (!read.ok) errors.push(`referenced reference ${citation} is missing or outside the store`);
   }
   for (const [kind, names] of [["tool", refs.tools], ["script", refs.scripts]] as const) {
     for (const name of names) {

@@ -6,12 +6,14 @@
  *   <!-- mc:context
  *   {"packets":["20261031-thermal"],"files":["src/parser.ts"],
  *    "knowledge":["knowledge/thermal.md"],"skills":["reference"],
+ *    "references":["glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions"],
  *    "tools":["bench"],"scripts":["release-check"]}
  *   -->
  *
- * `knowledge` remains an alias for reference material; `files` names source
- * files that matter to the issue. Unknown keys are ignored; missing paths
- * become manifest warnings.
+ * `knowledge` remains an alias for repository reference material; `files`
+ * names source files that matter to the issue; `references` names exact
+ * citations in the central `~/.machine_code/references/` store. Unknown keys
+ * are ignored; missing paths become manifest warnings.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,6 +23,8 @@ export interface ArtifactReferences {
   packets: string[];
   files: string[];
   knowledge: string[];
+  /** Exact central-store citations: `product/version/content/file.md#anchor`. */
+  references: string[];
   skills: string[];
   tools: string[];
   scripts: string[];
@@ -30,6 +34,7 @@ const EMPTY: ArtifactReferences = {
   packets: [],
   files: [],
   knowledge: [],
+  references: [],
   skills: [],
   tools: [],
   scripts: [],
@@ -48,6 +53,7 @@ export function parseArtifactReferences(body: string): ArtifactReferences {
       packets: strings(raw.packets),
       files: strings(raw.files),
       knowledge: strings(raw.knowledge),
+      references: strings(raw.references ?? raw.reference),
       skills: strings(raw.skills),
       tools: strings(raw.tools),
       scripts: strings(raw.scripts),

@@ -1,30 +1,59 @@
 ---
 name: reference
-description: Use when asked to gather or index web and PDF sources into attributed reference bundles.
+description: Use when asked to gather, index, or read attributed reference bundles from the central store.
 ---
 
 # Reference skill
 
 You are gathering and indexing sources, not writing project code.
 
-## Procedure
+The store is `~/.machine_code/references/`. It uses the same bundle layout as
+OpenCode:
 
-1. Search for relevant sources with `reference:search` (query).
-2. Open promising sources with `reference:browser` (url) to read them.
-3. For PDFs, download or locate them, then extract text with `reference:pdf-extract` (path).
-4. Convert each source into an attributed bundle: markdown with front-matter
-   (source URL, title, date, author) and a short summary. Cite the origin.
-5. Write the bundle with `reference:index` (path, content) under
-   `~/.machine_code/references/` (machine-wide) or `.machine_code/references/`
-   (project-local). Update `.machine_code/references/links.toml` for project links.
-6. Record what you indexed in the packet's context and acceptance.
+```text
+references/
+├── index.md                 # generated catalog
+├── topics.yaml              # generated topic -> citation map
+└── <product>/<version>/
+    ├── manifest.yaml        # provenance + status
+    ├── index.md             # hand-authored topic map
+    ├── api-index.md         # generated symbol -> citation map
+    ├── content/*.md         # small cited topic files
+    └── raw/                 # originals; never read
+```
+
+## Find and read
+
+1. Run `reference:find` with a topic, symbol, product, or phrase.
+2. Follow the returned citation with `reference:read` (`path#anchor`).
+3. Cite the exact `~/.machine_code/references/<product>/<version>/content/file.md#anchor`
+   and version. Do not crawl `raw/` or guess anchors.
+4. If the index has no plausible match, search the web with `reference:search`,
+   fetch a source with `reference:browser`, or extract a PDF with
+   `reference:pdf-extract`.
+
+## Create
+
+1. Write the bundle manifest with `reference:write`
+   (`<product>/<version>/manifest.yaml`).
+2. Write each content file with front-matter (`topics`, `symbols`, `tokens`)
+   and stable `{#anchor}` headings.
+3. Write the hand-authored `<product>/<version>/index.md` topic map.
+4. Run `reference:reindex` to regenerate the store catalog, topics, and
+   `api-index.md`.
+5. Reference the result from an issue:
+
+```markdown
+<!-- mc:context
+{"references":["<product>/<version>/content/file.md#anchor"]}
+-->
+```
 
 ## Rules
 
-- Never write to project code paths. The index writer is path-scoped to the
-  reference directories only.
+- Never write to project code paths. Reference writes are scoped to the store
+  or the project reference view.
 - Prefer primary sources. Attribute every claim to its source URL.
-- Keep bundles small and focused; one topic per bundle.
-- General agent never gets these tools. Only an Architect doing reference
-  work loads this skill.
-EOF
+- Keep one concept per content file; split when larger.
+- Read only the exact cited file and anchor. Never load a whole bundle.
+- General agent does not get reference commands. Use an agent with `command`.

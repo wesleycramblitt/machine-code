@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { CommandSpec, CommandContext, CommandRunResult } from "./registry.js";
 import type { Layout } from "../paths.js";
+import { findReferences, readReference, referenceStore, reindexReferences, writeReference } from "../references/store.js";
 
 export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   const out = new Map<string, CommandSpec>();
@@ -113,9 +114,8 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const content = typeof args.content === "string" ? args.content : "";
       if (!rel || !content) return { text: "reference:index requires path and content", isError: true };
       // Determine the reference root: machine-wide or repo.
-      const home = process.env.MACHINE_CODE_HOME ?? join(process.env.HOME ?? "", ".machine_code");
       const repoRef = join(ctx.root, ".machine_code", "references");
-      const machineRef = join(home, "references");
+      const machineRef = referenceStore(layout);
       // Allow writes only under these two roots.
       const roots = [repoRef, machineRef];
       // Pick the root based on the path prefix.
@@ -140,6 +140,90 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
         }
       }
       return { text: `indexed: ${target}`, isError: false };
+    },
+  });
+
+  // reference:find — search the cheap index layer (catalog/topics/api-index).
+  out.set("reference:find", {
+    name: "reference:find",
+    description: "Find reference bundles or exact content/file#anchor citations from the store's index.md, topics.yaml, and api-index.md. Never searches content or raw files.",
+    binary: "node",
+    args: () => [],
+    schema: {
+      query: { type: "string", required: true, description: "Topic, symbol, product, or phrase." },
+      limit: { type: "number", description: "Max index matches (default 20)." },
+    },
+    readonly: true,
+    timeoutMs: 30_000,
+    handler: async (args) => {
+      const query = typeof args.query === "string" ? args.query : "";
+      if (!query.trim()) return { text: "reference:find requires query", isError: true };
+      const limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit ?? 20))));
+      return { text: findReferences(layout, query, limit), isError: false };
+    },
+  });
+
+  // reference:read — read one cited content file and optional anchor.
+  out.set("reference:read", {
+    name: "reference:read",
+    description: "Read exactly one store citation, e.g. 'glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions'. Rejects raw/ and paths outside the store.",
+    binary: "node",
+    args: () => [],
+    schema: {
+      path: { type: "string", required: true, description: "Store-relative path or bundle key, with optional #anchor." },
+      limit: { type: "number", description: "Max bytes returned (default 12 KiB)." },
+    },
+    readonly: true,
+    timeoutMs: 30_000,
+    handler: async (args) => {
+      const path = typeof args.path === "string" ? args.path : "";
+      if (!path.trim()) return { text: "reference:read requires path", isError: true };
+      const cap = Math.max(1_024, Math.min(64 * 1_024, Math.floor(Number(args.limit ?? 12 * 1_024))));
+      const result = readReference(layout, path, cap);
+      if (!result.ok) return { text: result.error, isError: true };
+      const citation = `${result.path}${result.anchor ? `#${result.anchor}` : ""}`;
+      return { text: `${citation}\n\n${result.text}`, isError: false };
+    },
+  });
+
+  // reference:write — create one bundle file under the store or project view.
+  out.set("reference:write", {
+    name: "reference:write",
+    description: "Write one file under the reference store (default) or project view. Use for manifest.yaml, content/*.md, index.md, and links.yaml. Run reference:reindex afterwards.",
+    binary: "node",
+    args: () => [],
+    schema: {
+      path: { type: "string", required: true, description: "Path relative to the store or project view." },
+      content: { type: "string", required: true, description: "File content." },
+      scope: { type: "string", description: "store (default) or project." },
+    },
+    readonly: false,
+    timeoutMs: 30_000,
+    handler: async (args) => {
+      const path = typeof args.path === "string" ? args.path : "";
+      const content = typeof args.content === "string" ? args.content : "";
+      if (!path.trim() || !content) return { text: "reference:write requires path and content", isError: true };
+      const scope = args.scope === "project" ? "project" : "store";
+      const result = writeReference(layout, path, content, scope);
+      if (!result.ok) return { text: result.error, isError: true };
+      return { text: `wrote: ${result.path}\nNext: run reference:reindex.`, isError: false };
+    },
+  });
+
+  // reference:reindex — regenerate catalog, topics, and api-index files.
+  out.set("reference:reindex", {
+    name: "reference:reindex",
+    description: "Regenerate the store catalog/topics/api-index and any project view from links.yaml. Requires python3 + PyYAML and reference-index.py.",
+    binary: "node",
+    args: () => [],
+    schema: {
+      check: { type: "boolean", description: "Check for drift without writing." },
+    },
+    readonly: false,
+    timeoutMs: 120_000,
+    handler: async (args) => {
+      const result = reindexReferences(layout, args.check === true);
+      return { text: result, isError: /failed|not found|required/i.test(result) };
     },
   });
 

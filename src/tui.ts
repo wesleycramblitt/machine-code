@@ -201,7 +201,7 @@ interface ContextPanelItem {
   available?: boolean;
   counted?: boolean;
 }
-const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
+const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
 
 type NewRunState = ForkedRunSettings;
 
@@ -464,6 +464,7 @@ function contextTone(kind: string): string {
     case "task": return Y;
     case "packet": return M;
     case "knowledge": return C;
+    case "reference": return M;
     case "file": return W;
     case "skill": return G;
     case "tool": return M;
@@ -1672,6 +1673,7 @@ export async function runTui(): Promise<void> {
       const ctxBits = [
         preview.artifacts.files.length ? `files ${preview.artifacts.files.length}` : "",
         preview.artifacts.knowledge.length ? `knowledge ${preview.artifacts.knowledge.length}` : "",
+        preview.artifacts.references.length ? `references ${preview.artifacts.references.length}` : "",
         preview.artifacts.tools.length ? `tools ${preview.artifacts.tools.length}` : "",
         preview.artifacts.scripts.length ? `scripts ${preview.artifacts.scripts.length}` : "",
       ].filter(Boolean).join(" · ");
@@ -1772,6 +1774,7 @@ export async function runTui(): Promise<void> {
         referencedToolChars,
       );
       const knowledgeItems: ContextPanelItem[] = itemsFor(["knowledge"]);
+      const referenceItems: ContextPanelItem[] = itemsFor(["reference"]);
       const knownKnowledge = new Set(knowledgeItems.map((item) => item.key));
       for (const path of discoverKnowledgeFiles(newRunLayout)) {
         const key = `knowledge:${path}`;
@@ -1905,6 +1908,7 @@ export async function runTui(): Promise<void> {
           (item) =>
             item.depth === index &&
             (item.kind === "knowledge" ||
+              item.kind === "reference" ||
               item.kind === "tool" ||
               item.kind === "script" ||
               (item.kind === "skill" && !/^\d+ skills$/.test(item.ref))),
@@ -1961,6 +1965,7 @@ export async function runTui(): Promise<void> {
       const sections = [
         { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
         { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
+        { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
         { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
         { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
         { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },

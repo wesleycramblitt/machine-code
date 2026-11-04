@@ -303,9 +303,17 @@ Feature → Epic, nearest first:
 ```markdown
 <!-- mc:context
 {"files":["src/parser.ts"],"knowledge":["knowledge/parser.md"],
+ "references":["glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions"],
  "skills":["reference"],"tools":["bench"],"scripts":["release-check"]}
 -->
 ```
+
+`references` cites exact files and anchors in the central
+`~/.machine_code/references/` store. The store keeps archival bundles and a
+generated index layer; use `reference:find`, `reference:read`,
+`reference:write`, and `reference:reindex` rather than reading bundle content
+or `raw/` directly. `reference:reindex` regenerates the catalog, topic map,
+and per-bundle symbol index from `manifest.yaml` and content front-matter.
 
 Tools live in `.machine_code/tools/<name>.toml`, scripts under
 `.machine_code/scripts/`. `machine_code tools new <name>` scaffolds both.

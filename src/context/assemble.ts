@@ -26,6 +26,7 @@ import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
 import { parseArtifactReferences, skillMetas } from "./references.js";
+import { readReference } from "../references/store.js";
 import { discoverPlanFiles } from "./plans.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
@@ -82,6 +83,7 @@ const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
   issues: ["task", "feature", "epic"],
   files: ["file"],
   knowledge: ["knowledge"],
+  references: ["reference"],
   skills: ["skill"],
   tools: ["tool"],
   scripts: ["script"],
@@ -197,6 +199,36 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
 
         for (const path of refs.files) addFile(path, "file");
         for (const path of refs.knowledge) addFile(path, "knowledge");
+
+        for (const citation of refs.references) {
+          const key = `reference:${citation}`;
+          if (seenRefs.has(key)) continue;
+          seenRefs.add(key);
+          const read = readReference(layout, citation, 8 * KIB);
+          if (!read.ok) {
+            pending.push({
+              kind: "reference",
+              origin,
+              ref: citation,
+              depth,
+              body: "",
+              cap: 0,
+              band,
+              warning: `referenced reference ${citation} is missing or outside the store`,
+            });
+            continue;
+          }
+          const label = `${read.path}${read.anchor ? `#${read.anchor}` : ""}`;
+          pending.push({
+            kind: "reference",
+            origin,
+            ref: label,
+            depth,
+            body: `${label}\n\n${read.text}`,
+            cap: 8 * KIB,
+            band,
+          });
+        }
 
         for (const name of refs.skills) {
           const key = `skill:${name}`;

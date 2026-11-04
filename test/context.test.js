@@ -93,8 +93,8 @@ test("artifact reference + skill front-matter parsers", () => {
   const refs = parseArtifactReferences(
     '<!-- mc:context {"packets":["p1"],"knowledge":["knowledge/a.md"],"skills":["reference"],"tools":["scripts/x.sh"],"junk":1} -->',
   );
-  assert.deepEqual(refs, { packets: ["p1"], files: [], knowledge: ["knowledge/a.md"], skills: ["reference"], tools: ["scripts/x.sh"], scripts: [] });
-  assert.deepEqual(parseArtifactReferences("none"), { packets: [], files: [], knowledge: [], skills: [], tools: [], scripts: [] });
+  assert.deepEqual(refs, { packets: ["p1"], files: [], knowledge: ["knowledge/a.md"], references: [], skills: ["reference"], tools: ["scripts/x.sh"], scripts: [] });
+  assert.deepEqual(parseArtifactReferences("none"), { packets: [], files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] });
   const skill = parseSkillFrontMatter("---\nname: reference\ndescription: research\n---\n# body", "x");
   assert.deepEqual(skill, { name: "reference", description: "research", path: "x" });
 });
@@ -202,6 +202,34 @@ test("mc:context knowledge references load, missing ones warn, duplicates dedupe
     assert.equal(knowledge.length, 2, "one loaded + one missing warning (duplicate removed)");
     assert.ok(knowledge.some((s) => s.warning?.includes("missing")));
     assert.match(bundle.text, /use leapfrog/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("mc:context reference citations load from the central store", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-ref-"));
+  try {
+    const layout = fakeLayout(root);
+    const dir = join(layout.home, "references", "demo", "1", "content");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "alpha.md"), "## Alpha {#alpha}\n\nAlpha reference body.\n", "utf8");
+    const provider = hierarchyProvider();
+    provider.map.get(31).body = [
+      '<!-- mc:context {"references":["demo/1/content/alpha.md#alpha","demo/1/content/missing.md"]} -->',
+      "Task body",
+    ].join("\n");
+    const bundle = await assembleContext({
+      layout,
+      machine: machine(),
+      provider,
+      issue: { provider: "github", repo: "o/r", number: 31 },
+    });
+    const refs = bundle.sources.filter((s) => s.kind === "reference");
+    assert.equal(refs.length, 2, "one loaded + one missing warning");
+    assert.ok(refs.some((source) => source.ref === "demo/1/content/alpha.md#alpha"));
+    assert.ok(refs.some((source) => source.warning?.includes("missing")));
+    assert.match(bundle.text, /Alpha reference body/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

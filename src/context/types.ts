@@ -15,6 +15,7 @@ export type ContextKind =
   | "task"
   | "packet"
   | "knowledge"
+  | "reference"
   | "file"
   | "skill"
   | "tool"
