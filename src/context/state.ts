@@ -14,7 +14,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
 import { readGitStatus, type GitStatusEntry } from "./git-status.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
@@ -67,6 +67,16 @@ export interface RunState {
   workingSet: Ref[];
   open: OpenQuestion[];
   counters: { turn: number; steps: number; artifacts: number };
+}
+
+/** A file the model has read or changed in this run, for prompt working context. */
+interface WorkingFileState {
+  path: string;
+  ranges: Array<[number, number]>;
+  full: boolean;
+  lastTurn: number;
+  changed: boolean;
+  preloaded: boolean;
 }
 
 type Entry =
@@ -152,6 +162,23 @@ function lineCount(text: string): number {
   return text.length === 0 ? 0 : text.split("\n").length;
 }
 
+/** The line range an edit wrote, when the replacement is unique in the file. */
+function editRange(repoRoot: string | undefined, path: string, newText: string): [number, number] | undefined {
+  if (!repoRoot || newText.length === 0) return undefined;
+  try {
+    const abs = isAbsolute(path) ? path : join(repoRoot, path);
+    const after = readFileSync(abs, "utf8");
+    const first = after.indexOf(newText);
+    if (first < 0) return undefined;
+    if (after.indexOf(newText, first + 1) >= 0) return undefined;
+    const start = after.slice(0, first).split("\n").length;
+    const end = start + Math.max(0, newText.split("\n").length - 1);
+    return [start, end];
+  } catch {
+    return undefined;
+  }
+}
+
 function num(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
 }
@@ -171,6 +198,10 @@ function refLabel(ref: Ref): string {
   return `${ref.path}${range}${symbol}${artifact}`;
 }
 
+function rangesOverlap(a: readonly [number, number], b: readonly [number, number]): boolean {
+  return a[0] <= b[1] && b[0] <= a[1];
+}
+
 /** Merge overlapping or adjacent line ranges for the compact read coverage. */
 function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
   const sorted = [...ranges].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -184,6 +215,39 @@ function mergeRanges(ranges: ReadonlyArray<readonly [number, number]>): Array<[n
     }
   }
   return out;
+}
+
+/** Number selected line ranges, preserving gaps when the file is large. */
+function renderNumberedLines(
+  lines: readonly string[],
+  ranges: ReadonlyArray<readonly [number, number]>,
+  cap: number,
+): string {
+  const total = lines.length;
+  const out: string[] = [];
+  let used = 0;
+  let last = 0;
+  for (const [rawStart, rawEnd] of ranges) {
+    const start = Math.max(1, Math.min(total, rawStart));
+    const end = Math.max(start, Math.min(total, rawEnd));
+    if (last > 0 && start > last + 1) {
+      out.push(`... [lines ${last + 1}-${start - 1} omitted]`);
+    }
+    for (let index = start; index <= end; index += 1) {
+      const line = `${index}: ${lines[index - 1] ?? ""}`;
+      if (used + line.length + 1 > cap) {
+        out.push("... [working context truncated; use read or context recall for the rest]");
+        return out.join("\n");
+      }
+      out.push(line);
+      used += line.length + 1;
+    }
+    last = end;
+  }
+  if (last > 0 && last < total) {
+    out.push(`... [${total - last} more lines; use read or context recall]`);
+  }
+  return out.join("\n");
 }
 
 function writeTextAtomic(file: string, text: string): void {
@@ -208,6 +272,8 @@ export class RunStateStore {
   private sequence = 0;
   /** Git status at run construction; only deltas belong to this run. */
   private gitBaseline: Map<string, GitStatusEntry> | null = null;
+  /** Files that are in play; rendered as current content, not transcript. */
+  private workingFiles = new Map<string, WorkingFileState>();
 
   constructor(options: StateStoreOptions) {
     this.runDir = options.runDir;
@@ -287,12 +353,19 @@ export class RunStateStore {
       case "fact": {
         const fact = entry.fact;
         if (fact.kind === "change") {
+          const changed = fact.refs[0];
+          const changedPath = changed?.path;
+          const changedRange = changed?.range;
+          const overlaps = (ref: Ref): boolean =>
+            Boolean(changedPath) &&
+            ref.path === changedPath &&
+            (!changedRange || !ref.range || rangesOverlap(ref.range, changedRange));
           for (const existing of this.state.facts) {
             if (existing.status !== "active") continue;
             if (existing.key === fact.key) existing.status = "stale";
-            if (existing.refs.some((ref) => ref.path === fact.refs[0]?.path)) {
-              const newHash = fact.refs[0]?.hash;
-              if (!newHash || existing.refs.some((ref) => ref.path === fact.refs[0]?.path && ref.hash !== newHash)) {
+            if (existing.refs.some(overlaps)) {
+              const newHash = changed?.hash;
+              if (!newHash || existing.refs.some((ref) => overlaps(ref) && ref.hash !== newHash)) {
                 existing.status = "stale";
               }
             }
@@ -305,6 +378,13 @@ export class RunStateStore {
           same.turn = fact.turn;
         } else {
           this.state.facts.push({ ...fact, status: "active" });
+        }
+        if (fact.kind === "finding" && fact.key.startsWith("read:") && fact.refs[0]) {
+          const ref = fact.refs[0];
+          this.noteWorkingFile(ref.path, ref.range, fact.turn, false, false, !ref.range && !ref.symbol);
+        } else if (fact.kind === "change" && fact.refs[0]) {
+          const ref = fact.refs[0];
+          this.noteWorkingFile(ref.path, ref.range, fact.turn, true, false, !ref.range);
         }
         break;
       }
@@ -405,6 +485,145 @@ export class RunStateStore {
 
   getArtifact(id: string): string | null {
     return getArtifact(this.runDir, id);
+  }
+
+  private noteWorkingFile(
+    path: string,
+    range: [number, number] | undefined,
+    turn: number,
+    changed = false,
+    preloaded = false,
+    full = false,
+  ): void {
+    if (!path) return;
+    const entry = this.workingFiles.get(path) ?? {
+      path,
+      ranges: [],
+      full: false,
+      lastTurn: turn,
+      changed: false,
+      preloaded: false,
+    };
+    if (full) {
+      entry.full = true;
+      entry.ranges = [];
+    } else if (range) {
+      entry.ranges = mergeRanges([...entry.ranges, range]);
+    }
+    entry.lastTurn = Math.max(entry.lastTurn, turn);
+    if (changed) entry.changed = true;
+    if (preloaded) entry.preloaded = true;
+    this.workingFiles.set(path, entry);
+  }
+
+  /** Put task-relevant files in the working set before the first model call. */
+  seedWorkingFiles(paths: readonly string[], turn = 0): void {
+    if (!this.repoRoot) return;
+    for (const path of paths) {
+      try {
+        const abs = isAbsolute(path) ? path : join(this.repoRoot, path);
+        const content = readFileSync(abs, "utf8");
+        const artifact = this.putArtifact(content);
+        const total = content.length === 0 ? 1 : content.split("\n").length;
+        const ref: Ref = {
+          path,
+          range: [1, total],
+          hash: artifact.hash.slice(0, 16),
+          artifact: artifact.id,
+          bytes: artifact.bytes,
+        };
+        this.addReadFact(ref, turn);
+        this.noteWorkingFile(path, undefined, turn, false, true, true);
+      } catch {
+        // A missing or unreadable preload is not a run failure.
+      }
+    }
+  }
+
+  /**
+   * Current file content for the model. This is the task working set, not a
+   * transcript replay: changed files are re-read from disk, and unrelated
+   * history stays in artifacts.
+   */
+  renderWorkingContext(options: { maxChars?: number; perFileChars?: number; maxFiles?: number } = {}): string {
+    if (!this.repoRoot || this.workingFiles.size === 0) return "";
+    const maxChars = options.maxChars ?? 16_000;
+    const perFileChars = options.perFileChars ?? 6_000;
+    const maxFiles = options.maxFiles ?? 6;
+    const nextText = [
+      this.state.nextAction ?? "",
+      ...this.state.facts
+        .filter((fact) => fact.kind === "decision" && fact.status === "active")
+        .map((fact) => fact.text),
+    ].join("\n");
+    const focus = new Set(this.state.workingSet.map((ref) => ref.path));
+    const score = (entry: WorkingFileState): number =>
+      (entry.changed ? 1_000 : 0) +
+      (entry.preloaded ? 300 : 0) +
+      (focus.has(entry.path) ? 200 : 0) +
+      (nextText.includes(entry.path) || nextText.includes(basename(entry.path)) ? 500 : 0) +
+      Math.min(200, entry.lastTurn);
+    const currentTurn = this.currentTurn();
+    const entries = [...this.workingFiles.values()]
+      .filter((entry) => {
+        if (entry.changed || entry.preloaded || focus.has(entry.path)) return true;
+        if (nextText.includes(entry.path) || nextText.includes(basename(entry.path))) return true;
+        return currentTurn - entry.lastTurn <= 8;
+      })
+      .sort((a, b) => score(b) - score(a) || b.lastTurn - a.lastTurn || a.path.localeCompare(b.path))
+      .slice(0, maxFiles);
+
+    const blocks: string[] = [];
+    let used = 0;
+    for (const entry of entries) {
+      let raw: string;
+      try {
+        const abs = isAbsolute(entry.path) ? entry.path : join(this.repoRoot, entry.path);
+        raw = readFileSync(abs, "utf8");
+      } catch {
+        continue;
+      }
+      const lines = raw.split("\n");
+      const total = lines.length;
+      let ranges: Array<[number, number]>;
+      if (raw.length <= perFileChars) {
+        ranges = [[1, total]];
+      } else {
+        ranges = entry.ranges.length > 0 ? mergeRanges(entry.ranges) : [];
+        ranges.push([1, Math.min(40, total)]);
+        // A preloaded or fully read file is usually edited at the end. Keep the
+        // tail visible so the model does not need a re-read just to append.
+        if (entry.preloaded || entry.full) {
+          ranges.push([Math.max(1, total - 39), total]);
+        }
+        ranges = mergeRanges(ranges);
+      }
+      const body = renderNumberedLines(lines, ranges, perFileChars);
+      if (!body.trim()) continue;
+      const state = entry.changed
+        ? "current after change"
+        : entry.preloaded
+          ? "preloaded task file"
+          : "read";
+      const header = `### ${entry.path} (${state} · turn ${entry.lastTurn})`;
+      const block = `${header}\n${body}`;
+      const remaining = maxChars - used;
+      if (remaining <= 0) break;
+      const clipped =
+        block.length <= remaining
+          ? block
+          : `${block.slice(0, Math.max(0, remaining - 24)).replace(/\s+$/, "")}\n…[working context truncated]`;
+      blocks.push(clipped);
+      used += clipped.length;
+    }
+    if (blocks.length === 0) return "";
+    return [
+      "<working-context>",
+      "Current file content for this run. Prefer it to re-reading. Use context recall for omitted artifacts or ranges.",
+      "",
+      blocks.join("\n\n"),
+      "</working-context>",
+    ].join("\n");
   }
 
   addReadFact(ref: Ref, turn: number, excerptText = ""): void {
@@ -592,12 +811,13 @@ export class RunStateStore {
         detail: change?.detail ?? summary,
       });
     }
+    const label = ref.range ? `${path}:${ref.range[0]}-${ref.range[1]}` : path;
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind: "change",
-        text: `change ${path}: ${summary.replace(/\s+/g, " ").trim().slice(0, 160)}`,
+        text: `change ${label}: ${summary.replace(/\s+/g, " ").trim().slice(0, 160)}`,
         refs: [{ ...ref, path }],
         turn,
         status: "active",
@@ -725,10 +945,11 @@ export class RunStateStore {
         verified = true;
       } else if ((toolName === "edit" || toolName === "write") && path) {
         if (message.isError === true) continue;
-        const ref: Ref = { path };
         const oldText = str(args.oldString) ?? "";
         const newText = str(args.newString) ?? "";
         const content = str(args.content) ?? "";
+        const range = toolName === "edit" ? editRange(this.repoRoot, path, newText) : undefined;
+        const ref: Ref = { path, ...(range ? { range } : {}) };
         const delta =
           toolName === "edit"
             ? `edit ${lineCount(oldText)}->${lineCount(newText)} lines (${oldText.length}->${newText.length} chars)`
@@ -803,13 +1024,17 @@ export class RunStateStore {
       }
       if (readFacts.length > 0) {
         lines.push("Read coverage:");
-        const coverage = new Map<string, { ranges: Array<[number, number]>; symbols: Set<string>; all: boolean }>();
+        const coverage = new Map<
+          string,
+          { ranges: Array<[number, number]>; symbols: Set<string>; all: boolean; artifacts: string[] }
+        >();
         for (const fact of readFacts) {
           const ref = fact.refs[0]!;
-          const entry = coverage.get(ref.path) ?? { ranges: [], symbols: new Set<string>(), all: false };
+          const entry = coverage.get(ref.path) ?? { ranges: [], symbols: new Set<string>(), all: false, artifacts: [] };
           if (ref.range) entry.ranges.push([ref.range[0], ref.range[1]]);
           else if (ref.symbol) entry.symbols.add(ref.symbol);
           else entry.all = true;
+          if (ref.artifact) entry.artifacts.push(ref.artifact);
           coverage.set(ref.path, entry);
         }
         let shownPaths = 0;
@@ -826,7 +1051,9 @@ export class RunStateStore {
             ...[...entry.symbols].slice(0, 4).map((symbol) => `symbol ${symbol}`),
           ];
           const older = merged.length > 10 ? ` (+${merged.length - 10} earlier range(s))` : "";
-          lines.push(`- ${path}: ${parts.join(", ") || "seen"}${older}`);
+          const artifacts = [...new Set(entry.artifacts)].slice(-2);
+          const recall = artifacts.length > 0 ? ` · ${artifacts.join(", ")}` : "";
+          lines.push(`- ${path}: ${parts.join(", ") || "seen"}${older}${recall}`);
         }
       }
       if (issues.length > 0) {

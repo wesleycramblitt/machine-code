@@ -251,6 +251,7 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
   if (!id) return null;
   const startedAt = str(r.startedAt) ?? new Date(0).toISOString();
   const endedAt = str(r.endedAt);
+  const status = normalizeStatus(r.status);
   return {
     schemaVersion: SCHEMA_VERSION,
     id,
@@ -270,7 +271,7 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
       : undefined,
     settings: migrateRunSettings(r.settings),
     request: str(r.request) ?? "",
-    status: normalizeStatus(r.status),
+    status,
     pid: num(r.pid),
     startedAt,
     lastActivityAt: str(r.lastActivityAt) ?? endedAt ?? startedAt,
@@ -314,7 +315,9 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     error: str(r.error),
     finalText: str(r.finalText),
     summary: str(r.summary),
-    stopReason: str(r.stopReason),
+    // A recovered plan checkpoint can leave an old loop reason on a run that
+    // later completed. The terminal status wins.
+    stopReason: status === "completed" && str(r.stopReason) === "loop" ? "completed" : str(r.stopReason),
   };
 }
 

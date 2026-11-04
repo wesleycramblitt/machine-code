@@ -69,7 +69,8 @@ the remaining probe work.
 ## Invariants
 
 - Context is bounded; every block has provenance in `context.json`.
-- Run state is the memory; the transcript is not replayed.
+- Run state is the memory; the transcript is not replayed. Current working
+  files are re-read from disk into a bounded working context.
 - One logical change per tool call; read the smallest unit that justifies it.
 - Tool calls are structured. Text tool-call markup is malformed; rotate models
   or fail, never complete.
@@ -77,6 +78,12 @@ the remaining probe work.
   criteria, and a body under 4,000 chars. Oversized Tasks are rejected before
   creation or build.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
+- A completed run stays completed even when a recoverable plan checkpoint fired.
+- An edit invalidates only overlapping read ranges; read coverage carries
+  artifact ids for recall.
+- Build and sudo seed task-named files and inferred tests into a bounded
+  working context. The working context is re-read from disk after edits.
+- Read-only commands are cached until the next edit, write, or mutating command.
 - Prompts use ASD-STE100 and end with the role's typed terminal line.
 
 ## Configuration

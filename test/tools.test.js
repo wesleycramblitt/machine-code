@@ -213,6 +213,12 @@ test("search files expands brace globs and outline accepts a pattern path", asyn
     assert.match(filesText, /data\/b\.toml/);
     assert.doesNotMatch(filesText, /c\.json/);
 
+    const rooted = await tool.execute("id", { mode: "files", pattern: "src/*.ts", path: "src" });
+    assert.match(rooted.content.map((c) => c.text ?? "").join("\n"), /src\/app\.ts/);
+
+    const bare = await tool.execute("id", { mode: "files", pattern: "*.ts", path: "src" });
+    assert.match(bare.content.map((c) => c.text ?? "").join("\n"), /src\/app\.ts/);
+
     const outline = await tool.execute("id", { mode: "outline", pattern: "src/app.ts" });
     assert.equal(outline.isError, undefined);
     assert.match(outline.content.map((c) => c.text ?? "").join("\n"), /src\/app\.ts/);

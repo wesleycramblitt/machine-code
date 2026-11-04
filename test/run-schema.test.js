@@ -66,6 +66,17 @@ test("migrateRunSummary keeps the outcome summary and stop reason", () => {
   assert.equal(migrated.stopReason, "turn-cap");
 });
 
+test("migrateRunSummary clears a stale loop reason on a completed run", () => {
+  const migrated = migrateRunSummary({
+    id: "completed-loop",
+    status: "completed",
+    startedAt: "2026-11-03T00:00:00.000Z",
+    stopReason: "loop",
+  });
+  assert.ok(migrated);
+  assert.equal(migrated.stopReason, "completed");
+});
+
 test("migrateRunSummary fills missing lastActivityAt and rejects unusable records", () => {
   const minimal = migrateRunSummary({ id: "x", status: "running", startedAt: "2026-10-31T00:00:00.000Z" });
   assert.ok(minimal);

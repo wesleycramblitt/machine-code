@@ -247,7 +247,10 @@ guard: different ranges, new files, and new search scopes are left to the
 model and the prompt. `command describe issue` returns a direct hint that
 `issue` is a tool, not a command.
 
-Typed commands and runner gates run through the per-run process supervisor. The
+Typed commands and runner gates run through the per-run process supervisor. A
+read-only command that already passed is cached until an edit, write, or
+mutating command changes the tree; a repeat call returns the earlier result with
+a cached note instead of running the process again. The
 run detail **Processes** section shows each process, its status, pid, and output
 tail; `j`/`k` selects one, `F` follows the latest, `o` or Enter opens the log,
 `x` kills the selected process, and `X` kills all live processes for the run.
@@ -434,13 +437,18 @@ Each run keeps its working memory outside the transcript:
   artifacts/    content-addressed tool bodies
 ```
 
-The model sees the run state plus the last step, not the full tool history. The
-state block includes merged Read coverage per file, so the model can see what
-it already knows. A next action older than six turns expires and is shown as
-unset. A back-to-back re-read of the same 100-line band returns a nudge with the
-artifact id instead of the same bytes; a later re-read after other work is
-allowed. The `context` tool records decisions, focuses ranges, recalls
-artifacts, and resolves facts. A prompt that exceeds the run envelope or 90% of the selected model's
+The model sees the run state, a bounded working context of current files, and
+the last two complete tool steps, not the full tool history. The state block includes merged Read
+coverage per file with its artifact ids, so the model can see what it already
+knows and can recall the bytes. An edit invalidates only the read ranges that
+overlap the change. Build and sudo runs seed the files named by the task and
+their inferred tests into the working context before the first turn; the
+working context is capped and re-read from disk after edits, so it stays
+current. A next action older than six turns expires and is shown as unset. A
+back-to-back re-read of the same 100-line band returns a nudge with the artifact
+id instead of the same bytes; a later re-read after other work is allowed. The
+`context` tool records decisions, focuses ranges, recalls artifacts, and
+resolves facts. A prompt that exceeds the run envelope or 90% of the selected model's
 window blocks and writes a split report instead of truncating.
 
 `machine_code prompts [role]` prints the rendered agent prompt with its size.

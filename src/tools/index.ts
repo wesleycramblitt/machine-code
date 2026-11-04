@@ -8,7 +8,7 @@
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
   READ_CAP_BYTES,
@@ -354,10 +354,18 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               return fail(`rg exited ${result.code}: ${result.stderr.trim() || "(no stderr)"}`);
             }
             const all = result.stdout.split("\n").filter(Boolean);
+            // `rg` lists paths relative to the scope. Match both forms so a
+            // caller can pass path=test with pattern=test/*.js, and always
+            // return repo-relative paths to the model.
+            const rootRelative = (file: string): string => toRelative(ctx.root, join(scope, file));
             const filtered = matchers.length > 0
-              ? all.filter((file) => matchers.some((matcher) => matcher.test(file)))
+              ? all.filter((file) => {
+                  const rooted = rootRelative(file);
+                  return matchers.some((matcher) => matcher.test(file) || matcher.test(rooted));
+                })
               : all;
-            return ok(capText(filtered.join("\n"), SEARCH_CAP_BYTES).text || "no matches");
+            const listed = filtered.map(rootRelative);
+            return ok(capText(listed.join("\n"), SEARCH_CAP_BYTES).text || "no matches");
           }
           case "text": {
             if (!params.pattern) return fail("text mode requires a pattern");

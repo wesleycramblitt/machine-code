@@ -1,9 +1,10 @@
 /**
  * machine_code — render the model prompt from run state + the current step.
  *
- * The prompt is not a transcript replay. It is the system prompt, a compact
- * state block, and the immediately preceding assistant/tool step (the evidence
- * for the next action). Older evidence lives in state and artifacts.
+ * The prompt is not a transcript replay. It is the system prompt, the assembled
+ * task context, a compact state block, current working-file content, and the
+ * last two complete assistant/tool steps. Older evidence lives in state and
+ * artifacts.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
@@ -26,25 +27,24 @@ function toolCalls(message: MessageLike): string[] {
   return ids;
 }
 
-function lastStep(messages: readonly MessageLike[]): MessageLike[] {
-  let assistant = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") {
-      assistant = i;
-      break;
-    }
+/** Keep the last few complete assistant/tool steps, never an orphan call. */
+function recentSteps(messages: readonly MessageLike[], count = 2): MessageLike[] {
+  const assistants: number[] = [];
+  for (let i = messages.length - 1; i >= 0 && assistants.length < count; i -= 1) {
+    if (messages[i]?.role === "assistant") assistants.push(i);
   }
-  if (assistant >= 0) {
-    const step = messages.slice(assistant);
-    const calls = toolCalls(messages[assistant]!);
-    if (calls.length === 0) return step;
-    const results = new Set(
-      step
-        .filter((message) => message.role === "toolResult" && typeof message.toolCallId === "string")
-        .map((message) => message.toolCallId as string),
-    );
-    // Never send an assistant tool call without every result.
-    if (calls.every((id) => results.has(id))) return step;
+  if (assistants.length > 0) {
+    for (const start of assistants.reverse()) {
+      const step = messages.slice(start);
+      const calls = toolCalls(messages[start]!);
+      if (calls.length === 0) return step;
+      const results = new Set(
+        step
+          .filter((message) => message.role === "toolResult" && typeof message.toolCallId === "string")
+          .map((message) => message.toolCallId as string),
+      );
+      if (calls.every((id) => results.has(id))) return step;
+    }
   }
   // A user answer (ask) or follow-up is its own step.
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -70,13 +70,15 @@ export function renderPromptMessages(
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // The bound task packet leads. It names the work; the repo map is reference.
-  const block = [startupContext, mapIndex, state.renderBlock()].filter(Boolean).join("\n\n");
+  const block = [startupContext, mapIndex, state.renderBlock(), state.renderWorkingContext()]
+    .filter(Boolean)
+    .join("\n\n");
   const user: MessageLike = {
     role: "user",
     content: block,
     timestamp: Date.now(),
   };
-  const step = lastStep(source);
+  const step = recentSteps(source, 2);
   const out = [
     ...(system ? [system] : []),
     user,

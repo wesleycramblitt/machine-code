@@ -31,6 +31,7 @@ import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deter
 import { ensureSemanticMap } from "./map/ensure.js";
 import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
+import { inferPreloadFiles } from "./context/preload.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
@@ -474,6 +475,21 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     recorder,
     processes,
   });
+  // Task builds start with the files the task names, plus their inferred
+  // tests. This is working-set content, not an extra prompt block: it stays
+  // current after edits and is capped at render time.
+  if (input.agent.name === "build" || input.agent.name === "sudo") {
+    // Only the bound task/packet names the work. Knowledge and plan blocks can
+    // mention unrelated files, so do not mine the whole assembled context.
+    const taskBlock =
+      /<context-block kind="(?:task|packet)"[^>]*>[\s\S]*?<\/context-block>/.exec(input.contextText ?? "")?.[0] ??
+      "";
+    const preload = inferPreloadFiles(mapRoot, `${input.request}\n${taskBlock}`, 6);
+    if (preload.length > 0) {
+      memory.seedWorkingFiles(preload, 0);
+      recorder.event("context_preloaded", { files: preload });
+    }
+  }
   // Semantic refresh after a changed turn. Coalesce so a burst of edits
   // produces at most one in-flight refresh plus one follow-up.
   let semanticRefreshInFlight = false;
@@ -536,7 +552,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const initialChars =
     input.agent.prompt.length +
     input.request.length +
+    (input.contextText?.length ?? 0) +
     mapIndex.length +
+    memory.renderWorkingContext().length +
+    4_000 +
     toolSchemaChars(input.agent.tools) +
     2_000;
 
@@ -717,6 +736,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     /** Consecutive reads of the same range; another tool resets the streak. */
     let lastReadUnit = "";
     let lastReadCount = 0;
+    /** Successful read-only command results for the current file state. */
+    const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
+    let changeEpoch = 0;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -890,6 +912,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             };
           };
 
+          const noteCall = (key: string, preview: string): void => {
+            if (key === lastCallKey) {
+              lastCallCount += 1;
+              lastCallPreview = preview;
+            } else {
+              lastCallKey = key;
+              lastCallCount = 1;
+              lastCallPreview = preview;
+            }
+          };
+
           const issueAction =
             tool.name === "issue" ? String((params as { action?: unknown }).action ?? "") : "";
           const contextAction =
@@ -999,6 +1032,27 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               { args: capJson(params), repeats: lastCallCount },
             );
           }
+          const commandAction =
+            tool.name === "command" ? String((params as { action?: unknown }).action ?? "") : "";
+          const commandName =
+            tool.name === "command" ? String((params as { name?: unknown }).name ?? "") : "";
+          const cacheableCommand =
+            commandAction === "run" &&
+            commandName.length > 0 &&
+            input.commands.get(commandName)?.readonly === true;
+          const cached = cacheableCommand ? commandCache.get(key) : undefined;
+          if (cached && cached.epoch === changeEpoch) {
+            noteCall(key, cached.preview);
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  `[cached ${commandName} from turn ${cached.turn}; no files changed since]\n` +
+                  cached.text,
+              }],
+              details: undefined,
+            };
+          }
           const result = await execute(id, params, signal, onUpdate);
           if (planNote && !result.isError && hasPlanDecision(memory.getState().facts)) {
             // The plan is the next action. Do not let the old "explore" next
@@ -1016,6 +1070,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             }
           }
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
+            changeEpoch += 1;
+            commandCache.clear();
             const changed = (params as { path?: unknown }).path;
             if (typeof changed === "string") {
               if (
@@ -1028,20 +1084,30 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               }
             }
           }
+          if (!result.isError && tool.name === "command" && commandAction === "run" && !cacheableCommand) {
+            // A mutating command can change files without an edit/write call.
+            changeEpoch += 1;
+            commandCache.clear();
+          }
           const preview = result.content
             .filter((item): item is { type: "text"; text: string } => item.type === "text")
             .map((item) => item.text)
             .join("\n")
             .replace(/\s+/g, " ")
             .slice(0, 300);
-          if (key === lastCallKey) {
-            lastCallCount += 1;
-            lastCallPreview = preview;
-          } else {
-            lastCallKey = key;
-            lastCallCount = 1;
-            lastCallPreview = preview;
+          if (!result.isError && cacheableCommand) {
+            const text = result.content
+              .filter((item): item is { type: "text"; text: string } => item.type === "text")
+              .map((item) => item.text)
+              .join("\n");
+            commandCache.set(key, {
+              epoch: changeEpoch,
+              turn: memory.currentTurn(),
+              text,
+              preview,
+            });
           }
+          noteCall(key, preview);
           return result;
         },
       } as AgentTool;

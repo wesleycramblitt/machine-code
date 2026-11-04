@@ -92,7 +92,9 @@ function clip(value: string, cap: number): string {
 function inferStopReason(status: RunStatus, events: readonly RunEvent[]): StopReason {
   if (events.some((event) => event.type === "turn_cap")) return "turn-cap";
   if (events.some((event) => event.type === "budget_exhausted")) return "budget";
-  if (events.some((event) => event.type === "loop_blocked")) return "loop";
+  // A loop block is a checkpoint when the run later completes. Only a run
+  // that actually stopped on the block is a loop.
+  if (status !== "completed" && events.some((event) => event.type === "loop_blocked")) return "loop";
   switch (status) {
     case "completed":
       return "completed";

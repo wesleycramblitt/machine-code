@@ -252,11 +252,15 @@ test("explicit context focus survives automatic ingestion", () => {
   }
 });
 
-test("render keeps only state plus the last step", () => {
+test("render keeps state and the last two complete steps", () => {
   const dir = tempDir();
   try {
     const store = new RunStateStore({ runDir: dir, runId: "r4", goal: "the goal" });
     store.note("decision", "Use the map first.");
+    const older = [
+      assistant({ id: "older", args: { path: "older.ts", offset: 1, limit: 1 } }),
+      result({ id: "older", text: "OLDER-TOOL-BODY" }),
+    ];
     const old = [
       assistant({ id: "old", args: { path: "old.ts", offset: 1, limit: 1 } }),
       result({ id: "old", text: "OLD-TOOL-BODY" }),
@@ -265,13 +269,14 @@ test("render keeps only state plus the last step", () => {
       assistant({ id: "new", args: { path: "new.ts", offset: 1, limit: 1 } }),
       result({ id: "new", text: "NEW-TOOL-BODY" }),
     ];
-    const rendered = renderPromptMessages([system, user, ...old, ...last], store, "MAP-INDEX");
+    const rendered = renderPromptMessages([system, user, ...older, ...old, ...last], store, "MAP-INDEX");
     const serialized = JSON.stringify(rendered.messages);
     assert.match(serialized, /the goal/);
     assert.match(serialized, /Use the map first/);
     assert.match(serialized, /MAP-INDEX/);
+    assert.match(serialized, /OLD-TOOL-BODY/);
     assert.match(serialized, /NEW-TOOL-BODY/);
-    assert.doesNotMatch(serialized, /OLD-TOOL-BODY/);
+    assert.doesNotMatch(serialized, /OLDER-TOOL-BODY/);
     assert.equal(rendered.messages[0].role, "system");
     assert.equal(rendered.messages[1].role, "user");
     assert.equal(rendered.messages[2].role, "assistant");
@@ -349,6 +354,101 @@ test("the first change replaces the plan's first-edit next action", () => {
     assert.match(block, /change src\/a\.ts/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an edit invalidates only overlapping read coverage", () => {
+  const dir = tempDir();
+  const root = tempDir("mc-state-range-");
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    const file = join(root, "src.ts");
+    const lines = Array.from({ length: 200 }, (_, index) => `line ${index + 1}`);
+    writeFileSync(file, `${lines.join("\n")}\n`, "utf8");
+    const store = new RunStateStore({ runDir: dir, runId: "r-range", goal: "goal", repoRoot: root });
+
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "r1", name: "read", args: { path: "src.ts", offset: 1, limit: 10 } }),
+        result({ id: "r1", name: "read", text: "src.ts:1-10\n1: line 1\n10: line 10" }),
+      ],
+      2,
+    );
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "r2", name: "read", args: { path: "src.ts", offset: 100, limit: 21 } }),
+        result({ id: "r2", name: "read", text: "src.ts:100-120\n100: line 100\n120: line 120" }),
+      ],
+      3,
+    );
+
+    lines[109] = "line 110 changed";
+    writeFileSync(file, `${lines.join("\n")}\n`, "utf8");
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({
+          id: "e1",
+          name: "edit",
+          args: { path: "src.ts", oldString: "line 110", newString: "line 110 changed" },
+        }),
+        result({ id: "e1", name: "edit", text: "edited src.ts (1 replacement)" }),
+      ],
+      4,
+    );
+
+    const block = store.renderBlock();
+    assert.match(block, /src\.ts: 1-10/);
+    assert.doesNotMatch(block, /src\.ts:.*100-120/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("working context seeds task files and follows edits", () => {
+  const dir = tempDir();
+  const root = tempDir("mc-state-working-");
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
+    const store = new RunStateStore({ runDir: dir, runId: "r-working", goal: "goal", repoRoot: root });
+
+    store.seedWorkingFiles(["src/a.ts"], 0);
+    let working = store.renderWorkingContext();
+    assert.match(working, /<working-context>/);
+    assert.match(working, /preloaded task file/);
+    assert.match(working, /1: export const a = 1;/);
+    assert.match(JSON.stringify(renderPromptMessages([system, user, assistant()], store, "MAP").messages), /<working-context>/);
+
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 2;\n", "utf8");
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({
+          id: "e1",
+          name: "edit",
+          args: { path: "src/a.ts", oldString: "export const a = 1;", newString: "export const a = 2;" },
+        }),
+        result({ id: "e1", name: "edit", text: "edited src/a.ts (1 replacement)" }),
+      ],
+      1,
+    );
+
+    working = store.renderWorkingContext();
+    assert.match(working, /current after change/);
+    assert.match(working, /1: export const a = 2;/);
+    assert.doesNotMatch(working, /1: export const a = 1;/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

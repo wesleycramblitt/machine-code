@@ -73,6 +73,22 @@ test("a repeated tool call block is reported as the stop reason", () => {
   assert.match(outcome.text, /repeated identical tool calls/);
 });
 
+test("a completed run with a recovered plan checkpoint is completed", () => {
+  const outcome = summarizeRun({
+    summary: summary({ status: "completed", error: undefined }),
+    events: [
+      { type: "loop_blocked", tool: "read", reason: "plan-required", plan: true },
+      { type: "plan_recovered", chars: 480 },
+      { type: "tool_call_start", toolCallId: "e1", tool: "edit", args: { path: "src/a.ts" } },
+      { type: "tool_call", toolCallId: "e1", tool: "edit", isError: false },
+    ],
+    finalText: "Result: done",
+  });
+  assert.equal(outcome.stopReason, "completed");
+  assert.match(outcome.headline, /^Completed/);
+  assert.doesNotMatch(outcome.text, /did not finish cleanly/);
+});
+
 test("the terminal loop block decides the headline", () => {
   const outcome = summarizeRun({
     summary: summary({ status: "blocked", error: "repeated identical tool calls detected" }),
