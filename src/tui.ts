@@ -976,6 +976,10 @@ export async function runTui(): Promise<void> {
 
   const forkRun = (detail: RunDetail) => {
     const summary = detail.summary;
+    if (summary.status === "created" || summary.status === "running" || summary.status === "awaiting_input") {
+      notify(`interrupt ${summary.id.slice(-8)} before forking; its worktree is still active`);
+      return;
+    }
     const repoLayout = layout(summary.repoRoot);
     const agent = AGENT_NAMES.includes(summary.agent) ? summary.agent : "general";
     const policy = effectivePolicy(summary.repoRoot);

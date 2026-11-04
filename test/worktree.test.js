@@ -16,6 +16,7 @@ import {
   removeWorktree,
   commitWorktree,
   pruneWorktrees,
+  reusableWorktree,
   WorktreeError,
 } from "../dist/worktree.js";
 import { RunRecorder } from "../dist/state/runs.js";
@@ -186,6 +187,21 @@ test("issue branches are reused across runs; same branch cannot be checked out t
     const second = await createWorktree({ layout, runId: "r-c", kind: "task", issueNumber: 31 });
     assert.equal(second.branch, "mc/task/31");
     assert.ok(!second.createdBranches.includes("mc/task/31"), "existing branch must be reused, not recreated");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a terminal parent worktree can be reused by a fork on the same branch", async () => {
+  const { dir } = tempRepo();
+  try {
+    const layout = fakeLayout(dir);
+    const spec = await createWorktree({ layout, runId: "r-parent", kind: "task", issueNumber: 31 });
+    const parent = { worktree: spec.path, branch: spec.branch, status: "failed" };
+    assert.equal(reusableWorktree(parent, "mc/task/31"), spec.path);
+    assert.equal(reusableWorktree({ ...parent, status: "running" }, "mc/task/31"), undefined);
+    assert.equal(reusableWorktree(parent, "mc/task/32"), undefined);
+    assert.equal(reusableWorktree({ ...parent, worktree: join(dir, "missing") }, "mc/task/31"), undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

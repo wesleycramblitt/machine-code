@@ -219,8 +219,10 @@ Press `f` on any run detail section to fork the run settings into a new run.
 The New Run composer opens with the same agent, model setting, tier, preset,
 verification, issue tracking, ask, approval, ambiguity, min-fit, floors, issue,
 and request. An explicit parent model pin is copied; a parent that used
-auto-selection stays on auto. Edit the request, change any setting, and start
-the run. The fork keeps parent lineage; it does not inherit the parent worktree.
+auto-selection stays on auto. A fork of a finished build run reuses the parent
+worktree on the same issue branch, so one branch is not checked out twice.
+Edit the request, change any setting, and start the run. The fork keeps parent
+lineage.
 
 The New Run **Model[m]** picker lists every model from configured providers
 with a status: `✓` eligible, `⏸` cooling with the remaining time, or `✕` with

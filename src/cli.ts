@@ -35,7 +35,7 @@ import { runLoop, type RunLoopResult } from "./loop.js";
 import { policyFor, type OrchestrateResult } from "./orchestrate.js";
 import { resolveGates, runGates } from "./verify.js";
 import { allCommands } from "./commands/profiles.js";
-import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, WorktreeError } from "./worktree.js";
+import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, reusableWorktree, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved, isReserved } from "./issues/reserved.js";
@@ -1174,62 +1174,83 @@ async function cmdRun(argv: string[]): Promise<number> {
       : forceWorktree || agentNameParsed === "build";
   let toolRoot = l.repoRoot;
   if (mutating) {
-    try {
-      const worktreeProcesses = new ProcessSupervisor({
-        runId: recorder.id,
-        runDir: recorder.dir,
-        onEvent: (type, data) => recorder.event(type, data),
+    const expectedBranch = issueRef ? `mc/task/${issueRef.number}` : undefined;
+    const reusePath = reusableWorktree(parentRun, expectedBranch);
+    if (reusePath && parentRun?.branch) {
+      // One branch cannot be checked out twice. A fork of a terminal or paused
+      // parent continues in the parent worktree instead of colliding with it.
+      toolRoot = reusePath;
+      recorder.patchSummary({
+        worktree: reusePath,
+        worktreeOwnerRunId: parentRun.id,
+        branch: parentRun.branch,
+        baseBranch: parentRun.baseBranch,
+        baseRef: parentRun.baseRef,
       });
-      const spec = await createWorktree({
-        layout: l,
-        runId: recorder.id,
-        kind: issueRef ? "task" : "run",
-        issueNumber: issueRef?.number,
-        featureNumber,
-        base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
-        processes: worktreeProcesses,
+      recorder.event("worktree_reused", {
+        parentRunId: parentRun.id,
+        path: reusePath,
+        branch: parentRun.branch,
       });
-      recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
-      if (inheritWorktree && parentRun?.worktree) {
-        // Inherit the parent's uncommitted work explicitly; conflicts fail.
-        try {
-          const { inheritWorktreePatch } = await import("./worktree.js");
-          const patch = await inheritWorktreePatch({
-            parentWorktree: parentRun.worktree,
-            parentBaseRef: parentRun.baseRef,
-            childWorktree: spec.path,
-          });
-          recorder.event("fork_inherited", { parentRunId: parentRun.id, patchBytes: patch.bytes });
-        } catch (error) {
-          if (error instanceof WorktreeError) {
-            recorder.finalize("blocked", `${error.code}: ${error.message}`);
-            process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
-            return EXIT.blocked;
+      process.stderr.write(`worktree ${reusePath} (reused from ${parentRun.id}, branch ${parentRun.branch})\n`);
+    } else {
+      try {
+        const worktreeProcesses = new ProcessSupervisor({
+          runId: recorder.id,
+          runDir: recorder.dir,
+          onEvent: (type, data) => recorder.event(type, data),
+        });
+        const spec = await createWorktree({
+          layout: l,
+          runId: recorder.id,
+          kind: issueRef ? "task" : "run",
+          issueNumber: issueRef?.number,
+          featureNumber,
+          base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
+          processes: worktreeProcesses,
+        });
+        recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
+        if (inheritWorktree && parentRun?.worktree) {
+          // Inherit the parent's uncommitted work explicitly; conflicts fail.
+          try {
+            const { inheritWorktreePatch } = await import("./worktree.js");
+            const patch = await inheritWorktreePatch({
+              parentWorktree: parentRun.worktree,
+              parentBaseRef: parentRun.baseRef,
+              childWorktree: spec.path,
+            });
+            recorder.event("fork_inherited", { parentRunId: parentRun.id, patchBytes: patch.bytes });
+          } catch (error) {
+            if (error instanceof WorktreeError) {
+              recorder.finalize("blocked", `${error.code}: ${error.message}`);
+              process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
+              return EXIT.blocked;
+            }
+            throw error;
           }
-          throw error;
         }
+        for (const branch of spec.createdBranches) {
+          recorder.event("branch_created", { branch, base: spec.baseRef });
+        }
+        recorder.event("worktree_created", {
+          path: spec.path,
+          branch: spec.branch,
+          baseRef: spec.baseRef,
+          baseBranch: spec.baseBranch,
+          linkedDirs: spec.linkedDirs,
+          skippedLinks: spec.skippedLinks,
+          materialized: spec.materialized,
+        });
+        toolRoot = spec.path;
+        process.stderr.write(`worktree ${spec.path} (branch ${spec.branch})\n`);
+      } catch (error) {
+        if (error instanceof WorktreeError) {
+          recorder.finalize("blocked", `${error.code}: ${error.message}`);
+          process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
+          return EXIT.blocked;
+        }
+        throw error;
       }
-      for (const branch of spec.createdBranches) {
-        recorder.event("branch_created", { branch, base: spec.baseRef });
-      }
-      recorder.event("worktree_created", {
-        path: spec.path,
-        branch: spec.branch,
-        baseRef: spec.baseRef,
-        baseBranch: spec.baseBranch,
-        linkedDirs: spec.linkedDirs,
-        skippedLinks: spec.skippedLinks,
-        materialized: spec.materialized,
-      });
-      toolRoot = spec.path;
-      process.stderr.write(`worktree ${spec.path} (branch ${spec.branch})\n`);
-    } catch (error) {
-      if (error instanceof WorktreeError) {
-        recorder.finalize("blocked", `${error.code}: ${error.message}`);
-        process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
-        return EXIT.blocked;
-      }
-      throw error;
     }
   }
 

@@ -198,6 +198,22 @@ export async function branchCheckedOutAt(mainRoot: string, branch: string): Prom
   return null;
 }
 
+/**
+ * A fork may reuse the parent's worktree when the parent is not actively
+ * running. One branch cannot be checked out twice, and the parent's uncommitted
+ * work is exactly what a fork usually wants to continue.
+ */
+export function reusableWorktree(
+  parent: Pick<RunSummary, "worktree" | "branch" | "status"> | undefined,
+  branch: string | undefined,
+): string | undefined {
+  if (!parent?.worktree || !branch || parent.branch !== branch) return undefined;
+  if (parent.status === "created" || parent.status === "running" || parent.status === "awaiting_input") {
+    return undefined;
+  }
+  return existsSync(parent.worktree) ? parent.worktree : undefined;
+}
+
 /* ------------------------------------------------------------- creation */
 
 export type WorktreeKind = "task" | "feature" | "run";
@@ -345,7 +361,11 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   // One checkout per branch: git forbids two worktrees on one branch anyway.
   const checkedOut = await branchCheckedOutAt(mainRoot, branch);
   if (checkedOut) {
-    throw new WorktreeError("branch_checked_out", `branch ${branch} is already checked out at ${checkedOut}`);
+    throw new WorktreeError(
+      "branch_checked_out",
+      `branch ${branch} is already checked out at ${checkedOut}; ` +
+        "fork the run that owns it or remove that worktree before creating another",
+    );
   }
 
   // Stale leftovers (dir without worktree registration) are removed.
