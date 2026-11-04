@@ -35,7 +35,7 @@ import { runLoop, type RunLoopResult } from "./loop.js";
 import { policyFor, type OrchestrateResult } from "./orchestrate.js";
 import { resolveGates, runGates } from "./verify.js";
 import { allCommands } from "./commands/profiles.js";
-import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, reusableWorktree, WorktreeError } from "./worktree.js";
+import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, reusableWorktreeOwner, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved, isReserved } from "./issues/reserved.js";
@@ -1068,6 +1068,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   let parentRun: import("./state/runs.js").RunSummary | undefined;
   /** Parent, grandparent, … nearest first, so a fork of a fork keeps the whole chain. */
   const parentChain: Array<{ id: string; request: string; finalText?: string }> = [];
+  const parentChainRuns: RunSummary[] = [];
   if (parentFlag !== undefined) {
     const allRuns = listAllRuns(l.home);
     parentRun = allRuns.find((r) => r.id === parentFlag);
@@ -1077,6 +1078,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     let cursor: import("./state/runs.js").RunSummary | undefined = parentRun;
     while (cursor && parentChain.length < 4 && !seen.has(cursor.id)) {
       seen.add(cursor.id);
+      parentChainRuns.push(cursor);
       parentChain.push({
         id: cursor.id,
         request: cursor.request,
@@ -1175,24 +1177,30 @@ async function cmdRun(argv: string[]): Promise<number> {
   let toolRoot = l.repoRoot;
   if (mutating) {
     const expectedBranch = issueRef ? `mc/task/${issueRef.number}` : undefined;
-    const reusePath = reusableWorktree(parentRun, expectedBranch);
-    if (reusePath && parentRun?.branch) {
+    const reuse = reusableWorktreeOwner(
+      [
+        ...parentChainRuns,
+        ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
+      ],
+      expectedBranch,
+    );
+    if (reuse) {
       // One branch cannot be checked out twice. A fork of a terminal or paused
-      // parent continues in the parent worktree instead of colliding with it.
-      toolRoot = reusePath;
+      // run continues in the worktree that already owns the issue branch.
+      toolRoot = reuse.path;
       recorder.patchSummary({
-        worktree: reusePath,
-        worktreeOwnerRunId: parentRun.id,
-        branch: parentRun.branch,
-        baseBranch: parentRun.baseBranch,
-        baseRef: parentRun.baseRef,
+        worktree: reuse.path,
+        worktreeOwnerRunId: reuse.run.id,
+        branch: reuse.run.branch,
+        baseBranch: reuse.run.baseBranch,
+        baseRef: reuse.run.baseRef,
       });
       recorder.event("worktree_reused", {
-        parentRunId: parentRun.id,
-        path: reusePath,
-        branch: parentRun.branch,
+        parentRunId: reuse.run.id,
+        path: reuse.path,
+        branch: reuse.run.branch,
       });
-      process.stderr.write(`worktree ${reusePath} (reused from ${parentRun.id}, branch ${parentRun.branch})\n`);
+      process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
     } else {
       try {
         const worktreeProcesses = new ProcessSupervisor({

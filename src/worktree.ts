@@ -214,6 +214,19 @@ export function reusableWorktree(
   return existsSync(parent.worktree) ? parent.worktree : undefined;
 }
 
+/** Find the nearest run that already owns a reusable worktree for `branch`. */
+export function reusableWorktreeOwner(
+  runs: readonly RunSummary[],
+  branch: string | undefined,
+): { run: RunSummary; path: string } | undefined {
+  if (!branch) return undefined;
+  for (const run of runs) {
+    const path = reusableWorktree(run, branch);
+    if (path) return { run, path };
+  }
+  return undefined;
+}
+
 /* ------------------------------------------------------------- creation */
 
 export type WorktreeKind = "task" | "feature" | "run";

@@ -17,6 +17,7 @@ import {
   commitWorktree,
   pruneWorktrees,
   reusableWorktree,
+  reusableWorktreeOwner,
   WorktreeError,
 } from "../dist/worktree.js";
 import { RunRecorder } from "../dist/state/runs.js";
@@ -202,6 +203,11 @@ test("a terminal parent worktree can be reused by a fork on the same branch", as
     assert.equal(reusableWorktree({ ...parent, status: "running" }, "mc/task/31"), undefined);
     assert.equal(reusableWorktree(parent, "mc/task/32"), undefined);
     assert.equal(reusableWorktree({ ...parent, worktree: join(dir, "missing") }, "mc/task/31"), undefined);
+    assert.equal(
+      reusableWorktreeOwner([{ ...parent, status: "running" }, parent], "mc/task/31")?.path,
+      spec.path,
+      "skip an active run and use the nearest terminal owner",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
