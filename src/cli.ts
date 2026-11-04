@@ -1031,9 +1031,10 @@ async function cmdRun(argv: string[]): Promise<number> {
   // Issue association: runs attach to Tasks only. Resolve before the run
   // record so a task-attached run can derive its request from the issue
   // instead of a typed prompt.
-  const planningAgent = agentNameParsed === "planner" || agentNameParsed === "review";
   let issueRef: IssueRef | undefined;
   let linkedIssue: Issue | undefined;
+  /** The human-selected issue, before resolving to a planning anchor. */
+  let requestIssue: Issue | undefined;
   let createdIssues: Issue[] = [];
   const issueBundle = await createIssueProvider(l, machine);
   if (issueFlag !== undefined) {
@@ -1062,14 +1063,15 @@ async function cmdRun(argv: string[]): Promise<number> {
         throw error;
       }
       linkedIssue = resolved.issue;
+      requestIssue = resolved.scope ?? linkedIssue;
       issueRef = linkedIssue.ref;
       issueNumber = linkedIssue.ref.number;
       if (featureNumber === undefined && linkedIssue.parent?.number) featureNumber = linkedIssue.parent.number;
       createdIssues = resolved.created;
     }
   }
-  if (linkedIssue && !planningAgent && (request.length === 0 || isGenericTaskRequest(request))) {
-    request = issueRunRequest(linkedIssue, issueRequestVerb(agentNameParsed));
+  if (requestIssue && (request.length === 0 || isGenericTaskRequest(request))) {
+    request = issueRunRequest(requestIssue, issueRequestVerb(agentNameParsed));
   }
   if (request.length === 0) {
     fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);

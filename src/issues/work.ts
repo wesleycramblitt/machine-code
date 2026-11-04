@@ -37,6 +37,8 @@ export interface ResolveRunTargetInput {
 export interface ResolveRunTargetResult {
   issue: Issue;
   created: Issue[];
+  /** The issue the human selected, before resolving to its planning anchor. */
+  scope?: Issue;
 }
 
 export function objectiveTitle(request: string, fallback = "machine_code task"): string {
@@ -168,11 +170,17 @@ export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<Re
   const issue = await provider.get(ref);
   if (!issue) throw new IssueError("issue_not_found", `issue ${ref.repo}#${ref.number} not found`);
 
+  // A Review run judges the deliverable it was pointed at. Planner runs move
+  // up to the Feature's Planning & Review task so their Runs row stays with
+  // the planning work.
+  if (input.agent === "review" && issue.kind === "task") {
+    return { issue, created: [], scope: issue };
+  }
   if (planningAgent(input.agent) || (input.agent === "general" && issue.kind !== "task")) {
     const anchor = await resolvePlanningAnchor(provider, issue.ref, input.reserved);
     const resolved = await provider.get(anchor);
     if (!resolved) throw new IssueError("issue_not_found", `planning anchor ${anchor.repo}#${anchor.number} not found`);
-    return { issue: resolved, created: [] };
+    return { issue: resolved, created: [], scope: issue };
   }
 
   // Never auto-create work under a reserved Planning & Review anchor.
@@ -184,7 +192,11 @@ export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<Re
   }
 
   if (!autoCreate) {
-    return { issue: await validateRunIssue(provider, issue.ref, { allowReserved: input.agent === "sudo" }), created: [] };
+    return {
+      issue: await validateRunIssue(provider, issue.ref, { allowReserved: input.agent === "sudo" }),
+      created: [],
+      scope: issue,
+    };
   }
 
   const created: Issue[] = [];
@@ -216,7 +228,7 @@ export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<Re
       `${current.ref.repo}#${current.ref.number} is a reserved Task 0; implementation runs need a deliverable Task`,
     );
   }
-  return { issue: current, created };
+  return { issue: current, created, scope: issue };
 }
 
 /** Explicit Feature creation for the TUI/CLI when a human chooses an Epic. */

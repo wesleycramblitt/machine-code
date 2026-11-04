@@ -1795,7 +1795,11 @@ export async function runTui(): Promise<void> {
           if (newrun.agent === "sudo" && issueObj.kind === "task") return "runs attach here";
           return "reserved anchor · choose a deliverable Task";
         }
-        if (issueObj.kind === "task") return "runs attach here";
+        if (issueObj.kind === "task") {
+          return newrun.agent === "planner"
+            ? "planner attaches to the Feature planning task"
+            : "runs attach here";
+        }
         if (planningAgent) return "planning/review attaches to reserved Task 0";
         if (newrun.agent === "general") return "general attaches to reserved Task 0";
         if (issueAccess === "create") {
@@ -3249,7 +3253,9 @@ export async function runTui(): Promise<void> {
         outcome = "reserved Planning & Review anchor; choose a deliverable Task";
       }
     } else if (issue.kind === "task") {
-      outcome = "runs attach here";
+      outcome = newrun.agent === "planner"
+        ? "planner attaches to the Feature planning task"
+        : "runs attach here";
     } else if (planningAgent) {
       outcome = "planning/review attaches to its reserved Task 0";
     } else if (newrun.agent === "general") {

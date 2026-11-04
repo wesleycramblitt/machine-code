@@ -260,7 +260,21 @@ test("resolvePlanningAnchor maps Epic/Feature to reserved Task 0", async () => {
   assert.equal(featureAnchor.number, featureReserved.ref.number);
 
   const taskAnchor = await resolvePlanningAnchor(p, task.ref);
-  assert.equal(taskAnchor.number, task.ref.number);
+  assert.equal(taskAnchor.number, featureReserved.ref.number);
+});
+
+test("a Task under reserved Feature 0 uses the Epic planning Task 0", async () => {
+  const p = new FakeProvider();
+  const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
+  const reserved = await ensureEpicReserved(p, epic.ref);
+  const task = await p.create({
+    title: "Deliverable under planning",
+    body: "",
+    kind: "task",
+    parent: reserved.feature0.ref,
+  });
+  const anchor = await resolvePlanningAnchor(p, task.ref);
+  assert.equal(anchor.number, reserved.task0.ref.number);
 });
 
 test("validateRunIssue enforces Task-only and reserved rules", async () => {
@@ -867,13 +881,22 @@ test("planner and review targets resolve Epic/Feature to reserved Task 0", async
     const epicTarget = await resolveRunTarget({ provider, ref: epic.ref, request: "plan", agent });
     assert.equal(epicTarget.issue.kind, "task");
     assert.equal(epicTarget.issue.reserved?.kind, "feature-pr");
+    assert.equal(epicTarget.scope?.ref.number, epic.ref.number);
+    assert.match(issueRunRequest(epicTarget.scope, "Plan"), /^Plan o\/r#\d+: Epic/);
 
     const featureTarget = await resolveRunTarget({ provider, ref: feature.ref, request: "plan", agent });
     assert.equal(featureTarget.issue.kind, "task");
     assert.equal(featureTarget.issue.reserved?.kind, "feature-pr");
+    assert.equal(featureTarget.scope?.ref.number, feature.ref.number);
 
     const taskTarget = await resolveRunTarget({ provider, ref: task.ref, request: "plan", agent });
-    assert.equal(taskTarget.issue.ref.number, task.ref.number);
+    if (agent === "planner") {
+      assert.equal(taskTarget.issue.reserved?.kind, "feature-pr");
+      assert.equal(taskTarget.issue.ref.number, featureTarget.issue.ref.number);
+    } else {
+      assert.equal(taskTarget.issue.ref.number, task.ref.number);
+    }
+    assert.equal(taskTarget.scope?.ref.number, task.ref.number);
   }
 });
 

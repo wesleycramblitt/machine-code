@@ -173,8 +173,13 @@ Task issue hierarchy, with runs that have no issue under Untracked and runs
 whose cached issue is missing under Orphaned issue.
 
 Runs attach to Tasks only. Selecting an Epic or Feature for a planner/review
-run resolves to that scope's reserved Planning & Review Task 0. A build or sudo
-run with issue-create access auto-creates the missing Task. A planner run that
+run resolves to that scope's reserved Planning & Review Task 0. Selecting a
+deliverable Task resolves a Planner run to its parent Feature's Planning &
+Review Task 0; a Task under reserved Feature 0 uses the Epic's Planning &
+Review Task 0. Review runs stay on the deliverable Task. A planner/review run
+derives its objective from the selected Epic, Feature, or Task, not from the
+anchor Task. A build or sudo run with issue-create access auto-creates the
+missing Task. A planner run that
 starts before the Epic or Feature exists links itself to the new scope's
 reserved Task 0 when it creates the first issue. A Task can own multiple runs;
 they appear as children of the Task row, while Epic and Feature rows show

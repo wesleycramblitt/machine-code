@@ -218,7 +218,12 @@ export async function auditHierarchy(
  * Resolve the Task a run must attach to for planning/review:
  *   Epic → its reserved Feature 0's Task 0
  *   Feature → its reserved Task 0
- *   Task → itself
+ *   Task → its parent Feature's reserved Task 0
+ *   Reserved Task 0 → itself
+ *
+ * A Task under a reserved Feature 0 uses the Epic's planning Task 0. This
+ * keeps planning runs under a Planning & Review anchor instead of attaching
+ * them to a deliverable Task.
  */
 export async function resolvePlanningAnchor(
   provider: IssueProvider,
@@ -227,7 +232,24 @@ export async function resolvePlanningAnchor(
 ): Promise<IssueRef> {
   const issue = await provider.get(ref);
   if (!issue) throw new IssueError("issue_not_found", `issue ${ref.repo}#${ref.number} not found`);
-  if (issue.kind === "task") return issue.ref;
+  if (issue.kind === "task") {
+    if (isReservedTask(issue) || !issue.parent) return issue.ref;
+    const parent = await provider.get(issue.parent);
+    if (!parent) return issue.ref;
+    if (parent.kind === "feature") {
+      if (isReserved(parent)) {
+        const epic = parent.parent ? await provider.get(parent.parent) : null;
+        if (epic?.kind === "epic") {
+          const { task0 } = await ensureEpicReserved(provider, epic.ref, opts);
+          return task0.ref;
+        }
+        return issue.ref;
+      }
+      const task0 = await ensureFeatureReserved(provider, parent.ref, opts);
+      return task0.ref;
+    }
+    return issue.ref;
+  }
   if (issue.kind === "feature") {
     const task0 = await ensureFeatureReserved(provider, issue.ref, opts);
     return task0.ref;
