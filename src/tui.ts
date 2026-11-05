@@ -60,7 +60,7 @@ import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
 import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "./context/references.js";
 import { listReferenceEntries } from "./references/store.js";
-import { changesFor, contextUsage, readContextManifest, readContextPackManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
+import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
@@ -100,6 +100,11 @@ const START_BG = "\x1b[48;2;170;30;30m";
 const WHITE = "\x1b[97m";
 const WRAP_OFF = "\x1b[?7l";
 const WRAP_ON = "\x1b[?7h";
+
+/** Vim-style half-page scrolls. PageUp/PageDown are not bound anywhere. */
+const CTRL_D = "\x04";
+const CTRL_U = "\x15";
+const HALF_PAGE = 10;
 
 interface UiTheme {
   headerBg: string;
@@ -817,7 +822,7 @@ export async function runTui(): Promise<void> {
   let eventScroll = 0;
   /** Line offset inside a selected timeline block (expanded inputs/outputs). */
   let eventBodyScroll = 0;
-  /** Follow the newest timeline event; j/k or PgUp/PgDn turns it off. */
+  /** Follow the newest timeline event; j/k or ^D/^U turns it off. */
   let timelineFollow = true;
   /** Show routine internals in the timeline. */
   let timelineVerbose = false;
@@ -2862,6 +2867,7 @@ export async function runTui(): Promise<void> {
       actions = joinCommands([
         command("Esc", "Back", undefined, GR),
         command("j/k", "Scroll", undefined, M),
+        command("^D/^U", "Page", undefined, M),
         command("t", "Probe", undefined, G),
         command("p", "Copy key", undefined, C),
         command("o", "Provider", undefined, BL),
@@ -2930,8 +2936,9 @@ export async function runTui(): Promise<void> {
         command("g", "Group", modelGroup, BL),
         command("s", "Sort", modelSort, C),
         command("j/k", "Move", undefined, GR),
+        command("^D/^U", "Page", undefined, GR),
       ]);
-      secondary = `${D}space folds the group under the cursor · Enter opens details${R}`;
+      secondary = `${D}space folds groups · Enter opens details${R}`;
     }
 
     /* ---------------------------------------------------------- pipeline */
@@ -3171,6 +3178,7 @@ export async function runTui(): Promise<void> {
         command("g", "Group", spendBy, C),
         command("d", "Range", spendDaysWindow === 0 ? "all" : `${spendDaysWindow}d`, Y),
         command("j/k", "Scroll", undefined, M),
+        command("^D/^U", "Page", undefined, M),
         command("r", "Refresh", undefined, GR),
       ]);
       secondary = `${D}ledger ${join(l.home, "spend.jsonl")}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
@@ -3219,7 +3227,6 @@ export async function runTui(): Promise<void> {
           readInbox(detail.dir),
         );
         const context = readContextManifest(detail.dir);
-        const contextPack = readContextPackManifest(detail.dir);
         const relatedList = relatedRuns(allRuns, s);
         const thinking = thinkingChunks(ev);
         const outcomeText =
@@ -3255,22 +3262,23 @@ export async function runTui(): Promise<void> {
             ? [
                 hint("j/k", "events"),
                 hint("space", "expand", G),
-                hint("PgUp/Dn", "scroll"),
+                hint("^D/^U", "scroll", Y),
                 hint("F", `follow ${timelineFollow ? "ON" : "OFF"}`, Y),
                 hint("v", timelineVerbose ? "all" : "key events"),
               ]
             : runSection === "processes"
               ? [
                   hint("j/k", "select"),
+                  hint("^D/^U", "page", Y),
                   hint("F", "follow", Y),
                   hint("o", "log", G),
                   hint("x", "kill", RED),
                   hint("X", "kill all", RED),
                 ]
               : runSection === "overview" || runSection === "changes" || runSection === "context"
-                ? [hint("j/k", "scroll"), hint("PgUp/Dn", "page")]
+                ? [hint("j/k", "scroll"), hint("^D/^U", "page", Y)]
                 : runSection === "related"
-                  ? [hint("j/k", "select")]
+                  ? [hint("j/k", "select"), hint("^D/^U", "page", Y)]
                   : []),
         ]);
         footerMapTokens = mapStatusTokens(s.worktree ?? s.repoRoot);
@@ -3370,8 +3378,9 @@ export async function runTui(): Promise<void> {
             const isSelected = i === eventSel;
             const prefix = isSelected ? `${C}▸${R}` : " ";
             const time = String(event.t ?? "").slice(11, 19);
-            // The selected event auto-expands; space toggles the manual set.
-            const expandedEvent = expanded.has(`${s.id}:${i}`) || isSelected;
+            // Selection never expands: block heights stay stable while moving,
+            // so the cursor does not jump. Space toggles expansion manually.
+            const expandedEvent = expanded.has(`${s.id}:${i}`);
             const type = String(event.type);
             if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}${event.mode ? `/${event.mode}` : ""}`);
             else if (type === "model_select") {
@@ -3550,7 +3559,7 @@ export async function runTui(): Promise<void> {
             if (start < eventScroll) eventScroll = start;
           } else {
             // A long block starts at the top so the first output lines are visible.
-            // PgDn/PgUp move the line offset inside the block.
+            // ^D/^U move the line offset inside the block.
             const maxBodyScroll = Math.max(0, end - start - visibleCount);
             eventBodyScroll = Math.max(0, Math.min(eventBodyScroll, maxBodyScroll));
             eventScroll = start + eventBodyScroll;
@@ -3684,21 +3693,6 @@ export async function runTui(): Promise<void> {
               lines.push(`  ${tone}${source.kind.padEnd(10)}${R} ${D}${String(source.bytes).padStart(6)}b${R} ${D}${source.origin.padEnd(9)}${R} ${W}${trunc(source.ref, cols - 36)}${R}${source.truncated ? ` ${Y}trunc${R}` : ""}${source.warning ? ` ${Y}${source.warning}${R}` : ""}`);
             }
           }
-          if (contextPack) {
-            lines.push(
-              "",
-              ` ${B}${C}Task pack${R} ${D}${contextPack.pack.chars.toLocaleString()} chars / ${contextPack.pack.items.length} items · ` +
-                `rendered ${contextPack.rendered.chars.toLocaleString()} · omitted ${contextPack.rendered.omitted.length} · ` +
-                `ledger ${contextPack.ledger.chars.toLocaleString()} · overview ${(contextPack.overviewChars ?? 0).toLocaleString()}${R}`,
-            );
-            for (const item of contextPack.pack.items.slice(0, short ? 4 : 16)) {
-              const tone = item.kind === "file" || item.kind === "test" || item.kind === "symbol" ? C : D;
-              lines.push(`  ${tone}${item.kind.padEnd(10)}${R} ${D}${String(item.chars).padStart(7)}b${R} ${W}${trunc(item.ref, cols - 28)}${R}`);
-            }
-            if (contextPack.pack.items.length > (short ? 4 : 16)) {
-              lines.push(`  ${D}… ${contextPack.pack.items.length - (short ? 4 : 16)} more pack item(s)${R}`);
-            }
-          }
           const w = scrollLines(lines, runScroll, bodyH);
           runScroll = w.scroll;
           body = clipBody(w.lines);
@@ -3765,7 +3759,7 @@ export async function runTui(): Promise<void> {
       body = clipBody([...view.lines, ...inputLines]);
       actions = joinCommands([
         ...(options.length > 0 ? [command("1-9", "Choose", undefined, M)] : []),
-        ...(answerOverflow ? [command("PgUp/Dn", "Scroll", undefined, M)] : []),
+        ...(answerOverflow ? [command("^D/^U", "Scroll", undefined, M)] : []),
         command("Enter", "Send", undefined, G),
         command("Esc", "Cancel", undefined, GR),
       ]);
@@ -4192,8 +4186,8 @@ export async function runTui(): Promise<void> {
 
     if (screen === "answer") {
       if (data === "\x1b") { screen = "run"; answerText = ""; answerOptions = []; answerScroll = 0; draw(); return; }
-      if (data === "\x1b[5~") { answerScroll = Math.max(0, answerScroll - answerPage); draw(); return; }
-      if (data === "\x1b[6~") { answerScroll += answerPage; draw(); return; }
+      if (data === CTRL_U) { answerScroll = Math.max(0, answerScroll - Math.max(1, Math.floor(answerPage / 2))); draw(); return; }
+      if (data === CTRL_D) { answerScroll += Math.max(1, Math.floor(answerPage / 2)); draw(); return; }
       if (/^[1-9]$/.test(data) && answerOptions.length > 0 && answerText.length === 0) {
         const option = answerOptions[Number(data) - 1];
         if (option) { answerText = option; draw(); return; }
@@ -4349,6 +4343,8 @@ export async function runTui(): Promise<void> {
       }
       if (data === "j") { newRunContextItem += 1; draw(); return; }
       if (data === "k") { newRunContextItem = Math.max(0, newRunContextItem - 1); draw(); return; }
+      if (data === CTRL_U) { newRunContextItem = Math.max(0, newRunContextItem - 5); draw(); return; }
+      if (data === CTRL_D) { newRunContextItem += 5; draw(); return; }
       if (data === " ") {
         const key = newRunContextItemKeys[newRunContextItem];
         const available = newRunContextItemAvailable[newRunContextItem] === true;
@@ -4672,16 +4668,21 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "\x1b[6~" || data === "\x1b[5~") {
-        const direction = data === "\x1b[6~" ? 1 : -1;
+      if (data === CTRL_D || data === CTRL_U) {
+        const direction = data === CTRL_D ? 1 : -1;
         if (runSection === "timeline") {
           timelineFollow = false;
-          eventBodyScroll = Math.max(0, eventBodyScroll + direction * 10);
+          eventBodyScroll = Math.max(0, eventBodyScroll + direction * HALF_PAGE);
         } else if (runSection === "thinking") {
           thinkingFollow = false;
-          thinkingScroll = Math.max(0, thinkingScroll + direction * 10);
+          thinkingScroll = Math.max(0, thinkingScroll + direction * HALF_PAGE);
+        } else if (runSection === "processes") {
+          processFollow = false;
+          processSel = Math.max(0, processSel + direction * 5);
+        } else if (runSection === "related") {
+          childSel = Math.max(0, childSel + direction * 5);
         } else {
-          runScroll = Math.max(0, runScroll + direction * 10);
+          runScroll = Math.max(0, runScroll + direction * HALF_PAGE);
         }
         draw();
         return;
@@ -4787,6 +4788,8 @@ export async function runTui(): Promise<void> {
     if (page === "models" && screen === "model") {
       if (data === "\x1b[A" || data === "k") { modelScroll = Math.max(0, modelScroll - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { modelScroll++; draw(); return; }
+      if (data === CTRL_U) { modelScroll = Math.max(0, modelScroll - HALF_PAGE); draw(); return; }
+      if (data === CTRL_D) { modelScroll += HALF_PAGE; draw(); return; }
       if (data === "t") {
         const row = loadCatalogue(l.catalogueFile)?.models.find((entry) => entry.key === selectedModelKey);
         if (row) {
@@ -4819,6 +4822,12 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[A" || data === "k") { modelSel = Math.max(0, modelSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") {
         modelSel = Math.min(Math.max(0, modelDisplay.length - 1), modelSel + 1);
+        draw();
+        return;
+      }
+      if (data === CTRL_U) { modelSel = Math.max(0, modelSel - HALF_PAGE); draw(); return; }
+      if (data === CTRL_D) {
+        modelSel = Math.min(Math.max(0, modelDisplay.length - 1), modelSel + HALF_PAGE);
         draw();
         return;
       }
@@ -4884,6 +4893,8 @@ export async function runTui(): Promise<void> {
     if (page === "spend") {
       if (data === "\x1b[A" || data === "k") { spendScroll = Math.max(0, spendScroll - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { spendScroll++; draw(); return; }
+      if (data === CTRL_U) { spendScroll = Math.max(0, spendScroll - HALF_PAGE); draw(); return; }
+      if (data === CTRL_D) { spendScroll += HALF_PAGE; draw(); return; }
       if (data === "g") {
         const values: Array<"provider" | "model" | "day" | "agent"> = ["provider", "model", "day", "agent"];
         spendBy = values[(values.indexOf(spendBy) + 1) % values.length]!;
@@ -5103,6 +5114,8 @@ export async function runTui(): Promise<void> {
     if (page === "settings") {
       if (data === "\x1b[A" || data === "k") { settingsSel = Math.max(0, settingsSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { settingsSel++; draw(); return; }
+      if (data === CTRL_U) { settingsSel = Math.max(0, settingsSel - HALF_PAGE); draw(); return; }
+      if (data === CTRL_D) { settingsSel += HALF_PAGE; draw(); return; }
       draw();
       return;
     }
