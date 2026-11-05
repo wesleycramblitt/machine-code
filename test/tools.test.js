@@ -473,6 +473,27 @@ test("text search returns repo-relative paths for a directory scope", async () =
   }
 });
 
+test("search auto picks symbols for an identifier and outline for a file", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-auto-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "src.ts"), "export function alpha() { return 1; }\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+
+    const symbol = await tool.execute("id", { mode: "auto", pattern: "alpha" });
+    assert.equal(symbol.isError, undefined);
+    assert.match(symbol.content.map((c) => c.text ?? "").join("\n"), /alpha/);
+
+    const outline = await tool.execute("id", { mode: "auto", path: "src.ts", pattern: "alpha" });
+    assert.equal(outline.isError, undefined);
+    const text = outline.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /src\.ts/);
+    assert.match(text, /alpha/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("text search respects ignore rules and a specific paths list", async () => {
   const root = initRepoWithSecrets();
   try {

@@ -502,17 +502,18 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
 /* ------------------------------------------------------------------ search */
 
 const SEARCH_MODES: readonly string[] = [
-  "map", "files", "outline", "sections", "text", "structure", "json", "yaml",
+  "auto", "map", "files", "outline", "sections", "text", "structure", "json", "yaml",
   "definition", "references", "symbols", "info", "semantic", "graph",
 ];
 
 const SearchParams = Type.Object({
   mode: Type.Optional(
     Type.String({
-      enum: ["map", "files", "outline", "sections", "text", "structure", "json", "yaml", "definition", "references", "symbols", "info", "semantic", "graph"],
+      enum: ["auto", "map", "files", "outline", "sections", "text", "structure", "json", "yaml", "definition", "references", "symbols", "info", "semantic", "graph"],
       description:
-        "Search mode: map | files | outline | sections | text | structure | json | yaml | " +
-        "definition | references | symbols | info | semantic | graph (default text).",
+        "Search mode: auto | map | files | outline | sections | text | structure | json | yaml | " +
+        "definition | references | symbols | info | semantic | graph (default text). " +
+        "Use auto to pick symbols for a bare identifier, outline for a file path, or text otherwise.",
     }),
   ),
   pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic/graph, symbol filter for LSP modes. outline/sections use path." })),
@@ -566,7 +567,20 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     parameters: SearchParams,
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
-      const mode = params.mode ?? "text";
+      let mode = params.mode ?? "text";
+      if (mode === "auto") {
+        if (params.path) {
+          try {
+            mode = statSync(scope).isFile() ? "outline" : "text";
+          } catch {
+            mode = "text";
+          }
+        } else if (params.pattern && /^[A-Za-z_$][\w$]*$/.test(params.pattern.trim())) {
+          mode = "symbols";
+        } else {
+          mode = "text";
+        }
+      }
       if (!SEARCH_MODES.includes(mode)) {
         return fail(`unknown search mode "${mode}". Use one of: ${SEARCH_MODES.join(", ")}.`);
       }

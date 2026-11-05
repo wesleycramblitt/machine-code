@@ -60,7 +60,7 @@ The pack carries a short policy: use the most direct tool first.
 
 | Job | First choice | Then |
 |---|---|---|
-| Locate a symbol | outline / LSP symbols | `rg` text |
+| Locate a symbol | `search auto` (symbols) / outline | `rg` text |
 | Read code | symbol | full file if small |
 | Read non-code | section | full file if small |
 | Read a huge unindexed file | offset page | — |

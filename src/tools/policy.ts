@@ -9,7 +9,7 @@ export const TOOL_GUIDE = [
   "Use the most direct tool first.",
   "- Locate: outline or symbols (LSP) before text search. Use text search for strings.",
   "- Read: symbol or section first; batch several symbols/sections in one call; full file if small; offset paging only for a large unindexed file.",
-  "- Search: rg/git grep for text, ast-grep for structure, LSP references for callers.",
+  "- Search: search auto for a symbol or file path; rg/git grep for text, ast-grep for structure, LSP references for callers.",
   "- Edit: exact-match edit scoped by symbol/section; batch all hunks in one call; write only for a new file or a full replacement.",
   "- Verify: use the packet's acceptance command, not an ad-hoc probe.",
   "- Repeated work: create or reuse an artifact script instead of repeating a command.",
