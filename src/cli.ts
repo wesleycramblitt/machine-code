@@ -202,8 +202,8 @@ Usage:
   machine_code worktree remove <run-id> [--delete-branch] [--force]
   machine_code issue list|view|tree|create|edit|close|reopen|link|ensure
                                     GitHub issue operations (hierarchy enforced)
-  machine_code issue delete <n>     Delete issue + PRs, branches, worktrees
-                                    [--cascade] [--yes]
+  machine_code issue delete <n>     Delete issue + PRs, branches, worktrees, runs
+                                    [--cascade] [--keep-runs] [--yes]
   machine_code approve <issue|pr>   Approve a pending human close/merge request
   machine_code accept <issue>       Record a human acceptance verdict (needed to close)
   machine_code task status <issue>  Show the task lifecycle and the next action
@@ -285,6 +285,7 @@ const BOOLEAN_FLAGS = new Set([
   "retry",
   "cascade",
   "yes",
+  "keep-runs",
 ]);
 
 function parseFlags(argv: string[]): { flags: Map<string, string>; positional: string[] } {
@@ -2075,9 +2076,11 @@ async function cmdIssue(argv: string[]): Promise<number> {
         provider,
         issue,
         cascade: flags.has("cascade"),
+        keepRuns: flags.has("keep-runs"),
       });
       process.stdout.write(
         `deleted ${result.deleted.map((n) => `#${n}`).join(", ")}` +
+          `${result.deletedRuns.length ? `; removed ${result.deletedRuns.length} run(s)` : ""}` +
           `${result.closedPrs.length ? `; closed PR(s) ${result.closedPrs.map((n) => `#${n}`).join(", ")}` : ""}` +
           `${result.removedWorktrees.length ? `; removed ${result.removedWorktrees.length} worktree(s)` : ""}` +
           `${result.deletedBranches.length ? `; deleted ${result.deletedBranches.length} branch(es)` : ""}\n`,

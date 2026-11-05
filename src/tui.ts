@@ -1839,6 +1839,7 @@ export async function runTui(): Promise<void> {
           `   ${Y}•${R} close open PR(s)`,
           `   ${Y}•${R} remove ${worktrees.size} worktree(s)`,
           `   ${Y}•${R} delete local and remote ${target.kind === "task" ? "Task" : target.kind === "feature" ? "Feature" : "scope"} branches`,
+          `   ${Y}•${R} delete ${targetRuns.length} associated run record(s)`,
           `   ${Y}•${R} delete the issue${descendants > 0 ? ` and ${descendants} descendant issue(s)` : ""}`,
           "",
           ` ${D}${targetRuns.length} associated run(s) · ${descendants} descendant issue(s)${R}`,

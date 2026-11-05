@@ -324,10 +324,10 @@ remove the worktree. `A` in the Pipeline view does the same for the selected
 task and updates the orchestration ledger.
 
 Press `D` on a Runs-list issue or an issue detail to open the issue delete
-confirmation. Confirming deletes the issue, closes its open PRs, removes its
-worktrees, and deletes the associated local and remote branches. Deleting a
-Feature or Epic requires the cascade confirmation and removes the whole
-subtree.
+confirmation. Confirming deletes the issue, its terminal run records, open
+PRs, worktrees, and associated local and remote branches. Deleting a Feature
+or Epic requires the cascade confirmation and removes the whole subtree.
+Use `--keep-runs` on the CLI to preserve run evidence.
 
 Press `D` on a run row or run detail to delete that run record, its worktree
 when unshared, and its branch when unshared. Open PR branches are kept unless
@@ -336,6 +336,7 @@ when unshared, and its branch when unshared. Open PR branches are kept unless
 ```bash
 machine_code issue delete <issue> --yes
 machine_code issue delete <feature-or-epic> --cascade --yes
+machine_code issue delete <issue> --yes --keep-runs
 machine_code runs delete <run-id> --yes
 ```
 

@@ -4,12 +4,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { deleteIssue } from "../dist/tasks/delete.js";
 import { addTombstones, readIssueCache, removeTombstones, writeIssueCache } from "../dist/issues/cache.js";
+import { RunRecorder } from "../dist/state/runs.js";
 
 function layout(root) {
   return {
@@ -92,6 +93,23 @@ test("a parent with children needs an explicit cascade", async () => {
       /pass --cascade/,
     );
     assert.deepEqual(provider.deleted, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue deletion removes terminal run records unless keepRuns is set", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-del-runs-"));
+  try {
+    const l = layout(root);
+    const target = issue(31, "task");
+    const provider = new FakeProvider([target]);
+    const recorder = new RunRecorder(l, { agent: "build", mode: "", request: "run", repoRoot: root, issue: target.ref });
+    recorder.finalize("completed");
+    const runId = recorder.current.id;
+    const result = await deleteIssue({ layout: l, machine, provider, issue: target, keepRuns: false });
+    assert.deepEqual(result.deletedRuns, [runId]);
+    assert.equal(existsSync(join(l.runsDir, runId)), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

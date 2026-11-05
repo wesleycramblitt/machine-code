@@ -5,12 +5,13 @@
  * deletes the associated local and remote branches. Parent issues require an
  * explicit cascade so a typo cannot delete a whole Feature or Epic.
  */
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import type { MachineConfig } from "../config.js";
 import type { Issue, IssueProvider } from "../issues/provider.js";
 import { listRuns, readRun, RunRecorder } from "../state/runs.js";
+import { isActiveStatus } from "../state/run-schema.js";
 import { removeWorktree } from "../worktree.js";
 import { createPrProviderFor } from "../pr/factory.js";
 import type { PullRequestProvider } from "../pr/provider.js";
@@ -23,11 +24,13 @@ export interface DeleteIssueInput {
   provider: IssueProvider;
   issue: Issue;
   cascade?: boolean;
+  keepRuns?: boolean;
   prs?: PullRequestProvider;
 }
 
 export interface DeleteIssueResult {
   deleted: number[];
+  deletedRuns: string[];
   closedPrs: number[];
   removedWorktrees: string[];
   deletedBranches: string[];
@@ -132,6 +135,22 @@ async function cleanupIssue(
   for (const branch of branches) await deleteBranch(input.layout, branch, result);
 }
 
+function removeIssueRuns(input: DeleteIssueInput, issue: Issue, result: DeleteIssueResult): void {
+  if (input.keepRuns) return;
+  for (const run of listRuns(input.layout).filter((candidate) => assignedTo(candidate, issue))) {
+    if (isActiveStatus(run.status)) {
+      result.warnings.push(`run ${run.id} is ${run.status}; kept it`);
+      continue;
+    }
+    try {
+      rmSync(join(input.layout.runsDir, run.id), { recursive: true, force: true });
+      result.deletedRuns.push(run.id);
+    } catch (error) {
+      result.warnings.push(`run ${run.id}: ${(error as Error).message}`);
+    }
+  }
+}
+
 export async function deleteIssue(input: DeleteIssueInput): Promise<DeleteIssueResult> {
   if (input.issue.reserved) throw new Error(`reserved issue #${input.issue.ref.number} cannot be deleted`);
   const children = await input.provider.children(input.issue.ref);
@@ -147,6 +166,7 @@ export async function deleteIssue(input: DeleteIssueInput): Promise<DeleteIssueR
   addTombstones(input.layout, targetRefs);
   const result: DeleteIssueResult = {
     deleted: [],
+    deletedRuns: [],
     closedPrs: [],
     removedWorktrees: [],
     deletedBranches: [],
@@ -156,6 +176,7 @@ export async function deleteIssue(input: DeleteIssueInput): Promise<DeleteIssueR
     for (const issue of targets) {
       await cleanupIssue(input, issue, prs, result);
       await input.provider.delete(issue.ref);
+      removeIssueRuns(input, issue, result);
       result.deleted.push(issue.ref.number);
     }
   } catch (error) {
