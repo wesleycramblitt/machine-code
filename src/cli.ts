@@ -170,7 +170,9 @@ Usage:
   machine_code runs [--group gh-issue|status|overall] [--filter ...] [--text Q]
                                     Run hierarchy grouped by repo/issue or status
   machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch]
-                                    Delete a terminal run and its resources
+                                    [--force] [--no-cancel]
+                                    Delete a run and its resources; active runs
+                                    are cancelled and stopped first
   machine_code show <run-id>        Rich run detail: model, ask, context, state, changes,
                                     related [--events] [--thinking] [--changes] [--context]
                                     [--state] [--json]
@@ -3045,7 +3047,7 @@ async function cmdRuns(argv: string[]): Promise<number> {
     const { flags, positional } = parseFlags(argv.slice(1));
     if (!flags.has("yes")) fail("runs delete is destructive; rerun with --yes");
     const id = positional[0];
-    if (!id) fail("usage: machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch] [--force]");
+    if (!id) fail("usage: machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch] [--force] [--no-cancel]");
     const found = findRunAnywhere(layout().home, id);
     if (!found) fail(`no such run: ${id}`);
     const result = await deleteRun({
@@ -3054,9 +3056,11 @@ async function cmdRuns(argv: string[]): Promise<number> {
       deleteWorktree: !flags.has("keep-worktree"),
       deleteBranch: !flags.has("keep-branch"),
       force: flags.has("force"),
+      terminate: !flags.has("no-cancel"),
     });
     process.stdout.write(
       `deleted run ${result.runId}` +
+        `${result.cancelled ? "; cancelled active run" : ""}` +
         `${result.removedWorktree ? "; worktree removed" : ""}` +
         `${result.deletedBranch ? "; branch deleted" : ""}\n`,
     );

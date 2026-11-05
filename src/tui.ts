@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
+import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { addTombstones, readIssueCache, removeTombstones, writeIssueCache } from "./issues/cache.js";
@@ -1386,7 +1386,10 @@ export async function runTui(): Promise<void> {
   };
 
   const interrupt = (summary: RunSummary | undefined) => {
-    if (!summary || summary.status !== "running") { notify("run is not running"); return; }
+    if (!summary) return;
+    const active = ["created", "running", "awaiting_input", "paused", "interrupted"];
+    if (!active.includes(summary.status)) { notify(`run is ${summary.status}; nothing to stop`); return; }
+    const action = summary.status === "running" ? "interrupt" : "cancel";
     const dir = join(summary.repoRoot, ".machine_code", "local", "runs", summary.id);
     let seq = 1;
     try {
@@ -1395,8 +1398,8 @@ export async function runTui(): Promise<void> {
     } catch { /* no ack */ }
     try {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "control"), JSON.stringify({ seq, action: "interrupt", from: process.pid }) + "\n", "utf8");
-      notify("interrupt requested");
+      writeFileSync(join(dir, "control"), JSON.stringify({ seq, action, from: process.pid }) + "\n", "utf8");
+      notify(action === "cancel" ? "cancel requested" : "interrupt requested");
     } catch { notify("could not write control request"); }
   };
 
@@ -1830,6 +1833,9 @@ export async function runTui(): Promise<void> {
           ` ${D}Status:${R} ${run.status}   ${D}Agent:${R} ${run.agent}${run.mode ? `/${run.mode}` : ""}`,
           ` ${D}Request:${R} ${run.request.replace(/\s+/g, " ").slice(0, 100)}`,
           "",
+          ...(isActiveStatus(run.status)
+            ? [` ${Y}This run is active. It will be cancelled and stopped first.${R}`, ""]
+            : []),
           ` ${D}This permanently deletes:${R}`,
           `   ${Y}•${R} the run record, events, transcript, and reports`,
           `   ${Y}•${R} its worktree when no other run shares it`,
@@ -2850,6 +2856,9 @@ export async function runTui(): Promise<void> {
           hint("P", "pipeline", C),
           hint("D", "delete", RED),
           ...(pending ? [hint("a", "answer", Y)] : []),
+          ...(["running", "awaiting_input", "paused"].includes(s.status)
+            ? [hint("i", s.status === "running" ? "interrupt" : "cancel", RED)]
+            : []),
           ...(runSection === "timeline"
             ? [
                 hint("j/k", "events"),

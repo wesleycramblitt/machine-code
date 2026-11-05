@@ -9,10 +9,13 @@ import { join } from "node:path";
 import { rmSync } from "node:fs";
 import type { Layout } from "../paths.js";
 import type { RunSummary } from "./runs.js";
-import { listRuns } from "./runs.js";
+import { isPidAlive, listRuns, sendControl, waitForControlAck } from "./runs.js";
 import { isActiveStatus } from "./run-schema.js";
 import { removeWorktree } from "../worktree.js";
 import { runProc } from "../proc.js";
+
+/** How long an active run gets to cancel before deletion refuses. */
+const CANCEL_TIMEOUT_MS = 5_000;
 
 export interface DeleteRunInput {
   layout: Layout;
@@ -20,13 +23,40 @@ export interface DeleteRunInput {
   deleteWorktree?: boolean;
   deleteBranch?: boolean;
   force?: boolean;
+  /**
+   * Ask a live owner to cancel and wait for it to exit before deleting.
+   * Default true: the delete confirmation is already explicit.
+   */
+  terminate?: boolean;
 }
 
 export interface DeleteRunResult {
   runId: string;
   removedWorktree: boolean;
   deletedBranch: boolean;
+  /** True when an active owner was cancelled before deletion. */
+  cancelled: boolean;
   warnings: string[];
+}
+
+/**
+ * Cancel a live owner and wait for it to leave. Never delete a run directory
+ * while its process can still append events or write run.json.
+ */
+async function terminateOwner(layout: Layout, run: RunSummary): Promise<boolean> {
+  if (!run.pid || !isPidAlive(run.pid)) return false;
+  const seq = sendControl(layout.repoRoot, run.id, "cancel");
+  // The ack is best-effort; the pid is the authority.
+  await waitForControlAck(layout.repoRoot, run.id, seq, 2_000);
+  const deadline = Date.now() + CANCEL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(run.pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!isPidAlive(run.pid)) return true;
+  throw new Error(
+    `run ${run.id} is still ${run.status}; cancel it and wait for it to stop before deleting`,
+  );
 }
 
 function ownerRunId(layout: Layout, run: RunSummary): string | undefined {
@@ -53,14 +83,19 @@ async function deleteBranch(layout: Layout, branch: string, result: DeleteRunRes
 
 export async function deleteRun(input: DeleteRunInput): Promise<DeleteRunResult> {
   const { layout, run } = input;
+  let cancelled = false;
   if (isActiveStatus(run.status)) {
-    throw new Error(`run ${run.id} is ${run.status}; cancel or finish it before deleting`);
+    if (input.terminate === false) {
+      throw new Error(`run ${run.id} is ${run.status}; cancel or finish it before deleting`);
+    }
+    cancelled = await terminateOwner(layout, run);
   }
   const others = listRuns(layout).filter((candidate) => candidate.id !== run.id);
   const result: DeleteRunResult = {
     runId: run.id,
     removedWorktree: false,
     deletedBranch: false,
+    cancelled,
     warnings: [],
   };
 
