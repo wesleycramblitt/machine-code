@@ -116,3 +116,14 @@ tool-using run.
 - Remove or formally document the remaining legacy `delegate` configuration.
 - Remove or document `--direct-exec`; no queue or child path uses it.
 - Keep `queue` documented as a compatibility path until a breaking release.
+
+## 5. Repo map and semantic search quality
+
+- Derive each semantic module description only from that module's own files.
+  Current defects: `src/plan` includes "artifact usage events"; `data/` is
+  described as the reference-index layer.
+- Cover `data/`, `.machine_code/`, and `docs/` in semantic ranking so model
+  configs, policy, skills, and the manual Task lifecycle surface by concept.
+- Add regression tests for attribution and ranking.
+- Acceptance: descriptions are module-local; the three concept queries return
+  the expected files; existing map and semantic tests stay green.
