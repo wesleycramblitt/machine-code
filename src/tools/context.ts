@@ -7,7 +7,10 @@
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { READ_CAP_BYTES, capText } from "./safety.js";
+import { buildRepoMap, renderOutline, symbolRange } from "../map/deterministic.js";
 import type { ToolContext } from "./index.js";
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -18,13 +21,13 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
-const CONTEXT_ACTIONS = new Set(["note", "focus", "recall", "forget", "state"]);
+const CONTEXT_ACTIONS = new Set(["note", "focus", "recall", "forget", "state", "expand"]);
 const CONTEXT_KINDS = new Set(["finding", "decision", "open", "next"]);
 
 const ContextParams = Type.Object({
   action: Type.String({
-    enum: ["note", "focus", "recall", "forget", "state"],
-    description: "Memory operation: note | focus | recall | forget | state.",
+    enum: ["note", "focus", "recall", "forget", "state", "expand"],
+    description: "Memory or context operation: note | focus | recall | forget | state | expand.",
   }),
   kind: Type.Optional(
     Type.String({
@@ -37,6 +40,9 @@ const ContextParams = Type.Object({
     Type.Array(Type.String(), { description: "References: path, path:line, or path:start-end." }),
   ),
   id: Type.Optional(Type.String({ description: "Artifact id for recall, or fact/question id for forget." })),
+  target: Type.Optional(
+    Type.String({ description: "For expand: a path or path#symbol, e.g. src/loop.ts#runLoop." }),
+  ),
 });
 
 export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
@@ -44,9 +50,10 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     name: "context",
     label: "context",
     description:
-      "Control run state. note needs text (kind: finding|decision|open|next). focus needs refs. " +
-      "recall needs id. forget needs id or text. state takes no fields. " +
-      "Example: {\"action\":\"note\",\"kind\":\"next\",\"text\":\"Edit src/tui.ts to ...\"}.",
+      "Control run state or expand task context. note needs text (kind: finding|decision|open|next). focus needs refs. " +
+      "recall needs id. forget needs id or text. state takes no fields. expand needs target (path or path#symbol) and returns " +
+      "the symbol/file plus imports, callers, and tests in one sweep. " +
+      "Example: {\"action\":\"expand\",\"target\":\"src/loop.ts#runLoop\"}.",
     parameters: ContextParams,
     async execute(_id, params: Static<typeof ContextParams>) {
       const memory = ctx.state;
@@ -87,6 +94,84 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
             }
             if (!id) return fail("forget requires id or matching text");
             return memory.forget(id) ? ok(`resolved ${id}`) : fail(`no fact or question ${id}`);
+          }
+          case "expand": {
+            if (!params.target || params.target.trim().length === 0) {
+              return fail("expand requires target: path or path#symbol");
+            }
+            const [path, symbol] = params.target.split("#");
+            if (!path) return fail("expand target needs a path");
+            const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+            const file = built.map.files.find((entry) => entry.path === path);
+            if (!file) return fail(`no mapped file "${path}"`);
+            const absolute = join(ctx.root, path);
+            if (!existsSync(absolute)) return fail(`file not found: ${path}`);
+            const raw = readFileSync(absolute, "utf8");
+            const lines = raw.split("\n");
+            const parts: string[] = [];
+            const add = (label: string, body: string): void => {
+              if (body.trim()) parts.push(`### ${label}\n${body}`);
+            };
+            if (symbol) {
+              const range = symbolRange(file, symbol);
+              if (!range) {
+                const known = file.symbols.slice(0, 16).map((entry) => `${entry.line} ${entry.kind} ${entry.name}`).join("\n");
+                return fail(`no symbol "${symbol}" in ${path}. Known symbols:\n${known || "(none)"}`);
+              }
+              const body = lines
+                .slice(range.start - 1, range.end)
+                .map((line, index) => `${range.start + index}: ${line}`)
+                .join("\n");
+              add(`${path}:${range.start}-${range.end} (${symbol})`, body);
+            } else if (lines.length > 200) {
+              add(`${path} (outline)`, renderOutline(file));
+            } else {
+              add(path, raw);
+            }
+
+            const byPath = new Map(built.map.files.map((entry) => [entry.path, entry] as const));
+            const imports = (file.imports ?? []).filter((dependency) => byPath.has(dependency)).slice(0, 8);
+            for (const dependency of imports) {
+              const depFile = byPath.get(dependency)!;
+              const depRaw = readFileSync(join(ctx.root, dependency), "utf8");
+              add(
+                `${dependency} (import)`,
+                depRaw.length <= 8_000 ? depRaw : renderOutline(depFile),
+              );
+            }
+
+            const callers = built.map.files
+              .filter((entry) => entry.path !== path && (entry.imports ?? []).includes(path))
+              .slice(0, 8);
+            for (const caller of callers) {
+              const outline = renderOutline(caller);
+              add(
+                `${caller.path} (caller)`,
+                outline.trim() || readFileSync(join(ctx.root, caller.path), "utf8").slice(0, 4_000),
+              );
+            }
+
+            const stem = basename(path).replace(/\.[^.]+$/, "");
+            const parent = basename(dirname(path));
+            const testCandidates = [...new Set([
+              `test/${parent}-${stem}.test.js`,
+              `test/${stem}.test.js`,
+              `test/${parent}/${stem}.test.js`,
+              `test/${parent}-${stem}.test.ts`,
+              `test/${stem}.test.ts`,
+            ])];
+            for (const candidate of testCandidates) {
+              const abs = join(ctx.root, candidate);
+              if (!existsSync(abs)) continue;
+              add(`${candidate} (test)`, readFileSync(abs, "utf8"));
+            }
+
+            if (parts.length === 0) return fail(`nothing to expand for ${params.target}`);
+            return ok(
+              `<context-expansion target="${params.target}">\n` +
+                `${capText(parts.join("\n\n"), READ_CAP_BYTES).text}\n` +
+                "</context-expansion>",
+            );
           }
           case "state":
             return ok(memory.renderMarkdown());

@@ -71,6 +71,7 @@ The pack carries a short policy: use the most direct tool first.
 | Job | First choice | Then |
 |---|---|---|
 | Locate a symbol | `search auto` (symbols) / outline | `rg` text |
+| Expand a symbol | `context expand path#symbol` | read symbol + imports + callers + tests |
 | Read code | symbol | full file if small |
 | Read non-code | section | full file if small |
 | Read a huge unindexed file | offset page | — |

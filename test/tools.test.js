@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { commandTool, editTool, readTool, searchTool } from "../dist/tools/index.js";
+import { contextTool } from "../dist/tools/context.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 import { RunStateStore } from "../dist/context/state.js";
 
@@ -274,6 +275,37 @@ test("read stores exact bytes in the evidence ledger", async () => {
     const secondText = second.content.map((c) => c.text ?? "").join("\n");
     assert.match(secondText, /return 2/);
     assert.notEqual(secondText, firstText);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test("context expand returns a symbol with imports, callers, and tests", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-context-expand-"));
+  const runDir = mkdtempSync(join(tmpdir(), "mc-context-expand-run-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, "test"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "a.ts"),
+      "import { helper } from './dep.js';\nexport function target() { return helper(); }\n",
+      "utf8",
+    );
+    writeFileSync(join(root, "src", "dep.ts"), "export function helper() { return 1; }\n", "utf8");
+    writeFileSync(join(root, "src", "consumer.ts"), "import { target } from './a.js';\ntarget();\n", "utf8");
+    writeFileSync(join(root, "test", "a.test.js"), "test('target', () => {});\n", "utf8");
+    const store = new RunStateStore({ runDir, runId: "r-expand", goal: "goal", repoRoot: root });
+    const tool = contextTool({ root, commands: CORE_COMMANDS, state: store });
+    const result = await tool.execute("id", { action: "expand", target: "src/a.ts#target" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /src\/a\.ts:\d+-\d+ \(target\)/);
+    assert.match(text, /return helper/);
+    assert.match(text, /src\/dep\.ts \(import\)/);
+    assert.match(text, /src\/consumer\.ts \(caller\)/);
+    assert.match(text, /test\/a\.test\.js \(test\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(runDir, { recursive: true, force: true });
