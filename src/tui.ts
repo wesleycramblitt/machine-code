@@ -17,7 +17,7 @@ import { layout, type Layout } from "./paths.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
-import { readIssueCache, writeIssueCache } from "./issues/cache.js";
+import { addTombstones, readIssueCache, removeTombstones, writeIssueCache } from "./issues/cache.js";
 import type { Issue, IssueRef } from "./issues/provider.js";
 import { filterRuns, headerCounts, issueGlyphKind, issueRowDetail, sortRuns, type RunFilter } from "./tui/status.js";
 import {
@@ -3490,8 +3490,9 @@ export async function runTui(): Promise<void> {
         const target = deleteTarget;
         if (!target) { screen = deleteReturn; draw(); return; }
         deleteInFlight = true;
-        deletingIssues.add(refKey(target.ref));
-        for (const ref of descendantRefs(target)) deletingIssues.add(refKey(ref));
+        const deleteRefs = [target.ref, ...descendantRefs(target)];
+        addTombstones(l, deleteRefs);
+        for (const ref of deleteRefs) deletingIssues.add(refKey(ref));
         const cache = readIssueCache(l);
         if (cache) {
           const next = cache.issues.filter((issue) => !deletingIssues.has(refKey(issue.ref)));
@@ -3524,6 +3525,7 @@ export async function runTui(): Promise<void> {
             notify(`deleted #${target.ref.number}`);
           } else {
             deletingIssues.clear();
+            removeTombstones(l, deleteRefs);
             const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
             notify(`delete failed for #${target.ref.number}: ${trunc(last, 80)}`);
           }

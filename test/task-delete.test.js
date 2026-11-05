@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { deleteIssue } from "../dist/tasks/delete.js";
+import { addTombstones, readIssueCache, removeTombstones, writeIssueCache } from "../dist/issues/cache.js";
 
 function layout(root) {
   return {
@@ -91,6 +92,21 @@ test("a parent with children needs an explicit cascade", async () => {
       /pass --cascade/,
     );
     assert.deepEqual(provider.deleted, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tombstones hide a deleted issue even when a stale cache writes it back", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-del-cache-"));
+  try {
+    const l = layout(root);
+    const target = issue(31, "task");
+    writeIssueCache(l, "o/r", [target]);
+    addTombstones(l, [target.ref]);
+    assert.deepEqual(readIssueCache(l).issues, []);
+    removeTombstones(l, [target.ref]);
+    assert.equal(readIssueCache(l).issues.length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

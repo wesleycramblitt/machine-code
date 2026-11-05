@@ -15,6 +15,7 @@ import { removeWorktree } from "../worktree.js";
 import { createPrProviderFor } from "../pr/factory.js";
 import type { PullRequestProvider } from "../pr/provider.js";
 import { runProc } from "../proc.js";
+import { addTombstones, removeTombstones } from "../issues/cache.js";
 
 export interface DeleteIssueInput {
   layout: Layout;
@@ -142,6 +143,8 @@ export async function deleteIssue(input: DeleteIssueInput): Promise<DeleteIssueR
   if (!input.provider.delete) throw new Error("issue provider does not support deletion");
   const prs = input.prs ?? (await createPrProviderFor(input.layout)).provider;
   const targets = input.cascade ? [...(await descendants(input.provider, input.issue)), input.issue] : [input.issue];
+  const targetRefs = targets.map((target) => target.ref);
+  addTombstones(input.layout, targetRefs);
   const result: DeleteIssueResult = {
     deleted: [],
     closedPrs: [],
@@ -149,10 +152,15 @@ export async function deleteIssue(input: DeleteIssueInput): Promise<DeleteIssueR
     deletedBranches: [],
     warnings: [],
   };
-  for (const issue of targets) {
-    await cleanupIssue(input, issue, prs, result);
-    await input.provider.delete(issue.ref);
-    result.deleted.push(issue.ref.number);
+  try {
+    for (const issue of targets) {
+      await cleanupIssue(input, issue, prs, result);
+      await input.provider.delete(issue.ref);
+      result.deleted.push(issue.ref.number);
+    }
+  } catch (error) {
+    removeTombstones(input.layout, targetRefs);
+    throw error;
   }
   return result;
 }

@@ -7,7 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
-import type { Issue } from "../issues/provider.js";
+import type { Issue, IssueRef } from "../issues/provider.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
 
 export interface IssueCacheFile {
@@ -21,24 +21,59 @@ export function issueCachePath(layout: Layout): string {
   return join(layout.localDir, "cache", "issues.json");
 }
 
+export function issueKey(ref: IssueRef): string {
+  return `${ref.repo}#${ref.number}`;
+}
+
+function tombstonesPath(layout: Layout): string {
+  return join(layout.localDir, "cache", "deleted-issues.json");
+}
+
+export function readTombstones(layout: Layout): Set<string> {
+  const file = tombstonesPath(layout);
+  if (!existsSync(file)) return new Set();
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { deleted?: unknown };
+    return new Set(Array.isArray(raw.deleted) ? raw.deleted.filter((v): v is string => typeof v === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function addTombstones(layout: Layout, refs: Iterable<IssueRef>): void {
+  const deleted = readTombstones(layout);
+  for (const ref of refs) deleted.add(issueKey(ref));
+  writeJsonAtomic(tombstonesPath(layout), { deleted: [...deleted].sort() });
+}
+
+export function removeTombstones(layout: Layout, refs: Iterable<IssueRef>): void {
+  const deleted = readTombstones(layout);
+  for (const ref of refs) deleted.delete(issueKey(ref));
+  writeJsonAtomic(tombstonesPath(layout), { deleted: [...deleted].sort() });
+}
+
 export function readIssueCache(layout: Layout): IssueCacheFile | null {
   const file = issueCachePath(layout);
   if (!existsSync(file)) return null;
   try {
     const cache = JSON.parse(readFileSync(file, "utf8")) as IssueCacheFile;
     if (!cache || !Array.isArray(cache.issues)) return null;
-    return cache;
+    const deleted = readTombstones(layout);
+    return deleted.size > 0
+      ? { ...cache, issues: cache.issues.filter((issue) => !deleted.has(issueKey(issue.ref))) }
+      : cache;
   } catch {
     return null;
   }
 }
 
 export function writeIssueCache(layout: Layout, repo: string, issues: Issue[]): IssueCacheFile {
+  const deleted = readTombstones(layout);
   const cache: IssueCacheFile = {
     schemaVersion: 1,
     repo,
     fetchedAt: new Date().toISOString(),
-    issues,
+    issues: deleted.size > 0 ? issues.filter((issue) => !deleted.has(issueKey(issue.ref))) : issues,
   };
   writeJsonAtomic(issueCachePath(layout), cache);
   return cache;
