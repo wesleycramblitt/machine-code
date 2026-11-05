@@ -104,3 +104,20 @@ export function skillMetas(layout: Layout): Array<{ name: string; description: s
   }
   return [...out.values()];
 }
+
+/**
+ * Mode default skills for a run, before issue-declared skills.
+ *
+ * `clean-code` rides every coding/planning run (build, planner, general,
+ * sudo); `verified-testing` joins it when verification is verified or
+ * higher. `safe-refactor` stays opt-in via `mc:context` on refactor issues.
+ * Review is harness-owned (independent Review run), not a skill.
+ */
+export function defaultSkillsFor(args: { agent: string; verification?: string }): string[] {
+  if (!["build", "planner", "general", "sudo"].includes(args.agent)) return [];
+  const skills = ["clean-code"];
+  if (args.verification === "verified" || args.verification === "redundant") {
+    skills.push("verified-testing");
+  }
+  return skills;
+}

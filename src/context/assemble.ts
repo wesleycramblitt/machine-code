@@ -92,6 +92,13 @@ export interface AssembleInput {
   exclude?: ContextExclusion;
   /** Add files selected in the composer that no issue references. */
   include?: ContextInclude;
+  /**
+   * Mode default skills (e.g. from `defaultSkillsFor`): bodies load like
+   * issue-declared skills, lose ties to them, and honor the same
+   * `section:skills` / `skill:name` exclusions. Missing defaults are
+   * skipped silently.
+   */
+  defaultSkills?: string[];
 }
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
@@ -269,7 +276,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
             ref: name,
             depth,
             body: skill.text,
-            cap: 4 * KIB,
+            cap: 8 * KIB,
             band,
           });
         }
@@ -310,6 +317,21 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         }
       }
     }
+  }
+
+  // Mode default skills (clean-code on coding/planning runs, verified-testing
+  // on verified+). They load like issue-declared skill bodies at the same
+  // priority, lose ties to declared skills via later dedupe, and honor the
+  // same composer exclusions. Missing defaults are skipped silently.
+  const declaredSkillRefs = new Set(
+    pending.filter((item) => item.kind === "skill").map((item) => item.ref),
+  );
+  for (const name of input.defaultSkills ?? []) {
+    if (declaredSkillRefs.has(name)) continue;
+    declaredSkillRefs.add(name);
+    const skill = skillBody(layout, name);
+    if (!skill) continue;
+    pending.push({ kind: "skill", origin: "explicit", ref: name, body: skill.text, cap: 8 * KIB, band: 2 });
   }
 
   // Explicit composer includes. These are user-selected knowledge files that

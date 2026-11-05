@@ -43,7 +43,7 @@ export interface ContextPreview {
 
 const FILE_CAP = 8 * 1024;
 const ARTIFACT_CAP = 3 * 1024;
-const SKILL_CAP = 4 * 1024;
+const SKILL_CAP = 8 * 1024;
 
 function keyOf(ref: IssueRef): string {
   return `${ref.repo}#${ref.number}`;
@@ -84,6 +84,8 @@ export function issueChain(issues: readonly Issue[], ref?: IssueRef): Issue[] {
 export interface PreviewContextOptions {
   planFile?: string;
   knowledgeIndex?: string;
+  /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
+  defaultSkills?: string[];
 }
 
 export function previewContext(
@@ -194,6 +196,17 @@ export function previewContext(
     const size = capFor(join(layout.repoRoot, planPath), 2 * 1024);
     chars += size;
     sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
+  }
+  // Mode default skill bodies (clean-code, verified-testing). Declared issue
+  // skills win ties; missing defaults are skipped silently.
+  for (const name of options.defaultSkills ?? []) {
+    if (skills.includes(name)) continue;
+    skills.push(name);
+    const path = skillPath(layout, name);
+    if (!path) continue;
+    const size = capFor(path, SKILL_CAP);
+    chars += size;
+    sources.push({ kind: "skill", ref: name, origin: "explicit", depth: 0, chars: size, exists: true });
   }
   if (options.knowledgeIndex) {
     const root = resolve(layout.repoRoot);

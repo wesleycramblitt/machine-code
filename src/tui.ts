@@ -58,7 +58,7 @@ import { loadCatalogue } from "./catalogue/load.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
-import { skillMetas } from "./context/references.js";
+import { skillMetas, defaultSkillsFor } from "./context/references.js";
 import { changesFor, contextUsage, readContextManifest, readContextPackManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
@@ -1146,7 +1146,7 @@ export async function runTui(): Promise<void> {
     const newRunLayout = layout(newRunRepo);
     // Everything below depends on the repo/issue, not on the text being typed.
     // Cache it for the duration of an insert session so keystrokes stay cheap.
-    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}`;
+    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}`;
     const previewTtl = newRunInsert ? 60_000 : 5_000;
     if (
       !newRunPreviewCache ||
@@ -1162,6 +1162,7 @@ export async function runTui(): Promise<void> {
         context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, "", {
           planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
+          defaultSkills: defaultSkillsFor({ agent: newrun.agent, verification: newrun.verification }),
         }),
         policy: effectivePolicy(newRunRepo),
         machine,

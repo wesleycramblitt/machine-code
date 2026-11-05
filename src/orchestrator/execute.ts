@@ -20,6 +20,7 @@ import { createWorktree, WorktreeError } from "../worktree.js";
 import { parseVerificationCommands, writePacket, type PacketAcceptance, type TaskPacket } from "../packet.js";
 import { parseArtifactReferences } from "../context/references.js";
 import { assembleContext } from "../context/assemble.js";
+import { defaultSkillsFor } from "../context/references.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
 import { loadAvailability } from "../availability.js";
@@ -227,6 +228,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
     machine: input.machine,
     provider: input.provider,
     issue: issue.ref,
+    defaultSkills: defaultSkillsFor({ agent: "build", verification: plan.verification }),
   });
   if (context.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: context.chars, sources: context.sources });

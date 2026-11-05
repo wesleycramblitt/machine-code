@@ -24,7 +24,7 @@ these tools.
    All descriptions render into one context block capped at 1 KiB
    (`src/context/assemble.ts`, `skillMetas` and the skill block).
 2. **Body loading.** A skill body enters the prompt only when an issue declares
-   it in `mc:context` (`{"skills":["..."]}`). The cap is 4 KiB
+   it in `mc:context` (`{"skills":["..."]}`). The cap is 8 KiB
    (`src/context/assemble.ts`, `skillBody`; `src/context/references.ts`).
 3. **No skill scripts.** Commands are typed manifests from profiles and run
    with `execFile` (`src/commands/registry.ts`). There is no shell. A vendored
@@ -66,19 +66,52 @@ Consequences:
 | `reference` | Architect | Gathering or indexing sources | existing |
 | `requirements` | Architect | Request is large or ambiguous | about 1.2 KiB |
 | `systematic-debugging` | Build, Sudo | A gate, test, or bug fails | about 1.4 KiB |
+| `clean-code` | Build, Planner | Every coding/planning run (mode default) | about 5.7 KiB |
+| `verified-testing` | Build | Verification verified or higher (mode default) | about 2.0 KiB |
+| `safe-refactor` | Build | Refactor issue declares it in `mc:context` | about 1.6 KiB |
 
-The three descriptions use about 330 chars. The whole description block must
+The six descriptions use about 720 chars. The whole description block must
 stay under 1 KiB.
 
 ## How an agent gets a kept skill
 
-1. Preferred: the issue adds `{"skills":["systematic-debugging"]}` to its
+1. Mode defaults: `defaultSkillsFor` (`src/context/references.ts`) resolves
+   `clean-code` on every build/planner/general/sudo run plus
+   `verified-testing` on verified or higher. Bodies load like declared
+   skills, lose ties to them, and honor `section:skills` / `skill:name`
+   exclusions (`src/context/assemble.ts`, `src/context/preview.ts`).
+2. Preferred for conditional skills: the issue adds
+   `{"skills":["systematic-debugging"]}` (or `["safe-refactor"]`) to its
    `mc:context` block. The body is then injected for that issue and its
    descendants.
-2. If the issue has no block: the Architect names the exact path in the packet
+3. If the issue has no block: the Architect names the exact path in the packet
    constraints. Build reads it once.
-3. Do not add a skill to every issue. A 4 KiB body pushes out task and packet
-   context.
+4. Do not add a skill to every issue. An 8 KiB body pushes out task and packet
+   context. Mode defaults are the only always-on bodies.
+
+## Update 2026-11-05: mode default skills
+
+Surveyed obra/superpowers (15 skills), mattpocock/skills (tdd, code-review,
+implement, to-tickets, improve-codebase-architecture), ramziddin/solid-skills
+(1 TS-centric skill, ~88 KiB bundle), and the myskills.tools directory.
+Kept the rewrite-don't-vendor rule with one exception: `clean-code`
+(upstream body kept verbatim, description shortened to fit the parser and
+the 1 KiB description budget).
+
+- Added `verified-testing`: distills mattpocock/tdd seams and anti-patterns
+  (implementation-coupled, tautological, horizontal slicing) against packet
+  acceptance instead of user-confirmed seams. Partially revisits the rank-4
+  TDD drop: test-first ordering is now the verified-mode default, with an
+  explicit escape hatch. Revisit if "blocked on test-first" reports recur.
+- Added `safe-refactor`: gated green-to-green loop for behavior-preserving
+  restructures. `improve-codebase-architecture` stays deferred for
+  structural (shallow-to-deep) refactors with behavior invariants.
+- Dropped everything else: packets/issues own planning and tickets
+  (writing-plans, to-tickets, implement), the harness owns worktrees,
+  dispatch, gates, and review (executing-plans, subagent-driven-development,
+  using-git-worktrees, requesting-code-review, code-review), scripts cannot
+  run here (brainstorming server, plan scripts), and solid-skills overlaps
+  clean-code at ~88 KiB.
 
 ## Proposed prompt lines, not applied
 
