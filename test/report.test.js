@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { thinkingChunks, touchedPaths, childRuns, relatedRuns, readContextPackManifest } from "../dist/report/run.js";
+import { thinkingChunks, touchedPaths, childRuns, relatedRuns, readContextPackManifest, runMetrics, exceededLimits } from "../dist/report/run.js";
 
 test("thinking chunks combine live deltas and final turn text", () => {
   const events = [
@@ -81,6 +81,58 @@ test("context pack manifests are read defensively", () => {
 
     writeFileSync(join(dir, "context-pack.json"), "{bad json", "utf8");
     assert.equal(readContextPackManifest(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("run metrics summarize calls, context, changes, gates, and limits", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mc-eval-"));
+  try {
+    writeFileSync(
+      join(dir, "context-pack.json"),
+      JSON.stringify({
+        pack: { chars: 4_000, tokens: 1_000, files: ["src/a.ts"], items: [] },
+        rendered: { chars: 3_900, included: 1, omitted: [{ ref: "src/b.ts", reason: "budget" }] },
+        ledger: { chars: 800, entries: [] },
+        overviewChars: 1_200,
+      }),
+      "utf8",
+    );
+    const summary = {
+      id: "r-eval",
+      agent: "build",
+      status: "blocked",
+      stopReason: "loop",
+      modelCalls: 4,
+      usage: { input: 100, output: 20, cacheRead: 300, cacheWrite: 0, totalTokens: 420 },
+      cost: { actual: 0.01, estimated: 0 },
+      startedAt: "2026-01-01T00:00:00.000Z",
+      lastActivityAt: "2026-01-01T00:00:02.500Z",
+    };
+    const events = [
+      { t: "2026-01-01T00:00:00.100Z", type: "model_select", key: "provider/model" },
+      { t: "2026-01-01T00:00:00.200Z", type: "model_call_end" },
+      { t: "2026-01-01T00:00:00.300Z", type: "tool_call", tool: "read" },
+      { t: "2026-01-01T00:00:00.400Z", type: "tool_call", tool: "edit", args: { path: "src/a.ts" } },
+      { t: "2026-01-01T00:00:00.500Z", type: "loop_blocked", reason: "loop" },
+      { t: "2026-01-01T00:00:00.600Z", type: "gates", passed: false, results: [{ command: "typescript:test", passed: false }] },
+    ];
+    const metrics = runMetrics(summary, events, dir);
+    assert.equal(metrics.model, "provider/model");
+    assert.equal(metrics.modelCalls, 4);
+    assert.equal(metrics.toolCalls, 2);
+    assert.equal(metrics.toolCallsByTool.read, 1);
+    assert.equal(metrics.loopReason, "loop");
+    assert.equal(metrics.gates?.failed[0], "typescript:test");
+    assert.deepEqual(metrics.changedPaths, ["src/a.ts"]);
+    assert.equal(metrics.packTokens, 1_000);
+    assert.equal(metrics.omittedPackItems, 1);
+    assert.equal(metrics.ledgerChars, 800);
+    assert.equal(metrics.wallMs, 2_500);
+
+    assert.deepEqual(exceededLimits(metrics, { maxCalls: 10, maxCost: 1 }), []);
+    assert.match(exceededLimits(metrics, { maxCalls: 1, maxTokens: 100 })[0], /model calls 4 > 1/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

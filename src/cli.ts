@@ -66,7 +66,7 @@ import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
 import { artifactPeek } from "./context/preview.js";
-import { changesFor, contextUsage, readContextManifest, readContextPackManifest, relatedRuns, thinkingChunks, touchedPaths } from "./report/run.js";
+import { changesFor, contextUsage, exceededLimits, readContextManifest, readContextPackManifest, relatedRuns, runMetrics, thinkingChunks, touchedPaths } from "./report/run.js";
 import { buildSettings, settingsFileFor } from "./tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./data.js";
 import { runTui } from "./tui.js";
@@ -181,6 +181,9 @@ Usage:
   machine_code processes kill <run-id> <process-id|all>
   machine_code processes logs <run-id> <process-id>
   machine_code context <run-id>     Print the run context manifest
+  machine_code eval <run-id>        Score calls, tokens, cost, context, gates [--baseline <id>]
+                                    [--max-calls N] [--max-cost N] [--max-tokens N]
+                                    [--max-context N] [--json]
   machine_code pack <request>       Preview the task pack before a run [--issue <ref>]
                                     [--agent <role>] [--model <key>] [--context] [--json]
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
@@ -3766,6 +3769,84 @@ function cmdShow(argv: string[]): number {
   return 0;
 }
 
+async function cmdEval(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const id = positional[0];
+  if (!id) fail("eval needs a run id");
+  const found = findRunAnywhere(layout().home, id);
+  if (!found) fail(`no such run: ${id}`);
+  const runDir = join(found.layout.runsDir, found.run.summary.id);
+  const metrics = runMetrics(found.run.summary, found.run.events, runDir);
+  const baselineId = flags.get("baseline");
+  const baselineFound = baselineId ? findRunAnywhere(layout().home, baselineId) : null;
+  if (baselineId && !baselineFound) fail(`no such baseline run: ${baselineId}`);
+  const baseline = baselineFound
+    ? runMetrics(
+        baselineFound.run.summary,
+        baselineFound.run.events,
+        join(baselineFound.layout.runsDir, baselineFound.run.summary.id),
+      )
+    : undefined;
+  const limits = {
+    ...(flags.has("max-calls") ? { maxCalls: Number(flags.get("max-calls")) } : {}),
+    ...(flags.has("max-cost") ? { maxCost: Number(flags.get("max-cost")) } : {}),
+    ...(flags.has("max-tokens") ? { maxTokens: Number(flags.get("max-tokens")) } : {}),
+    ...(flags.has("max-context") ? { maxContextTokens: Number(flags.get("max-context")) } : {}),
+  };
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isFinite(value) || value < 0) fail(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} needs a non-negative number`);
+  }
+  const failures = exceededLimits(metrics, limits);
+  const delta = baseline
+    ? {
+        calls: metrics.modelCalls - baseline.modelCalls,
+        toolCalls: metrics.toolCalls - baseline.toolCalls,
+        tokens: metrics.totalTokens - baseline.totalTokens,
+        cost: metrics.costActual - baseline.costActual,
+        peakContext: metrics.peakContextTokens - baseline.peakContextTokens,
+        wallMs: metrics.wallMs - baseline.wallMs,
+      }
+    : undefined;
+
+  if (flags.has("json")) {
+    process.stdout.write(`${JSON.stringify({ metrics, baseline, delta, limits, failures }, null, 2)}\n`);
+    return failures.length > 0 ? 1 : 0;
+  }
+
+  process.stdout.write(
+    `${metrics.id}  ${metrics.agent}  ${metrics.status}${metrics.stopReason && metrics.stopReason !== "completed" ? ` (${metrics.stopReason})` : ""}  ${metrics.model ?? "(model unknown)"}\n`,
+  );
+  process.stdout.write(
+    `  calls   ${metrics.modelCalls} model · ${metrics.toolCalls} tool · ` +
+      Object.entries(metrics.toolCallsByTool).sort((a, b) => b[1] - a[1]).map(([tool, count]) => `${tool} ${count}`).join(" · ") + "\n",
+  );
+  process.stdout.write(
+    `  tokens  ${fmtRunTokens(metrics.totalTokens)} total · ${fmtRunTokens(metrics.inputTokens)} in · ` +
+      `${fmtRunTokens(metrics.cacheReadTokens)} cache · ${fmtRunTokens(metrics.outputTokens)} out\n`,
+  );
+  process.stdout.write(`  cost    ${fmtMoney(metrics.costActual)} actual · ${fmtMoney(metrics.costEstimated)} estimated\n`);
+  process.stdout.write(
+    `  context ${fmtRunTokens(metrics.peakContextTokens)} peak · pack ${fmtRunTokens(metrics.packTokens)} · ` +
+      `ledger ${fmtRunTokens(Math.ceil(metrics.ledgerChars / 4))} · overview ${fmtRunTokens(Math.ceil(metrics.overviewChars / 4))} · omitted ${metrics.omittedPackItems}\n`,
+  );
+  process.stdout.write(`  time    ${Math.round(metrics.wallMs / 1000)}s · changes ${metrics.changedPaths.length} · gates ${metrics.gates ? (metrics.gates.passed ? "pass" : `fail (${metrics.gates.failed.join(", ")})`) : "not run"}\n`);
+  if (metrics.loopReason) process.stdout.write(`  loop    ${metrics.loopReason}\n`);
+  if (baseline && delta) {
+    const sign = (value: number): string => (value > 0 ? `+${value}` : String(value));
+    process.stdout.write(
+      `  vs ${baseline.id}: calls ${sign(delta.calls)} · tool ${sign(delta.toolCalls)} · ` +
+        `tokens ${sign(delta.tokens)} · cost ${sign(Number(delta.cost.toFixed(4)))} · ` +
+        `peak ctx ${sign(delta.peakContext)} · time ${sign(Math.round(delta.wallMs / 1000))}s\n`,
+    );
+  }
+  if (failures.length > 0) {
+    process.stdout.write(`  FAIL ${failures.join("; ")}\n`);
+    return 1;
+  }
+  if (Object.keys(limits).length > 0) process.stdout.write(`  PASS limits\n`);
+  return 0;
+}
+
 async function cmdPack(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const l = layout();
@@ -4302,6 +4383,9 @@ async function main(): Promise<void> {
       break;
     case "context":
       code = cmdContext(rest);
+      break;
+    case "eval":
+      code = await cmdEval(rest);
       break;
     case "pack":
       code = await cmdPack(rest);

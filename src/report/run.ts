@@ -159,6 +159,121 @@ export function readContextPackManifest(runDir: string): ContextPackManifest | n
   }
 }
 
+export interface RunMetrics {
+  id: string;
+  agent: string;
+  status: string;
+  stopReason: string | null;
+  model?: string;
+  modelCalls: number;
+  toolCalls: number;
+  toolCallsByTool: Record<string, number>;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costActual: number;
+  costEstimated: number;
+  peakContextTokens: number;
+  contextTokens: number;
+  packChars: number;
+  packTokens: number;
+  renderedPackChars: number;
+  omittedPackItems: number;
+  ledgerChars: number;
+  overviewChars: number;
+  wallMs: number;
+  changedPaths: string[];
+  gates?: { passed: boolean; total: number; failed: string[] };
+  loopReason?: string;
+}
+
+/** Compact run scorecard used by `machine_code eval` and thresholds. */
+export function runMetrics(summary: RunSummary, events: readonly RunEvent[], runDir: string): RunMetrics {
+  const toolCallsByTool: Record<string, number> = {};
+  let toolCalls = 0;
+  let modelCalls = 0;
+  let loopReason: string | undefined;
+  let gates: RunMetrics["gates"];
+  for (const event of events) {
+    if (event.type === "tool_call") {
+      toolCalls += 1;
+      const tool = String(event.tool ?? "tool");
+      toolCallsByTool[tool] = (toolCallsByTool[tool] ?? 0) + 1;
+    }
+    if (event.type === "model_call_end") modelCalls += 1;
+    if (event.type === "loop_blocked" && !loopReason) loopReason = String(event.reason ?? "loop");
+    if (event.type === "gates") {
+      const results = Array.isArray(event.results) ? event.results as Array<Record<string, unknown>> : [];
+      gates = {
+        passed: event.passed === true,
+        total: results.length,
+        failed: results.filter((result) => result.passed !== true).map((result) => String(result.command ?? "?")),
+      };
+    }
+  }
+  const lastModel = [...events].reverse().find((event) => event.type === "model_select" && typeof event.key === "string");
+  const context = contextUsage(summary.usage, events);
+  const pack = readContextPackManifest(runDir);
+  const started = Date.parse(summary.startedAt);
+  const ended = Date.parse(summary.lastActivityAt);
+  return {
+    id: summary.id,
+    agent: summary.agent,
+    status: summary.status,
+    stopReason: summary.stopReason ?? null,
+    ...(lastModel?.key ? { model: String(lastModel.key) } : {}),
+    modelCalls: summary.modelCalls || modelCalls,
+    toolCalls,
+    toolCallsByTool,
+    inputTokens: summary.usage.input,
+    outputTokens: summary.usage.output,
+    cacheReadTokens: summary.usage.cacheRead,
+    cacheWriteTokens: summary.usage.cacheWrite,
+    totalTokens: summary.usage.totalTokens,
+    costActual: summary.cost.actual,
+    costEstimated: summary.cost.estimated,
+    peakContextTokens: context.peakTokens,
+    contextTokens: context.tokens,
+    packChars: pack?.pack.chars ?? 0,
+    packTokens: pack?.pack.tokens ?? 0,
+    renderedPackChars: pack?.rendered.chars ?? 0,
+    omittedPackItems: pack?.rendered.omitted.length ?? 0,
+    ledgerChars: pack?.ledger.chars ?? 0,
+    overviewChars: pack?.overviewChars ?? 0,
+    wallMs: Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, ended - started) : 0,
+    changedPaths: touchedPaths(events),
+    ...(gates ? { gates } : {}),
+    ...(loopReason ? { loopReason } : {}),
+  };
+}
+
+export interface MetricsLimits {
+  maxCalls?: number;
+  maxCost?: number;
+  maxTokens?: number;
+  maxContextTokens?: number;
+}
+
+/** Returns the exceeded limits, formatted for an eval failure. */
+export function exceededLimits(metrics: RunMetrics, limits: MetricsLimits): string[] {
+  const failures: string[] = [];
+  if (limits.maxCalls !== undefined && metrics.modelCalls > limits.maxCalls) {
+    failures.push(`model calls ${metrics.modelCalls} > ${limits.maxCalls}`);
+  }
+  if (limits.maxCost !== undefined && metrics.costActual > limits.maxCost) {
+    failures.push(`cost $${metrics.costActual.toFixed(4)} > $${limits.maxCost}`);
+  }
+  if (limits.maxTokens !== undefined && metrics.totalTokens > limits.maxTokens) {
+    failures.push(`tokens ${metrics.totalTokens} > ${limits.maxTokens}`);
+  }
+  if (limits.maxContextTokens !== undefined && metrics.peakContextTokens > limits.maxContextTokens) {
+    failures.push(`peak context ${metrics.peakContextTokens} > ${limits.maxContextTokens}`);
+  }
+  return failures;
+}
+
 export function childRuns(runs: readonly RunSummary[], parentId: string): RunSummary[] {
   return runs
     .filter((run) => run.parentRunId === parentId || (run.rootRunId === parentId && run.id !== parentId))

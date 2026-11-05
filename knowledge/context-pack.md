@@ -116,6 +116,14 @@ Implemented:
   implement and unrestricted presets set `artifact_scripts = true`, so a
   repeated probe or gate can become a reusable script in the run.
 
+## Measurement
+
+`machine_code eval <run-id>` prints the scorecard: model/tool calls, tokens by
+kind, cost, peak context, pack/ledger/overview tokens, wall time, changed
+paths, gates, and loop reason. Use `--baseline <run-id>` for deltas and
+`--max-calls`, `--max-cost`, `--max-tokens`, or `--max-context` as CI limits.
+The same metrics come from `src/report/run.ts` (`runMetrics`).
+
 Next:
 
 - a routing layer that auto-selects the best tool for a request;
