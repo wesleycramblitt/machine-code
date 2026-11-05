@@ -30,12 +30,10 @@ import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
-import { buildRepoMap, mapBytes, renderMapIndex, symbolCount, type MapFile } from "./map/deterministic.js";
+import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { ensureSemanticMap } from "./map/ensure.js";
 import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
-import { inferPreloadFiles } from "./context/preload.js";
-import { buildTaskPack, packManifest, renderContextPack, type ContextPack } from "./context/pack.js";
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
@@ -433,7 +431,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const wantMap = input.skipMap !== true;
   const wantSemantic = input.skipSemantic !== true;
   let mapIndex = "";
-  let mapFiles: MapFile[] = [];
   let semanticMap: SemanticMap | null = null;
   const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"], semantic: SemanticMap | null): string =>
     [
@@ -442,7 +439,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     ].filter(Boolean).join("\n");
   if (wantMap || wantSemantic) try {
     const built = await buildRepoMap(mapRoot, { processes });
-    mapFiles = built.map.files;
     const dirty = wantSemantic ? readSemanticDirty(mapRoot) : [];
     const deterministic = wantSemantic ? buildModuleIndex(built.map) : null;
     const cached = wantSemantic ? loadSemantic(mapRoot) : null;
@@ -525,21 +521,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     recorder,
     processes,
   });
-  // Task builds start with the files the task names, plus their inferred
-  // tests. This is working-set content, not an extra prompt block: it stays
-  // current after edits and is capped at render time.
-  if (input.agent.name === "build" || input.agent.name === "sudo") {
-    // Only the bound task/packet names the work. Knowledge and plan blocks can
-    // mention unrelated files, so do not mine the whole assembled context.
-    const taskBlock =
-      /<context-block kind="(?:task|packet)"[^>]*>[\s\S]*?<\/context-block>/.exec(input.contextText ?? "")?.[0] ??
-      "";
-    const preload = inferPreloadFiles(mapRoot, `${input.request}\n${taskBlock}`, 6);
-    if (preload.length > 0) {
-      memory.seedWorkingFiles(preload, 0);
-      recorder.event("context_preloaded", { files: preload });
-    }
-  }
   // Semantic refresh after a changed turn. Coalesce so a burst of edits
   // produces at most one in-flight refresh plus one follow-up.
   let semanticRefreshInFlight = false;
@@ -599,65 +580,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     })();
   };
 
-  // Task pack: the task-specific half of the prompt. The always-on overview
-  // (packet, knowledge, map, semantic index) runs above it. The pack is built
-  // from the task and plan, then fitted to the selected model's window.
-  const packAgent =
-    input.agent.name === "build" ||
-    input.agent.name === "sudo" ||
-    input.agent.name === "review" ||
-    input.agent.name === "planner";
-  const taskBlock =
-    /<context-block kind="(?:task|packet)"[^>]*>[\s\S]*?<\/context-block>/.exec(input.contextText ?? "")?.[0] ??
-    "";
-  const planText = (): string =>
-    memory
-      .getState()
-      .facts.filter((fact) => fact.kind === "decision" && fact.status === "active")
-      .map((fact) => fact.text)
-      .join("\n");
-  const wantsPack = packAgent && mapFiles.length > 0;
-  const assembledFileChars = wantsPack
-    ? (input.contextText?.match(/<context-block kind="file"[\s\S]*?<\/context-block>/g) ?? [])
-        .reduce((sum, block) => sum + block.length, 0)
-    : 0;
-  const assembledOverviewChars = Math.max(0, (input.contextText?.length ?? 0) - assembledFileChars);
-  const buildPack = (): ContextPack =>
-    buildTaskPack({
-      root: mapRoot,
-      ...(input.layout ? { layout: input.layout } : {}),
-      request: input.request,
-      taskText: taskBlock,
-      planText: planText(),
-      mapFiles,
-      commands: input.commands,
-      budgetChars: 400_000,
-      maxFiles: input.agent.name === "planner" ? 10 : 18,
-      mode: input.agent.name === "planner" ? "overview" : "task",
-    });
-  let taskPack: ContextPack | null = wantsPack ? buildPack() : null;
-  let packDirty = false;
-  let lastPackChars = 0;
-  let lastPackOmitted = 0;
+  // The assembled context is the single source of truth. There is no hidden
+  // task pack that selects files after the user curated the context.
   let lastLedgerChars = 0;
   let lastOverviewChars = 0;
   let lastBudget: ContextBudget | null = null;
-  if (taskPack) {
-    recorder.event("context_pack", {
-      files: taskPack.files.length,
-      items: taskPack.items.length,
-      chars: taskPack.chars,
-      tokens: taskPack.tokens,
-      refs: taskPack.items.map((item) => ({ kind: item.kind, ref: item.ref, chars: item.chars })),
-    });
-  }
 
   const initialChars =
     input.agent.prompt.length +
     input.request.length +
-    Math.min(assembledOverviewChars, 64_000) +
+    (input.contextText?.length ?? 0) +
     mapIndex.length +
-    (taskPack ? Math.min(taskPack.chars, 80_000) : memory.renderWorkingContext().length) +
+    memory.renderWorkingContext().length +
     memory.renderBlock().length +
     4_000 +
     toolSchemaChars(input.agent.tools) +
@@ -1163,18 +1097,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             // note survive and steer the model back into reading. Only Build
             // has an edit contract; a Planner or Sudo run must not inherit it.
             memory.note("next", "Execute the plan: make the first edit.", [], memory.currentTurn());
-            packDirty = true;
           }
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
             changeEpoch += 1;
             commandCache.clear();
-            packDirty = true;
           }
           if (!result.isError && tool.name === "command" && commandAction === "run" && !cacheableCommand) {
             // A mutating command can change files without an edit/write call.
             changeEpoch += 1;
             commandCache.clear();
-            packDirty = true;
           }
           const preview = result.content
             .filter((item): item is { type: "text"; text: string } => item.type === "text")
@@ -1378,10 +1309,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       },
       prepareRequest: async ({ context }) => {
         const renderFor = (row: CatalogueRow | null) => {
-          if (taskPack && packDirty) {
-            taskPack = buildPack();
-            packDirty = false;
-          }
           const budget = row ? contextBudget(row.context, policy.expectedOutputTokens) : null;
           lastBudget = budget;
           const baseOverhead =
@@ -1390,70 +1317,40 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             memory.renderBlock().length +
             toolChars +
             24_000;
-          const overviewBaseChars = taskPack
-            ? assembledOverviewChars
-            : input.contextText?.length ?? 0;
+          const overviewBaseChars = input.contextText?.length ?? 0;
           const overviewMaxChars = budget
-            ? Math.max(8_000, Math.min(overviewBaseChars, Math.floor(budget.inputChars * 0.4)))
+            ? Math.max(8_000, budget.inputChars - baseOverhead)
             : undefined;
-          const overviewEstimate = Math.min(overviewBaseChars, overviewMaxChars ?? 0);
-          const packChars = taskPack && budget
-            ? Math.max(4_000, budget.inputChars - baseOverhead - overviewEstimate)
-            : 0;
-          const renderedPack = taskPack
-            ? renderContextPack(taskPack, { maxChars: packChars })
-            : null;
-          const packText = renderedPack?.text;
-          lastPackChars = packText?.length ?? 0;
-          lastPackOmitted = renderedPack?.omitted.length ?? 0;
+          const overviewEstimate = Math.min(overviewBaseChars, overviewMaxChars ?? overviewBaseChars);
           lastOverviewChars = overviewEstimate;
-          const remaining = Math.max(0, packChars - lastPackChars);
-          const ledgerText = taskPack && remaining > 0
-            ? memory.renderLedger({
-                maxChars: Math.min(remaining, 200_000),
-                excludePaths: new Set(taskPack.files),
-              })
-            : undefined;
-          lastLedgerChars = ledgerText?.length ?? 0;
-          if (taskPack) {
-            try {
-              writeFileSync(
-                join(recorder.dir, "context-pack.json"),
-                JSON.stringify(
-                  {
-                    updatedAt: new Date().toISOString(),
-                    model: row?.key,
-                    contextWindow: budget?.contextWindowTokens,
-                    inputBudgetTokens: budget?.inputTokens,
-                    overviewChars: overviewEstimate,
-                    stateChars: memory.renderBlock().length,
-                    toolChars,
-                    pack: packManifest(taskPack),
-                    rendered: {
-                      chars: renderedPack?.chars ?? 0,
-                      included: renderedPack?.included ?? 0,
-                      omitted: renderedPack?.omitted ?? [],
-                    },
-                    ledger: {
-                      chars: lastLedgerChars,
-                      entries: memory.ledgerManifest(),
-                    },
-                  },
-                  null,
-                  2,
-                ),
-                "utf8",
-              );
-            } catch {
-              // Inspection metadata must not break the run.
+          if (budget) {
+            const projected = overviewBaseChars + baseOverhead;
+            const ratio = projected / budget.inputChars;
+            if (ratio >= 0.8) {
+              recorder.event("context_warning", {
+                kind: overviewBaseChars > overviewEstimate ? "overview-trimmed" : "context-near-budget",
+                chars: projected,
+                inputBudgetChars: budget.inputChars,
+                ratio,
+                model: row?.key,
+                message: overviewBaseChars > overviewEstimate
+                  ? "curated context exceeds the model input budget; lower-priority blocks are omitted"
+                  : "curated context is near the model input budget",
+              });
             }
           }
+          const ledgerBudget = budget
+            ? Math.max(0, budget.inputChars - baseOverhead - overviewEstimate)
+            : 200_000;
+          const ledgerText = ledgerBudget > 0
+            ? memory.renderLedger({ maxChars: Math.min(ledgerBudget, 200_000) })
+            : undefined;
+          lastLedgerChars = ledgerText?.length ?? 0;
           return renderPromptMessages(
             context.messages,
             memory,
             mapIndex,
             input.contextText,
-            packText,
             ledgerText,
             overviewMaxChars,
           );
@@ -1574,8 +1471,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               promptChars: lastPromptChars,
               tokens: actualContextTokens > 0 ? actualContextTokens : Math.ceil(lastRequestChars / 4),
               stateChars: memory.renderBlock().length,
-              packChars: lastPackChars,
-              packOmitted: lastPackOmitted,
               ledgerChars: lastLedgerChars,
               overviewChars: lastOverviewChars,
               ...(lastBudget
@@ -1833,7 +1728,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       if (trimmed) {
         memory.note("decision", trimmed, [], turns + 1);
         recoveryPlan = trimmed;
-        packDirty = true;
         recorder.event("plan_recovered", { chars: trimmed.length });
         // Fresh attempt with the plan in context. Per-attempt guards reset.
         continue;

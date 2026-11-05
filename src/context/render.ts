@@ -60,18 +60,6 @@ export function trimContextText(text: string | undefined, maxChars?: number): st
   return out.length <= maxChars ? out : `${out.slice(0, Math.max(0, maxChars - 24)).replace(/\s+$/, "")}\n…[context truncated]`;
 }
 
-/**
- * The task pack carries task files with the correct size. Remove the assembled
- * file blocks so a truncated copy cannot compete with the pack.
- */
-function withoutFileBlocks(text: string | undefined): string | undefined {
-  if (!text || !text.includes('<context-block kind="file"')) return text;
-  const stripped = text
-    .replace(/<context-block kind="file"[^>]*>[\s\S]*?<\/context-block>\s*/g, "")
-    .trim();
-  return /<context-block\b/.test(stripped) ? stripped : undefined;
-}
-
 /** Keep the last few complete assistant/tool steps, never an orphan call. */
 function recentSteps(messages: readonly MessageLike[], count = 2): MessageLike[] {
   const assistants: number[] = [];
@@ -111,23 +99,16 @@ export function renderPromptMessages(
   state: RunStateStore,
   mapIndex?: string,
   startupContext?: string,
-  packText?: string,
   ledgerText?: string,
   overviewMaxChars?: number,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
-  // The bound task packet leads. It names the work; the repo map is reference.
-  // The task pack holds symbol-aware specifics, and the state block holds the
-  // current plan/changes. Stable content stays before volatile state so the
-  // provider cache can reuse the prefix. A run without a pack falls back to the
-  // working-context slice.
-  const details = packText ?? state.renderWorkingContext();
-  const guide = packText ? "" : TOOL_GUIDE;
-  const startup = trimContextText(
-    packText ? withoutFileBlocks(startupContext) : startupContext,
-    overviewMaxChars,
-  );
+  // The assembled context is the prompt. Stable content stays before volatile
+  // state so the provider cache can reuse the prefix.
+  const details = state.renderWorkingContext();
+  const guide = TOOL_GUIDE;
+  const startup = trimContextText(startupContext, overviewMaxChars);
   const block = [startup, mapIndex, guide, details, ledgerText, state.renderBlock()]
     .filter(Boolean)
     .join("\n\n");

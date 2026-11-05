@@ -78,9 +78,24 @@ test("preview groups issue context files by hierarchy depth", () => {
   }
 });
 
-test("repository knowledge index fits the context cap and links deeper notes", () => {
+test("preview reports the real plan size instead of a fixed 2 KiB cap", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-preview-plan-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    const body = `# Plan\n\n${"line\n".repeat(1000)}END\n`;
+    writeFileSync(join(root, "plans", "next.md"), body, "utf8");
+    const preview = previewContext(fakeLayout(root), [], undefined, "", {});
+    const plan = preview.sources.find((source) => source.kind === "plan");
+    assert.ok(plan);
+    assert.equal(plan.chars, Buffer.byteLength(body, "utf8"));
+    assert.ok(plan.chars > 2048);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("repository knowledge index links deeper notes", () => {
   const text = readFileSync(new URL("../knowledge/index.md", import.meta.url), "utf8");
-  assert.ok(Buffer.byteLength(text, "utf8") <= 2048, "knowledge/index.md must fit the 2 KiB inherited cap");
   assert.match(text, /knowledge\/architecture\.md/);
 });
 

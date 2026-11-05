@@ -21,10 +21,10 @@ these tools.
 
 1. **Description discovery.** Every `.machine_code/skills/*/SKILL.md` and
    `~/.machine_code/skills/*/SKILL.md` is parsed for `name` and `description`.
-   All descriptions render into one context block capped at 1 KiB
-   (`src/context/assemble.ts`, `skillMetas` and the skill block).
+   All descriptions render into one context block (`src/context/assemble.ts`,
+   `skillMetas` and the skill block).
 2. **Body loading.** A skill body enters the prompt only when an issue declares
-   it in `mc:context` (`{"skills":["..."]}`). The cap is 8 KiB
+   it in `mc:context` (`{"skills":["..."]}`). The body is included whole
    (`src/context/assemble.ts`, `skillBody`; `src/context/references.ts`).
 3. **No skill scripts.** Commands are typed manifests from profiles and run
    with `execFile` (`src/commands/registry.ts`). There is no shell. A vendored
@@ -86,7 +86,7 @@ stay under 1 KiB.
    descendants.
 3. If the issue has no block: the Architect names the exact path in the packet
    constraints. Build reads it once.
-4. Do not add a skill to every issue. An 8 KiB body pushes out task and packet
+4. Do not add a skill to every issue. A large body pushes out task and packet
    context. Mode defaults are the only always-on bodies.
 
 ## Update 2026-11-05: mode default skills

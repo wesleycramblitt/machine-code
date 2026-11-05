@@ -75,12 +75,11 @@ the remaining probe work.
 ## Invariants
 
 - Context is model-budgeted; every block has provenance in `context.json`.
-- Run state is the memory; the transcript is not replayed. Build, sudo, review,
-  and planner runs render a task pack with symbol-aware specifics instead of a
-  fixed working-context slice.
-- The task pack is task- and plan-aware: task files and tests whole when they
-  fit, outlines plus named symbol bodies for large files, one-hop imports and
-  reverse dependencies, commands/scripts, acceptance gates, and the tool guide.
+- The prompt is the curated composer context plus the always-on indexes. There
+  is no hidden task pack, semantic preload, inferred test list, dependency
+  expansion, or knowledge-note scoring. The model reads/searchs for more.
+- The Planner chooses issue context files after reading and records them with
+  `context_files`; the issue tool writes `mc:context` from that explicit list.
 - One logical change per tool call; read the smallest unit that justifies it.
 - Tool calls are structured. Text tool-call markup is malformed; rotate models
   or fail, never complete.
@@ -89,9 +88,9 @@ the remaining probe work.
   `## Deliverable`, and acceptance; runtime gates come from named acceptance
   commands or a `## Verification` section. Epic/Feature bodies carry
   `## Context`, `## Goal`, and `## Scope` (Feature also `## Success measures`). The issue tool
-  rejects create/graph/body-edit requests that miss these sections, and infers
-  an `mc:context` file list from body paths and the semantic map when the body
-  has no marker. Oversized Tasks are rejected before creation or build.
+  rejects create/graph/body-edit requests that miss these sections. Context
+  files come only from the explicit `context_files` parameter. Oversized Tasks
+  are rejected before creation or build.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
 - The only loop stop is evidence novelty: repeated reads of one band at the
   same file version, repeated search result sets, or repeated command output
@@ -101,10 +100,7 @@ the remaining probe work.
   artifact ids for recall.
 - Exact read bytes stay in a run ledger. An unchanged re-read returns the
   cached bytes; an edit drops that file's entries; the prompt includes acquired
-  bytes not already in the task pack.
-- Build, sudo, review, and planner build a task pack from the task, plan, and
-  map. The pack is re-read from disk after edits and fitted to the selected
-  model.
+  bytes not already in the curated context.
 - A read that returns only an outline or a past-end note never becomes read
   coverage.
 - The deterministic semantic index persists to `semantic.json`; module edges

@@ -2,9 +2,10 @@
  * machine_code — model-derived context budgets.
  *
  * The context window is a resource, not a fixed character cap. A model with a
- * 1M-token window should receive a large, useful task pack; a 32k model should
- * receive the same pack rendered to its smaller budget. Price is a soft limit:
- * record it, warn on unusual cost, but never silently drop task-critical bytes.
+ * 1M-token window should receive the full curated context; a 32k model should
+ * receive it trimmed to its smaller budget with an explicit warning. Price is a
+ * soft limit: record it, warn on unusual cost, but never silently drop
+ * task-critical bytes.
  */
 
 /** Conservative characters per token for prompt estimation. */

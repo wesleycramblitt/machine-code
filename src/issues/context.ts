@@ -7,7 +7,7 @@
  * buildable: Goal/Scope for parents and Deliverable/Acceptance for Tasks.
  */
 import { parseAcceptance, type IssueKind } from "./provider.js";
-import { inferPreloadFiles } from "../context/preload.js";
+import { isSecretPath } from "../tools/safety.js";
 
 export const MIN_CONTEXT_CHARS = 20;
 
@@ -78,14 +78,30 @@ export function issueContextErrors(input: IssueContextInput): string[] {
 }
 
 /**
- * Attach an `mc:context` file list inferred from the issue body. The Planner
- * should not have to write JSON by hand when the body already names the files
- * or the semantic map can identify them. Existing markers are left alone.
+ * Record files the Planner explicitly selected for this issue. Nothing is
+ * inferred: the planner reads the repo, chooses paths, and passes them in.
  */
-export function withInferredContext(body: string, repoRoot: string): string {
-  if (/<!--\s*mc:context\b/.test(body)) return body;
-  const files = inferPreloadFiles(repoRoot, body, 6);
-  if (files.length === 0) return body;
-  const marker = `<!-- mc:context\n${JSON.stringify({ files }, null, 2)}\n-->`;
-  return `${body.replace(/\s+$/, "")}\n\n${marker}\n`;
+export function withContextFiles(body: string, files: readonly string[] | undefined): string {
+  if (!files || files.length === 0) return body;
+  const valid = [...new Set(
+    files
+      .map((file) => file.trim().replace(/^\.\//, ""))
+      .filter((file) => file.length > 0 && !file.startsWith("/") && !file.split("/").includes(".."))
+      .filter((file) => !isSecretPath(file)),
+  )];
+  if (valid.length === 0) return body;
+  const match = body.match(/<!--\s*mc:context\s*([\s\S]*?)-->/);
+  if (match) {
+    try {
+      const raw = JSON.parse(match[1]!.trim()) as Record<string, unknown>;
+      const existing = Array.isArray(raw.files)
+        ? raw.files.filter((item): item is string => typeof item === "string")
+        : [];
+      raw.files = [...new Set([...existing, ...valid])];
+      return body.replace(match[0], `<!-- mc:context\n${JSON.stringify(raw, null, 2)}\n-->`);
+    } catch {
+      // A malformed existing marker falls through to a fresh one.
+    }
+  }
+  return `${body.replace(/\s+$/, "")}\n\n<!-- mc:context\n${JSON.stringify({ files: valid }, null, 2)}\n-->\n`;
 }

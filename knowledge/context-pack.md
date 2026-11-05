@@ -1,7 +1,7 @@
-# Task context pack
+# Curated context
 
-The context window is a resource. The harness maximizes **useful** context, not
-the number of tokens and not a fixed character cap.
+The context window is a resource. The harness maximizes **useful** context
+without guessing which files the task needs.
 
 ## Rule
 
@@ -15,58 +15,57 @@ than many small calls that re-acquire the same bytes.
 
 ## Layers
 
-Every turn has two layers.
+### Curated sources
 
-### Always-on overview
+The TUI composer is the curation surface. It selects:
 
-- task/packet, goal, constraints, acceptance, gate commands
-- plan and current stage
+- the issue hierarchy and each issue's explicit `mc:context` files
+- knowledge files
+- references
+- skill descriptions and bodies
+- tools and scripts
+- plans
+- the prompt/task packet
+
+The composer has a few defaults: plans, `knowledge/index.md`, skill
+descriptions, commands, the repo map, and the semantic index. Everything else
+is an explicit choice.
+
+### Always-on indexes
+
 - repo map: paths, languages, line counts, top-level symbols
 - semantic index: module summaries, key files, deps, edit hints
-- knowledge index; full knowledge only when referenced or selected
-- tools, commands, scripts, inputs/outputs
+- knowledge index
+- commands and tool schemas
 - current run state and recent steps
 
-The overview is assembled up to 64k characters, then trimmed to the selected
-model's budget in priority order. The lowest-priority blocks are named as
-omitted. A large model gets the whole overview; a small model gets the packet,
-task, and other high-priority blocks first.
+The model reads, searches, or expands a symbol when it needs more. The harness
+does not preload files, infer tests, expand imports, add reverse dependencies,
+or score knowledge notes behind the scenes.
 
-### Task-specific pack
+### Planning runs
 
-`src/context/pack.ts` builds this from the task, active plan, and repo map.
+A Planner researches first, then chooses specific issue context files and
+passes them with `context_files`. The issue tool records that explicit list in
+`mc:context`. Build receives exactly that list plus the curated composer
+context. Nothing is inferred from issue prose.
 
-Priority:
+## Budget and warnings
 
-1. task-named files and inferred tests, whole when they fit
-2. plan-named files
-3. relevant knowledge notes (keyword-scored; the index is already in the overview)
-4. one-hop imports and reverse dependencies
-5. for a large file: outline, named section, and bodies of symbols the task or
-   plan names (at most six)
-6. test tail for append-heavy test files
-7. command and artifact inventory
-8. acceptance gates
-9. tool-selection guide
+Context is ordered by priority. It is not clipped by per-file caps.
 
-It does not include all dependencies whole. A small dependency (under 8k
-characters) is included whole; a larger one gets its outline. The model reads a
-named symbol only when it needs the body.
+- At 80% of the selected model's input budget, the composer shows a warning.
+- At 100%, it shows an over-budget warning.
+- The runner records `context_warning` and names any omitted or truncated
+  source in `context.json`.
+- A single huge curated file is a warning, not an automatic outline swap.
 
-Planner runs use `overview` mode: named files, knowledge notes, commands, and
-gates, but no dependency or symbol-body expansion. The planner fetches detail
-for each stage and the ledger keeps it for later stages.
-
-## Rendering
-
-The renderer sorts by priority and fits the pack to the selected model. It
-keeps a stable order so the provider cache can reuse the prefix. It reports
-what it omitted and why. A task-named file is never silently clipped: if it
-does not fit, its outline and edit regions are kept and the omission is named.
+The only hard ceiling is the model's input window. The user decides what to
+remove.
 
 ## Tool selection
 
-The pack carries a short policy: use the most direct tool first.
+The prompt carries a short policy: use the most direct tool first.
 
 | Job | First choice | Then |
 |---|---|---|
@@ -88,26 +87,26 @@ not the default reading tool.
 
 Implemented:
 
+- `src/context/assemble.ts` — single source of truth for the prompt context;
+  no task pack, no automatic file assignment.
 - `src/context/budget.ts` — model-derived input budget.
-- `src/context/pack.ts` — task/symbol-aware pack and budget-aware renderer.
-- `src/context/render.ts` — overview + pack + state + recent steps; trims the
-  overview to the selected model's budget in priority order.
-- `src/loop.ts` — build/rebuild the pack for Build, Sudo, Review, and Planner;
-  fit it to the selected model; record pack size and input budget in
-  `context_state`; write `context-pack.json` for inspection.
-- `machine_code context <run-id>` prints the assembled context plus pack,
-  rendered, omitted, and ledger manifests.
-- `machine_code pack <request>` previews a prospective task pack before a run;
-  `--issue`, `--agent`, `--model`, `--context`, and `--json` tune the view.
+- `src/context/preview.ts` — TUI preview of curated sources and real file sizes.
+- `src/context/render.ts` — context + ledger + state + recent steps.
+- `src/loop.ts` — records the actual prompt size, model budget, ledger size,
+  and `context_warning` when curated context does not fit.
+- `machine_code context <run-id>` prints the assembled context and ledger.
+- `machine_code pack` previews the curated run context before a run.
+- `issues` `context_files` parameter — Planner-selected files go into
+  `mc:context`; no inference.
 - `read { symbols: [...] }` and `read { sections: [...] }` for a targeted sweep
   in one call; `read { section }` supports Markdown headings and comment
-  banners. `read` prefers symbol/section and treats a past-end page as an error.
+  banners. `read` treats a past-end page as an error.
 - `edit { symbol|section, edits: [...] }` scopes exact matches and applies
   several hunks atomically in one call.
 - `src/tools/policy.ts` — the always-in-context tool-selection guide.
 - Evidence ledger in `src/context/state.ts`: exact read bytes are kept for the
-  run, unchanged re-reads return from cache, an edit drops the file's entries,
-  and the renderer includes acquired bytes not already in the task pack.
+  run, unchanged re-reads return from cache, and an edit drops the file's
+  entries.
 - Evidence-novelty loop detector in `src/state/progress.ts`: repeated reads of
   one band at the same file version, repeated search result sets, repeated
   command output, or repeated failures kill the run after twenty stale actions.
@@ -119,12 +118,12 @@ Implemented:
 ## Measurement
 
 `machine_code eval <run-id>` prints the scorecard: model/tool calls, tokens by
-kind, cost, peak context, pack/ledger/overview tokens, wall time, changed
-paths, gates, and loop reason. Use `--baseline <run-id>` for deltas and
-`--max-calls`, `--max-cost`, `--max-tokens`, or `--max-context` as CI limits.
-The same metrics come from `src/report/run.ts` (`runMetrics`).
+kind, cost, peak context, ledger size, wall time, changed paths, gates, and
+loop reason. Use `--baseline <run-id>` for deltas and `--max-calls`,
+`--max-cost`, `--max-tokens`, or `--max-context` as CI limits. The same metrics
+come from `src/report/run.ts` (`runMetrics`).
 
 Next:
 
 - a routing layer that auto-selects the best tool for a request;
-- planner staging: overview pack, then per-stage detail.
+- planner staging: curated overview, then per-stage detail.

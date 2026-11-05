@@ -457,6 +457,28 @@ test("the first change replaces the plan's first-edit next action", () => {
   }
 });
 
+test("command describe is not a gate run or a verification", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-describe", goal: "goal" });
+    const ingested = store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "d1", name: "command", args: { action: "describe", name: "typescript:test" } }),
+        result({ id: "d1", name: "command", text: '{"name":"typescript:test"}' }),
+      ],
+      1,
+    );
+    assert.equal(ingested.changed, false);
+    assert.equal(store.getState().phase, "orient");
+    assert.equal(store.getState().facts.find((fact) => fact.key === "command:typescript:test:true"), undefined);
+    assert.doesNotMatch(store.renderBlock(), /Next: Verify the change/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("an edit invalidates only overlapping read coverage", () => {
   const dir = tempDir();
   const root = tempDir("mc-state-range-");
@@ -709,6 +731,10 @@ test("git status detects command-side mutations without duplicating edits", () =
     assert.ok(change);
     assert.match(change.text, /git status changed 1 path/);
     assert.equal(change.refs[0].path, "src/a.ts");
+    const block = store.renderBlock();
+    assert.doesNotMatch(block, /Next: Verify the change/);
+    assert.match(block, /Tree changes \(not from this run\):/);
+    assert.doesNotMatch(block, /^Changes:$/m);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -3,10 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { thinkingChunks, touchedPaths, childRuns, relatedRuns, readContextPackManifest, runMetrics, exceededLimits } from "../dist/report/run.js";
+import { thinkingChunks, touchedPaths, childRuns, relatedRuns, runMetrics, exceededLimits } from "../dist/report/run.js";
 
 test("thinking chunks combine live deltas and final turn text", () => {
   const events = [
@@ -52,54 +49,8 @@ test("touched paths and child runs are derived from events and lineage", () => {
   assert.deepEqual(childRuns(runs, "parent").map((run) => run.id), ["child"]);
 });
 
-test("context pack manifests are read defensively", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mc-pack-manifest-"));
-  try {
-    writeFileSync(
-      join(dir, "context-pack.json"),
-      JSON.stringify({
-        model: "opencode-go/deepseek-v4.1-flash",
-        contextWindow: 1_000_000,
-        inputBudgetTokens: 988_000,
-        overviewChars: 2_400,
-        pack: {
-          chars: 90_000,
-          tokens: 22_500,
-          files: ["src/a.ts"],
-          items: [{ kind: "file", ref: "src/a.ts", chars: 1_000, tokens: 250, reason: "task file" }],
-        },
-        rendered: { chars: 88_000, included: 1, omitted: [] },
-        ledger: { chars: 1_200, entries: [{ key: "src/a.ts#full", path: "src/a.ts", label: "src/a.ts", kind: "file", chars: 1_200, turn: 2 }] },
-      }),
-      "utf8",
-    );
-    const manifest = readContextPackManifest(dir);
-    assert.ok(manifest);
-    assert.equal(manifest?.pack.items[0].ref, "src/a.ts");
-    assert.equal(manifest?.pack.tokens, 22_500);
-    assert.equal(manifest?.ledger.entries[0].path, "src/a.ts");
-
-    writeFileSync(join(dir, "context-pack.json"), "{bad json", "utf8");
-    assert.equal(readContextPackManifest(dir), null);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("run metrics summarize calls, context, changes, gates, and limits", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mc-eval-"));
-  try {
-    writeFileSync(
-      join(dir, "context-pack.json"),
-      JSON.stringify({
-        pack: { chars: 4_000, tokens: 1_000, files: ["src/a.ts"], items: [] },
-        rendered: { chars: 3_900, included: 1, omitted: [{ ref: "src/b.ts", reason: "budget" }] },
-        ledger: { chars: 800, entries: [] },
-        overviewChars: 1_200,
-      }),
-      "utf8",
-    );
-    const summary = {
+  const summary = {
       id: "r-eval",
       agent: "build",
       status: "blocked",
@@ -118,7 +69,7 @@ test("run metrics summarize calls, context, changes, gates, and limits", () => {
       { t: "2026-01-01T00:00:00.500Z", type: "loop_blocked", reason: "loop" },
       { t: "2026-01-01T00:00:00.600Z", type: "gates", passed: false, results: [{ command: "typescript:test", passed: false }] },
     ];
-    const metrics = runMetrics(summary, events, dir);
+    const metrics = runMetrics(summary, events);
     assert.equal(metrics.model, "provider/model");
     assert.equal(metrics.modelCalls, 4);
     assert.equal(metrics.toolCalls, 2);
@@ -126,16 +77,10 @@ test("run metrics summarize calls, context, changes, gates, and limits", () => {
     assert.equal(metrics.loopReason, "loop");
     assert.equal(metrics.gates?.failed[0], "typescript:test");
     assert.deepEqual(metrics.changedPaths, ["src/a.ts"]);
-    assert.equal(metrics.packTokens, 1_000);
-    assert.equal(metrics.omittedPackItems, 1);
-    assert.equal(metrics.ledgerChars, 800);
     assert.equal(metrics.wallMs, 2_500);
 
     assert.deepEqual(exceededLimits(metrics, { maxCalls: 10, maxCost: 1 }), []);
     assert.match(exceededLimits(metrics, { maxCalls: 1, maxTokens: 100 })[0], /model calls 4 > 1/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 test("related runs include lineage and same-orchestration task siblings", () => {

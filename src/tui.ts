@@ -211,7 +211,7 @@ interface ContextPanelItem {
   available?: boolean;
   counted?: boolean;
 }
-const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase", "Prompt"] as const;
+const NEW_RUN_CONTEXT_TABS = ["Issues", "Files", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase", "Prompt"] as const;
 
 type NewRunState = ForkedRunSettings;
 
@@ -1312,7 +1312,8 @@ export async function runTui(): Promise<void> {
     // Everything below depends on the repo/issue, not on the text being typed.
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
-    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${skillModesKey}`;
+    const includedFilesKey = [...newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
+    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${skillModesKey}\0${includedFilesKey}`;
     const previewTtl = newRunInsert ? 60_000 : 5_000;
     if (
       !newRunPreviewCache ||
@@ -1328,6 +1329,9 @@ export async function runTui(): Promise<void> {
         context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, "", {
           planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
+          files: [...newRunContextIncluded]
+            .filter((key) => key.startsWith("file:"))
+            .map((key) => key.slice("file:".length)),
           defaultSkills: defaultSkillsFor({ agent: newrun.agent, verification: newrun.verification }),
           skillPresets: roleSkillPresets(newrun.agent),
           skillOverrides: Object.fromEntries(newRunSkillModes),
@@ -2179,6 +2183,21 @@ export async function runTui(): Promise<void> {
           .map((artifact) => ({ name: artifact.name, description: artifact.description })),
         referencedToolChars,
       );
+      const cachedMap = readCachedMap(newRunRepo);
+      const fileItems: ContextPanelItem[] = itemsFor(["file"]);
+      const knownFiles = new Set(fileItems.map((item) => item.key));
+      for (const file of cachedMap?.files ?? []) {
+        const key = `file:${file.path}`;
+        if (knownFiles.has(key)) continue;
+        fileItems.push({
+          text: `${file.path} · available`,
+          chars: file.bytes,
+          exists: true,
+          key,
+          available: true,
+          counted: false,
+        });
+      }
       const knowledgeItems: ContextPanelItem[] = itemsFor(["knowledge"]);
       // Attached references first (issue-cited), then every store bundle as
       // an available row the user can search and opt into with space.
@@ -2409,7 +2428,6 @@ export async function runTui(): Promise<void> {
       }
       const mapEnabled = preview.machine?.map.enabled !== false;
       const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
-      const cachedMap = readCachedMap(newRunRepo);
       const semantic = loadSemanticOrDeterministic(newRunRepo);
       const semanticDirty = readSemanticDirty(newRunRepo);
       const mapChars = mapEnabled ? (cachedMap ? renderMapIndex(cachedMap).length : 1024) : 0;
@@ -2453,6 +2471,7 @@ export async function runTui(): Promise<void> {
         }));
       const sections = [
         { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
+        { label: "Files", tone: C, sectionKey: "section:files", items: fileItems },
         { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
         { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
         { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
@@ -2467,7 +2486,7 @@ export async function runTui(): Promise<void> {
         const row = item as ContextPanelItem;
         return (
           row.available === true &&
-          (row.key.startsWith("knowledge:") || row.key.startsWith("reference:")) &&
+          (row.key.startsWith("file:") || row.key.startsWith("knowledge:") || row.key.startsWith("reference:")) &&
           newRunContextIncluded.has(row.key)
         );
       };
@@ -4392,7 +4411,7 @@ export async function runTui(): Promise<void> {
           if (next === "exclude") newRunContextExcluded.add(key);
           else newRunContextExcluded.delete(key);
         } else if (key && available) {
-          if (key.startsWith("knowledge:") || key.startsWith("reference:")) {
+          if (key.startsWith("file:") || key.startsWith("knowledge:") || key.startsWith("reference:")) {
             if (newRunContextIncluded.has(key)) newRunContextIncluded.delete(key);
             else {
               newRunContextIncluded.add(key);

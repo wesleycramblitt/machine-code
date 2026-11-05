@@ -8,7 +8,7 @@ not maximum autonomy.
 ## Start here
 - README.md — user-facing behavior and config.
 - knowledge/architecture.md — runtime flow, module map, invariants.
-- knowledge/context-pack.md — budgets, task pack, tool order.
+- knowledge/context-pack.md — curated context, budgets, tool order.
 - knowledge/model-tool-calling.md — native calls and repair.
 - knowledge/run-failures-2026-11-05.md — incidents.
 - plans/plan.md — remaining work and open validation.

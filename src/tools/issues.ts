@@ -25,7 +25,7 @@ import {
   type IssueProvider,
   type IssueRef,
 } from "../issues/provider.js";
-import { issueContextErrors, withInferredContext } from "../issues/context.js";
+import { issueContextErrors, withContextFiles } from "../issues/context.js";
 import {
   ensureEpicReserved,
   ensureFeatureReserved,
@@ -62,6 +62,9 @@ const GraphNode = Type.Object({
       description: "Required. ## Context; Epic/Feature also ## Goal and ## Scope (Feature also ## Success measures).",
     }),
   ),
+  context_files: Type.Optional(
+    Type.Array(Type.String({ description: "Repo-relative files you chose after reading; recorded in mc:context." })),
+  ),
   blocked_by: Type.Optional(Type.Array(Type.String({ description: "Temporary key or issue ref." }))),
 });
 const GraphTask = Type.Object({
@@ -70,6 +73,9 @@ const GraphTask = Type.Object({
   title: Type.String(),
   body: Type.Optional(
     Type.String({ description: "Required. ## Context, ## Deliverable, and ## Acceptance criteria." }),
+  ),
+  context_files: Type.Optional(
+    Type.Array(Type.String({ description: "Repo-relative files you chose after reading; recorded in mc:context." })),
   ),
   blocked_by: Type.Optional(Type.Array(Type.String({ description: "Temporary key or issue ref." }))),
 });
@@ -108,6 +114,9 @@ const IssueParams = Type.Object({
       description:
         "Required for create/edit. ## Context; Epic/Feature also ## Goal and ## Scope (Feature also ## Success measures); Task also ## Deliverable and acceptance criteria.",
     }),
+  ),
+  context_files: Type.Optional(
+    Type.Array(Type.String({ description: "Repo-relative files you chose after reading; recorded in mc:context." })),
   ),
   graph: Type.Optional(GraphParams),
   labels: Type.Optional(Type.Array(Type.String())),
@@ -272,7 +281,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       "Every created/edited body needs ## Context; Epic/Feature also need ## Goal and ## Scope (Feature: ## Success measures); Task needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
-      "mc:context files are inferred from body paths when absent; add exact known files only and do not research it. " +
+      "Pass context_files for the exact repo files you chose after reading; the tool records them in mc:context. Nothing is inferred. " +
       "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
       "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
     parameters: IssueParams,
@@ -383,12 +392,12 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         requireCreate();
         if (!params.graph) return fail("graph action requires graph");
         const graph = params.graph;
-        graph.epic.body = withInferredContext(graph.epic.body ?? "", ctx.layout.repoRoot);
+        graph.epic.body = withContextFiles(graph.epic.body ?? "", graph.epic.context_files);
         for (const feature of graph.features) {
-          feature.body = withInferredContext(feature.body ?? "", ctx.layout.repoRoot);
+          feature.body = withContextFiles(feature.body ?? "", feature.context_files);
         }
         for (const task of graph.tasks) {
-          task.body = withInferredContext(task.body ?? "", ctx.layout.repoRoot);
+          task.body = withContextFiles(task.body ?? "", task.context_files);
         }
         const keys = new Set<string>();
         const addKey = (key: string): void => {
@@ -531,9 +540,9 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         treeCache.clear();
         if (!params.kind) return fail("create requires kind (epic|feature|task)");
         if (!params.title) return fail("create requires title");
-        const body = withInferredContext(
+        const body = withContextFiles(
           withApproval(params.body ?? "", ctx.defaultApproval),
-          ctx.layout.repoRoot,
+          params.context_files,
         );
         const contextErrors = issueContextErrors({ kind: params.kind, body });
         if (contextErrors.length > 0) {
@@ -620,7 +629,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             remember(auto.issue, "plan ready");
             note =
               `\nplan ready on #${auto.issue.ref.number}. ` +
-              "mc:context files are inferred from body paths when absent; add exact known files only and do not research it. " +
+              "Use context_files for the exact files you chose after reading. " +
               "Then create the next Task or stop.";
           } else if (created.acceptance.length > 0) {
             note =
@@ -642,11 +651,13 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (target.reserved && params.title != null) {
           return fail("reserved issues cannot be retitled (their identity is the reserved role)");
         }
-        const nextBody = params.body == null
-          ? undefined
-          : target.reserved
-            ? params.body
-            : withInferredContext(params.body, ctx.layout.repoRoot);
+        const nextBody = target.reserved
+          ? (params.body ?? undefined)
+          : params.body == null
+            ? (params.context_files && params.context_files.length > 0
+                ? withContextFiles(target.body ?? "", params.context_files)
+                : undefined)
+            : withContextFiles(params.body, params.context_files);
         if (!target.reserved && nextBody !== undefined) {
           const contextErrors = issueContextErrors({ kind: target.kind, body: nextBody });
           if (contextErrors.length > 0) {

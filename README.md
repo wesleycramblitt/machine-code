@@ -218,10 +218,10 @@ page structure remains readable.
 
 `machine_code show <run-id>` exposes the same overview, summary, context,
 changes, related lineage, and event stream as the run detail screen.
-`machine_code context <run-id>` prints the assembled context plus the task-pack
-and ledger manifest that the model actually received. `machine_code pack
-"<request>"` previews the task pack before a run; add `--issue`, `--agent`,
-`--model`, `--context`, or `--json` to tune the view. `machine_code eval
+`machine_code context <run-id>` prints the assembled context and ledger that
+the model actually received. `machine_code pack` previews the curated run
+context before a run; add `--issue`, `--agent`, `--model`, `--context`, or
+`--json` to tune the view. `machine_code eval
 <run-id>` scores a run's calls, tokens, cost, context, changes, and gates;
 compare with `--baseline <run-id>` and fail CI with `--max-calls`,
 `--max-cost`, `--max-tokens`, or `--max-context`. `machine_code spend` and
@@ -468,9 +468,9 @@ create and execute scripts: the `implement` and `unrestricted` presets set
 `plan` action, which inserts or replaces the `mc:plan` marker. The new-run
 composer previews exactly which files, tools, scripts, and issues the selected
 run will inherit before it starts. The **Issues** subtab nests each issue's
-`mc:context` files under that issue; there is no separate Files subtab. An
-issue with no marker shows `no mc:context files`, because files enter the
-prompt only when the issue body declares them. The **Tools** subtab lists every tool
+`mc:context` files under that issue. The **Files** subtab lists repo files;
+press `space` on a file to include it explicitly. An issue with no marker
+shows `no mc:context files`. The **Tools** subtab lists every tool
 available to the selected agent, including `issue` with its access level, plus
 custom repository/machine tools. Core tool definitions are sent with every
 request, so their schema tokens are included in the estimate and cannot be
@@ -483,10 +483,10 @@ Skill descriptions are always visible and appear as one row per skill in the
 **Scripts** also list available files and manifests, marked `·`. Their rows
 show the content-size estimate with an `avail` suffix, but available entries
 are not counted in the section or footer token totals until they are part of
-the assembled context. Press `space` on an available knowledge file to include
-it; the composer passes it through `--context-include`. Files and knowledge
-enter the prompt otherwise only when an issue's `mc:context` block, or the
-configured knowledge index, references them.
+the assembled context. Press `space` on an available file or knowledge file to
+include it; the composer passes it through `--context-include`. Files also
+enter the prompt when an issue's `mc:context` block or the **Files** subtab
+selects them; the configured knowledge index is inherited by default.
 
 Each skill has three modes, cycled with `space` on its **Skills** row:
 `include` inlines the full body (marked `· body`, counted in tokens),
@@ -539,10 +539,10 @@ files/symbols, and constraints. Epic and Feature bodies also need `## Goal` and
 `## Scope`; Features need `## Success measures`; Tasks need `## Deliverable` and
 acceptance criteria. The `issue` tool rejects a create, graph, or body edit that
 misses these sections. This keeps context at creation time instead of requiring
-a later review. When the body names files, the issue tool also infers an
-`mc:context` file list from those paths and the semantic map. That list is what
-the context cascade shows and what Build preloads. Legacy issues can be repaired
-with `issue action=edit`.
+a later review. The Planner chooses context files after reading and passes them
+with `context_files`; the tool records that explicit list in `mc:context`.
+Nothing is inferred from prose. That list is what the context cascade shows and
+what Build receives. Legacy issues can be repaired with `issue action=edit`.
 
 `machine_code availability` shows cooling models and provider health.
 `machine_code model probe <key>` checks one model. Metadata probes use free
@@ -625,26 +625,26 @@ Each run keeps its working memory outside the transcript:
 ```
 
 The model sees the run state, an always-on overview (packet, knowledge, repo
-map, semantic index), a task context pack, and the last two complete tool steps,
-not the full tool history. The pack is built from the task and plan: task files
-and tests whole when they fit, outlines plus the bodies of named symbols when a
-file is large, one-hop imports and reverse dependencies, the command/script
-inventory, acceptance gates, and a short tool-selection guide. It is rendered
-to the selected model's input budget (context window minus output reserve), not
-to a fixed character cap: a 1M-token model gets the full useful pack, and a
-smaller model gets the same pack fitted to its window. The overview is assembled
-up to 64k characters and trimmed to the selected model in priority order, so
-the task packet and plan survive before lower-priority knowledge. A past-end
-read is an
+map, semantic index), the last two complete tool steps, not the full tool
+history, and no hidden task pack. The prompt is exactly the context curated in
+the composer plus the always-on indexes. There is no automatic preload,
+dependency expansion, inferred test list, or knowledge-note scoring: the model
+reads, searches, or expands a symbol when it needs more. The Planner chooses
+specific issue context files after reading and passes them with
+`context_files`. Context is assembled in priority order. If it exceeds the
+selected model's input budget, the run records a warning and names the omitted
+or truncated sources; the pre-run composer warns at 80% and over budget. A
+past-end read is an
 error and never creates read coverage. The state block includes merged Read
 coverage per file with its artifact ids, so the model can see what it already
 knows and can recall the bytes. Exact read bytes also stay in a run ledger: an
 unchanged re-read returns the cached bytes, a changed file drops its entries,
-and the prompt includes acquired bytes that the pack does not already carry. An
+and the prompt includes acquired bytes not already in the curated context. An
 edit invalidates only the read ranges that overlap the change. A next action older than six turns expires and is shown as
 unset. The `context` tool records decisions, focuses ranges, recalls artifacts,
-and resolves facts. A prompt that exceeds the run envelope or 90% of the
-selected model's window blocks and writes a split report instead of truncating.
+and resolves facts. A prompt near the selected model's input budget records a
+warning; an over-budget prompt names the omitted or truncated sources instead
+of silently changing the context.
 
 `machine_code prompts [role]` prints the rendered agent prompt with its size.
 Prompts share `data/prompts/base.md`; role files carry only short deltas.

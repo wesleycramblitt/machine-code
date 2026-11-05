@@ -41,6 +41,9 @@ export interface ContextBundle {
   text: string;
   sources: ContextSource[];
   chars: number;
+  /** Human-readable over-budget/truncation notes. Never silently drop curated sources. */
+  warnings: string[];
 }
 
+/** Warning threshold when the caller has no selected model budget. Not a cap. */
 export const DEFAULT_CONTEXT_BUDGET = 64_000;

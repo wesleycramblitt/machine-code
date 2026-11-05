@@ -67,7 +67,7 @@ import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
 import { artifactPeek } from "./context/preview.js";
-import { changesFor, contextUsage, exceededLimits, readContextManifest, readContextPackManifest, relatedRuns, runMetrics, thinkingChunks, touchedPaths } from "./report/run.js";
+import { changesFor, contextUsage, exceededLimits, readContextManifest, relatedRuns, runMetrics, thinkingChunks, touchedPaths } from "./report/run.js";
 import { buildSettings, settingsFileFor } from "./tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./data.js";
 import { runTui } from "./tui.js";
@@ -186,7 +186,7 @@ Usage:
   machine_code eval <run-id>        Score calls, tokens, cost, context, gates [--baseline <id>]
                                     [--max-calls N] [--max-cost N] [--max-tokens N]
                                     [--max-context N] [--json]
-  machine_code pack <request>       Preview the task pack before a run [--issue <ref>]
+  machine_code pack                 Preview the curated run context [--issue <ref>]
                                     [--agent <role>] [--model <key>] [--context] [--json]
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
                                     --no-symbols, --semantic)
@@ -1038,16 +1038,26 @@ async function cmdRun(argv: string[]): Promise<number> {
   let contextInclude: import("./context/assemble.js").ContextInclude | undefined;
   if (contextIncludeFlag !== undefined) {
     try {
-      const raw = JSON.parse(contextIncludeFlag) as { knowledge?: unknown; references?: unknown };
-      const knowledge = Array.isArray(raw.knowledge)
-        ? raw.knowledge.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-        : undefined;
-      const references = Array.isArray(raw.references)
-        ? raw.references.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-        : undefined;
-      contextInclude = { knowledge, references };
+      const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; knowledge?: unknown; references?: unknown };
+      const strings = (value: unknown): string[] | undefined =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          : undefined;
+      contextInclude = {
+        files: strings(raw.files),
+        knowledge: strings(raw.knowledge),
+        references: strings(raw.references),
+      };
     } catch {
       fail("--context-include must be a JSON object");
+    }
+  }
+  const contextBudgetFlag = flags.get("context-budget");
+  let contextBudgetChars: number | undefined;
+  if (contextBudgetFlag !== undefined) {
+    contextBudgetChars = Number(contextBudgetFlag);
+    if (!Number.isFinite(contextBudgetChars) || contextBudgetChars <= 0) {
+      fail("--context-budget needs a positive character count");
     }
   }
   // Composer per-skill mode overrides: {"clean-code":"include",...}.
@@ -1399,6 +1409,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     provider: issueBundle.provider.kind === "none" ? undefined : issueBundle.provider,
     issue: issueRef,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
+    ...(contextBudgetChars !== undefined ? { budgetChars: contextBudgetChars } : {}),
     exclude: contextExclude,
     include: contextInclude,
     defaultSkills: defaultSkillsFor({ agent: agentNameParsed, verification: agentOverrides.verification }),
@@ -1406,8 +1417,8 @@ async function cmdRun(argv: string[]): Promise<number> {
     skillOverrides: skillModeOverrides,
   });
   if (contextBundle.text) {
-    writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources });
-    recorder.event("context_assembled", { chars: contextBundle.chars, sources: contextBundle.sources });
+    writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
+    recorder.event("context_assembled", { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
   }
   const contextText = contextBundle.text || undefined;
 
@@ -1788,8 +1799,8 @@ async function cmdQueue(argv: string[]): Promise<number> {
     const { writeJsonAtomic } = await import("./state/run-schema.js");
     const queueContext = await assembleContext({ layout: l, machine, packetId: packet.id });
     if (queueContext.text) {
-      writeJsonAtomic(join(recorder.dir, "context.json"), { chars: queueContext.chars, sources: queueContext.sources });
-      recorder.event("context_assembled", { chars: queueContext.chars, sources: queueContext.sources });
+      writeJsonAtomic(join(recorder.dir, "context.json"), { chars: queueContext.chars, sources: queueContext.sources, warnings: queueContext.warnings });
+      recorder.event("context_assembled", { chars: queueContext.chars, sources: queueContext.sources, warnings: queueContext.warnings });
     }
     const result = await orchestrate({
       models,
@@ -3702,39 +3713,6 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   return stopReason ? 1 : 0;
 }
 
-function printContextPack(pack: import("./report/run.js").ContextPackManifest, limit: number, all: boolean): void {
-  const items = pack.pack.items;
-  process.stdout.write(
-    `\npack     ${pack.pack.chars.toLocaleString()} chars (~${pack.pack.tokens.toLocaleString()} tok)  ` +
-      `${items.length} item(s)  rendered ${pack.rendered.chars.toLocaleString()}  ` +
-      `omitted ${pack.rendered.omitted.length}  ledger ${pack.ledger.chars.toLocaleString()}  ` +
-      `overview ${(pack.overviewChars ?? 0).toLocaleString()}\n`,
-  );
-  if (pack.model) {
-    process.stdout.write(
-      `  model  ${pack.model}${pack.contextWindow ? `  window ${pack.contextWindow.toLocaleString()}` : ""}` +
-        `${pack.inputBudgetTokens ? `  input budget ${pack.inputBudgetTokens.toLocaleString()}` : ""}\n`,
-    );
-  }
-  for (const item of items.slice(0, all ? items.length : limit)) {
-    process.stdout.write(
-      `  ${item.kind.padEnd(10)} ${String(item.chars).padStart(7)}b ${item.ref}${item.reason ? `  ${item.reason}` : ""}\n`,
-    );
-  }
-  if (!all && items.length > limit) process.stdout.write(`  … ${items.length - limit} more pack item(s) (--context)\n`);
-  if (all && pack.rendered.omitted.length > 0) {
-    process.stdout.write(`  omitted:\n`);
-    for (const item of pack.rendered.omitted) process.stdout.write(`    ${item.ref}  ${item.reason}\n`);
-  }
-  if (all && pack.ledger.entries.length > 0) {
-    process.stdout.write(`  ledger entries:\n`);
-    for (const entry of pack.ledger.entries.slice(0, 40)) {
-      process.stdout.write(`    ${entry.kind.padEnd(8)} ${String(entry.chars).padStart(7)}b ${entry.path}#${entry.label}  t${entry.turn}\n`);
-    }
-    if (pack.ledger.entries.length > 40) process.stdout.write(`    … ${pack.ledger.entries.length - 40} more\n`);
-  }
-}
-
 function cmdShow(argv: string[]): number {
   const { flags, positional } = parseFlags(argv);
   const id = positional[0];
@@ -3745,7 +3723,6 @@ function cmdShow(argv: string[]): number {
   const s = reconcileRun(run.summary);
   const runDir = join(found.layout.runsDir, s.id);
   const context = readContextManifest(runDir);
-  const contextPack = readContextPackManifest(runDir);
   const allRuns = listAllRuns(found.layout.home);
   const related = relatedRuns(allRuns, s);
   const thinking = thinkingChunks(run.events);
@@ -3773,7 +3750,6 @@ function cmdShow(argv: string[]): number {
       `${JSON.stringify({
         summary: s,
         context,
-        contextPack,
         related,
         thinking,
         touched,
@@ -3814,8 +3790,8 @@ function cmdShow(argv: string[]): number {
       process.stdout.write(`  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(6)}b ${source.origin.padEnd(9)} ${source.ref}${source.warning ? `  (${source.warning})` : ""}\n`);
     }
     if (!flags.has("context") && context.sources.length > 12) process.stdout.write(`  … ${context.sources.length - 12} more (--context)\n`);
+    for (const warning of context.warnings) process.stdout.write(`  warning: ${warning}\n`);
   }
-  if (contextPack) printContextPack(contextPack, flags.has("context") ? 100 : 12, flags.has("context"));
 
   const stateFile = join(runDir, "state.md");
   if (existsSync(stateFile)) {
@@ -3888,17 +3864,12 @@ async function cmdEval(argv: string[]): Promise<number> {
   if (!id) fail("eval needs a run id");
   const found = findRunAnywhere(layout().home, id);
   if (!found) fail(`no such run: ${id}`);
-  const runDir = join(found.layout.runsDir, found.run.summary.id);
-  const metrics = runMetrics(found.run.summary, found.run.events, runDir);
+  const metrics = runMetrics(found.run.summary, found.run.events);
   const baselineId = flags.get("baseline");
   const baselineFound = baselineId ? findRunAnywhere(layout().home, baselineId) : null;
   if (baselineId && !baselineFound) fail(`no such baseline run: ${baselineId}`);
   const baseline = baselineFound
-    ? runMetrics(
-        baselineFound.run.summary,
-        baselineFound.run.events,
-        join(baselineFound.layout.runsDir, baselineFound.run.summary.id),
-      )
+    ? runMetrics(baselineFound.run.summary, baselineFound.run.events)
     : undefined;
   const limits = {
     ...(flags.has("max-calls") ? { maxCalls: Number(flags.get("max-calls")) } : {}),
@@ -3939,8 +3910,7 @@ async function cmdEval(argv: string[]): Promise<number> {
   );
   process.stdout.write(`  cost    ${fmtMoney(metrics.costActual)} actual · ${fmtMoney(metrics.costEstimated)} estimated\n`);
   process.stdout.write(
-    `  context ${fmtRunTokens(metrics.peakContextTokens)} peak · pack ${fmtRunTokens(metrics.packTokens)} · ` +
-      `ledger ${fmtRunTokens(Math.ceil(metrics.ledgerChars / 4))} · overview ${fmtRunTokens(Math.ceil(metrics.overviewChars / 4))} · omitted ${metrics.omittedPackItems}\n`,
+    `  context ${fmtRunTokens(metrics.peakContextTokens)} peak\n`,
   );
   process.stdout.write(`  time    ${Math.round(metrics.wallMs / 1000)}s · changes ${metrics.changedPaths.length} · gates ${metrics.gates ? (metrics.gates.passed ? "pass" : `fail (${metrics.gates.failed.join(", ")})`) : "not run"}\n`);
   if (metrics.loopReason) process.stdout.write(`  loop    ${metrics.loopReason}\n`);
@@ -3961,35 +3931,41 @@ async function cmdEval(argv: string[]): Promise<number> {
 }
 
 async function cmdPack(argv: string[]): Promise<number> {
-  const { flags, positional } = parseFlags(argv);
+  const { flags } = parseFlags(argv);
   const l = layout();
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const agent = flags.get("agent") ?? "build";
   const agentPolicy = policy.agents[agent];
   if (!agentPolicy) fail(`unknown agent "${agent}"; choose one of ${Object.keys(policy.agents).join(", ")}`);
 
-  let request = positional.join(" ").trim();
-  let taskText = "";
+  let include: import("./context/assemble.js").ContextInclude | undefined;
+  const includeFlag = flags.get("context-include");
+  if (includeFlag !== undefined) {
+    try {
+      const raw = JSON.parse(includeFlag) as { files?: unknown; knowledge?: unknown; references?: unknown };
+      const strings = (value: unknown): string[] | undefined =>
+        Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+          : undefined;
+      include = { files: strings(raw.files), knowledge: strings(raw.knowledge), references: strings(raw.references) };
+    } catch {
+      fail("--context-include must be a JSON object");
+    }
+  }
+  let issueRef: import("./issues/provider.js").IssueRef | undefined;
+  let provider: import("./issues/provider.js").IssueProvider | undefined;
   if (flags.has("issue")) {
     const bundle = await createIssueProvider(l, machine);
     if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
-    const ref = parseIssueRef(flags.get("issue")!, bundle.repo, "github");
-    const issue = await bundle.provider.get(ref);
-    if (!issue) fail(`no such issue: ${flags.get("issue")}`);
-    taskText = issue.body;
-    request = request || `${issue.title}\n\n${issue.body}`;
+    provider = bundle.provider;
+    issueRef = parseIssueRef(flags.get("issue")!, bundle.repo, "github");
   }
-  if (!request) fail("pack needs a request text or --issue");
-
-  const { buildRepoMap } = await import("./map/deterministic.js");
-  const { buildTaskPack, packManifest, renderContextPack } = await import("./context/pack.js");
-  const { contextBudget, inputCost } = await import("./context/budget.js");
-  const built = await buildRepoMap(l.repoRoot);
 
   let row = flags.get("model")
     ? catalogueDoc.models.find((entry) => entry.key === flags.get("model") || entry.id === flags.get("model") || `${entry.providerID}/${entry.id}` === flags.get("model"))
     : undefined;
   if (flags.get("model") && !row) fail(`no catalogue row for model "${flags.get("model")}"`);
+  const estimatedChars = issueRef ? 64_000 : 16_000;
   if (!row) {
     const result = pick({
       agent,
@@ -3999,44 +3975,41 @@ async function cmdPack(argv: string[]): Promise<number> {
       configuredProviders,
       availability: loadAvailability(l.home),
       fundedProviders: fundedProviderIds(machine.providers),
-      contextChars: Math.min(64_000, request.length + 16_000),
+      contextChars: estimatedChars,
     });
     if ("error" in result) fail(result.error);
     row = result.selected;
   }
 
+  const { assembleContext } = await import("./context/assemble.js");
+  const { contextBudget, inputCost } = await import("./context/budget.js");
+  const { roleSkillPresets } = await import("./agents.js");
   const budget = contextBudget(row.context || row.capabilities.contextWindow, agentPolicy.expectedOutputTokens);
-  const pack = buildTaskPack({
-    root: l.repoRoot,
+  const bundle = await assembleContext({
     layout: l,
-    request,
-    taskText,
-    planText: "",
-    mapFiles: built.map.files,
-    commands: allCommands(l),
+    machine,
+    ...(provider ? { provider } : {}),
+    ...(issueRef ? { issue: issueRef } : {}),
+    ...(include ? { include } : {}),
     budgetChars: budget.inputChars,
-    maxFiles: agent === "planner" ? 10 : 18,
-    mode: agent === "planner" ? "overview" : "task",
+    defaultSkills: defaultSkillsFor({ agent, verification: "verified" }),
+    skillPresets: roleSkillPresets(agent),
   });
-  const packBudget = Math.max(4_000, budget.inputChars - 20_000);
-  const rendered = renderContextPack(pack, { maxChars: packBudget });
-  const cost = inputCost(rendered.tokens, row.pricing.input);
-  const manifest = packManifest(pack);
+  const tokens = Math.ceil(bundle.chars / 4);
+  const cost = inputCost(tokens, row.pricing.input);
 
   if (flags.has("json")) {
     process.stdout.write(
       `${JSON.stringify({
-        request,
         agent,
         model: row.key,
         contextWindow: row.context,
         inputBudgetTokens: budget.inputTokens,
-        pack: manifest,
-        rendered: {
-          chars: rendered.chars,
-          tokens: rendered.tokens,
-          included: rendered.included,
-          omitted: rendered.omitted,
+        context: {
+          chars: bundle.chars,
+          tokens,
+          sources: bundle.sources,
+          warnings: bundle.warnings,
         },
         estimatedInputCost: cost,
       }, null, 2)}\n`,
@@ -4044,21 +4017,21 @@ async function cmdPack(argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stdout.write(`pack ${row.key}  agent ${agent}  window ${fmtCtx(row.context)}  input budget ${fmtTokens(budget.inputTokens)} tok\n`);
+  process.stdout.write(`context ${row.key}  agent ${agent}  window ${fmtCtx(row.context)}  input budget ${fmtTokens(budget.inputTokens)} tok\n`);
   process.stdout.write(
-    `  items ${pack.items.length}  chars ${pack.chars.toLocaleString()} (~${fmtTokens(pack.tokens)} tok)  ` +
-      `rendered ${rendered.chars.toLocaleString()} (~${fmtTokens(rendered.tokens)} tok)  ` +
-      `omitted ${rendered.omitted.length}  est input ${fmtMoney(cost)}\n`,
+    `  chars ${bundle.chars.toLocaleString()} (~${fmtTokens(tokens)} tok)  ` +
+      `sources ${bundle.sources.length}  est input ${fmtMoney(cost)}\n`,
   );
-  for (const item of pack.items.slice(0, flags.has("context") ? pack.items.length : 12)) {
-    process.stdout.write(`  ${item.kind.padEnd(10)} ${String(item.chars).padStart(7)}b ${item.ref}  ${item.reason}\n`);
+  for (const source of bundle.sources.slice(0, flags.has("context") ? bundle.sources.length : 12)) {
+    process.stdout.write(
+      `  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(7)}b ${source.origin.padEnd(9)} ${source.ref}` +
+        `${source.truncated ? " [truncated]" : ""}${source.warning ? ` (${source.warning})` : ""}\n`,
+    );
   }
-  if (!flags.has("context") && pack.items.length > 12) {
-    process.stdout.write(`  … ${pack.items.length - 12} more item(s) (--context)\n`);
+  if (!flags.has("context") && bundle.sources.length > 12) {
+    process.stdout.write(`  … ${bundle.sources.length - 12} more source(s) (--context)\n`);
   }
-  if (rendered.omitted.length > 0) {
-    process.stdout.write(`  omitted: ${rendered.omitted.slice(0, 6).map((item) => `${item.ref} (${item.reason})`).join("; ")}${rendered.omitted.length > 6 ? `; +${rendered.omitted.length - 6} more` : ""}\n`);
-  }
+  for (const warning of bundle.warnings) process.stdout.write(`  warning: ${warning}\n`);
   return 0;
 }
 
@@ -4077,9 +4050,8 @@ function cmdContext(argv: string[]): number {
         `  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(7)}b ${source.origin.padEnd(9)} ${source.ref}${source.truncated ? " [truncated]" : ""}${source.warning ? ` (${source.warning})` : ""}\n`,
       );
     }
+    for (const warning of manifest.warnings) process.stdout.write(`  warning: ${warning}\n`);
   }
-  const pack = readContextPackManifest(join(found.layout.runsDir, found.run.summary.id));
-  if (pack) printContextPack(pack, 100, true);
   return 0;
 }
 

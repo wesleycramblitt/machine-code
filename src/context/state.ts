@@ -699,7 +699,7 @@ export class RunStateStore {
     }
   }
 
-  /** Render acquired bytes not already present in the task pack. */
+  /** Render acquired bytes not already present in the curated context. */
   renderLedger(options: {
     maxChars?: number;
     perItemChars?: number;
@@ -931,7 +931,8 @@ export class RunStateStore {
         key: `change:git:${sha1(paths.join("\0"))}`,
       },
     });
-    this.settleNextAfterChange(turn);
+    // Git status is a safety net, not proof this run made an edit. A concurrent
+    // process or a pre-existing dirty tree must not push the run into verify.
   }
 
   addChangeFact(
@@ -1092,6 +1093,10 @@ export class RunStateStore {
         this.addSearchFact(mode === "text" ? query : `${mode} ${query}`.trim(), found, turn, hits);
         refs.push(...found.slice(0, 3));
       } else if (toolName === "command") {
+        // describe/list are reads. Only run executes a gate or mutates the
+        // tree; treating introspection as verification put runs into a test
+        // loop before they made a single edit.
+        if ((str(args.action) ?? "run") !== "run") continue;
         commandRan = true;
         commandName = str(args.name) ?? "command";
         this.addCommandFact(commandName, message.isError !== true, turn, excerpt(resultText));
@@ -1154,6 +1159,9 @@ export class RunStateStore {
       const readFacts = findings.filter((fact) => fact.key.startsWith("read:") && fact.refs.length > 0);
       const otherFindings = findings.filter((fact) => !fact.key.startsWith("read:"));
       const changes = active.filter((fact) => fact.kind === "change");
+      // Git status changes can come from another process sharing the tree.
+      // Only edit/write facts prove this run changed something.
+      const runChanges = changes.filter((fact) => !fact.key.startsWith("change:git:"));
       const planDecision = decisions.some((fact) => /\bplan\b/i.test(fact.text));
       const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`];
       if (decisions.length > 0) {
@@ -1166,9 +1174,9 @@ export class RunStateStore {
       const nextTurn = this.state.nextActionTurn;
       const nextAge = nextTurn === undefined ? 0 : this.currentTurn() - nextTurn;
       const planNext = PLAN_NEXT.test(this.state.nextAction ?? "");
-      if (changes.length > 0 && (planNext || !this.state.nextAction || nextAge > 6)) {
+      if (runChanges.length > 0 && (planNext || !this.state.nextAction || nextAge > 6)) {
         lines.push(`Next: ${VERIFY_NEXT}`);
-      } else if (planDecision && changes.length === 0) {
+      } else if (planDecision && runChanges.length === 0) {
         lines.push("Next: Execute the plan: make the first edit.");
       } else if (this.state.nextAction && nextAge <= 6) {
         lines.push(`Next: ${this.state.nextAction}`);
@@ -1225,9 +1233,14 @@ export class RunStateStore {
         lines.push("Working set:");
         for (const ref of this.state.workingSet) lines.push(`- ${refLabel(ref)}`);
       }
-      if (changes.length > 0) {
+      if (runChanges.length > 0) {
         lines.push("Changes:");
-        for (const fact of changes) lines.push(`- ${fact.text}`);
+        for (const fact of runChanges) lines.push(`- ${fact.text}`);
+      }
+      const externalChanges = changes.filter((fact) => !runChanges.includes(fact));
+      if (externalChanges.length > 0) {
+        lines.push("Tree changes (not from this run):");
+        for (const fact of externalChanges) lines.push(`- ${fact.text}`);
       }
       const open = this.state.open.filter((question) => question.status === "open");
       if (open.length > 0) {

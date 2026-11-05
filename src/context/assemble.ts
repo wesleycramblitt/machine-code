@@ -1,20 +1,14 @@
 /**
  * machine_code — context assembly.
  *
- * Resolves, in priority order, then dedupes and budgets:
- *   1 explicit packet            (8 KiB)
- *   2 current Task               (6 KiB)
- *   3 parent Feature             (4 KiB)
- *   4 parent Epic                (3 KiB)
- *   5 explicit knowledge files   (6 KiB total)
- *   6 parent run + ancestor summaries (2 KiB each)
- *   7 plan files / knowledge index (2 KiB each)
- *   8 skill descriptions / tools (1 KiB)
+ * Resolves in priority order, dedupes, and emits the full curated context.
+ * The only ceiling is the caller's model input budget. There are no per-file
+ * size rules; a source either fits or is reported as truncated/omitted.
  *
  * Every block is labelled with its source and origin; context.json records the
  * manifest (hash, bytes, truncation, warnings) so the model's context is
- * traceable. Nothing is preloaded that was not asked for by the run or an
- * ancestor.
+ * traceable. Nothing is preloaded that was not asked for by the run, an
+ * ancestor, or the composer.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -28,6 +22,7 @@ import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "
 import { parseArtifactReferences, resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
 import { readReference } from "../references/store.js";
 import { discoverPlanFiles } from "./plans.js";
+import { isSecretPath } from "../tools/safety.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
   type ContextBundle,
@@ -36,15 +31,12 @@ import {
   type ContextSource,
 } from "./types.js";
 
-const KIB = 1024;
-
 interface Pending {
   kind: ContextKind;
   origin: ContextOrigin;
   ref: string;
   depth?: number;
   body: string;
-  cap: number;
   band: number;
   warning?: string;
 }
@@ -57,6 +49,8 @@ export interface ContextExclusion {
 }
 
 export interface ContextInclude {
+  /** Repo-relative source files to add explicitly from the composer. */
+  files?: string[];
   /** Repo-relative knowledge files to add explicitly from the composer. */
   knowledge?: string[];
   /** Reference citations to add explicitly from the composer. */
@@ -88,7 +82,7 @@ export interface AssembleInput {
     stopReason?: string;
     error?: string;
   };
-  /** Override the configured character budget. */
+  /** Model input budget in characters; used to report over-budget context. */
   budgetChars?: number;
   /** Drop whole sections or individual sources selected in the composer. */
   exclude?: ContextExclusion;
@@ -123,11 +117,6 @@ function sha1(text: string): string {
   return createHash("sha1").update(text).digest("hex");
 }
 
-function clip(text: string, cap: number): { body: string; truncated: boolean } {
-  if (text.length <= cap) return { body: text, truncated: false };
-  return { body: text.slice(0, cap).replace(/\s+$/, "") + "\n…[truncated]", truncated: true };
-}
-
 function withinRepo(root: string, path: string): string | null {
   if (isAbsolute(path)) return null;
   const abs = resolve(root, path);
@@ -147,10 +136,9 @@ function renderIssue(issue: Issue): string {
   return lines.join("\n");
 }
 
-function readFileCapped(file: string, cap: number): { text: string; warning?: string } | null {
+function readFileText(file: string): { text: string; warning?: string } | null {
   try {
-    const raw = readFileSync(file, "utf8");
-    return { text: raw.slice(0, cap) };
+    return { text: readFileSync(file, "utf8") };
   } catch {
     return null;
   }
@@ -216,14 +204,13 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
               ref: path,
               depth,
               body: "",
-              cap: 0,
               band,
               warning: `referenced ${kind} is missing or outside the repo`,
             });
             return;
           }
-          const read = readFileCapped(abs, 8 * KIB);
-          if (read) pending.push({ kind, origin, ref: path, depth, body: read.text, cap: 8 * KIB, band });
+          const read = readFileText(abs);
+          if (read) pending.push({ kind, origin, ref: path, depth, body: read.text, band });
         };
 
         for (const path of refs.files) addFile(path, "file");
@@ -233,7 +220,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
           const key = `reference:${citation}`;
           if (seenRefs.has(key)) continue;
           seenRefs.add(key);
-          const read = readReference(layout, citation, 8 * KIB);
+          const read = readReference(layout, citation, Number.MAX_SAFE_INTEGER);
           if (!read.ok) {
             pending.push({
               kind: "reference",
@@ -241,7 +228,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
               ref: citation,
               depth,
               body: "",
-              cap: 0,
               band,
               warning: `referenced reference ${citation} is missing or outside the store`,
             });
@@ -254,7 +240,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
             ref: label,
             depth,
             body: `${label}\n\n${read.text}`,
-            cap: 8 * KIB,
             band,
           });
         }
@@ -278,7 +263,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
               ref: name,
               depth,
               body: "",
-              cap: 0,
               band,
               warning: `referenced skill "${name}" was not found`,
             });
@@ -293,7 +277,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
             ref: name,
             depth,
             body: skill.text,
-            cap: 8 * KIB,
             band,
           });
         }
@@ -314,14 +297,13 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
                 ref,
                 depth,
                 body: "",
-                cap: 0,
                 band,
                 warning: `referenced ${kind} "${ref}" was not found`,
               });
               continue;
             }
             const path = artifactPath(layout, artifact);
-            const content = path ? readFileCapped(path, 2 * KIB) : null;
+            const content = path ? readFileText(path) : null;
             const body = [
               artifactSummary(artifact),
               path ? `path: ${path}` : "",
@@ -329,7 +311,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
             ]
               .filter(Boolean)
               .join("\n");
-            pending.push({ kind, origin, ref: artifact.name, depth, body, cap: 3 * KIB, band });
+            pending.push({ kind, origin, ref: artifact.name, depth, body, band });
           }
         }
       }
@@ -360,12 +342,28 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (mode !== "include") continue;
     const skill = skillBody(layout, name);
     if (!skill) continue;
-    pending.push({ kind: "skill", origin: "explicit", ref: name, body: skill.text, cap: 8 * KIB, band: 2 });
+    pending.push({ kind: "skill", origin: "explicit", ref: name, body: skill.text, band: 2 });
   }
 
   // Explicit composer includes. These are user-selected knowledge files that
   // no issue or configured index references; they are still ordinary
   // provenance-tracked context blocks.
+  for (const path of input.include?.files ?? []) {
+    const abs = withinRepo(layout.repoRoot, path);
+    if (!abs || !existsSync(abs) || isSecretPath(path)) {
+      pending.push({
+        kind: "file",
+        origin: "explicit",
+        ref: path,
+        body: "",
+        band: 1,
+        warning: "included file is missing, secret, or outside the repo",
+      });
+      continue;
+    }
+    const read = readFileText(abs);
+    if (read) pending.push({ kind: "file", origin: "explicit", ref: path, body: read.text, band: 1 });
+  }
   for (const path of input.include?.knowledge ?? []) {
     const abs = withinRepo(layout.repoRoot, path);
     if (!abs || !existsSync(abs)) {
@@ -374,26 +372,24 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         origin: "explicit",
         ref: path,
         body: "",
-        cap: 0,
         band: 1,
         warning: "included knowledge is missing or outside the repo",
       });
       continue;
     }
-    const read = readFileCapped(abs, 8 * KIB);
+    const read = readFileText(abs);
     if (read) {
-      pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, cap: 8 * KIB, band: 1 });
+      pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, band: 1 });
     }
   }
   for (const citation of input.include?.references ?? []) {
-    const read = readReference(layout, citation, 8 * KIB);
+    const read = readReference(layout, citation, Number.MAX_SAFE_INTEGER);
     if (!read.ok) {
       pending.push({
         kind: "reference",
         origin: "explicit",
         ref: citation,
         body: "",
-        cap: 0,
         band: 1,
         warning: `included reference ${citation} is missing or outside the store`,
       });
@@ -405,7 +401,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       origin: "explicit",
       ref: citation,
       body: `${label}\n\n${read.text}`,
-      cap: 8 * KIB,
       band: 1,
     });
   }
@@ -418,7 +413,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       ref: `${current.ref.repo}#${current.ref.number}`,
       depth: 0,
       body: renderIssue(current),
-      cap: 6 * KIB,
       band: 2,
     });
     let depth = 1;
@@ -430,7 +424,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         ref: `${ancestor.ref.repo}#${ancestor.ref.number}`,
         depth,
         body: renderIssue(ancestor),
-        cap: kind === "feature" ? 4 * KIB : 3 * KIB,
         band: kind === "feature" ? 3 : 4,
       });
       depth += 1;
@@ -442,7 +435,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   for (const id of packetIds) {
     const packet = readPacket(layout, id);
     if (!packet) {
-      pending.push({ kind: "packet", origin: "explicit", ref: id, body: "", cap: 0, band: 1, warning: "packet not found" });
+      pending.push({ kind: "packet", origin: "explicit", ref: id, body: "", band: 1, warning: "packet not found" });
       continue;
     }
     pending.push({
@@ -450,7 +443,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       origin: "explicit",
       ref: packet.id,
       body: JSON.stringify(packet, null, 2),
-      cap: 8 * KIB,
       band: 1,
     });
   }
@@ -499,28 +491,28 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       ref: run.id,
       depth: run.depth,
       body: text,
-      cap: 2 * KIB,
       band: 6,
     });
   }
 
-  // Plan files + knowledge index.
+  // Plan files + knowledge index. These are inherited overview material, but
+  // they are not second-class files: let the model budget decide how much fits.
+  // A fixed 2 KiB cap silently cut a plan in half before the model ever saw it.
   for (const planPath of discoverPlanFiles(layout, machine.context.planFile)) {
     const abs = withinRepo(layout.repoRoot, planPath)!;
-    const read = readFileCapped(abs, 2 * KIB);
-    if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, body: read.text, cap: 2 * KIB, band: 7 });
+    const read = readFileText(abs);
+    if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, body: read.text, band: 7 });
   }
   if (machine.context.knowledgeIndex) {
     const abs = withinRepo(layout.repoRoot, machine.context.knowledgeIndex);
     if (abs && existsSync(abs)) {
-      const read = readFileCapped(abs, 2 * KIB);
+      const read = readFileText(abs);
       if (read) {
         pending.push({
           kind: "knowledge",
           origin: "inherited",
           ref: machine.context.knowledgeIndex,
           body: read.text,
-          cap: 2 * KIB,
           band: 7,
         });
       }
@@ -546,7 +538,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const skills = skillMetas(layout).filter((skill) => !excludedSkillNames.has(skill.name));
   if (skills.length > 0) {
     const text = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
-    pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, body: text, cap: 1 * KIB, band: 8 });
+    pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, body: text, band: 8 });
   }
   try {
     const commands = [...allCommands(layout).keys()].sort();
@@ -556,7 +548,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         origin: "explicit",
         ref: `${commands.length} commands`,
         body: commands.join(", "),
-        cap: 1 * KIB,
         band: 8,
       });
     }
@@ -587,8 +578,11 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     selected.push(item);
   }
 
-  // Budget + render.
+  // Render every curated source. The runner may trim the prompt to the
+  // selected model's input window, but that is a model limit, not a per-file
+  // rule. Report the overage instead of silently changing a source.
   const sources: ContextSource[] = [];
+  const warnings: string[] = [];
   const blocks: string[] = [];
   let used = 0;
   for (const item of selected) {
@@ -596,28 +590,27 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       sources.push({ kind: item.kind, origin: item.origin, ref: item.ref, depth: item.depth, bytes: 0, hash: "", truncated: false, warning: item.warning });
       continue;
     }
-    const remaining = budget - used;
-    if (remaining <= 0) break;
-    const allowed = Math.min(item.cap, remaining);
-    const clipped = clip(item.body, allowed);
-    if (clipped.body.trim().length === 0) continue;
-    used += clipped.body.length;
+    if (item.body.trim().length === 0) continue;
+    used += item.body.length;
     const attrs = [
       `kind="${item.kind}"`,
       `source="${item.ref.replace(/"/g, "'")}"`,
       `origin="${item.origin}"`,
       ...(item.depth !== undefined ? [`depth="${item.depth}"`] : []),
     ];
-    blocks.push(`<context-block ${attrs.join(" ")}>\n${clipped.body}\n</context-block>`);
+    blocks.push(`<context-block ${attrs.join(" ")}>\n${item.body}\n</context-block>`);
     sources.push({
       kind: item.kind,
       origin: item.origin,
       ref: item.ref,
       depth: item.depth,
-      bytes: clipped.body.length,
-      hash: sha1(clipped.body),
-      truncated: clipped.truncated,
+      bytes: item.body.length,
+      hash: sha1(item.body),
+      truncated: false,
     });
+  }
+  if (used > budget) {
+    warnings.push(`curated context is ${used.toLocaleString()} chars; model input budget is ${budget.toLocaleString()} chars; the runner will trim to fit`);
   }
 
   const text =
@@ -630,5 +623,5 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
           "</context>",
         ].join("\n");
 
-  return { text, sources, chars: text.length };
+  return { text, sources, chars: text.length, warnings };
 }

@@ -41,10 +41,6 @@ export interface ContextPreview {
   warnings: string[];
 }
 
-const FILE_CAP = 8 * 1024;
-const ARTIFACT_CAP = 3 * 1024;
-const SKILL_CAP = 8 * 1024;
-
 function keyOf(ref: IssueRef): string {
   return `${ref.repo}#${ref.number}`;
 }
@@ -84,6 +80,8 @@ export function issueChain(issues: readonly Issue[], ref?: IssueRef): Issue[] {
 export interface PreviewContextOptions {
   planFile?: string;
   knowledgeIndex?: string;
+  /** Explicit repo-relative files selected in the composer. */
+  files?: string[];
   /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
   defaultSkills?: string[];
   /** Role `[skills]` preset table (from the agent's role TOML). */
@@ -124,7 +122,7 @@ export function previewContext(
       const abs = resolve(root, path);
       const inside = abs === root || abs.startsWith(root + sep);
       const exists = inside && existsSync(abs);
-      const size = exists ? capFor(abs, FILE_CAP) : 0;
+      const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
       chars += size;
       sources.push({ kind: "file", ref: path, origin, depth, chars: size, exists });
       if (!exists) warnings.push(`file ${path} is missing`);
@@ -136,7 +134,7 @@ export function previewContext(
       const abs = resolve(root, path);
       const inside = abs === root || abs.startsWith(root + sep);
       const exists = inside && existsSync(abs);
-      const size = exists ? capFor(abs, FILE_CAP) : 0;
+      const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
       chars += size;
       sources.push({ kind: "knowledge", ref: path, origin, depth, chars: size, exists });
       if (!exists) warnings.push(`knowledge ${path} is missing`);
@@ -168,7 +166,7 @@ export function previewContext(
         declared: refs.skills,
         overrides: options.skillOverrides,
       });
-      const size = mode === "include" && path ? capFor(path, SKILL_CAP) : 0;
+      const size = mode === "include" && path ? capFor(path, Number.MAX_SAFE_INTEGER) : 0;
       chars += size;
       sources.push({ kind: "skill", ref: name, origin, depth, chars: size, exists: Boolean(path) });
       if (!path) warnings.push(`skill ${name} is missing`);
@@ -187,7 +185,7 @@ export function previewContext(
         }
         target.push(artifact);
         const path = artifactPath(layout, artifact);
-        const size = path ? Math.min(ARTIFACT_CAP, artifact.description.length + 160) : 0;
+        const size = path ? (artifactExists(layout, artifact) && path ? capFor(path, Number.MAX_SAFE_INTEGER) : artifact.description.length + 160) : 0;
         chars += size;
         sources.push({
           kind,
@@ -202,8 +200,21 @@ export function previewContext(
     }
   }
 
+  for (const path of options.files ?? []) {
+    const root = resolve(layout.repoRoot);
+    const abs = resolve(root, path);
+    const inside = abs === root || abs.startsWith(root + sep);
+    const exists = inside && existsSync(abs);
+    const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
+    chars += size;
+    sources.push({ kind: "file", ref: path, origin: "explicit", depth: 0, chars: size, exists });
+    if (!exists) warnings.push(`file ${path} is missing or outside the repo`);
+  }
+
   for (const planPath of discoverPlanFiles(layout, options.planFile)) {
-    const size = capFor(join(layout.repoRoot, planPath), 2 * 1024);
+    // Report the real size. The run's global model budget decides what fits;
+    // preview must not hide a plan by pretending it is 2 KiB long.
+    const size = capFor(join(layout.repoRoot, planPath), Number.MAX_SAFE_INTEGER);
     chars += size;
     sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
   }
@@ -226,7 +237,7 @@ export function previewContext(
       overrides: options.skillOverrides,
     });
     if (mode !== "include") continue;
-    const size = capFor(path, SKILL_CAP);
+    const size = capFor(path, Number.MAX_SAFE_INTEGER);
     chars += size;
     sources.push({ kind: "skill", ref: name, origin: "explicit", depth: 0, chars: size, exists: true });
   }
@@ -235,7 +246,7 @@ export function previewContext(
     const abs = resolve(root, options.knowledgeIndex);
     const inside = abs === root || abs.startsWith(root + sep);
     const exists = inside && existsSync(abs);
-    const size = exists ? capFor(abs, 2 * 1024) : 0;
+    const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
     chars += size;
     sources.push({ kind: "knowledge", ref: options.knowledgeIndex, origin: "inherited", depth: 3, chars: size, exists });
     if (!exists) warnings.push(`knowledge ${options.knowledgeIndex} is missing`);

@@ -433,8 +433,8 @@ test("create rejects issue bodies without the required context shape", async () 
   }
 });
 
-test("issue create infers mc:context files from the body", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-iss-infer-"));
+test("issue create records explicit context_files and does not infer them", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-context-files-"));
   try {
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src/tui.ts"), "export const value = 1;\n");
@@ -448,10 +448,22 @@ test("issue create infers mc:context files from the body", async () => {
       parent: `#${feature.ref.number}`,
       title: "Task",
       body: `${issueBody("task")}\n\n## Relevant files\n\nChange \`src/tui.ts\`.\n`,
+      context_files: ["src/tui.ts"],
     });
     assert.equal(task.isError, undefined);
     const created = [...p.issues.values()].find((issue) => issue.title === "Task");
     assert.deepEqual(parseArtifactReferences(created.body).files, ["src/tui.ts"]);
+
+    const bodyOnly = await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "task",
+      parent: `#${feature.ref.number}`,
+      title: "Task without explicit files",
+      body: `${issueBody("task")}\n\n## Relevant files\n\nChange \`src/tui.ts\`.\n`,
+    });
+    assert.equal(bodyOnly.isError, undefined);
+    const inferred = [...p.issues.values()].find((issue) => issue.title === "Task without explicit files");
+    assert.deepEqual(parseArtifactReferences(inferred.body).files, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

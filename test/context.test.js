@@ -99,6 +99,62 @@ test("artifact reference + skill front-matter parsers", () => {
   assert.deepEqual(skill, { name: "reference", description: "research", path: "x" });
 });
 
+test("plans are included up to the model budget, not a fixed 2 KiB cap", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-plan-full-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    const long = `# Long plan\n\n${"detail line\n".repeat(400)}END OF PLAN\n`;
+    writeFileSync(join(root, "plans", "next.md"), long, "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine({ context: { maxChars: 24_000, planFile: undefined, knowledgeIndex: undefined } }),
+    });
+    const source = bundle.sources.find((item) => item.kind === "plan");
+    assert.ok(source, "plan is a context source");
+    assert.ok(source.bytes > 4096, "the plan is not silently cut at 2 KiB");
+    assert.match(bundle.text, /END OF PLAN/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context over budget is reported instead of silently truncated", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-over-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "next.md"), `# Plan\n\n${"line\n".repeat(300)}END OF PLAN\n`, "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine({ context: { maxChars: 1_000, planFile: undefined, knowledgeIndex: undefined } }),
+    });
+    assert.match(bundle.text, /END OF PLAN/);
+    const plan = bundle.sources.find((item) => item.kind === "plan");
+    assert.ok(plan);
+    assert.equal(plan.truncated, false);
+    assert.ok(bundle.warnings.some((warning) => /model input budget/.test(warning)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("composer can include explicit files without a heuristic", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-files-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "export const included = true;\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/a.ts"] },
+    });
+    const source = bundle.sources.find((item) => item.kind === "file" && item.ref === "src/a.ts");
+    assert.ok(source, "explicit file is a context source");
+    assert.match(bundle.text, /export const included = true/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("no inputs yields only the tool/command index", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx0-"));
   try {
@@ -235,7 +291,7 @@ test("mc:context reference citations load from the central store", async () => {
   }
 });
 
-test("budget truncates blocks and keeps higher priority first", async () => {
+test("over-budget context is preserved and warned, not silently clipped", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx4-"));
   try {
     const provider = hierarchyProvider();
@@ -249,10 +305,11 @@ test("budget truncates blocks and keeps higher priority first", async () => {
       issue: { provider: "github", repo: "o/r", number: 31 },
       budgetChars: 4000,
     });
-    assert.ok(bundle.text.length < 5000, "stays near the budget");
-    assert.ok(bundle.sources.some((s) => s.truncated));
+    assert.ok(bundle.text.length > 20_000, "curated context is not silently truncated");
+    assert.ok(bundle.warnings.some((warning) => /model input budget/.test(warning)));
     assert.equal(bundle.sources[0].kind, "task");
-    assert.ok(!bundle.text.includes("E".repeat(1000)), "lowest priority is dropped or heavily clipped");
+    assert.ok(bundle.text.includes("E".repeat(1_000)), "lowest priority source is still present");
+    assert.ok(bundle.sources.every((source) => source.truncated === false));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

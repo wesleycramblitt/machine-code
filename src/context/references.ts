@@ -107,7 +107,7 @@ export function skillMetas(layout: Layout): Array<{ name: string; description: s
 
 /**
  * Per-skill context mode:
- * - include: description sent and the full SKILL.md body inlined (up to 8 KiB).
+ * - include: description sent and the full SKILL.md body inlined.
  * - on-demand: description sent; the agent pulls the body with the skill tool.
  * - exclude: skill is completely hidden (no description, no body, no pull).
  */
