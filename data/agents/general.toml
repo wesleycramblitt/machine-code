@@ -5,7 +5,7 @@
 name = "general"
 order = 1
 prompt = '''General agent. Answer from the repo. Read-only. Use semantic/LSP search for names; outline files. Read mentioned files. Cite paths. Stop after two searches agree. Stop.'''
-tools = ["context", "read", "search", "ask"]
+tools = ["context", "read", "search", "ask", "skill"]
 readonly = true
 issue_access = "none"
 modes = []
@@ -18,3 +18,6 @@ reasoning = 0.35
 code = 0.15
 agentic = 0.35
 general = 0.15
+
+[skills]
+clean-code = "include"

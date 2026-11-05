@@ -50,7 +50,7 @@ test("rendered prompts name the resolved tools and config", () => {
     }
 
     const planner = resolveAgent(l, "planner");
-    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "issue", "artifact"]);
+    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "issue", "artifact", "skill"]);
     assert.ok(!planner.def.tools.includes("command"), "planner must not hold command");
     assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
     assert.match(planner.prompt, /Inspect tree/);
@@ -81,7 +81,7 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.match(sudo.prompt, /use its Deliverable and Acceptance/);
 
     const general = resolveAgent(l, "general");
-    assert.deepEqual(general.def.tools, ["context", "read", "search", "ask"]);
+    assert.deepEqual(general.def.tools, ["context", "read", "search", "ask", "skill"]);
     assert.ok(!general.def.tools.includes("command"), "general must not hold command");
     assert.match(general.prompt, /core:map with command/);
 

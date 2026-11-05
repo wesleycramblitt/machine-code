@@ -28,6 +28,7 @@ const DESCRIPTIONS: Record<string, string> = {
   context: "run memory",
   ask: "ask the human",
   artifact: "tools and scripts",
+  skill: "skill bodies on demand",
   pr: "pull requests",
 };
 

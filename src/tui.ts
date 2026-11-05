@@ -48,7 +48,7 @@ import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
-import { AGENT_META, AGENT_NAMES, agentDef, type AgentDef, type IssueAccess } from "./agents.js";
+import { AGENT_META, AGENT_NAMES, agentDef, roleSkillPresets, type AgentDef, type IssueAccess } from "./agents.js";
 import { PRESETS, resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { isGenericTaskRequest, issueRequestVerb, issueRunRequest } from "./issues/work.js";
@@ -58,7 +58,8 @@ import { loadCatalogue } from "./catalogue/load.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
-import { skillMetas, defaultSkillsFor } from "./context/references.js";
+import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "./context/references.js";
+import { listReferenceEntries } from "./references/store.js";
 import { changesFor, contextUsage, readContextManifest, readContextPackManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
@@ -839,8 +840,15 @@ export async function runTui(): Promise<void> {
   let newRunContextItemKeys: string[] = [];
   let newRunContextItemAvailable: boolean[] = [];
   let newRunContextSectionKey = "";
+  /** `/` filters the active context tab's rows by substring. */
+  let newRunContextFilter = "";
+  let newRunContextFiltering = false;
   const newRunContextExcluded = new Set<string>();
   const newRunContextIncluded = new Set<string>();
+  /** Explicit per-skill mode choices (include | on-demand | exclude). */
+  const newRunSkillModes = new Map<string, SkillMode>();
+  /** Modes as rendered this frame (single source for space-cycling). */
+  const newRunSkillShown = new Map<string, SkillMode>();
   /**
    * Static inputs to the new-run preview (policy, catalogue, provider status,
    * context files) are expensive to reload on every keystroke, so they are
@@ -1100,6 +1108,9 @@ export async function runTui(): Promise<void> {
     newRunSettingsSel = 0;
     newRunContextTab = 0;
     newRunContextItem = 0;
+    newRunContextFilter = "";
+    newRunContextFiltering = false;
+    newRunSkillModes.clear();
     newRunContextExcluded.clear();
     newRunContextIncluded.clear();
     newRunPreviewCache = null;
@@ -1248,7 +1259,8 @@ export async function runTui(): Promise<void> {
     const newRunLayout = layout(newRunRepo);
     // Everything below depends on the repo/issue, not on the text being typed.
     // Cache it for the duration of an insert session so keystrokes stay cheap.
-    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}`;
+    const skillModesKey = [...newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
+    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${skillModesKey}`;
     const previewTtl = newRunInsert ? 60_000 : 5_000;
     if (
       !newRunPreviewCache ||
@@ -1265,6 +1277,8 @@ export async function runTui(): Promise<void> {
           planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
           defaultSkills: defaultSkillsFor({ agent: newrun.agent, verification: newrun.verification }),
+          skillPresets: roleSkillPresets(newrun.agent),
+          skillOverrides: Object.fromEntries(newRunSkillModes),
         }),
         policy: effectivePolicy(newRunRepo),
         machine,
@@ -1444,8 +1458,17 @@ export async function runTui(): Promise<void> {
     const includedKnowledge = [...newRunContextIncluded]
       .filter((key) => key.startsWith("knowledge:"))
       .map((key) => key.slice("knowledge:".length));
-    if (includedKnowledge.length > 0) {
-      args.push("--context-include", JSON.stringify({ knowledge: includedKnowledge }));
+    const includedReferences = [...newRunContextIncluded]
+      .filter((key) => key.startsWith("reference:"))
+      .map((key) => key.slice("reference:".length));
+    if (includedKnowledge.length > 0 || includedReferences.length > 0) {
+      args.push("--context-include", JSON.stringify({
+        ...(includedKnowledge.length > 0 ? { knowledge: includedKnowledge } : {}),
+        ...(includedReferences.length > 0 ? { references: includedReferences } : {}),
+      }));
+    }
+    if (newRunSkillModes.size > 0) {
+      args.push("--skill-modes", JSON.stringify(Object.fromEntries(newRunSkillModes)));
     }
     if (newrun.prompt.trim().length > 0) args.push(newrun.prompt);
     return args;
@@ -2090,7 +2113,28 @@ export async function runTui(): Promise<void> {
         referencedToolChars,
       );
       const knowledgeItems: ContextPanelItem[] = itemsFor(["knowledge"]);
+      // Attached references first (issue-cited), then every store bundle as
+      // an available row the user can search and opt into with space.
       const referenceItems: ContextPanelItem[] = itemsFor(["reference"]);
+      const attachedCitations = new Set(ctx.artifacts.references);
+      const attachedPaths = new Set(
+        ctx.sources
+          .filter((source) => source.kind === "reference")
+          .map((source) => source.ref.split("#")[0]),
+      );
+      for (const entry of listReferenceEntries(newRunLayout)) {
+        if (attachedCitations.has(entry.citation)) continue;
+        const rel = entry.path.split("#")[0];
+        if (attachedPaths.has(rel) || attachedPaths.has(entry.citation)) continue;
+        referenceItems.push({
+          text: `${entry.citation} · available`,
+          chars: Math.min(entry.bytes, 8 * 1024),
+          exists: entry.exists,
+          key: `reference:${entry.citation}`,
+          available: true,
+          counted: false,
+        });
+      }
       const knownKnowledge = new Set(knowledgeItems.map((item) => item.key));
       for (const path of discoverKnowledgeFiles(newRunLayout)) {
         const key = `knowledge:${path}`;
@@ -2135,6 +2179,18 @@ export async function runTui(): Promise<void> {
       }
       const skillSources = ctx.sources.filter((source) => source.kind === "skill");
       const aggregateSkill = skillSources.find((source) => /^\d+ skills$/.test(source.ref));
+      const skillDefaults = defaultSkillsFor({ agent: newrun.agent, verification: newrun.verification });
+      const skillPresets = roleSkillPresets(newrun.agent);
+      const skillOverrides = Object.fromEntries(newRunSkillModes);
+      const skillModeOf = (name: string): SkillMode => {
+        if (newRunContextExcluded.has(`skill:${name}`)) return "exclude";
+        return resolveSkillMode(name, {
+          presets: skillPresets,
+          defaults: skillDefaults,
+          declared: ctx.artifacts.skills,
+          overrides: skillOverrides,
+        });
+      };
       const skillItems: ContextPanelItem[] = aggregateSkill
         ? skillListItems(skillMetas(newRunLayout), aggregateSkill.chars)
         : [];
@@ -2143,14 +2199,49 @@ export async function runTui(): Promise<void> {
         if (source === aggregateSkill) continue;
         bodyChars.set(source.ref, (bodyChars.get(source.ref) ?? 0) + source.chars);
       }
+      // Three modes per skill: include (description + body, marked ✓ body),
+      // on-demand (description only, pulled with the skill tool), exclude (✕).
+      // Space cycles include → on-demand → exclude. Active modes sort first.
+      newRunSkillShown.clear();
       for (const item of skillItems) {
         const name = item.key.slice("skill:".length);
-        item.chars += bodyChars.get(name) ?? 0;
+        const mode = skillModeOf(name);
+        newRunSkillShown.set(name, mode);
+        if (mode === "include") {
+          item.chars += bodyChars.get(name) ?? 0;
+          item.text += " · body";
+        } else if (mode === "on-demand") {
+          item.text += " · on-demand";
+        }
         bodyChars.delete(name);
       }
       for (const [name, chars] of bodyChars) {
-        skillItems.push({ text: name, chars, exists: true, key: `skill:${name}` });
+        const mode = skillModeOf(name);
+        newRunSkillShown.set(name, mode);
+        if (mode === "exclude") continue;
+        skillItems.push({
+          text: mode === "include" ? `${name} · body` : `${name} · on-demand`,
+          chars: mode === "include" ? chars : 0,
+          exists: true,
+          key: `skill:${name}`,
+        });
       }
+      // Defaults the agent wants but no SKILL.md provides: visible as missing
+      // instead of silently absent.
+      const knownSkillNames = new Set(skillItems.map((item) => item.key.slice("skill:".length)));
+      for (const name of skillDefaults) {
+        if (knownSkillNames.has(name)) continue;
+        knownSkillNames.add(name);
+        newRunSkillShown.set(name, skillModeOf(name));
+        skillItems.push({ text: `${name} · default · missing`, chars: 0, exists: false, key: `skill:${name}` });
+      }
+      const SKILL_MODE_RANK: Record<SkillMode, number> = { include: 0, "on-demand": 1, exclude: 2 };
+      skillItems.sort((a, b) => {
+        // Missing bodies always sink below installed skills of any mode.
+        const aRank = a.exists ? SKILL_MODE_RANK[newRunSkillShown.get(a.key.slice("skill:".length)) ?? "on-demand"] : 3;
+        const bRank = b.exists ? SKILL_MODE_RANK[newRunSkillShown.get(b.key.slice("skill:".length)) ?? "on-demand"] : 3;
+        return aRank - bRank;
+      });
       const roleFit = ap ? (newrun.tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) : undefined;
       const floorText = newrun.floors === "role" ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : newrun.floors;
       const fitText = newrun.minFit === undefined ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : String(newrun.minFit);
@@ -2291,7 +2382,11 @@ export async function runTui(): Promise<void> {
       if (newRunContextTab >= sections.length) newRunContextTab = 0;
       const isIncludedAvailable = (item: unknown): boolean => {
         const row = item as ContextPanelItem;
-        return row.available === true && row.key.startsWith("knowledge:") && newRunContextIncluded.has(row.key);
+        return (
+          row.available === true &&
+          (row.key.startsWith("knowledge:") || row.key.startsWith("reference:")) &&
+          newRunContextIncluded.has(row.key)
+        );
       };
       const isCounted = (item: unknown): boolean => {
         const row = item as ContextPanelItem;
@@ -2340,14 +2435,20 @@ export async function runTui(): Promise<void> {
       ).map((line) => panelLine(line, false, true));
       const activeSection = sections[newRunContextTab]!;
       newRunContextSectionKey = activeSection.sectionKey;
-      newRunContextItemKeys = activeSection.items.map((item) => item.key);
-      newRunContextItemAvailable = activeSection.items.map(
+      // `/` narrows the active tab by substring; attached rows stay sorted
+      // first by construction (references/skills), so filtering keeps them.
+      const contextFilter = newRunContextFilter.trim().toLowerCase();
+      const shownItems = contextFilter
+        ? activeSection.items.filter((item) => item.text.toLowerCase().includes(contextFilter))
+        : activeSection.items;
+      newRunContextItemKeys = shownItems.map((item) => item.key);
+      newRunContextItemAvailable = shownItems.map(
         (item) => (item as { available?: boolean }).available === true,
       );
-      newRunContextItem = Math.min(newRunContextItem, Math.max(0, activeSection.items.length - 1));
+      newRunContextItem = Math.min(newRunContextItem, Math.max(0, shownItems.length - 1));
       const sectionOff = newRunContextExcluded.has(activeSection.sectionKey);
-      const availableItems = activeSection.items.filter((item) => isShownAvailable(item));
-      const contextItems = activeSection.items.filter((item) => !isShownAvailable(item));
+      const availableItems = shownItems.filter((item) => isShownAvailable(item));
+      const contextItems = shownItems.filter((item) => !isShownAvailable(item));
       const keptItems = contextItems.filter((item) => {
         if ((item as { fixed?: boolean }).fixed) return true;
         return !sectionOff && !newRunContextExcluded.has(item.key);
@@ -2369,9 +2470,9 @@ export async function runTui(): Promise<void> {
       const itemRoom = Math.max(1, Math.floor(bodyH * 0.28));
       const itemStart = Math.max(
         0,
-        Math.min(newRunContextItem - Math.floor(itemRoom / 2), Math.max(0, activeSection.items.length - itemRoom)),
+        Math.min(newRunContextItem - Math.floor(itemRoom / 2), Math.max(0, shownItems.length - itemRoom)),
       );
-      const visibleItems = activeSection.items.slice(itemStart, itemStart + itemRoom);
+      const visibleItems = shownItems.slice(itemStart, itemStart + itemRoom);
       const itemLines: string[] = [];
       if (itemStart > 0) itemLines.push(panelLine(`  ${D}… ${itemStart} above${R}`));
       for (let offset = 0; offset < visibleItems.length; offset++) {
@@ -2385,15 +2486,21 @@ export async function runTui(): Promise<void> {
         const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 30))}${R} ${count}`;
         itemLines.push(panelLine(line, index === newRunContextItem));
       }
-      const remainingItems = activeSection.items.length - (itemStart + visibleItems.length);
+      const remainingItems = shownItems.length - (itemStart + visibleItems.length);
       if (remainingItems > 0) itemLines.push(panelLine(`  ${D}… ${remainingItems} more${R}`));
+      if (newRunContextFiltering || newRunContextFilter) {
+        itemLines.push(panelLine(`  ${D}filter: ${newRunContextFilter || "(type)"}${newRunContextFiltering ? "▌" : ""}${R}`));
+      }
       const compact = (key: string, label: string, tone: string): string =>
         `${B}${tone}${key}${R} ${D}${label}${R}`;
       const contextCommands = panelLine(
         joinCommands([
           compact("h/l", "tabs", Y),
           compact("j/k", "sel", M),
-          `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
+          compact("/", "filter", BL),
+          activeSection.sectionKey === "section:skills"
+            ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
+            : `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
           !newRunInsert && activeSection.sectionKey === "section:issues"
             ? command("i", "Issue", issueValue, newrun.issue ? C : GR)
             : "",
@@ -4094,6 +4201,15 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === ":") { newRunColon = true; draw(); return; }
+      if (newRunContextFiltering) {
+        if (data === "\x1b") { newRunContextFiltering = false; newRunContextFilter = ""; newRunContextItem = 0; draw(); return; }
+        if (data === "\r" || data === "\n") { newRunContextFiltering = false; newRunContextItem = 0; draw(); return; }
+        if (data === "\x7f" || data === "\b") { newRunContextFilter = newRunContextFilter.slice(0, -1); newRunContextItem = 0; draw(); return; }
+        if (!data.startsWith("\x1b")) { newRunContextFilter += printable(data); newRunContextItem = 0; draw(); return; }
+        draw();
+        return;
+      }
+      if (data === "/") { newRunContextFiltering = true; draw(); return; }
       if (data === "\x1b") { screen = "list"; draw(); return; }
       if (data === "h" || data === "\x1b[D") {
         newRunContextTab = Math.max(0, newRunContextTab - 1);
@@ -4112,8 +4228,17 @@ export async function runTui(): Promise<void> {
       if (data === " ") {
         const key = newRunContextItemKeys[newRunContextItem];
         const available = newRunContextItemAvailable[newRunContextItem] === true;
-        if (key && available) {
-          if (key.startsWith("knowledge:")) {
+        if (key && key.startsWith("skill:")) {
+          // Three modes cycle: include (body inlined) → on-demand
+          // (description only, pulled with the skill tool) → exclude.
+          const name = key.slice("skill:".length);
+          const current = newRunSkillShown.get(name) ?? "on-demand";
+          const next: SkillMode = current === "include" ? "on-demand" : current === "on-demand" ? "exclude" : "include";
+          newRunSkillModes.set(name, next);
+          if (next === "exclude") newRunContextExcluded.add(key);
+          else newRunContextExcluded.delete(key);
+        } else if (key && available) {
+          if (key.startsWith("knowledge:") || key.startsWith("reference:")) {
             if (newRunContextIncluded.has(key)) newRunContextIncluded.delete(key);
             else {
               newRunContextIncluded.add(key);

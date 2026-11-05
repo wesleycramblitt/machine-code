@@ -401,3 +401,38 @@ test("a blocked parent's closing summary is not inherited as truth", async () =>
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("skill modes gate bodies but keep descriptions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-skills-"));
+  try {
+    for (const name of ["alpha", "beta", "gamma"]) {
+      mkdirSync(join(root, ".machine_code", "skills", name), { recursive: true });
+      writeFileSync(
+        join(root, ".machine_code", "skills", name, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${name} things\n---\n# ${name} body\n`,
+        "utf8",
+      );
+    }
+    const base = {
+      layout: fakeLayout(root),
+      machine: machine(),
+      defaultSkills: ["alpha"],
+      skillPresets: { beta: "on-demand", gamma: "exclude" },
+    };
+    const bundle = await assembleContext(base);
+    // alpha default -> include: body inlined.
+    assert.match(bundle.text, /# alpha body/);
+    // beta preset on-demand -> description only, no body.
+    assert.match(bundle.text, /beta: beta things/);
+    assert.doesNotMatch(bundle.text, /# beta body/);
+    // gamma preset exclude -> nowhere, not even the description.
+    assert.doesNotMatch(bundle.text, /gamma/);
+    // Composer override wins over the preset.
+    const overridden = await assembleContext({ ...base, skillOverrides: { beta: "include", alpha: "exclude" } });
+    assert.match(overridden.text, /# beta body/);
+    assert.doesNotMatch(overridden.text, /# alpha body/);
+    assert.doesNotMatch(overridden.text, /alpha: alpha things/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

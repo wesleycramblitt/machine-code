@@ -21,6 +21,7 @@ import { parseVerificationCommands, writePacket, type PacketAcceptance, type Tas
 import { parseArtifactReferences } from "../context/references.js";
 import { assembleContext } from "../context/assemble.js";
 import { defaultSkillsFor } from "../context/references.js";
+import { roleSkillPresets } from "../agents.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
 import { loadAvailability } from "../availability.js";
@@ -229,6 +230,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
     provider: input.provider,
     issue: issue.ref,
     defaultSkills: defaultSkillsFor({ agent: "build", verification: plan.verification }),
+    skillPresets: roleSkillPresets("build"),
   });
   if (context.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: context.chars, sources: context.sources });

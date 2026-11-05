@@ -480,14 +480,27 @@ it; the composer passes it through `--context-include`. Files and knowledge
 enter the prompt otherwise only when an issue's `mc:context` block, or the
 configured knowledge index, references them.
 
-Each skill description can be switched off independently with `space`; that
-writes the `skill:<name>` exclusion, which removes both the description line
-and any referenced skill body. Turning off the whole Skills section still
-works as before.
+Each skill has three modes, cycled with `space` on its **Skills** row:
+`include` inlines the full body (marked `· body`, counted in tokens),
+`on-demand` sends only the description (marked `· on-demand`) and the agent
+pulls the body with the `skill` tool (`list`, `show`) when it needs it,
+`exclude` (marked `✕`) hides the skill completely — no description, no body,
+no pull. Excluding writes the `skill:<name>` exclusion, so a run started from
+the composer and the agent's `skill show` calls both honor it. Turning off the
+whole Skills section still works as before.
 
-Skills live in `.machine_code/skills/<name>/SKILL.md`. Only descriptions are
-always visible; the body loads when an issue references the skill. The curation
-policy and the kept set are in
+Mode precedence is composer choice > role `[skills]` preset > issue-declared
+(include) > agent defaults (include) > on-demand. Agent defaults come from the
+role (`clean-code` on coding/planning runs, plus `verified-testing` on
+verified+ runs); role presets live in `data/agents/<role>.toml` under
+`[skills]` (`clean-code = "include"`) and a machine role file replaces the
+shipped one wholesale. The composer passes its choices through `--skill-modes`.
+
+Skills live in `.machine_code/skills/<name>/SKILL.md`. Descriptions are
+always visible; bodies load up front only in `include` mode, otherwise the
+agent reads them on demand with the `skill` tool (`list`, `show`), which the
+build, planner, general, and sudo roles hold. The curation policy and the kept
+set are in
 [knowledge/skills-curation.md](knowledge/skills-curation.md).
 
 ### Issue access and model availability

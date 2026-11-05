@@ -300,3 +300,67 @@ export function referenceFileSize(layout: Layout, value: string): number {
     return 0;
   }
 }
+
+export interface ReferenceEntry {
+  /** Citation as the agent would write it (resolves via resolveReferencePath). */
+  citation: string;
+  /** Store-relative target path. */
+  path: string;
+  bytes: number;
+  exists: boolean;
+}
+
+const LIST_CAP = 500;
+
+/** Bundle-level catalog of the reference store for the TUI browser. */
+export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
+  const store = referenceStore(layout);
+  const out: ReferenceEntry[] = [];
+  const seen = new Set<string>();
+  const push = (citation: string, abs: string): void => {
+    if (seen.has(citation) || out.length >= LIST_CAP) return;
+    seen.add(citation);
+    let bytes = 0;
+    try {
+      bytes = statSync(abs).size;
+    } catch {
+      // keep the row visible with an unknown size
+    }
+    out.push({ citation, path: relative(store, abs), bytes, exists: existsSync(abs) });
+  };
+  if (existsSync(store)) {
+    let products: string[] = [];
+    try {
+      products = readdirSync(store, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+    } catch {
+      products = [];
+    }
+    for (const product of products) {
+      let versions: string[] = [];
+      try {
+        versions = readdirSync(join(store, product), { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name)
+          .sort();
+      } catch {
+        versions = [];
+      }
+      for (const version of versions) {
+        const index = join(store, product, version, "index.md");
+        if (existsSync(index)) push(`${product}/${version}`, index);
+        else {
+          const manifest = join(store, product, version, "manifest.yaml");
+          if (existsSync(manifest)) push(`${product}/${version}`, manifest);
+        }
+      }
+    }
+    for (const name of ["index.md", "topics.yaml"]) {
+      const file = join(store, name);
+      if (existsSync(file)) push(name, file);
+    }
+  }
+  return out.sort((a, b) => (a.citation < b.citation ? -1 : 1));
+}

@@ -11,7 +11,7 @@ import { join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import type { Issue, IssueRef } from "../issues/provider.js";
 import { artifactExists, artifactPath, listArtifacts, resolveArtifact, type ArtifactDef } from "../artifacts/registry.js";
-import { parseArtifactReferences, skillMetas } from "./references.js";
+import { parseArtifactReferences, resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
 import { readReference, referenceFileSize } from "../references/store.js";
 import { discoverPlanFiles } from "./plans.js";
 
@@ -86,6 +86,10 @@ export interface PreviewContextOptions {
   knowledgeIndex?: string;
   /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
   defaultSkills?: string[];
+  /** Role `[skills]` preset table (from the agent's role TOML). */
+  skillPresets?: Record<string, string>;
+  /** Composer per-skill mode overrides (highest precedence). */
+  skillOverrides?: Record<string, SkillMode>;
 }
 
 export function previewContext(
@@ -158,7 +162,13 @@ export function previewContext(
       if (skills.includes(name)) continue;
       skills.push(name);
       const path = skillPath(layout, name);
-      const size = path ? capFor(path, SKILL_CAP) : 0;
+      const mode = resolveSkillMode(name, {
+        presets: options.skillPresets,
+        defaults: options.defaultSkills,
+        declared: refs.skills,
+        overrides: options.skillOverrides,
+      });
+      const size = mode === "include" && path ? capFor(path, SKILL_CAP) : 0;
       chars += size;
       sources.push({ kind: "skill", ref: name, origin, depth, chars: size, exists: Boolean(path) });
       if (!path) warnings.push(`skill ${name} is missing`);
@@ -197,13 +207,25 @@ export function previewContext(
     chars += size;
     sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
   }
-  // Mode default skill bodies (clean-code, verified-testing). Declared issue
-  // skills win ties; missing defaults are skipped silently.
-  for (const name of options.defaultSkills ?? []) {
+  // Mode default skill bodies plus explicit composer includes (clean-code,
+  // verified-testing). Declared issue skills win ties; missing ones are
+  // skipped silently. On-demand modes keep the description only; the agent
+  // pulls the body with the skill tool.
+  const includeOverrides = Object.entries(options.skillOverrides ?? {})
+    .filter(([, mode]) => mode === "include")
+    .map(([name]) => name);
+  for (const name of [...(options.defaultSkills ?? []), ...includeOverrides]) {
     if (skills.includes(name)) continue;
     skills.push(name);
     const path = skillPath(layout, name);
     if (!path) continue;
+    const mode = resolveSkillMode(name, {
+      presets: options.skillPresets,
+      defaults: options.defaultSkills,
+      declared: skills,
+      overrides: options.skillOverrides,
+    });
+    if (mode !== "include") continue;
     const size = capFor(path, SKILL_CAP);
     chars += size;
     sources.push({ kind: "skill", ref: name, origin: "explicit", depth: 0, chars: size, exists: true });

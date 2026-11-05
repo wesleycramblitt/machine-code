@@ -96,3 +96,20 @@ test("reference store writes, indexes, finds, and reads exact anchors", (t) => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("skill modes resolve with overrides first and on-demand last", async () => {
+  const { resolveSkillMode, isSkillMode } = await import("../dist/context/references.js");
+  assert.equal(isSkillMode("include"), true);
+  assert.equal(isSkillMode("on-demand"), true);
+  assert.equal(isSkillMode("exclude"), true);
+  assert.equal(isSkillMode("sometimes"), false);
+  assert.equal(resolveSkillMode("x"), "on-demand");
+  assert.equal(resolveSkillMode("x", { defaults: ["x"] }), "include");
+  assert.equal(resolveSkillMode("x", { declared: ["x"] }), "include");
+  assert.equal(resolveSkillMode("x", { defaults: ["x"], presets: { x: "on-demand" } }), "on-demand");
+  assert.equal(
+    resolveSkillMode("x", { defaults: ["x"], presets: { x: "on-demand" }, overrides: { x: "exclude" } }),
+    "exclude",
+  );
+  assert.equal(resolveSkillMode("x", { presets: { x: "bogus" }, defaults: ["x"] }), "include");
+});

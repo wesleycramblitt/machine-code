@@ -19,6 +19,7 @@ import { applyClassification, classifyError, loadAvailability, saveAvailability 
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
+import { roleSkillPresets } from "./agents.js";
 import type { MutableModels } from "./models.js";
 import { coreTools } from "./tools/index.js";
 import { toolDefinitionChars, toolSchemaChars } from "./tools/schema.js";
@@ -187,6 +188,8 @@ export interface RunLoopInput {
   skipMap?: boolean;
   /** Skip semantic module annotations in the up-front context. */
   skipSemantic?: boolean;
+  /** Composer-excluded skill names the skill tool must refuse. */
+  skillExcludes?: string[];
 }
 
 export interface RunLoopResult {
@@ -881,6 +884,22 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
         : undefined;
 
+    // Skill tool: on-demand SKILL.md bodies. Preset-excluded skills plus the
+    // composer's per-skill exclusions are invisible here.
+    const skillContext: import("./tools/skill.js").SkillToolContext | undefined =
+      input.layout && input.agent.tools.includes("skill")
+        ? {
+            layout: layoutFor(mapRoot),
+            recorder,
+            excluded: new Set([
+              ...Object.entries(roleSkillPresets(input.agent.name))
+                .filter(([, mode]) => mode === "exclude")
+                .map(([name]) => name),
+              ...(input.skillExcludes ?? []),
+            ]),
+          }
+        : undefined;
+
     // PR tool: read/create/merge are capability- and approval-gated.
     let prContext: import("./tools/pr.js").PrToolContext | undefined;
     if (input.layout && input.agent.tools.includes("pr")) {
@@ -902,6 +921,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         ask: askContext,
         issues: issueContext,
         artifacts: artifactContext,
+        skills: skillContext,
         prs: prContext,
         state: memory,
         semantic: () => semanticMap,

@@ -106,6 +106,44 @@ export function skillMetas(layout: Layout): Array<{ name: string; description: s
 }
 
 /**
+ * Per-skill context mode:
+ * - include: description sent and the full SKILL.md body inlined (up to 8 KiB).
+ * - on-demand: description sent; the agent pulls the body with the skill tool.
+ * - exclude: skill is completely hidden (no description, no body, no pull).
+ */
+export type SkillMode = "include" | "on-demand" | "exclude";
+
+export function isSkillMode(value: unknown): value is SkillMode {
+  return value === "include" || value === "on-demand" || value === "exclude";
+}
+
+export interface SkillModeInput {
+  /** Role preset table (`[skills]` in the role TOML), if any. */
+  presets?: Record<string, string>;
+  /** Agent mode defaults that inline bodies (from `defaultSkillsFor`). */
+  defaults?: string[];
+  /** Issue-declared skills (from `mc:context`). */
+  declared?: string[];
+  /** Composer/explicit per-skill overrides (highest precedence). */
+  overrides?: Record<string, SkillMode>;
+}
+
+/**
+ * Single precedence chain shared by assembly, preview, and the composer:
+ * explicit overrides > role presets > issue-declared (include) >
+ * agent defaults (include) > on-demand.
+ */
+export function resolveSkillMode(name: string, input: SkillModeInput = {}): SkillMode {
+  const override = input.overrides?.[name];
+  if (override !== undefined) return override;
+  const preset = input.presets?.[name];
+  if (isSkillMode(preset)) return preset;
+  if (input.declared?.includes(name)) return "include";
+  if (input.defaults?.includes(name)) return "include";
+  return "on-demand";
+}
+
+/**
  * Mode default skills for a run, before issue-declared skills.
  *
  * `clean-code` rides every coding/planning run (build, planner, general,

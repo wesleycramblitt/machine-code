@@ -39,6 +39,7 @@ import { documentSections, sectionTitle } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
 import { issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
+import { skillTool, type SkillToolContext } from "./skill.js";
 import { prTool, type PrToolContext } from "./pr.js";
 import { contextTool } from "./context.js";
 import { loadSemanticOrDeterministic, renderModuleGraph, searchSemantic, type SemanticMap } from "../map/semantic.js";
@@ -58,6 +59,8 @@ export interface ToolContext {
   issues?: IssueToolContext;
   /** When provided, the `artifact` tool is live (tools/scripts inventory). */
   artifacts?: ArtifactToolContext;
+  /** When provided, the `skill` tool is live (on-demand skill bodies). */
+  skills?: SkillToolContext;
   /** When provided, the `pr` tool is live (capability-gated PR access). */
   prs?: PrToolContext;
   /** Run state for the `context` tool. */
@@ -1006,6 +1009,24 @@ function artifactUnavailable(): AgentTool<typeof ArtifactUnavailableParams> {
   };
 }
 
+/* ------------------------------------------------------------------- skill */
+
+const SkillUnavailableParams = Type.Object({
+  action: Type.String({ description: "Skill operation." }),
+});
+
+function skillUnavailable(): AgentTool<typeof SkillUnavailableParams> {
+  return {
+    name: "skill",
+    label: "skill",
+    description: "On-demand skill bodies.",
+    parameters: SkillUnavailableParams,
+    async execute() {
+      return fail("skill bodies are not available in this run (role lacks skill access)");
+    },
+  };
+}
+
 /* ---------------------------------------------------------------------- pr */
 
 const PrUnavailableParams = Type.Object({
@@ -1036,6 +1057,7 @@ export type CoreToolName =
   | "ask"
   | "issue"
   | "artifact"
+  | "skill"
   | "pr";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
@@ -1049,6 +1071,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     issue: ctx.issues ? issueTool(ctx.issues) : issueUnavailable(),
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
+    skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),
     pr: ctx.prs ? prTool(ctx.prs) : prUnavailable(),
   };
   // Prefer provider-side JSON-schema constrained sampling. Models that pass

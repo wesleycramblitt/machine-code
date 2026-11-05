@@ -68,6 +68,8 @@ interface RoleData {
   issue_access?: unknown;
   base_prompt?: unknown;
   weights?: Record<string, unknown>;
+  /** Per-skill context-mode preset table: `[skills] clean-code = "include"`. */
+  skills?: Record<string, unknown>;
 }
 
 interface AgentsData {
@@ -181,6 +183,22 @@ export function roleWeights(name: AgentName): Partial<Record<"reasoning" | "code
 export function rolePreset(name: AgentName): string {
   const role = roleData(name);
   return typeof role.preset === "string" ? role.preset : "assistant";
+}
+
+/**
+ * Per-skill context-mode presets for a role (`[skills]` table). Invalid
+ * values are ignored so a typo degrades to the default chain, not a crash.
+ * A machine role file replaces the shipped one wholesale (existing pattern).
+ */
+export function roleSkillPresets(name: AgentName): Record<string, string> {
+  const raw = roleData(name).skills ?? {};
+  const out: Record<string, string> = {};
+  for (const [skill, mode] of Object.entries(raw)) {
+    if (typeof mode === "string" && (mode === "include" || mode === "on-demand" || mode === "exclude")) {
+      out[skill] = mode;
+    }
+  }
+  return out;
 }
 
 function basePrompt(name: AgentName): string {

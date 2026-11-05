@@ -25,7 +25,7 @@ import type { Issue, IssueProvider, IssueRef } from "../issues/provider.js";
 import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
-import { parseArtifactReferences, skillMetas } from "./references.js";
+import { parseArtifactReferences, resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
 import { readReference } from "../references/store.js";
 import { discoverPlanFiles } from "./plans.js";
 import {
@@ -59,6 +59,8 @@ export interface ContextExclusion {
 export interface ContextInclude {
   /** Repo-relative knowledge files to add explicitly from the composer. */
   knowledge?: string[];
+  /** Reference citations to add explicitly from the composer. */
+  references?: string[];
 }
 
 export interface AssembleInput {
@@ -96,9 +98,14 @@ export interface AssembleInput {
    * Mode default skills (e.g. from `defaultSkillsFor`): bodies load like
    * issue-declared skills, lose ties to them, and honor the same
    * `section:skills` / `skill:name` exclusions. Missing defaults are
-   * skipped silently.
+   * skipped silently. A per-skill mode of on-demand (role preset or
+   * composer override) keeps the description but skips the body.
    */
   defaultSkills?: string[];
+  /** Role `[skills]` preset table (from the agent's role TOML). */
+  skillPresets?: Record<string, string>;
+  /** Composer per-skill mode overrides (highest precedence). */
+  skillOverrides?: Record<string, SkillMode>;
 }
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
@@ -256,6 +263,13 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
           const key = `skill:${name}`;
           if (seenRefs.has(key)) continue;
           seenRefs.add(key);
+          const mode = resolveSkillMode(name, {
+            presets: input.skillPresets,
+            defaults: input.defaultSkills,
+            declared: refs.skills,
+            overrides: input.skillOverrides,
+          });
+          if (mode === "exclude") continue;
           const skill = skillBody(layout, name);
           if (!skill) {
             pending.push({
@@ -270,6 +284,9 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
             });
             continue;
           }
+          // On-demand keeps the description only; the agent pulls the body
+          // with the skill tool when it needs it.
+          if (mode === "on-demand") continue;
           pending.push({
             kind: "skill",
             origin,
@@ -326,9 +343,21 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const declaredSkillRefs = new Set(
     pending.filter((item) => item.kind === "skill").map((item) => item.ref),
   );
-  for (const name of input.defaultSkills ?? []) {
+  // Defaults plus explicit composer includes. Overrides alone do not
+  // enumerate skills, so include-overrides join the candidate list here.
+  const includeOverrides = Object.entries(input.skillOverrides ?? {})
+    .filter(([, mode]) => mode === "include")
+    .map(([name]) => name);
+  for (const name of [...(input.defaultSkills ?? []), ...includeOverrides]) {
     if (declaredSkillRefs.has(name)) continue;
     declaredSkillRefs.add(name);
+    const mode = resolveSkillMode(name, {
+      presets: input.skillPresets,
+      defaults: input.defaultSkills,
+      declared: [...declaredSkillRefs],
+      overrides: input.skillOverrides,
+    });
+    if (mode !== "include") continue;
     const skill = skillBody(layout, name);
     if (!skill) continue;
     pending.push({ kind: "skill", origin: "explicit", ref: name, body: skill.text, cap: 8 * KIB, band: 2 });
@@ -355,6 +384,30 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (read) {
       pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, cap: 8 * KIB, band: 1 });
     }
+  }
+  for (const citation of input.include?.references ?? []) {
+    const read = readReference(layout, citation, 8 * KIB);
+    if (!read.ok) {
+      pending.push({
+        kind: "reference",
+        origin: "explicit",
+        ref: citation,
+        body: "",
+        cap: 0,
+        band: 1,
+        warning: `included reference ${citation} is missing or outside the store`,
+      });
+      continue;
+    }
+    const label = `${read.path}${read.anchor ? `#${read.anchor}` : ""}`;
+    pending.push({
+      kind: "reference",
+      origin: "explicit",
+      ref: citation,
+      body: `${label}\n\n${read.text}`,
+      cap: 8 * KIB,
+      band: 1,
+    });
   }
 
   // Task / Feature / Epic blocks (task first, then nearest ancestor).
@@ -476,11 +529,20 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
 
   // Skills (descriptions only) + tool/command names. Individual skill
   // exclusions remove that skill's description; body items are filtered below.
+  // Excluded means excluded everywhere: composer items, composer mode
+  // overrides, and role presets all hide the description.
   const excludedSkillNames = new Set(
     [...excludedItems]
       .filter((key) => key.startsWith("skill:"))
       .map((key) => key.slice("skill:".length)),
   );
+  for (const [name, mode] of Object.entries(input.skillPresets ?? {})) {
+    if (mode === "exclude") excludedSkillNames.add(name);
+  }
+  for (const [name, mode] of Object.entries(input.skillOverrides ?? {})) {
+    if (mode === "exclude") excludedSkillNames.add(name);
+    else excludedSkillNames.delete(name);
+  }
   const skills = skillMetas(layout).filter((skill) => !excludedSkillNames.has(skill.name));
   if (skills.length > 0) {
     const text = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");

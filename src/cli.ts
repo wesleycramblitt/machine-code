@@ -155,6 +155,7 @@ Usage:
                                     sections or sources from a run
                                     [--context-include '<json>'] add knowledge files
                                     selected in the composer
+                                    [--skill-modes '<json>'] per-skill include|on-demand|exclude
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
                                     Install missing base CLIs (default: pinned static binaries)
@@ -1035,17 +1036,39 @@ async function cmdRun(argv: string[]): Promise<number> {
   let contextInclude: import("./context/assemble.js").ContextInclude | undefined;
   if (contextIncludeFlag !== undefined) {
     try {
-      const raw = JSON.parse(contextIncludeFlag) as { knowledge?: unknown };
+      const raw = JSON.parse(contextIncludeFlag) as { knowledge?: unknown; references?: unknown };
       const knowledge = Array.isArray(raw.knowledge)
         ? raw.knowledge.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
         : undefined;
-      contextInclude = { knowledge };
+      const references = Array.isArray(raw.references)
+        ? raw.references.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        : undefined;
+      contextInclude = { knowledge, references };
     } catch {
       fail("--context-include must be a JSON object");
     }
   }
+  // Composer per-skill mode overrides: {"clean-code":"include",...}.
+  let skillModeOverrides: Record<string, import("./context/references.js").SkillMode> | undefined;
+  const skillModesFlag = flags.get("skill-modes");
+  if (skillModesFlag !== undefined) {
+    try {
+      const raw = JSON.parse(skillModesFlag) as Record<string, unknown>;
+      const { isSkillMode } = await import("./context/references.js");
+      const modes: Record<string, import("./context/references.js").SkillMode> = {};
+      for (const [name, mode] of Object.entries(raw)) {
+        if (typeof name === "string" && name.trim().length > 0 && isSkillMode(mode)) modes[name] = mode;
+      }
+      skillModeOverrides = modes;
+    } catch {
+      fail("--skill-modes must be a JSON object of skill name to include|on-demand|exclude");
+    }
+  }
   const excludedSections = new Set(contextExclude?.sections ?? []);
   const excludedItems = new Set(contextExclude?.items ?? []);
+  const skillExcludes = [...excludedItems]
+    .filter((key) => key.startsWith("skill:"))
+    .map((key) => key.slice("skill:".length));
   const skipMap = excludedSections.has("codebase") || excludedItems.has("map:index");
   const skipSemantic = excludedSections.has("codebase") || excludedItems.has("semantic:index");
   if (requireProvider && !configuredProviders.has(requireProvider)) {
@@ -1356,6 +1379,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   // sources, written to context.json for provenance.
   const { assembleContext } = await import("./context/assemble.js");
   const { writeJsonAtomic } = await import("./state/run-schema.js");
+  const { roleSkillPresets } = await import("./agents.js");
   const contextBundle = await assembleContext({
     layout: l,
     machine,
@@ -1365,6 +1389,8 @@ async function cmdRun(argv: string[]): Promise<number> {
     exclude: contextExclude,
     include: contextInclude,
     defaultSkills: defaultSkillsFor({ agent: agentNameParsed, verification: agentOverrides.verification }),
+    skillPresets: roleSkillPresets(agentNameParsed),
+    skillOverrides: skillModeOverrides,
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources });
@@ -1444,6 +1470,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       contextText,
       skipMap,
       skipSemantic,
+      skillExcludes,
       signal: abort.signal,
     });
   } else {
