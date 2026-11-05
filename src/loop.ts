@@ -12,10 +12,10 @@
  */
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
-import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
+import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
 import { estimateTokens, pick, providerMultiplier, isFreeRow } from "./select.js";
-import { applyClassification, classifyError, loadAvailability, saveAvailability } from "./availability.js";
+import { applyClassification, classifyError, clearFreeModelCooldowns, loadAvailability, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
@@ -333,25 +333,67 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // Callers normally load this, but a direct run must still respect persisted
   // cooldowns. Loading here also keeps the in-memory state current.
   const availability = input.availability ?? loadAvailability(input.home);
+  // Free-model cooldowns are per run: a free run loops from best fit to worst
+  // across every listed free model each time it starts. Drop any persisted
+  // free-model cooldowns so a previous run's limits do not shrink this run.
+  try {
+    const persistedFreeKeys = input.catalogue.filter((row) => isFreeRow(row)).map((row) => row.key);
+    clearFreeModelCooldowns(availability, persistedFreeKeys);
+  } catch {
+    // catalogue scan failure must not block the run
+  }
   const triedModels = new Set<string>();
   /** A build run that cannot plan gets one plan-only model call, then a fresh attempt. */
   let planRecovered = false;
   let recoveryPlan = "";
+
+  /**
+   * First-token timeout for one provider call. Ollama is local and known to
+   * exist, but it may be busy with another request, so it waits far longer
+   * than remote providers before the call is abandoned and rotated.
+   */
+  const firstTokenTimeoutMsFor = (providerID: string): number => {
+    const base = input.machine.selection?.firstTokenTimeoutMs ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS;
+    if (providerID !== "ollama") return base;
+    const ollama =
+      input.machine.selection?.ollamaFirstTokenTimeoutMs ?? DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS;
+    return Math.max(ollama, base);
+  };
+
+  const freeKeysForProvider = (provider: string): string[] =>
+    input.catalogue
+      .filter((row) => row.providerID === provider && isFreeRow(row))
+      .map((row) => row.key);
+
+  const isFreeKey = (key: string): boolean => {
+    const row = input.catalogue.find((candidate) => candidate.key === key);
+    return row ? isFreeRow(row) : false;
+  };
 
   const applyErrorState = (
     provider: string,
     modelKey: string,
     classified: ReturnType<typeof classifyError>,
   ): void => {
-    const state = loadAvailability(input.home);
+    // Per-run free semantics: free-model failures (including a free-tier
+    // limit, which cools every free offer on that provider) cool the
+    // in-memory availability and join `triedModels` so this run rotates from
+    // best fit to worst. Nothing is written to disk, so the next run starts
+    // fresh instead of inheriting a 30m+ cooldown.
     if (classified.kind === "free-limit") {
-      const freeKeys = input.catalogue
-        .filter((row) => row.providerID === provider && isFreeRow(row))
-        .map((row) => row.key);
-      applyClassification(state, provider, modelKey, classified, { freeKeys });
-    } else {
-      applyClassification(state, provider, modelKey, classified);
+      const freeKeys = freeKeysForProvider(provider);
+      const keys = freeKeys.length > 0 ? freeKeys : [modelKey];
+      applyClassification(availability, provider, modelKey, classified, { freeKeys: keys });
+      for (const key of keys) triedModels.add(key);
+      return;
     }
+    if (isFreeKey(modelKey)) {
+      applyClassification(availability, provider, modelKey, classified);
+      triedModels.add(modelKey);
+      return;
+    }
+    const state = loadAvailability(input.home);
+    applyClassification(state, provider, modelKey, classified);
     saveAvailability(input.home, state);
     Object.assign(availability, state);
   };
@@ -1209,13 +1251,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       convertToLlm,
       streamFn: (model, context, options) => {
         const call = callIndex;
-        const firstTokenTimeoutMs =
-          input.machine.selection?.firstTokenTimeoutMs ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS;
+        const firstTokenTimeoutMs = firstTokenTimeoutMsFor(model.provider);
         const requestText = renderModelInput((context as Context).messages);
         recorder.event("model_request", {
           call,
           provider: model.provider,
           model: model.id,
+          firstTokenTimeoutMs,
           messages: (context as Context).messages.length,
           chars: requestText.length,
           input:

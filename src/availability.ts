@@ -161,6 +161,24 @@ export function clearModelCooldown(state: AvailabilityState, key: string): void 
   }
 }
 
+/**
+ * Free-model cooldowns are per run, not persisted. A free run must loop from
+ * best fit to worst across every listed free model each time it starts, so a
+ * previous run's rate limit, free-tier limit, or stall must not keep free
+ * offers cooling for 30m+ into the next run. Call this at run start to drop
+ * any persisted free-model cooldowns (kept for backwards compatibility with
+ * state written before per-run semantics).
+ */
+export function clearFreeModelCooldowns(state: AvailabilityState, freeKeys: readonly string[]): void {
+  for (const key of new Set(freeKeys)) {
+    const h = state.models[key];
+    if (!h) continue;
+    h.cooldownUntil = 0;
+    h.tier = 0;
+    delete h.lastErrorKind;
+  }
+}
+
 export function clearProviderCooldown(state: AvailabilityState, providerId: string): void {
   const h = state.providers[providerId];
   if (h) {

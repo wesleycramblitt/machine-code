@@ -45,8 +45,9 @@ import { isGenericTaskRequest, issueRequestVerb, issueRunRequest, resolveRunTarg
 import { taskSizeErrors } from "./plan/validate.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
 import { closeCompletedTask } from "./orchestrator/closure.js";
-import { loadAvailability, saveAvailability } from "./availability.js";
+import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
+import { isFreeRow } from "./select.js";
 import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
@@ -509,6 +510,7 @@ function policyTemplate(kind: "machine" | "repo"): string {
 [selection]
 tier = "paid"              # free | paid
 # first_token_timeout_ms = 60000   # abandon a stalled call; cool it and retry
+# ollama_first_token_timeout_ms = 300000  # local Ollama waits far longer; it may be busy
 # min_fit = 7.0            # global role-weighted capability floor
 # min_capability = 0       # neutral composite safety floor (optional)
 # min_context = 32000
@@ -1158,7 +1160,18 @@ async function cmdRun(argv: string[]): Promise<number> {
   // Probe cooling models with free metadata before a run record exists. A
   // recovered model can rejoin selection; if nothing is ready, block here
   // instead of starting a run that cannot make its first call.
+  // Free-model cooldowns are per run: drop persisted free cooldowns first so
+  // a free run always starts by looping best fit to worst across every listed
+  // free model. Paid cooldowns are still honored here.
   const availabilityState = loadAvailability(l.home);
+  try {
+    clearFreeModelCooldowns(
+      availabilityState,
+      catalogueDoc.models.filter((row) => isFreeRow(row)).map((row) => row.key),
+    );
+  } catch {
+    // catalogue scan failure must not block the run
+  }
   const probeResults = await probeCoolingModels({
     rows: catalogueDoc.models,
     state: availabilityState,

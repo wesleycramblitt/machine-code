@@ -51,6 +51,13 @@ export const DEFAULT_AVAILABILITY: AvailabilityConfig = {
  */
 export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 60_000;
 
+/**
+ * Ollama runs locally and is known to exist, but it may be busy with another
+ * request (loading a model, finishing a long generation). Give it far longer
+ * than remote providers before abandoning the call.
+ */
+export const DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS = 300_000;
+
 export interface ProviderCost {
   /** Billed cost for this provider as a fraction of list price (1 = list). */
   costMultiplier?: number;
@@ -98,7 +105,7 @@ export interface MachineConfig {
   maxOutputTokens?: number;
   defaultMode?: PacketMode;
   /** Selection tier and per-call request guards ([selection]). */
-  selection: { tier: SelectionTier; firstTokenTimeoutMs: number };
+  selection: { tier: SelectionTier; firstTokenTimeoutMs: number; ollamaFirstTokenTimeoutMs: number };
   /** Cooldown recovery probes ([availability]). */
   availability: AvailabilityConfig;
   /** Per-provider billing adjustments ([providers.<id>]). */
@@ -318,6 +325,8 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     selection: {
       tier: tierRaw as SelectionTier,
       firstTokenTimeoutMs: asNumber(selectionRaw.first_token_timeout_ms) ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+      ollamaFirstTokenTimeoutMs:
+        asNumber(selectionRaw.ollama_first_token_timeout_ms) ?? DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS,
     },
     availability: {
       probe: probeMode,

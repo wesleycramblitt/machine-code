@@ -112,10 +112,16 @@ Meta routers (ids or names containing `router`) are never selected: they
 forward to unknown upstream models, so their catalogue scores and capabilities
 are guesses. A provider call that produces no stream event within
 `[selection] first_token_timeout_ms` (default 60 s) is aborted, the model is
-cooled, and the run rotates to the next eligible model. Rate limits, free-tier
-usage limits, timeouts, and other retryable provider errors rotate the same
-way until a model succeeds or none remain; a free-tier limit cools every free
-offer on that provider rather than only the model that answered first.
+cooled, and the run rotates to the next eligible model. Ollama waits far
+longer (`[selection] ollama_first_token_timeout_ms`, default 300 s): the model
+is known to exist locally but may be busy with another request. Rate limits,
+free-tier usage limits, timeouts, and other retryable provider errors rotate
+the same way until a model succeeds or none remain; a free-tier limit cools
+every free offer on that provider rather than only the model that answered
+first. Free-model cooldowns are per run and are never written to disk, so each
+free run loops from best fit to worst across every listed free model instead
+of inheriting the previous run's 30m+ cooldowns. Paid cooldowns persist with
+the 1m→5m→30m→2h→12h→1d→7d→30d tier schedule.
 
 The TUI palette is machine-configurable with hex colors. Header and footer share
 a surface, subpage chrome uses a contrasting accent, and inner section tabs get
