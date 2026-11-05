@@ -43,4 +43,4 @@ export interface ContextBundle {
   chars: number;
 }
 
-export const DEFAULT_CONTEXT_BUDGET = 24_000;
+export const DEFAULT_CONTEXT_BUDGET = 64_000;

@@ -347,7 +347,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       cacheTtlSeconds: issueTtl ?? 30,
     },
     context: {
-      maxChars: asNumber(contextRaw.max_chars) ?? 24_000,
+      maxChars: asNumber(contextRaw.max_chars) ?? 64_000,
       planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
       // A repo that keeps knowledge/index.md gets it in context by default.
       // An explicit knowledge_index (including "") still wins.

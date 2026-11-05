@@ -29,6 +29,38 @@ function toolCalls(message: MessageLike): string[] {
 }
 
 /**
+ * Trim an assembled context bundle to a model budget. Blocks are already in
+ * priority order, so the first blocks that fit are kept and the rest are
+ * named as omitted.
+ */
+export function trimContextText(text: string | undefined, maxChars?: number): string | undefined {
+  if (!text) return text;
+  if (maxChars === undefined || maxChars <= 0 || text.length <= maxChars) return text;
+  const blocks = [...text.matchAll(/<context-block[\s\S]*?<\/context-block>/g)].map((match) => match[0]);
+  if (blocks.length === 0) {
+    return `${text.slice(0, Math.max(0, maxChars - 24)).replace(/\s+$/, "")}\n…[context truncated]`;
+  }
+  const header = "<context>\nAssembled context for this run. Blocks are in priority order.\n";
+  const footer = "\n</context>";
+  let out = header;
+  let kept = 0;
+  for (const block of blocks) {
+    if (out.length + block.length + 2 + footer.length > maxChars) break;
+    out += `\n${block}`;
+    kept += 1;
+  }
+  if (kept === 0) {
+    return `${header}\n_Context blocks omitted for the model budget._${footer}`.slice(0, maxChars);
+  }
+  const omission = kept < blocks.length ? `\n_…${blocks.length - kept} block(s) omitted._` : "";
+  if (out.length + omission.length + footer.length > maxChars) {
+    out = out.slice(0, Math.max(0, maxChars - omission.length - footer.length));
+  }
+  out += omission + footer;
+  return out.length <= maxChars ? out : `${out.slice(0, Math.max(0, maxChars - 24)).replace(/\s+$/, "")}\n…[context truncated]`;
+}
+
+/**
  * The task pack carries task files with the correct size. Remove the assembled
  * file blocks so a truncated copy cannot compete with the pack.
  */
@@ -81,6 +113,7 @@ export function renderPromptMessages(
   startupContext?: string,
   packText?: string,
   ledgerText?: string,
+  overviewMaxChars?: number,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
@@ -91,7 +124,10 @@ export function renderPromptMessages(
   // working-context slice.
   const details = packText ?? state.renderWorkingContext();
   const guide = packText ? "" : TOOL_GUIDE;
-  const startup = packText ? withoutFileBlocks(startupContext) : startupContext;
+  const startup = trimContextText(
+    packText ? withoutFileBlocks(startupContext) : startupContext,
+    overviewMaxChars,
+  );
   const block = [startup, mapIndex, guide, details, ledgerText, state.renderBlock()]
     .filter(Boolean)
     .join("\n\n");

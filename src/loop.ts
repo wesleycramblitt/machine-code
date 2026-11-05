@@ -588,6 +588,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastPackChars = 0;
   let lastPackOmitted = 0;
   let lastLedgerChars = 0;
+  let lastOverviewChars = 0;
   let lastBudget: ContextBudget | null = null;
   if (taskPack) {
     recorder.event("context_pack", {
@@ -602,7 +603,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const initialChars =
     input.agent.prompt.length +
     input.request.length +
-    (input.contextText?.length ?? 0) +
+    Math.min(input.contextText?.length ?? 0, 64_000) +
     mapIndex.length +
     (taskPack ? Math.min(taskPack.chars, 80_000) : memory.renderWorkingContext().length) +
     memory.renderBlock().length +
@@ -1309,20 +1310,26 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
           const budget = row ? contextBudget(row.context, policy.expectedOutputTokens) : null;
           lastBudget = budget;
-          const overhead =
+          const baseOverhead =
             input.agent.prompt.length +
-            (input.contextText?.length ?? 0) +
             mapIndex.length +
             memory.renderBlock().length +
             toolChars +
             24_000;
-          const packChars = taskPack && budget ? Math.max(4_000, budget.inputChars - overhead) : 0;
+          const overviewMaxChars = budget
+            ? Math.max(8_000, Math.min(input.contextText?.length ?? 0, Math.floor(budget.inputChars * 0.4)))
+            : undefined;
+          const overviewEstimate = Math.min(input.contextText?.length ?? 0, overviewMaxChars ?? 0);
+          const packChars = taskPack && budget
+            ? Math.max(4_000, budget.inputChars - baseOverhead - overviewEstimate)
+            : 0;
           const renderedPack = taskPack
             ? renderContextPack(taskPack, { maxChars: packChars })
             : null;
           const packText = renderedPack?.text;
           lastPackChars = packText?.length ?? 0;
           lastPackOmitted = renderedPack?.omitted.length ?? 0;
+          lastOverviewChars = overviewEstimate;
           const remaining = Math.max(0, packChars - lastPackChars);
           const ledgerText = taskPack && remaining > 0
             ? memory.renderLedger({
@@ -1338,6 +1345,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             input.contextText,
             packText,
             ledgerText,
+            overviewMaxChars,
           );
         };
 
@@ -1459,6 +1467,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               packChars: lastPackChars,
               packOmitted: lastPackOmitted,
               ledgerChars: lastLedgerChars,
+              overviewChars: lastOverviewChars,
               ...(lastBudget
                 ? {
                     contextWindow: lastBudget.contextWindowTokens,

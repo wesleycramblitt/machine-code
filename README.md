@@ -592,7 +592,10 @@ file is large, one-hop imports and reverse dependencies, the command/script
 inventory, acceptance gates, and a short tool-selection guide. It is rendered
 to the selected model's input budget (context window minus output reserve), not
 to a fixed character cap: a 1M-token model gets the full useful pack, and a
-smaller model gets the same pack fitted to its window. A past-end read is an
+smaller model gets the same pack fitted to its window. The overview is assembled
+up to 64k characters and trimmed to the selected model in priority order, so
+the task packet and plan survive before lower-priority knowledge. A past-end
+read is an
 error and never creates read coverage. The state block includes merged Read
 coverage per file with its artifact ids, so the model can see what it already
 knows and can recall the bytes. Exact read bytes also stay in a run ledger: an

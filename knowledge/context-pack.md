@@ -27,6 +27,11 @@ Every turn has two layers.
 - tools, commands, scripts, inputs/outputs
 - current run state and recent steps
 
+The overview is assembled up to 64k characters, then trimmed to the selected
+model's budget in priority order. The lowest-priority blocks are named as
+omitted. A large model gets the whole overview; a small model gets the packet,
+task, and other high-priority blocks first.
+
 ### Task-specific pack
 
 `src/context/pack.ts` builds this from the task, active plan, and repo map.
@@ -80,7 +85,8 @@ Implemented:
 
 - `src/context/budget.ts` — model-derived input budget.
 - `src/context/pack.ts` — task/symbol-aware pack and budget-aware renderer.
-- `src/context/render.ts` — overview + pack + state + recent steps.
+- `src/context/render.ts` — overview + pack + state + recent steps; trims the
+  overview to the selected model's budget in priority order.
 - `src/loop.ts` — build/rebuild the pack for Build, Sudo, Review, and Planner;
   fit it to the selected model; record pack size and input budget in
   `context_state`.
@@ -101,5 +107,4 @@ Implemented:
 Next:
 
 - a routing layer that auto-selects the best tool for a request;
-- planner staging: overview pack, then per-stage detail;
-- model-aware assembly for the overview layer, not only the task pack.
+- planner staging: overview pack, then per-stage detail.

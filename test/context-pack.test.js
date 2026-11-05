@@ -178,6 +178,38 @@ test("a tight budget falls back to the outline instead of clipping mid-file", ()
   }
 });
 
+test("the overview keeps high-priority blocks and trims the rest", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mc-pack-overview-"));
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-overview", goal: "goal" });
+    const startup = [
+      "<context>",
+      '<context-block kind="task">TASK-BODY</context-block>',
+      `<context-block kind="knowledge">${"x".repeat(300)}</context-block>`,
+      '<context-block kind="plan">PLAN-BODY</context-block>',
+      "</context>",
+    ].join("\n");
+    const rendered = renderPromptMessages(
+      [
+        { role: "system", content: "system" },
+        { role: "user", content: "original" },
+      ],
+      store,
+      "MAP",
+      startup,
+      undefined,
+      undefined,
+      180,
+    );
+    const content = String(rendered.messages.find((message) => message.role === "user")?.content ?? "");
+    assert.match(content, /TASK-BODY/);
+    assert.match(content, /omitted/);
+    assert.doesNotMatch(content, /x{100}/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the renderer fits the pack to its budget and names what it dropped", () => {
   const root = tempRepo();
   try {
