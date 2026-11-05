@@ -12,6 +12,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
@@ -77,6 +78,19 @@ interface WorkingFileState {
   lastTurn: number;
   changed: boolean;
   preloaded: boolean;
+}
+
+/** Exact bytes acquired by a read, keyed by path plus symbol/section/range. */
+export interface LedgerEntry {
+  key: string;
+  path: string;
+  label: string;
+  kind: "file" | "symbol" | "section" | "outline";
+  content: string;
+  hash: string;
+  chars: number;
+  turn: number;
+  fileSig?: string;
 }
 
 type Entry =
@@ -274,6 +288,8 @@ export class RunStateStore {
   private gitBaseline: Map<string, GitStatusEntry> | null = null;
   /** Files that are in play; rendered as current content, not transcript. */
   private workingFiles = new Map<string, WorkingFileState>();
+  /** Exact acquired bytes for the full run; a read cache and prompt evidence. */
+  private ledger = new Map<string, LedgerEntry>();
 
   constructor(options: StateStoreOptions) {
     this.runDir = options.runDir;
@@ -356,6 +372,7 @@ export class RunStateStore {
           const changed = fact.refs[0];
           const changedPath = changed?.path;
           const changedRange = changed?.range;
+          if (changedPath) this.dropLedgerPath(changedPath);
           const overlaps = (ref: Ref): boolean =>
             Boolean(changedPath) &&
             ref.path === changedPath &&
@@ -624,6 +641,119 @@ export class RunStateStore {
       blocks.join("\n\n"),
       "</working-context>",
     ].join("\n");
+  }
+
+  /** Remember exact read bytes for cache hits and durable prompt evidence. */
+  rememberRead(input: {
+    key: string;
+    path: string;
+    label: string;
+    kind: LedgerEntry["kind"];
+    content: string;
+    fileSig?: string;
+    turn?: number;
+  }): void {
+    if (!input.key || !input.path || !input.content.trim()) return;
+    const content = input.content.length <= 48_000
+      ? input.content
+      : `${input.content.slice(0, 48_000).replace(/\s+$/, "")}\n…[ledger truncated]`;
+    const entry: LedgerEntry = {
+      key: input.key,
+      path: input.path,
+      label: input.label || input.path,
+      kind: input.kind,
+      content,
+      hash: sha1(content),
+      chars: content.length,
+      turn: input.turn ?? this.currentTurn(),
+      ...(input.fileSig ? { fileSig: input.fileSig } : {}),
+    };
+    this.ledger.delete(input.key);
+    this.ledger.set(input.key, entry);
+    // Keep the ledger bounded; old entries remain available as artifacts.
+    if (this.ledger.size > 200) {
+      const oldest = this.ledger.keys().next().value;
+      if (typeof oldest === "string") this.ledger.delete(oldest);
+    }
+  }
+
+  /** Return unchanged cached bytes for a read target, or null. */
+  cachedRead(key: string, fileSig?: string): string | null {
+    const entry = this.ledger.get(key);
+    if (!entry) return null;
+    if (entry.fileSig && fileSig && entry.fileSig !== fileSig) return null;
+    // Mark it as recently used so the renderer keeps it near the top.
+    this.ledger.delete(key);
+    this.ledger.set(key, { ...entry, turn: this.currentTurn() });
+    return entry.content;
+  }
+
+  private currentFileSignature(path: string): string | undefined {
+    if (!this.repoRoot) return undefined;
+    try {
+      const abs = isAbsolute(path) ? path : join(this.repoRoot, path);
+      const stat = statSync(abs);
+      return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Render acquired bytes not already present in the task pack. */
+  renderLedger(options: {
+    maxChars?: number;
+    perItemChars?: number;
+    excludePaths?: ReadonlySet<string>;
+  } = {}): string {
+    if (this.ledger.size === 0) return "";
+    const maxChars = options.maxChars ?? 24_000;
+    if (maxChars <= 0) return "";
+    const perItemChars = options.perItemChars ?? 12_000;
+    const exclude = options.excludePaths ?? new Set<string>();
+    const entries = [...this.ledger.values()]
+      .filter((entry) => {
+        if (exclude.has(entry.path)) return false;
+        if (!entry.fileSig || !this.repoRoot) return true;
+        const current = this.currentFileSignature(entry.path);
+        return Boolean(current) && entry.fileSig === current;
+      })
+      .sort((a, b) => b.turn - a.turn);
+    if (entries.length === 0) return "";
+    const blocks: string[] = [];
+    let used = 0;
+    let omitted = 0;
+    for (const entry of entries) {
+      const header = `### ${entry.kind}: ${entry.path}${entry.label && entry.label !== entry.path ? ` — ${entry.label}` : ""} (turn ${entry.turn})`;
+      const remaining = maxChars - used - header.length - 2;
+      if (remaining <= 0) {
+        omitted += 1;
+        continue;
+      }
+      const cap = Math.min(entry.content.length, perItemChars, remaining);
+      const body = entry.content.length <= cap
+        ? entry.content
+        : `${entry.content.slice(0, cap).replace(/\s+$/, "")}\n…[truncated]`;
+      const block = `${header}\n${body}`;
+      blocks.push(block);
+      used += block.length + 2;
+    }
+    if (blocks.length === 0) return "";
+    const note = omitted > 0
+      ? `\n\n_${omitted} older ledger entr${omitted === 1 ? "y" : "ies"} not rendered; use context recall or re-read the target._`
+      : "";
+    return [
+      "<ledger>",
+      "Acquired context from earlier reads. Use it before re-reading.",
+      "",
+      blocks.join("\n\n") + note,
+      "</ledger>",
+    ].join("\n");
+  }
+
+  private dropLedgerPath(path: string): void {
+    for (const [key, entry] of this.ledger) {
+      if (entry.path === path) this.ledger.delete(key);
+    }
   }
 
   addReadFact(ref: Ref, turn: number, excerptText = ""): void {

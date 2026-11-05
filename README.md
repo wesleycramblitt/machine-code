@@ -593,8 +593,10 @@ to a fixed character cap: a 1M-token model gets the full useful pack, and a
 smaller model gets the same pack fitted to its window. A past-end read is an
 error and never creates read coverage. The state block includes merged Read
 coverage per file with its artifact ids, so the model can see what it already
-knows and can recall the bytes. An edit invalidates only the read ranges that
-overlap the change. A next action older than six turns expires and is shown as
+knows and can recall the bytes. Exact read bytes also stay in a run ledger: an
+unchanged re-read returns the cached bytes, a changed file drops its entries,
+and the prompt includes acquired bytes that the pack does not already carry. An
+edit invalidates only the read ranges that overlap the change. A next action older than six turns expires and is shown as
 unset. The `context` tool records decisions, focuses ranges, recalls artifacts,
 and resolves facts. A prompt that exceeds the run envelope or 90% of the
 selected model's window blocks and writes a split report instead of truncating.

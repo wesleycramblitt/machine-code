@@ -43,7 +43,7 @@ import { prTool, type PrToolContext } from "./pr.js";
 import { contextTool } from "./context.js";
 import { loadSemanticOrDeterministic, renderModuleGraph, searchSemantic, type SemanticMap } from "../map/semantic.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
-import type { RunStateStore } from "../context/state.js";
+import type { LedgerEntry, RunStateStore } from "../context/state.js";
 
 export interface ToolContext {
   /** Worktree root every path is bound to. */
@@ -103,6 +103,28 @@ function findSymbolLine(lines: readonly string[], symbol: string): number {
   return 0;
 }
 
+/** Stable cache key for one read target: symbol, section, window, or full file. */
+function readCacheKey(path: string, params: { symbol?: string | null; section?: string | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
+  if (params.symbol) return `${path}#symbol:${params.symbol}`;
+  if (params.section) return `${path}#section:${params.section.trim().toLowerCase()}`;
+  if (params.around != null) return `${path}#around:${params.around}`;
+  if (params.offset != null || params.limit != null) {
+    return `${path}@${Math.max(1, Math.floor(params.offset ?? 1))}:${Math.max(1, Math.floor(params.limit ?? 2000))}`;
+  }
+  return `${path}#full`;
+}
+
+function readTargetLabel(path: string, params: { symbol?: string | null; section?: string | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
+  if (params.symbol) return `${path}#${params.symbol}`;
+  if (params.section) return `${path}#${params.section.trim()}`;
+  if (params.around != null) return `${path}#around ${params.around}`;
+  if (params.offset != null || params.limit != null) {
+    const start = Math.max(1, Math.floor(params.offset ?? 1));
+    return `${path}:${start}-${start + Math.max(1, Math.floor(params.limit ?? 2000)) - 1}`;
+  }
+  return path;
+}
+
 export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
   return {
     name: "read",
@@ -119,15 +141,20 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const abs = resolveWithin(ctx.root, params.path);
         assertRegularFile(abs);
         if (isBinaryFile(abs)) return fail(`refusing to read a binary file: ${params.path}`);
-        const raw = readFileSync(abs, "utf8");
-        const lines = raw.split("\n");
-        const bytes = Buffer.byteLength(raw, "utf8");
         if (params.symbol && params.around != null) {
           return fail("use symbol or around, not both");
         }
         if (params.section && (params.symbol || params.around != null)) {
           return fail("use section or symbol/around, not both");
         }
+        const stat = statSync(abs);
+        const fileSig = `${stat.mtimeMs}:${stat.size}`;
+        const cacheKey = readCacheKey(params.path, params);
+        const cached = ctx.state?.cachedRead(cacheKey, fileSig);
+        if (cached !== null && cached !== undefined) return ok(cached);
+        const raw = readFileSync(abs, "utf8");
+        const lines = raw.split("\n");
+        const bytes = Buffer.byteLength(raw, "utf8");
         // Symbol/around wins when a model also passes offset/limit. Ignore the
         // paging arguments instead of spending a turn on a schema correction.
 
@@ -135,6 +162,17 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         let limit = Math.max(1, Math.floor(params.limit ?? 2000));
         let header = "";
         let symbolFallback = false;
+        const remember = (text: string, kind: LedgerEntry["kind"], label?: string) => {
+          ctx.state?.rememberRead({
+            key: cacheKey,
+            path: params.path,
+            label: label ?? readTargetLabel(params.path, params),
+            kind,
+            content: text,
+            fileSig,
+          });
+          return ok(text);
+        };
 
         if (params.section) {
           const headings = documentSections(raw, params.path);
@@ -196,9 +234,11 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         } else if (bytes > READ_CAP_BYTES && params.offset == null && params.limit == null) {
           const file = await outlineFile(ctx.root, params.path);
           const outline = file ? renderOutline(file) : "(no symbols)";
-          return ok(
+          return remember(
             `[${params.path} is ${lines.length} lines / ${bytes} bytes; full read exceeds ${READ_CAP_BYTES} bytes]\n` +
             `${outline}\nRead a symbol or a range.`,
+            "outline",
+            `${params.path}#outline`,
           );
         }
 
@@ -225,7 +265,11 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             `[${lines.length - (page.nextOffset - 1)} more lines; call read with offset ${page.nextOffset}]`,
           );
         }
-        return ok([header, page.text, ...notes].filter(Boolean).join("\n"));
+        return remember(
+          [header, page.text, ...notes].filter(Boolean).join("\n"),
+          params.symbol ? "symbol" : params.section ? "section" : "file",
+          header || readTargetLabel(params.path, params),
+        );
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
       }

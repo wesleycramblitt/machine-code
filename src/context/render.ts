@@ -80,6 +80,7 @@ export function renderPromptMessages(
   mapIndex?: string,
   startupContext?: string,
   packText?: string,
+  ledgerText?: string,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
@@ -91,7 +92,7 @@ export function renderPromptMessages(
   const details = packText ?? state.renderWorkingContext();
   const guide = packText ? "" : TOOL_GUIDE;
   const startup = packText ? withoutFileBlocks(startupContext) : startupContext;
-  const block = [startup, mapIndex, guide, details, state.renderBlock()]
+  const block = [startup, mapIndex, guide, details, ledgerText, state.renderBlock()]
     .filter(Boolean)
     .join("\n\n");
   const user: MessageLike = {

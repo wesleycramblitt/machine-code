@@ -96,6 +96,9 @@ the remaining probe work.
 - A completed run stays completed even when a recoverable plan checkpoint fired.
 - An edit invalidates only overlapping read ranges; read coverage carries
   artifact ids for recall.
+- Exact read bytes stay in a run ledger. An unchanged re-read returns the
+  cached bytes; an edit drops that file's entries; the prompt includes acquired
+  bytes not already in the task pack.
 - Build, sudo, and review build a task pack from the task, plan, and map. The
   pack is re-read from disk after edits and fitted to the selected model.
 - A read that returns only an outline or a past-end note never becomes read

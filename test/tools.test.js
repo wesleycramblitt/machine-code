@@ -4,12 +4,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { commandTool, readTool, searchTool } from "../dist/tools/index.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
+import { RunStateStore } from "../dist/context/state.js";
 
 test("command list returns every schema in one call", async () => {
   const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
@@ -250,6 +251,32 @@ test("read section returns one heading block and lists headings on a miss", asyn
     assert.match(missing.content.map((c) => c.text ?? "").join("\n"), /Configuration/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read stores exact bytes in the evidence ledger", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-ledger-"));
+  const runDir = mkdtempSync(join(tmpdir(), "mc-read-ledger-run-"));
+  try {
+    const file = join(root, "src.ts");
+    writeFileSync(file, "export function target() { return 1; }\n", "utf8");
+    const store = new RunStateStore({ runDir, runId: "r-read-ledger", goal: "goal", repoRoot: root });
+    const tool = readTool({ root, commands: CORE_COMMANDS, state: store });
+    const first = await tool.execute("id", { path: "src.ts" });
+    const firstText = first.content.map((c) => c.text ?? "").join("\n");
+    assert.match(firstText, /target/);
+    const stat = statSync(file);
+    const sig = `${stat.mtimeMs}:${stat.size}`;
+    assert.equal(store.cachedRead("src.ts#full", sig), firstText);
+
+    writeFileSync(file, "export function target() { return 2; }\n", "utf8");
+    const second = await tool.execute("id", { path: "src.ts" });
+    const secondText = second.content.map((c) => c.text ?? "").join("\n");
+    assert.match(secondText, /return 2/);
+    assert.notEqual(secondText, firstText);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(runDir, { recursive: true, force: true });
   }
 });
 

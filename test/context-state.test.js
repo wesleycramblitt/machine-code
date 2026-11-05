@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -259,6 +259,80 @@ test("a non-content read note never becomes read coverage", () => {
     assert.equal(store.getState().workingSet.length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the evidence ledger caches unchanged reads and drops changed paths", () => {
+  const dir = tempDir();
+  const root = tempDir("mc-ledger-");
+  try {
+    const file = join(root, "src.ts");
+    writeFileSync(file, "export const a = 1;\n", "utf8");
+    const stat = statSync(file);
+    const sig = `${stat.mtimeMs}:${stat.size}`;
+    const store = new RunStateStore({ runDir: dir, runId: "r-ledger", goal: "goal", repoRoot: root });
+    store.rememberRead({
+      key: "src.ts#symbol:a",
+      path: "src.ts",
+      label: "src.ts#a",
+      kind: "symbol",
+      content: "1: export const a = 1;",
+      fileSig: sig,
+    });
+    assert.equal(store.cachedRead("src.ts#symbol:a", sig), "1: export const a = 1;");
+    assert.equal(store.cachedRead("src.ts#symbol:a", "different"), null);
+
+    const ledger = store.renderLedger({ maxChars: 2_000 });
+    assert.match(ledger, /<ledger>/);
+    assert.match(ledger, /src\.ts#a/);
+    assert.match(ledger, /export const a = 1/);
+
+    const excluded = store.renderLedger({ maxChars: 2_000, excludePaths: new Set(["src.ts"]) });
+    assert.equal(excluded, "");
+
+    store.addChangeFact("src.ts", { path: "src.ts" }, 2, "edited src.ts");
+    assert.equal(store.cachedRead("src.ts#symbol:a", sig), null);
+    assert.equal(store.renderLedger({ maxChars: 2_000 }), "");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the evidence ledger hides a stale file signature", () => {
+  const dir = tempDir();
+  const root = tempDir("mc-ledger-stale-");
+  try {
+    const file = join(root, "src.ts");
+    writeFileSync(file, "one\n", "utf8");
+    const first = statSync(file);
+    const store = new RunStateStore({ runDir: dir, runId: "r-ledger-stale", goal: "goal", repoRoot: root });
+    store.rememberRead({
+      key: "src.ts#full",
+      path: "src.ts",
+      label: "src.ts",
+      kind: "file",
+      content: "1: one",
+      fileSig: `${first.mtimeMs}:${first.size}`,
+    });
+    assert.match(store.renderLedger({ maxChars: 2_000 }), /1: one/);
+
+    writeFileSync(file, "two\n", "utf8");
+    const second = statSync(file);
+    store.rememberRead({
+      key: "src.ts#full",
+      path: "src.ts",
+      label: "src.ts",
+      kind: "file",
+      content: "1: two",
+      fileSig: `${second.mtimeMs}:${second.size}`,
+    });
+    const ledger = store.renderLedger({ maxChars: 2_000 });
+    assert.match(ledger, /1: two/);
+    assert.doesNotMatch(ledger, /1: one/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

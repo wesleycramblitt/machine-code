@@ -595,6 +595,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let packDirty = false;
   let lastPackChars = 0;
   let lastPackOmitted = 0;
+  let lastLedgerChars = 0;
   let lastBudget: ContextBudget | null = null;
   if (taskPack) {
     recorder.event("context_pack", {
@@ -1356,7 +1357,22 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const packText = renderedPack?.text;
           lastPackChars = packText?.length ?? 0;
           lastPackOmitted = renderedPack?.omitted.length ?? 0;
-          return renderPromptMessages(context.messages, memory, mapIndex, input.contextText, packText);
+          const remaining = Math.max(0, packChars - lastPackChars);
+          const ledgerText = taskPack && remaining > 0
+            ? memory.renderLedger({
+                maxChars: Math.min(remaining, 200_000),
+                excludePaths: new Set(taskPack.files),
+              })
+            : undefined;
+          lastLedgerChars = ledgerText?.length ?? 0;
+          return renderPromptMessages(
+            context.messages,
+            memory,
+            mapIndex,
+            input.contextText,
+            packText,
+            ledgerText,
+          );
         };
 
         let rendered = renderFor(currentRow);
@@ -1476,6 +1492,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               stateChars: memory.renderBlock().length,
               packChars: lastPackChars,
               packOmitted: lastPackOmitted,
+              ledgerChars: lastLedgerChars,
               ...(lastBudget
                 ? {
                     contextWindow: lastBudget.contextWindowTokens,

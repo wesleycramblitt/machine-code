@@ -85,11 +85,14 @@ Implemented:
 - `read { section }` for Markdown headings and comment banners; `read` prefers
   symbol/section and treats a past-end page as an error.
 - `src/tools/policy.ts` — the always-in-context tool-selection guide.
+- Evidence ledger in `src/context/state.ts`: exact read bytes are kept for the
+  run, unchanged re-reads return from cache, an edit drops the file's entries,
+  and the renderer includes acquired bytes not already in the task pack.
 
 Next:
 
-- persistent evidence ledger keyed by `path#symbol`/`path#section` so a re-read
-  returns the cached bytes inline;
 - batch `read symbols/sections/files` and patch-by-symbol;
+- a routing layer that auto-selects the best tool for a request;
+- planner staging: overview pack, then per-stage detail;
 - model-aware assembly for the overview layer, not only the task pack;
 - one loop detector that kills a run when recent actions add no new evidence.
