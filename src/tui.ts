@@ -42,7 +42,7 @@ import { loadAvailability, saveAvailability, type AvailabilityState } from "./av
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule } from "./orchestrator/scheduler.js";
-import { listOrchestrations } from "./orchestrator/state.js";
+import { listOrchestrations, readLease } from "./orchestrator/state.js";
 import { skillListItems, toolListItems, tokensForChars } from "./tui/tools.js";
 import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
@@ -1459,10 +1459,17 @@ export async function runTui(): Promise<void> {
     }
 
     const runsListScreen = page === "runs" && screen === "list";
+    const activeOrchestrations = needRunData
+      ? listOrchestrations(l).filter((state) => {
+          const lease = readLease(l, state.id);
+          return Boolean(lease && lease.until > Date.now());
+        }).length
+      : 0;
     const runIndicators = [
       `${C}●${R} ${counts.active} running`,
       `${Y}?${R} ${counts.awaiting} awaiting`,
       `${Y}⏸${R} ${counts.paused} paused`,
+      ...(activeOrchestrations > 0 ? [`${G}●${R} ${activeOrchestrations} pipeline`] : []),
     ];
     const statusTokens = [`${Y}PR${R} ${counts.openPrs} open`];
 
@@ -2515,8 +2522,11 @@ export async function runTui(): Promise<void> {
           ) ??
           states.find((candidate) => candidate.scope === "project");
         if (ledger) {
+          const lease = readLease(l, ledger.id);
+          const running = Boolean(lease && lease.until > Date.now());
           lines.push(
             ` ${C}${ledger.id}${R}  ${D}${ledger.checkpoint ?? "preflight"}${R}  ` +
+              `${running ? `${G}● RUNNING${R} ${D}${lease!.owner}${R}` : `${D}idle${R}`}  ` +
               `${D}packets ${ledger.approvedPackets?.length ?? 0} · results ${ledger.approvedResults?.length ?? 0}${R}` +
               `${ledger.stopReason ? `  ${RED}${ledger.stopReason}${R}` : ""}`,
           );
@@ -4059,6 +4069,20 @@ export async function runTui(): Promise<void> {
       if (data === "x") {
         const scope = pipelineScope;
         if (!scope) { notify("no pipeline scope"); draw(); return; }
+        if (scope.kind !== "task") {
+          const state = listOrchestrations(l).find(
+            (candidate) =>
+              candidate.scope === scope.kind &&
+              candidate.scopeRef &&
+              refKey(candidate.scopeRef) === refKey(scope.ref),
+          );
+          const lease = state ? readLease(l, state.id) : undefined;
+          if (state && lease && lease.until > Date.now()) {
+            notify(`already running ${state.id} (${lease.owner}, pid ${lease.pid})`);
+            draw();
+            return;
+          }
+        }
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         const args = scope.kind === "task"
           ? ["task", "start", String(scope.ref.number)]

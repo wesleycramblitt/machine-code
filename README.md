@@ -278,6 +278,7 @@ machine_code processes kill <run-id> p-0001   # or: all
 
 # readiness preview, then one sequential execution pass
 machine_code orchestrate status --scope project
+machine_code orchestrate status --all
 machine_code orchestrate start --scope epic --epic 42
 machine_code orchestrate approve --orchestration <id> --task 31
 machine_code orchestrate approve --orchestration <id> --task 31 --result
@@ -295,6 +296,13 @@ budget is exhausted. Build ends with a typed `Outcome:` and Review with a
 typed `Verdict:`; both are recorded as events. Completion failures retry with
 evidence up to the task's `retries_before_replan`, then stop at
 `needs_planning`. `--dry-run` only prints the schedule.
+
+`orchestrate status` shows the selected scope's lease: `RUNNING` with owner and
+pid, or `idle`. `orchestrate status --all` lists every orchestration with its
+scope, checkpoint, lease, and stop reason. `start` reuses the existing ledger
+for a scope, and a lease plus scope-start lock prevents two processes from
+running the same scope. The lease renews every 30 seconds while execution is
+live.
 
 The TUI Runs tab includes the pipeline. Select an Epic, Feature, or Task in
 the Runs list and press `p` to open a Pipeline view scoped to that issue.

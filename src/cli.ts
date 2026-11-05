@@ -55,7 +55,7 @@ import { approveTask, cleanupTask, runTaskChecks, suggestedReviewChecks, taskRun
 import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
-import { acquireLease, createOrchestration, listOrchestrations, readOrchestration, releaseLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
+import { acquireLease, createOrchestration, listOrchestrations, readLease, readOrchestration, releaseLease, renewLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, issueGlyphKind, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
@@ -220,7 +220,8 @@ Usage:
   machine_code model cooldown clear <id>
   machine_code availability [--probe] [--free-only] [--json]
                                     Show or probe cooling model availability
-  machine_code orchestrate status|tick|start [--dry-run]
+  machine_code orchestrate status [--all] [--json]
+  machine_code orchestrate tick|start [--dry-run]
                                     [--scope project|epic|feature] [--epic <n>|--feature <n>]
                                     [--max-parallel N] [--max-minutes N] [--max-spend-usd N]
                                     [--checkpoint after-task]
@@ -3153,11 +3154,42 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const sub = positional[0] ?? "status";
   if (sub !== "status" && sub !== "tick" && sub !== "start" && sub !== "approve") {
-    fail("usage: machine_code orchestrate status|tick|start|approve [--dry-run] [--scope project|epic|feature]");
+    fail("usage: machine_code orchestrate status|tick|start|approve [--all] [--dry-run] [--scope project|epic|feature]");
   }
   const dryRun = flags.has("dry-run") || flags.has("json") || sub === "status";
   const l = layout();
   const machine = loadMachineConfig(l);
+  const owner = `cli:${process.pid}`;
+  if (sub === "status" && flags.has("all")) {
+    const now = Date.now();
+    const rows = listOrchestrations(l).map((state) => {
+      const lease = readLease(l, state.id);
+      return {
+        ...state,
+        lease,
+        running: Boolean(lease && lease.until > now),
+      };
+    });
+    if (flags.has("json")) {
+      process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+      return 0;
+    }
+    if (rows.length === 0) {
+      process.stdout.write("no orchestrations\n");
+      return 0;
+    }
+    for (const row of rows) {
+      const scopeText = row.scopeRef ? `${row.scope} #${row.scopeRef.number}` : row.scope;
+      const lease = row.running
+        ? `RUNNING ${row.lease!.owner} pid ${row.lease!.pid} until ${new Date(row.lease!.until).toISOString()}`
+        : "idle";
+      process.stdout.write(
+        `${row.id}  ${scopeText.padEnd(18)}  ${(row.checkpoint ?? "preflight").padEnd(24)}  ${lease}` +
+          `${row.stopReason ? `  STOPPED ${row.stopReason}` : ""}\n`,
+      );
+    }
+    return 0;
+  }
   if (sub === "approve") {
     const id = flags.get("orchestration");
     const task = Number(flags.get("task"));
@@ -3221,23 +3253,36 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
 
   let orchestration: OrchestrationState | undefined;
   const requestedId = flags.get("orchestration");
-  if (requestedId) {
-    orchestration = readOrchestration(l, requestedId) ?? undefined;
-    if (!orchestration) fail(`no such orchestration: ${requestedId}`);
-    scope = orchestration.scope;
-    scopeRef = orchestration.scopeRef;
-  } else if (!dryRun) {
-    if (sub === "tick") {
+  const scopeLockId = scope === "project" ? "scope-project" : `scope-${scope}-${scopeRef?.number ?? "none"}`;
+  const scopeLocked = !dryRun && !requestedId;
+  if (scopeLocked && !acquireLease(l, scopeLockId, owner, 30_000)) {
+    const current = readLease(l, scopeLockId);
+    fail(
+      `scope ${scope}${scopeRef ? ` #${scopeRef.number}` : ""} is already starting` +
+        (current ? ` (${current.owner}, pid ${current.pid})` : ""),
+    );
+  }
+  try {
+    if (requestedId) {
+      orchestration = readOrchestration(l, requestedId) ?? undefined;
+      if (!orchestration) fail(`no such orchestration: ${requestedId}`);
+      scope = orchestration.scope;
+      scopeRef = orchestration.scopeRef;
+    } else {
       orchestration = listOrchestrations(l).find(
         (state) =>
           state.scope === scope &&
           ((!scopeRef && !state.scopeRef) ||
             (scopeRef && state.scopeRef && scopeRef.repo === state.scopeRef.repo && scopeRef.number === state.scopeRef.number)),
       );
+      if (!dryRun && !orchestration) {
+        orchestration = createOrchestration(l, scope, scopeRef);
+      }
     }
-    orchestration ??= createOrchestration(l, scope, scopeRef);
+  } finally {
+    if (scopeLocked) releaseLease(l, scopeLockId, owner);
   }
-  if (orchestration?.stopReason) fail(`orchestration ${orchestration.id} stopped: ${orchestration.stopReason}`);
+  if (orchestration?.stopReason && !dryRun) fail(`orchestration ${orchestration.id} stopped: ${orchestration.stopReason}`);
 
   const maxParallelRaw = flags.get("max-parallel");
   const maxParallel = maxParallelRaw === undefined ? 2 : Number(maxParallelRaw);
@@ -3260,11 +3305,15 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   const issues = await bundle.provider.list({ state: "all", limit: 500 });
   const runs = listRuns(l);
   const result = planSchedule({ issues, scope, ...(scopeRef ? { scopeRef } : {}), runs, maxParallel });
+  const lease = orchestration ? readLease(l, orchestration.id) : undefined;
+  const running = Boolean(lease && lease.until > Date.now());
   if (flags.has("json")) {
     process.stdout.write(
       `${JSON.stringify(
         {
           orchestration: orchestration?.id ?? null,
+          lease: lease ?? null,
+          running,
           scope: result.scope,
           scopeRef: result.scopeRef ?? null,
           tasks: result.tasks.map((task) => ({
@@ -3286,7 +3335,12 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   }
 
   const scopeText = result.scopeRef ? `${result.scope} #${result.scopeRef.number}` : result.scope;
-  process.stdout.write(`orchestration${orchestration ? ` ${orchestration.id}` : ""} ${scopeText}: ${result.tasks.length} task(s), ${result.ready.length} ready, ${result.dispatch.length} dispatch\n`);
+  process.stdout.write(
+    `orchestration${orchestration ? ` ${orchestration.id}` : ""} ${scopeText}: ${result.tasks.length} task(s), ` +
+      `${result.ready.length} ready, ${result.dispatch.length} dispatch` +
+      `${running ? ` · RUNNING ${lease!.owner} pid ${lease!.pid}` : " · idle"}` +
+      `${orchestration?.stopReason ? ` · STOPPED ${orchestration.stopReason}` : ""}\n`,
+  );
   for (const task of result.tasks) {
     const mark = task.ready ? "READY" : "BLOCK";
     process.stdout.write(
@@ -3304,13 +3358,22 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   }
   if (!orchestration) fail("orchestration state missing");
   const runtime = await loadRuntime(l);
-  const owner = `cli:${process.pid}`;
-  if (!acquireLease(l, orchestration.id, owner, 120_000)) {
-    fail(`orchestration ${orchestration.id} is leased by another process`);
+  const orchestrationId = orchestration.id;
+  if (!acquireLease(l, orchestrationId, owner, 120_000)) {
+    const current = readLease(l, orchestrationId);
+    fail(
+      `orchestration ${orchestrationId} is already running` +
+        (current ? ` (${current.owner}, pid ${current.pid})` : " (lease held by another process)"),
+    );
   }
   const executed: Array<{ issue: number; runId: string; status: string; error?: string }> = [];
   let stopReason: string | undefined;
   let checkpoint: string | undefined;
+  const heartbeat = setInterval(() => {
+    if (!renewLease(l, orchestrationId, owner, 120_000)) {
+      stopReason ??= `orchestration ${orchestrationId} lost its lease`;
+    }
+  }, 30_000);
   const runTask = async (
     task: NonNullable<(typeof result.dispatch)[number]>,
   ): Promise<{ stop?: string; checkpoint?: string }> => {
@@ -3456,7 +3519,8 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       ...(stopReason ? { stopReason } : {}),
     });
   } finally {
-    releaseLease(l, orchestration.id, owner);
+    clearInterval(heartbeat);
+    releaseLease(l, orchestrationId, owner);
   }
   return stopReason ? 1 : 0;
 }
