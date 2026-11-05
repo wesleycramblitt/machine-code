@@ -67,6 +67,16 @@ test("workspace symbols format as path:line:column kind name", () => {
   assert.deepEqual(text, ["/repo/src/state/runs.ts:42:7 class RunRecorder (state)"]);
 });
 
+test("common LSP servers expose structured install commands", () => {
+  for (const id of ["typescript", "python", "rust", "go", "bash", "yaml", "json", "ruby", "php"]) {
+    const spec = serverForLanguage(id);
+    assert.ok(spec, `missing ${id}`);
+    assert.ok(spec.installCommand, `missing install command for ${id}`);
+    assert.ok((spec.installCommand.args ?? []).length > 0, `empty install command for ${id}`);
+  }
+  assert.ok(allServers().filter((spec) => spec.installCommand).length >= 10);
+});
+
 test("repo coverage lists only matching servers with boolean availability", () => {
   const entries = lspStatusForPaths(["src/a.ts", "app/main.py", "README.md", "notes.txt"]);
   assert.deepEqual(entries.map((entry) => entry.language), ["markdown", "python", "typescript"]);

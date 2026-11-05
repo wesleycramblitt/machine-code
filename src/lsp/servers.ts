@@ -24,6 +24,8 @@ export interface LspServerSpec {
   languageIds: Record<string, string>;
   /** Human install hint. */
   install: string;
+  /** Structured installer for common package managers; print by default, run with --run. */
+  installCommand?: { binary: string; args: string[] };
   /** Probe args used to confirm the binary actually runs. [] skips the probe. */
   versionArgs?: string[];
   /** Passed to initialize.initializationOptions. */
@@ -46,6 +48,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
       ".cjs": "javascript",
     },
     install: "npm i -g typescript-language-server typescript",
+    installCommand: { binary: "npm", args: ["i", "-g", "typescript-language-server", "typescript"] },
   },
   {
     id: "python",
@@ -55,6 +58,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".py", ".pyi"],
     languageIds: { "*": "python" },
     install: "npm i -g pyright",
+    installCommand: { binary: "npm", args: ["i", "-g", "pyright"] },
     versionArgs: [],
   },
   {
@@ -65,6 +69,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".rs"],
     languageIds: { "*": "rust" },
     install: "rustup component add rust-analyzer",
+    installCommand: { binary: "rustup", args: ["component", "add", "rust-analyzer"] },
   },
   {
     id: "go",
@@ -74,6 +79,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".go"],
     languageIds: { "*": "go" },
     install: "go install golang.org/x/tools/gopls@latest",
+    installCommand: { binary: "go", args: ["install", "golang.org/x/tools/gopls@latest"] },
     versionArgs: ["version"],
   },
   {
@@ -112,6 +118,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".sh", ".bash"],
     languageIds: { "*": "shellscript" },
     install: "npm i -g bash-language-server",
+    installCommand: { binary: "npm", args: ["i", "-g", "bash-language-server"] },
   },
   {
     id: "lua",
@@ -130,6 +137,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".yaml", ".yml"],
     languageIds: { "*": "yaml" },
     install: "npm i -g yaml-language-server",
+    installCommand: { binary: "npm", args: ["i", "-g", "yaml-language-server"] },
   },
   {
     id: "json",
@@ -139,6 +147,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".json", ".jsonc"],
     languageIds: { ".json": "json", ".jsonc": "jsonc" },
     install: "npm i -g vscode-langservers-extracted",
+    installCommand: { binary: "npm", args: ["i", "-g", "vscode-langservers-extracted"] },
     versionArgs: [],
   },
   {
@@ -149,6 +158,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".html", ".htm"],
     languageIds: { "*": "html" },
     install: "npm i -g vscode-langservers-extracted",
+    installCommand: { binary: "npm", args: ["i", "-g", "vscode-langservers-extracted"] },
     versionArgs: [],
   },
   {
@@ -159,6 +169,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".css", ".scss", ".less"],
     languageIds: { ".css": "css", ".scss": "scss", ".less": "less" },
     install: "npm i -g vscode-langservers-extracted",
+    installCommand: { binary: "npm", args: ["i", "-g", "vscode-langservers-extracted"] },
     versionArgs: [],
   },
   {
@@ -169,6 +180,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".vue"],
     languageIds: { "*": "vue" },
     install: "npm i -g @vue/language-server",
+    installCommand: { binary: "npm", args: ["i", "-g", "@vue/language-server"] },
   },
   {
     id: "svelte",
@@ -178,6 +190,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".svelte"],
     languageIds: { "*": "svelte" },
     install: "npm i -g svelte-language-server",
+    installCommand: { binary: "npm", args: ["i", "-g", "svelte-language-server"] },
   },
   {
     id: "ruby",
@@ -187,6 +200,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".rb", ".rake"],
     languageIds: { "*": "ruby" },
     install: "gem install ruby-lsp",
+    installCommand: { binary: "gem", args: ["install", "ruby-lsp"] },
   },
   {
     id: "php",
@@ -196,6 +210,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [".php"],
     languageIds: { "*": "php" },
     install: "npm i -g intelephense",
+    installCommand: { binary: "npm", args: ["i", "-g", "intelephense"] },
   },
   {
     id: "csharp",
@@ -252,6 +267,7 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     extensions: [],
     languageIds: { "*": "dockerfile" },
     install: "npm i -g dockerfile-language-server-nodejs",
+    installCommand: { binary: "npm", args: ["i", "-g", "dockerfile-language-server-nodejs"] },
     versionArgs: [],
   },
   {

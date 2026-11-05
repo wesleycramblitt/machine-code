@@ -672,7 +672,9 @@ sections, text, and structure search still work.
 
 `machine_code lsp list` shows every server, its file types, whether its binary
 is on PATH, and the install hint. `machine_code lsp status` shows only the
-servers whose languages appear in the current repo.
+servers whose languages appear in the current repo. `machine_code lsp install
+[language]` prints the structured install command for common servers; add
+`--run` to execute it. Without a language it lists every available installer.
 
 Tool modes:
 

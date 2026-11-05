@@ -72,7 +72,7 @@ import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./da
 import { runTui } from "./tui.js";
 import { SEARCH_EXCLUDES } from "./tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "./install.js";
-import { allServers, formatServerList, lspStatusForPaths, serverAvailable } from "./lsp/index.js";
+import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serverForLanguage } from "./lsp/index.js";
 
 /* ---------------------------------------------------------- runtime setup */
 
@@ -188,7 +188,7 @@ Usage:
                                     [--agent <role>] [--model <key>] [--context] [--json]
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
                                     --no-symbols, --semantic)
-  machine_code lsp [list|status]    Language servers, availability, and repo coverage (--json)
+  machine_code lsp [list|status|install] Language servers, availability, install commands
   machine_code prompts [role]       Print rendered agent prompts with chars and words (--json)
   machine_code spend [--days N] [--by provider|model|day|agent] [--json]
   machine_code tools [tool|script]  List repo/machine tools and scripts
@@ -4118,6 +4118,7 @@ async function cmdLsp(argv: string[]): Promise<number> {
             extensions: spec.extensions,
             filenames: spec.filenames ?? [],
             install: spec.install,
+            ...(spec.installCommand ? { installCommand: `${spec.installCommand.binary} ${spec.installCommand.args.join(" ")}` } : {}),
           })),
           null,
           2,
@@ -4151,7 +4152,50 @@ async function cmdLsp(argv: string[]): Promise<number> {
     return 0;
   }
 
-  fail("usage: machine_code lsp [list|status] [--json]");
+  if (action === "install") {
+    const ids = positional.slice(1);
+    if (ids.length === 0) {
+      for (const spec of allServers()) {
+        if (!spec.installCommand) continue;
+        process.stdout.write(
+          `${spec.id.padEnd(12)} ${spec.installCommand.binary} ${spec.installCommand.args.join(" ")}\n`,
+        );
+      }
+      return 0;
+    }
+    let code = 0;
+    for (const id of ids) {
+      const spec = serverForLanguage(id);
+      if (!spec) {
+        process.stderr.write(`unknown language "${id}"\n`);
+        code = 1;
+        continue;
+      }
+      if (serverAvailable(id)) {
+        process.stdout.write(`${id}: ready\n`);
+        continue;
+      }
+      if (!spec.installCommand) {
+        process.stdout.write(`${id}: install: ${spec.install}\n`);
+        code = 1;
+        continue;
+      }
+      const command = `${spec.installCommand.binary} ${spec.installCommand.args.join(" ")}`;
+      if (!flags.has("run")) {
+        process.stdout.write(`${id}: ${command}\n  run with --run\n`);
+        continue;
+      }
+      process.stdout.write(`${id}: ${command}\n`);
+      const result = spawnSync(spec.installCommand.binary, spec.installCommand.args, { stdio: "inherit" });
+      if (result.status !== 0) {
+        process.stderr.write(`${id}: install failed (${result.status ?? "spawn error"})\n`);
+        code = 1;
+      }
+    }
+    return code;
+  }
+
+  fail("usage: machine_code lsp [list|status|install] [--json] [--run]");
   return 1;
 }
 
