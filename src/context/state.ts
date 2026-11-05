@@ -750,6 +750,18 @@ export class RunStateStore {
     ].join("\n");
   }
 
+  /** Manifest of acquired evidence for run inspection; no bytes. */
+  ledgerManifest(): Array<{ key: string; path: string; label: string; kind: LedgerEntry["kind"]; chars: number; turn: number }> {
+    return [...this.ledger.values()].map((entry) => ({
+      key: entry.key,
+      path: entry.path,
+      label: entry.label,
+      kind: entry.kind,
+      chars: entry.chars,
+      turn: entry.turn,
+    }));
+  }
+
   private dropLedgerPath(path: string): void {
     for (const [key, entry] of this.ledger) {
       if (entry.path === path) this.ledger.delete(key);

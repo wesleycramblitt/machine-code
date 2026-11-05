@@ -70,6 +70,95 @@ export function readContextManifest(runDir: string): ContextManifest | null {
   }
 }
 
+export interface ContextPackItemManifest {
+  kind: string;
+  ref: string;
+  chars: number;
+  tokens: number;
+  reason: string;
+}
+
+export interface ContextPackManifest {
+  updatedAt?: string;
+  model?: string;
+  contextWindow?: number;
+  inputBudgetTokens?: number;
+  overviewChars?: number;
+  stateChars?: number;
+  toolChars?: number;
+  pack: {
+    chars: number;
+    tokens: number;
+    files: string[];
+    items: ContextPackItemManifest[];
+  };
+  rendered: {
+    chars: number;
+    included: number;
+    omitted: Array<{ ref: string; reason: string }>;
+  };
+  ledger: {
+    chars: number;
+    entries: Array<{
+      key: string;
+      path: string;
+      label: string;
+      kind: string;
+      chars: number;
+      turn: number;
+    }>;
+  };
+}
+
+/** The task pack and ledger that the model actually received. */
+export function readContextPackManifest(runDir: string): ContextPackManifest | null {
+  const file = join(runDir, "context-pack.json");
+  if (!existsSync(file)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as Partial<ContextPackManifest>;
+    const pack = raw.pack;
+    const rendered = raw.rendered;
+    const ledger = raw.ledger;
+    if (!pack || !Array.isArray(pack.items)) return null;
+    return {
+      ...(typeof raw.updatedAt === "string" ? { updatedAt: raw.updatedAt } : {}),
+      ...(typeof raw.model === "string" ? { model: raw.model } : {}),
+      ...(typeof raw.contextWindow === "number" ? { contextWindow: raw.contextWindow } : {}),
+      ...(typeof raw.inputBudgetTokens === "number" ? { inputBudgetTokens: raw.inputBudgetTokens } : {}),
+      ...(typeof raw.overviewChars === "number" ? { overviewChars: raw.overviewChars } : {}),
+      ...(typeof raw.stateChars === "number" ? { stateChars: raw.stateChars } : {}),
+      ...(typeof raw.toolChars === "number" ? { toolChars: raw.toolChars } : {}),
+      pack: {
+        chars: typeof pack.chars === "number" ? pack.chars : 0,
+        tokens: typeof pack.tokens === "number" ? pack.tokens : 0,
+        files: Array.isArray(pack.files) ? pack.files.filter((item): item is string => typeof item === "string") : [],
+        items: pack.items.filter((item) => item && typeof item.ref === "string").map((item) => ({
+          kind: typeof item.kind === "string" ? item.kind : "item",
+          ref: item.ref,
+          chars: typeof item.chars === "number" ? item.chars : 0,
+          tokens: typeof item.tokens === "number" ? item.tokens : 0,
+          reason: typeof item.reason === "string" ? item.reason : "",
+        })),
+      },
+      rendered: {
+        chars: typeof rendered?.chars === "number" ? rendered.chars : 0,
+        included: typeof rendered?.included === "number" ? rendered.included : 0,
+        omitted: Array.isArray(rendered?.omitted)
+          ? rendered.omitted.filter((item) => item && typeof item.ref === "string")
+          : [],
+      },
+      ledger: {
+        chars: typeof ledger?.chars === "number" ? ledger.chars : 0,
+        entries: Array.isArray(ledger?.entries)
+          ? ledger.entries.filter((item) => item && typeof item.path === "string")
+          : [],
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function childRuns(runs: readonly RunSummary[], parentId: string): RunSummary[] {
   return runs
     .filter((run) => run.parentRunId === parentId || (run.rootRunId === parentId && run.id !== parentId))

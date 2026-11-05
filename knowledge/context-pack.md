@@ -94,7 +94,9 @@ Implemented:
   overview to the selected model's budget in priority order.
 - `src/loop.ts` — build/rebuild the pack for Build, Sudo, Review, and Planner;
   fit it to the selected model; record pack size and input budget in
-  `context_state`.
+  `context_state`; write `context-pack.json` for inspection.
+- `machine_code context <run-id>` prints the assembled context plus pack,
+  rendered, omitted, and ledger manifests.
 - `read { symbols: [...] }` and `read { sections: [...] }` for a targeted sweep
   in one call; `read { section }` supports Markdown headings and comment
   banners. `read` prefers symbol/section and treats a past-end page as an error.

@@ -3,7 +3,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { thinkingChunks, touchedPaths, childRuns, relatedRuns } from "../dist/report/run.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { thinkingChunks, touchedPaths, childRuns, relatedRuns, readContextPackManifest } from "../dist/report/run.js";
 
 test("thinking chunks combine live deltas and final turn text", () => {
   const events = [
@@ -47,6 +50,40 @@ test("touched paths and child runs are derived from events and lineage", () => {
     { id: "other", parentRunId: "nope", startedAt: "2026-01-01T00:00:00Z" },
   ];
   assert.deepEqual(childRuns(runs, "parent").map((run) => run.id), ["child"]);
+});
+
+test("context pack manifests are read defensively", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mc-pack-manifest-"));
+  try {
+    writeFileSync(
+      join(dir, "context-pack.json"),
+      JSON.stringify({
+        model: "opencode-go/deepseek-v4.1-flash",
+        contextWindow: 1_000_000,
+        inputBudgetTokens: 988_000,
+        overviewChars: 2_400,
+        pack: {
+          chars: 90_000,
+          tokens: 22_500,
+          files: ["src/a.ts"],
+          items: [{ kind: "file", ref: "src/a.ts", chars: 1_000, tokens: 250, reason: "task file" }],
+        },
+        rendered: { chars: 88_000, included: 1, omitted: [] },
+        ledger: { chars: 1_200, entries: [{ key: "src/a.ts#full", path: "src/a.ts", label: "src/a.ts", kind: "file", chars: 1_200, turn: 2 }] },
+      }),
+      "utf8",
+    );
+    const manifest = readContextPackManifest(dir);
+    assert.ok(manifest);
+    assert.equal(manifest?.pack.items[0].ref, "src/a.ts");
+    assert.equal(manifest?.pack.tokens, 22_500);
+    assert.equal(manifest?.ledger.entries[0].path, "src/a.ts");
+
+    writeFileSync(join(dir, "context-pack.json"), "{bad json", "utf8");
+    assert.equal(readContextPackManifest(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("related runs include lineage and same-orchestration task siblings", () => {

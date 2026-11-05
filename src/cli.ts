@@ -65,7 +65,7 @@ import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
 import { artifactPeek } from "./context/preview.js";
-import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths } from "./report/run.js";
+import { changesFor, contextUsage, readContextManifest, readContextPackManifest, relatedRuns, thinkingChunks, touchedPaths } from "./report/run.js";
 import { buildSettings, settingsFileFor } from "./tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "./data.js";
 import { runTui } from "./tui.js";
@@ -3582,6 +3582,39 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   return stopReason ? 1 : 0;
 }
 
+function printContextPack(pack: import("./report/run.js").ContextPackManifest, limit: number, all: boolean): void {
+  const items = pack.pack.items;
+  process.stdout.write(
+    `\npack     ${pack.pack.chars.toLocaleString()} chars (~${pack.pack.tokens.toLocaleString()} tok)  ` +
+      `${items.length} item(s)  rendered ${pack.rendered.chars.toLocaleString()}  ` +
+      `omitted ${pack.rendered.omitted.length}  ledger ${pack.ledger.chars.toLocaleString()}  ` +
+      `overview ${(pack.overviewChars ?? 0).toLocaleString()}\n`,
+  );
+  if (pack.model) {
+    process.stdout.write(
+      `  model  ${pack.model}${pack.contextWindow ? `  window ${pack.contextWindow.toLocaleString()}` : ""}` +
+        `${pack.inputBudgetTokens ? `  input budget ${pack.inputBudgetTokens.toLocaleString()}` : ""}\n`,
+    );
+  }
+  for (const item of items.slice(0, all ? items.length : limit)) {
+    process.stdout.write(
+      `  ${item.kind.padEnd(10)} ${String(item.chars).padStart(7)}b ${item.ref}${item.reason ? `  ${item.reason}` : ""}\n`,
+    );
+  }
+  if (!all && items.length > limit) process.stdout.write(`  … ${items.length - limit} more pack item(s) (--context)\n`);
+  if (all && pack.rendered.omitted.length > 0) {
+    process.stdout.write(`  omitted:\n`);
+    for (const item of pack.rendered.omitted) process.stdout.write(`    ${item.ref}  ${item.reason}\n`);
+  }
+  if (all && pack.ledger.entries.length > 0) {
+    process.stdout.write(`  ledger entries:\n`);
+    for (const entry of pack.ledger.entries.slice(0, 40)) {
+      process.stdout.write(`    ${entry.kind.padEnd(8)} ${String(entry.chars).padStart(7)}b ${entry.path}#${entry.label}  t${entry.turn}\n`);
+    }
+    if (pack.ledger.entries.length > 40) process.stdout.write(`    … ${pack.ledger.entries.length - 40} more\n`);
+  }
+}
+
 function cmdShow(argv: string[]): number {
   const { flags, positional } = parseFlags(argv);
   const id = positional[0];
@@ -3592,6 +3625,7 @@ function cmdShow(argv: string[]): number {
   const s = reconcileRun(run.summary);
   const runDir = join(found.layout.runsDir, s.id);
   const context = readContextManifest(runDir);
+  const contextPack = readContextPackManifest(runDir);
   const allRuns = listAllRuns(found.layout.home);
   const related = relatedRuns(allRuns, s);
   const thinking = thinkingChunks(run.events);
@@ -3619,6 +3653,7 @@ function cmdShow(argv: string[]): number {
       `${JSON.stringify({
         summary: s,
         context,
+        contextPack,
         related,
         thinking,
         touched,
@@ -3660,6 +3695,7 @@ function cmdShow(argv: string[]): number {
     }
     if (!flags.has("context") && context.sources.length > 12) process.stdout.write(`  … ${context.sources.length - 12} more (--context)\n`);
   }
+  if (contextPack) printContextPack(contextPack, flags.has("context") ? 100 : 12, flags.has("context"));
 
   const stateFile = join(runDir, "state.md");
   if (existsSync(stateFile)) {
@@ -3734,14 +3770,16 @@ function cmdContext(argv: string[]): number {
   const manifest = readContextManifest(join(found.layout.runsDir, found.run.summary.id));
   if (!manifest) {
     process.stdout.write("no context manifest recorded for this run\n");
-    return 0;
+  } else {
+    process.stdout.write(`context ${manifest.chars.toLocaleString()} chars  ${manifest.sources.length} source(s)\n`);
+    for (const source of manifest.sources) {
+      process.stdout.write(
+        `  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(7)}b ${source.origin.padEnd(9)} ${source.ref}${source.truncated ? " [truncated]" : ""}${source.warning ? ` (${source.warning})` : ""}\n`,
+      );
+    }
   }
-  process.stdout.write(`context ${manifest.chars.toLocaleString()} chars  ${manifest.sources.length} source(s)\n`);
-  for (const source of manifest.sources) {
-    process.stdout.write(
-      `  ${source.kind.padEnd(10)} ${String(source.bytes).padStart(7)}b ${source.origin.padEnd(9)} ${source.ref}${source.truncated ? " [truncated]" : ""}${source.warning ? ` (${source.warning})` : ""}\n`,
-    );
-  }
+  const pack = readContextPackManifest(join(found.layout.runsDir, found.run.summary.id));
+  if (pack) printContextPack(pack, 100, true);
   return 0;
 }
 

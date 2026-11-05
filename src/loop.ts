@@ -33,7 +33,7 @@ import { ensureSemanticMap } from "./map/ensure.js";
 import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
 import { inferPreloadFiles } from "./context/preload.js";
-import { buildTaskPack, renderContextPack, type ContextPack } from "./context/pack.js";
+import { buildTaskPack, packManifest, renderContextPack, type ContextPack } from "./context/pack.js";
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
@@ -1352,6 +1352,39 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               })
             : undefined;
           lastLedgerChars = ledgerText?.length ?? 0;
+          if (taskPack) {
+            try {
+              writeFileSync(
+                join(recorder.dir, "context-pack.json"),
+                JSON.stringify(
+                  {
+                    updatedAt: new Date().toISOString(),
+                    model: row?.key,
+                    contextWindow: budget?.contextWindowTokens,
+                    inputBudgetTokens: budget?.inputTokens,
+                    overviewChars: overviewEstimate,
+                    stateChars: memory.renderBlock().length,
+                    toolChars,
+                    pack: packManifest(taskPack),
+                    rendered: {
+                      chars: renderedPack?.chars ?? 0,
+                      included: renderedPack?.included ?? 0,
+                      omitted: renderedPack?.omitted ?? [],
+                    },
+                    ledger: {
+                      chars: lastLedgerChars,
+                      entries: memory.ledgerManifest(),
+                    },
+                  },
+                  null,
+                  2,
+                ),
+                "utf8",
+              );
+            } catch {
+              // Inspection metadata must not break the run.
+            }
+          }
           return renderPromptMessages(
             context.messages,
             memory,

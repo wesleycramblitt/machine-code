@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { contextBudget } from "../dist/context/budget.js";
-import { buildTaskPack, renderContextPack } from "../dist/context/pack.js";
+import { buildTaskPack, packManifest, renderContextPack } from "../dist/context/pack.js";
 import { renderPromptMessages } from "../dist/context/render.js";
 import { RunStateStore } from "../dist/context/state.js";
 
@@ -246,6 +246,26 @@ test("the overview keeps high-priority blocks and trims the rest", () => {
     assert.doesNotMatch(content, /x{100}/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the pack manifest records item sizes without bodies", () => {
+  const root = tempRepo();
+  try {
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
+    const pack = buildTaskPack({
+      root,
+      request: "Change src/a.ts",
+      mapFiles: [{ path: "src/a.ts", lang: "ts", bytes: 20, lines: 1, symbols: [], imports: [] }],
+      budgetChars: 20_000,
+      maxFiles: 2,
+    });
+    const manifest = packManifest(pack);
+    assert.equal(manifest.chars, pack.chars);
+    assert.ok(manifest.items.some((item) => item.ref === "src/a.ts" && item.chars > 0));
+    assert.equal("body" in manifest.items[0], false, "manifest does not carry file bodies");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

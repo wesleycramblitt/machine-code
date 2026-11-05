@@ -457,3 +457,26 @@ export function renderContextPack(pack: ContextPack, options: RenderPackOptions)
   }
   return { text, chars: text.length, tokens: tokenCount(text.length), included, omitted };
 }
+
+/** Manifest written next to a run so the rendered context is inspectable. */
+export interface PackManifest {
+  chars: number;
+  tokens: number;
+  files: string[];
+  items: Array<{ kind: PackKind; ref: string; chars: number; tokens: number; reason: string }>;
+}
+
+export function packManifest(pack: ContextPack): PackManifest {
+  return {
+    chars: pack.chars,
+    tokens: pack.tokens,
+    files: [...pack.files],
+    items: pack.items.map((item) => ({
+      kind: item.kind,
+      ref: item.ref,
+      chars: item.chars,
+      tokens: item.tokens,
+      reason: item.reason,
+    })),
+  };
+}
