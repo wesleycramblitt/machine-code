@@ -674,9 +674,11 @@ export async function runTui(): Promise<void> {
   let selectedIssueKey: string | null = null;
   let selectedRunId: string | null = null;
   let deleteTarget: Issue | undefined;
+  let deleteRunTarget: RunSummary | undefined;
   let deleteReturn: Screen = "list";
   let deleteInFlight = false;
   const deletingIssues = new Set<string>();
+  const deletingRuns = new Set<string>();
   let issueRefreshQueued = false;
   let issueCachesByRepo = new Map<string, readonly Issue[]>();
   let issueRunSel = 0;
@@ -1460,7 +1462,7 @@ export async function runTui(): Promise<void> {
     const needRunData =
       pendingRunAt > 0 ||
       (page === "runs" && (screen === "list" || screen === "issue" || screen === "run" || screen === "pipeline"));
-    const allRuns = needRunData ? listAllRuns(l.home) : [];
+    const allRuns = needRunData ? listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id)) : [];
     const cache = needRunData ? readIssueCache(l) : undefined;
     if (needRunData) issueCachesByRepo = collectIssueCaches(allRuns);
     const issues = needRunData ? issueCachesByRepo.get(l.repoRoot) ?? cache?.issues ?? [] : [];
@@ -1798,34 +1800,58 @@ export async function runTui(): Promise<void> {
 
     /* ----------------------------------------------------------- delete */
     else if (screen === "delete") {
-      const target = deleteTarget;
-      if (!target) {
-        screen = deleteReturn;
-        return draw();
+      if (deleteRunTarget) {
+        const run = deleteRunTarget;
+        const lines = [
+          "",
+          ` ${RED}${B}Delete run ${run.id}${R}`,
+          "",
+          ` ${D}Status:${R} ${run.status}   ${D}Agent:${R} ${run.agent}${run.mode ? `/${run.mode}` : ""}`,
+          ` ${D}Request:${R} ${run.request.replace(/\s+/g, " ").slice(0, 100)}`,
+          "",
+          ` ${D}This permanently deletes:${R}`,
+          `   ${Y}•${R} the run record, events, transcript, and reports`,
+          `   ${Y}•${R} its worktree when no other run shares it`,
+          `   ${Y}•${R} its branch when no other run shares it and no open PR owns it`,
+          "",
+          ` ${RED}This cannot be undone.${R}`,
+        ];
+        body = clipBody(lines);
+        actions = joinCommands([
+          command("D", "Confirm delete", undefined, RED),
+          command("Esc", "Cancel", undefined, GR),
+        ]);
+        secondary = `${D}run ${run.id}${R}`;
+      } else {
+        const target = deleteTarget;
+        if (!target) {
+          screen = deleteReturn;
+          return draw();
+        }
+        const descendants = descendantCount(target);
+        const targetRuns = allRuns.filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(target.ref));
+        const worktrees = new Set(targetRuns.map((run) => run.worktree).filter(Boolean));
+        const lines = [
+          "",
+          ` ${RED}${B}Delete #${target.ref.number}${R} ${W}${target.title}${R}`,
+          "",
+          ` ${D}This permanently deletes the issue and its associated resources:${R}`,
+          `   ${Y}•${R} close open PR(s)`,
+          `   ${Y}•${R} remove ${worktrees.size} worktree(s)`,
+          `   ${Y}•${R} delete local and remote ${target.kind === "task" ? "Task" : target.kind === "feature" ? "Feature" : "scope"} branches`,
+          `   ${Y}•${R} delete the issue${descendants > 0 ? ` and ${descendants} descendant issue(s)` : ""}`,
+          "",
+          ` ${D}${targetRuns.length} associated run(s) · ${descendants} descendant issue(s)${R}`,
+          "",
+          ` ${RED}This cannot be undone.${R}`,
+        ];
+        body = clipBody(lines);
+        actions = joinCommands([
+          command("D", "Confirm delete", undefined, RED),
+          command("Esc", "Cancel", undefined, GR),
+        ]);
+        secondary = `${D}#${target.ref.number} ${target.kind}${R}`;
       }
-      const descendants = descendantCount(target);
-      const targetRuns = allRuns.filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(target.ref));
-      const worktrees = new Set(targetRuns.map((run) => run.worktree).filter(Boolean));
-      const lines = [
-        "",
-        ` ${RED}${B}Delete #${target.ref.number}${R} ${W}${target.title}${R}`,
-        "",
-        ` ${D}This permanently deletes the issue and its associated resources:${R}`,
-        `   ${Y}•${R} close open PR(s)`,
-        `   ${Y}•${R} remove ${worktrees.size} worktree(s)`,
-        `   ${Y}•${R} delete local and remote ${target.kind === "task" ? "Task" : target.kind === "feature" ? "Feature" : "scope"} branches`,
-        `   ${Y}•${R} delete the issue${descendants > 0 ? ` and ${descendants} descendant issue(s)` : ""}`,
-        "",
-        ` ${D}${targetRuns.length} associated run(s) · ${descendants} descendant issue(s)${R}`,
-        "",
-        ` ${RED}This cannot be undone.${R}`,
-      ];
-      body = clipBody(lines);
-      actions = joinCommands([
-        command("D", "Confirm delete", undefined, RED),
-        command("Esc", "Cancel", undefined, GR),
-      ]);
-      secondary = `${D}#${target.ref.number} ${target.kind}${R}`;
     }
 
     /* ---------------------------------------------------------- new run */
@@ -3485,7 +3511,48 @@ export async function runTui(): Promise<void> {
 
     // Text-entry modes take precedence over global navigation.
     if (screen === "delete") {
-      if (data === "\x1b") { screen = deleteReturn; draw(); return; }
+      if (data === "\x1b") { deleteTarget = undefined; deleteRunTarget = undefined; screen = deleteReturn; draw(); return; }
+      if (data === "D" && deleteRunTarget) {
+        const run = deleteRunTarget;
+        deletingRuns.add(run.id);
+        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+        const child = spawn(
+          process.execPath,
+          [cliPath, "runs", "delete", run.id, "--yes"],
+          {
+            cwd: l.repoRoot,
+            stdio: ["ignore", "pipe", "pipe"],
+            env: process.env,
+          },
+        );
+        let stdout = "";
+        let stderr = "";
+        child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+        child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+        child.on("close", (code) => {
+          const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+          try {
+            writeFileSync(join(l.localDir, "delete.log"), `${new Date().toISOString()} run ${run.id}\n${output}\n`, "utf8");
+          } catch {
+            // best-effort diagnostics
+          }
+          if (code === 0) {
+            notify(`deleted run ${run.id}`);
+          } else {
+            deletingRuns.delete(run.id);
+            const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
+            notify(`delete failed for run ${run.id}: ${trunc(last, 80)}`);
+          }
+          draw();
+        });
+        notify(`deleting run ${run.id}`);
+        deleteRunTarget = undefined;
+        selectedRunId = null;
+        screen = "list";
+        page = "runs";
+        draw();
+        return;
+      }
       if (data === "D") {
         const target = deleteTarget;
         if (!target) { screen = deleteReturn; draw(); return; }
@@ -3766,7 +3833,7 @@ export async function runTui(): Promise<void> {
 
     /* --------------------------------------------------------- runs keys */
     if (page === "runs" && screen === "list") {
-      const allRuns = listAllRuns(l.home);
+      const allRuns = listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id));
       issueCachesByRepo = collectIssueCaches(allRuns);
       const filtered = runsFilter === "all" || runsFilter === "attention" ? allRuns : filterRuns(allRuns, runsFilter);
       const index = buildRunIndex({
@@ -3828,6 +3895,14 @@ export async function runTui(): Promise<void> {
       if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
       if (data === "p" || data === "D") {
         const row = index.selectable[runsSel];
+        if (data === "D" && row?.kind === "run") {
+          deleteRunTarget = row.run;
+          deleteTarget = undefined;
+          deleteReturn = "list";
+          screen = "delete";
+          draw();
+          return;
+        }
         const issue = row?.kind === "issue"
           ? row.issue
           : row?.kind === "run"
@@ -3837,6 +3912,7 @@ export async function runTui(): Promise<void> {
         if (issue.reserved) { notify("select a deliverable issue"); draw(); return; }
         if (data === "D") {
           deleteTarget = issue;
+          deleteRunTarget = undefined;
           deleteReturn = "list";
           screen = "delete";
           draw();
@@ -4057,14 +4133,12 @@ export async function runTui(): Promise<void> {
         }
       }
       if (data === "D") {
-        const issue = issueByRef(detail.summary.taskIssue ?? detail.summary.issue);
-        if (issue && !issue.reserved) {
-          deleteTarget = issue;
-          deleteReturn = "run";
-          screen = "delete";
-          draw();
-          return;
-        }
+        deleteRunTarget = detail.summary;
+        deleteTarget = undefined;
+        deleteReturn = "run";
+        screen = "delete";
+        draw();
+        return;
       }
       if (data === "o") { openUrl(issueByRef(detail.summary.issue)?.url ?? detail.summary.prUrl); draw(); return; }
       if (data === "\r" || data === "\n") {

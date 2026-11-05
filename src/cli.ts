@@ -53,6 +53,7 @@ import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.
 import { executeTask } from "./orchestrator/execute.js";
 import { approveTask, cleanupTask, runTaskChecks, suggestedReviewChecks, taskRuns, taskStatus } from "./tasks/lifecycle.js";
 import { deleteIssue } from "./tasks/delete.js";
+import { deleteRun } from "./state/run-delete.js";
 import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
@@ -168,6 +169,8 @@ Usage:
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
   machine_code runs [--group gh-issue|status|overall] [--filter ...] [--text Q]
                                     Run hierarchy grouped by repo/issue or status
+  machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch]
+                                    Delete a terminal run and its resources
   machine_code show <run-id>        Rich run detail: model, ask, context, state, changes,
                                     related [--events] [--thinking] [--changes] [--context]
                                     [--state] [--json]
@@ -1922,7 +1925,7 @@ function cmdLog(id: string | undefined): number {
   return 0;
 }
 
-function cmdStatus(): number {
+async function cmdStatus(): Promise<number> {
   return cmdRuns(["--group", "overall"]);
 }
 
@@ -3034,7 +3037,29 @@ function parseRunGroup(value: string): RunGroup | null {
   }
 }
 
-function cmdRuns(argv: string[]): number {
+async function cmdRuns(argv: string[]): Promise<number> {
+  if (argv[0] === "delete") {
+    const { flags, positional } = parseFlags(argv.slice(1));
+    if (!flags.has("yes")) fail("runs delete is destructive; rerun with --yes");
+    const id = positional[0];
+    if (!id) fail("usage: machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch] [--force]");
+    const found = findRunAnywhere(layout().home, id);
+    if (!found) fail(`no such run: ${id}`);
+    const result = await deleteRun({
+      layout: found.layout,
+      run: found.run.summary,
+      deleteWorktree: !flags.has("keep-worktree"),
+      deleteBranch: !flags.has("keep-branch"),
+      force: flags.has("force"),
+    });
+    process.stdout.write(
+      `deleted run ${result.runId}` +
+        `${result.removedWorktree ? "; worktree removed" : ""}` +
+        `${result.deletedBranch ? "; branch deleted" : ""}\n`,
+    );
+    for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
+    return 0;
+  }
   const { flags } = parseFlags(argv);
   const l = layout();
   const group = parseRunGroup(flags.get("group") ?? "gh-issue");
@@ -4116,7 +4141,7 @@ async function main(): Promise<void> {
       }
       break;
     case "runs":
-      code = cmdRuns(rest);
+      code = await cmdRuns(rest);
       break;
     case "show":
       code = cmdShow(rest);
@@ -4153,7 +4178,7 @@ async function main(): Promise<void> {
       code = cmdLog(rest[0]);
       break;
     case "status":
-      code = cmdStatus();
+      code = await cmdStatus();
       break;
     case "resume":
       code = await cmdResume(rest[0], rest.slice(1));

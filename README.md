@@ -63,8 +63,9 @@ node dist/cli.js policy edit --repo          # edit .machine_code/policy.toml
 node dist/cli.js catalogue refresh           # after adding provider keys
 node dist/cli.js catalogue snapshot          # update committed data/models + data/offers
 
-# worktrees, inspection
+# worktrees, inspection, run cleanup
 node dist/cli.js worktree list
+node dist/cli.js runs delete <run-id> --yes
 node dist/cli.js runs                 # Epic → Feature → Task → runs + untracked
 node dist/cli.js show <run-id>        # summary/overview/context/changes/related/events
 node dist/cli.js spend --days 30
@@ -322,15 +323,20 @@ changes, open or merge the Task PR, record acceptance, close the Task, and
 remove the worktree. `A` in the Pipeline view does the same for the selected
 task and updates the orchestration ledger.
 
-Press `D` on a Runs-list issue or run, an issue detail, or a run detail to open
-a delete confirmation. Confirming deletes the issue, closes its open PRs,
-removes its worktrees, and deletes the associated local and remote branches.
-Deleting a Feature or Epic requires the cascade confirmation and removes the
-whole subtree. The CLI equivalent is:
+Press `D` on a Runs-list issue or an issue detail to open the issue delete
+confirmation. Confirming deletes the issue, closes its open PRs, removes its
+worktrees, and deletes the associated local and remote branches. Deleting a
+Feature or Epic requires the cascade confirmation and removes the whole
+subtree.
+
+Press `D` on a run row or run detail to delete that run record, its worktree
+when unshared, and its branch when unshared. Open PR branches are kept unless
+`--force` is used.
 
 ```bash
 machine_code issue delete <issue> --yes
 machine_code issue delete <feature-or-epic> --cascade --yes
+machine_code runs delete <run-id> --yes
 ```
 
 After every Task PR is merged, `machine_code pr feature <n>` runs a final

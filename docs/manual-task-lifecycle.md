@@ -40,7 +40,16 @@ machine_code issue delete 98 --cascade --yes
 
 Deletion closes open PRs, removes worktrees, deletes local and remote branches,
 and then deletes the issue. `--cascade` is required for a Feature or Epic with
-children. In the TUI, press `D` on the issue or run and confirm.
+children. In the TUI, press `D` on the issue and confirm.
+
+To delete one run without deleting its issue:
+
+```bash
+machine_code runs delete <run-id> --yes
+```
+
+In the TUI, press `D` on a run row or run detail. The run record, worktree, and
+branch are removed when no other run shares them.
 
 In the TUI, select an Epic, Feature, or Task in the Runs list and press `p` to
 open a Pipeline view scoped to that issue. `P` works from the issue or run
