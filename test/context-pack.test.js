@@ -143,6 +143,20 @@ test("the prompt uses the task pack in place of the working-context slice", () =
     assert.match(content, /TASK/);
     assert.doesNotMatch(content, /TRUNCATED/);
     assert.doesNotMatch(content, /<working-context>/);
+
+    const onlyFile = renderPromptMessages(
+      [
+        { role: "system", content: "system" },
+        { role: "user", content: "original" },
+      ],
+      store,
+      "MAP",
+      '<context><context-block kind="file" source="src/a.ts">TRUNCATED</context-block></context>',
+      "<task-pack>PACK-BODY</task-pack>",
+    );
+    const onlyFileContent = String(onlyFile.messages.find((message) => message.role === "user")?.content ?? "");
+    assert.doesNotMatch(onlyFileContent, /TRUNCATED/);
+    assert.doesNotMatch(onlyFileContent, /<context>/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

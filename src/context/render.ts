@@ -69,7 +69,7 @@ function withoutFileBlocks(text: string | undefined): string | undefined {
   const stripped = text
     .replace(/<context-block kind="file"[^>]*>[\s\S]*?<\/context-block>\s*/g, "")
     .trim();
-  return stripped.length > 0 ? stripped : undefined;
+  return /<context-block\b/.test(stripped) ? stripped : undefined;
 }
 
 /** Keep the last few complete assistant/tool steps, never an orphan call. */
