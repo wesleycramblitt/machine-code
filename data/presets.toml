@@ -25,6 +25,7 @@ issues = "optional"
 ask = false
 approval = "human"
 ambiguity = "precise"
+artifact_scripts = true
 
 [review]
 delegate = false
@@ -49,3 +50,4 @@ issues = "optional"
 ask = true
 approval = "human"
 ambiguity = "precise"
+artifact_scripts = true

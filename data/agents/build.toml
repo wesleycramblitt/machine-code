@@ -5,13 +5,13 @@
 name = "build"
 order = 3
 prompt = '''Build agent. Task packet: use its Deliverable and Acceptance; if empty, stop. Use map/sections. Write a 3-line change plan as a context decision. Next must be an edit or needs_planning. Then edit, run gates once, add tests and docs. End `Outcome: completed|needs_planning|blocked|failed`. Stop.'''
-tools = ["context", "read", "write", "edit", "search", "command", "ask", "issue"]
+tools = ["context", "read", "write", "edit", "search", "command", "ask", "issue", "artifact"]
 readonly = false
 issue_access = "read"
 modes = []
 blurb = "implements packets; not started directly"
 preset = "implement"
-capabilities = ["code:read", "context:inherit", "code:write", "issue:read"]
+capabilities = ["code:read", "context:inherit", "code:write", "issue:read", "artifact:provision"]
 
 [weights]
 code = 0.4

@@ -55,6 +55,7 @@ test("role presets resolve to the documented defaults", () => {
   assert.equal(build.ask, false);
   assert.equal(build.verification, "verified");
   assert.equal(build.issueAccess, "read");
+  assert.equal(build.artifactScripts, true);
 
   const general = resolveAgentConfig({ role: "general" });
   assert.equal(general.preset, "assistant");
@@ -132,6 +133,7 @@ test("ask is disabled in autonomous mode regardless of the ask flag", () => {
 test("capability matrix: build, review, general, sudo", () => {
   const build = capabilitiesFor("build", { ...PRESETS.implement });
   assert.ok(hasCapability(build, "code:write"));
+  assert.ok(hasCapability(build, "artifact:provision"));
   assert.ok(hasCapability(build, "issue:read"));
   assert.ok(!hasCapability(build, "issue:write"));
   assert.ok(!hasCapability(build, "issue:create"));
@@ -155,6 +157,7 @@ test("capability matrix: build, review, general, sudo", () => {
 
   const sudo = capabilitiesFor("sudo", { ...PRESETS.unrestricted });
   assert.ok(hasCapability(sudo, "code:write"));
+  assert.ok(hasCapability(sudo, "artifact:provision"));
   assert.ok(hasCapability(sudo, "issue:close"));
   assert.ok(hasCapability(sudo, "pr:merge"));
 });
@@ -210,6 +213,7 @@ test("tools are capability-gated and no role has the task tool", () => {
     assert.ok(!build.def.tools.includes("task"));
     assert.ok(!build.def.tools.includes("ask"), "build asks are off by default");
     assert.ok(build.def.tools.includes("write"));
+    assert.ok(build.def.tools.includes("artifact"));
 
     const buildAsk = resolveAgent(layout, "build", { runOverrides: { ask: true } });
     assert.ok(buildAsk.def.tools.includes("ask"), "build may be configured to ask");

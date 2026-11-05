@@ -5,13 +5,13 @@
 name = "sudo"
 order = 5
 prompt = '''Sudo agent. If a task issue is attached, use its Deliverable and Acceptance. Do the explicit task with all allowed tools. Map first. Typed commands only. Verify once. Stop.'''
-tools = ["context", "read", "write", "edit", "search", "command", "ask", "issue", "pr"]
+tools = ["context", "read", "write", "edit", "search", "command", "ask", "issue", "artifact", "pr"]
 readonly = false
 issue_access = "read"
 modes = []
 blurb = "full permissions; solo only"
 preset = "unrestricted"
-capabilities = ["code:read", "context:inherit", "code:write", "artifact:write", "issue:read", "pr:read", "pr:create", "pr:merge", "review:write"]
+capabilities = ["code:read", "context:inherit", "code:write", "artifact:write", "artifact:provision", "issue:read", "pr:read", "pr:create", "pr:merge", "review:write"]
 
 [weights]
 agentic = 0.4

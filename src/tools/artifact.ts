@@ -2,8 +2,8 @@
  * machine_code — the `artifact` tool.
  *
  * Inventory for reusable tools and scripts. Tool manifests can be provisioned
- * with `artifact:provision`; executable scripts remain a human-approved CLI
- * operation.
+ * with `artifact:provision`; executable script creation additionally requires
+ * the run's `artifact_scripts` setting (on for implement/unrestricted presets).
  */
 import { Type, type Static } from "typebox";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -176,8 +176,8 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
     name: "artifact",
     label: "artifact",
     description:
-      "Inspect reusable tools and scripts: list, show a manifest/script, or show recorded usage. " +
-      "Provisioning requires a human-approved tools command.",
+      "Inspect reusable tools and scripts: list, show, usage, create, or update. " +
+      "Provisioning needs artifact:provision; new executable scripts also need artifact_scripts.",
     parameters: ArtifactParams,
     async execute(_id, params: Static<typeof ArtifactParams>) {
       try {

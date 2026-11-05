@@ -79,7 +79,7 @@ The pack carries a short policy: use the most direct tool first.
 | Search structure | `ast-grep` | LSP references |
 | Edit | exact-match edit | `write` for a new file |
 | Verify | packet acceptance command | profile command |
-| Repeat work | artifact script | — |
+| Repeat work | `artifact` create (build/sudo) | rerun command |
 
 Offset paging is a fallback for a large file the index cannot address. It is
 not the default reading tool.
@@ -105,9 +105,12 @@ Implemented:
   run, unchanged re-reads return from cache, an edit drops the file's entries,
   and the renderer includes acquired bytes not already in the task pack.
 - Evidence-novelty loop detector in `src/state/progress.ts`: repeated reads of
-  one band at the same file version, repeated search result sets, or repeated
-  command output kill the run after twenty stale actions. It is the only loop
-  guard.
+  one band at the same file version, repeated search result sets, repeated
+  command output, or repeated failures kill the run after twenty stale actions.
+  It is the only loop guard.
+- Build and sudo have the `artifact` tool with `artifact:provision`; the
+  implement and unrestricted presets set `artifact_scripts = true`, so a
+  repeated probe or gate can become a reusable script in the run.
 
 Next:
 
