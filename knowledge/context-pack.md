@@ -79,7 +79,7 @@ The pack carries a short policy: use the most direct tool first.
 | Search structure | `ast-grep` | LSP references |
 | Edit | exact-match edit | `write` for a new file |
 | Verify | packet acceptance command | profile command |
-| Repeat work | `artifact` create (build/sudo) | rerun command |
+| Repeat work | `artifact` create/run (build/sudo) | rerun command |
 
 Offset paging is a fallback for a large file the index cannot address. It is
 not the default reading tool.

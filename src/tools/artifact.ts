@@ -8,14 +8,17 @@
 import { Type, type Static } from "typebox";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { Layout } from "../paths.js";
 import { layout } from "../paths.js";
+import { runProc } from "../proc.js";
+import { COMMAND_CAP_BYTES, capText } from "./safety.js";
 import {
   artifactPath,
   artifactSummary,
   listArtifacts,
   resolveArtifact,
+  type ArtifactDef,
 } from "../artifacts/registry.js";
 import { listAllRuns, type RunRecorder } from "../state/runs.js";
 import type { ArtifactUsage } from "../plan/usage.js";
@@ -30,8 +33,8 @@ export interface ArtifactToolContext {
 
 const ArtifactParams = Type.Object({
   action: Type.Union(
-    [Type.Literal("list"), Type.Literal("show"), Type.Literal("usage"), Type.Literal("create"), Type.Literal("update")],
-    { description: "list, show, usage, or a provisioning request." },
+    [Type.Literal("list"), Type.Literal("show"), Type.Literal("usage"), Type.Literal("create"), Type.Literal("update"), Type.Literal("run")],
+    { description: "list, show, usage, run, or a provisioning request." },
   ),
   name: Type.Optional(Type.String({ description: "Artifact name or repo-relative path." })),
   kind: Type.Optional(Type.Union([Type.Literal("tool"), Type.Literal("script")])),
@@ -41,6 +44,7 @@ const ArtifactParams = Type.Object({
   script: Type.Optional(Type.String({ description: "Executable script body (kind=script)." })),
   lang: Type.Optional(Type.String({ description: "Script extension, e.g. sh, py, js." })),
   force: Type.Optional(Type.Boolean({ description: "Replace an existing tool manifest (create/update)." })),
+  args: Type.Optional(Type.Array(Type.String(), { description: "Arguments for run." })),
 });
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -111,7 +115,7 @@ function provisionTool(ctx: ArtifactToolContext, params: ArtifactParamsType, act
     }
     mkdirSync(join(ctx.layout.repoDir, "scripts"), { recursive: true });
     writeFileSync(scriptPath, params.script, { encoding: "utf8", mode: 0o755 });
-    command = `scripts/${name}.${lang}`;
+    command = relative(ctx.layout.repoRoot, scriptPath).split("\\").join("/");
   }
   const kind = scriptKind ? "script" : "tool";
   mkdirSync(join(ctx.layout.repoDir, "tools"), { recursive: true });
@@ -141,6 +145,34 @@ function provisionTool(ctx: ArtifactToolContext, params: ArtifactParamsType, act
     action,
   } as ArtifactUsage);
   return ok(`${action}d tool manifest ${file}`);
+}
+
+function scriptInvocation(path: string, extra: readonly string[]): { binary: string; args: string[] } {
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  if (ext === "sh" || ext === "bash") return { binary: "bash", args: [path, ...extra] };
+  if (ext === "py") return { binary: "python3", args: [path, ...extra] };
+  if (ext === "js" || ext === "mjs" || ext === "cjs") return { binary: "node", args: [path, ...extra] };
+  return { binary: path, args: [...extra] };
+}
+
+/** Resolve an artifact to an argv: interpreter for scripts, command vector for tools. */
+function runInvocation(
+  layout: Layout,
+  artifact: ArtifactDef,
+  extra: readonly string[],
+): { binary: string; args: string[] } | null {
+  let path = artifactPath(layout, artifact);
+  // Older provisioned manifests used "scripts/..." relative to .machine_code.
+  if (path && !existsSync(path) && artifact.origin === "repo" && artifact.path) {
+    const nested = join(layout.repoDir, artifact.path);
+    if (existsSync(nested)) path = nested;
+  }
+  if (path && existsSync(path) && /\.(sh|bash|py|js|mjs|cjs)$/i.test(path)) {
+    return scriptInvocation(path, [...artifact.args, ...extra]);
+  }
+  const parts = (artifact.command ?? artifact.path ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return null;
+  return { binary: parts[0]!, args: [...parts.slice(1), ...artifact.args, ...extra] };
 }
 
 function usageFor(ctx: ArtifactToolContext, name: string): string {
@@ -176,8 +208,9 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
     name: "artifact",
     label: "artifact",
     description:
-      "Inspect reusable tools and scripts: list, show, usage, create, or update. " +
-      "Provisioning needs artifact:provision; new executable scripts also need artifact_scripts.",
+      "Inspect reusable tools and scripts: list, show, usage, run, create, or update. " +
+      "Provisioning needs artifact:provision; new executable scripts also need artifact_scripts. " +
+      "run executes the artifact in the worktree and returns bounded output.",
     parameters: ArtifactParams,
     async execute(_id, params: Static<typeof ArtifactParams>) {
       try {
@@ -197,6 +230,40 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
         if (!name) return fail(`${params.action} requires name`);
         const artifact = resolveArtifact(ctx.layout, name);
         if (!artifact) return fail(`artifact not found: ${name}`);
+        if (params.action === "run") {
+          const invocation = runInvocation(ctx.layout, artifact, params.args ?? []);
+          if (!invocation) return fail(`artifact ${artifact.name} has no command to run`);
+          const started = Date.now();
+          const result = await runProc(invocation.binary, invocation.args, {
+            cwd: ctx.layout.repoRoot,
+            timeoutMs: 300_000,
+          });
+          const success = result.outcome === "exit" && result.code === 0;
+          recordUsage(ctx, {
+            artifact: artifact.name,
+            kind: artifact.kind === "script" ? "script" : "tool",
+            scope: "task",
+            issue: ctx.recorder.current.issue,
+            runId: ctx.recorder.id,
+            role: ctx.recorder.current.agent,
+            at: new Date().toISOString(),
+            success,
+            action: "run",
+          } as ArtifactUsage);
+          const output = capText(
+            [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n"),
+            COMMAND_CAP_BYTES,
+          ).text;
+          const label = `${invocation.binary} ${invocation.args.join(" ")}`.trim();
+          const body = `$ ${label}\n${output || "(no output)"}`;
+          const elapsed = Math.round((Date.now() - started) / 1000);
+          if (result.outcome === "timeout") return fail(`${body}\n[timed out after ${elapsed}s]`);
+          if (result.outcome === "spawn-error") {
+            return fail(`${body}\n[spawn error: ${result.spawnError ?? "unknown"}]`);
+          }
+          if (!success) return fail(`${body}\n[exit ${result.code ?? "?"}; ${elapsed}s]`);
+          return ok(`${body}\n[exit 0; ${elapsed}s]`);
+        }
         if (params.action === "usage") {
           return ok(usageFor(ctx, artifact.name));
         }

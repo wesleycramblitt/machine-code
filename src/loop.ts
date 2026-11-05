@@ -27,6 +27,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
+import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
 import { buildRepoMap, mapBytes, renderMapIndex, symbolCount, type MapFile } from "./map/deterministic.js";
 import { ensureSemanticMap } from "./map/ensure.js";
@@ -873,7 +874,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const artifactContext: import("./tools/artifact.js").ArtifactToolContext | undefined =
       input.layout && input.agent.tools.includes("artifact")
         ? {
-            layout: input.layout,
+            layout: layoutFor(mapRoot),
             capabilities: input.agentCapabilities ?? [],
             recorder,
             allowScripts: input.agentConfig?.artifactScripts === true,

@@ -444,8 +444,8 @@ and per-bundle symbol index from `manifest.yaml` and content front-matter.
 Tools live in `.machine_code/tools/<name>.toml`, scripts under
 `.machine_code/scripts/`. `machine_code tools new <name>` scaffolds both.
 Planner can inspect them and provision tool manifests with the `artifact` tool
-(`list`, `show`, `usage`, `create`, `update`). Build and sudo can also create
-executable scripts: the `implement` and `unrestricted` presets set
+(`list`, `show`, `usage`, `run`, `create`, `update`). Build and sudo can also
+create and execute scripts: the `implement` and `unrestricted` presets set
 `artifact_scripts = true`. Other roles need the explicit
 `--allow-artifact-scripts` run flag. Planner writes task policy with the issue
 `plan` action, which inserts or replaces the `mc:plan` marker. The new-run

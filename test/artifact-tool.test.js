@@ -60,6 +60,35 @@ test("artifact list and show expose repo tools and scripts", async () => {
   }
 });
 
+test("artifact run executes a script in the worktree with arguments", async () => {
+  const { root, layout, recorder } = setup();
+  try {
+    const ctx = { layout, capabilities: ["artifact:provision"], recorder, allowScripts: true };
+    const create = await artifactTool(ctx).execute("c1", {
+      action: "create",
+      name: "echo-arg",
+      kind: "script",
+      lang: "sh",
+      script: "#!/bin/sh\necho \"$1\"\n",
+    });
+    assert.equal(create.isError, undefined);
+    const run = await artifactTool(ctx).execute("c1", {
+      action: "run",
+      name: "echo-arg",
+      args: ["hello-worktree"],
+    });
+    assert.equal(run.isError, undefined);
+    const text = run.content.map((item) => item.text ?? "").join("\n");
+    assert.match(text, /hello-worktree/);
+    assert.match(text, /exit 0/);
+
+    const missing = await artifactTool(ctx).execute("c1", { action: "run", name: "missing" });
+    assert.equal(missing.isError, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("artifact provisioning writes tool manifests but not scripts", async () => {
   const { root, layout, recorder } = setup();
   try {
