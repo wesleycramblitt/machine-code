@@ -181,7 +181,7 @@ candidates. Minimums are layered in `~/.machine_code/config.toml` and
 default `--group gh-issue` groups by repository, then by the Epic → Feature →
 Task issue hierarchy, with runs that have no issue under Untracked and runs
 whose cached issue is missing under Orphaned issue. Select an Epic, Feature, or
-Task and press `p` to open a Pipeline view scoped to that issue.
+Task and press `p` to open an Orchestration view scoped to that issue.
 
 Runs attach to Tasks only. Selecting an Epic or Feature for a planner/review
 run resolves to that scope's reserved Planning & Review Task 0. Selecting a
@@ -200,7 +200,9 @@ rollup counts. There are no direct Epic/Feature run rows.
 run status with no issue tree. `--group overall` drops repository headings
 entirely and groups every run on the machine by status, so blocked, failed, and
 running work is visible at a glance. `machine_code status` is shorthand for the
-overall view. In the TUI, `g` cycles GH issue → Status → Overall status.
+overall view. In the TUI, `g` cycles GH issue → Status → Overall status and
+`f` toggles all repos vs the TUI cwd; `!` limits the list to work needing a
+human or in flight. With the cwd scope, `n` opens the composer for the cwd.
 
 In the GH issue view, the highlighted row keeps its branch bright: the selected
 issue or run, its parent issues, its peers at the same level, and its immediate
@@ -298,15 +300,19 @@ machine_code orchestrate approve --orchestration <id> --task 31 --result
 # approval/acceptance command is printed.
 machine_code orchestrate tick --orchestration <id> --dry-run
 machine_code orchestrate start --scope epic --epic 42 --checkpoint after-task
+machine_code orchestrate stop --orchestration <id>
 ```
 
 `start` and `tick` execute ready tasks up to `--max-parallel` at a time through
 Build, gates, commit, Review, and PR; tasks sharing a Feature are serialized.
 `--max-minutes` and `--max-spend-usd` stop new dispatch when the invocation
-budget is exhausted. Build ends with a typed `Outcome:` and Review with a
+budget is exhausted. `--tier`, `--min-fit`, `--min-capability`, `--min-axes`
+(`strict` bumps every axis floor +0.5), and `--model` override model selection
+for the invocation. Build ends with a typed `Outcome:` and Review with a
 typed `Verdict:`; both are recorded as events. Completion failures retry with
 evidence up to the task's `retries_before_replan`, then stop at
-`needs_planning`. `--dry-run` only prints the schedule.
+`needs_planning`. `--dry-run` only prints the schedule. `orchestrate stop`
+requests a graceful stop: the worker loop stops after the current task.
 
 `orchestrate status` shows the selected scope's lease: `RUNNING` with owner and
 pid, or `idle`. `orchestrate status --all` lists every orchestration with its
@@ -315,12 +321,17 @@ for a scope, and a lease plus scope-start lock prevents two processes from
 running the same scope. The lease renews every 30 seconds while execution is
 live.
 
-The TUI Runs tab includes the pipeline. Select an Epic, Feature, or Task in
-the Runs list and press `p` to open a Pipeline view scoped to that issue.
+The TUI Runs tab includes orchestration. Select an Epic, Feature, or Task in
+the Runs list and press `p` to open an Orchestration view scoped to that issue.
 `P` does the same from an issue or run detail screen. `r` refreshes the issue
-cache, `x` starts execution for the selected scope, `a` approves the selected
-packet, `A` finishes the selected task, and Enter opens the selected issue. The
+cache, `x` starts execution for the selected scope with the shown settings,
+`s` requests a graceful stop of the running orchestration, `t`/`m`/`f` edit
+tier/min-fit/floors, `P` cycles max-parallel, `c` toggles the after-task
+checkpoint, `M` pins the previewed model, `a` approves the selected packet,
+`A` finishes the selected task, and Enter opens the selected issue. The
 header shows the active orchestration id, checkpoint, and approval counts.
+Each ready task shows the model the build agent would select under the
+current settings.
 Agent result review closes the Task only after the Task PR is merged; human
 result review or a human merge gate waits for `task approve` or
 `orchestrate approve --result`. Parent closure cascades only where the parent's
@@ -328,7 +339,7 @@ approval policy is `agent`.
 
 In the TUI, `p` on a Task or task run runs `task approve`: commit any remaining
 changes, open or merge the Task PR, record acceptance, close the Task, and
-remove the worktree. `A` in the Pipeline view does the same for the selected
+remove the worktree. `A` in the Orchestration view does the same for the selected
 task and updates the orchestration ledger.
 
 Press `D` on a Runs-list issue or an issue detail to open the issue delete

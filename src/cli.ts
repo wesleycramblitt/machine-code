@@ -58,7 +58,7 @@ import { deleteRun } from "./state/run-delete.js";
 import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
-import { acquireLease, createOrchestration, listOrchestrations, readLease, readOrchestration, releaseLease, renewLease, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
+import { acquireLease, clearOrchestrationStop, createOrchestration, listOrchestrations, orchestrationStopRequested, readLease, readOrchestration, releaseLease, renewLease, requestOrchestrationStop, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, issueGlyphKind, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
@@ -238,8 +238,12 @@ Usage:
   machine_code orchestrate tick|start [--dry-run]
                                     [--scope project|epic|feature] [--epic <n>|--feature <n>]
                                     [--max-parallel N] [--max-minutes N] [--max-spend-usd N]
-                                    [--checkpoint after-task]
+                                    [--checkpoint after-task] [--tier free|paid]
+                                    [--min-fit N] [--min-capability N] [--min-axes axes|strict]
+                                    [--model <key>]
                                     Compute or execute ready issue-graph tasks
+  machine_code orchestrate stop --orchestration <id>
+                                    Request a graceful stop after the current task
   machine_code orchestrate approve --orchestration <id> --task <n> [--result]
                                     Approve a packet or result checkpoint
   machine_code tui                 Launch the TUI (default when interactive)
@@ -3217,13 +3221,30 @@ async function cmdProcesses(argv: string[]): Promise<number> {
 async function cmdOrchestrate(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const sub = positional[0] ?? "status";
-  if (sub !== "status" && sub !== "tick" && sub !== "start" && sub !== "approve") {
-    fail("usage: machine_code orchestrate status|tick|start|approve [--all] [--dry-run] [--scope project|epic|feature]");
+  if (sub !== "status" && sub !== "tick" && sub !== "start" && sub !== "approve" && sub !== "stop") {
+    fail("usage: machine_code orchestrate status|tick|start|stop|approve [--all] [--dry-run] [--scope project|epic|feature]");
   }
   const dryRun = flags.has("dry-run") || flags.has("json") || sub === "status";
   const l = layout();
   const machine = loadMachineConfig(l);
   const owner = `cli:${process.pid}`;
+  if (sub === "stop") {
+    const id = flags.get("orchestration");
+    if (!id) fail("usage: machine_code orchestrate stop --orchestration <id>");
+    const state = readOrchestration(l, id);
+    if (!state) fail(`no such orchestration: ${id}`);
+    requestOrchestrationStop(l, id, owner);
+    const lease = readLease(l, id);
+    const running = Boolean(lease && lease.until > Date.now());
+    if (!running) {
+      if (!state.stopReason) updateOrchestration(l, id, { stopReason: "stop requested" });
+      clearOrchestrationStop(l, id);
+      process.stdout.write(`orchestration ${id} is not running; marked stopped\n`);
+    } else {
+      process.stdout.write(`stop requested for orchestration ${id} (${lease!.owner}, pid ${lease!.pid}); it stops after the current task\n`);
+    }
+    return 0;
+  }
   if (sub === "status" && flags.has("all")) {
     const now = Date.now();
     const rows = listOrchestrations(l).map((state) => {
@@ -3365,6 +3386,32 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   if (checkpointFlag !== undefined && checkpointFlag !== "after-task") {
     fail("--checkpoint must be after-task");
   }
+  const tierFlag = flags.get("tier");
+  if (tierFlag !== undefined && tierFlag !== "free" && tierFlag !== "paid") {
+    fail("--tier must be free|paid");
+  }
+  const minFitRaw = flags.get("min-fit");
+  let minFit: number | undefined;
+  if (minFitRaw !== undefined) {
+    minFit = Number(minFitRaw);
+    if (!Number.isFinite(minFit) || minFit < 0 || minFit > 10) fail("--min-fit needs a number in 0-10");
+  }
+  const minCapRaw = flags.get("min-capability");
+  let minCapability: number | undefined;
+  if (minCapRaw !== undefined) {
+    minCapability = Number(minCapRaw);
+    if (!Number.isFinite(minCapability) || minCapability < 0 || minCapability > 10) {
+      fail("--min-capability needs a number in 0-10");
+    }
+  }
+  const minAxesRaw = flags.get("min-axes");
+  /** Literal "strict" bumps every axis floor +0.5, mirroring the TUI preview. */
+  let minAxesStrict = false;
+  let minAxesSnapshot: Partial<Record<import("./config.js").CapabilityAxis, number>> | undefined;
+  if (minAxesRaw !== undefined) {
+    if (minAxesRaw === "strict") minAxesStrict = true;
+    else minAxesSnapshot = parseAxisOverrides(minAxesRaw);
+  }
 
   const issues = await bundle.provider.list({ state: "all", limit: 500 });
   const runs = listRuns(l);
@@ -3422,6 +3469,26 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   }
   if (!orchestration) fail("orchestration state missing");
   const runtime = await loadRuntime(l);
+  if (tierFlag !== undefined) runtime.machine.selection.tier = tierFlag;
+  if (minFit !== undefined) {
+    for (const ap of Object.values(runtime.policy.agents)) ap.minFit = minFit;
+  }
+  if (minCapability !== undefined) {
+    for (const ap of Object.values(runtime.policy.agents)) ap.minCapability = minCapability;
+  }
+  if (minAxesSnapshot) {
+    for (const ap of Object.values(runtime.policy.agents)) ap.minAxes = { ...(ap.minAxes ?? {}), ...minAxesSnapshot };
+  }
+  if (minAxesStrict) {
+    for (const ap of Object.values(runtime.policy.agents)) {
+      const next = { ...(ap.minAxes ?? {}) };
+      for (const axis of CAPABILITY_AXES) {
+        const current = next[axis] ?? ap.minFit ?? 6;
+        next[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
+      }
+      ap.minAxes = next;
+    }
+  }
   const orchestrationId = orchestration.id;
   if (!acquireLease(l, orchestrationId, owner, 120_000)) {
     const current = readLease(l, orchestrationId);
@@ -3552,10 +3619,15 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       .reduce((sum, run) => sum + run.cost.actual, 0);
   const invocationBudget = (): string | undefined =>
     budgetStop({ ...(deadline !== undefined ? { deadline } : {}), ...(maxSpendUsd !== undefined ? { maxSpendUsd } : {}), spentUsd: spentUsd() });
-  const stopped = (): boolean => Boolean(stopReason || checkpoint?.startsWith("awaiting"));
+  const stopFileRequested = (): boolean => orchestrationStopRequested(l, orchestrationId) !== null;
+  const stopped = (): boolean => Boolean(stopReason || checkpoint?.startsWith("awaiting") || stopFileRequested());
   const workerCount = Math.min(Math.max(1, maxParallel), Math.max(1, queue.length));
   const workers = Array.from({ length: workerCount }, async () => {
     while (!stopped()) {
+      if (stopFileRequested()) {
+        stopReason ??= "stop requested";
+        return;
+      }
       const budget = invocationBudget();
       if (budget) {
         stopReason = budget;
@@ -3584,6 +3656,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
     });
   } finally {
     clearInterval(heartbeat);
+    clearOrchestrationStop(l, orchestrationId);
     releaseLease(l, orchestrationId, owner);
   }
   return stopReason ? 1 : 0;

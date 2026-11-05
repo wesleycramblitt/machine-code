@@ -5,7 +5,7 @@
  * operational state needed to avoid duplicate schedulers and to remember a
  * checkpoint or stop reason. It never stores task prose.
  */
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
@@ -48,6 +48,42 @@ export function orchestrationLeasePath(layout: Layout, id: string): string {
 
 export function orchestrationEventsPath(layout: Layout, id: string): string {
   return join(orchestrationsDir(layout), `${id}.events.jsonl`);
+}
+
+/** Cooperative stop request. The worker loop polls this and stops after the current task. */
+export function orchestrationStopPath(layout: Layout, id: string): string {
+  return join(orchestrationsDir(layout), `${id}.stop`);
+}
+
+export function requestOrchestrationStop(layout: Layout, id: string, by = "cli"): void {
+  mkdirSyncSafe(orchestrationsDir(layout));
+  writeFileSync(
+    orchestrationStopPath(layout, id),
+    JSON.stringify({ requestedAt: new Date().toISOString(), by }) + "\n",
+    "utf8",
+  );
+}
+
+export function orchestrationStopRequested(layout: Layout, id: string): { requestedAt: string; by: string } | null {
+  const file = orchestrationStopPath(layout, id);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, "utf8")) as { requestedAt: string; by: string };
+  } catch {
+    return { requestedAt: "", by: "unknown" };
+  }
+}
+
+export function clearOrchestrationStop(layout: Layout, id: string): void {
+  rmSync(orchestrationStopPath(layout, id), { force: true });
+}
+
+function mkdirSyncSafe(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch {
+    // exists or best-effort
+  }
 }
 
 function newId(now = new Date()): string {

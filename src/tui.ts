@@ -19,7 +19,7 @@ import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { addTombstones, readIssueCache, removeTombstones, writeIssueCache } from "./issues/cache.js";
 import type { Issue, IssueRef } from "./issues/provider.js";
-import { filterRuns, headerCounts, issueGlyphKind, issueRowDetail, sortRuns, type RunFilter } from "./tui/status.js";
+import { headerCounts, issueGlyphKind, issueRowDetail, sortRuns } from "./tui/status.js";
 import {
   RUN_GROUPS,
   RUN_GROUP_LABELS,
@@ -41,8 +41,8 @@ import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
-import { planSchedule } from "./orchestrator/scheduler.js";
-import { listOrchestrations, readLease } from "./orchestrator/state.js";
+import { planSchedule, type ScheduledTask } from "./orchestrator/scheduler.js";
+import { listOrchestrations, orchestrationStopRequested, readLease } from "./orchestrator/state.js";
 import { skillListItems, toolListItems, tokensForChars } from "./tui/tools.js";
 import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
@@ -154,7 +154,8 @@ type Page = "runs" | "models" | "spend" | "settings";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline" | "delete";
 type PipelineScope = { kind: "epic" | "feature" | "task"; ref: IssueRef };
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
-type RunListFilter = RunFilter | "attention";
+/** Runs list repo scope: every known repo, or the TUI cwd only. */
+type RunsRepoScope = "all" | "cwd";
 
 const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "runs", label: "Runs", key: "1" },
@@ -635,6 +636,78 @@ function refKey(ref: IssueRef | undefined): string {
   return ref ? `${ref.repo}#${ref.number}` : "";
 }
 
+/** Subtle zebra stripe for timeline rows (slightly lighter than body #0a0a0a). */
+const ZEBRA_BG = "\x1b[48;2;15;15;17m";
+
+/** True for write/edit tool events (both start and completion records). */
+function isEditToolEvent(event: RunEvent): boolean {
+  if (event.type !== "tool_call" && event.type !== "tool_call_start") return false;
+  const tool = String((event as { tool?: unknown }).tool ?? "");
+  return tool === "write" || tool === "edit";
+}
+
+function editEventArgs(event: RunEvent): Record<string, unknown> {
+  const direct = (event as { args?: unknown }).args;
+  if (direct !== undefined && direct !== null) return direct as Record<string, unknown>;
+  const nested = (event as { call?: { args?: unknown } }).call?.args;
+  return (nested ?? {}) as Record<string, unknown>;
+}
+
+/**
+ * Human-readable edit summary: path plus a short -/+ diff snippet.
+ * Timeline keeps full JSON; Thinking and Overview use this instead.
+ */
+function editSummaryLines(event: RunEvent, width: number): string[] {
+  const tool = String((event as { tool?: unknown }).tool ?? "edit");
+  const args = editEventArgs(event);
+  const path = typeof args.path === "string" ? args.path : "(unknown path)";
+  const out: string[] = [`${tool} ${path}`];
+  const pushPair = (oldText: string, newText: string): void => {
+    const olds = oldText.split("\n").filter((line) => line.trim().length > 0).slice(0, 3);
+    const news = newText.split("\n").filter((line) => line.trim().length > 0).slice(0, 3);
+    for (const line of olds) {
+      for (const wrapped of wrapText(line, Math.max(20, width))) {
+        out.push(`- ${trunc(wrapped, Math.max(20, width - 2))}`);
+        if (out.length >= 8) return;
+      }
+    }
+    for (const line of news) {
+      for (const wrapped of wrapText(line, Math.max(20, width))) {
+        out.push(`+ ${trunc(wrapped, Math.max(20, width - 2))}`);
+        if (out.length >= 8) return;
+      }
+    }
+  };
+  if (Array.isArray(args.edits) && args.edits.length > 0) {
+    const first = args.edits[0] as { oldString?: unknown; newString?: unknown };
+    pushPair(String(first.oldString ?? ""), String(first.newString ?? ""));
+    if (args.edits.length > 1) out.push(`… ${args.edits.length - 1} more hunk(s)`);
+  } else if (typeof args.oldString === "string" || typeof args.newString === "string") {
+    pushPair(String(args.oldString ?? ""), String(args.newString ?? ""));
+  } else if (typeof args.content === "string") {
+    const lines = args.content.split("\n").filter((line) => line.trim().length > 0).slice(0, 4);
+    for (const line of lines) {
+      for (const wrapped of wrapText(line, Math.max(20, width))) {
+        out.push(`+ ${trunc(wrapped, Math.max(20, width - 2))}`);
+        if (out.length >= 7) break;
+      }
+    }
+    out.push(`… ${Buffer.byteLength(args.content, "utf8")} bytes total`);
+  }
+  return out;
+}
+
+/** Latest edit/write tool events, newest last, for Thinking and Overview snippets. */
+function recentEditEvents(events: readonly RunEvent[], limit = 5): RunEvent[] {
+  const out: RunEvent[] = [];
+  for (const event of events) {
+    if (event.type !== "tool_call") continue;
+    if (!isEditToolEvent(event)) continue;
+    out.push(event);
+  }
+  return out.slice(-Math.max(1, limit));
+}
+
 /* ------------------------------------------------------------------ app */
 
 export async function runTui(): Promise<void> {
@@ -643,7 +716,8 @@ export async function runTui(): Promise<void> {
 
   let page: Page = "runs";
   let screen: Screen = "list";
-  let runsFilter: RunListFilter = "all";
+  /** Repo scope for the runs list. `f` toggles all repos vs the TUI cwd. */
+  let runsRepoScope: RunsRepoScope = "all";
   let runsText = "";
   let runsGroup: RunGroup = "gh-issue";
   let runsSel = 0;
@@ -660,9 +734,14 @@ export async function runTui(): Promise<void> {
   let modelSel = 0;
   let modelScroll = 0;
   const probingModels = new Set<string>();
+  /** Collapsed model groups (provider/family key). Space folds the selected row's group. */
+  const modelCollapsed = new Set<string>();
   /** Rows in the exact order they are rendered (grouped), used by Enter/selection. */
   let modelVisible: CatalogueRow[] = [];
   let selectedModelKey: string | null = null;
+  /** Catalogue + provider cache: the 1MB models.json stays parsed across frames. */
+  let catalogueCache: { mtime: number; doc: CatalogueDocument | null } | null = null;
+  let statusesCache: { at: number; statuses: ReturnType<typeof providerStatuses> } | null = null;
 
   let spendDaysWindow = 30;
   let spendBy: "provider" | "model" | "day" | "agent" = "provider";
@@ -701,6 +780,27 @@ export async function runTui(): Promise<void> {
   let pipelineScope: PipelineScope | undefined;
   let pipelineSel = 0;
   let pipelineScroll = 0;
+  /** Tasks in the exact order rendered on the orchestration screen (group order). */
+  let pipelineTasks: ScheduledTask[] = [];
+  /** Orchestration settings, edited on the orchestration screen like new-run settings. */
+  let orchTier: "free" | "paid" = "paid";
+  let orchMinFit: number | undefined = undefined;
+  let orchFloors: "role" | "strict" | "off" = "role";
+  let orchMaxParallel = 2;
+  let orchMaxMinutes: number | undefined = undefined;
+  let orchMaxSpend: number | undefined = undefined;
+  let orchCheckpoint = false;
+  let orchModel: string | undefined = undefined;
+  /** Catalogue/policy cache for the per-task model preview. */
+  let orchPreviewCache: {
+    key: string;
+    at: number;
+    catalogue: CatalogueDocument | null;
+    policy: Policy | undefined;
+    machine: MachineConfig | undefined;
+    configured: Set<string>;
+    availability: AvailabilityState;
+  } | null = null;
   const expanded = new Set<string>();
   let changesCache: ChangesCache | null = null;
 
@@ -768,6 +868,8 @@ export async function runTui(): Promise<void> {
   let toast = "";
   let toastAt = 0;
   let pendingRunAt = 0;
+  /** Fast repaints while waiting for a fresh run record, so new runs open in ~250ms not ~1s. */
+  let pendingFastTimer: ReturnType<typeof setInterval> | null = null;
   let issueRefreshAt = 0;
   let issueRefreshing = false;
   let issueStatus = "no cache";
@@ -1358,6 +1460,22 @@ export async function runTui(): Promise<void> {
       screen = "list";
       page = "runs";
       selectedRunId = null;
+      // The 1s background tick is too coarse for run handoff. Repaint fast
+      // until the record resolves so the run-details screen opens promptly.
+      if (pendingFastTimer) clearInterval(pendingFastTimer);
+      pendingFastTimer = setInterval(() => {
+        if (pendingRunAt === 0) {
+          if (pendingFastTimer) clearInterval(pendingFastTimer);
+          pendingFastTimer = null;
+          return;
+        }
+        if (Date.now() - pendingRunAt > 15_000) {
+          if (pendingFastTimer) clearInterval(pendingFastTimer);
+          pendingFastTimer = null;
+          return;
+        }
+        draw();
+      }, 250);
     }
   };
 
@@ -1521,12 +1639,27 @@ export async function runTui(): Promise<void> {
       `${C}●${R} ${counts.active} running`,
       `${Y}?${R} ${counts.awaiting} awaiting`,
       `${Y}⏸${R} ${counts.paused} paused`,
-      ...(activeOrchestrations > 0 ? [`${G}●${R} ${activeOrchestrations} pipeline`] : []),
+      ...(activeOrchestrations > 0 ? [`${G}●${R} ${activeOrchestrations} orchestration`] : []),
     ];
     const statusTokens = [`${Y}PR${R} ${counts.openPrs} open`];
 
-    const catalogue = page === "models" ? loadCatalogue(l.catalogueFile) : null;
-    const statuses = page === "models" ? providerStatuses(createModelsCollection()) : [];
+    let catalogue: CatalogueDocument | null = null;
+    let statuses: ReturnType<typeof providerStatuses> = [];
+    if (page === "models") {
+      try {
+        const mtime = statSync(l.catalogueFile).mtimeMs;
+        if (!catalogueCache || catalogueCache.mtime !== mtime) {
+          catalogueCache = { mtime, doc: loadCatalogue(l.catalogueFile) };
+        }
+        catalogue = catalogueCache.doc;
+      } catch {
+        catalogue = loadCatalogue(l.catalogueFile);
+      }
+      if (!statusesCache || Date.now() - statusesCache.at > 5_000) {
+        statusesCache = { at: Date.now(), statuses: providerStatuses(createModelsCollection()) };
+      }
+      statuses = statusesCache.statuses;
+    }
     const activeProviders = new Set(statuses.map((status) => status.id));
     // Hide stale rows for providers that are disabled or no longer registered.
     const catalogueRows = (catalogue?.models ?? []).filter((row) => activeProviders.has(row.providerID));
@@ -1567,7 +1700,7 @@ export async function runTui(): Promise<void> {
         : runDetailHeader
           ? `  ${B}${theme.headerFg}Run Details${R}`
           : page === "runs" && screen === "pipeline"
-            ? `  ${B}${theme.headerFg}Pipeline${R}`
+            ? `  ${B}${theme.headerFg}Orchestration${R}`
             : page === "models" && screen === "model"
               ? `  ${B}${theme.headerFg}Model Details${R}`
               : "";
@@ -1600,18 +1733,15 @@ export async function runTui(): Promise<void> {
     const hideFooter = screen === "newrun" && newRunInsert;
     const bodyH = Math.max(1, rows - header.length - footerReserve);
 
-    const filteredRuns = runsListScreen
-      ? runsFilter === "all" || runsFilter === "attention"
-        ? allRuns
-        : filterRuns(allRuns, runsFilter)
-      : [];
+    const scopeRuns = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
+    const filteredRuns = runsListScreen ? scopeRuns : [];
     const runIndex = buildRunIndex({
       runs: filteredRuns,
       issuesByRepo: runsListScreen ? issueCachesByRepo : new Map(),
       group: runsGroup,
       collapsed,
       text: runsText,
-      attentionOnly: runsAttention || runsFilter === "attention",
+      attentionOnly: runsAttention,
       preferredRepo: l.repoRoot,
     });
     if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
@@ -1735,7 +1865,7 @@ export async function runTui(): Promise<void> {
       actions = narrow
         ? joinCommands([
             command("n", "New", undefined, C),
-            command("p", "Pipeline", undefined, Y),
+            command("p", "Orchestrate", undefined, Y),
             command("Enter", "Open", undefined, G),
             ...answerAction,
             command("space", "Fold", undefined, Y),
@@ -1744,7 +1874,7 @@ export async function runTui(): Promise<void> {
           ])
         : joinCommands([
             command("n", "New run", undefined, C),
-            command("p", "Pipeline", undefined, Y),
+            command("p", "Orchestrate", undefined, Y),
             command("Enter", "Open", undefined, G),
             ...answerAction,
             command("space", "Fold", undefined, Y),
@@ -1753,7 +1883,7 @@ export async function runTui(): Promise<void> {
           ]);
       extraActions = joinCommands([
         command("g", "Group", RUN_GROUP_LABELS[runsGroup], C),
-        command("f", "Filter", runsFilter, M),
+        command("f", "Repos", runsRepoScope === "all" ? "all" : "cwd", M),
         command("D", "Delete", undefined, RED),
       ]);
       if (toast) secondary = `${Y}${toast}${R}`;
@@ -1819,7 +1949,7 @@ export async function runTui(): Promise<void> {
         command("Enter", "Open", undefined, G),
         command("j/k", "Select", undefined, M),
         command("p", "Approve", undefined, Y),
-        command("P", "Pipeline", undefined, C),
+        command("P", "Orchestrate", undefined, C),
         command("D", "Delete", undefined, RED),
         command("o", "Open URL", undefined, BL),
         command("Esc", "Back", undefined, GR),
@@ -2564,21 +2694,31 @@ export async function runTui(): Promise<void> {
     else if (page === "models" && screen === "list") {
       const lines: string[] = [];
       const groups = groupModels(modelRows, modelGroup);
-      modelVisible = groups.flatMap((group) => group.rows);
+      // Drop rows in collapsed groups; keep modelSel on a visible row.
+      const visibleGroups = groups.map((group) => ({
+        ...group,
+        rows: modelCollapsed.has(group.key) ? [] : group.rows,
+      }));
+      modelVisible = visibleGroups.flatMap((group) => group.rows);
+      if (modelSel >= modelVisible.length) modelSel = Math.max(0, modelVisible.length - 1);
+      const modelsAvail = loadAvailability(l.home);
+      const now = Date.now();
       let flatIndex = 0;
       let selectedLine = 0;
       for (const group of groups) {
-        lines.push(background(fit(` ${B}${theme.sectionFg}${group.key}${R} ${D}(${group.rows.length})${R}`, cols), theme.sectionBg));
+        const isCollapsed = modelCollapsed.has(group.key);
+        const marker = isCollapsed ? "▸" : "▾";
+        lines.push(background(fit(` ${B}${theme.sectionFg}${marker} ${group.key}${R} ${D}(${group.rows.length})${R}`, cols), theme.sectionBg));
+        if (isCollapsed) continue;
         for (const row of group.rows) {
           const isSelected = flatIndex === modelSel;
           if (isSelected) selectedLine = lines.length;
           const free = row.free || (row.pricing.input === 0 && row.pricing.output === 0) ? ` ${G}free${R}` : "";
           const cooling = (() => {
             if (probingModels.has(row.key)) return ` ${C}…${R}`;
-            const avail = loadAvailability(l.home);
-            const phase = avail.models[row.key];
-            if (!phase?.cooldownUntil || phase.cooldownUntil <= Date.now()) return "";
-            const minutes = Math.max(1, Math.ceil((phase.cooldownUntil - Date.now()) / 60_000));
+            const phase = modelsAvail.models[row.key];
+            if (!phase?.cooldownUntil || phase.cooldownUntil <= now) return "";
+            const minutes = Math.max(1, Math.ceil((phase.cooldownUntil - now) / 60_000));
             return ` ${Y}⏱${minutes >= 60 ? `${Math.ceil(minutes / 60)}h` : `${minutes}m`}${R}`;
           })();
           const axes = narrow ? "" : ` ${D}R${row.scores.reasoning.toFixed(1)} C${row.scores.code.toFixed(1)} A${row.scores.agentic.toFixed(1)} G${row.scores.general.toFixed(1)}${R}`;
@@ -2594,6 +2734,7 @@ export async function runTui(): Promise<void> {
       body = clipBody(w.lines);
       actions = joinCommands([
         command("Enter", "Details", undefined, G),
+        command("space", "Fold", undefined, Y),
         command("/", "Search", undefined, BL),
         command("a", "Providers", modelsAll ? "all" : "configured", C),
         command("f", "Free", modelsFree ? "only" : "all", modelsFree ? G : GR),
@@ -2615,25 +2756,36 @@ export async function runTui(): Promise<void> {
         actions = joinCommands([
           command("Esc", "Back", undefined, GR),
         ]);
-        secondary = "no pipeline scope";
+        secondary = "no orchestration scope";
       } else {
         const scopedIssue = issueByRef(scope.ref);
         const scopeTitle = scopedIssue ? `#${scope.ref.number} ${scopedIssue.title}` : `#${scope.ref.number}`;
         const runs = allRuns.filter((run) => run.repoRoot === l.repoRoot);
         const schedule =
           scope.kind === "task"
-            ? planSchedule({ issues, scope: "project", runs, maxParallel: 2 })
-            : planSchedule({ issues, scope: scope.kind, scopeRef: scope.ref, runs, maxParallel: 2 });
+            ? planSchedule({ issues, scope: "project", runs, maxParallel: orchMaxParallel })
+            : planSchedule({ issues, scope: scope.kind, scopeRef: scope.ref, runs, maxParallel: orchMaxParallel });
         const tasks = scope.kind === "task"
           ? schedule.tasks.filter((task) => refKey(task.issue.ref) === refKey(scope.ref))
           : schedule.tasks;
         const ready = tasks.filter((task) => task.ready).length;
         const blocked = tasks.length - ready;
+        const minFitLabel = orchMinFit === undefined ? "auto" : String(orchMinFit);
         lines.push(
-          ` ${B}${W}Pipeline${R} ${D}${scope.kind} ${scopeTitle}${R}  ` +
+          ` ${B}${W}Orchestration${R} ${D}${scope.kind} ${scopeTitle}${R}  ` +
             `${G}${ready} ready${R}  ${Y}${blocked} blocked${R}`,
         );
         lines.push(` ${D}${l.repoRoot}${R}`);
+        lines.push(
+          ` ${D}tier${R} ${tierTone(orchTier)}${orchTier}${R}` +
+            ` ${D}minFit${R} ${W}${minFitLabel}${R}` +
+            ` ${D}floors${R} ${W}${orchFloors}${R}` +
+            ` ${D}parallel${R} ${W}${orchMaxParallel}${R}` +
+            ` ${D}checkpoint${R} ${W}${orchCheckpoint ? "after-task" : "off"}${R}` +
+            ` ${D}model${R} ${C}${orchModel ?? "auto"}${R}` +
+            `${orchMaxMinutes !== undefined ? ` ${D}maxMin${R} ${W}${orchMaxMinutes}${R}` : ""}` +
+            `${orchMaxSpend !== undefined ? ` ${D}maxSpend${R} ${W}$${orchMaxSpend}${R}` : ""}`,
+        );
         const states = listOrchestrations(l);
         const ledger =
           states.find(
@@ -2646,10 +2798,12 @@ export async function runTui(): Promise<void> {
         if (ledger) {
           const lease = readLease(l, ledger.id);
           const running = Boolean(lease && lease.until > Date.now());
+          const stopFile = orchestrationStopRequested(l, ledger.id);
           lines.push(
             ` ${C}${ledger.id}${R}  ${D}${ledger.checkpoint ?? "preflight"}${R}  ` +
               `${running ? `${G}● RUNNING${R} ${D}${lease!.owner}${R}` : `${D}idle${R}`}  ` +
               `${D}packets ${ledger.approvedPackets?.length ?? 0} · results ${ledger.approvedResults?.length ?? 0}${R}` +
+              `${stopFile ? `  ${Y}stop requested${R}` : ""}` +
               `${ledger.stopReason ? `  ${RED}${ledger.stopReason}${R}` : ""}`,
           );
         }
@@ -2665,6 +2819,7 @@ export async function runTui(): Promise<void> {
           lines.push("");
           lines.push(` ${B}${C}Task${R} ${D}#${scope.ref.number}${R} ${W}${scopedIssue?.title ?? ""}${R}`);
           lines.push(`   ${D}Plan${R}    ${plan ? `${plan.status}/${plan.verification} · review ${plan.planReview}/${plan.resultReview}` : "missing"}`);
+          lines.push(`   ${D}Model${R}   ${C}${orchModelForTask(scopedIssue?.title.length ?? 0, plan?.verification)}${R} ${D}tier ${orchTier} · minFit ${orchMinFit === undefined ? "auto" : orchMinFit} · floors ${orchFloors}${R}`);
           lines.push(`   ${D}Run${R}     ${latest ? `${latest.id.slice(-8)} · ${latest.status}${latest.phase ? `/${latest.phase}` : ""} · ${latest.agent}` : "none"}`);
           lines.push(`   ${D}Worktree${R} ${build?.worktree ?? "none"}${build?.commit ? ` · commit ${build.commit.slice(0, 12)}` : ""}`);
           lines.push(`   ${D}PR${R}      ${build?.prNumber ? `#${build.prNumber} ${build.prState ?? "open"}` : "none"}`);
@@ -2683,19 +2838,22 @@ export async function runTui(): Promise<void> {
           lines.push("", ` ${D}No Tasks under this ${scope.kind}.${R}`);
         } else {
           const rows: Array<{ line: string; task?: number }> = [];
+          const ordered: ScheduledTask[] = [];
           let taskIndex = 0;
           const addTask = (task: (typeof tasks)[number]): void => {
             const mark = task.ready ? `${G}READY${R}` : `${Y}BLOCK${R}`;
             const plan = task.plan ? `${task.plan.status}/${task.plan.verification}` : "no-plan";
+            const model = task.ready ? orchModelForTask(task.issue.title.length, task.plan?.verification) : "—";
             const latest = allRuns
               .filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(task.issue.ref))
               .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
             const pr = latest?.prNumber ? ` ${D}PR#${latest.prNumber} ${latest.prState ?? ""}${R}` : "";
             const line =
-              `  ${mark} ${D}#${task.issue.ref.number}${R} ${C}${plan.padEnd(16)}${R} ` +
-              `${W}${trunc(task.issue.title, Math.max(16, cols - 46))}${R}${pr}` +
-              `${task.reason ? ` ${D}${trunc(task.reason, Math.max(12, cols - 90))}${R}` : ""}`;
+              `  ${mark} ${D}#${task.issue.ref.number}${R} ${C}${plan.padEnd(16)}${R} ${M}${trunc(model, 24).padEnd(24)}${R} ` +
+              `${W}${trunc(task.issue.title, Math.max(16, cols - 72))}${R}${pr}` +
+              `${task.reason ? ` ${D}${trunc(task.reason, Math.max(12, cols - 116))}${R}` : ""}`;
             rows.push({ line: selected(line, taskIndex === pipelineSel), task: taskIndex });
+            ordered.push(task);
             taskIndex += 1;
           };
           if (scope.kind === "epic") {
@@ -2716,6 +2874,7 @@ export async function runTui(): Promise<void> {
             for (const task of tasks) addTask(task);
           }
           pipelineSel = Math.max(0, Math.min(pipelineSel, Math.max(0, taskIndex - 1)));
+          pipelineTasks = ordered;
           const selectedRow = rows.findIndex((row) => row.task === pipelineSel);
           const available = Math.max(1, bodyH - lines.length - 1);
           if (selectedRow < pipelineScroll) pipelineScroll = selectedRow;
@@ -2730,17 +2889,22 @@ export async function runTui(): Promise<void> {
         for (const error of schedule.errors) lines.push(` ${RED}${error}${R}`);
         body = clipBody(lines);
         actions = joinCommands([
-          command("r", "Issues", undefined, C),
-          ...(scope.kind === "task"
-            ? [command("x", "Start task", undefined, G), command("A", "Finish task", undefined, Y)]
-            : [
-                command("x", "Start scope", undefined, G),
-                command("a", "Approve packet", undefined, Y),
-                command("A", "Finish task", undefined, Y),
-                command("j/k", "Move", undefined, M),
-              ]),
+          command("x", "Start", undefined, G),
+          command("s", "Stop", undefined, RED),
           command("Enter", "Open issue", undefined, G),
           command("Esc", "Back", undefined, GR),
+        ]);
+        extraActions = joinCommands([
+          command("t", "Tier", orchTier, orchTier === "paid" ? Y : G),
+          command("m", "MinFit", orchMinFit === undefined ? "auto" : String(orchMinFit), C),
+          command("f", "Floors", orchFloors, M),
+          command("P", "Parallel", String(orchMaxParallel), C),
+          command("c", "Checkpoint", orchCheckpoint ? "after-task" : "off", orchCheckpoint ? Y : GR),
+          command("M", "Model", orchModel ?? "auto", BL),
+          command("a", "Approve packet", undefined, Y),
+          command("A", "Finish task", undefined, Y),
+          command("j/k", "Move", undefined, M),
+          command("r", "Issues", undefined, C),
         ]);
         secondary = `${D}${scope.kind} #${scope.ref.number}${R}`;
       }
@@ -2859,7 +3023,7 @@ export async function runTui(): Promise<void> {
           `${B}${tone}${key}${R} ${D}${label}${R}`;
         runHints = joinCommands([
           command("f", "fork", undefined, Y),
-          hint("P", "pipeline", C),
+          hint("P", "orchestrate", C),
           hint("D", "delete", RED),
           ...(pending ? [hint("a", "answer", Y)] : []),
           ...(["running", "awaiting_input", "paused"].includes(s.status)
@@ -2915,66 +3079,49 @@ export async function runTui(): Promise<void> {
         else lines.push(` ${accessMeta}`);
         lines.push("", ...sectionBar, "");
         if (runSection === "overview") {
-          lines.push(` ${B}${statusColor(s.status)}Status${R}`);
-          const statusText = s.error ?? s.status.toUpperCase();
-          const statusTone = s.error || s.status === "failed" ? RED : W;
-          for (const line of wrapText(statusText, cols - 4).slice(0, short ? 3 : 6)) {
-            lines.push(`  ${statusTone}${line}${R}`);
+          // Lean overview: header already carries status/agent/cost. Show the
+          // outcome plus one snippet per detail section (thinking, edits,
+          // activity, changes) instead of duplicating their full bodies.
+          if (s.error || s.status === "failed" || s.status === "blocked") {
+            lines.push(` ${B}${statusColor(s.status)}Status${R}`);
+            const statusText = s.error ?? s.status.toUpperCase();
+            const statusTone = RED;
+            for (const line of wrapText(statusText, cols - 4).slice(0, short ? 3 : 6)) {
+              lines.push(`  ${statusTone}${line}${R}`);
+            }
           }
           if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
-          lines.push("", ` ${B}${G}Summary${R}`);
+          lines.push(` ${B}${G}Summary${R}`);
           for (const rawLine of outcomeText.split("\n")) {
             for (const line of wrapText(rawLine, cols - 4)) lines.push(`  ${W}${line}${R}`);
           }
-          lines.push("", ` ${B}${BL}Request${R}`);
-          for (const line of wrapText(s.request, cols - 4).slice(0, short ? 3 : 6)) lines.push(`  ${W}${line}${R}`);
-          lines.push("", ` ${B}${M}Now${R}`);
-          const lastModel = [...ev].reverse().find((event) => event.type === "model_select" && !event.error);
-          const lastTool = [...ev].reverse().find((event) => event.type === "tool_call_start");
-          const lastEnd = [...ev].reverse().find((event) => event.type === "model_call_end");
-          lines.push(`  ${D}model${R}  ${C}${String(lastModel?.key ?? "(pending)")}${R}`);
-          if (lastTool) lines.push(`  ${D}tool${R}   ${Y}${String(lastTool.tool)}${R} ${D}${JSON.stringify(lastTool.args ?? {}).slice(0, cols - 18)}${R}`);
-          if (lastEnd) lines.push(`  ${D}turn${R}   ${D}${String(lastEnd.stopReason ?? "")}${R} ${D}· ${fmtTokens(Number((lastEnd.usage as { totalTokens?: number } | undefined)?.totalTokens ?? 0))} tok${R}`);
+          lines.push(` ${B}${BL}Request${R}`);
+          for (const line of wrapText(s.request, cols - 4).slice(0, 3)) lines.push(`  ${W}${line}${R}`);
+          const lastThinking = thinking.length > 0 ? thinking[thinking.length - 1] : undefined;
+          if (lastThinking) {
+            lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Thinking${R}`);
+            for (const line of wrapText(lastThinking.text, cols - 4).slice(-3)) lines.push(`  ${D}${line}${R}`);
+          }
+          const snippetEdits = recentEditEvents(ev, 3);
+          if (snippetEdits.length > 0) {
+            lines.push("", ` ${B}${G}Edit snippet${R} ${D}latest ${snippetEdits.length} · full diffs in Thinking${R}`);
+            for (const editEvent of snippetEdits) {
+              const summary = editSummaryLines(editEvent, cols - 6);
+              lines.push(`  ${G}✎${R} ${W}${trunc(summary[0] ?? "edit", Math.max(16, cols - 8))}${R}`);
+            }
+          }
           if (recentActivity.length) {
-            lines.push("", ` ${B}${C}Activity${R}${s.status === "running" ? ` ${G}live${R}` : ""}`);
-            for (const event of recentActivity) {
+            lines.push("", ` ${B}${C}Activity snippet${R}${s.status === "running" ? ` ${G}live${R}` : ""} ${D}full log in Timeline${R}`);
+            for (const event of recentActivity.slice(-4)) {
               const time = String(event.t ?? "").slice(11, 19);
               lines.push(`  ${D}${time}${R} ${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}`);
             }
           }
-          lines.push("", ` ${B}${G}Progress${R}`);
-          const mapRoot = s.worktree ?? s.repoRoot;
-          const semantic = loadSemanticOrDeterministic(mapRoot);
-          const semanticDirty = readSemanticDirty(mapRoot);
-          const mapCached = existsSync(join(mapRoot, ".machine_code", "local", "cache", "map.json"));
-          const mapTone = mapCached ? G : Y;
-          const semanticTone = semantic && semanticDirty.length === 0 ? G : Y;
-          const semanticText = semantic
-            ? `${semanticDirty.length ? `stale (${semanticDirty.length})` : "cached"} · ${Object.values(semantic.modules).filter((entry) => !entry.file).length} modules`
-            : "missing";
-          const lspReady = serverAvailable("typescript");
-          lines.push(
-            `  ${D}map${R}     ${mapTone}${mapCached ? "deterministic cached" : "deterministic missing"}${R}` +
-              ` ${D}·${R} ${D}semantic${R} ${semanticTone}${semanticText}${R}`,
-          );
-          lines.push(`  ${D}lsp${R}     ${lspReady ? G : Y}typescript ${lspReady ? "ready" : "missing"}${R}`);
-          lines.push(`  ${D}startup${R} ${C}${context ? `${context.chars.toLocaleString()} chars / ${context.sources.length} sources` : "not recorded"}${R}`);
-          if (contextPack) {
-            lines.push(`  ${D}pack${R}    ${C}${contextPack.pack.chars.toLocaleString()} chars${R} ${D}·${R} ${C}${contextPack.pack.items.length} items${R} ${D}·${R} ${D}ledger ${contextPack.ledger.chars.toLocaleString()}${R}`);
-          }
-          lines.push(`  ${D}changes${R} ${touched.length ? `${G}${touched.length}${R} ${D}path(s) touched${R}` : `${D}none yet${R}`}`);
-          if (relatedList.length) lines.push(`  ${D}related${R}  ${M}${relatedList.length}${R} ${D}run(s)${R}`);
-          lines.push(`  ${D}parent${R}  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
+          lines.push("", ` ${B}${G}Changes${R} ${touched.length ? `${G}${touched.length}${R} ${D}path(s)${R}` : `${D}none yet${R}`}` +
+            (relatedList.length ? `  ${D}related${R}  ${M}${relatedList.length}${R}` : "") +
+            `  ${D}parent${R}  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
           if (context) {
-            lines.push("", ` ${B}${C}Context${R}`);
-            for (const source of context.sources.slice(0, short ? 3 : 8)) {
-              const tone = contextTone(source.kind);
-              lines.push(`  ${tone}${source.kind.padEnd(10)}${R} ${D}${String(source.bytes).padStart(6)}b${R} ${W}${source.ref}${R}`);
-            }
-          }
-          if (thinking.length) {
-            lines.push("", ` ${B}${Y}Latest thinking${R}`);
-            for (const line of wrapText(thinking[thinking.length - 1]!.text, cols - 4).slice(-Math.max(1, short ? 3 : 8))) lines.push(`  ${W}${line}${R}`);
+            lines.push(`  ${D}context${R} ${C}${context.chars.toLocaleString()} chars / ${context.sources.length} sources${R}`);
           }
           const w = scrollLines(lines, runScroll, bodyH);
           runScroll = w.scroll;
@@ -2982,6 +3129,8 @@ export async function runTui(): Promise<void> {
         } else if (runSection === "timeline") {
           const eventLines: string[] = [];
           const starts: number[] = [];
+          /** Visible events in render order, for zebra striping. */
+          const visibleOrder: number[] = [];
           let timelineAttempt = 0;
           if (timelineFollow) {
             const lastVisible = lastTimelineIndex(ev, timelineVerbose);
@@ -2995,10 +3144,12 @@ export async function runTui(): Promise<void> {
             const event = ev[i]!;
             if (event.type === "model_select" && event.call === 0) timelineAttempt += 1;
             if (!isTimelineEvent(event, timelineVerbose)) continue;
+            visibleOrder.push(i);
             const isSelected = i === eventSel;
             const prefix = isSelected ? `${C}▸${R}` : " ";
             const time = String(event.t ?? "").slice(11, 19);
-            const expandedEvent = expanded.has(`${s.id}:${i}`);
+            // The selected event auto-expands; space toggles the manual set.
+            const expandedEvent = expanded.has(`${s.id}:${i}`) || isSelected;
             const type = String(event.type);
             if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}${event.mode ? `/${event.mode}` : ""}`);
             else if (type === "model_select") {
@@ -3141,6 +3292,19 @@ export async function runTui(): Promise<void> {
             else if (type === "context_assembled") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}context${R} ${D}${fmtTokens(Number(event.chars ?? 0))} chars${R}`);
             else eventLines.push(`${prefix} ${GR}${time}${R} ${D}${type}${R}`);
           }
+          // Zebra striping per event block for scanability. Selected keeps its
+          // normal surface so the ▸ cursor stays legible.
+          for (let order = 0; order < visibleOrder.length; order++) {
+            const evIdx = visibleOrder[order]!;
+            if (evIdx === eventSel) continue;
+            if (order % 2 === 0) continue;
+            const nextIdx = visibleOrder[order + 1];
+            const blockStart = starts[evIdx] ?? 0;
+            const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
+            for (let line = blockStart; line < blockEnd; line++) {
+              eventLines[line] = background(eventLines[line]!, ZEBRA_BG);
+            }
+          }
           eventSel = Math.max(0, Math.min(ev.length - 1, eventSel));
           while (eventSel < ev.length - 1 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel += 1;
           while (eventSel > 0 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel -= 1;
@@ -3164,13 +3328,40 @@ export async function runTui(): Promise<void> {
           lines.push(...eventLines.slice(eventScroll, eventScroll + visibleCount));
           body = clipBody(lines);
         } else if (runSection === "thinking") {
-          const chunks = thinking;
+          // Human-readable output: assistant text interleaved with edit/write
+          // calls rendered as -/+ diff snippets (not raw JSON). Timeline keeps
+          // the full details; this section stays skimmable.
           const thinkingLines: string[] = [];
-          for (const chunk of chunks) {
-            const label = chunk.kind === "thinking" ? `${M}thinking${R}` : `${C}response${R}`;
-            const live = chunk.complete ? "" : `${Y} live${R}`;
-            thinkingLines.push(` ${GR}${String(chunk.at).slice(11, 19)}${R} ${D}call ${chunk.call ?? "?"}${R} ${label}${live}`);
-            for (const line of wrapText(chunk.text, Math.max(20, cols - 6))) thinkingLines.push(` ${chunk.kind === "thinking" ? D : W}${line}${R}`);
+          type ThinkingEntry =
+            | { at: string; kind: "thinking" | "text"; call?: number; complete: boolean; text: string }
+            | { at: string; kind: "edit"; event: RunEvent };
+          const entries: ThinkingEntry[] = [];
+          for (const chunk of thinking) {
+            entries.push({ at: chunk.at, kind: chunk.kind, call: chunk.call, complete: chunk.complete, text: chunk.text });
+          }
+          for (const event of ev) {
+            if (event.type !== "tool_call" || !isEditToolEvent(event)) continue;
+            entries.push({ at: String(event.t ?? ""), kind: "edit", event });
+          }
+          entries.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+          for (const entry of entries) {
+            if (entry.kind === "edit") {
+              const summary = editSummaryLines(entry.event, cols - 6);
+              const failed = Boolean((entry.event as { isError?: unknown }).isError);
+              thinkingLines.push(
+                ` ${GR}${String(entry.at).slice(11, 19)}${R} ${G}✎ edit${R}${failed ? ` ${RED}ERR${R}` : ""} ${W}${trunc(summary[0] ?? "edit", Math.max(16, cols - 24))}${R}`,
+              );
+              for (const line of summary.slice(1)) {
+                const tone = line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
+                thinkingLines.push(`   ${tone}${trunc(line, Math.max(16, cols - 8))}${R}`);
+              }
+              thinkingLines.push("");
+              continue;
+            }
+            const label = entry.kind === "thinking" ? `${M}thinking${R}` : `${C}response${R}`;
+            const live = entry.complete ? "" : `${Y} live${R}`;
+            thinkingLines.push(` ${GR}${String(entry.at).slice(11, 19)}${R} ${D}call ${entry.call ?? "?"}${R} ${label}${live}`);
+            for (const line of wrapText(entry.text, Math.max(20, cols - 6))) thinkingLines.push(` ${entry.kind === "thinking" ? D : W}${line}${R}`);
             thinkingLines.push("");
           }
           if (thinkingLines.length === 0) thinkingLines.push(` ${D}No assistant text recorded yet.${R}`);
@@ -3594,6 +3785,71 @@ export async function runTui(): Promise<void> {
     modelPickSel = index >= 0 ? index + 1 : 0;
   };
 
+  /* --------------------------------------- orchestration screen helpers */
+
+  /** Cached catalogue/policy/machine for the per-task model preview. */
+  const orchPreviewBase = (): {
+    catalogue: CatalogueDocument | null;
+    policy: Policy | undefined;
+    machine: MachineConfig | undefined;
+    configured: Set<string>;
+    availability: AvailabilityState;
+  } => {
+    const key = `${orchTier}\0${orchMinFit ?? ""}\0${orchFloors}\0${orchModel ?? ""}`;
+    if (!orchPreviewCache || orchPreviewCache.key !== key || Date.now() - orchPreviewCache.at > 5_000) {
+      const repoLayout = layout(l.repoRoot);
+      const statuses = providerStatuses(createModelsCollection());
+      const machine = (() => {
+        try { return loadMachineConfig(repoLayout); } catch { return undefined; }
+      })();
+      orchPreviewCache = {
+        key,
+        at: Date.now(),
+        catalogue: loadCatalogue(repoLayout.catalogueFile),
+        policy: effectivePolicy(l.repoRoot),
+        machine,
+        configured: new Set(statuses.filter((status) => status.configured).map((status) => status.id)),
+        availability: loadAvailability(l.home),
+      };
+    }
+    return orchPreviewCache;
+  };
+
+  /** Model the build agent would select for a task under current orch settings. */
+  const orchModelForTask = (titleChars: number, planVerification?: string): string => {
+    const base = orchPreviewBase();
+    if (!base.policy || !base.machine || !base.catalogue) return "—";
+    const ap = base.policy.agents.build;
+    if (!ap) return "—";
+    const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
+    if (orchMinFit !== undefined) effective.minFit = orchMinFit;
+    if (orchFloors === "off") {
+      effective.minFit = 0;
+      for (const axis of CAPABILITY_AXES) effective.minAxes[axis] = 0;
+    }
+    if (orchFloors === "strict") {
+      for (const axis of CAPABILITY_AXES) {
+        const current = effective.minAxes[axis] ?? ap.minFit;
+        effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
+      }
+    }
+    const machine = { ...base.machine, selection: { ...base.machine.selection, tier: orchTier } };
+    const result = pick({
+      agent: "build",
+      policy: effective,
+      machine,
+      catalogue: base.catalogue.models,
+      configuredProviders: base.configured,
+      availability: base.availability,
+      fundedProviders: fundedProviderIds(machine.providers),
+      contextChars: 16_000 + titleChars * 4,
+      tier: orchTier,
+      ...(orchModel ? { requireModel: orchModel } : {}),
+    });
+    if ("error" in result) return "—";
+    return result.selected.key;
+  };
+
   /* ------------------------------------------------------------- input */
 
   const handleKey = (data: string) => {
@@ -3936,14 +4192,14 @@ export async function runTui(): Promise<void> {
     if (page === "runs" && screen === "list") {
       const allRuns = listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id));
       issueCachesByRepo = collectIssueCaches(allRuns);
-      const filtered = runsFilter === "all" || runsFilter === "attention" ? allRuns : filterRuns(allRuns, runsFilter);
+      const scopeFiltered = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
       const index = buildRunIndex({
-        runs: filtered,
+        runs: scopeFiltered,
         issuesByRepo: issueCachesByRepo,
         group: runsGroup,
         collapsed,
         text: runsText,
-        attentionOnly: runsAttention || runsFilter === "attention",
+        attentionOnly: runsAttention,
         preferredRepo: l.repoRoot,
       });
       const repoForRow = (row: RunRow | undefined): string => {
@@ -4042,10 +4298,10 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "f") {
-        const filters: RunListFilter[] = ["all", "active", "awaiting", "paused", "completed", "attention"];
-        runsFilter = filters[(filters.indexOf(runsFilter) + 1) % filters.length]!;
-        runsAttention = runsFilter === "attention";
+        runsRepoScope = runsRepoScope === "all" ? "cwd" : "all";
         runsSel = 0;
+        runsScroll = 0;
+        notify(runsRepoScope === "cwd" ? "showing cwd runs only" : "showing runs from all repos");
         draw();
         return;
       }
@@ -4317,6 +4573,16 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
+      if (data === " ") {
+        const row = modelVisible[modelSel];
+        if (row) {
+          const key = modelGroup === "family" ? (row.family || "other") : modelGroup === "none" ? "all" : row.providerID;
+          if (modelCollapsed.has(key)) modelCollapsed.delete(key);
+          else modelCollapsed.add(key);
+        }
+        draw();
+        return;
+      }
       if (data === "\r" || data === "\n") {
         const row = modelVisible[modelSel];
         if (row) { selectedModelKey = row.key; modelScroll = 0; screen = "model"; }
@@ -4339,6 +4605,7 @@ export async function runTui(): Promise<void> {
         const values: Array<"provider" | "family" | "none"> = ["provider", "family", "none"];
         modelGroup = values[(values.indexOf(modelGroup) + 1) % values.length]!;
         modelSel = 0;
+        modelCollapsed.clear();
         draw();
         return;
       }
@@ -4377,27 +4644,94 @@ export async function runTui(): Promise<void> {
       return;
     }
 
-    /* ----------------------------------------------------- pipeline keys */
+    /* ---------------------------------------------- orchestration keys */
     if (page === "runs" && screen === "pipeline") {
       if (data === "\x1b[A" || data === "k") { pipelineSel = Math.max(0, pipelineSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { pipelineSel++; draw(); return; }
       if (data === "r") { void refreshIssues("current"); draw(); return; }
+      if (data === "t") { orchTier = orchTier === "paid" ? "free" : "paid"; orchPreviewCache = null; draw(); return; }
+      if (data === "m") {
+        const values: Array<number | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 0];
+        orchMinFit = values[(values.findIndex((value) => value === orchMinFit) + 1) % values.length];
+        orchPreviewCache = null;
+        draw();
+        return;
+      }
+      if (data === "f") {
+        const values: Array<"role" | "strict" | "off"> = ["role", "strict", "off"];
+        orchFloors = values[(values.indexOf(orchFloors) + 1) % values.length]!;
+        orchPreviewCache = null;
+        draw();
+        return;
+      }
+      if (data === "P") {
+        const values = [1, 2, 4, 8];
+        orchMaxParallel = values[(values.indexOf(orchMaxParallel) + 1) % values.length] ?? 2;
+        draw();
+        return;
+      }
+      if (data === "c") { orchCheckpoint = !orchCheckpoint; draw(); return; }
+      if (data === "M") {
+        // Pin the model previewed for the selected task, or release the pin.
+        if (pipelineScope?.kind === "task") {
+          const issue = issueByRef(pipelineScope.ref);
+          const model = orchModelForTask(issue?.title.length ?? 0, issue?.plan?.verification);
+          orchModel = orchModel && model === orchModel ? undefined : (model === "—" ? orchModel : model);
+          orchPreviewCache = null;
+          notify(orchModel ? `model pinned ${orchModel}` : "model auto");
+          draw();
+          return;
+        }
+        const task = pipelineTasks[pipelineSel];
+        if (task) {
+          const model = orchModelForTask(task.issue.title.length, task.plan?.verification);
+          orchModel = orchModel && model === orchModel ? undefined : (model === "—" ? orchModel : model);
+          orchPreviewCache = null;
+          notify(orchModel ? `model pinned ${orchModel}` : "model auto");
+        }
+        draw();
+        return;
+      }
       const selected = () => {
-        const scope = pipelineScope;
-        if (!scope) return undefined;
-        const cached = readIssueCache(l)?.issues ?? [];
-        if (scope.kind === "task") {
-          const issue = cached.find((candidate) => refKey(candidate.ref) === refKey(scope.ref));
+        if (pipelineScope?.kind === "task") {
+          const cached = readIssueCache(l)?.issues ?? [];
+          const issue = cached.find((candidate) => refKey(candidate.ref) === refKey(pipelineScope!.ref));
           return issue ? { issue, plan: issue.plan } : undefined;
         }
-        const runs = listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot);
-        const schedule = planSchedule({ issues: cached, scope: scope.kind, scopeRef: scope.ref, runs });
-        const task = schedule.tasks[pipelineSel];
+        const task = pipelineTasks[pipelineSel];
         return task ? { issue: task.issue, plan: task.plan } : undefined;
       };
+      const scopeLedger = () => {
+        const scope = pipelineScope;
+        if (!scope) return undefined;
+        const states = listOrchestrations(l);
+        return states.find(
+          (candidate) =>
+            candidate.scope === scope.kind &&
+            candidate.scopeRef &&
+            refKey(candidate.scopeRef) === refKey(scope.ref),
+        );
+      };
+      if (data === "s") {
+        const state = scopeLedger();
+        if (!state) { notify("no orchestration to stop"); draw(); return; }
+        const lease = readLease(l, state.id);
+        if (!lease || lease.until <= Date.now()) { notify(`${state.id} is not running`); draw(); return; }
+        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+        const child = spawn(process.execPath, [cliPath, "orchestrate", "stop", "--orchestration", state.id], {
+          cwd: l.repoRoot,
+          detached: true,
+          stdio: "ignore",
+          env: process.env,
+        });
+        child.unref();
+        notify(`stop requested for ${state.id}`);
+        draw();
+        return;
+      }
       if (data === "x") {
         const scope = pipelineScope;
-        if (!scope) { notify("no pipeline scope"); draw(); return; }
+        if (!scope) { notify("no orchestration scope"); draw(); return; }
         if (scope.kind !== "task") {
           const state = listOrchestrations(l).find(
             (candidate) =>
@@ -4422,6 +4756,18 @@ export async function runTui(): Promise<void> {
               scope.kind,
               scope.kind === "epic" ? "--epic" : "--feature",
               String(scope.ref.number),
+              "--tier", orchTier,
+              ...(orchMinFit !== undefined ? ["--min-fit", String(orchMinFit)] : []),
+              ...(orchFloors === "off"
+                ? ["--min-axes", "reasoning=0,code=0,agentic=0,general=0"]
+                : orchFloors === "strict"
+                  ? ["--min-axes", "strict"]
+                  : []),
+              "--max-parallel", String(orchMaxParallel),
+              ...(orchMaxMinutes !== undefined ? ["--max-minutes", String(orchMaxMinutes)] : []),
+              ...(orchMaxSpend !== undefined ? ["--max-spend-usd", String(orchMaxSpend)] : []),
+              ...(orchCheckpoint ? ["--checkpoint", "after-task"] : []),
+              ...(orchModel ? ["--model", orchModel] : []),
             ];
         const child = spawn(process.execPath, [cliPath, ...args], {
           cwd: l.repoRoot,
