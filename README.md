@@ -582,19 +582,22 @@ Each run keeps its working memory outside the transcript:
   artifacts/    content-addressed tool bodies
 ```
 
-The model sees the run state, a bounded working context of current files, and
-the last two complete tool steps, not the full tool history. The state block includes merged Read
+The model sees the run state, an always-on overview (packet, knowledge, repo
+map, semantic index), a task context pack, and the last two complete tool steps,
+not the full tool history. The pack is built from the task and plan: task files
+and tests whole when they fit, outlines plus the bodies of named symbols when a
+file is large, one-hop imports and reverse dependencies, the command/script
+inventory, acceptance gates, and a short tool-selection guide. It is rendered
+to the selected model's input budget (context window minus output reserve), not
+to a fixed character cap: a 1M-token model gets the full useful pack, and a
+smaller model gets the same pack fitted to its window. A past-end read is an
+error and never creates read coverage. The state block includes merged Read
 coverage per file with its artifact ids, so the model can see what it already
 knows and can recall the bytes. An edit invalidates only the read ranges that
-overlap the change. Build and sudo runs seed the files named by the task and
-their inferred tests into the working context before the first turn; the
-working context is capped and re-read from disk after edits, so it stays
-current. A next action older than six turns expires and is shown as unset. A
-back-to-back re-read of the same 100-line band returns a nudge with the artifact
-id instead of the same bytes; a later re-read after other work is allowed. The
-`context` tool records decisions, focuses ranges, recalls artifacts, and
-resolves facts. A prompt that exceeds the run envelope or 90% of the selected model's
-window blocks and writes a split report instead of truncating.
+overlap the change. A next action older than six turns expires and is shown as
+unset. The `context` tool records decisions, focuses ranges, recalls artifacts,
+and resolves facts. A prompt that exceeds the run envelope or 90% of the
+selected model's window blocks and writes a split report instead of truncating.
 
 `machine_code prompts [role]` prints the rendered agent prompt with its size.
 Prompts share `data/prompts/base.md`; role files carry only short deltas.

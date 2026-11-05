@@ -229,15 +229,40 @@ test("read truncates one oversized line and still advances", async () => {
   }
 });
 
-test("read reports an offset past the end of the file", async () => {
+test("read section returns one heading block and lists headings on a miss", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-section-"));
+  try {
+    writeFileSync(
+      join(root, "doc.md"),
+      "intro\n## Configuration\nname = x\n## Usage\nrun it\n",
+      "utf8",
+    );
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "doc.md", section: "Configuration" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /doc\.md:2-3 \(section Configuration\)/);
+    assert.match(text, /name = x/);
+    assert.doesNotMatch(text, /run it/);
+
+    const missing = await tool.execute("id", { path: "doc.md", section: "Nope" });
+    assert.equal(missing.isError, true);
+    assert.match(missing.content.map((c) => c.text ?? "").join("\n"), /Configuration/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read reports an offset past the end of the file as an error", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-read-eof-"));
   try {
     writeFileSync(join(root, "small.txt"), "one\ntwo\n", "utf8");
     const tool = readTool({ root, commands: CORE_COMMANDS });
     const result = await tool.execute("id", { path: "small.txt", offset: 999 });
-    assert.equal(result.isError, undefined);
+    assert.equal(result.isError, true);
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /past the end of small\.txt/);
+    assert.match(text, /file ends at line 3/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -328,6 +353,21 @@ test("sections mode finds comment headings inside a large file", async () => {
     assert.match(text, /3: \/\* -+ run keys \*\//);
     assert.match(text, /4: \/\/ ---- orchestrate keys ----/);
     assert.doesNotMatch(text, /not a section/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("text search returns repo-relative paths for a directory scope", async () => {
+  const root = initRepoWithSecrets();
+  try {
+    mkdirSync(join(root, "sub"), { recursive: true });
+    writeFileSync(join(root, "sub", "a.ts"), "export const HIT = 1;\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const scoped = await tool.execute("id", { mode: "text", pattern: "HIT", path: "sub" });
+    const text = scoped.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /^sub\/a\.ts:1:/m, "directory-scoped search keeps the root prefix");
+    assert.doesNotMatch(text, /^a\.ts:1:/m);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

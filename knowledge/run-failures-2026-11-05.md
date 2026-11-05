@@ -30,6 +30,40 @@ Scope: `.machine_code/local/runs/` runs `20261105-041337-ig70`,
 7. The TUI shows an `a answer` hint in run detail and accepts `a` on the run
    list. Ask options are selectable with `1`–`9`.
 
+## Run `20261105-072535-q02z` — Build research loop
+
+The task was correctly decomposed: the source edits landed by turn ~12. The run
+then spent 490 more turns re-reading four files. It was interrupted at 514
+model calls, 11.4M total tokens, and $0.80.
+
+Causes:
+
+1. A past-end `read` returned a successful empty page. State ingestion turned
+   that note into a read fact with a fabricated range, so the model saw fake
+   coverage (`test/...:300-439`) and kept paging past a 266-line file.
+2. The repeat guards were streak-only. Reads of `probe.ts` (187),
+   `refresh.ts` (156), and `cli.ts` (99) alternated files or shifted the offset
+   by a few lines, so no guard fired. Search repeated the same test scope 16
+   times with synonym patterns.
+3. The plan gate only applies before the first change. After the first edit,
+   research was unbounded.
+4. Directory-scoped text search returned paths relative to the scope
+   (`availability-probe.test.js`), not the worktree, which polluted the working
+   set with files that do not exist at the root.
+5. The working context keeps only the last tool refs and a bounded slice of
+   each file. The model did not trust it and re-acquired the same bytes.
+
+Correctness fixes kept:
+
+- A past-end read is an error and is not ingested as coverage.
+- Directory-scoped text search returns worktree-relative paths.
+
+Rejected fix:
+
+- Per-band, per-file, per-scope, no-progress, turn, and token caps. The loop
+  must be prevented by a better context and tool model, not by blocking useful
+  tool calls. The only accepted stop is a detected loop that kills the run.
+
 ## Verification
 
 - `test/loop-policy.test.js` covers the role gate, plan detection, and read

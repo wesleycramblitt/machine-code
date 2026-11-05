@@ -35,7 +35,7 @@ import {
   rangeAround,
 } from "../map/deterministic.js";
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
-import { sectionHeadings } from "../map/sections.js";
+import { documentSections, sectionTitle } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
 import { issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
@@ -80,10 +80,11 @@ function fail(text: string): AgentToolResult<undefined> {
 
 const ReadParams = Type.Object({
   path: Type.String({ description: "File path, relative to the worktree root." }),
-  offset: Type.Optional(Type.Number({ description: "1-based line to start at (default 1)." })),
+  offset: Type.Optional(Type.Number({ description: "1-based line to start at (default 1). Use only for a large unindexed file." })),
   limit: Type.Optional(Type.Number({ description: "Max lines to return (default 2000)." })),
-  symbol: Type.Optional(Type.String({ description: "Top-level symbol to read (resolved from the repo map)." })),
+  symbol: Type.Optional(Type.String({ description: "Top-level symbol to read (resolved from the repo map). Prefer this." })),
   around: Type.Optional(Type.Number({ description: "1-based line; read the symbol that contains it." })),
+  section: Type.Optional(Type.String({ description: "Comment section heading to read in a non-code or large file. Prefer this over offset paging." })),
 });
 
 /** Find a nested or non-map declaration so `read { symbol }` can still help. */
@@ -107,9 +108,11 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     name: "read",
     label: "read",
     description:
-      "Read a file inside the worktree. Use symbol or around for a surgical range; offset/limit page. " +
-      "Capped at 24 KiB per call; a bare full read of a larger file returns its outline. Binary files are rejected. " +
-      "Examples: {\"path\":\"src/tui.ts\",\"offset\":2400,\"limit\":120}; {\"path\":\"src/tui.ts\",\"symbol\":\"runTui\"}.",
+      "Read a file inside the worktree. Prefer symbol or section for a targeted sweep; use offset/limit only " +
+      "for a large unindexed file. Capped at 24 KiB per call; a bare full read of a larger file returns its outline. " +
+      "Binary files are rejected. A past-end offset is an error; do not page further. " +
+      "Examples: {\"path\":\"src/tui.ts\",\"symbol\":\"runTui\"}; {\"path\":\"README.md\",\"section\":\"Configuration\"}; " +
+      "{\"path\":\"src/tui.ts\",\"offset\":2400,\"limit\":120}.",
     parameters: ReadParams,
     async execute(_id, params: Static<typeof ReadParams>) {
       try {
@@ -122,6 +125,9 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         if (params.symbol && params.around != null) {
           return fail("use symbol or around, not both");
         }
+        if (params.section && (params.symbol || params.around != null)) {
+          return fail("use section or symbol/around, not both");
+        }
         // Symbol/around wins when a model also passes offset/limit. Ignore the
         // paging arguments instead of spending a turn on a schema correction.
 
@@ -130,7 +136,26 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         let header = "";
         let symbolFallback = false;
 
-        if (params.symbol || params.around != null) {
+        if (params.section) {
+          const headings = documentSections(raw, params.path);
+          const needle = params.section.trim().toLowerCase();
+          const index = headings.findIndex((heading) => {
+            const title = sectionTitle(heading.text).toLowerCase();
+            return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
+          });
+          if (index < 0) {
+            const known = headings.slice(0, 12).map((heading) => sectionTitle(heading.text) || heading.text);
+            return fail(
+              `no section "${params.section}" in ${params.path}. ` +
+                (known.length > 0 ? `Known sections:\n${known.join("\n")}` : "This file has no section headings; use symbol or a range."),
+            );
+          }
+          const heading = headings[index]!;
+          const next = headings[index + 1];
+          offset = heading.line;
+          limit = Math.max(1, (next ? next.line - 1 : lines.length) - heading.line + 1);
+          header = `${params.path}:${offset}-${offset + limit - 1} (section ${sectionTitle(heading.text) || heading.text})`;
+        } else if (params.symbol || params.around != null) {
           const file = await outlineFile(ctx.root, params.path);
           const range = file
             ? params.symbol
@@ -178,7 +203,14 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         }
 
         if (offset > lines.length) {
-          return ok(`[offset ${offset} is past the end of ${params.path} (${lines.length} lines)]`);
+          // A past-end page is an error, not an empty successful read. The
+          // state ingester would otherwise record a read range that does not
+          // exist and the model would page forever.
+          const last = Math.max(1, lines.length);
+          return fail(
+            `offset ${offset} is past the end of ${params.path} (${lines.length} lines). ` +
+              `The file ends at line ${last}. Do not page further; use symbol, around, or context recall.`,
+          );
         }
         const page = numberLinesCapped(lines, offset, limit, READ_CAP_BYTES);
         const notes: string[] = [];
@@ -428,8 +460,11 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 .replaceAll(`${ctx.root}/`, "");
               return ok(text);
             }
-            if (scopeIsFile) args.push(params.path ?? scope);
-            return await exec("rg", args, scopeIsFile ? ctx.root : scope, SEARCH_CAP_BYTES);
+            // Always run from the worktree root and pass the scope as a target.
+            // With cwd=scope, rg prints paths relative to that directory, which
+            // the state ingester then stores as bogus root-relative files.
+            if (scopeIsFile || scope !== ctx.root) args.push(toRelative(ctx.root, scope));
+            return await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
           }
           case "map": {
             const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
@@ -487,7 +522,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             if (isBinaryFile(abs)) return fail(`refusing to read a binary file: ${sectionPath}`);
             const text = readFileSync(abs, "utf8");
             const lines = text.split("\n");
-            const found = sectionHeadings(text).map((heading) => `${heading.line}: ${heading.text}`);
+            const found = documentSections(text, sectionPath).map((heading) => `${heading.line}: ${heading.text}`);
             if (found.length === 0) return ok(`no section headings in ${sectionPath}; use outline or text`);
             return ok(`${sectionPath} (${lines.length} lines)\n${found.slice(0, limit).join("\n")}`);
           }

@@ -8,6 +8,7 @@
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
+import { TOOL_GUIDE } from "../tools/policy.js";
 
 interface MessageLike {
   role?: string;
@@ -25,6 +26,18 @@ function toolCalls(message: MessageLike): string[] {
     if (b.type === "toolCall" && typeof b.id === "string") ids.push(b.id);
   }
   return ids;
+}
+
+/**
+ * The task pack carries task files with the correct size. Remove the assembled
+ * file blocks so a truncated copy cannot compete with the pack.
+ */
+function withoutFileBlocks(text: string | undefined): string | undefined {
+  if (!text || !text.includes('<context-block kind="file"')) return text;
+  const stripped = text
+    .replace(/<context-block kind="file"[^>]*>[\s\S]*?<\/context-block>\s*/g, "")
+    .trim();
+  return stripped.length > 0 ? stripped : undefined;
 }
 
 /** Keep the last few complete assistant/tool steps, never an orphan call. */
@@ -66,11 +79,19 @@ export function renderPromptMessages(
   state: RunStateStore,
   mapIndex?: string,
   startupContext?: string,
+  packText?: string,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // The bound task packet leads. It names the work; the repo map is reference.
-  const block = [startupContext, mapIndex, state.renderBlock(), state.renderWorkingContext()]
+  // The task pack holds symbol-aware specifics, and the state block holds the
+  // current plan/changes. Stable content stays before volatile state so the
+  // provider cache can reuse the prefix. A run without a pack falls back to the
+  // working-context slice.
+  const details = packText ?? state.renderWorkingContext();
+  const guide = packText ? "" : TOOL_GUIDE;
+  const startup = packText ? withoutFileBlocks(startupContext) : startupContext;
+  const block = [startup, mapIndex, guide, details, state.renderBlock()]
     .filter(Boolean)
     .join("\n\n");
   const user: MessageLike = {

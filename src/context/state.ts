@@ -879,11 +879,22 @@ export class RunStateStore {
       if (toolName === "read" && path) {
         const header = /^([^:\n]+):(\d+)-(\d+)(?: \(([^)]+)\))?/.exec(resultText.trimStart());
         const symbol = header?.[4] ?? str(args.symbol);
-        const range: [number, number] | undefined = header
-          ? [Number(header[2]), Number(header[3])]
-          : str(args.symbol)
-            ? undefined
-            : [num(args.offset, 1), num(args.offset, 1) + num(args.limit, 1) - 1];
+        const numbered = [...resultText.matchAll(/^(\d+): /gm)].map((match) => Number(match[1]));
+        let range: [number, number] | undefined;
+        if (header) {
+          range = [Number(header[2]), Number(header[3])];
+        } else if (str(args.symbol)) {
+          range = undefined;
+        } else if (args.offset != null || args.limit != null) {
+          const offset = num(args.offset, 1);
+          range = [offset, offset + num(args.limit, 1) - 1];
+        } else if (numbered.length > 0) {
+          range = [numbered[0]!, numbered[numbered.length - 1]!];
+        } else {
+          // A read that returned an outline or a harness note has no bytes to
+          // record. Never invent a range from the default page size.
+          continue;
+        }
         const ref: Ref = {
           path,
           ...(symbol ? { symbol } : {}),

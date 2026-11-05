@@ -1,15 +1,16 @@
 # machine_code — repository knowledge
 
 machine_code is a Linux-first coding-agent harness. One run is one role
-(general, planner, build, review, architect) with a bounded tool loop, a
-file-based run directory, and explicit outcome/verdict lines. It optimizes
-correctness per dollar, not maximum autonomy.
+(general, planner, build, review) with a tool loop, a file-based run
+directory, and explicit outcome lines. It optimizes correctness per dollar,
+not maximum autonomy.
 
 ## Start here
 - README.md — user-facing behavior and config.
 - knowledge/architecture.md — runtime flow, module map, invariants.
-- knowledge/model-tool-calling.md — native calls, markup and argument repair.
-- knowledge/run-failures-2026-11-05.md — four-run incident and fixes.
+- knowledge/context-pack.md — budgets, task pack, tool order.
+- knowledge/model-tool-calling.md — native calls and repair.
+- knowledge/run-failures-2026-11-05.md — incidents.
 - plans/plan.md — remaining work and open validation.
 - src/ — TypeScript source. test/ — node:test suites. data/ — prompts,
   agents, models, offers. .machine_code/ — repo policy and skills.
@@ -31,7 +32,7 @@ CLI (`src/cli.ts`) → run loop (`src/loop.ts`) → context assembly
 
 ## Invariants
 - No shell tool; commands are typed specs (`src/commands/registry.ts`).
-- Context is bounded and provenance is recorded in `context.json`.
+- Context is model-budgeted; provenance is in `context.json`.
 - Run state is the memory; earlier tool output is not replayed.
 - Tool calls are structured. Text tool-call markup is a malformed response;
   the loop cools the model and rotates, or fails. It never completes.

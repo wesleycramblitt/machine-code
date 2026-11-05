@@ -236,6 +236,32 @@ test("ingestTurn ignores harness errors from read and search", () => {
   }
 });
 
+test("a non-content read note never becomes read coverage", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-note", goal: "plan" });
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "n1", name: "read", args: { path: "src/big.ts" } }),
+        result({
+          id: "n1",
+          name: "read",
+          text: "[src/big.ts is 900 lines / 30000 bytes; full read exceeds 24576 bytes]\nexport function run()",
+        }),
+      ],
+      1,
+    );
+    const block = store.renderBlock();
+    assert.equal(store.getState().facts.filter((fact) => fact.key.startsWith("read:")).length, 0);
+    assert.doesNotMatch(block, /Read coverage:/);
+    assert.equal(store.getState().workingSet.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("explicit context focus survives automatic ingestion", () => {
   const dir = tempDir();
   try {

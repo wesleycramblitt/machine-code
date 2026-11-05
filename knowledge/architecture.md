@@ -24,7 +24,8 @@ state, selection, and verification; the model owns decisions and edits.
 - **Run loop** (`src/loop.ts`): turn budget, token budget, exact-repeat guard,
   retries, final-answer fallback, semantic refresh scheduling.
 - **Context** (`src/context/`): issue hierarchy, packets, knowledge files,
-  plans, skills, tool index, run-state rendering, manifest/provenance.
+  plans, skills, tool index, run-state rendering, model-derived budgets
+  (`budget.ts`), the task context pack (`pack.ts`), and manifest/provenance.
 - **Selection** (`src/select.ts`, `src/catalogue/`): capability floors, cost,
   availability, provider multipliers, free/paid tiers.
 - **Tools** (`src/tools/`): read/search/edit/write, typed commands, issues,
@@ -73,9 +74,13 @@ the remaining probe work.
 
 ## Invariants
 
-- Context is bounded; every block has provenance in `context.json`.
-- Run state is the memory; the transcript is not replayed. Current working
-  files are re-read from disk into a bounded working context.
+- Context is model-budgeted; every block has provenance in `context.json`.
+- Run state is the memory; the transcript is not replayed. Build, sudo, and
+  review runs render a task pack with symbol-aware specifics instead of a
+  fixed working-context slice.
+- The task pack is task- and plan-aware: task files and tests whole when they
+  fit, outlines plus named symbol bodies for large files, one-hop imports and
+  reverse dependencies, commands/scripts, acceptance gates, and the tool guide.
 - One logical change per tool call; read the smallest unit that justifies it.
 - Tool calls are structured. Text tool-call markup is malformed; rotate models
   or fail, never complete.
@@ -91,8 +96,10 @@ the remaining probe work.
 - A completed run stays completed even when a recoverable plan checkpoint fired.
 - An edit invalidates only overlapping read ranges; read coverage carries
   artifact ids for recall.
-- Build and sudo seed task-named files and inferred tests into a bounded
-  working context. The working context is re-read from disk after edits.
+- Build, sudo, and review build a task pack from the task, plan, and map. The
+  pack is re-read from disk after edits and fitted to the selected model.
+- A read that returns only an outline or a past-end note never becomes read
+  coverage.
 - The deterministic semantic index persists to `semantic.json`; module edges
   come from resolved TS/JS imports. LSP remains the exact symbol layer.
 - Read-only commands are cached until the next edit, write, or mutating command.
