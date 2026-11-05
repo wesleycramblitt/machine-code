@@ -34,6 +34,7 @@ import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { runLoop, type RunLoopResult } from "./loop.js";
 import { policyFor, type OrchestrateResult } from "./orchestrate.js";
 import { resolveGates, runGates } from "./verify.js";
+import { defaultSkillsFor } from "./context/references.js";
 import { allCommands } from "./commands/profiles.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, reusableWorktreeOwner, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
@@ -180,6 +181,8 @@ Usage:
   machine_code processes kill <run-id> <process-id|all>
   machine_code processes logs <run-id> <process-id>
   machine_code context <run-id>     Print the run context manifest
+  machine_code pack <request>       Preview the task pack before a run [--issue <ref>]
+                                    [--agent <role>] [--model <key>] [--context] [--json]
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
                                     --no-symbols, --semantic)
   machine_code lsp [list|status]    Language servers, availability, and repo coverage (--json)
@@ -1354,6 +1357,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
     exclude: contextExclude,
     include: contextInclude,
+    defaultSkills: defaultSkillsFor({ agent: agentNameParsed, verification: agentOverrides.verification }),
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources });
@@ -3762,6 +3766,108 @@ function cmdShow(argv: string[]): number {
   return 0;
 }
 
+async function cmdPack(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const l = layout();
+  const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
+  const agent = flags.get("agent") ?? "build";
+  const agentPolicy = policy.agents[agent];
+  if (!agentPolicy) fail(`unknown agent "${agent}"; choose one of ${Object.keys(policy.agents).join(", ")}`);
+
+  let request = positional.join(" ").trim();
+  let taskText = "";
+  if (flags.has("issue")) {
+    const bundle = await createIssueProvider(l, machine);
+    if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
+    const ref = parseIssueRef(flags.get("issue")!, bundle.repo, "github");
+    const issue = await bundle.provider.get(ref);
+    if (!issue) fail(`no such issue: ${flags.get("issue")}`);
+    taskText = issue.body;
+    request = request || `${issue.title}\n\n${issue.body}`;
+  }
+  if (!request) fail("pack needs a request text or --issue");
+
+  const { buildRepoMap } = await import("./map/deterministic.js");
+  const { buildTaskPack, packManifest, renderContextPack } = await import("./context/pack.js");
+  const { contextBudget, inputCost } = await import("./context/budget.js");
+  const built = await buildRepoMap(l.repoRoot);
+
+  let row = flags.get("model")
+    ? catalogueDoc.models.find((entry) => entry.key === flags.get("model") || entry.id === flags.get("model") || `${entry.providerID}/${entry.id}` === flags.get("model"))
+    : undefined;
+  if (flags.get("model") && !row) fail(`no catalogue row for model "${flags.get("model")}"`);
+  if (!row) {
+    const result = pick({
+      agent,
+      policy: agentPolicy,
+      machine,
+      catalogue: catalogueDoc.models,
+      configuredProviders,
+      availability: loadAvailability(l.home),
+      fundedProviders: fundedProviderIds(machine.providers),
+      contextChars: Math.min(64_000, request.length + 16_000),
+    });
+    if ("error" in result) fail(result.error);
+    row = result.selected;
+  }
+
+  const budget = contextBudget(row.context || row.capabilities.contextWindow, agentPolicy.expectedOutputTokens);
+  const pack = buildTaskPack({
+    root: l.repoRoot,
+    layout: l,
+    request,
+    taskText,
+    planText: "",
+    mapFiles: built.map.files,
+    commands: allCommands(l),
+    budgetChars: budget.inputChars,
+    maxFiles: agent === "planner" ? 10 : 18,
+    mode: agent === "planner" ? "overview" : "task",
+  });
+  const packBudget = Math.max(4_000, budget.inputChars - 20_000);
+  const rendered = renderContextPack(pack, { maxChars: packBudget });
+  const cost = inputCost(rendered.tokens, row.pricing.input);
+  const manifest = packManifest(pack);
+
+  if (flags.has("json")) {
+    process.stdout.write(
+      `${JSON.stringify({
+        request,
+        agent,
+        model: row.key,
+        contextWindow: row.context,
+        inputBudgetTokens: budget.inputTokens,
+        pack: manifest,
+        rendered: {
+          chars: rendered.chars,
+          tokens: rendered.tokens,
+          included: rendered.included,
+          omitted: rendered.omitted,
+        },
+        estimatedInputCost: cost,
+      }, null, 2)}\n`,
+    );
+    return 0;
+  }
+
+  process.stdout.write(`pack ${row.key}  agent ${agent}  window ${fmtCtx(row.context)}  input budget ${fmtTokens(budget.inputTokens)} tok\n`);
+  process.stdout.write(
+    `  items ${pack.items.length}  chars ${pack.chars.toLocaleString()} (~${fmtTokens(pack.tokens)} tok)  ` +
+      `rendered ${rendered.chars.toLocaleString()} (~${fmtTokens(rendered.tokens)} tok)  ` +
+      `omitted ${rendered.omitted.length}  est input ${fmtMoney(cost)}\n`,
+  );
+  for (const item of pack.items.slice(0, flags.has("context") ? pack.items.length : 12)) {
+    process.stdout.write(`  ${item.kind.padEnd(10)} ${String(item.chars).padStart(7)}b ${item.ref}  ${item.reason}\n`);
+  }
+  if (!flags.has("context") && pack.items.length > 12) {
+    process.stdout.write(`  … ${pack.items.length - 12} more item(s) (--context)\n`);
+  }
+  if (rendered.omitted.length > 0) {
+    process.stdout.write(`  omitted: ${rendered.omitted.slice(0, 6).map((item) => `${item.ref} (${item.reason})`).join("; ")}${rendered.omitted.length > 6 ? `; +${rendered.omitted.length - 6} more` : ""}\n`);
+  }
+  return 0;
+}
+
 function cmdContext(argv: string[]): number {
   const id = argv.find((arg) => !arg.startsWith("--"));
   if (!id) fail("context needs a run id");
@@ -4196,6 +4302,9 @@ async function main(): Promise<void> {
       break;
     case "context":
       code = cmdContext(rest);
+      break;
+    case "pack":
+      code = await cmdPack(rest);
       break;
     case "spend":
       code = cmdSpend(rest);

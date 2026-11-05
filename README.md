@@ -211,7 +211,9 @@ page structure remains readable.
 `machine_code show <run-id>` exposes the same overview, summary, context,
 changes, related lineage, and event stream as the run detail screen.
 `machine_code context <run-id>` prints the assembled context plus the task-pack
-and ledger manifest that the model actually received. `machine_code spend` and
+and ledger manifest that the model actually received. `machine_code pack
+"<request>"` previews the task pack before a run; add `--issue`, `--agent`,
+`--model`, `--context`, or `--json` to tune the view. `machine_code spend` and
 `machine_code models` cover the catalogue and cost views without the TUI.
 
 Every terminal run records a deterministic outcome summary in

@@ -97,6 +97,8 @@ Implemented:
   `context_state`; write `context-pack.json` for inspection.
 - `machine_code context <run-id>` prints the assembled context plus pack,
   rendered, omitted, and ledger manifests.
+- `machine_code pack <request>` previews a prospective task pack before a run;
+  `--issue`, `--agent`, `--model`, `--context`, and `--json` tune the view.
 - `read { symbols: [...] }` and `read { sections: [...] }` for a targeted sweep
   in one call; `read { section }` supports Markdown headings and comment
   banners. `read` prefers symbol/section and treats a past-end page as an error.
