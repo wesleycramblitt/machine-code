@@ -11,7 +11,7 @@
  * the task and plan name.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import type { MapFile, MapSymbol } from "../map/deterministic.js";
@@ -30,6 +30,7 @@ export type PackKind =
   | "gate"
   | "command"
   | "artifact"
+  | "knowledge"
   | "guide"
   | "section";
 
@@ -325,6 +326,39 @@ export function buildTaskPack(input: BuildPackInput): ContextPack {
       const start = Math.max(1, lines.length - 59);
       add(packItem("section", `${path}#tail`, numbered(lines, start, lines.length), 45, "test tail for appending"));
     }
+  }
+
+  // Relevant knowledge notes are overview material. The knowledge index is
+  // already in the assembled context; include the strongest matching notes.
+  const knowledgeDir = join(input.root, "knowledge");
+  try {
+    const notes = readdirSync(knowledgeDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .map((entry) => entry.name)
+      .filter((name) => name !== "index.md")
+      .slice(0, 60);
+    const scored = notes
+      .map((name) => {
+        const text = readText(join(knowledgeDir, name)) ?? "";
+        const haystack = `${name}\n${text.slice(0, 8_000)}`.toLowerCase();
+        let score = 0;
+        for (const word of keywords) {
+          if (word.length < 5 || GENERIC_SYMBOL_WORDS.has(word)) continue;
+          score += (name.toLowerCase().includes(word) ? 10 : 0) + (haystack.split(word).length - 1);
+        }
+        return { name, text, score };
+      })
+      .filter((entry) => entry.score >= 8)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    for (const note of scored) {
+      const body = note.text.length <= 12_000
+        ? note.text
+        : `${note.text.slice(0, 12_000).replace(/\s+$/, "")}\n…[truncated]`;
+      add(packItem("knowledge", `knowledge/${note.name}`, body, 5, `knowledge note (score ${note.score})`));
+    }
+  } catch {
+    // No knowledge directory is not a run failure.
   }
 
   // Commands and artifacts are part of the task context, not discovery work.

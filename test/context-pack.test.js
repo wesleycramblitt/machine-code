@@ -63,6 +63,26 @@ test("task pack includes full task files, tests, and one-hop dependencies", () =
   }
 });
 
+test("task keywords select relevant knowledge notes", () => {
+  const root = tempRepo();
+  try {
+    mkdirSync(join(root, "knowledge"), { recursive: true });
+    writeFileSync(join(root, "knowledge", "zebracorn.md"), "# Zebracorn\nzebracorn behaviour notes\n", "utf8");
+    writeFileSync(join(root, "knowledge", "unrelated.md"), "# Other\nnothing here\n", "utf8");
+    const pack = buildTaskPack({
+      root,
+      request: "Fix the zebracorn behaviour",
+      mapFiles: [],
+      budgetChars: 20_000,
+      maxFiles: 2,
+    });
+    assert.ok(pack.items.some((item) => item.kind === "knowledge" && item.ref === "knowledge/zebracorn.md"));
+    assert.ok(!pack.items.some((item) => item.ref === "knowledge/unrelated.md"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a large file becomes an outline plus named symbol bodies", () => {
   const root = tempRepo();
   try {

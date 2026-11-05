@@ -35,13 +35,14 @@ Priority:
 
 1. task-named files and inferred tests, whole when they fit
 2. plan-named files
-3. one-hop imports and reverse dependencies
-4. for a large file: outline, named section, and bodies of symbols the task or
+3. relevant knowledge notes (keyword-scored; the index is already in the overview)
+4. one-hop imports and reverse dependencies
+5. for a large file: outline, named section, and bodies of symbols the task or
    plan names (at most six)
-5. test tail for append-heavy test files
-6. command and artifact inventory
-7. acceptance gates
-8. tool-selection guide
+6. test tail for append-heavy test files
+7. command and artifact inventory
+8. acceptance gates
+9. tool-selection guide
 
 It does not include all dependencies whole. A small dependency (under 8k
 characters) is included whole; a larger one gets its outline. The model reads a
