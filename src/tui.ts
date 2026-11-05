@@ -32,7 +32,7 @@ import {
   type RunRow,
 } from "./tui/runs.js";
 import { scrollLines, selectableLines } from "./tui/scroll.js";
-import { describeTimelineEvent, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "./tui/timeline.js";
+import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type AgentPolicy, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
@@ -58,6 +58,7 @@ import { loadCatalogue } from "./catalogue/load.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
+import { contextBudget } from "./context/budget.js";
 import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "./context/references.js";
 import { listReferenceEntries } from "./references/store.js";
 import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
@@ -1480,6 +1481,11 @@ export async function runTui(): Promise<void> {
       "--ambiguity", newrun.ambiguity,
       ...(newRunParentId ? ["--parent", newRunParentId] : []),
     ];
+    const previewPolicy = policy?.agents[newrun.agent];
+    if (modelState.model && previewPolicy) {
+      const budget = contextBudget(modelState.model.context, previewPolicy.expectedOutputTokens);
+      args.push("--context-budget", String(budget.inputChars));
+    }
     if (newrun.floors === "off") {
       args.push("--min-fit", "0");
     } else if (newrun.minFit !== undefined) {
@@ -2492,7 +2498,19 @@ export async function runTui(): Promise<void> {
         0,
       );
       const contextTokens = Math.max(0, totalTokens - excludedTokens) + tokensForChars(ctx.promptChars);
-      footerCtx = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}`;
+      const previewPolicy = preview.policy?.agents[newrun.agent];
+      const modelChars = preview.model && previewPolicy
+        ? contextBudget(preview.model.context, previewPolicy.expectedOutputTokens).inputChars
+        : undefined;
+      const usedChars = contextTokens * 4;
+      const contextWarning = modelChars === undefined
+        ? ""
+        : usedChars >= modelChars
+          ? ` ${RED}over model input budget${R}`
+          : usedChars >= modelChars * 0.8
+            ? ` ${Y}${Math.round((usedChars / modelChars) * 100)}% of model input budget${R}`
+            : "";
+      footerCtx = `${C}ctx${R} ${W}${(contextTokens / 1000).toFixed(1)}K${R}${contextWarning}`;
       // The context panel and prompt box share the same width.
       const panelWidth = Math.max(20, cols - 2);
       const panelLine = (line: string, isSelected = false, indent = false): string => {
@@ -3402,11 +3420,12 @@ export async function runTui(): Promise<void> {
               const input = typeof event.input === "string" ? event.input : "";
               if (input) {
                 const inputLines = input.split("\n");
+                while (inputLines.length > 0 && inputLines[inputLines.length - 1]!.trim() === "") inputLines.pop();
                 // The head is the repeating system prompt; the tail is the
                 // unique send for this call, so the preview shows the tail.
-                const shown = expandedEvent ? inputLines : inputLines.slice(-3);
-                if (!expandedEvent && inputLines.length > 3) {
-                  eventLines.push(`    ${D}… ${inputLines.length - 3} head lines hidden (space to expand)${R}`);
+                const shown = expandedEvent ? inputLines : inputLines.slice(-4);
+                if (!expandedEvent && inputLines.length > 4) {
+                  eventLines.push(`    ${D}… ${inputLines.length - 4} head lines hidden (space to expand)${R}`);
                 }
                 for (const line of shown) {
                   for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
@@ -3430,7 +3449,7 @@ export async function runTui(): Promise<void> {
               ).trim();
               if (output) {
                 const outputLines = output.split("\n");
-                const shown = expandedEvent ? outputLines : outputLines.slice(0, 3);
+                const shown = expandedEvent ? outputLines : outputLines.slice(0, 4);
                 const more =
                   !expandedEvent && outputLines.length > shown.length
                     ? ` ${D}(${outputLines.length - shown.length} more lines; space to expand)${R}`
@@ -3447,7 +3466,7 @@ export async function runTui(): Promise<void> {
                 .trim();
               if (reasoning) {
                 const reasoningLines = reasoning.split("\n");
-                const shown = expandedEvent ? reasoningLines : reasoningLines.slice(0, 3);
+                const shown = expandedEvent ? reasoningLines : reasoningLines.slice(0, 4);
                 const more =
                   !expandedEvent && reasoningLines.length > shown.length
                     ? ` ${D}(${reasoningLines.length - shown.length} more lines; space to expand)${R}`
@@ -3464,39 +3483,53 @@ export async function runTui(): Promise<void> {
               // Streaming deltas are coalesced by the Thinking section; showing
               // each chunk here split the response into unreadable fragments.
             } else if (type === "tool_call_start") {
-              eventLines.push(`${prefix} ${GR}${time}${R} ${Y}⚡${R} ${B}${String(event.tool)}${R} ${D}calling…${R}`);
-              if (event.args) {
+              const startArgs = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
+              const human = describeToolArgs(String(event.tool ?? ""), startArgs ?? undefined);
+              eventLines.push(`${prefix} ${GR}${time}${R} ${Y}⚡${R} ${B}${String(event.tool)}${R}${human ? ` ${D}${trunc(human, Math.max(12, cols - 24))}${R}` : ` ${D}calling…${R}`}`);
+              if (expandedEvent && event.args) {
                 const argsText = stripAnsi(JSON.stringify(event.args));
-                if (expandedEvent) {
-                  for (const line of wrapText(argsText, cols - 6)) eventLines.push(`    ${D}${line}${R}`);
-                } else {
-                  eventLines.push(`    ${D}${trunc(argsText.replace(/\s+/g, " "), Math.max(20, cols - 8))}${R}`);
-                }
+                for (const line of wrapText(argsText, cols - 6)) eventLines.push(`    ${D}${line}${R}`);
               }
             } else if (type === "tool_call") {
-              const isEdit = event.tool === "write" || event.tool === "edit";
-              eventLines.push(`${prefix} ${GR}${time}${R} ${isEdit ? `${G}✎${R}` : `${Y}⚡${R}`} ${B}${String(event.tool)}${R} ${event.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof event.durationMs === "number" ? ` ${D}${event.durationMs}ms${R}` : ""}`);
-              const args = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) ?? null;
-              if (expandedEvent && args) {
-                for (const line of wrapText(JSON.stringify(args), cols - 6)) eventLines.push(`    ${D}${line}${R}`);
+              const toolName = String(event.tool ?? "");
+              const isEdit = toolName === "write" || toolName === "edit";
+              const callArgs = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
+              const human = describeToolArgs(toolName, callArgs);
+              eventLines.push(`${prefix} ${GR}${time}${R} ${isEdit ? `${G}✎${R}` : `${Y}⚡${R}`} ${B}${toolName}${R} ${event.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof event.durationMs === "number" ? ` ${D}${event.durationMs}ms${R}` : ""}${human ? ` ${D}${trunc(human, Math.max(12, cols - 32))}${R}` : ""}`);
+              if (expandedEvent && callArgs) {
+                for (const line of wrapText(JSON.stringify(callArgs), cols - 6)) eventLines.push(`    ${D}${line}${R}`);
+              }
+              if (isEdit && !expandedEvent) {
+                // The diff is the meat of an edit; the raw result ("ok") is not.
+                for (const line of editSummaryLines(event, cols - 6, 5).slice(1)) {
+                  const tone = line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
+                  eventLines.push(`    ${tone}${trunc(line, Math.max(16, cols - 8))}${R}`);
+                }
               }
               const result = event.result;
-              if (result !== undefined) {
+              if (result !== undefined && (expandedEvent || !isEdit)) {
                 const text = stripAnsi(typeof result === "string" ? result : JSON.stringify(result));
                 if (expandedEvent) {
                   for (const line of text.split("\n")) {
                     for (const wrapped of wrapText(line, cols - 6)) eventLines.push(`    ${G}→${R} ${wrapped}`);
                   }
                 } else {
-                  const preview = text.split("\n").filter((line) => line.trim().length > 0).slice(0, 2);
+                  const preview = text.split("\n").filter((line) => line.trim().length > 0).slice(0, 3);
                   for (const line of preview) eventLines.push(`    ${G}→${R} ${trunc(line, Math.max(20, cols - 8))}`);
-                  if (text.split("\n").length > 2) eventLines.push(`    ${D}… (space to expand)${R}`);
+                  if (text.split("\n").length > 3) eventLines.push(`    ${D}… (${text.split("\n").length - 3} more; space to expand)${R}`);
                 }
               }
             } else if (type === "gates") {
+              const results = Array.isArray(event.results) ? (event.results as Array<{ passed?: boolean; command?: string }>) : [];
               eventLines.push(`${prefix} ${GR}${time}${R} ${B}⊞ gates${R} ${event.passed ? `${G}PASS${R}` : `${RED}FAIL${R}`}`);
+              if (!expandedEvent && !event.passed) {
+                // A failing gate's command is the actionable part.
+                for (const gate of results.filter((gate) => !gate.passed).slice(0, 2)) {
+                  eventLines.push(`    ${RED}✗${R} ${trunc(String(gate.command ?? ""), Math.max(16, cols - 10))}`);
+                }
+              }
               if (expandedEvent && Array.isArray(event.results)) {
-                for (const gate of event.results as Array<{ passed?: boolean; command?: string }>) eventLines.push(`    ${gate.passed ? `${G}✓` : `${RED}✗`}${R} ${gate.command}`);
+                for (const gate of results) eventLines.push(`    ${gate.passed ? `${G}✓` : `${RED}✗`}${R} ${gate.command}`);
               }
             } else if (type === "error_classified") eventLines.push(`${prefix} ${GR}${time}${R} ${RED}⚠ ${String(event.kind)}${R}`);
             else if (type === "malformed_tool_call") eventLines.push(`${prefix} ${GR}${time}${R} ${RED}⚠ malformed tool call${R} ${D}${String(event.model ?? "")}${R}`);
@@ -3692,6 +3725,7 @@ export async function runTui(): Promise<void> {
               const tone = contextTone(source.kind);
               lines.push(`  ${tone}${source.kind.padEnd(10)}${R} ${D}${String(source.bytes).padStart(6)}b${R} ${D}${source.origin.padEnd(9)}${R} ${W}${trunc(source.ref, cols - 36)}${R}${source.truncated ? ` ${Y}trunc${R}` : ""}${source.warning ? ` ${Y}${source.warning}${R}` : ""}`);
             }
+            for (const warning of context.warnings) lines.push(`  ${Y}warning${R} ${W}${warning}${R}`);
           }
           const w = scrollLines(lines, runScroll, bodyH);
           runScroll = w.scroll;

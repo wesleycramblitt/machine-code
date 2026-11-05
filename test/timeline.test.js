@@ -57,3 +57,16 @@ test("event descriptions are one-line and ANSI-free", () => {
   assert.match(describeTimelineEvent({ type: "turn_cap", turns: 25 }), /25/);
   assert.doesNotMatch(describeTimelineEvent({ type: "error_classified", kind: "rate-limit" }), /\x1b/);
 });
+
+test("tool args render as human one-liners, not JSON", async () => {
+  const { describeToolArgs } = await import("../dist/tui/timeline.js");
+  assert.equal(describeToolArgs("read", { path: "src/a.ts", symbol: "runLoop" }), "src/a.ts#runLoop");
+  assert.equal(describeToolArgs("read", { path: "src/a.ts", offset: 10, limit: 20 }), "src/a.ts#10:20");
+  assert.equal(describeToolArgs("edit", { path: "src/a.ts", edits: [{}, {}] }), "src/a.ts · 2 hunks");
+  assert.equal(describeToolArgs("search", { pattern: "foo", mode: "text" }), '"foo" text');
+  assert.equal(describeToolArgs("search", { pattern: "foo" }), '"foo"');
+  assert.equal(describeToolArgs("command", { action: "run", name: "core:status" }), "run core:status");
+  assert.equal(describeToolArgs("issue", { action: "view", issue: "123" }), "view 123");
+  assert.equal(describeToolArgs("mystery", { path: "x", name: "y" }), "x y");
+  assert.equal(describeToolArgs("read", null), "");
+});
