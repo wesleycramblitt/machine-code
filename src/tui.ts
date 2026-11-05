@@ -59,7 +59,7 @@ import { filterModels, groupModels, siblingOffers, type ModelSort } from "./cata
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
 import { skillMetas } from "./context/references.js";
-import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
+import { changesFor, contextUsage, readContextManifest, readContextPackManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
@@ -2832,6 +2832,7 @@ export async function runTui(): Promise<void> {
           readInbox(detail.dir),
         );
         const context = readContextManifest(detail.dir);
+        const contextPack = readContextPackManifest(detail.dir);
         const relatedList = relatedRuns(allRuns, s);
         const thinking = thinkingChunks(ev);
         const outcomeText =
@@ -2957,6 +2958,9 @@ export async function runTui(): Promise<void> {
           );
           lines.push(`  ${D}lsp${R}     ${lspReady ? G : Y}typescript ${lspReady ? "ready" : "missing"}${R}`);
           lines.push(`  ${D}startup${R} ${C}${context ? `${context.chars.toLocaleString()} chars / ${context.sources.length} sources` : "not recorded"}${R}`);
+          if (contextPack) {
+            lines.push(`  ${D}pack${R}    ${C}${contextPack.pack.chars.toLocaleString()} chars${R} ${D}·${R} ${C}${contextPack.pack.items.length} items${R} ${D}·${R} ${D}ledger ${contextPack.ledger.chars.toLocaleString()}${R}`);
+          }
           lines.push(`  ${D}changes${R} ${touched.length ? `${G}${touched.length}${R} ${D}path(s) touched${R}` : `${D}none yet${R}`}`);
           if (relatedList.length) lines.push(`  ${D}related${R}  ${M}${relatedList.length}${R} ${D}run(s)${R}`);
           lines.push(`  ${D}parent${R}  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
@@ -3255,6 +3259,21 @@ export async function runTui(): Promise<void> {
             for (const source of context.sources) {
               const tone = contextTone(source.kind);
               lines.push(`  ${tone}${source.kind.padEnd(10)}${R} ${D}${String(source.bytes).padStart(6)}b${R} ${D}${source.origin.padEnd(9)}${R} ${W}${trunc(source.ref, cols - 36)}${R}${source.truncated ? ` ${Y}trunc${R}` : ""}${source.warning ? ` ${Y}${source.warning}${R}` : ""}`);
+            }
+          }
+          if (contextPack) {
+            lines.push(
+              "",
+              ` ${B}${C}Task pack${R} ${D}${contextPack.pack.chars.toLocaleString()} chars / ${contextPack.pack.items.length} items · ` +
+                `rendered ${contextPack.rendered.chars.toLocaleString()} · omitted ${contextPack.rendered.omitted.length} · ` +
+                `ledger ${contextPack.ledger.chars.toLocaleString()} · overview ${(contextPack.overviewChars ?? 0).toLocaleString()}${R}`,
+            );
+            for (const item of contextPack.pack.items.slice(0, short ? 4 : 16)) {
+              const tone = item.kind === "file" || item.kind === "test" || item.kind === "symbol" ? C : D;
+              lines.push(`  ${tone}${item.kind.padEnd(10)}${R} ${D}${String(item.chars).padStart(7)}b${R} ${W}${trunc(item.ref, cols - 28)}${R}`);
+            }
+            if (contextPack.pack.items.length > (short ? 4 : 16)) {
+              lines.push(`  ${D}… ${contextPack.pack.items.length - (short ? 4 : 16)} more pack item(s)${R}`);
             }
           }
           const w = scrollLines(lines, runScroll, bodyH);
