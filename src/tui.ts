@@ -41,7 +41,7 @@ import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
-import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
+import { planSchedule } from "./orchestrator/scheduler.js";
 import { listOrchestrations } from "./orchestrator/state.js";
 import { skillListItems, toolListItems, tokensForChars } from "./tui/tools.js";
 import { toolSchemaChars } from "./tools/schema.js";
@@ -152,6 +152,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
 
 type Page = "runs" | "models" | "spend" | "settings";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline";
+type PipelineScope = { kind: "epic" | "feature" | "task"; ref: IssueRef };
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
 type RunListFilter = RunFilter | "attention";
 
@@ -690,10 +691,9 @@ export async function runTui(): Promise<void> {
   let thinkingScroll = 0;
   let thinkingFollow = true;
   let childSel = 0;
-  let orchestrateScope: OrchestrationScope = "project";
-  let orchestrateRef: IssueRef | undefined;
-  let orchestrateSel = 0;
-  let orchestrateScroll = 0;
+  let pipelineScope: PipelineScope | undefined;
+  let pipelineSel = 0;
+  let pipelineScroll = 0;
   const expanded = new Set<string>();
   let changesCache: ChangesCache | null = null;
 
@@ -1097,15 +1097,6 @@ export async function runTui(): Promise<void> {
 
   const effectivePolicy = (repoRoot = l.repoRoot): Policy | undefined => {
     try { return loadPolicy(layout(repoRoot)); } catch { return undefined; }
-  };
-
-  const orchestrateCandidates = (): Array<{ scope: OrchestrationScope; ref?: IssueRef }> => {
-    const cached = readIssueCache(l)?.issues ?? [];
-    return [
-      { scope: "project" },
-      ...cached.filter((issue) => issue.kind === "epic").map((issue) => ({ scope: "epic" as const, ref: issue.ref })),
-      ...cached.filter((issue) => issue.kind === "feature").map((issue) => ({ scope: "feature" as const, ref: issue.ref })),
-    ];
   };
 
   const modelPreview = (): {
@@ -1760,6 +1751,7 @@ export async function runTui(): Promise<void> {
         command("Enter", "Open", undefined, G),
         command("j/k", "Select", undefined, M),
         command("p", "Approve", undefined, Y),
+        command("P", "Pipeline", undefined, C),
         command("o", "Open URL", undefined, BL),
         command("Esc", "Back", undefined, GR),
       ]);
@@ -2486,82 +2478,140 @@ export async function runTui(): Promise<void> {
 
     /* ---------------------------------------------------------- pipeline */
     else if (page === "runs" && screen === "pipeline") {
-      const runs = allRuns.filter((run) => run.repoRoot === l.repoRoot);
-      let scopeRef = orchestrateRef;
-      if (orchestrateScope !== "project" && !scopeRef) {
-        const wanted = orchestrateScope === "epic" ? "epic" : "feature";
-        const first = issues.find((issue) => issue.kind === wanted);
-        scopeRef = first?.ref;
-        orchestrateRef = scopeRef;
-      }
-      const schedule = planSchedule({
-        issues,
-        scope: orchestrateScope,
-        ...(scopeRef ? { scopeRef } : {}),
-        runs,
-        maxParallel: 2,
-      });
-      const scopeText = schedule.scopeRef ? `${schedule.scope} #${schedule.scopeRef.number}` : schedule.scope;
-      const states = listOrchestrations(l);
-      const ledger =
-        states.find(
-          (candidate) =>
-            candidate.scope === orchestrateScope &&
-            ((!scopeRef && !candidate.scopeRef) ||
-              (scopeRef &&
-                candidate.scopeRef?.repo === scopeRef.repo &&
-                candidate.scopeRef.number === scopeRef.number)),
-        ) ?? states[0];
-      const lines: string[] = [
-        ` ${B}${W}Pipeline${R} ${D}${scopeText}${R}  ${G}${schedule.ready.length} ready${R}  ${Y}${schedule.blocked.length} blocked${R}  ${D}${schedule.dispatch.length} dispatch${R}`,
-        ` ${D}${l.repoRoot}${R}`,
-      ];
-      if (ledger) {
-        lines.push(
-          ` ${C}${ledger.id}${R}  ${D}${ledger.checkpoint ?? "preflight"}${R}  ` +
-            `${D}packets ${ledger.approvedPackets?.length ?? 0} · results ${ledger.approvedResults?.length ?? 0}${R}` +
-            `${ledger.stopReason ? `  ${RED}${ledger.stopReason}${R}` : ""}`,
-        );
-      }
-      if (issues.length === 0) {
-        lines.push("", ` ${Y}No cached issues. Press r to refresh.${R}`);
-      } else if (schedule.tasks.length === 0) {
-        lines.push("", ` ${D}No tasks in scope.${R}`);
+      const scope = pipelineScope;
+      const lines: string[] = [];
+      if (!scope) {
+        lines.push("", ` ${Y}Select an Epic, Feature, or Task in the Runs list, then press p.${R}`);
+        body = clipBody(lines);
+        actions = joinCommands([
+          command("Esc", "Back", undefined, GR),
+        ]);
+        secondary = "no pipeline scope";
       } else {
-        const taskLines: string[] = [];
-        for (let i = 0; i < schedule.tasks.length; i++) {
-          const task = schedule.tasks[i]!;
-          const mark = task.ready ? `${G}READY${R}` : `${Y}BLOCK${R}`;
-          const plan = task.plan ? `${task.plan.status}/${task.plan.verification}` : "no-plan";
-          const line =
-            ` ${mark} ${D}#${task.issue.ref.number}${R} ${C}${plan.padEnd(16)}${R} ` +
-            `${W}${trunc(task.issue.title, Math.max(16, cols - 38))}${R}` +
-            `${task.reason ? ` ${D}${trunc(task.reason, Math.max(12, cols - 80))}${R}` : ""}`;
-          taskLines.push(selected(line, i === orchestrateSel));
+        const scopedIssue = issueByRef(scope.ref);
+        const scopeTitle = scopedIssue ? `#${scope.ref.number} ${scopedIssue.title}` : `#${scope.ref.number}`;
+        const runs = allRuns.filter((run) => run.repoRoot === l.repoRoot);
+        const schedule =
+          scope.kind === "task"
+            ? planSchedule({ issues, scope: "project", runs, maxParallel: 2 })
+            : planSchedule({ issues, scope: scope.kind, scopeRef: scope.ref, runs, maxParallel: 2 });
+        const tasks = scope.kind === "task"
+          ? schedule.tasks.filter((task) => refKey(task.issue.ref) === refKey(scope.ref))
+          : schedule.tasks;
+        const ready = tasks.filter((task) => task.ready).length;
+        const blocked = tasks.length - ready;
+        lines.push(
+          ` ${B}${W}Pipeline${R} ${D}${scope.kind} ${scopeTitle}${R}  ` +
+            `${G}${ready} ready${R}  ${Y}${blocked} blocked${R}`,
+        );
+        lines.push(` ${D}${l.repoRoot}${R}`);
+        const states = listOrchestrations(l);
+        const ledger =
+          states.find(
+            (candidate) =>
+              candidate.scopeRef &&
+              (refKey(candidate.scopeRef) === refKey(scope.ref) ||
+                (scopedIssue?.parent && refKey(candidate.scopeRef) === refKey(scopedIssue.parent))),
+          ) ??
+          states.find((candidate) => candidate.scope === "project");
+        if (ledger) {
+          lines.push(
+            ` ${C}${ledger.id}${R}  ${D}${ledger.checkpoint ?? "preflight"}${R}  ` +
+              `${D}packets ${ledger.approvedPackets?.length ?? 0} · results ${ledger.approvedResults?.length ?? 0}${R}` +
+              `${ledger.stopReason ? `  ${RED}${ledger.stopReason}${R}` : ""}`,
+          );
         }
-        orchestrateSel = Math.max(0, Math.min(orchestrateSel, taskLines.length - 1));
-        const available = Math.max(1, bodyH - lines.length - 1);
-        if (orchestrateSel < orchestrateScroll) orchestrateScroll = orchestrateSel;
-        if (orchestrateSel >= orchestrateScroll + available) orchestrateScroll = orchestrateSel - available + 1;
-        orchestrateScroll = Math.max(0, Math.min(orchestrateScroll, Math.max(0, taskLines.length - available)));
-        lines.push(...taskLines.slice(orchestrateScroll, orchestrateScroll + available));
+        if (issues.length === 0) {
+          lines.push("", ` ${Y}No cached issues. Press r to refresh.${R}`);
+        } else if (scope.kind === "task") {
+          const taskRuns = allRuns
+            .filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(scope.ref))
+            .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+          const latest = taskRuns[0];
+          const build = taskRuns.find((run) => run.agent === "build" || run.phase === "build") ?? latest;
+          const plan = scopedIssue?.plan;
+          lines.push("");
+          lines.push(` ${B}${C}Task${R} ${D}#${scope.ref.number}${R} ${W}${scopedIssue?.title ?? ""}${R}`);
+          lines.push(`   ${D}Plan${R}    ${plan ? `${plan.status}/${plan.verification} · review ${plan.planReview}/${plan.resultReview}` : "missing"}`);
+          lines.push(`   ${D}Run${R}     ${latest ? `${latest.id.slice(-8)} · ${latest.status}${latest.phase ? `/${latest.phase}` : ""} · ${latest.agent}` : "none"}`);
+          lines.push(`   ${D}Worktree${R} ${build?.worktree ?? "none"}${build?.commit ? ` · commit ${build.commit.slice(0, 12)}` : ""}`);
+          lines.push(`   ${D}PR${R}      ${build?.prNumber ? `#${build.prNumber} ${build.prState ?? "open"}` : "none"}`);
+          const next = latest?.status === "completed"
+            ? `machine_code task approve ${scope.ref.number}`
+            : latest?.status === "blocked" || latest?.status === "failed"
+              ? `machine_code task start ${scope.ref.number} --retry`
+              : plan?.status === "ready"
+                ? `machine_code task start ${scope.ref.number}`
+                : `machine_code run --agent planner --issue ${scope.ref.number}`;
+          lines.push(`   ${D}Next${R}    ${next}`);
+          if (build?.prNumber && build.prState === "open") {
+            lines.push(`           ${Y}awaiting review/merge${R}`);
+          }
+        } else if (tasks.length === 0) {
+          lines.push("", ` ${D}No Tasks under this ${scope.kind}.${R}`);
+        } else {
+          const rows: Array<{ line: string; task?: number }> = [];
+          let taskIndex = 0;
+          const addTask = (task: (typeof tasks)[number]): void => {
+            const mark = task.ready ? `${G}READY${R}` : `${Y}BLOCK${R}`;
+            const plan = task.plan ? `${task.plan.status}/${task.plan.verification}` : "no-plan";
+            const latest = allRuns
+              .filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(task.issue.ref))
+              .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
+            const pr = latest?.prNumber ? ` ${D}PR#${latest.prNumber} ${latest.prState ?? ""}${R}` : "";
+            const line =
+              `  ${mark} ${D}#${task.issue.ref.number}${R} ${C}${plan.padEnd(16)}${R} ` +
+              `${W}${trunc(task.issue.title, Math.max(16, cols - 46))}${R}${pr}` +
+              `${task.reason ? ` ${D}${trunc(task.reason, Math.max(12, cols - 90))}${R}` : ""}`;
+            rows.push({ line: selected(line, taskIndex === pipelineSel), task: taskIndex });
+            taskIndex += 1;
+          };
+          if (scope.kind === "epic") {
+            const groups = new Map<string, { label: string; tasks: typeof tasks }>();
+            for (const task of tasks) {
+              const key = task.issue.parent ? refKey(task.issue.parent) : "";
+              const parent = task.issue.parent ? issueByRef(task.issue.parent) : undefined;
+              const label = parent ? `#${parent.ref.number} ${parent.title}` : "Unparented Tasks";
+              const group = groups.get(key) ?? { label, tasks: [] };
+              group.tasks.push(task);
+              groups.set(key, group);
+            }
+            for (const group of groups.values()) {
+              rows.push({ line: ` ${B}${C}${trunc(group.label, Math.max(20, cols - 2))}${R}` });
+              for (const task of group.tasks) addTask(task);
+            }
+          } else {
+            for (const task of tasks) addTask(task);
+          }
+          pipelineSel = Math.max(0, Math.min(pipelineSel, Math.max(0, taskIndex - 1)));
+          const selectedRow = rows.findIndex((row) => row.task === pipelineSel);
+          const available = Math.max(1, bodyH - lines.length - 1);
+          if (selectedRow < pipelineScroll) pipelineScroll = selectedRow;
+          if (selectedRow >= pipelineScroll + available) pipelineScroll = selectedRow - available + 1;
+          pipelineScroll = Math.max(0, Math.min(pipelineScroll, Math.max(0, rows.length - available)));
+          lines.push(...rows.slice(pipelineScroll, pipelineScroll + available).map((row) => row.line));
+        }
+        if (scope.kind !== "task") {
+          const dispatch = tasks.filter((task) => task.ready).map((task) => `#${task.issue.ref.number}`);
+          if (dispatch.length > 0) lines.push("", ` ${D}dispatch ${R}${dispatch.join(", ")}`);
+        }
+        for (const error of schedule.errors) lines.push(` ${RED}${error}${R}`);
+        body = clipBody(lines);
+        actions = joinCommands([
+          command("r", "Issues", undefined, C),
+          ...(scope.kind === "task"
+            ? [command("x", "Start task", undefined, G), command("A", "Finish task", undefined, Y)]
+            : [
+                command("x", "Start scope", undefined, G),
+                command("a", "Approve packet", undefined, Y),
+                command("A", "Finish task", undefined, Y),
+                command("j/k", "Move", undefined, M),
+              ]),
+          command("Enter", "Open issue", undefined, G),
+          command("Esc", "Back", undefined, GR),
+        ]);
+        secondary = `${D}${scope.kind} #${scope.ref.number}${R}`;
       }
-      if (schedule.dispatch.length > 0) {
-        lines.push("", ` ${D}dispatch ${R}${schedule.dispatch.map((task) => `#${task.issue.ref.number}`).join(", ")}`);
-      }
-      for (const error of schedule.errors) lines.push(` ${RED}${error}${R}`);
-      body = clipBody(lines);
-      actions = joinCommands([
-        command("s", "Scope", orchestrateScope, Y),
-        command("r", "Issues", undefined, C),
-        command("x", "Start", undefined, G),
-        command("a", "Approve", undefined, Y),
-        command("A", "Result", undefined, Y),
-        command("j/k", "Move", undefined, M),
-        command("Enter", "Open issue", undefined, G),
-        command("Esc", "Back", undefined, GR),
-      ]);
-      secondary = `${D}${scopeText}${R}`;
     }
 
     /* ------------------------------------------------------------ spend */
@@ -2676,6 +2726,7 @@ export async function runTui(): Promise<void> {
           `${B}${tone}${key}${R} ${D}${label}${R}`;
         runHints = joinCommands([
           command("f", "fork", undefined, Y),
+          hint("P", "pipeline", C),
           ...(runSection === "timeline"
             ? [
                 hint("j/k", "events"),
@@ -3642,7 +3693,22 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
-      if (data === "p") { screen = "pipeline"; orchestrateSel = 0; orchestrateScroll = 0; draw(); return; }
+      if (data === "p") {
+        const row = index.selectable[runsSel];
+        const issue = row?.kind === "issue"
+          ? row.issue
+          : row?.kind === "run"
+            ? issueByRef(row.run.taskIssue ?? row.run.issue)
+            : undefined;
+        if (!issue) { notify("select an Epic, Feature, or Task first"); draw(); return; }
+        if (issue.reserved) { notify("select a deliverable issue"); draw(); return; }
+        pipelineScope = { kind: issue.kind, ref: issue.ref };
+        pipelineSel = 0;
+        pipelineScroll = 0;
+        screen = "pipeline";
+        draw();
+        return;
+      }
       if (data === "!") { runsAttention = !runsAttention; runsSel = 0; draw(); return; }
       if (data === "g") {
         runsGroup = RUN_GROUPS[(RUN_GROUPS.indexOf(runsGroup) + 1) % RUN_GROUPS.length]!;
@@ -3676,6 +3742,14 @@ export async function runTui(): Promise<void> {
       if (data === "\r" || data === "\n") { const run = issueRuns[issueRunSel]; if (run) { selectedRunId = run.id; runSection = "overview"; screen = "run"; } draw(); return; }
       if (data === "n") { startNewRun(issue.ref, issueRoot, issue); draw(); return; }
       if (data === "p") { approveSelected(issue, issueRuns[issueRunSel] ?? issueRuns[0], issueRoot); draw(); return; }
+      if (data === "P" && !issue.reserved) {
+        pipelineScope = { kind: issue.kind, ref: issue.ref };
+        pipelineSel = 0;
+        pipelineScroll = 0;
+        screen = "pipeline";
+        draw();
+        return;
+      }
       if (data === "o") { openUrl(issue.url); draw(); return; }
       draw();
       return;
@@ -3824,6 +3898,17 @@ export async function runTui(): Promise<void> {
       if (data === "i") { interrupt(detail.summary); draw(); return; }
       if (data === "c") { startCorrect(detail.summary); draw(); return; }
       if (data === "p") { approveSelected(issueByRef(detail.summary.issue), detail.summary, detail.summary.repoRoot); draw(); return; }
+      if (data === "P") {
+        const issue = issueByRef(detail.summary.taskIssue ?? detail.summary.issue);
+        if (issue && !issue.reserved) {
+          pipelineScope = { kind: issue.kind, ref: issue.ref };
+          pipelineSel = 0;
+          pipelineScroll = 0;
+          screen = "pipeline";
+          draw();
+          return;
+        }
+      }
       if (data === "o") { openUrl(issueByRef(detail.summary.issue)?.url ?? detail.summary.prUrl); draw(); return; }
       if (data === "\r" || data === "\n") {
         if (runSection === "timeline") toggleEvent();
@@ -3955,44 +4040,36 @@ export async function runTui(): Promise<void> {
 
     /* ----------------------------------------------------- pipeline keys */
     if (page === "runs" && screen === "pipeline") {
-      if (data === "\x1b") { screen = "list"; draw(); return; }
-      if (data === "\x1b[A" || data === "k") { orchestrateSel = Math.max(0, orchestrateSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { orchestrateSel++; draw(); return; }
-      if (data === "s") {
-        const candidates = orchestrateCandidates();
-        const index = candidates.findIndex(
-          (candidate) =>
-            candidate.scope === orchestrateScope &&
-            ((!candidate.ref && !orchestrateRef) ||
-              (candidate.ref &&
-                orchestrateRef &&
-                candidate.ref.repo === orchestrateRef.repo &&
-                candidate.ref.number === orchestrateRef.number)),
-        );
-        const next = candidates[(index + 1 + candidates.length) % candidates.length] ?? { scope: "project" as const };
-        orchestrateScope = next.scope;
-        orchestrateRef = next.ref;
-        orchestrateSel = 0;
-        orchestrateScroll = 0;
-        draw();
-        return;
-      }
+      if (data === "\x1b[A" || data === "k") { pipelineSel = Math.max(0, pipelineSel - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { pipelineSel++; draw(); return; }
       if (data === "r") { void refreshIssues("current"); draw(); return; }
-      const selectedTask = () => {
+      const selected = () => {
+        const scope = pipelineScope;
+        if (!scope) return undefined;
         const cached = readIssueCache(l)?.issues ?? [];
+        if (scope.kind === "task") {
+          const issue = cached.find((candidate) => refKey(candidate.ref) === refKey(scope.ref));
+          return issue ? { issue, plan: issue.plan } : undefined;
+        }
         const runs = listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot);
-        return planSchedule({
-          issues: cached,
-          scope: orchestrateScope,
-          ...(orchestrateRef ? { scopeRef: orchestrateRef } : {}),
-          runs,
-        }).tasks[orchestrateSel];
+        const schedule = planSchedule({ issues: cached, scope: scope.kind, scopeRef: scope.ref, runs });
+        const task = schedule.tasks[pipelineSel];
+        return task ? { issue: task.issue, plan: task.plan } : undefined;
       };
       if (data === "x") {
+        const scope = pipelineScope;
+        if (!scope) { notify("no pipeline scope"); draw(); return; }
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-        const args = ["orchestrate", "start", "--scope", orchestrateScope];
-        if (orchestrateScope === "epic" && orchestrateRef) args.push("--epic", String(orchestrateRef.number));
-        if (orchestrateScope === "feature" && orchestrateRef) args.push("--feature", String(orchestrateRef.number));
+        const args = scope.kind === "task"
+          ? ["task", "start", String(scope.ref.number)]
+          : [
+              "orchestrate",
+              "start",
+              "--scope",
+              scope.kind,
+              scope.kind === "epic" ? "--epic" : "--feature",
+              String(scope.ref.number),
+            ];
         const child = spawn(process.execPath, [cliPath, ...args], {
           cwd: l.repoRoot,
           detached: true,
@@ -4000,22 +4077,21 @@ export async function runTui(): Promise<void> {
           env: process.env,
         });
         child.unref();
-        notify(`started orchestration for ${orchestrateScope}`);
+        notify(`started ${scope.kind} #${scope.ref.number}`);
         draw();
         return;
       }
       if (data === "a" || data === "A") {
-        const task = selectedTask();
+        const task = selected();
+        const scope = pipelineScope;
         const states = listOrchestrations(l);
-        const state =
-          states.find(
-            (candidate) =>
-              candidate.scope === orchestrateScope &&
-              ((!orchestrateRef && !candidate.scopeRef) ||
-                (orchestrateRef &&
-                  candidate.scopeRef?.repo === orchestrateRef.repo &&
-                  candidate.scopeRef.number === orchestrateRef.number)),
-          ) ?? states[0];
+        const state = states.find(
+          (candidate) =>
+            scope &&
+            candidate.scopeRef &&
+            (refKey(candidate.scopeRef) === refKey(scope.ref) ||
+              (task?.issue.parent && refKey(candidate.scopeRef) === refKey(task.issue.parent))),
+        ) ?? states.find((candidate) => candidate.scope === "project");
         if (!task) notify("no task selected");
         else if (data === "A") {
           const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
@@ -4044,9 +4120,9 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "\r" || data === "\n") {
-        const task = selectedTask();
+        const task = selected()?.issue ?? (pipelineScope ? issueByRef(pipelineScope.ref) : undefined);
         if (task) {
-          selectedIssueKey = refKey(task.issue.ref);
+          selectedIssueKey = refKey(task.ref);
           page = "runs";
           screen = "issue";
         }

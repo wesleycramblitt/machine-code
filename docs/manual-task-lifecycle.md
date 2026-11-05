@@ -31,9 +31,10 @@ The Task PR is not merged, and the Task is not closed, until the review and
 merge policy allow it. Feature publishing runs a final aggregate Review before
 the Feature PR to main.
 
-In the TUI, press `p` in the Runs list to open the Pipeline view. The old
-separate Orchestrate tab is gone. `x` starts the selected scope, `a` approves a
-packet, and `A` finishes the selected task.
+In the TUI, select an Epic, Feature, or Task in the Runs list and press `p` to
+open a Pipeline view scoped to that issue. `P` works from the issue or run
+detail. The old separate Orchestrate tab is gone. `x` starts the selected
+scope, `a` approves a packet, and `A` finishes the selected task.
 
 ## The complete manual sequence
 

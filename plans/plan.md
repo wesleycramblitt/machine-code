@@ -637,9 +637,10 @@ Primary tabs:
 1:Runs  2:Models  3:Spend  4:Settings
 ```
 
-The Runs tab contains the Pipeline view (`p`).
+The Runs tab contains a Pipeline view scoped to the selected Epic, Feature, or
+Task (`p`; `P` from detail screens).
 
-Pipeline list: scope, repo, Epic/Feature, plan readiness, counts
+Pipeline list: selected scope, repo, plan readiness, counts
 (ready/draft/needs-planning/running/blocked), state/checkpoint, spend, attempts,
 last tick, model preview, pending reviews.
 

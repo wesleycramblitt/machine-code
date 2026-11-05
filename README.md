@@ -177,8 +177,8 @@ candidates. Minimums are layered in `~/.machine_code/config.toml` and
 `machine_code runs` is the scriptable version of the TUI's Runs page. The
 default `--group gh-issue` groups by repository, then by the Epic → Feature →
 Task issue hierarchy, with runs that have no issue under Untracked and runs
-whose cached issue is missing under Orphaned issue. Press `p` in the Runs list
-to open the Pipeline view, which is the Orchestrator schedule and controls.
+whose cached issue is missing under Orphaned issue. Select an Epic, Feature, or
+Task and press `p` to open a Pipeline view scoped to that issue.
 
 Runs attach to Tasks only. Selecting an Epic or Feature for a planner/review
 run resolves to that scope's reserved Planning & Review Task 0. Selecting a
@@ -296,15 +296,16 @@ typed `Verdict:`; both are recorded as events. Completion failures retry with
 evidence up to the task's `retries_before_replan`, then stop at
 `needs_planning`. `--dry-run` only prints the schedule.
 
-The TUI Runs tab includes the pipeline. Press `p` on the Runs list to open the
-Pipeline view. `s` cycles project/epic/feature scope (project plus each cached
-Epic/Feature), `r` refreshes the issue cache, `x` starts execution for the
-scope, `a` approves the selected packet, `A` finishes the selected task, and
-Enter opens the selected issue. The header shows the active orchestration id,
-checkpoint, and approval counts. Agent result review closes the Task only after
-the Task PR is merged; human result review or a human merge gate waits for
-`task approve` or `orchestrate approve --result`. Parent closure cascades only
-where the parent's approval policy is `agent`.
+The TUI Runs tab includes the pipeline. Select an Epic, Feature, or Task in
+the Runs list and press `p` to open a Pipeline view scoped to that issue.
+`P` does the same from an issue or run detail screen. `r` refreshes the issue
+cache, `x` starts execution for the selected scope, `a` approves the selected
+packet, `A` finishes the selected task, and Enter opens the selected issue. The
+header shows the active orchestration id, checkpoint, and approval counts.
+Agent result review closes the Task only after the Task PR is merged; human
+result review or a human merge gate waits for `task approve` or
+`orchestrate approve --result`. Parent closure cascades only where the parent's
+approval policy is `agent`.
 
 In the TUI, `p` on a Task or task run runs `task approve`: commit any remaining
 changes, open or merge the Task PR, record acceptance, close the Task, and
