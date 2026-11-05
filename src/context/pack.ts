@@ -70,6 +70,12 @@ export interface BuildPackInput {
   budgetChars: number;
   /** Maximum files to consider before budget fitting. */
   maxFiles?: number;
+  /**
+   * `task` adds dependency/symbol detail for an edit. `overview` keeps the
+   * task, knowledge, inventory, and named files only; a planner fetches detail
+   * as each stage needs it.
+   */
+  mode?: "task" | "overview";
 }
 
 export interface RenderPackOptions {
@@ -201,6 +207,7 @@ function packItem(
 export function buildTaskPack(input: BuildPackInput): ContextPack {
   const requestText = `${input.request}\n${input.taskText ?? ""}`;
   const planText = input.planText ?? "";
+  const overview = input.mode === "overview";
   const keywords = symbolKeywords(input.request, input.taskText, planText);
   const maxFiles = Math.max(1, input.maxFiles ?? 16);
   const byPath = new Map(input.mapFiles.map((file) => [file.path, file] as const));
@@ -218,20 +225,22 @@ export function buildTaskPack(input: BuildPackInput): ContextPack {
   for (const path of seeds) push(path);
 
   // One-hop dependency expansion: imports are the code the target needs.
-  for (const path of seeds) {
-    const file = byPath.get(path);
-    for (const dependency of file?.imports ?? []) {
-      if (byPath.has(dependency)) push(dependency);
+  if (!overview) {
+    for (const path of seeds) {
+      const file = byPath.get(path);
+      for (const dependency of file?.imports ?? []) {
+        if (byPath.has(dependency)) push(dependency);
+      }
     }
-  }
 
-  // Reverse dependencies: the call sites and wiring the change must not break.
-  if (order.length < maxFiles) {
-    const wanted = new Set(order);
-    for (const file of input.mapFiles) {
-      if (order.length >= maxFiles) break;
-      if (wanted.has(file.path)) continue;
-      if ((file.imports ?? []).some((dependency) => wanted.has(dependency))) push(file.path);
+    // Reverse dependencies: the call sites and wiring the change must not break.
+    if (order.length < maxFiles) {
+      const wanted = new Set(order);
+      for (const file of input.mapFiles) {
+        if (order.length >= maxFiles) break;
+        if (wanted.has(file.path)) continue;
+        if ((file.imports ?? []).some((dependency) => wanted.has(dependency))) push(file.path);
+      }
     }
   }
 
@@ -301,7 +310,7 @@ export function buildTaskPack(input: BuildPackInput): ContextPack {
 
     // Include the bodies of symbols the task or plan names. Dependencies stay
     // at outline level; the model can read a named symbol when it needs it.
-    if (isExplicit) {
+    if (isExplicit && !overview) {
       const matched = (file?.symbols ?? [])
         .map((symbol) => ({ symbol, score: symbolScore(symbol, keywords) }))
         .filter((entry) => entry.score > 0)

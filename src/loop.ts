@@ -586,7 +586,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       mapFiles,
       commands: input.commands,
       budgetChars: 400_000,
-      maxFiles: 18,
+      maxFiles: input.agent.name === "planner" ? 10 : 18,
+      mode: input.agent.name === "planner" ? "overview" : "task",
     });
   let taskPack: ContextPack | null = wantsPack ? buildPack() : null;
   let packDirty = false;

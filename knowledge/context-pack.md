@@ -53,6 +53,10 @@ It does not include all dependencies whole. A small dependency (under 8k
 characters) is included whole; a larger one gets its outline. The model reads a
 named symbol only when it needs the body.
 
+Planner runs use `overview` mode: named files, knowledge notes, commands, and
+gates, but no dependency or symbol-body expansion. The planner fetches detail
+for each stage and the ledger keeps it for later stages.
+
 ## Rendering
 
 The renderer sorts by priority and fits the pack to the selected model. It

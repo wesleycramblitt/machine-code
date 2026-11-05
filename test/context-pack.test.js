@@ -63,6 +63,31 @@ test("task pack includes full task files, tests, and one-hop dependencies", () =
   }
 });
 
+test("overview mode keeps named files but not dependency expansion", () => {
+  const root = tempRepo();
+  try {
+    writeFileSync(join(root, "src", "a.ts"), "import { helper } from './dep.js';\nexport function target() { return helper(); }\n", "utf8");
+    writeFileSync(join(root, "src", "dep.ts"), "export function helper() { return 1; }\n", "utf8");
+    const mapFiles = [
+      { path: "src/a.ts", lang: "ts", bytes: 80, lines: 2, symbols: [{ name: "target", kind: "function", line: 2, end: 2 }], imports: ["src/dep.ts"] },
+      { path: "src/dep.ts", lang: "ts", bytes: 40, lines: 1, symbols: [{ name: "helper", kind: "function", line: 1, end: 1 }], imports: [] },
+    ];
+    const pack = buildTaskPack({
+      root,
+      request: "Plan a change to src/a.ts",
+      mapFiles,
+      budgetChars: 20_000,
+      maxFiles: 4,
+      mode: "overview",
+    });
+    const refs = pack.items.map((item) => item.ref);
+    assert.ok(refs.includes("src/a.ts"));
+    assert.ok(!refs.includes("src/dep.ts"), "overview mode does not expand dependencies");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("task keywords select relevant knowledge notes", () => {
   const root = tempRepo();
   try {
