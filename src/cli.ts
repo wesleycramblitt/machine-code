@@ -187,7 +187,8 @@ Usage:
                                     [--max-calls N] [--max-cost N] [--max-tokens N]
                                     [--max-context N] [--json]
   machine_code pack                 Preview the curated run context [--issue <ref>]
-                                    [--agent <role>] [--model <key>] [--context] [--json]
+                                    [--agent <role>] [--model <key>]
+                                    [--context-include <json>] [--context] [--json]
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
                                     --no-symbols, --semantic)
   machine_code lsp [list|status|install] Language servers, availability, install commands

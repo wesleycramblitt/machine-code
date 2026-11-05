@@ -220,8 +220,8 @@ page structure remains readable.
 changes, related lineage, and event stream as the run detail screen.
 `machine_code context <run-id>` prints the assembled context and ledger that
 the model actually received. `machine_code pack` previews the curated run
-context before a run; add `--issue`, `--agent`, `--model`, `--context`, or
-`--json` to tune the view. `machine_code eval
+context before a run; add `--issue`, `--agent`, `--model`, `--context-include`,
+`--context`, or `--json` to tune the view. `machine_code eval
 <run-id>` scores a run's calls, tokens, cost, context, changes, and gates;
 compare with `--baseline <run-id>` and fail CI with `--max-calls`,
 `--max-cost`, `--max-tokens`, or `--max-context`. `machine_code spend` and
