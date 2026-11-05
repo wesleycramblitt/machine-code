@@ -1126,14 +1126,19 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             });
           }
           // Evidence novelty: repeated reads of one band at the same file
-          // version, repeated search result sets, and repeated command output
-          // are not new information. A mutation resets the stale streak.
-          if (!result.isError) {
-            const resultText = result.content
-              .filter((item): item is { type: "text"; text: string } => item.type === "text")
-              .map((item) => item.text)
-              .join("\n");
-            const resultHash = createHash("sha1").update(resultText).digest("hex").slice(0, 16);
+          // version, repeated search result sets, repeated command output, and
+          // repeated identical failures are not new information. A mutation
+          // resets the stale streak.
+          const resultText = result.content
+            .filter((item): item is { type: "text"; text: string } => item.type === "text")
+            .map((item) => item.text)
+            .join("\n");
+          const resultHash = createHash("sha1").update(resultText).digest("hex").slice(0, 16);
+          if (result.isError) {
+            const errorKey = `error:${tool.name}:${resultHash}`;
+            const check = evidence.observe(errorKey, false);
+            if (check.loop) return killLoop(errorKey, check.stale);
+          } else {
             const isProgress =
               tool.name === "edit" ||
               tool.name === "write" ||

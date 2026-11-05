@@ -259,9 +259,9 @@ the role mode, the effective agent parameters, and the policy floors.
 
 The loop detector watches evidence, not call shape. A read is one 100-line band
 (or symbol/section) at a file version, a search is one scope with one result
-set, and a command is its output. Twenty stale actions in a row with no edit,
-write, or mutating command kill the run with a `loop_blocked` event and a
-summary that says so. Memory operations and new evidence reset nothing and do
+set, a command is its output, and a failure is its message. Twenty stale actions
+in a row with no edit, write, or mutating command kill the run with a
+`loop_blocked` event and a summary that says so. Memory operations and new evidence reset nothing and do
 not count as progress. `command describe issue` returns a direct hint that
 `issue` is a tool, not a command.
 
