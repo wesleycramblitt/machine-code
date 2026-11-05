@@ -557,7 +557,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // (packet, knowledge, map, semantic index) runs above it. The pack is built
   // from the task and plan, then fitted to the selected model's window.
   const packAgent =
-    input.agent.name === "build" || input.agent.name === "sudo" || input.agent.name === "review";
+    input.agent.name === "build" ||
+    input.agent.name === "sudo" ||
+    input.agent.name === "review" ||
+    input.agent.name === "planner";
   const taskBlock =
     /<context-block kind="(?:task|packet)"[^>]*>[\s\S]*?<\/context-block>/.exec(input.contextText ?? "")?.[0] ??
     "";

@@ -75,8 +75,8 @@ the remaining probe work.
 ## Invariants
 
 - Context is model-budgeted; every block has provenance in `context.json`.
-- Run state is the memory; the transcript is not replayed. Build, sudo, and
-  review runs render a task pack with symbol-aware specifics instead of a
+- Run state is the memory; the transcript is not replayed. Build, sudo, review,
+  and planner runs render a task pack with symbol-aware specifics instead of a
   fixed working-context slice.
 - The task pack is task- and plan-aware: task files and tests whole when they
   fit, outlines plus named symbol bodies for large files, one-hop imports and
@@ -102,8 +102,9 @@ the remaining probe work.
 - Exact read bytes stay in a run ledger. An unchanged re-read returns the
   cached bytes; an edit drops that file's entries; the prompt includes acquired
   bytes not already in the task pack.
-- Build, sudo, and review build a task pack from the task, plan, and map. The
-  pack is re-read from disk after edits and fitted to the selected model.
+- Build, sudo, review, and planner build a task pack from the task, plan, and
+  map. The pack is re-read from disk after edits and fitted to the selected
+  model.
 - A read that returns only an outline or a past-end note never becomes read
   coverage.
 - The deterministic semantic index persists to `semantic.json`; module edges

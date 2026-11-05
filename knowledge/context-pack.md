@@ -81,8 +81,9 @@ Implemented:
 - `src/context/budget.ts` — model-derived input budget.
 - `src/context/pack.ts` — task/symbol-aware pack and budget-aware renderer.
 - `src/context/render.ts` — overview + pack + state + recent steps.
-- `src/loop.ts` — build/rebuild the pack for Build, Sudo, and Review; fit it to
-  the selected model; record pack size and input budget in `context_state`.
+- `src/loop.ts` — build/rebuild the pack for Build, Sudo, Review, and Planner;
+  fit it to the selected model; record pack size and input budget in
+  `context_state`.
 - `read { symbols: [...] }` and `read { sections: [...] }` for a targeted sweep
   in one call; `read { section }` supports Markdown headings and comment
   banners. `read` prefers symbol/section and treats a past-end page as an error.
