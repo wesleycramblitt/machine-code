@@ -205,7 +205,7 @@ interface ContextPanelItem {
   available?: boolean;
   counted?: boolean;
 }
-const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase"] as const;
+const NEW_RUN_CONTEXT_TABS = ["Issues", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase", "Prompt"] as const;
 
 type NewRunState = ForkedRunSettings;
 
@@ -446,6 +446,37 @@ function statusColor(status: string): string {
   return GR;
 }
 
+/** Per-event accent color for timeline dots and overview snippets. */
+function eventTone(type: string, isError = false): string {
+  if (isError) return RED;
+  switch (type) {
+    case "run_start":
+    case "context_assembled": return C;
+    case "model_select":
+    case "model_request":
+    case "plan_updated": return BL;
+    case "model_call_end":
+    case "run_summary":
+    case "child_spawned":
+    case "child_completed": return M;
+    case "tool_call_start": return Y;
+    case "tool_call": return G;
+    case "gates":
+    case "agent_config": return B;
+    case "issue_created":
+    case "issue_linked": return G;
+    case "retry":
+    case "control":
+    case "turn_cap":
+    case "budget_exhausted": return Y;
+    case "run_end":
+    case "error_classified":
+    case "malformed_tool_call":
+    case "loop_blocked": return RED;
+    default: return D;
+  }
+}
+
 /** Compact codebase-index health tokens for bottom footers. */
 function mapStatusTokens(root: string): string[] {
   const mapCached = existsSync(join(root, ".machine_code", "local", "cache", "map.json"));
@@ -655,45 +686,60 @@ function editEventArgs(event: RunEvent): Record<string, unknown> {
 }
 
 /**
- * Human-readable edit summary: path plus a short -/+ diff snippet.
+ * Human-readable edit rendering: path plus every hunk as -/+ diff lines.
  * Timeline keeps full JSON; Thinking and Overview use this instead.
+ * Capped so a giant write cannot flood the section.
  */
-function editSummaryLines(event: RunEvent, width: number): string[] {
+function editSummaryLines(event: RunEvent, width: number, maxLines = 30): string[] {
   const tool = String((event as { tool?: unknown }).tool ?? "edit");
   const args = editEventArgs(event);
   const path = typeof args.path === "string" ? args.path : "(unknown path)";
   const out: string[] = [`${tool} ${path}`];
-  const pushPair = (oldText: string, newText: string): void => {
-    const olds = oldText.split("\n").filter((line) => line.trim().length > 0).slice(0, 3);
-    const news = newText.split("\n").filter((line) => line.trim().length > 0).slice(0, 3);
+  const pushLine = (line: string): boolean => {
+    out.push(line);
+    return out.length < maxLines;
+  };
+  const pushPair = (oldText: string, newText: string, hunkLabel?: string): void => {
+    if (hunkLabel) {
+      if (!pushLine(`… ${hunkLabel}`)) return;
+    }
+    const olds = oldText.split("\n").filter((line) => line.trim().length > 0);
+    const news = newText.split("\n").filter((line) => line.trim().length > 0);
     for (const line of olds) {
       for (const wrapped of wrapText(line, Math.max(20, width))) {
-        out.push(`- ${trunc(wrapped, Math.max(20, width - 2))}`);
-        if (out.length >= 8) return;
+        if (!pushLine(`- ${trunc(wrapped, Math.max(20, width - 2))}`)) return;
       }
     }
     for (const line of news) {
       for (const wrapped of wrapText(line, Math.max(20, width))) {
-        out.push(`+ ${trunc(wrapped, Math.max(20, width - 2))}`);
-        if (out.length >= 8) return;
+        if (!pushLine(`+ ${trunc(wrapped, Math.max(20, width - 2))}`)) return;
       }
     }
   };
   if (Array.isArray(args.edits) && args.edits.length > 0) {
-    const first = args.edits[0] as { oldString?: unknown; newString?: unknown };
-    pushPair(String(first.oldString ?? ""), String(first.newString ?? ""));
-    if (args.edits.length > 1) out.push(`… ${args.edits.length - 1} more hunk(s)`);
+    const edits = args.edits as Array<{ oldString?: unknown; newString?: unknown }>;
+    edits.forEach((hunk, index) => {
+      if (out.length >= maxLines) return;
+      pushPair(
+        String(hunk.oldString ?? ""),
+        String(hunk.newString ?? ""),
+        edits.length > 1 ? `hunk ${index + 1}/${edits.length}` : undefined,
+      );
+    });
+    if (out.length >= maxLines) out.push(`… capped at ${maxLines} lines`);
   } else if (typeof args.oldString === "string" || typeof args.newString === "string") {
     pushPair(String(args.oldString ?? ""), String(args.newString ?? ""));
+    if (out.length >= maxLines) out.push(`… capped at ${maxLines} lines`);
   } else if (typeof args.content === "string") {
-    const lines = args.content.split("\n").filter((line) => line.trim().length > 0).slice(0, 4);
+    const lines = args.content.split("\n").filter((line) => line.trim().length > 0);
     for (const line of lines) {
       for (const wrapped of wrapText(line, Math.max(20, width))) {
-        out.push(`+ ${trunc(wrapped, Math.max(20, width - 2))}`);
-        if (out.length >= 7) break;
+        if (!pushLine(`+ ${trunc(wrapped, Math.max(20, width - 2))}`)) break;
       }
+      if (out.length >= maxLines) break;
     }
-    out.push(`… ${Buffer.byteLength(args.content, "utf8")} bytes total`);
+    if (out.length >= maxLines) out.push(`… capped at ${maxLines} lines (${Buffer.byteLength(args.content, "utf8")} bytes total)`);
+    else out.push(`… ${Buffer.byteLength(args.content, "utf8")} bytes total`);
   }
   return out;
 }
@@ -735,10 +781,10 @@ export async function runTui(): Promise<void> {
   let modelSel = 0;
   let modelScroll = 0;
   const probingModels = new Set<string>();
-  /** Collapsed model groups (provider/family key). Space folds the selected row's group. */
+  /** Collapsed model groups (provider/family key). Headers are cursor stops, so space reopens them. */
   const modelCollapsed = new Set<string>();
-  /** Rows in the exact order they are rendered (grouped), used by Enter/selection. */
-  let modelVisible: CatalogueRow[] = [];
+  /** Cursor stops in render order: group headers plus visible model rows. */
+  let modelDisplay: Array<{ kind: "header"; key: string } | { kind: "row"; key: string; row: CatalogueRow }> = [];
   let selectedModelKey: string | null = null;
   /** Catalogue + provider cache: the 1MB models.json stays parsed across frames. */
   let catalogueCache: { mtime: number; doc: CatalogueDocument | null } | null = null;
@@ -1967,11 +2013,21 @@ export async function runTui(): Promise<void> {
       const w = selectableLines(lines, Math.max(0, runStart + issueRunSel), issueScroll, bodyH);
       issueScroll = w.scroll;
       body = clipBody(w.lines);
+      // Approve does real work: task approve merges the PR, records
+      // acceptance, and closes/cleans up; otherwise it approves the open PR.
+      const approveRun = issueRuns[Math.min(issueRunSel, Math.max(0, issueRuns.length - 1))];
+      const approveTask = issue.kind === "task" ? issue : issueByRef(approveRun?.taskIssue ?? approveRun?.issue);
+      const approveLabel =
+        approveTask && approveRun
+          ? `Finish #${approveTask.ref.number}`
+          : approveRun?.prNumber && approveRun.prState === "open"
+            ? `Merge PR#${approveRun.prNumber}`
+            : "Approve";
       actions = joinCommands([
         command("n", "New run", undefined, C),
         command("Enter", "Open", undefined, G),
         command("j/k", "Select", undefined, M),
-        command("p", "Approve", undefined, Y),
+        command("p", approveLabel, undefined, Y),
         command("P", "Orchestrate", undefined, C),
         command("D", "Delete", undefined, RED),
         command("o", "Open URL", undefined, BL),
@@ -2369,6 +2425,21 @@ export async function runTui(): Promise<void> {
           key: "semantic:index",
         },
       ];
+      // The resolved agent prompt is context too: every line the run will
+      // send, listed read-only. Fixed rows are always in context and cannot
+      // be switched off, mirroring the core-tool rows.
+      const promptItems: ContextPanelItem[] = resolvedAgent.prompt
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line, index) => ({
+          text: line,
+          chars: line.length,
+          exists: true,
+          key: `prompt:${index}`,
+          fixed: true,
+          counted: false,
+        }));
       const sections = [
         { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
         { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
@@ -2378,6 +2449,7 @@ export async function runTui(): Promise<void> {
         { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
         { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
         { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
+        { label: "Prompt", tone: W, sectionKey: "section:prompt", items: promptItems },
       ];
       if (newRunContextTab >= sections.length) newRunContextTab = 0;
       const isIncludedAvailable = (item: unknown): boolean => {
@@ -2801,25 +2873,35 @@ export async function runTui(): Promise<void> {
     else if (page === "models" && screen === "list") {
       const lines: string[] = [];
       const groups = groupModels(modelRows, modelGroup);
-      // Drop rows in collapsed groups; keep modelSel on a visible row.
-      const visibleGroups = groups.map((group) => ({
-        ...group,
-        rows: modelCollapsed.has(group.key) ? [] : group.rows,
-      }));
-      modelVisible = visibleGroups.flatMap((group) => group.rows);
-      if (modelSel >= modelVisible.length) modelSel = Math.max(0, modelVisible.length - 1);
+      // Cursor stops on headers and rows alike: collapsing every group can
+      // never strand the cursor, and space on a header reopens it.
+      const stops: typeof modelDisplay = [];
+      for (const group of groups) {
+        stops.push({ kind: "header", key: group.key });
+        if (!modelCollapsed.has(group.key)) {
+          for (const row of group.rows) stops.push({ kind: "row", key: group.key, row });
+        }
+      }
+      modelDisplay = stops;
+      if (modelSel >= stops.length) modelSel = Math.max(0, stops.length - 1);
       const modelsAvail = loadAvailability(l.home);
       const now = Date.now();
-      let flatIndex = 0;
       let selectedLine = 0;
-      for (const group of groups) {
-        const isCollapsed = modelCollapsed.has(group.key);
-        const marker = isCollapsed ? "▸" : "▾";
-        lines.push(background(fit(` ${B}${theme.sectionFg}${marker} ${group.key}${R} ${D}(${group.rows.length})${R}`, cols), theme.sectionBg));
-        if (isCollapsed) continue;
-        for (const row of group.rows) {
-          const isSelected = flatIndex === modelSel;
-          if (isSelected) selectedLine = lines.length;
+      for (let s = 0; s < stops.length; s++) {
+        const stop = stops[s]!;
+        const isSelected = s === modelSel;
+        if (isSelected) selectedLine = lines.length;
+        if (stop.kind === "header") {
+          const group = groups.find((candidate) => candidate.key === stop.key)!;
+          const isCollapsed = modelCollapsed.has(group.key);
+          const marker = isCollapsed ? "▸" : "▾";
+          lines.push(
+            selected(background(fit(` ${B}${theme.sectionFg}${marker} ${group.key}${R} ${D}(${group.rows.length})${R}`, cols), theme.sectionBg), isSelected),
+          );
+          continue;
+        }
+        const row = stop.row;
+        {
           const free = row.free || (row.pricing.input === 0 && row.pricing.output === 0) ? ` ${G}free${R}` : "";
           const cooling = (() => {
             if (probingModels.has(row.key)) return ` ${C}…${R}`;
@@ -2832,7 +2914,6 @@ export async function runTui(): Promise<void> {
           const left = `   ${row.coding === false ? `${GR}○${R}` : `${G}●${R}`} ${BL}${trunc(row.name, narrow ? 20 : 30)}${R}${free}${cooling}`;
           const right = `${D}${fmtContext(row.context)}${R} ${D}cap${R} ${row.scores.capability.toFixed(1)}${axes} ${Y}$${row.pricing.input}${R}/${Y}$${row.pricing.output}${R}`;
           lines.push(selected(` ${narrow ? trunc(left, Math.max(18, cols - 18)) + " " + right : pad(left, Math.max(26, cols - visible(right) - 2)) + right}`, isSelected));
-          flatIndex++;
         }
       }
       if (lines.length === 0) lines.push(` ${D}No matching models.${R}`);
@@ -2850,7 +2931,7 @@ export async function runTui(): Promise<void> {
         command("s", "Sort", modelSort, C),
         command("j/k", "Move", undefined, GR),
       ]);
-      secondary = "";
+      secondary = `${D}space folds the group under the cursor · Enter opens details${R}`;
     }
 
     /* ---------------------------------------------------------- pipeline */
@@ -2867,11 +2948,16 @@ export async function runTui(): Promise<void> {
       } else {
         const scopedIssue = issueByRef(scope.ref);
         const scopeTitle = scopedIssue ? `#${scope.ref.number} ${scopedIssue.title}` : `#${scope.ref.number}`;
-        const runs = allRuns.filter((run) => run.repoRoot === l.repoRoot);
+        // The scope can come from any repo in an all-repos view; schedule
+        // from the scope's own issues and runs, not the TUI cwd.
+        const scopeRepo = issueRepoOf(scope.ref) ?? l.repoRoot;
+        const scopeLayout = scopeRepo === l.repoRoot ? l : layout(scopeRepo);
+        const scopeIssues = issueCachesByRepo.get(scopeRepo) ?? [];
+        const runs = allRuns.filter((run) => run.repoRoot === scopeRepo);
         const schedule =
           scope.kind === "task"
-            ? planSchedule({ issues, scope: "project", runs, maxParallel: orchMaxParallel })
-            : planSchedule({ issues, scope: scope.kind, scopeRef: scope.ref, runs, maxParallel: orchMaxParallel });
+            ? planSchedule({ issues: scopeIssues, scope: "project", runs, maxParallel: orchMaxParallel })
+            : planSchedule({ issues: scopeIssues, scope: scope.kind, scopeRef: scope.ref, runs, maxParallel: orchMaxParallel });
         const tasks = scope.kind === "task"
           ? schedule.tasks.filter((task) => refKey(task.issue.ref) === refKey(scope.ref))
           : schedule.tasks;
@@ -2882,7 +2968,7 @@ export async function runTui(): Promise<void> {
           ` ${B}${W}Orchestration${R} ${D}${scope.kind} ${scopeTitle}${R}  ` +
             `${G}${ready} ready${R}  ${Y}${blocked} blocked${R}`,
         );
-        lines.push(` ${D}${l.repoRoot}${R}`);
+        lines.push(` ${D}${scopeRepo}${R}`);
         lines.push(
           ` ${D}tier${R} ${tierTone(orchTier)}${orchTier}${R}` +
             ` ${D}minFit${R} ${W}${minFitLabel}${R}` +
@@ -2893,7 +2979,7 @@ export async function runTui(): Promise<void> {
             `${orchMaxMinutes !== undefined ? ` ${D}maxMin${R} ${W}${orchMaxMinutes}${R}` : ""}` +
             `${orchMaxSpend !== undefined ? ` ${D}maxSpend${R} ${W}$${orchMaxSpend}${R}` : ""}`,
         );
-        const states = listOrchestrations(l);
+        const states = listOrchestrations(scopeLayout);
         const ledger =
           states.find(
             (candidate) =>
@@ -2903,9 +2989,9 @@ export async function runTui(): Promise<void> {
           ) ??
           states.find((candidate) => candidate.scope === "project");
         if (ledger) {
-          const lease = readLease(l, ledger.id);
+          const lease = readLease(scopeLayout, ledger.id);
           const running = Boolean(lease && lease.until > Date.now());
-          const stopFile = orchestrationStopRequested(l, ledger.id);
+          const stopFile = orchestrationStopRequested(scopeLayout, ledger.id);
           lines.push(
             ` ${C}${ledger.id}${R}  ${D}${ledger.checkpoint ?? "preflight"}${R}  ` +
               `${running ? `${G}● RUNNING${R} ${D}${lease!.owner}${R}` : `${D}idle${R}`}  ` +
@@ -2914,8 +3000,8 @@ export async function runTui(): Promise<void> {
               `${ledger.stopReason ? `  ${RED}${ledger.stopReason}${R}` : ""}`,
           );
         }
-        if (issues.length === 0) {
-          lines.push("", ` ${Y}No cached issues. Press r to refresh.${R}`);
+        if (scopeIssues.length === 0) {
+          lines.push("", ` ${Y}No cached issues for ${scopeRepo}.${R} ${D}Press r to refresh.${R}`);
         } else if (scope.kind === "task") {
           const taskRuns = allRuns
             .filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(scope.ref))
@@ -2942,27 +3028,16 @@ export async function runTui(): Promise<void> {
             lines.push(`           ${Y}awaiting review/merge${R}`);
           }
         } else if (tasks.length === 0) {
-          lines.push("", ` ${D}No Tasks under this ${scope.kind}.${R}`);
+          lines.push("", ` ${D}No ready or blocked Tasks found under this ${scope.kind}.${R}`);
+          lines.push(` ${D}The schedule ran over ${scopeIssues.length} cached issue(s) in ${scopeRepo}.${R}`);
+          if (schedule.errors.length === 0) {
+            lines.push(` ${D}Tasks appear once they have a ready plan and open blockers. Press r to refresh the cache.${R}`);
+          }
         } else {
-          const rows: Array<{ line: string; task?: number }> = [];
+          // Flatten in display order first so the selected-task detail below
+          // and the cursor agree even when tasks group under features.
           const ordered: ScheduledTask[] = [];
-          let taskIndex = 0;
-          const addTask = (task: (typeof tasks)[number]): void => {
-            const mark = task.ready ? `${G}READY${R}` : `${Y}BLOCK${R}`;
-            const plan = task.plan ? `${task.plan.status}/${task.plan.verification}` : "no-plan";
-            const model = task.ready ? orchModelForTask(task.issue.title.length, task.plan?.verification) : "—";
-            const latest = allRuns
-              .filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(task.issue.ref))
-              .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
-            const pr = latest?.prNumber ? ` ${D}PR#${latest.prNumber} ${latest.prState ?? ""}${R}` : "";
-            const line =
-              `  ${mark} ${D}#${task.issue.ref.number}${R} ${C}${plan.padEnd(16)}${R} ${M}${trunc(model, 24).padEnd(24)}${R} ` +
-              `${W}${trunc(task.issue.title, Math.max(16, cols - 72))}${R}${pr}` +
-              `${task.reason ? ` ${D}${trunc(task.reason, Math.max(12, cols - 116))}${R}` : ""}`;
-            rows.push({ line: selected(line, taskIndex === pipelineSel), task: taskIndex });
-            ordered.push(task);
-            taskIndex += 1;
-          };
+          const groupLabelAt = new Map<number, string>();
           if (scope.kind === "epic") {
             const groups = new Map<string, { label: string; tasks: typeof tasks }>();
             for (const task of tasks) {
@@ -2974,14 +3049,54 @@ export async function runTui(): Promise<void> {
               groups.set(key, group);
             }
             for (const group of groups.values()) {
-              rows.push({ line: ` ${B}${C}${trunc(group.label, Math.max(20, cols - 2))}${R}` });
-              for (const task of group.tasks) addTask(task);
+              groupLabelAt.set(ordered.length, group.label);
+              for (const task of group.tasks) ordered.push(task);
             }
           } else {
-            for (const task of tasks) addTask(task);
+            for (const task of tasks) ordered.push(task);
           }
-          pipelineSel = Math.max(0, Math.min(pipelineSel, Math.max(0, taskIndex - 1)));
+          pipelineSel = Math.max(0, Math.min(pipelineSel, ordered.length - 1));
           pipelineTasks = ordered;
+          // Full detail for the selected task only; rows stay scannable.
+          const sel = ordered[pipelineSel];
+          if (sel) {
+            const selPlan = sel.plan ? `${sel.plan.status}/${sel.plan.verification} · review ${sel.plan.planReview}/${sel.plan.resultReview}` : "missing plan";
+            const selModel = sel.ready ? orchModelForTask(sel.issue.title.length, sel.plan?.verification) : "—";
+            const selLatest = allRuns
+              .filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(sel.issue.ref))
+              .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
+            lines.push("", ` ${B}${sel.ready ? G : Y}${sel.ready ? "READY" : "BLOCKED"}${R} ${D}#${sel.issue.ref.number}${R} ${W}${trunc(sel.issue.title, Math.max(16, cols - 24))}${R}`);
+            lines.push(`   ${D}plan${R}  ${C}${selPlan}${R}`);
+            lines.push(`   ${D}model${R} ${C}${trunc(selModel, 40)}${R}`);
+            if (sel.reason) {
+              for (const reasonLine of wrapText(sel.reason, Math.max(20, cols - 14)).slice(0, 3)) {
+                lines.push(`   ${D}wait${R}  ${Y}${reasonLine}${R}`);
+              }
+            }
+            lines.push(
+              `   ${D}run${R}   ${selLatest ? `${icon(selLatest.status)} ${selLatest.id.slice(-8)} · ${selLatest.status} · ${selLatest.agent}` : "none"}` +
+                `${selLatest?.prNumber ? `  ${D}PR${R} #${selLatest.prNumber} ${selLatest.prState ?? ""}` : ""}`,
+            );
+          }
+          const rows: Array<{ line: string; task?: number }> = [];
+          for (let taskIndex = 0; taskIndex < ordered.length; taskIndex++) {
+            const task = ordered[taskIndex]!;
+            const label = groupLabelAt.get(taskIndex);
+            if (label !== undefined) rows.push({ line: ` ${B}${C}${trunc(label, Math.max(20, cols - 2))}${R}` });
+            const mark = task.ready ? `${G}READY${R}` : `${Y}BLOCK${R}`;
+            const latest = allRuns
+              .filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(task.issue.ref))
+              .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
+            const runMark = latest ? ` ${icon(latest.status)}` : "";
+            const pr = latest?.prNumber ? ` ${D}PR#${latest.prNumber}${R}` : "";
+            rows.push({
+              line: selected(
+                `  ${mark} ${D}#${task.issue.ref.number}${R} ${W}${trunc(task.issue.title, Math.max(16, cols - 32))}${R}${runMark}${pr}`,
+                taskIndex === pipelineSel,
+              ),
+              task: taskIndex,
+            });
+          }
           const selectedRow = rows.findIndex((row) => row.task === pipelineSel);
           const available = Math.max(1, bodyH - lines.length - 1);
           if (selectedRow < pipelineScroll) pipelineScroll = selectedRow;
@@ -3011,7 +3126,7 @@ export async function runTui(): Promise<void> {
           command("a", "Approve packet", undefined, Y),
           command("A", "Finish task", undefined, Y),
           command("j/k", "Move", undefined, M),
-          command("r", "Issues", undefined, C),
+          command("r", "Refresh", undefined, C),
         ]);
         secondary = `${D}${scope.kind} #${scope.ref.number}${R}`;
       }
@@ -3278,12 +3393,14 @@ export async function runTui(): Promise<void> {
               const input = typeof event.input === "string" ? event.input : "";
               if (input) {
                 const inputLines = input.split("\n");
-                const shown = expandedEvent ? inputLines : inputLines.slice(0, 3);
+                // The head is the repeating system prompt; the tail is the
+                // unique send for this call, so the preview shows the tail.
+                const shown = expandedEvent ? inputLines : inputLines.slice(-3);
+                if (!expandedEvent && inputLines.length > 3) {
+                  eventLines.push(`    ${D}… ${inputLines.length - 3} head lines hidden (space to expand)${R}`);
+                }
                 for (const line of shown) {
                   for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
-                }
-                if (!expandedEvent && inputLines.length > 3) {
-                  eventLines.push(`    ${D}… ${inputLines.length - 3} more lines (space to expand)${R}`);
                 }
               }
             } else if (type === "model_call_end") {
@@ -3399,22 +3516,29 @@ export async function runTui(): Promise<void> {
             else if (type === "context_assembled") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}context${R} ${D}${fmtTokens(Number(event.chars ?? 0))} chars${R}`);
             else eventLines.push(`${prefix} ${GR}${time}${R} ${D}${type}${R}`);
           }
-          // Zebra striping per event block for scanability. Selected keeps its
-          // normal surface so the ▸ cursor stays legible.
-          for (let order = 0; order < visibleOrder.length; order++) {
-            const evIdx = visibleOrder[order]!;
-            if (evIdx === eventSel) continue;
-            if (order % 2 === 0) continue;
-            const nextIdx = visibleOrder[order + 1];
-            const blockStart = starts[evIdx] ?? 0;
-            const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
-            for (let line = blockStart; line < blockEnd; line++) {
-              eventLines[line] = background(eventLines[line]!, ZEBRA_BG);
-            }
-          }
           eventSel = Math.max(0, Math.min(ev.length - 1, eventSel));
           while (eventSel < ev.length - 1 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel += 1;
           while (eventSel > 0 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel -= 1;
+          // Full-width stripes and selection. Padding must sit INSIDE the
+          // tone wrap: the frame paints body background over everything past
+          // the wrap's final reset, so unwrapped padding would punch
+          // body-colored holes at every line end.
+          for (let order = 0; order < visibleOrder.length; order++) {
+            const evIdx = visibleOrder[order]!;
+            const nextIdx = visibleOrder[order + 1];
+            const blockStart = starts[evIdx] ?? 0;
+            const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
+            if (evIdx === eventSel) {
+              if (blockStart < blockEnd) {
+                eventLines[blockStart] = selected(fit(eventLines[blockStart]!, cols), true);
+              }
+              continue;
+            }
+            if (order % 2 === 0) continue;
+            for (let line = blockStart; line < blockEnd; line++) {
+              eventLines[line] = background(fit(eventLines[line]!, cols), ZEBRA_BG);
+            }
+          }
           const visibleCount = Math.max(1, bodyH - 4);
           const start = starts[eventSel] ?? 0;
           const end = starts[eventSel + 1] ?? eventLines.length;
@@ -4245,7 +4369,7 @@ export async function runTui(): Promise<void> {
               newRunContextExcluded.delete(key);
             }
           }
-        } else if (key && !key.startsWith("core-tool:")) {
+        } else if (key && !key.startsWith("core-tool:") && !key.startsWith("prompt:")) {
           if (newRunContextExcluded.has(key)) newRunContextExcluded.delete(key);
           else {
             newRunContextExcluded.add(key);
@@ -4694,23 +4818,33 @@ export async function runTui(): Promise<void> {
     if (page === "models") {
       if (data === "\x1b[A" || data === "k") { modelSel = Math.max(0, modelSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") {
-        modelSel = Math.min(Math.max(0, modelVisible.length - 1), modelSel + 1);
+        modelSel = Math.min(Math.max(0, modelDisplay.length - 1), modelSel + 1);
         draw();
         return;
       }
       if (data === " ") {
-        const row = modelVisible[modelSel];
-        if (row) {
-          const key = modelGroup === "family" ? (row.family || "other") : modelGroup === "none" ? "all" : row.providerID;
+        const stop = modelDisplay[modelSel];
+        if (stop) {
+          const key = stop.key;
           if (modelCollapsed.has(key)) modelCollapsed.delete(key);
-          else modelCollapsed.add(key);
+          else {
+            modelCollapsed.add(key);
+            // Collapsing from a row would strand the cursor; land on the header.
+            if (stop.kind === "row") {
+              const headerIndex = modelDisplay.findIndex((candidate) => candidate.kind === "header" && candidate.key === key);
+              if (headerIndex >= 0) modelSel = headerIndex;
+            }
+          }
         }
         draw();
         return;
       }
       if (data === "\r" || data === "\n") {
-        const row = modelVisible[modelSel];
-        if (row) { selectedModelKey = row.key; modelScroll = 0; screen = "model"; }
+        const stop = modelDisplay[modelSel];
+        if (stop?.kind === "header") {
+          if (modelCollapsed.has(stop.key)) modelCollapsed.delete(stop.key);
+          else modelCollapsed.add(stop.key);
+        } else if (stop) { selectedModelKey = stop.row.key; modelScroll = 0; screen = "model"; }
         draw();
         return;
       }
@@ -4773,7 +4907,7 @@ export async function runTui(): Promise<void> {
     if (page === "runs" && screen === "pipeline") {
       if (data === "\x1b[A" || data === "k") { pipelineSel = Math.max(0, pipelineSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { pipelineSel++; draw(); return; }
-      if (data === "r") { void refreshIssues("current"); draw(); return; }
+      if (data === "r") { void refreshIssues("all"); draw(); return; }
       if (data === "t") { orchTier = orchTier === "paid" ? "free" : "paid"; orchPreviewCache = null; draw(); return; }
       if (data === "m") {
         const values: Array<number | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 0];
@@ -4817,9 +4951,14 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
+      // The scope may live in another repo; resolve its layout and issues.
+      const scopeCtx = (): { repo: string; layout: Layout } => {
+        const repo = (pipelineScope && issueRepoOf(pipelineScope.ref)) ?? l.repoRoot;
+        return { repo, layout: repo === l.repoRoot ? l : layout(repo) };
+      };
       const selected = () => {
         if (pipelineScope?.kind === "task") {
-          const cached = readIssueCache(l)?.issues ?? [];
+          const cached = readIssueCache(layout(scopeCtx().repo))?.issues ?? [];
           const issue = cached.find((candidate) => refKey(candidate.ref) === refKey(pipelineScope!.ref));
           return issue ? { issue, plan: issue.plan } : undefined;
         }
@@ -4829,7 +4968,7 @@ export async function runTui(): Promise<void> {
       const scopeLedger = () => {
         const scope = pipelineScope;
         if (!scope) return undefined;
-        const states = listOrchestrations(l);
+        const states = listOrchestrations(scopeCtx().layout);
         return states.find(
           (candidate) =>
             candidate.scope === scope.kind &&
@@ -4840,11 +4979,12 @@ export async function runTui(): Promise<void> {
       if (data === "s") {
         const state = scopeLedger();
         if (!state) { notify("no orchestration to stop"); draw(); return; }
-        const lease = readLease(l, state.id);
+        const ctx = scopeCtx();
+        const lease = readLease(ctx.layout, state.id);
         if (!lease || lease.until <= Date.now()) { notify(`${state.id} is not running`); draw(); return; }
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         const child = spawn(process.execPath, [cliPath, "orchestrate", "stop", "--orchestration", state.id], {
-          cwd: l.repoRoot,
+          cwd: ctx.repo,
           detached: true,
           stdio: "ignore",
           env: process.env,
@@ -4857,14 +4997,15 @@ export async function runTui(): Promise<void> {
       if (data === "x") {
         const scope = pipelineScope;
         if (!scope) { notify("no orchestration scope"); draw(); return; }
+        const ctx = scopeCtx();
         if (scope.kind !== "task") {
-          const state = listOrchestrations(l).find(
+          const state = listOrchestrations(ctx.layout).find(
             (candidate) =>
               candidate.scope === scope.kind &&
               candidate.scopeRef &&
               refKey(candidate.scopeRef) === refKey(scope.ref),
           );
-          const lease = state ? readLease(l, state.id) : undefined;
+          const lease = state ? readLease(ctx.layout, state.id) : undefined;
           if (state && lease && lease.until > Date.now()) {
             notify(`already running ${state.id} (${lease.owner}, pid ${lease.pid})`);
             draw();
@@ -4895,7 +5036,7 @@ export async function runTui(): Promise<void> {
               ...(orchModel ? ["--model", orchModel] : []),
             ];
         const child = spawn(process.execPath, [cliPath, ...args], {
-          cwd: l.repoRoot,
+          cwd: scopeCtx().repo,
           detached: true,
           stdio: "ignore",
           env: process.env,
@@ -4908,7 +5049,8 @@ export async function runTui(): Promise<void> {
       if (data === "a" || data === "A") {
         const task = selected();
         const scope = pipelineScope;
-        const states = listOrchestrations(l);
+        const ctx = scopeCtx();
+        const states = listOrchestrations(ctx.layout);
         const state = states.find(
           (candidate) =>
             scope &&
@@ -4920,7 +5062,7 @@ export async function runTui(): Promise<void> {
         else if (data === "A") {
           const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
           const child = spawn(process.execPath, [cliPath, "task", "approve", String(task.issue.ref.number)], {
-            cwd: l.repoRoot,
+            cwd: scopeCtx().repo,
             detached: true,
             stdio: "ignore",
             env: process.env,
@@ -4932,7 +5074,7 @@ export async function runTui(): Promise<void> {
           const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
           const args = ["orchestrate", "approve", "--orchestration", state.id, "--task", String(task.issue.ref.number)];
           const child = spawn(process.execPath, [cliPath, ...args], {
-            cwd: l.repoRoot,
+            cwd: scopeCtx().repo,
             detached: true,
             stdio: "ignore",
             env: process.env,

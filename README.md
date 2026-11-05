@@ -468,7 +468,9 @@ prompt only when the issue body declares them. The **Tools** subtab lists every 
 available to the selected agent, including `issue` with its access level, plus
 custom repository/machine tools. Core tool definitions are sent with every
 request, so their schema tokens are included in the estimate and cannot be
-excluded as context.
+excluded as context. The **Prompt** subtab lists every line of the resolved
+agent system prompt being previewed; like core tools it is fixed and cannot
+be switched off. Every subtab supports `/` filtering and `j/k` scrolling.
 
 Skill descriptions are always visible and appear as one row per skill in the
 **Skills** subtab even when no issue references a skill body. **Knowledge** and
