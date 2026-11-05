@@ -151,7 +151,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
 }
 
 type Page = "runs" | "models" | "spend" | "settings";
-type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline";
+type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline" | "delete";
 type PipelineScope = { kind: "epic" | "feature" | "task"; ref: IssueRef };
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
 type RunListFilter = RunFilter | "attention";
@@ -673,6 +673,8 @@ export async function runTui(): Promise<void> {
 
   let selectedIssueKey: string | null = null;
   let selectedRunId: string | null = null;
+  let deleteTarget: Issue | undefined;
+  let deleteReturn: Screen = "list";
   let issueCachesByRepo = new Map<string, readonly Issue[]>();
   let issueRunSel = 0;
   let issueScroll = 0;
@@ -827,6 +829,20 @@ export async function runTui(): Promise<void> {
       if (issue) return issue;
     }
     return undefined;
+  };
+
+  const descendantCount = (issue: Issue): number => {
+    let count = 0;
+    const walk = (parent: Issue): void => {
+      for (const ref of parent.children) {
+        const child = issueByRef(ref);
+        if (!child) continue;
+        count += 1;
+        walk(child);
+      }
+    };
+    walk(issue);
+    return count;
   };
 
   /** Objective text for an issue, using the verb for the current agent. */
@@ -1694,6 +1710,7 @@ export async function runTui(): Promise<void> {
       extraActions = joinCommands([
         command("g", "Group", RUN_GROUP_LABELS[runsGroup], C),
         command("f", "Filter", runsFilter, M),
+        command("D", "Delete", undefined, RED),
       ]);
       if (toast) secondary = `${Y}${toast}${R}`;
     }
@@ -1759,10 +1776,43 @@ export async function runTui(): Promise<void> {
         command("j/k", "Select", undefined, M),
         command("p", "Approve", undefined, Y),
         command("P", "Pipeline", undefined, C),
+        command("D", "Delete", undefined, RED),
         command("o", "Open URL", undefined, BL),
         command("Esc", "Back", undefined, GR),
       ]);
       secondary = `${D}${issue.kind} #${issue.ref.number} · ${issueRuns.length} run(s) · ${preview.chars.toLocaleString()} context chars${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+    }
+
+    /* ----------------------------------------------------------- delete */
+    else if (screen === "delete") {
+      const target = deleteTarget;
+      if (!target) {
+        screen = deleteReturn;
+        return draw();
+      }
+      const descendants = descendantCount(target);
+      const targetRuns = allRuns.filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(target.ref));
+      const worktrees = new Set(targetRuns.map((run) => run.worktree).filter(Boolean));
+      const lines = [
+        "",
+        ` ${RED}${B}Delete #${target.ref.number}${R} ${W}${target.title}${R}`,
+        "",
+        ` ${D}This permanently deletes the issue and its associated resources:${R}`,
+        `   ${Y}•${R} close open PR(s)`,
+        `   ${Y}•${R} remove ${worktrees.size} worktree(s)`,
+        `   ${Y}•${R} delete local and remote ${target.kind === "task" ? "Task" : target.kind === "feature" ? "Feature" : "scope"} branches`,
+        `   ${Y}•${R} delete the issue${descendants > 0 ? ` and ${descendants} descendant issue(s)` : ""}`,
+        "",
+        ` ${D}${targetRuns.length} associated run(s) · ${descendants} descendant issue(s)${R}`,
+        "",
+        ` ${RED}This cannot be undone.${R}`,
+      ];
+      body = clipBody(lines);
+      actions = joinCommands([
+        command("D", "Confirm delete", undefined, RED),
+        command("Esc", "Cancel", undefined, GR),
+      ]);
+      secondary = `${D}#${target.ref.number} ${target.kind}${R}`;
     }
 
     /* ---------------------------------------------------------- new run */
@@ -2737,6 +2787,7 @@ export async function runTui(): Promise<void> {
         runHints = joinCommands([
           command("f", "fork", undefined, Y),
           hint("P", "pipeline", C),
+          hint("D", "delete", RED),
           ...(runSection === "timeline"
             ? [
                 hint("j/k", "events"),
@@ -3420,6 +3471,35 @@ export async function runTui(): Promise<void> {
     }
 
     // Text-entry modes take precedence over global navigation.
+    if (screen === "delete") {
+      if (data === "\x1b") { screen = deleteReturn; draw(); return; }
+      if (data === "D") {
+        const target = deleteTarget;
+        if (!target) { screen = deleteReturn; draw(); return; }
+        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+        const child = spawn(
+          process.execPath,
+          [cliPath, "issue", "delete", String(target.ref.number), "--cascade", "--yes"],
+          {
+            cwd: l.repoRoot,
+            detached: true,
+            stdio: "ignore",
+            env: process.env,
+          },
+        );
+        child.unref();
+        notify(`deleting #${target.ref.number} and associated resources`);
+        deleteTarget = undefined;
+        selectedIssueKey = null;
+        screen = "list";
+        page = "runs";
+        draw();
+        return;
+      }
+      draw();
+      return;
+    }
+
     if (screen === "answer") {
       if (data === "\x1b") { screen = "run"; answerText = ""; draw(); return; }
       if (data === "\r" || data === "\n") {
@@ -3703,7 +3783,7 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
-      if (data === "p") {
+      if (data === "p" || data === "D") {
         const row = index.selectable[runsSel];
         const issue = row?.kind === "issue"
           ? row.issue
@@ -3712,6 +3792,13 @@ export async function runTui(): Promise<void> {
             : undefined;
         if (!issue) { notify("select an Epic, Feature, or Task first"); draw(); return; }
         if (issue.reserved) { notify("select a deliverable issue"); draw(); return; }
+        if (data === "D") {
+          deleteTarget = issue;
+          deleteReturn = "list";
+          screen = "delete";
+          draw();
+          return;
+        }
         pipelineScope = { kind: issue.kind, ref: issue.ref };
         pipelineSel = 0;
         pipelineScroll = 0;
@@ -3757,6 +3844,13 @@ export async function runTui(): Promise<void> {
         pipelineSel = 0;
         pipelineScroll = 0;
         screen = "pipeline";
+        draw();
+        return;
+      }
+      if (data === "D" && !issue.reserved) {
+        deleteTarget = issue;
+        deleteReturn = "issue";
+        screen = "delete";
         draw();
         return;
       }
@@ -3915,6 +4009,16 @@ export async function runTui(): Promise<void> {
           pipelineSel = 0;
           pipelineScroll = 0;
           screen = "pipeline";
+          draw();
+          return;
+        }
+      }
+      if (data === "D") {
+        const issue = issueByRef(detail.summary.taskIssue ?? detail.summary.issue);
+        if (issue && !issue.reserved) {
+          deleteTarget = issue;
+          deleteReturn = "run";
+          screen = "delete";
           draw();
           return;
         }

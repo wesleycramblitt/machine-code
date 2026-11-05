@@ -37,6 +37,8 @@ node dist/cli.js resume <run-id>
 # issues (reserved Feature 0 / Task 0 enforced by the harness)
 node dist/cli.js issue tree 10
 node dist/cli.js issue ensure 10
+node dist/cli.js issue delete 31 --yes
+node dist/cli.js issue delete 98 --cascade --yes
 node dist/cli.js accept 31
 node dist/cli.js approve 31
 
@@ -319,6 +321,17 @@ In the TUI, `p` on a Task or task run runs `task approve`: commit any remaining
 changes, open or merge the Task PR, record acceptance, close the Task, and
 remove the worktree. `A` in the Pipeline view does the same for the selected
 task and updates the orchestration ledger.
+
+Press `D` on a Runs-list issue or run, an issue detail, or a run detail to open
+a delete confirmation. Confirming deletes the issue, closes its open PRs,
+removes its worktrees, and deletes the associated local and remote branches.
+Deleting a Feature or Epic requires the cascade confirmation and removes the
+whole subtree. The CLI equivalent is:
+
+```bash
+machine_code issue delete <issue> --yes
+machine_code issue delete <feature-or-epic> --cascade --yes
+```
 
 After every Task PR is merged, `machine_code pr feature <n>` runs a final
 Feature Review over `main...mc/feature/<n>`, runs integration gates, and opens

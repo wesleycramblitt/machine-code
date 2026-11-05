@@ -31,6 +31,17 @@ The Task PR is not merged, and the Task is not closed, until the review and
 merge policy allow it. Feature publishing runs a final aggregate Review before
 the Feature PR to main.
 
+To delete an issue and its associated resources:
+
+```bash
+machine_code issue delete 104 --yes
+machine_code issue delete 98 --cascade --yes
+```
+
+Deletion closes open PRs, removes worktrees, deletes local and remote branches,
+and then deletes the issue. `--cascade` is required for a Feature or Epic with
+children. In the TUI, press `D` on the issue or run and confirm.
+
 In the TUI, select an Epic, Feature, or Task in the Runs list and press `p` to
 open a Pipeline view scoped to that issue. `P` works from the issue or run
 detail. The old separate Orchestrate tab is gone. `x` starts the selected

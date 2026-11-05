@@ -132,6 +132,10 @@ export class GitHubPrProvider implements PullRequestProvider {
     await this.gh(["pr", "merge", String(number), "--repo", this.repo, `--${method}`], 120_000);
   }
 
+  async close(number: number): Promise<void> {
+    await this.gh(["pr", "close", String(number), "--repo", this.repo], 60_000);
+  }
+
   async list(filter: { head?: string; base?: string; state?: "open" | "closed" | "all" } = {}): Promise<PullRequest[]> {
     const args = ["pr", "list", "--repo", this.repo, "--state", filter.state ?? "all", "--json", PR_FIELDS];
     if (filter.head) args.push("--head", filter.head);

@@ -408,6 +408,10 @@ export class GitHubIssueProvider implements IssueProvider {
     await this.gh(["issue", "reopen", String(ref.number), "--repo", this.repo], 30_000);
   }
 
+  async delete(ref: IssueRef): Promise<void> {
+    await this.gh(["issue", "delete", String(ref.number), "--repo", this.repo, "--yes"], 60_000);
+  }
+
   async linkParent(child: IssueRef, parent: IssueRef | null): Promise<void> {
     const args = ["issue", "edit", String(child.number), "--repo", this.repo];
     if (parent) args.push("--parent", String(parent.number));

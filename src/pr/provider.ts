@@ -32,6 +32,8 @@ export interface PullRequestProvider {
   create(input: NewPullRequest): Promise<PullRequest>;
   status(number: number): Promise<PullRequest | null>;
   merge(number: number, method?: "squash" | "merge" | "rebase"): Promise<void>;
+  /** Close an open PR without merging it. */
+  close?(number: number): Promise<void>;
   list(filter?: { head?: string; base?: string; state?: "open" | "closed" | "all" }): Promise<PullRequest[]>;
 }
 

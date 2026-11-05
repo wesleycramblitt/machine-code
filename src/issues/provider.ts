@@ -88,6 +88,8 @@ export interface IssueProvider {
   close(ref: IssueRef, reason?: string): Promise<void>;
   reopen(ref: IssueRef): Promise<void>;
   linkParent(child: IssueRef, parent: IssueRef | null): Promise<void>;
+  /** Permanently delete the issue. Not all providers support this. */
+  delete?(ref: IssueRef): Promise<void>;
 }
 
 export class IssueError extends Error {

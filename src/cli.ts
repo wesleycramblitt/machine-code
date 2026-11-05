@@ -52,6 +52,7 @@ import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { executeTask } from "./orchestrator/execute.js";
 import { approveTask, cleanupTask, runTaskChecks, suggestedReviewChecks, taskRuns, taskStatus } from "./tasks/lifecycle.js";
+import { deleteIssue } from "./tasks/delete.js";
 import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
@@ -198,6 +199,8 @@ Usage:
   machine_code worktree remove <run-id> [--delete-branch] [--force]
   machine_code issue list|view|tree|create|edit|close|reopen|link|ensure
                                     GitHub issue operations (hierarchy enforced)
+  machine_code issue delete <n>     Delete issue + PRs, branches, worktrees
+                                    [--cascade] [--yes]
   machine_code approve <issue|pr>   Approve a pending human close/merge request
   machine_code accept <issue>       Record a human acceptance verdict (needed to close)
   machine_code task status <issue>  Show the task lifecycle and the next action
@@ -277,6 +280,8 @@ const BOOLEAN_FLAGS = new Set([
   "keep-worktree",
   "keep-branch",
   "retry",
+  "cascade",
+  "yes",
 ]);
 
 function parseFlags(argv: string[]): { flags: Map<string, string>; positional: string[] } {
@@ -2057,6 +2062,26 @@ async function cmdIssue(argv: string[]): Promise<number> {
       process.stdout.write(`reopened #${issue.ref.number}${cascaded.length ? ` (reserved: ${cascaded.map((n) => `#${n}`).join(", ")})` : ""}\n`);
       return 0;
     }
+    case "delete": {
+      if (!flags.has("yes")) fail("issue delete is destructive; rerun with --yes");
+      const issue = await provider.get(ref("issue"));
+      if (!issue) fail(`issue not found: ${refArg}`);
+      const result = await deleteIssue({
+        layout: l,
+        machine,
+        provider,
+        issue,
+        cascade: flags.has("cascade"),
+      });
+      process.stdout.write(
+        `deleted ${result.deleted.map((n) => `#${n}`).join(", ")}` +
+          `${result.closedPrs.length ? `; closed PR(s) ${result.closedPrs.map((n) => `#${n}`).join(", ")}` : ""}` +
+          `${result.removedWorktrees.length ? `; removed ${result.removedWorktrees.length} worktree(s)` : ""}` +
+          `${result.deletedBranches.length ? `; deleted ${result.deletedBranches.length} branch(es)` : ""}\n`,
+      );
+      for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
+      return 0;
+    }
     case "link": {
       const issue = await provider.get(ref("issue"));
       if (!issue) fail(`issue not found: ${refArg}`);
@@ -2088,7 +2113,7 @@ async function cmdIssue(argv: string[]): Promise<number> {
       return 0;
     }
     default:
-      fail("usage: machine_code issue list|view|tree|create|edit|close|reopen|link|ensure");
+      fail("usage: machine_code issue list|view|tree|create|edit|close|reopen|delete|link|ensure");
   }
 }
 
