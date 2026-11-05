@@ -83,8 +83,10 @@ const ReadParams = Type.Object({
   offset: Type.Optional(Type.Number({ description: "1-based line to start at (default 1). Use only for a large unindexed file." })),
   limit: Type.Optional(Type.Number({ description: "Max lines to return (default 2000)." })),
   symbol: Type.Optional(Type.String({ description: "Top-level symbol to read (resolved from the repo map). Prefer this." })),
+  symbols: Type.Optional(Type.Array(Type.String(), { description: "Several symbols from one file in one call. Prefer this for a sweep." })),
   around: Type.Optional(Type.Number({ description: "1-based line; read the symbol that contains it." })),
-  section: Type.Optional(Type.String({ description: "Comment section heading to read in a non-code or large file. Prefer this over offset paging." })),
+  section: Type.Optional(Type.String({ description: "Comment or Markdown section heading to read. Prefer this over offset paging." })),
+  sections: Type.Optional(Type.Array(Type.String(), { description: "Several sections from one file in one call." })),
 });
 
 /** Find a nested or non-map declaration so `read { symbol }` can still help. */
@@ -104,7 +106,9 @@ function findSymbolLine(lines: readonly string[], symbol: string): number {
 }
 
 /** Stable cache key for one read target: symbol, section, window, or full file. */
-function readCacheKey(path: string, params: { symbol?: string | null; section?: string | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
+function readCacheKey(path: string, params: { symbol?: string | null; symbols?: readonly string[] | null; section?: string | null; sections?: readonly string[] | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
+  if (params.symbols && params.symbols.length > 0) return `${path}#symbols:${[...params.symbols].sort().join(",")}`;
+  if (params.sections && params.sections.length > 0) return `${path}#sections:${[...params.sections].map((item) => item.trim().toLowerCase()).sort().join(",")}`;
   if (params.symbol) return `${path}#symbol:${params.symbol}`;
   if (params.section) return `${path}#section:${params.section.trim().toLowerCase()}`;
   if (params.around != null) return `${path}#around:${params.around}`;
@@ -114,7 +118,9 @@ function readCacheKey(path: string, params: { symbol?: string | null; section?: 
   return `${path}#full`;
 }
 
-function readTargetLabel(path: string, params: { symbol?: string | null; section?: string | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
+function readTargetLabel(path: string, params: { symbol?: string | null; symbols?: readonly string[] | null; section?: string | null; sections?: readonly string[] | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
+  if (params.symbols && params.symbols.length > 0) return `${path}#${params.symbols.join(",")}`;
+  if (params.sections && params.sections.length > 0) return `${path}#${params.sections.join(",")}`;
   if (params.symbol) return `${path}#${params.symbol}`;
   if (params.section) return `${path}#${params.section.trim()}`;
   if (params.around != null) return `${path}#around ${params.around}`;
@@ -141,6 +147,17 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const abs = resolveWithin(ctx.root, params.path);
         assertRegularFile(abs);
         if (isBinaryFile(abs)) return fail(`refusing to read a binary file: ${params.path}`);
+        const wantsSymbols = Boolean(params.symbols && params.symbols.length > 0);
+        const wantsSections = Boolean(params.sections && params.sections.length > 0);
+        if (wantsSymbols && wantsSections) {
+          return fail("use symbols or sections, not both");
+        }
+        if (wantsSymbols && (params.symbol || params.section || params.around != null)) {
+          return fail("use symbols alone; do not combine with symbol, section, or around");
+        }
+        if (wantsSections && (params.symbol || params.section || params.around != null)) {
+          return fail("use sections alone; do not combine with symbol, section, or around");
+        }
         if (params.symbol && params.around != null) {
           return fail("use symbol or around, not both");
         }
@@ -173,6 +190,70 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
           });
           return ok(text);
         };
+
+        if (wantsSymbols) {
+          const file = await outlineFile(ctx.root, params.path);
+          const parts: string[] = [];
+          const missing: string[] = [];
+          for (const name of params.symbols!) {
+            const range = file ? symbolRange(file, name) : null;
+            if (range) {
+              const page = numberLinesCapped(
+                lines,
+                range.start,
+                Math.max(1, range.end - range.start + 1),
+                READ_CAP_BYTES,
+              );
+              parts.push(`### ${params.path}:${range.start}-${range.end} (${name})\n${page.text}`);
+              continue;
+            }
+            const found = findSymbolLine(lines, name);
+            if (found > 0) {
+              const start = Math.max(1, found - 20);
+              const page = numberLinesCapped(lines, start, 41, READ_CAP_BYTES);
+              parts.push(`### ${params.path}:${start}-${start + 40} (around ${name})\n${page.text}`);
+            } else {
+              missing.push(name);
+            }
+          }
+          if (missing.length > 0) parts.push(`[no symbol: ${missing.join(", ")}]`);
+          if (parts.length === 0) return fail(`no symbols found in ${params.path}`);
+          return remember(
+            capText(parts.join("\n\n"), READ_CAP_BYTES).text,
+            "symbol",
+            `${params.path}#${params.symbols!.join(",")}`,
+          );
+        }
+
+        if (wantsSections) {
+          const headings = documentSections(raw, params.path);
+          const parts: string[] = [];
+          const missing: string[] = [];
+          for (const wanted of params.sections!) {
+            const needle = wanted.trim().toLowerCase();
+            const index = headings.findIndex((heading) => {
+              const title = sectionTitle(heading.text).toLowerCase();
+              return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
+            });
+            if (index < 0) {
+              missing.push(wanted);
+              continue;
+            }
+            const heading = headings[index]!;
+            const next = headings[index + 1];
+            const start = heading.line;
+            const end = next ? next.line - 1 : lines.length;
+            const page = numberLinesCapped(lines, start, Math.max(1, end - start + 1), READ_CAP_BYTES);
+            parts.push(`### ${params.path}:${start}-${end} (section ${sectionTitle(heading.text) || heading.text})\n${page.text}`);
+          }
+          if (missing.length > 0) parts.push(`[no section: ${missing.join(", ")}]`);
+          if (parts.length === 0) return fail(`no sections found in ${params.path}`);
+          return remember(
+            capText(parts.join("\n\n"), READ_CAP_BYTES).text,
+            "section",
+            `${params.path}#${params.sections!.join(",")}`,
+          );
+        }
 
         if (params.section) {
           const headings = documentSections(raw, params.path);
@@ -307,10 +388,22 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
 
 const EditParams = Type.Object({
   path: Type.String({ description: "File path, relative to the worktree root." }),
-  oldString: Type.String({ description: "Exact text to find." }),
-  newString: Type.String({ description: "Replacement text (must differ from oldString)." }),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form)." })),
+  edits: Type.Optional(
+    Type.Array(
+      Type.Object({
+        oldString: Type.String({ description: "Exact text to find." }),
+        newString: Type.String({ description: "Replacement text." }),
+        replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
+      }),
+      { description: "Several exact-match hunks applied atomically to one file." },
+    ),
+  ),
+  symbol: Type.Optional(Type.String({ description: "Limit the edit to one top-level symbol." })),
+  section: Type.Optional(Type.String({ description: "Limit the edit to one comment or Markdown section." })),
   replaceAll: Type.Optional(
-    Type.Boolean({ description: "Replace every occurrence (default false: a unique match is required)." }),
+    Type.Boolean({ description: "Replace every occurrence in the scope (single-hunk form)." }),
   ),
 });
 
@@ -319,26 +412,86 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     name: "edit",
     label: "edit",
     description:
-      "Exact-match replacement in a file. Without replaceAll the match must be unique.",
+      "Exact-match replacement in a file. Prefer one call with an edits array for several hunks. " +
+      "symbol or section scopes the match so an identical anchor elsewhere cannot win. " +
+      "Without replaceAll each hunk must be unique inside its scope.",
     parameters: EditParams,
     async execute(_id, params: Static<typeof EditParams>) {
       try {
-        if (params.oldString === params.newString) {
-          return fail("oldString and newString must differ");
+        if (params.edits && (params.oldString !== undefined || params.newString !== undefined)) {
+          return fail("use edits or oldString/newString, not both");
         }
+        const edits = params.edits && params.edits.length > 0
+          ? params.edits
+          : params.oldString !== undefined && params.newString !== undefined
+            ? [{ oldString: params.oldString, newString: params.newString, replaceAll: params.replaceAll }]
+            : [];
+        if (edits.length === 0) return fail("edit requires oldString/newString or a non-empty edits array");
+
         const abs = resolveWithin(ctx.root, params.path);
         assertRegularFile(abs);
         const raw = readFileSync(abs, "utf8");
-        const count = raw.split(params.oldString).length - 1;
-        if (count === 0) return fail(`no match in ${params.path}`);
-        if (!params.replaceAll && count > 1) {
-          return fail(`${count} matches in ${params.path}; add context to make the match unique or set replaceAll`);
+        const lines = raw.split("\n");
+        const lineOffsets = [0];
+        for (let index = 0; index < lines.length; index += 1) {
+          lineOffsets.push(lineOffsets[index]! + lines[index]!.length + 1);
         }
-        const next = params.replaceAll
-          ? raw.split(params.oldString).join(params.newString)
-          : raw.replace(params.oldString, params.newString);
+
+        let startChar = 0;
+        let endChar = raw.length;
+        let scopeLabel = "";
+        if (params.symbol) {
+          const file = await outlineFile(ctx.root, params.path);
+          const range = file ? symbolRange(file, params.symbol) : null;
+          if (!range) return fail(`no symbol "${params.symbol}" in ${params.path}`);
+          startChar = lineOffsets[range.start - 1] ?? 0;
+          endChar = Math.min(raw.length, lineOffsets[range.end] ?? raw.length);
+          scopeLabel = `symbol ${params.symbol}`;
+        } else if (params.section) {
+          const headings = documentSections(raw, params.path);
+          const needle = params.section.trim().toLowerCase();
+          const index = headings.findIndex((heading) => {
+            const title = sectionTitle(heading.text).toLowerCase();
+            return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
+          });
+          if (index < 0) return fail(`no section "${params.section}" in ${params.path}`);
+          const heading = headings[index]!;
+          const next = headings[index + 1];
+          const startLine = heading.line;
+          const endLine = next ? next.line - 1 : lines.length;
+          startChar = lineOffsets[startLine - 1] ?? 0;
+          endChar = Math.min(raw.length, lineOffsets[endLine] ?? raw.length);
+          scopeLabel = `section ${sectionTitle(heading.text) || heading.text}`;
+        }
+
+        const scoped = raw.slice(startChar, endChar);
+        let working = scoped;
+        let replacements = 0;
+        for (const edit of edits) {
+          if (edit.oldString.length === 0) return fail("oldString must not be empty");
+          if (edit.oldString === edit.newString) return fail("oldString and newString must differ");
+          const count = working.split(edit.oldString).length - 1;
+          if (count === 0) {
+            return fail(`no match in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}`);
+          }
+          if (!edit.replaceAll && count > 1) {
+            return fail(
+              `${count} matches in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}; ` +
+                "add context to make the match unique or set replaceAll",
+            );
+          }
+          working = edit.replaceAll
+            ? working.split(edit.oldString).join(edit.newString)
+            : working.replace(edit.oldString, edit.newString);
+          replacements += count;
+        }
+
+        const next = raw.slice(0, startChar) + working + raw.slice(endChar);
         writeFileSync(abs, next, "utf8");
-        return ok(`edited ${params.path} (${count} replacement${count === 1 ? "" : "s"})`);
+        return ok(
+          `edited ${params.path} (${replacements} replacement${replacements === 1 ? "" : "s"})` +
+            (scopeLabel ? ` in ${scopeLabel}` : ""),
+        );
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
       }

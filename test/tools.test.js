@@ -4,11 +4,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { commandTool, readTool, searchTool } from "../dist/tools/index.js";
+import { commandTool, editTool, readTool, searchTool } from "../dist/tools/index.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 import { RunStateStore } from "../dist/context/state.js";
 
@@ -277,6 +277,79 @@ test("read stores exact bytes in the evidence ledger", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(runDir, { recursive: true, force: true });
+  }
+});
+
+test("read reads several symbols or sections in one call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-batch-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(
+      join(root, "src.ts"),
+      "export function alpha() { return 1; }\nexport function beta() { return 2; }\n",
+      "utf8",
+    );
+    writeFileSync(join(root, "doc.md"), "## First\nalpha\n## Second\nbeta\n", "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+
+    const symbols = await tool.execute("id", { path: "src.ts", symbols: ["alpha", "beta"] });
+    assert.equal(symbols.isError, undefined);
+    const symbolText = symbols.content.map((c) => c.text ?? "").join("\n");
+    assert.match(symbolText, /src\.ts:\d+-\d+ \(alpha\)/);
+    assert.match(symbolText, /return 1/);
+    assert.match(symbolText, /src\.ts:\d+-\d+ \(beta\)/);
+    assert.match(symbolText, /return 2/);
+
+    const sections = await tool.execute("id", { path: "doc.md", sections: ["First", "Second"] });
+    assert.equal(sections.isError, undefined);
+    const sectionText = sections.content.map((c) => c.text ?? "").join("\n");
+    assert.match(sectionText, /\(section First\)/);
+    assert.match(sectionText, /alpha/);
+    assert.match(sectionText, /\(section Second\)/);
+    assert.match(sectionText, /beta/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("edit applies several hunks atomically and can scope to one symbol", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-edit-batch-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    const file = join(root, "src.ts");
+    writeFileSync(
+      file,
+      "export function alpha() { return 1; }\nexport function beta() { return 1; }\n",
+      "utf8",
+    );
+    const tool = editTool({ root, commands: CORE_COMMANDS });
+
+    const unscoped = await tool.execute("id", { path: "src.ts", oldString: "return 1;", newString: "return 10;" });
+    assert.equal(unscoped.isError, true, "duplicate anchor must fail without a scope");
+
+    const scoped = await tool.execute("id", {
+      path: "src.ts",
+      symbol: "alpha",
+      oldString: "return 1;",
+      newString: "return 10;",
+    });
+    assert.equal(scoped.isError, undefined);
+    assert.match(readFileSync(file, "utf8"), /alpha\(\) \{ return 10; \}/);
+    assert.match(readFileSync(file, "utf8"), /beta\(\) \{ return 1; \}/);
+
+    const batch = await tool.execute("id", {
+      path: "src.ts",
+      edits: [
+        { oldString: "alpha", newString: "Alpha" },
+        { oldString: "beta", newString: "Beta" },
+      ],
+    });
+    assert.equal(batch.isError, undefined);
+    const finalText = readFileSync(file, "utf8");
+    assert.match(finalText, /function Alpha/);
+    assert.match(finalText, /function Beta/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

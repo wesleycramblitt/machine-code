@@ -82,8 +82,11 @@ Implemented:
 - `src/context/render.ts` — overview + pack + state + recent steps.
 - `src/loop.ts` — build/rebuild the pack for Build, Sudo, and Review; fit it to
   the selected model; record pack size and input budget in `context_state`.
-- `read { section }` for Markdown headings and comment banners; `read` prefers
-  symbol/section and treats a past-end page as an error.
+- `read { symbols: [...] }` and `read { sections: [...] }` for a targeted sweep
+  in one call; `read { section }` supports Markdown headings and comment
+  banners. `read` prefers symbol/section and treats a past-end page as an error.
+- `edit { symbol|section, edits: [...] }` scopes exact matches and applies
+  several hunks atomically in one call.
 - `src/tools/policy.ts` — the always-in-context tool-selection guide.
 - Evidence ledger in `src/context/state.ts`: exact read bytes are kept for the
   run, unchanged re-reads return from cache, an edit drops the file's entries,
@@ -95,7 +98,6 @@ Implemented:
 
 Next:
 
-- batch `read symbols/sections/files` and patch-by-symbol;
 - a routing layer that auto-selects the best tool for a request;
 - planner staging: overview pack, then per-stage detail;
 - model-aware assembly for the overview layer, not only the task pack.
