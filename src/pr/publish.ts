@@ -26,6 +26,8 @@ export interface PublishInput {
   recorder: RunRecorder;
   /** Human by default; per-issue mc:approval overrides when an issue is set. */
   defaultApproval?: "human" | "agent";
+  /** Explicit merge policy that wins over the issue marker. */
+  approvalOverride?: "human" | "agent";
   title?: string;
   body?: string;
   /** Test/coordination injection; defaults to the GitHub/null factory. */
@@ -112,8 +114,8 @@ export async function maybePublish(input: PublishInput): Promise<PublishResult> 
   }
 
   // Approval: per-issue marker wins, then the run's configured default.
-  let approval = input.defaultApproval ?? "human";
-  if (summary.issue) {
+  let approval = input.approvalOverride ?? input.defaultApproval ?? "human";
+  if (!input.approvalOverride && summary.issue) {
     try {
       if (input.issues) {
         const issue = await input.issues.get(summary.issue);

@@ -7,6 +7,7 @@
  * acceptance step.
  */
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Issue, IssueProvider, IssueRef } from "../issues/provider.js";
 import type { Layout } from "../paths.js";
@@ -48,6 +49,12 @@ export interface ExecuteTaskInput {
   review?: boolean;
   /** Worktree base override; defaults to the parent Feature branch. */
   base?: string;
+  /** Reuse an existing Task worktree instead of creating a new one. */
+  worktree?: string;
+  worktreeOwnerRunId?: string;
+  branch?: string;
+  baseBranch?: string;
+  baseRef?: string;
   /** Prior failed-attempt evidence passed to the next Build. */
   retryEvidence?: string;
 }
@@ -56,6 +63,12 @@ export interface ExecuteTaskResult {
   runId: string;
   status: RunStatus;
   error?: string;
+  commit?: string;
+  reviewVerdict?: string;
+  mergeState?: import("../orchestrate.js").MergeState;
+  prNumber?: number;
+  prUrl?: string;
+  prState?: "none" | "open" | "merged" | "closed";
 }
 
 function packetAcceptance(line: string): PacketAcceptance | null {
@@ -156,31 +169,51 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
     onEvent: (type, data) => recorder.event(type, data),
   });
   try {
-    const spec = await createWorktree({
-      layout,
-      runId: recorder.id,
-      kind: "task",
-      issueNumber: issue.ref.number,
-      ...(issue.parent ? { featureNumber: issue.parent.number } : {}),
-      ...(input.base ? { base: input.base } : {}),
-      processes: setupProcesses,
-    });
-    toolRoot = spec.path;
-    recorder.patchSummary({
-      worktree: spec.path,
-      branch: spec.branch,
-      baseBranch: spec.baseBranch,
-      baseRef: spec.baseRef,
-    });
-    recorder.event("worktree_created", {
-      path: spec.path,
-      branch: spec.branch,
-      baseRef: spec.baseRef,
-      baseBranch: spec.baseBranch,
-      linkedDirs: spec.linkedDirs,
-      skippedLinks: spec.skippedLinks,
-      materialized: spec.materialized,
-    });
+    if (input.worktree) {
+      if (!existsSync(input.worktree)) {
+        recorder.finalize("blocked", `retry worktree is missing: ${input.worktree}`);
+        return { runId: recorder.id, status: "blocked", error: `retry worktree is missing: ${input.worktree}` };
+      }
+      toolRoot = input.worktree;
+      recorder.patchSummary({
+        worktree: toolRoot,
+        ...(input.worktreeOwnerRunId ? { worktreeOwnerRunId: input.worktreeOwnerRunId } : {}),
+        ...(input.branch ? { branch: input.branch } : {}),
+        ...(input.baseBranch ? { baseBranch: input.baseBranch } : {}),
+        ...(input.baseRef ? { baseRef: input.baseRef } : {}),
+      });
+      recorder.event("worktree_reused", {
+        path: toolRoot,
+        ...(input.worktreeOwnerRunId ? { parentRunId: input.worktreeOwnerRunId } : {}),
+        ...(input.branch ? { branch: input.branch } : {}),
+      });
+    } else {
+      const spec = await createWorktree({
+        layout,
+        runId: recorder.id,
+        kind: "task",
+        issueNumber: issue.ref.number,
+        ...(issue.parent ? { featureNumber: issue.parent.number } : {}),
+        ...(input.base ? { base: input.base } : {}),
+        processes: setupProcesses,
+      });
+      toolRoot = spec.path;
+      recorder.patchSummary({
+        worktree: spec.path,
+        branch: spec.branch,
+        baseBranch: spec.baseBranch,
+        baseRef: spec.baseRef,
+      });
+      recorder.event("worktree_created", {
+        path: spec.path,
+        branch: spec.branch,
+        baseRef: spec.baseRef,
+        baseBranch: spec.baseBranch,
+        linkedDirs: spec.linkedDirs,
+        skippedLinks: spec.skippedLinks,
+        materialized: spec.materialized,
+      });
+    }
   } catch (error) {
     if (error instanceof WorktreeError) {
       recorder.finalize("blocked", `${error.code}: ${error.message}`);
@@ -231,7 +264,17 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
       ...(input.signal ? { signal: input.signal } : {}),
     });
     recorder.finalize(result.status, result.error, result.finalText);
-    return { runId: recorder.id, status: result.status, ...(result.error ? { error: result.error } : {}) };
+    return {
+      runId: recorder.id,
+      status: result.status,
+      ...(result.error ? { error: result.error } : {}),
+      ...(result.commit ? { commit: result.commit } : {}),
+      ...(result.reviewVerdict ? { reviewVerdict: result.reviewVerdict } : {}),
+      ...(result.mergeState ? { mergeState: result.mergeState } : {}),
+      ...(result.prNumber ? { prNumber: result.prNumber } : {}),
+      ...(result.prUrl ? { prUrl: result.prUrl } : {}),
+      ...(result.prState ? { prState: result.prState } : {}),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     recorder.finalize("failed", message);

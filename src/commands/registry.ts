@@ -79,16 +79,19 @@ const SPECS: CommandSpec[] = [
   },
   {
     name: "core:diff",
-    description: "Diff of the worktree (or one path), optionally staged only.",
+    description: "Diff of the worktree, a commit range, or one path.",
     binary: "git",
     args: (a) => {
       const out = ["diff", "--no-color"];
       if (a.staged === true) out.push("--staged");
+      const base = typeof a.base === "string" ? a.base.trim() : "";
+      if (base) out.push(`${base}...HEAD`);
       const path = asPath(a.path);
       if (path) out.push("--", path);
       return out;
     },
     schema: {
+      base: { type: "string", description: "Diff from this ref to HEAD (three-dot)." },
       path: { type: "string", description: "Scope to one path." },
       staged: { type: "boolean", description: "Show staged changes only." },
     },

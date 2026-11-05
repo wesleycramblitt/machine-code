@@ -120,6 +120,29 @@ test("completion requires closed deliverable children and acceptance evidence", 
   }
 });
 
+test("a Task with an open PR cannot close", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-comp-pr-"));
+  try {
+    const layout = fakeLayout(root);
+    const task = issue(31, "task", "Task A");
+    const provider = new FakeProvider([task]);
+    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "build", repoRoot: root, issue: task.ref });
+    recorder.event("acceptance_verified", { issue: 31, by: "human", criteria: [] });
+    recorder.patchSummary({ prNumber: 7, prState: "open", branch: "mc/task/31", baseBranch: "mc/feature/30" });
+    recorder.finalize("completed");
+    const blocked = await checkCompletion(provider, layout, task);
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.reason, /PR #7 is still open/);
+
+    const run = recorder.current;
+    const merged = RunRecorder.reopen(layout, run);
+    merged.patchSummary({ prState: "merged" });
+    assert.equal((await checkCompletion(provider, layout, task)).ok, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("closing a parent cascades to reserved anchors; reopening restores them", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-casc-"));
   try {

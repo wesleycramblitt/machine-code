@@ -34,10 +34,12 @@ state, selection, and verification; the model owns decisions and edits.
 - **Map/semantic/LSP** (`src/map/`, `src/lsp/`): deterministic file/symbol
   inventory, module index, optional LLM annotations, language servers.
 - **Orchestrator** (`src/orchestrate.ts`, `src/orchestrator/`): issue-backed
-  scheduling, worktrees, gates, review, commit, PR.
+  scheduling, worktrees, gates, commit, review, PR.
 - **Task lifecycle** (`src/tasks/lifecycle.ts`): one-task status, review
   checks, approval, closure, and worktree cleanup for both direct Build runs
-  and Orchestrator runs.
+  and Orchestrator runs. A Task closes only after its PR merges.
+- **Feature publish** (`src/pr/feature.ts`): aggregate Feature Review, gates,
+  Feature PR to main, and the Feature merge policy.
 
 ## Tool-call protocol
 

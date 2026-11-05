@@ -3,12 +3,13 @@
  *
  * Only after every deliverable Task under the Feature is closed. The runner
  * creates a temporary Feature worktree, runs the configured integration gates,
- * removes the worktree, pushes the Feature branch, and opens the Feature PR.
- * Approval policy: human by default; a Feature may opt into agent merge.
+ * runs an independent aggregate Review, removes the worktree, pushes the
+ * Feature branch, and opens the Feature PR. Approval policy: human by default;
+ * a Feature may opt into agent merge.
  */
 import { runProc } from "../proc.js";
 import type { Layout } from "../paths.js";
-import type { MachineConfig } from "../config.js";
+import type { MachineConfig, Policy } from "../config.js";
 import type { IssueProvider, IssueRef } from "../issues/provider.js";
 import { createIssueProvider } from "../issues/index.js";
 import { isReserved } from "../issues/reserved.js";
@@ -17,8 +18,14 @@ import { PrError, type PullRequest, type PullRequestProvider } from "./provider.
 import { allCommands } from "../commands/profiles.js";
 import { runCommand } from "../commands/registry.js";
 import { recreateWorktreeFromBranch, removeWorktree, mainWorktreeRoot } from "../worktree.js";
-import type { RunRecorder } from "../state/runs.js";
+import { RunRecorder } from "../state/runs.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
+import type { MutableModels } from "../models.js";
+import type { CatalogueRow } from "../catalogue/types.js";
+import type { AgentConfig } from "../agents/config.js";
+import { resolveAgent } from "../agents/config.js";
+import { inferReviewVerdict, parseReviewVerdict } from "../orchestrator/outcome.js";
+import { policyFor, singleAgentRun } from "../orchestrate.js";
 
 const GIT_ENV = { GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" };
 
@@ -39,12 +46,22 @@ export interface PublishFeatureInput {
   issues?: IssueProvider;
   /** Optional run supervisor for integration git processes. */
   processes?: ProcessSupervisor;
+  /** Runtime inputs for the independent Feature Review. */
+  models?: MutableModels;
+  catalogue?: readonly CatalogueRow[];
+  configuredProviders?: ReadonlySet<string>;
+  policy?: Policy;
+  home?: string;
+  review?: boolean;
+  requireModel?: string;
+  agentOverrides?: Partial<AgentConfig>;
 }
 
 export interface PublishFeatureResult {
   status: "blocked" | "failed" | "awaiting_approval" | "merged";
   pr?: PullRequest;
   error?: string;
+  reviewVerdict?: string;
 }
 
 export async function publishFeature(input: PublishFeatureInput): Promise<PublishFeatureResult> {
@@ -101,6 +118,7 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
   }
 
   const commands = allCommands(layout);
+  let reviewVerdict: string | undefined;
   try {
     for (const gate of input.gates ?? []) {
       const result = await runCommand(gate.command, gate.args ?? {}, { root: worktree, commands });
@@ -108,6 +126,67 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
         return { status: "blocked", error: `integration gate ${gate.command} failed: ${result.text.slice(0, 400)}` };
       }
       recorder.event("integration_gate", { command: gate.command, passed: true });
+    }
+
+    if (input.review !== false && input.models && input.catalogue && input.configuredProviders && input.policy) {
+      const diff = await runCommand("core:diff", { base: "main" }, { root: worktree, commands });
+      const request =
+        `Review the aggregate Feature diff against main. Approve or reject with concrete evidence citing paths.\n\n` +
+        `FEATURE #${feature.ref.number}: ${feature.title}\n` +
+        `BRANCH: ${branch}\n\n` +
+        `FEATURE BODY:\n${feature.body.slice(0, 4_000)}\n\n` +
+        `DIFF:\n${diff.text}`;
+      const resolvedReview = resolveAgent(layout, "review", {
+        agentPolicy: input.policy.agents.review,
+        machineOverrides: machine.agents.review,
+        ...(input.agentOverrides ? { runOverrides: input.agentOverrides } : {}),
+      });
+      const reviewRecorder = new RunRecorder(layout, {
+        agent: "review",
+        mode: "",
+        request,
+        repoRoot: layout.repoRoot,
+        issue: feature.ref,
+        phase: "review",
+      });
+      reviewRecorder.patchSummary({
+        worktree,
+        worktreeOwnerRunId: runId,
+        branch,
+        baseBranch: "main",
+      });
+      reviewRecorder.event("review_of", { feature: feature.ref.number, branch });
+      recorder.event("feature_review_started", { runId: reviewRecorder.id });
+      const reviewResult = await singleAgentRun({
+        models: input.models,
+        catalogue: input.catalogue,
+        configuredProviders: input.configuredProviders,
+        agent: resolvedReview.def,
+        agentConfig: resolvedReview.config,
+        agentCapabilities: resolvedReview.capabilities,
+        policy: policyFor(layout, "review", input.policy),
+        fullPolicy: input.policy,
+        layout,
+        machine,
+        request,
+        root: layout.repoRoot,
+        toolRoot: worktree,
+        home: input.home ?? layout.home,
+        recorder: reviewRecorder,
+        commands,
+        ...(input.requireModel ? { requireModel: input.requireModel } : {}),
+      });
+      reviewRecorder.finalize(reviewResult.status, reviewResult.error, reviewResult.finalText);
+      if (reviewResult.status !== "completed") {
+        recorder.event("feature_review_finished", { runId: reviewRecorder.id, verdict: "failed" });
+        return { status: "blocked", error: reviewResult.error ?? "Feature Review did not complete" };
+      }
+      const labelled = parseReviewVerdict(reviewResult.finalText);
+      reviewVerdict = labelled ?? inferReviewVerdict(reviewResult.finalText);
+      recorder.event("feature_review_verdict", { runId: reviewRecorder.id, verdict: reviewVerdict });
+      if (reviewVerdict !== "approved") {
+        return { status: "blocked", error: `Feature Review verdict: ${reviewVerdict}`, reviewVerdict };
+      }
     }
   } finally {
     try {
@@ -148,12 +227,12 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
   const approval = feature.approval ?? input.defaultApproval ?? "human";
   if (approval === "human") {
     recorder.event("approval_requested", { action: "merge", pr: pr.number, issue: feature.ref.number });
-    return { status: "awaiting_approval", pr };
+    return { status: "awaiting_approval", pr, ...(reviewVerdict ? { reviewVerdict } : {}) };
   }
   await prs.merge(pr.number, "squash");
   recorder.patchSummary({ prState: "merged" });
   recorder.event("pr_merged", { pr: pr.number, method: "squash" });
-  return { status: "merged", pr };
+  return { status: "merged", pr, ...(reviewVerdict ? { reviewVerdict } : {}) };
 }
 
 export { mainWorktreeRoot };

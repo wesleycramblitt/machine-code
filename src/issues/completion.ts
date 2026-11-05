@@ -54,6 +54,20 @@ export interface CompletionCheck {
   acceptance: AcceptanceEvidence;
 }
 
+function openIssuePr(layout: Layout, issue: IssueRef): { runId: string; pr: number } | undefined {
+  const runs = listRuns(layout)
+    .filter((summary) => {
+      const assigned = summary.taskIssue ?? summary.issue;
+      return Boolean(assigned && assigned.repo === issue.repo && assigned.number === issue.number);
+    })
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+  const latestPr = runs.find((summary) => summary.prState !== undefined || summary.prNumber !== undefined);
+  if (latestPr?.prState === "open" && latestPr.prNumber) {
+    return { runId: latestPr.id, pr: latestPr.prNumber };
+  }
+  return undefined;
+}
+
 /** Validate parent closure: deliverable children closed + acceptance evidence. */
 export async function checkCompletion(
   provider: IssueProvider,
@@ -68,6 +82,15 @@ export async function checkCompletion(
     return {
       ok: false,
       reason: `open deliverable children: ${openChildren.map((n) => `#${n}`).join(", ")}`,
+      openChildren,
+      acceptance,
+    };
+  }
+  const pr = openIssuePr(layout, issue.ref);
+  if (pr) {
+    return {
+      ok: false,
+      reason: `PR #${pr.pr} is still open; merge it before closing (run ${pr.runId})`,
       openChildren,
       acceptance,
     };

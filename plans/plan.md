@@ -150,7 +150,7 @@ Acceptance:
 | PRs | Runner-owned Task → Feature and Feature → main PRs, integration worktree, approval queue, squash merges |
 | Context | Issue/packet/knowledge/skill/tool assembly, provenance, budget, child inheritance |
 | Maps and state | Deterministic map, semantic annotations with coalesced refresh, run-state rendering, artifacts, `context` tool, base + role prompts |
-| TUI/CLI | Five-tab TUI, issue-grouped runs, run detail, timeline, settings, spend/model views, Orchestrate preflight, map/status/prompt commands |
+| TUI/CLI | Four-tab TUI, issue-grouped runs, Pipeline view, run detail, timeline, settings, spend/model views, map/status/prompt commands |
 | Reference | Web/PDF extraction and indexed reference bundles via typed commands |
 
 The only unfinished validation from this baseline is in Phase 0.
@@ -503,7 +503,7 @@ loop.
 ## 8. Phase 5 — Orchestrator
 
 Status: the pure scheduler (`src/orchestrator/scheduler.ts`),
-`machine_code orchestrate status|tick --dry-run`, and the TUI Orchestrate
+`machine_code orchestrate status|tick --dry-run`, and the TUI Pipeline
 preflight/controls exist: scopes, readiness, dependency order, active-run suppression,
 cycle reporting, JSON output, durable ledger/lease state, parallel execution
 through the existing Build/gates/Review/commit/PR pipeline, TUI
@@ -589,8 +589,8 @@ not silently reclassified as planning failures.
 ## 9. Phase 6 — Sequential execution
 
 Status: implemented. `executeTask` synthesizes a frozen packet, creates the Task
-worktree, runs Build, gates, an independent Review run record, then commits and
-publishes. Build outcomes and Review verdicts are typed and recorded; completion
+worktree, runs Build and gates, commits, runs an independent Review on that
+commit, then publishes. Build outcomes and Review verdicts are typed and recorded; completion
 failures retry with evidence up to `retries_before_replan`. Before-build packet
 approval and after-review result approval are stored in the ledger and checked
 at their checkpoints. Human result approval records acceptance evidence and
@@ -634,14 +634,16 @@ compatibility path for committed packets; new issue-backed work uses
 Primary tabs:
 
 ```text
-1:Runs  2:Models  3:Spend  4:Settings  5:Orchestrate
+1:Runs  2:Models  3:Spend  4:Settings
 ```
 
-Orchestrate list: scope, repo, Epic/Feature, plan readiness, counts
+The Runs tab contains the Pipeline view (`p`).
+
+Pipeline list: scope, repo, Epic/Feature, plan readiness, counts
 (ready/draft/needs-planning/running/blocked), state/checkpoint, spend, attempts,
 last tick, model preview, pending reviews.
 
-Orchestrate preflight/details: included work, dependency order, per-task plan
+Pipeline preflight/details: included work, dependency order, per-task plan
 state, review policy, tools/scripts and scope, predicted model/cost, blockers,
 checkpoints, and start/step/pause/resume/stop/replan/approve/reject controls.
 
@@ -718,7 +720,7 @@ Keep the existing 256 tests green. Add:
 | Failure | `needs_planning` stop, gate/review retries, retry exhaustion, no automatic replan, typed verdicts |
 | Approvals | before-build packet approval, after-review approval, closure policy |
 | Processes | start/exit records, logs, individual/group/all kill, orphan reap, no arbitrary PID, terminal cleanup |
-| TUI | Orchestrate preflight, process selection/follow/kill, Related lineage, availability chip, `issues:*` badge and confirmation, no network in draw |
+| TUI | Pipeline preflight in Runs, process selection/follow/kill, Related lineage, availability chip, `issues:*` badge and confirmation, no network in draw |
 | E2E | greenfield Epic, two dependent tasks, parallel tasks, project/feature scope, human packet review, review rejection, missing script reuse, kill a running script; Planner creates issues while Build cannot |
 | Compat | legacy `run.json`, packets, and display-only `solo` mode remain readable |
 | GitHub | opt-in real-repo integration suite from Phase 0 |
@@ -795,7 +797,7 @@ embeddings/index server, web UI, and replacing GitHub as the plan/state source.
 - General/sudo stay standalone and untracked-capable.
 - Every run-owned OS process is visible, logged, and killable.
 - Run detail shows Processes and Related, not Children.
-- TUI has Orchestrate preflight and controls.
+- TUI has Pipeline preflight and controls in the Runs tab.
 - Existing run, issue, worktree, context, PR, spend, model, and settings
   behavior remains intact.
 

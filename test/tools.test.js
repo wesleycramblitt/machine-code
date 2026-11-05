@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { commandTool, readTool, searchTool } from "../dist/tools/index.js";
-import { CORE_COMMANDS } from "../dist/commands/registry.js";
+import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 
 test("command list returns every schema in one call", async () => {
   const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
@@ -19,6 +19,27 @@ test("command list returns every schema in one call", async () => {
   assert.match(text, /core:status/);
   assert.match(text, /core:diff/);
   assert.match(text, /"path"/);
+});
+
+test("core:diff can compare a base ref to HEAD", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-diff-base-"));
+  try {
+    const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "t@t.local");
+    git("config", "user.name", "T");
+    writeFileSync(join(root, "a.txt"), "one\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "one");
+    writeFileSync(join(root, "a.txt"), "two\n", "utf8");
+    git("add", "-A");
+    git("commit", "-qm", "two");
+    const result = await runCommand("core:diff", { base: "HEAD~1" }, { root, commands: CORE_COMMANDS });
+    assert.notEqual(result.isError, true);
+    assert.match(result.text, /\+two/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("command list with a name points at describe", async () => {

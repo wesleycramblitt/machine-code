@@ -177,6 +177,28 @@ test("approval=agent merges the Task PR after publishing", async () => {
   }
 });
 
+test("an explicit human approval override wins over an agent issue marker", async () => {
+  const { root, repo } = tempRepoWithOrigin();
+  try {
+    const layout = fakeLayout(repo);
+    const { recorder } = await makeRun(layout, repo);
+    const prs = new FakePrProvider();
+    const result = await maybePublish({
+      layout,
+      machine: MACHINE,
+      recorder,
+      prs,
+      issues: new FakeIssues("agent"),
+      defaultApproval: "agent",
+      approvalOverride: "human",
+    });
+    assert.equal(result.status, "awaiting_approval");
+    assert.equal(prs.merged.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("agent merge surfaces a conflicting PR instead of attempting the merge", async () => {
   const { root, repo } = tempRepoWithOrigin();
   try {

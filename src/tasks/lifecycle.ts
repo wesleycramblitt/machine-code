@@ -230,7 +230,10 @@ export async function taskStatus(
   if (stage === "awaiting-acceptance") next.push(`machine_code task approve ${n}`);
   if (stage === "blocked") {
     next.push(`machine_code show ${latest?.id ?? "<run-id>"}`);
-    if (state.exists) next.push(`machine_code task cleanup ${n} --force`);
+    if (state.exists) {
+      next.push(`machine_code task start ${n} --retry`);
+      next.push(`machine_code task cleanup ${n} --force`);
+    }
   }
   if (stage === "closed" && state.exists) next.push(`machine_code task cleanup ${n}`);
 
@@ -430,6 +433,10 @@ export async function approveTask(input: ApproveTaskInput): Promise<ApproveTaskR
     recorder.patchSummary({ prNumber: pr.number, prState: "merged", ...(pr.url ? { prUrl: pr.url } : {}) });
     current = recorder.current;
     pr = { ...pr, state: "merged" };
+  } else if (pr && pr.state === "merged" && current.prState !== "merged") {
+    const recorder = RunRecorder.reopen(layout, current);
+    recorder.patchSummary({ prNumber: pr.number, prState: "merged", ...(pr.url ? { prUrl: pr.url } : {}) });
+    current = recorder.current;
   } else if (pr && pr.state === "closed" && input.merge !== false) {
     throw new Error(`PR #${pr.number} is closed without merging`);
   }

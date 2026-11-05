@@ -65,15 +65,23 @@ export interface OrchestrateInput {
   signal?: AbortSignal;
 }
 
+export type MergeState = "merged" | "awaiting_approval" | "skipped" | "failed";
+
 export interface OrchestrateResult {
   status: RunStatus;
   finalText: string;
   error?: string;
   packet?: TaskPacket;
   runId: string;
+  commit?: string;
+  reviewVerdict?: string;
+  prNumber?: number;
+  prUrl?: string;
+  prState?: "none" | "open" | "merged" | "closed";
+  mergeState?: MergeState;
 }
 
-async function singleAgentRun(input: {
+export async function singleAgentRun(input: {
   models: MutableModels;
   catalogue: readonly CatalogueRow[];
   configuredProviders: ReadonlySet<string>;
@@ -252,6 +260,22 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
     };
   }
 
+  let commit: string | undefined;
+  if (toolRoot !== root) {
+    const message =
+      `mc(${packet.id}): ${packet.goal}\n\n` +
+      `run: ${recorder.id}\n` +
+      `packet: ${packet.id}` +
+      (input.issueNumber ? `\nissue: ${input.issueNumber}` : "");
+    const committed = await commitWorktree({ path: toolRoot, message, processes: gateProcesses });
+    if (committed.sha) {
+      commit = committed.sha;
+      recorder.patchSummary({ commit });
+      recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, packet: packet.id });
+    }
+  }
+
+  let reviewVerdict: string | undefined;
   if (input.review) {
     const resolvedReview = resolveAgent(layout, "review", {
       agentPolicy: policy.agents.review,
@@ -259,9 +283,16 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
       runOverrides: input.agentOverrides,
     });
     const reviewPolicy = policyFor(layout, "review", policy);
-    const diffResult = await runCommand("core:diff", {}, { root: toolRoot, commands });
+    const reviewBase = recorder.current.baseBranch ?? recorder.current.baseRef;
+    const diffResult = await runCommand(
+      "core:diff",
+      reviewBase ? { base: reviewBase } : {},
+      { root: toolRoot, commands },
+    );
     const reviewRequest =
-      `Review this packet and the resulting diff. Approve or reject with concrete evidence citing paths.\n\n` +
+      `Review this packet and the committed diff. Approve or reject with concrete evidence citing paths.\n\n` +
+      `COMMIT: ${commit ?? "(no commit created)"}\n` +
+      `BASE: ${reviewBase ?? "(unknown)"}\n\n` +
       `PACKET:\n${JSON.stringify(packet, null, 2)}\n\nDIFF:\n${diffResult.text}`;
     const reviewRecorder = new RunRecorder(layout, {
       agent: "review",
@@ -283,9 +314,10 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
       worktreeOwnerRunId: recorder.id,
       ...(recorder.current.branch ? { branch: recorder.current.branch } : {}),
       ...(recorder.current.baseBranch ? { baseBranch: recorder.current.baseBranch } : {}),
+      ...(commit ? { commit } : {}),
     });
-    reviewRecorder.event("review_of", { runId: recorder.id });
-    recorder.event("review_started", { runId: reviewRecorder.id });
+    reviewRecorder.event("review_of", { runId: recorder.id, ...(commit ? { commit } : {}) });
+    recorder.event("review_started", { runId: reviewRecorder.id, ...(commit ? { commit } : {}) });
     const reviewResult = await singleAgentRun({
       models: input.models,
       catalogue: input.catalogue,
@@ -320,10 +352,12 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
         error: reviewResult.error ?? "Review did not complete",
         packet,
         runId: recorder.id,
+        ...(commit ? { commit } : {}),
       };
     }
     const labelledVerdict = parseReviewVerdict(reviewResult.finalText);
     const verdict = labelledVerdict ?? inferReviewVerdict(reviewResult.finalText);
+    reviewVerdict = verdict;
     recorder.event("review_verdict", { verdict, source: labelledVerdict ? "label" : "fallback", runId: reviewRecorder.id });
     recorder.event("review_finished", { runId: reviewRecorder.id, verdict });
     if (verdict !== "approved") {
@@ -333,32 +367,68 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
         error: `Review verdict: ${verdict}`,
         packet,
         runId: recorder.id,
+        ...(commit ? { commit } : {}),
+        reviewVerdict: verdict,
       };
     }
   }
 
+  let mergeState: MergeState | undefined;
+  let prNumber: number | undefined;
+  let prUrl: string | undefined;
+  let prState: "none" | "open" | "merged" | "closed" | undefined;
   if (toolRoot !== root) {
-    const message =
-      `mc(${packet.id}): ${packet.goal}\n\n` +
-      `run: ${recorder.id}\n` +
-      `packet: ${packet.id}` +
-      (input.issueNumber ? `\nissue: ${input.issueNumber}` : "");
-    const { sha } = await commitWorktree({ path: toolRoot, message, processes: gateProcesses });
-    if (sha) {
-      recorder.patchSummary({ commit: sha });
-      recorder.event("commit_created", { sha, branch: recorder.current.branch, packet: packet.id });
-    }
     const { maybePublish } = await import("./pr/publish.js");
-    await maybePublish({
+    const published = await maybePublish({
       layout,
       machine,
       recorder,
       defaultApproval: resolvedBuild.config.approval,
+      ...(input.resultReview === "human" || input.review === false
+        ? { approvalOverride: "human" as const }
+        : {}),
       title: `Task: ${packet.goal}`,
     });
+    if (published.status === "failed") {
+      return {
+        status: "blocked",
+        finalText: buildResult.finalText,
+        error: published.error ?? "Task PR publish failed",
+        packet,
+        runId: recorder.id,
+        ...(commit ? { commit } : {}),
+        ...(reviewVerdict ? { reviewVerdict } : {}),
+        mergeState: "failed",
+      };
+    }
+    mergeState =
+      published.status === "merged"
+        ? "merged"
+        : published.status === "awaiting_approval"
+          ? "awaiting_approval"
+          : "skipped";
+    prNumber = published.pr?.number;
+    prUrl = published.pr?.url;
+    prState =
+      published.status === "merged"
+        ? "merged"
+        : published.status === "awaiting_approval"
+          ? "open"
+          : undefined;
   }
 
-  return { status: "completed", finalText: buildResult.finalText, packet, runId: recorder.id };
+  return {
+    status: "completed",
+    finalText: buildResult.finalText,
+    packet,
+    runId: recorder.id,
+    ...(commit ? { commit } : {}),
+    ...(reviewVerdict ? { reviewVerdict } : {}),
+    ...(mergeState ? { mergeState } : {}),
+    ...(prNumber ? { prNumber } : {}),
+    ...(prUrl ? { prUrl } : {}),
+    ...(prState ? { prState } : {}),
+  };
 }
 
 export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateResult> {

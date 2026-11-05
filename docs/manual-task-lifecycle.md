@@ -20,6 +20,21 @@ machine_code task approve 104
 
 `task start 104` is the same pipeline for a Task that has not run yet.
 
+The runner now uses this order:
+
+```text
+Build → verification → commit → Review(commit) → Task PR
+→ merge gate → acceptance → close → worktree removal
+```
+
+The Task PR is not merged, and the Task is not closed, until the review and
+merge policy allow it. Feature publishing runs a final aggregate Review before
+the Feature PR to main.
+
+In the TUI, press `p` in the Runs list to open the Pipeline view. The old
+separate Orchestrate tab is gone. `x` starts the selected scope, `a` approves a
+packet, and `A` finishes the selected task.
+
 ## The complete manual sequence
 
 ### 0. Inspect the worktree first
@@ -49,8 +64,9 @@ This creates or reuses:
 - branch: `mc/task/104`
 - base: `mc/feature/98`
 
-The build agent edits the worktree. It does **not** commit, open a PR, accept,
-or close.
+With `task start`, the runner commits after Build verification, before Review.
+With a bare `machine_code run --agent build`, the agent edits the worktree but
+does **not** commit, open a PR, accept, or close.
 
 Run the gates yourself if you want independent confirmation:
 
@@ -75,8 +91,10 @@ Your practical options are:
 - Use the orchestrator’s Review step.
 - Use a custom wrapper around the existing Review agent.
 
-Review before committing, because `core:diff` shows unstaged changes only.
-After commit, `core:diff` is empty unless you inspect the commit separately.
+In the new pipeline, Build commits first and Review reads
+`baseBranch...HEAD`. If you use a bare Build run, review before committing or
+commit first and inspect the commit. `core:diff` shows unstaged changes unless
+you pass a base ref.
 
 ### 3. Commit
 
@@ -151,11 +169,14 @@ After every deliverable Task under Feature `#98` is merged and closed:
 ```bash
 machine_code pr feature 98 --gates typescript:build,typescript:typecheck,typescript:test
 machine_code approve <feature-pr>
+machine_code accept 98
+machine_code issue close 98
 ```
 
 `pr feature` requires all deliverable Tasks under the Feature to be closed. It
-creates a temporary Feature worktree, runs the gates, removes that temporary
-worktree, pushes `mc/feature/98`, and opens the Feature PR to `main`.
+creates a temporary Feature worktree, runs a final aggregate Review and the
+gates, removes that temporary worktree, pushes `mc/feature/98`, and opens the
+Feature PR to `main`. Use `--no-review` to skip the Review agent.
 
 Feature and Epic issue closure follows the same completion gate. Do not close
 them until all deliverable children are closed. Reserved Task 0 / Feature 0
@@ -189,30 +210,29 @@ events.
 
 ## All supported options today
 
-1. **Manual pipeline**
+1. **Single-task lifecycle commands**
+   `machine_code task start|review|approve|cleanup` wires the lifecycle
+   together: Build, gates, commit, Review, Task PR, merge, acceptance, closure,
+   and worktree removal. Use this unless you need to intervene at a git step.
+
+2. **Manual pipeline**
    Build manually, self-review, commit with git, create and merge the Task PR
    with git/gh or `machine_code approve`, then `accept`, `issue close`, and
-   `worktree remove`. This is the only complete non-orchestrator route.
+   `worktree remove`. This remains the fallback when you want raw control.
 
-2. **Hybrid manual pipeline**
+3. **Hybrid manual pipeline**
    Use `machine_code run` for Build, then use `machine_code approve` for PR
    merges, `machine_code accept`, `machine_code issue close`, and
    `machine_code worktree remove`. Same lifecycle, less raw git/gh.
 
-3. **Packet queue**
+4. **Packet queue**
    `machine_code queue` runs committed packets through Build, gates, Review,
    commit, and publish. It is not issue-aware, so it will not accept or close
    issue tasks. Useful for non-issue packet work only.
 
-4. **Orchestrator**
-   The only path that automatically does Build → gates → Review → commit → Task
-   PR → acceptance/closure → cleanup decisions. Excluded by your constraint.
-
-5. **Single-task lifecycle commands**
-   `machine_code task start|review|approve|cleanup` now wires the existing
-   pieces together: `commitWorktree`, `maybePublish`, `closeCompletedTask`, and
-   `removeWorktree`. Use these unless you need to inspect or intervene at each
-   git step.
+5. **Orchestrator**
+   The scheduler path for many Tasks. It uses the same Build → gates → commit →
+   Review → Task PR pipeline and the same merge/closure rules.
 
 ## For `#104` right now
 
@@ -235,5 +255,6 @@ machine_code issue close 104
 machine_code worktree remove 20261104-054553-eisi --delete-branch
 ```
 
-The key gaps in the current direct-run flow are: no automatic Review, no
-commit, no Task PR creation, and no closure. Everything else has a command.
+The old gaps are now handled by `task start`: Build commits after verification,
+Review reads the commit, the Task PR is gated by policy, and the Task closes
+only after the PR merges. The manual steps above remain the fallback.

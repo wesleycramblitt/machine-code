@@ -150,8 +150,8 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
   };
 }
 
-type Page = "runs" | "models" | "spend" | "settings" | "orchestrate";
-type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model";
+type Page = "runs" | "models" | "spend" | "settings";
+type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline";
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
 type RunListFilter = RunFilter | "attention";
 
@@ -160,7 +160,6 @@ const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "models", label: "Models", key: "2" },
   { id: "spend", label: "Spend", key: "3" },
   { id: "settings", label: "Settings", key: "4" },
-  { id: "orchestrate", label: "Orchestrate", key: "5" },
 ];
 const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
 const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "related", "context"];
@@ -1440,8 +1439,7 @@ export async function runTui(): Promise<void> {
     // filesystem walk there keeps prompt typing responsive.
     const needRunData =
       pendingRunAt > 0 ||
-      page === "orchestrate" ||
-      (page === "runs" && (screen === "list" || screen === "issue" || screen === "run"));
+      (page === "runs" && (screen === "list" || screen === "issue" || screen === "run" || screen === "pipeline"));
     const allRuns = needRunData ? listAllRuns(l.home) : [];
     const cache = needRunData ? readIssueCache(l) : undefined;
     if (needRunData) issueCachesByRepo = collectIssueCaches(allRuns);
@@ -1509,7 +1507,7 @@ export async function runTui(): Promise<void> {
     const runDetailHeader = page === "runs" && screen === "run";
     const backHeader =
       runDetailHeader ||
-      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct")) ||
+      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct" || screen === "pipeline")) ||
       (page === "models" && screen === "model");
     // Tabs stay visible on every other screen. Runs and models replace the
     // blank separator with a live summary line; other pages keep the blank.
@@ -1518,9 +1516,11 @@ export async function runTui(): Promise<void> {
         ? `  ${B}${theme.headerFg}New Run${R}`
         : runDetailHeader
           ? `  ${B}${theme.headerFg}Run Details${R}`
-          : page === "models" && screen === "model"
-            ? `  ${B}${theme.headerFg}Model Details${R}`
-            : "";
+          : page === "runs" && screen === "pipeline"
+            ? `  ${B}${theme.headerFg}Pipeline${R}`
+            : page === "models" && screen === "model"
+              ? `  ${B}${theme.headerFg}Model Details${R}`
+              : "";
     const headerRight =
       page === "runs" && screen === "newrun" && !newRunInsert && !modelPick && !issuePick && !newRunSettings
         ? command("s", "Settings", undefined, M)
@@ -1679,6 +1679,7 @@ export async function runTui(): Promise<void> {
       actions = narrow
         ? joinCommands([
             command("n", "New", undefined, C),
+            command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
@@ -1686,6 +1687,7 @@ export async function runTui(): Promise<void> {
           ])
         : joinCommands([
             command("n", "New run", undefined, C),
+            command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
@@ -2482,8 +2484,8 @@ export async function runTui(): Promise<void> {
       secondary = "";
     }
 
-    /* ------------------------------------------------------- orchestrate */
-    else if (page === "orchestrate" && screen === "list") {
+    /* ---------------------------------------------------------- pipeline */
+    else if (page === "runs" && screen === "pipeline") {
       const runs = allRuns.filter((run) => run.repoRoot === l.repoRoot);
       let scopeRef = orchestrateRef;
       if (orchestrateScope !== "project" && !scopeRef) {
@@ -2511,7 +2513,7 @@ export async function runTui(): Promise<void> {
                 candidate.scopeRef.number === scopeRef.number)),
         ) ?? states[0];
       const lines: string[] = [
-        ` ${B}${W}Orchestrate${R} ${D}${scopeText}${R}  ${G}${schedule.ready.length} ready${R}  ${Y}${schedule.blocked.length} blocked${R}  ${D}${schedule.dispatch.length} dispatch${R}`,
+        ` ${B}${W}Pipeline${R} ${D}${scopeText}${R}  ${G}${schedule.ready.length} ready${R}  ${Y}${schedule.blocked.length} blocked${R}  ${D}${schedule.dispatch.length} dispatch${R}`,
         ` ${D}${l.repoRoot}${R}`,
       ];
       if (ledger) {
@@ -2557,6 +2559,7 @@ export async function runTui(): Promise<void> {
         command("A", "Result", undefined, Y),
         command("j/k", "Move", undefined, M),
         command("Enter", "Open issue", undefined, G),
+        command("Esc", "Back", undefined, GR),
       ]);
       secondary = `${D}${scopeText}${R}`;
     }
@@ -3639,6 +3642,7 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
+      if (data === "p") { screen = "pipeline"; orchestrateSel = 0; orchestrateScroll = 0; draw(); return; }
       if (data === "!") { runsAttention = !runsAttention; runsSel = 0; draw(); return; }
       if (data === "g") {
         runsGroup = RUN_GROUPS[(RUN_GROUPS.indexOf(runsGroup) + 1) % RUN_GROUPS.length]!;
@@ -3949,8 +3953,9 @@ export async function runTui(): Promise<void> {
       return;
     }
 
-    /* -------------------------------------------------- orchestrate keys */
-    if (page === "orchestrate") {
+    /* ----------------------------------------------------- pipeline keys */
+    if (page === "runs" && screen === "pipeline") {
+      if (data === "\x1b") { screen = "list"; draw(); return; }
       if (data === "\x1b[A" || data === "k") { orchestrateSel = Math.max(0, orchestrateSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { orchestrateSel++; draw(); return; }
       if (data === "s") {

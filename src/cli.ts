@@ -39,7 +39,7 @@ import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBra
 import { createIssueProvider } from "./issues/index.js";
 import { createPrProviderFor } from "./pr/factory.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
-import { ensureEpicReserved, ensureFeatureReserved, isReserved } from "./issues/reserved.js";
+import { ensureEpicReserved, ensureFeatureReserved } from "./issues/reserved.js";
 import { isGenericTaskRequest, issueRequestVerb, issueRunRequest, resolveRunTarget } from "./issues/work.js";
 import { taskSizeErrors } from "./plan/validate.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
@@ -202,7 +202,7 @@ Usage:
   machine_code accept <issue>       Record a human acceptance verdict (needed to close)
   machine_code task status <issue>  Show the task lifecycle and the next action
   machine_code task start <issue>   Build, review, commit, and open the Task PR
-                                    [--review agent|human] [--no-review] [--base <ref>] [--dry-run]
+                                    [--review agent|human] [--no-review] [--base <ref>] [--retry] [--dry-run]
   machine_code task review <issue>  Review the PR/worktree and run verification checks
                                     [--check <cmd>|--checks a,b] [--no-checks]
   machine_code task approve <issue> Merge, accept, close, and clean up the Task
@@ -210,7 +210,8 @@ Usage:
                                     [--keep-worktree] [--keep-branch] [--force]
   machine_code task cleanup <issue> Remove the Task worktree after closure
                                     [--force] [--keep-branch]
-  machine_code pr feature <n>       Open the Feature PR to main after tasks/gates
+  machine_code pr feature <n>       Review, gate, and open the Feature PR to main
+                                    [--gates cmd1,cmd2] [--approval human|agent] [--no-review]
   machine_code pr list|status <n>   Inspect pull requests
   machine_code provider disable|enable <name>
   machine_code provider cooldown <name> [minutes] | cooldown clear <name>
@@ -274,6 +275,7 @@ const BOOLEAN_FLAGS = new Set([
   "no-checks",
   "keep-worktree",
   "keep-branch",
+  "retry",
 ]);
 
 function parseFlags(argv: string[]): { flags: Map<string, string>; positional: string[] } {
@@ -2111,10 +2113,13 @@ async function cmdApprove(argv: string[]): Promise<number> {
         const requested = detail.events.some(
           (e) => e.type === "approval_requested" && (e as { action?: string; pr?: number }).action === "merge" && (e as { pr?: number }).pr === pr.number,
         );
-        if (!requested) continue;
+        if (!requested && detail.summary.prNumber !== pr.number) continue;
         const recorder = RunRecorder.reopen(l, detail.summary);
-        recorder.event("approval_granted", { pr: pr.number, by: "human" });
-        recorder.event("pr_merged", { pr: pr.number, by: run.id, approval: "human" });
+        if (requested) {
+          recorder.event("approval_granted", { pr: pr.number, by: "human" });
+          recorder.event("pr_merged", { pr: pr.number, by: run.id, approval: "human" });
+        }
+        recorder.patchSummary({ prNumber: pr.number, prState: "merged", ...(pr.url ? { prUrl: pr.url } : {}) });
         break;
       }
       process.stdout.write(`approved and merged PR #${pr.number} (squash)\n`);
@@ -2148,6 +2153,8 @@ async function cmdApprove(argv: string[]): Promise<number> {
     process.stdout.write(`no pending approval for #${issue.ref.number}\n`);
     return 0;
   }
+  const completion = await checkCompletion(bundle.provider, l, issue);
+  if (!completion.ok) fail(`cannot close #${issue.ref.number}: ${completion.reason}`);
   await bundle.provider.close(issue.ref, "completed");
   const cascaded = await cascadeReserved(bundle.provider, issue, "close");
   const recorder = RunRecorder.reopen(l, readRun(l, requestingRunId)!.summary);
@@ -2166,7 +2173,7 @@ async function cmdPr(argv: string[]): Promise<number> {
   const machine = loadMachineConfig(l);
   if (sub === "feature") {
     const n = Number(positional[0]);
-    if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code pr feature <feature#> [--gates cmd1,cmd2] [--approval human|agent]");
+    if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code pr feature <feature#> [--gates cmd1,cmd2] [--approval human|agent] [--no-review]");
     const bundle = await createIssueProvider(l, machine);
     if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown"}`);
     const gates = (flags.get("gates") ?? "")
@@ -2179,8 +2186,11 @@ async function cmdPr(argv: string[]): Promise<number> {
       mode: "",
       request: `publish feature #${n}`,
       repoRoot: l.repoRoot,
+      issue: { provider: "github", repo: bundle.repo ?? "", number: n },
     });
     registerProject(l.home, l.repoRoot);
+    const review = !flags.has("no-review");
+    const runtime = review ? await loadRuntime(l) : undefined;
     const { publishFeature } = await import("./pr/feature.js");
     try {
       const result = await publishFeature({
@@ -2190,12 +2200,24 @@ async function cmdPr(argv: string[]): Promise<number> {
         feature: { provider: "github", repo: bundle.repo ?? "", number: n },
         gates,
         defaultApproval: flags.get("approval") === "agent" ? "agent" : "human",
+        review,
+        ...(runtime
+          ? {
+              models: runtime.models,
+              catalogue: runtime.catalogue.models,
+              configuredProviders: runtime.configuredProviders,
+              policy: runtime.policy,
+              home: l.home,
+            }
+          : {}),
+        ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
       });
       recorder.finalize(
         result.status === "merged" || result.status === "awaiting_approval" ? "completed" : "blocked",
         result.error,
         result.pr ? `PR #${result.pr.number} ${result.pr.url}` : result.error,
       );
+      if (result.reviewVerdict) process.stdout.write(`Feature Review: ${result.reviewVerdict}\n`);
       if (result.pr) process.stdout.write(`PR #${result.pr.number} ${result.status}: ${result.pr.url}
 `);
       else process.stdout.write(`${result.status}: ${result.error ?? ""}
@@ -2330,17 +2352,27 @@ async function cmdTask(argv: string[]): Promise<number> {
       );
     }
     const latest = runs[0];
+    const latestWorktree = latest?.worktree && existsSync(latest.worktree) ? latest.worktree : undefined;
+    const retryable = Boolean(
+      latestWorktree && latest && (latest.status === "blocked" || latest.status === "failed"),
+    );
     if (latest && latest.status !== "failed" && latest.status !== "blocked" && latest.status !== "cancelled") {
       fail(
         `task #${number} already has run ${latest.id} (${latest.status}); ` +
           `use "machine_code task status ${number}" and "machine_code task review ${number}"`,
       );
     }
-    if (latest?.worktree && existsSync(latest.worktree)) {
+    if (latestWorktree && !retryable) {
       fail(
-        `task #${number} already has a worktree at ${latest.worktree}; ` +
+        `task #${number} already has a worktree at ${latestWorktree}; ` +
           `use "machine_code task cleanup ${number}" or finish the existing run`,
       );
+    }
+    if (retryable && !flags.has("retry")) {
+      fail(`task #${number} has a reviewable worktree; rerun with --retry to build on it`);
+    }
+    if (flags.has("retry") && !retryable) {
+      fail("--retry needs the latest run to be blocked or failed with an existing worktree");
     }
     const reviewFlag = flags.get("review");
     if (reviewFlag !== undefined && reviewFlag !== "agent" && reviewFlag !== "human") {
@@ -2384,6 +2416,15 @@ async function cmdTask(argv: string[]): Promise<number> {
       review: !flags.has("no-review"),
       ...(flags.get("base") ? { base: flags.get("base") } : {}),
       ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
+      ...(retryable && latest && latestWorktree
+        ? {
+            worktree: latestWorktree,
+            worktreeOwnerRunId: latest.worktreeOwnerRunId ?? latest.id,
+            ...(latest.branch ? { branch: latest.branch } : {}),
+            ...(latest.baseBranch ? { baseBranch: latest.baseBranch } : {}),
+            ...(latest.baseRef ? { baseRef: latest.baseRef } : {}),
+          }
+        : {}),
     });
     const detail = readRun(l, result.runId);
     if (detail?.summary.finalText) process.stdout.write(`${detail.summary.finalText}\n`);
@@ -2407,7 +2448,7 @@ async function cmdTask(argv: string[]): Promise<number> {
         `task #${number} agent-approved and closed${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
       );
     } else {
-      process.stdout.write(`task #${number} is awaiting human review.\n`);
+      process.stdout.write(`task #${number} is awaiting human review/merge.\n`);
     }
     return 0;
   }
@@ -3134,51 +3175,20 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       const ref = parseIssueRef(String(task), repo, "github");
       const issue = await issueBundle.provider.get(ref);
       if (!issue) fail(`task #${task} not found`);
-      const latest = listRuns(l)
-        .filter((run) => {
-          const assigned = run.taskIssue ?? run.issue;
-          return assigned?.repo === ref.repo && assigned.number === ref.number;
-        })
-        .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
-      if (!latest) fail(`no run is associated with task #${task}`);
-      const detail = readRun(l, latest.id);
-      if (!detail) fail(`run ${latest.id} is unreadable`);
-      const recorder = RunRecorder.reopen(l, detail.summary);
-      recorder.event("acceptance_verified", {
-        issue: ref.number,
-        by: "human",
-        criteria: issue.acceptance,
-        evidence: `approved result in orchestration ${id}`,
+      const prBundle = await createPrProviderFor(l);
+      const approved = await approveTask({
+        layout: l,
+        machine,
+        provider: issueBundle.provider,
+        issue,
+        ...(prBundle.provider.kind !== "none" ? { prs: prBundle.provider } : {}),
+        clean: true,
       });
-      const completion = await checkCompletion(issueBundle.provider, l, issue);
-      if (!completion.ok) fail(`cannot close task #${task}: ${completion.reason}`);
-      await issueBundle.provider.close(ref, "completed");
-      process.stdout.write(`closed task #${task} after human result approval\n`);
-      let parent = issue.parent ? await issueBundle.provider.get(issue.parent) : undefined;
-      for (let depth = 0; parent && depth < 2; depth += 1) {
-        const siblings = (await issueBundle.provider.children(parent.ref)).filter((child) => !isReserved(child));
-        if (siblings.some((child) => child.state !== "closed")) break;
-        const parentCompletion = await checkCompletion(issueBundle.provider, l, parent);
-        if (parentCompletion.ok && (parent.approval ?? "human") === "agent") {
-          await issueBundle.provider.close(parent.ref, "completed");
-          const cascaded = await cascadeReserved(issueBundle.provider, parent, "close");
-          recorder.event("approval_granted", { issue: parent.ref.number, by: "agent", policy: "agent" });
-          recorder.event("issue_closed", {
-            issue: parent.ref.number,
-            by: recorder.id,
-            approval: "agent",
-            cascaded,
-          });
-          process.stdout.write(`closed parent ${parent.kind} #${parent.ref.number} under agent approval\n`);
-        } else if (parentCompletion.ok) {
-          process.stdout.write(
-            `parent ${parent.kind} #${parent.ref.number} is ready; approve with "machine_code approve ${parent.ref.number}"\n`,
-          );
-        } else {
-          process.stdout.write(`parent ${parent.kind} #${parent.ref.number}: ${parentCompletion.reason}\n`);
-        }
-        parent = parent.parent ? await issueBundle.provider.get(parent.parent) : undefined;
-      }
+      process.stdout.write(
+        `closed task #${task} after human result approval` +
+          `${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
+          `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+      );
     }
     const current = resultApproval ? state.approvedResults ?? [] : state.approvedPackets ?? [];
     const approved = [...new Set([...current, task])].sort((a, b) => a - b);
@@ -3353,6 +3363,10 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         if (task.plan.resultReview === "human" && !(orchestration.approvedResults ?? []).includes(task.issue.ref.number)) {
           process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting result approval\n`);
           return { checkpoint: "awaiting_result_approval" };
+        }
+        if (outcome.mergeState === "awaiting_approval") {
+          process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting PR merge approval\n`);
+          return { checkpoint: "awaiting_merge" };
         }
         if (task.plan.resultReview === "agent") {
           const fresh = await bundle.provider.get(task.issue.ref);

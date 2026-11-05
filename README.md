@@ -43,6 +43,7 @@ node dist/cli.js approve 31
 # one task at a time, without the scheduler
 node dist/cli.js task status 31
 node dist/cli.js task start 31
+node dist/cli.js task start 31 --retry
 node dist/cli.js task review 31
 node dist/cli.js task approve 31
 
@@ -176,7 +177,8 @@ candidates. Minimums are layered in `~/.machine_code/config.toml` and
 `machine_code runs` is the scriptable version of the TUI's Runs page. The
 default `--group gh-issue` groups by repository, then by the Epic → Feature →
 Task issue hierarchy, with runs that have no issue under Untracked and runs
-whose cached issue is missing under Orphaned issue.
+whose cached issue is missing under Orphaned issue. Press `p` in the Runs list
+to open the Pipeline view, which is the Orchestrator schedule and controls.
 
 Runs attach to Tasks only. Selecting an Epic or Feature for a planner/review
 run resolves to that scope's reserved Planning & Review Task 0. Selecting a
@@ -279,7 +281,7 @@ machine_code orchestrate status --scope project
 machine_code orchestrate start --scope epic --epic 42
 machine_code orchestrate approve --orchestration <id> --task 31
 machine_code orchestrate approve --orchestration <id> --task 31 --result
-# --result records human acceptance and closes the Task.
+# --result merges the Task PR, records human acceptance, and closes the Task.
 # Parent Features/Epics close when their policy is agent; otherwise the next
 # approval/acceptance command is printed.
 machine_code orchestrate tick --orchestration <id> --dry-run
@@ -287,24 +289,34 @@ machine_code orchestrate start --scope epic --epic 42 --checkpoint after-task
 ```
 
 `start` and `tick` execute ready tasks up to `--max-parallel` at a time through
-Build, gates, Review, commit, and PR; tasks sharing a Feature are serialized.
+Build, gates, commit, Review, and PR; tasks sharing a Feature are serialized.
 `--max-minutes` and `--max-spend-usd` stop new dispatch when the invocation
 budget is exhausted. Build ends with a typed `Outcome:` and Review with a
 typed `Verdict:`; both are recorded as events. Completion failures retry with
 evidence up to the task's `retries_before_replan`, then stop at
-`needs_planning`. Tasks stay open for human acceptance. `--dry-run` only
-prints the schedule. The TUI Orchestrate tab shows the same schedule. `s` cycles project/epic/feature
-scope (project plus each cached Epic/Feature), `r` refreshes the issue cache, `x` starts execution for the scope, `a`
-approves the selected packet, `A` approves its result, and Enter opens the
-selected issue. The header shows the active orchestration id, checkpoint, and
-approval counts. Agent result review records acceptance evidence and closes the
-Task automatically; human result review waits for `approve --result`. Parent
-closure cascades only where the parent's approval policy is `agent`.
+`needs_planning`. `--dry-run` only prints the schedule.
+
+The TUI Runs tab includes the pipeline. Press `p` on the Runs list to open the
+Pipeline view. `s` cycles project/epic/feature scope (project plus each cached
+Epic/Feature), `r` refreshes the issue cache, `x` starts execution for the
+scope, `a` approves the selected packet, `A` finishes the selected task, and
+Enter opens the selected issue. The header shows the active orchestration id,
+checkpoint, and approval counts. Agent result review closes the Task only after
+the Task PR is merged; human result review or a human merge gate waits for
+`task approve` or `orchestrate approve --result`. Parent closure cascades only
+where the parent's approval policy is `agent`.
 
 In the TUI, `p` on a Task or task run runs `task approve`: commit any remaining
 changes, open or merge the Task PR, record acceptance, close the Task, and
-remove the worktree. `A` on the Orchestrate page does the same for the selected
+remove the worktree. `A` in the Pipeline view does the same for the selected
 task and updates the orchestration ledger.
+
+After every Task PR is merged, `machine_code pr feature <n>` runs a final
+Feature Review over `main...mc/feature/<n>`, runs integration gates, and opens
+the Feature PR to main. The Feature's `mc:approval` decides whether that PR
+merges automatically or waits for a human. After the Feature PR merges, record
+Feature acceptance and close it with `machine_code accept <feature>` and
+`machine_code issue close <feature>`; the same applies to the Epic.
 
 Orphaned running records are marked failed when read and during prune. Detached
 delegated runs are tracked as `orchestrator` processes. Map helper spawns are
@@ -337,10 +349,12 @@ machine_code task cleanup 31
   commit, PR, acceptance evidence, review checks, the current stage, and the
   exact next command. It never mutates state.
 - `task start` requires a ready `mc:plan`. It creates the isolated Task
-  worktree and `mc/task/<n>` branch, runs Build, gates, an independent Review,
-  commits, and opens the Task PR. It honors `result_review`: `agent` approves
-  and closes, `human` stops for review. `--review` overrides the plan and
-  `--no-review` skips the Review agent.
+  worktree and `mc/task/<n>` branch, runs Build, gates, commit, and an
+  independent Review of that commit, then opens the Task PR. It honors
+  `result_review`: `agent` approves the result, but closure still waits for the
+  issue merge policy; `human` stops for review. `--review` overrides the plan
+  and `--no-review` skips the Review agent. `--retry` reuses the blocked/failed
+  worktree for another Build.
 - `task review` shows the same state, then runs the Task's `## Verification`
   commands in the worktree. Use `--check <command>` or
   `--checks a,b` to run exact commands. Named commands (`typescript:test`) go
