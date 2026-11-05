@@ -759,6 +759,9 @@ export async function runTui(): Promise<void> {
   let answerText = "";
   let answerQuestionId = "";
   let answerOptions: string[] = [];
+  let answerScroll = 0;
+  let answerPage = 10;
+  let answerOverflow = false;
   let correctText = "";
   let searchMode = false;
   let searchText = "";
@@ -1382,6 +1385,7 @@ export async function runTui(): Promise<void> {
     answerQuestionId = pending.questionId;
     answerOptions = pending.options ?? [];
     answerText = "";
+    answerScroll = 0;
     screen = "answer";
   };
 
@@ -3275,26 +3279,51 @@ export async function runTui(): Promise<void> {
         : null;
       const options = answerOptions.length > 0 ? answerOptions : pending?.options ?? [];
       const width = Math.max(20, cols - 8);
-      const lines = [
-        "",
-        ` ${Y}?${R} ${W}${pending?.text ?? "(question text not recorded)"}${R}`,
-        "",
-      ];
+      const question = pending?.text ?? "(question text not recorded)";
+      const questionLines = wrapText(question, width);
+      const top: string[] = [];
+      questionLines.forEach((line, index) => {
+        top.push(index === 0 ? ` ${Y}?${R} ${W}${line}${R}` : `   ${W}${line}${R}`);
+      });
+      top.push("");
       if (options.length > 0) {
-        lines.push(` ${B}${C}Options${R}`);
+        top.push(` ${B}${C}Options${R}`);
         for (let i = 0; i < options.length && i < 9; i++) {
-          lines.push(` ${B}${M}${i + 1}${R} ${W}${trunc(options[i]!, width - 4)}${R}`);
+          const optionLines = wrapText(options[i]!, width - 4);
+          optionLines.forEach((line, index) => {
+            top.push(index === 0
+              ? ` ${B}${M}${i + 1}${R} ${W}${line}${R}`
+              : `   ${W}${line}${R}`);
+          });
         }
-        lines.push("");
+        top.push("");
       }
-      lines.push(` ${B}${C}Answer${R}`, ` ${D}┌${"─".repeat(width)}┐${R}`);
+      // Give the question/options as much room as possible. Shrink the answer
+      // box before hiding question lines.
+      const inputLinesFor = (height: number) => 3 + height;
+      let boxHeight = Math.max(1, Math.min(8, bodyH - 6));
+      let availableTop = Math.max(1, bodyH - inputLinesFor(boxHeight));
+      if (top.length > availableTop) {
+        const needed = bodyH - top.length - 3;
+        boxHeight = Math.max(1, Math.min(boxHeight, needed));
+        availableTop = Math.max(1, bodyH - inputLinesFor(boxHeight));
+      }
       const wrapped = wrapText(answerText || "(type the answer, then press Enter)", width - 2);
-      const boxHeight = Math.max(1, Math.min(bodyH - 8 - options.length, 8));
-      for (let i = 0; i < boxHeight; i++) lines.push(` ${D}│${R} ${W}${fit(wrapped[i] ?? "", width - 2)}${R} ${D}│${R}`);
-      lines.push(` ${D}└${"─".repeat(width)}┘${R}`);
-      body = clipBody(lines);
+      const inputLines = [
+        ` ${B}${C}Answer${R}`,
+        ` ${D}┌${"─".repeat(width)}┐${R}`,
+        ...Array.from({ length: boxHeight }, (_, i) =>
+          ` ${D}│${R} ${W}${fit(wrapped[i] ?? "", width - 2)}${R} ${D}│${R}`),
+        ` ${D}└${"─".repeat(width)}┘${R}`,
+      ];
+      const view = scrollLines(top, answerScroll, availableTop);
+      answerScroll = view.scroll;
+      answerPage = Math.max(1, availableTop - 1);
+      answerOverflow = top.length > availableTop;
+      body = clipBody([...view.lines, ...inputLines]);
       actions = joinCommands([
         ...(options.length > 0 ? [command("1-9", "Choose", undefined, M)] : []),
+        ...(answerOverflow ? [command("PgUp/Dn", "Scroll", undefined, M)] : []),
         command("Enter", "Send", undefined, G),
         command("Esc", "Cancel", undefined, GR),
       ]);
@@ -3655,7 +3684,9 @@ export async function runTui(): Promise<void> {
     }
 
     if (screen === "answer") {
-      if (data === "\x1b") { screen = "run"; answerText = ""; answerOptions = []; draw(); return; }
+      if (data === "\x1b") { screen = "run"; answerText = ""; answerOptions = []; answerScroll = 0; draw(); return; }
+      if (data === "\x1b[5~") { answerScroll = Math.max(0, answerScroll - answerPage); draw(); return; }
+      if (data === "\x1b[6~") { answerScroll += answerPage; draw(); return; }
       if (/^[1-9]$/.test(data) && answerOptions.length > 0 && answerText.length === 0) {
         const option = answerOptions[Number(data) - 1];
         if (option) { answerText = option; draw(); return; }
@@ -3673,6 +3704,7 @@ export async function runTui(): Promise<void> {
         screen = "run";
         answerText = "";
         answerOptions = [];
+        answerScroll = 0;
         draw();
         return;
       }

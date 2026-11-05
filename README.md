@@ -686,4 +686,4 @@ The index links to deeper notes such as `knowledge/architecture.md`. The
 deterministic module index handles "where is this code"; the knowledge files
 handle "why is this code shaped this way".
 
-Design and remaining work: [plans/plan.md](plans/plan.md).
+Remaining work: [plans/plan.md](plans/plan.md).
