@@ -490,6 +490,26 @@ test("context tool notes, focuses, recalls, and reports state", async () => {
 });
 
 
+test("context tool treats strict-schema null optionals as absent", async () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-null", goal: "goal" });
+    const tool = contextTool({ root: dir, commands: CORE_COMMANDS, state: store });
+    const outcome = await tool.execute("1", {
+      action: "note",
+      kind: null,
+      text: "Null optional fields are absent.",
+      refs: null,
+      id: null,
+    });
+    assert.equal(outcome.isError, undefined);
+    assert.equal(store.getState().facts[0]?.kind, "finding");
+    assert.match(store.renderBlock(), /Null optional fields are absent/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("ingestTurn records a bounded change digest with actor intent", () => {
   const root = tempDir();
   try {

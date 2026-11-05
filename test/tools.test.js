@@ -146,6 +146,46 @@ test("read uses a symbol range even when offset or limit is also passed", async 
   }
 });
 
+test("read treats strict-schema null optionals as absent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-null-"));
+  try {
+    writeFileSync(join(root, "a.ts"), "export function foo() {\n  return 1;\n}\n", "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "a.ts", symbol: "foo", around: null, offset: null, limit: null });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /export function foo/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read falls back to the first match for a nested symbol", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-nested-"));
+  try {
+    const lines = ["export function outer() {", ...Array.from({ length: 30 }, (_, i) => `  const pad${i} = ${i};`)];
+    lines.push("  const handleKey = (data: string) => {", "    return data;", "  };", "}");
+    writeFileSync(join(root, "a.ts"), lines.join("\n"), "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "a.ts", symbol: "handleKey" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /const handleKey/);
+    assert.match(text, /not a top-level map symbol/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("search rejects an unknown mode with the allowed list", async () => {
+  const tool = searchTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  const result = await tool.execute("id", { mode: "nonsense", pattern: "x" });
+  assert.equal(result.isError, true);
+  const text = result.content.map((c) => c.text ?? "").join("\n");
+  assert.match(text, /unknown search mode "nonsense"/);
+  assert.match(text, /text/);
+});
+
 test("read pages a large file with no skipped lines", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-read-"));
   try {

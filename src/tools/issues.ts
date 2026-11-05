@@ -581,7 +581,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           body,
           kind: params.kind,
           parent,
-          labels: params.labels,
+          ...(params.labels != null ? { labels: params.labels } : {}),
           ...(blockedBy ? { blockedBy } : {}),
         });
         ctx.recorder.event("issue_created", {
@@ -639,10 +639,10 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         treeCache.clear();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
-        if (target.reserved && params.title !== undefined) {
+        if (target.reserved && params.title != null) {
           return fail("reserved issues cannot be retitled (their identity is the reserved role)");
         }
-        const nextBody = params.body === undefined
+        const nextBody = params.body == null
           ? undefined
           : target.reserved
             ? params.body
@@ -664,9 +664,9 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         }
         const blockedBy = await dependencies([params.blocked_by, params.depends_on], target.ref);
         const updated = await ctx.provider.update(target.ref, {
-          ...(params.title !== undefined ? { title: params.title } : {}),
+          ...(params.title != null ? { title: params.title } : {}),
           ...(nextBody !== undefined ? { body: nextBody } : {}),
-          ...(params.labels !== undefined ? { labels: params.labels } : {}),
+          ...(params.labels != null ? { labels: params.labels } : {}),
           ...(blockedBy ? { blockedBy } : {}),
         });
         remember(updated);

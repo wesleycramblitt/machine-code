@@ -758,6 +758,7 @@ export async function runTui(): Promise<void> {
   } | null = null;
   let answerText = "";
   let answerQuestionId = "";
+  let answerOptions: string[] = [];
   let correctText = "";
   let searchMode = false;
   let searchText = "";
@@ -1356,18 +1357,30 @@ export async function runTui(): Promise<void> {
     }
   };
 
+  const pendingForRun = (run: RunSummary | undefined) => {
+    if (!run) return null;
+    const detail = findRunDetail(run.id);
+    if (!detail) return null;
+    return latestUnansweredQuestion(
+      detail.events.filter((event) => event.type === "question") as Array<{
+        questionId?: string;
+        text?: string;
+        options?: string[];
+      }>,
+      readInbox(detail.dir),
+    );
+  };
+
   const answerRun = (run: RunRow | RunSummary | undefined) => {
     const summary = "run" in (run ?? {}) ? (run as RunRow & { run: RunSummary }).run : (run as RunSummary | undefined);
     if (!summary) return;
     const detail = findRunDetail(summary.id);
     if (!detail) { notify("run record not found"); return; }
-    const pending = latestUnansweredQuestion(
-      detail.events.filter((event) => event.type === "question") as Array<{ questionId?: string; text?: string }>,
-      readInbox(detail.dir),
-    );
+    const pending = pendingForRun(summary);
     if (!pending?.questionId) { notify("no pending question"); return; }
     selectedRunId = detail.summary.id;
     answerQuestionId = pending.questionId;
+    answerOptions = pending.options ?? [];
     answerText = "";
     screen = "answer";
   };
@@ -1705,11 +1718,18 @@ export async function runTui(): Promise<void> {
       const windowed = selectableLines(lines, Math.min(selectedEndLine, Math.max(0, lines.length - 1)), runsScroll, bodyH);
       runsScroll = windowed.scroll;
       body = clipBody(windowed.lines);
+      const selectedListRow = runIndex.selectable[runsSel];
+      const selectedPending =
+        selectedListRow?.kind === "run" && selectedListRow.run.status === "awaiting_input"
+          ? pendingForRun(selectedListRow.run)
+          : null;
+      const answerAction = selectedPending ? [command("a", "Answer", undefined, Y)] : [];
       actions = narrow
         ? joinCommands([
             command("n", "New", undefined, C),
             command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
+            ...answerAction,
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
             command("/", "Search", undefined, BL),
@@ -1718,6 +1738,7 @@ export async function runTui(): Promise<void> {
             command("n", "New run", undefined, C),
             command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
+            ...answerAction,
             command("space", "Fold", undefined, Y),
             command("j/k", "Move", undefined, M),
             command("/", "Search", undefined, BL),
@@ -2828,6 +2849,7 @@ export async function runTui(): Promise<void> {
           command("f", "fork", undefined, Y),
           hint("P", "pipeline", C),
           hint("D", "delete", RED),
+          ...(pending ? [hint("a", "answer", Y)] : []),
           ...(runSection === "timeline"
             ? [
                 hint("j/k", "events"),
@@ -3234,24 +3256,36 @@ export async function runTui(): Promise<void> {
       const detail = runDetailData();
       const pending = detail
         ? latestUnansweredQuestion(
-            detail.events.filter((event) => event.type === "question") as Array<{ questionId?: string; text?: string }>,
+            detail.events.filter((event) => event.type === "question") as Array<{
+              questionId?: string;
+              text?: string;
+              options?: string[];
+            }>,
             readInbox(detail.dir),
           )
         : null;
+      const options = answerOptions.length > 0 ? answerOptions : pending?.options ?? [];
       const width = Math.max(20, cols - 8);
       const lines = [
         "",
         ` ${Y}?${R} ${W}${pending?.text ?? "(question text not recorded)"}${R}`,
         "",
-        ` ${B}${C}Answer${R}`,
-        ` ${D}┌${"─".repeat(width)}┐${R}`,
       ];
+      if (options.length > 0) {
+        lines.push(` ${B}${C}Options${R}`);
+        for (let i = 0; i < options.length && i < 9; i++) {
+          lines.push(` ${B}${M}${i + 1}${R} ${W}${trunc(options[i]!, width - 4)}${R}`);
+        }
+        lines.push("");
+      }
+      lines.push(` ${B}${C}Answer${R}`, ` ${D}┌${"─".repeat(width)}┐${R}`);
       const wrapped = wrapText(answerText || "(type the answer, then press Enter)", width - 2);
-      const boxHeight = Math.max(1, Math.min(bodyH - 8, 8));
+      const boxHeight = Math.max(1, Math.min(bodyH - 8 - options.length, 8));
       for (let i = 0; i < boxHeight; i++) lines.push(` ${D}│${R} ${W}${fit(wrapped[i] ?? "", width - 2)}${R} ${D}│${R}`);
       lines.push(` ${D}└${"─".repeat(width)}┘${R}`);
       body = clipBody(lines);
       actions = joinCommands([
+        ...(options.length > 0 ? [command("1-9", "Choose", undefined, M)] : []),
         command("Enter", "Send", undefined, G),
         command("Esc", "Cancel", undefined, GR),
       ]);
@@ -3612,7 +3646,11 @@ export async function runTui(): Promise<void> {
     }
 
     if (screen === "answer") {
-      if (data === "\x1b") { screen = "run"; answerText = ""; draw(); return; }
+      if (data === "\x1b") { screen = "run"; answerText = ""; answerOptions = []; draw(); return; }
+      if (/^[1-9]$/.test(data) && answerOptions.length > 0 && answerText.length === 0) {
+        const option = answerOptions[Number(data) - 1];
+        if (option) { answerText = option; draw(); return; }
+      }
       if (data === "\r" || data === "\n") {
         if (answerText.trim() && selectedRunId) {
           const detail = runDetailData();
@@ -3625,6 +3663,7 @@ export async function runTui(): Promise<void> {
         }
         screen = "run";
         answerText = "";
+        answerOptions = [];
         draw();
         return;
       }
@@ -3878,6 +3917,13 @@ export async function runTui(): Promise<void> {
         if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); draw(); return; }
         if (row?.kind === "issue") { selectedIssueKey = refKey(row.issue.ref); issueRunSel = 0; issueScroll = 0; screen = "issue"; }
         else if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
+        draw();
+        return;
+      }
+      if (data === "a") {
+        const row = index.selectable[runsSel];
+        if (row?.kind !== "run") { notify("select a run to answer"); draw(); return; }
+        answerRun(row.run);
         draw();
         return;
       }

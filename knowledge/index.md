@@ -6,10 +6,10 @@ file-based run directory, and explicit outcome/verdict lines. It optimizes
 correctness per dollar, not maximum autonomy.
 
 ## Start here
-- README.md — user-facing behavior, commands, and config.
+- README.md — user-facing behavior and config.
 - knowledge/architecture.md — runtime flow, module map, invariants.
-- knowledge/model-tool-calling.md — native tool calls, text-markup failures,
-  model probes.
+- knowledge/model-tool-calling.md — native calls, markup and argument repair.
+- knowledge/run-failures-2026-11-05.md — four-run incident and fixes.
 - plans/plan.md — design decisions and remaining work.
 - src/ — TypeScript source. test/ — node:test suites. data/ — prompts,
   agents, models, offers. .machine_code/ — repo policy and skills.

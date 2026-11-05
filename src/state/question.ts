@@ -79,6 +79,7 @@ export async function waitForAnswer(
 export interface QuestionLike {
   questionId?: string;
   text?: string;
+  options?: string[];
   t?: string;
 }
 

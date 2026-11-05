@@ -86,6 +86,22 @@ const ReadParams = Type.Object({
   around: Type.Optional(Type.Number({ description: "1-based line; read the symbol that contains it." })),
 });
 
+/** Find a nested or non-map declaration so `read { symbol }` can still help. */
+function findSymbolLine(lines: readonly string[], symbol: string): number {
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const declaration = new RegExp(
+    `(?:^|\\s)(?:function|class|const|let|var|interface|type|enum|def|fn|func)\\s+${escaped}\\b`,
+  );
+  for (let index = 0; index < lines.length; index += 1) {
+    if (declaration.test(lines[index] ?? "")) return index + 1;
+  }
+  const word = new RegExp(`\\b${escaped}\\b`);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (word.test(lines[index] ?? "")) return index + 1;
+  }
+  return 0;
+}
+
 export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
   return {
     name: "read",
@@ -103,7 +119,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const raw = readFileSync(abs, "utf8");
         const lines = raw.split("\n");
         const bytes = Buffer.byteLength(raw, "utf8");
-        if (params.symbol && params.around !== undefined) {
+        if (params.symbol && params.around != null) {
           return fail("use symbol or around, not both");
         }
         // Symbol/around wins when a model also passes offset/limit. Ignore the
@@ -112,8 +128,9 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         let offset = Math.max(1, Math.floor(params.offset ?? 1));
         let limit = Math.max(1, Math.floor(params.limit ?? 2000));
         let header = "";
+        let symbolFallback = false;
 
-        if (params.symbol || params.around !== undefined) {
+        if (params.symbol || params.around != null) {
           const file = await outlineFile(ctx.root, params.path);
           const range = file
             ? params.symbol
@@ -121,26 +138,37 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
               : rangeAround(file, params.around!)
             : null;
           if (!range) {
-            if (params.around !== undefined && !params.symbol) {
+            if (params.symbol) {
+              // Nested functions and local bindings are not top-level map
+              // symbols. Show the declaration's neighborhood instead of a
+              // dead end.
+              const found = findSymbolLine(lines, params.symbol);
+              if (found > 0) {
+                offset = Math.max(1, found - 20);
+                limit = 41;
+                header = `${params.path}:${offset}-${offset + 40} (around ${params.symbol})`;
+                symbolFallback = true;
+              } else {
+                const suggestion = file && file.symbols.length > 0
+                  ? file.symbols.slice(0, 12).map((symbol) => `${symbol.line} ${symbol.kind} ${symbol.name}`).join("\n")
+                  : "(no symbols)";
+                return fail(
+                  `no symbol "${params.symbol}" in ${params.path}. ` +
+                  `Try search text for the name, or read { around }. Known top-level symbols:\n${suggestion}`,
+                );
+              }
+            } else {
               // No symbols in the file: fall back to a small line window.
-              offset = Math.max(1, params.around - 20);
+              offset = Math.max(1, params.around! - 20);
               limit = 41;
               header = `${params.path}:${offset}-${offset + 40} (around ${params.around})`;
-            } else {
-              const suggestion = file && file.symbols.length > 0
-                ? file.symbols.slice(0, 12).map((symbol) => `${symbol.line} ${symbol.kind} ${symbol.name}`).join("\n")
-                : "(no symbols)";
-              return fail(
-                `no ${params.symbol ? `symbol "${params.symbol}"` : `symbol around line ${params.around}`} in ${params.path}. ` +
-                `Known symbols:\n${suggestion}`,
-              );
             }
           } else {
             offset = range.start;
             limit = Math.max(1, range.end - range.start + 1);
             header = `${params.path}:${range.start}-${range.end} (${range.name})`;
           }
-        } else if (bytes > READ_CAP_BYTES && params.offset === undefined && params.limit === undefined) {
+        } else if (bytes > READ_CAP_BYTES && params.offset == null && params.limit == null) {
           const file = await outlineFile(ctx.root, params.path);
           const outline = file ? renderOutline(file) : "(no symbols)";
           return ok(
@@ -154,6 +182,9 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         }
         const page = numberLinesCapped(lines, offset, limit, READ_CAP_BYTES);
         const notes: string[] = [];
+        if (symbolFallback) {
+          notes.push(`[${params.symbol} is not a top-level map symbol; showing the first match]`);
+        }
         if (page.truncatedLine) {
           notes.push(`[line ${page.nextOffset - 1} truncated at ${READ_CAP_BYTES} bytes]`);
         }
@@ -248,25 +279,12 @@ const SEARCH_MODES: readonly string[] = [
 
 const SearchParams = Type.Object({
   mode: Type.Optional(
-    Type.Union(
-      [
-        Type.Literal("map"),
-        Type.Literal("files"),
-        Type.Literal("outline"),
-        Type.Literal("sections"),
-        Type.Literal("text"),
-        Type.Literal("structure"),
-        Type.Literal("json"),
-        Type.Literal("yaml"),
-        Type.Literal("definition"),
-        Type.Literal("references"),
-        Type.Literal("symbols"),
-        Type.Literal("info"),
-        Type.Literal("semantic"),
-        Type.Literal("graph"),
-      ],
-      { description: "Search mode (default text)." },
-    ),
+    Type.String({
+      enum: ["map", "files", "outline", "sections", "text", "structure", "json", "yaml", "definition", "references", "symbols", "info", "semantic", "graph"],
+      description:
+        "Search mode: map | files | outline | sections | text | structure | json | yaml | " +
+        "definition | references | symbols | info | semantic | graph (default text).",
+    }),
   ),
   pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic/graph, symbol filter for LSP modes. outline/sections use path." })),
   path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
@@ -320,6 +338,9 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
       const mode = params.mode ?? "text";
+      if (!SEARCH_MODES.includes(mode)) {
+        return fail(`unknown search mode "${mode}". Use one of: ${SEARCH_MODES.join(", ")}.`);
+      }
       const limit = Math.max(1, Math.floor(params.limit ?? 200));
       try {
         switch (mode) {
@@ -569,7 +590,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               return ok((hits.join("\n") || "no symbols") + note);
             }
             if (POSITION_MODES.has(mode)) {
-              if (!params.path || params.line === undefined || params.column === undefined) {
+              if (!params.path || params.line == null || params.column == null) {
                 return fail(`LSP mode "${mode}" requires path + line + column`);
               }
               const language = params.language ?? languageForPath(params.path);
@@ -784,5 +805,12 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     pr: ctx.prs ? prTool(ctx.prs) : prUnavailable(),
   };
-  return allowed.map((name) => all[name]);
+  // Prefer provider-side JSON-schema constrained sampling. Models that pass
+  // tool-call tests in OpenCode are often much weaker without it: Beam Free is
+  // one example. `prefer` makes unsupported providers fall back to plain
+  // schemas instead of failing the run.
+  return allowed.map((name) => ({
+    ...all[name],
+    constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
+  }));
 }

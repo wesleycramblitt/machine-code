@@ -18,22 +18,19 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
+const CONTEXT_ACTIONS = new Set(["note", "focus", "recall", "forget", "state"]);
+const CONTEXT_KINDS = new Set(["finding", "decision", "open", "next"]);
+
 const ContextParams = Type.Object({
-  action: Type.Union(
-    [
-      Type.Literal("note"),
-      Type.Literal("focus"),
-      Type.Literal("recall"),
-      Type.Literal("forget"),
-      Type.Literal("state"),
-    ],
-    { description: "Memory operation." },
-  ),
+  action: Type.String({
+    enum: ["note", "focus", "recall", "forget", "state"],
+    description: "Memory operation: note | focus | recall | forget | state.",
+  }),
   kind: Type.Optional(
-    Type.Union(
-      [Type.Literal("finding"), Type.Literal("decision"), Type.Literal("open"), Type.Literal("next")],
-      { description: "Note kind (default finding)." },
-    ),
+    Type.String({
+      enum: ["finding", "decision", "open", "next"],
+      description: "Note kind: finding | decision | open | next (default finding).",
+    }),
   ),
   text: Type.Optional(Type.String({ description: "Note text (one short sentence)." })),
   refs: Type.Optional(
@@ -47,20 +44,26 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     name: "context",
     label: "context",
     description:
-      "Control run state. note records a finding, decision, open question, or next action. " +
-      "focus sets the working set. recall returns an artifact by id. forget closes a fact or question. " +
-      "state returns the current rendered state. " +
+      "Control run state. note needs text (kind: finding|decision|open|next). focus needs refs. " +
+      "recall needs id. forget needs id or text. state takes no fields. " +
       "Example: {\"action\":\"note\",\"kind\":\"next\",\"text\":\"Edit src/tui.ts to ...\"}.",
     parameters: ContextParams,
     async execute(_id, params: Static<typeof ContextParams>) {
       const memory = ctx.state;
       if (!memory) return fail("run state is not available in this run");
+      if (!CONTEXT_ACTIONS.has(params.action)) {
+        return fail(`unknown context action "${params.action}". Use one of: ${[...CONTEXT_ACTIONS].join(", ")}.`);
+      }
+      if (params.kind != null && !CONTEXT_KINDS.has(params.kind)) {
+        return fail(`unknown note kind "${params.kind}". Use one of: ${[...CONTEXT_KINDS].join(", ")}.`);
+      }
       try {
         switch (params.action) {
           case "note": {
             if (!params.text || params.text.trim().length === 0) return fail("note requires text");
-            memory.note(params.kind ?? "finding", params.text, params.refs ?? []);
-            return ok(`noted ${params.kind ?? "finding"}`);
+            const kind = (params.kind ?? "finding") as "finding" | "decision" | "open" | "next";
+            memory.note(kind, params.text, params.refs ?? []);
+            return ok(`noted ${kind}`);
           }
           case "focus": {
             if (!params.refs || params.refs.length === 0) return fail("focus requires refs");

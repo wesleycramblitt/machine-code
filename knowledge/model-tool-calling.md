@@ -41,6 +41,39 @@ Run `20261103-191201-1ukv` was a `general` run on the free tier.
 
 The run was still in the orient phase. It had no plan and no issue writes.
 
+## Observed failure 2026-11-05: serialized arguments
+
+Run `20261105-041811-ew9u` used `opencode-go/beam-free`. The model emitted a
+native tool call, but serialized the fields as attribute text inside one value:
+
+```json
+{ "action": "note\">\nkind: next\">\nInvestigate run ..." }
+```
+
+The schema rejected it. The model repeated the same malformed call, then ended
+with "I used malformed XML. Need correct." The harness marked the run
+`completed` because the final text had no markup.
+
+Fix in this revision:
+
+- Core tools now set `constrainedSampling: { type: "json_schema", strict:
+  "prefer" }`. The OpenCode Go metadata marks Beam Free as
+  `supportsStrictMode: true`; without this field the request sent
+  `strict: false`, so the model had no constrained decoding. OpenCode sends the
+  strict form, which matches the behavior the user observed there.
+- Schema conversion keeps unions/enums, so strict mode constrains `context`
+  actions, note kinds, and `search` modes to their allowed values.
+- Providers that do not support strict mode, or schemas that strict mode cannot
+  encode, fall back to the plain schema. The `command` tool uses
+  `patternProperties`, so it intentionally falls back.
+- Optional fields become `null` under strict mode. Tool code treats `null` as
+  absent.
+- `src/tools/args.ts` repairs the one-value attribute form before schema
+  validation. The repaired object still must pass the real schema.
+- A repaired call is logged as `tool_args_repaired` and may continue.
+- An unrepaired serialized argument now counts as a malformed response. The
+  loop cools the model and rotates instead of completing.
+
 ## Why the catalogue can be wrong
 
 OpenRouter catalogue rows infer tool support from endpoint metadata:
@@ -74,13 +107,21 @@ The selector only checks the catalogue flag (`src/select.ts`,
   `<function_call>`, and `<invoke>` markup. It requires two tags, or one tag
   plus `<param_key>`. It also detects provider envelopes (`</rfl:parameter>`,
   `<|start|>`, `<|end|>`, `<|channel|>`, `<|constrain|>`, `<|message|>`).
+- `src/tools/index.ts` requests JSON-schema constrained sampling for core
+  tools. Models with `compat.supportsStrictMode` get `strict: true`; others get
+  the plain schema.
+- `src/tools/args.ts` repairs one-value attribute serialization before
+  validation. A repaired call emits `tool_args_repaired`.
 - `src/loop.ts` checks the last assistant message after the agent goes idle. If
-  it has no native `toolCall` block and contains markup, or a native tool call
-  has provider markup inside its arguments, the loop records
-  `malformed_tool_call`, classifies the response as malformed, cools the
-  model, and retries.
+  it has no native `toolCall` block and contains markup, a native tool call has
+  provider markup inside its arguments, or a serialized argument was not
+  repaired, the loop records `malformed_tool_call`, classifies the response as
+  malformed, cools the model, and retries.
+- A run that ends with no final text is `blocked`, not `completed`. A run with
+  repeated tool errors and no substantive success is also `blocked`.
 - `src/tui/timeline.ts` and the run detail show `malformed tool call`.
-- `test/tool-call-text.test.js` covers the detector.
+- `test/tool-call-text.test.js` and `test/tool-args.test.js` cover the detector
+  and the repair.
 
 ## Remaining hardening
 
