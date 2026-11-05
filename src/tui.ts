@@ -3476,18 +3476,41 @@ export async function runTui(): Promise<void> {
       if (data === "D") {
         const target = deleteTarget;
         if (!target) { screen = deleteReturn; draw(); return; }
+        const cache = readIssueCache(l);
+        if (cache) {
+          const next = cache.issues.filter((issue) => refKey(issue.ref) !== refKey(target.ref));
+          writeIssueCache(l, cache.repo, next);
+          issueCachesByRepo.set(l.repoRoot, next);
+        }
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         const child = spawn(
           process.execPath,
           [cliPath, "issue", "delete", String(target.ref.number), "--cascade", "--yes"],
           {
             cwd: l.repoRoot,
-            detached: true,
-            stdio: "ignore",
+            stdio: ["ignore", "pipe", "pipe"],
             env: process.env,
           },
         );
-        child.unref();
+        let stdout = "";
+        let stderr = "";
+        child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+        child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+        child.on("close", (code) => {
+          const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
+          try {
+            writeFileSync(join(l.localDir, "delete.log"), `${new Date().toISOString()} #${target.ref.number}\n${output}\n`, "utf8");
+          } catch {
+            // best-effort diagnostics
+          }
+          if (code === 0) {
+            notify(`deleted #${target.ref.number}`);
+          } else {
+            const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
+            notify(`delete failed for #${target.ref.number}: ${trunc(last, 80)}`);
+          }
+          void refreshIssues("current").then(() => draw());
+        });
         notify(`deleting #${target.ref.number} and associated resources`);
         deleteTarget = undefined;
         selectedIssueKey = null;
