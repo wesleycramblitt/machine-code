@@ -571,6 +571,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       .map((fact) => fact.text)
       .join("\n");
   const wantsPack = packAgent && mapFiles.length > 0;
+  const assembledFileChars = wantsPack
+    ? (input.contextText?.match(/<context-block kind="file"[\s\S]*?<\/context-block>/g) ?? [])
+        .reduce((sum, block) => sum + block.length, 0)
+    : 0;
+  const assembledOverviewChars = Math.max(0, (input.contextText?.length ?? 0) - assembledFileChars);
   const buildPack = (): ContextPack =>
     buildTaskPack({
       root: mapRoot,
@@ -603,7 +608,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const initialChars =
     input.agent.prompt.length +
     input.request.length +
-    Math.min(input.contextText?.length ?? 0, 64_000) +
+    Math.min(assembledOverviewChars, 64_000) +
     mapIndex.length +
     (taskPack ? Math.min(taskPack.chars, 80_000) : memory.renderWorkingContext().length) +
     memory.renderBlock().length +
@@ -1321,10 +1326,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             memory.renderBlock().length +
             toolChars +
             24_000;
+          const overviewBaseChars = taskPack
+            ? assembledOverviewChars
+            : input.contextText?.length ?? 0;
           const overviewMaxChars = budget
-            ? Math.max(8_000, Math.min(input.contextText?.length ?? 0, Math.floor(budget.inputChars * 0.4)))
+            ? Math.max(8_000, Math.min(overviewBaseChars, Math.floor(budget.inputChars * 0.4)))
             : undefined;
-          const overviewEstimate = Math.min(input.contextText?.length ?? 0, overviewMaxChars ?? 0);
+          const overviewEstimate = Math.min(overviewBaseChars, overviewMaxChars ?? 0);
           const packChars = taskPack && budget
             ? Math.max(4_000, budget.inputChars - baseOverhead - overviewEstimate)
             : 0;
