@@ -675,6 +675,9 @@ export async function runTui(): Promise<void> {
   let selectedRunId: string | null = null;
   let deleteTarget: Issue | undefined;
   let deleteReturn: Screen = "list";
+  let deleteInFlight = false;
+  const deletingIssues = new Set<string>();
+  let issueRefreshQueued = false;
   let issueCachesByRepo = new Map<string, readonly Issue[]>();
   let issueRunSel = 0;
   let issueScroll = 0;
@@ -831,26 +834,31 @@ export async function runTui(): Promise<void> {
     return undefined;
   };
 
-  const descendantCount = (issue: Issue): number => {
-    let count = 0;
+  const descendantRefs = (issue: Issue): IssueRef[] => {
+    const out: IssueRef[] = [];
     const walk = (parent: Issue): void => {
       for (const ref of parent.children) {
         const child = issueByRef(ref);
         if (!child) continue;
-        count += 1;
+        out.push(child.ref);
         walk(child);
       }
     };
     walk(issue);
-    return count;
+    return out;
   };
+
+  const descendantCount = (issue: Issue): number => descendantRefs(issue).length;
 
   /** Objective text for an issue, using the verb for the current agent. */
   const issuePrompt = (issue: Issue | undefined, agent: string): string =>
     issue ? issueRunRequest(issue, issueRequestVerb(agent)) : "";
 
   const refreshIssues = async (scope: "current" | "all" = "current") => {
-    if (issueRefreshing) return;
+    if (issueRefreshing) {
+      issueRefreshQueued = true;
+      return;
+    }
     issueRefreshing = true;
     issueRefreshAt = Date.now();
     const repoRoots = scope === "all" ? [...new Set([l.repoRoot, ...listProjects(l.home)])] : [l.repoRoot];
@@ -866,7 +874,8 @@ export async function runTui(): Promise<void> {
             unavailable += 1;
             continue;
           }
-          const issues = await bundle.provider.list({ state: "all", limit: 300 });
+          const issues = (await bundle.provider.list({ state: "all", limit: 300 }))
+            .filter((issue) => !deletingIssues.has(refKey(issue.ref)));
           writeIssueCache(repoLayout, bundle.repo ?? "", issues);
           refreshed += 1;
         } catch {
@@ -879,6 +888,10 @@ export async function runTui(): Promise<void> {
       if (scope === "all") notify(issueStatus);
     } finally {
       issueRefreshing = false;
+      if (issueRefreshQueued) {
+        issueRefreshQueued = false;
+        void refreshIssues(scope);
+      }
     }
   };
 
@@ -3476,9 +3489,12 @@ export async function runTui(): Promise<void> {
       if (data === "D") {
         const target = deleteTarget;
         if (!target) { screen = deleteReturn; draw(); return; }
+        deleteInFlight = true;
+        deletingIssues.add(refKey(target.ref));
+        for (const ref of descendantRefs(target)) deletingIssues.add(refKey(ref));
         const cache = readIssueCache(l);
         if (cache) {
-          const next = cache.issues.filter((issue) => refKey(issue.ref) !== refKey(target.ref));
+          const next = cache.issues.filter((issue) => !deletingIssues.has(refKey(issue.ref)));
           writeIssueCache(l, cache.repo, next);
           issueCachesByRepo.set(l.repoRoot, next);
         }
@@ -3503,9 +3519,11 @@ export async function runTui(): Promise<void> {
           } catch {
             // best-effort diagnostics
           }
+          deleteInFlight = false;
           if (code === 0) {
             notify(`deleted #${target.ref.number}`);
           } else {
+            deletingIssues.clear();
             const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
             notify(`delete failed for #${target.ref.number}: ${trunc(last, 80)}`);
           }
@@ -4320,7 +4338,7 @@ export async function runTui(): Promise<void> {
   void refreshIssues();
   let availabilityProbeAt = Date.now();
   setInterval(() => {
-    if (Date.now() - issueRefreshAt > 30_000) void refreshIssues();
+    if (!deleteInFlight && Date.now() - issueRefreshAt > 30_000) void refreshIssues();
     if (Date.now() - availabilityProbeAt > 60_000) {
       availabilityProbeAt = Date.now();
       void (async () => {
