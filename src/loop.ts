@@ -23,7 +23,8 @@ import type { MutableModels } from "./models.js";
 import { coreTools } from "./tools/index.js";
 import { toolDefinitionChars, toolSchemaChars } from "./tools/schema.js";
 import type { AgentConfig } from "./agents/config.js";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
@@ -36,18 +37,13 @@ import { buildTaskPack, renderContextPack, type ContextPack } from "./context/pa
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
+import { EvidenceTracker } from "./state/progress.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
 
 /** Default turn cap. 0 means no cap; set max_turns per role or run. */
 export const MAX_TURNS = 0;
 
-/** Identical calls allowed before the harness blocks the repeat. */
-const REPEAT_LIMIT = 2;
-/** Blocked repeats allowed before the run terminates. */
-const REPEAT_BLOCK_LIMIT = 3;
-/** Re-reads of one 100-line band allowed before the harness returns a nudge. */
-const READ_REPEAT_LIMIT = 2;
 /** Build research allowed before a concrete change plan is required. */
 const BUILD_PLAN_RESEARCH_LIMIT = 12;
 /** Extra research allowed after a plan, so verification is not a dead end. */
@@ -120,6 +116,7 @@ export function readBucket(params: Record<string, unknown>): string {
   const path = typeof params.path === "string" ? params.path : "";
   if (!path) return "";
   if (typeof params.symbol === "string") return `${path}#${params.symbol}`;
+  if (typeof params.section === "string") return `${path}#section:${params.section.trim().toLowerCase()}`;
   if (typeof params.around === "number") return `${path}@${Math.floor(params.around / 100)}`;
   const offset = typeof params.offset === "number" && Number.isFinite(params.offset) ? Math.max(1, params.offset) : 1;
   return `${path}@${Math.floor(offset / 100)}`;
@@ -138,23 +135,6 @@ function stableKey(value: unknown): string {
     });
   } catch {
     return String(value);
-  }
-}
-
-function repeatHint(tool: string): string {
-  switch (tool) {
-    case "read":
-      return "Read a different range or symbol, or proceed with the result you have.";
-    case "search":
-      return "Use the earlier result or change the pattern or path.";
-    case "issue":
-      return "Use the earlier issue result; create the missing graph or stop. Do not view the same issue again.";
-    case "command":
-      return "Use the earlier command result. issue, pr, and artifact are tools, not commands.";
-    case "context":
-      return "Use the earlier context result or change the action.";
-    default:
-      return "Use the earlier result or change the arguments.";
   }
 }
 
@@ -390,6 +370,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     });
 
   const mapRoot = input.toolRoot ?? input.root;
+  /** A cheap file version for the loop detector; contents are not hashed. */
+  const fileVersion = (path: string): string | undefined => {
+    try {
+      const stat = statSync(join(mapRoot, path));
+      return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return undefined;
+    }
+  };
   const processes = new ProcessSupervisor({
     runId: recorder.id,
     runDir: recorder.dir,
@@ -627,6 +616,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastFailure: string | undefined;
   let lastAssistant: AssistantMessage | undefined;
   let totalTokens = 0;
+  /** Run-level loop detector; a model rotation does not erase evidence. */
+  const evidence = new EvidenceTracker(20);
   let turns = 0;
   /** Cumulative turns across resumes, for the run summary. */
   let reportedTurns = recorder.current.turns;
@@ -782,19 +773,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     let appliedError: { key: string; message: string } | undefined;
     let turnCapHit = false;
     let loopBlocked = false;
-    let loopBlockedReason: "repeat" | "plan-required" | undefined;
-    let repeatBlocked = 0;
-    let repeatBlockedTurn = -1;
+    let loopBlockedReason: "repeat" | "plan-required" | "loop" | undefined;
     let researchCalls = 0;
     let planBlocked = 0;
     let planBlockedTurn = -1;
-    /** Consecutive identical calls; a different call resets the streak. */
-    let lastCallKey = "";
-    let lastCallCount = 0;
-    let lastCallPreview = "";
-    /** Consecutive reads of the same range; another tool resets the streak. */
-    let lastReadUnit = "";
-    let lastReadCount = 0;
     /** Tool contract health: enough failures with no work is not "completed". */
     let toolErrors = 0;
     let substantiveSuccesses = 0;
@@ -934,33 +916,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           return prepare ? prepare(repaired) : repaired;
         },
         async execute(id, params, signal, onUpdate) {
-          const block = (message: string, detail: Record<string, unknown>) => {
-            // One strike per turn; a parallel batch is one turn.
-            const turn = memory.currentTurn();
-            if (turn !== repeatBlockedTurn) {
-              repeatBlockedTurn = turn;
-              repeatBlocked += 1;
-            }
-            if (repeatBlocked >= REPEAT_BLOCK_LIMIT) {
-              if (!loopBlocked) {
-                loopBlocked = true;
-                loopBlockedReason = "repeat";
-                recorder.event("loop_blocked", { tool: tool.name, reason: "repeat", ...detail });
-              }
-              return {
-                content: [{ type: "text" as const, text: message }],
-                details: undefined,
-                isError: true,
-                terminate: true,
-              };
-            }
-            return {
-              content: [{ type: "text" as const, text: message }],
-              details: undefined,
-              isError: true,
-            };
-          };
-
           const planBlock = (message: string, detail: Record<string, unknown>) => {
             const turn = memory.currentTurn();
             if (turn !== planBlockedTurn) {
@@ -987,15 +942,28 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             };
           };
 
-          const noteCall = (key: string, preview: string): void => {
-            if (key === lastCallKey) {
-              lastCallCount += 1;
-              lastCallPreview = preview;
-            } else {
-              lastCallKey = key;
-              lastCallCount = 1;
-              lastCallPreview = preview;
+          const killLoop = (evidenceKey: string | null, stale: number) => {
+            if (!loopBlocked) {
+              loopBlocked = true;
+              loopBlockedReason = "loop";
+              recorder.event("loop_blocked", {
+                tool: tool.name,
+                reason: "loop",
+                stale,
+                key: evidenceKey,
+              });
             }
+            return {
+              content: [{
+                type: "text" as const,
+                text:
+                  "Loop detected: recent actions produced no new evidence. " +
+                  "Stop. Report the result and what is blocked.",
+              }],
+              details: undefined,
+              isError: true,
+              terminate: true,
+            };
           };
 
           const issueAction =
@@ -1072,42 +1040,28 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             );
           }
 
-          // A re-read of the same 100-line band is not new evidence when it
-          // happens back to back. A later read after other work is allowed:
-          // the context keeps only the last step, so the model may need the
-          // bytes again.
-          const readUnit = tool.name === "read" ? readBucket(params as Record<string, unknown>) : "";
-          if (readUnit && readUnit === lastReadUnit && lastReadCount >= READ_REPEAT_LIMIT) {
-            const artifact = (() => {
-              const facts = memory.getState().facts;
-              for (let i = facts.length - 1; i >= 0; i -= 1) {
-                const fact = facts[i]!;
-                if (fact.kind !== "finding" || fact.status !== "active" || !fact.key.startsWith("read:")) continue;
-                const ref = fact.refs[0];
-                if (ref?.path === readPath && ref.artifact) return ref.artifact;
-              }
-              return undefined;
-            })();
-            return block(
-              `Already read ${readUnit} (${lastReadCount} times in a row). ` +
-                (artifact
-                  ? `Use context {"action":"recall","id":"${artifact}"} for the same bytes, or edit.`
-                  : "Use context recall for the earlier bytes, or edit."),
-              { args: capJson(params), readUnit, repeats: lastReadCount },
-            );
-          }
+          // Evidence keys for the loop detector. A read is one 100-line band
+          // (or one symbol/section) at a file version; a search is one scope
+          // with one result set. Repeated evidence is stale even if the model
+          // changes the offset or paraphrases the pattern.
+          const searchMode =
+            tool.name === "search" ? String((params as { mode?: unknown }).mode ?? "text") : "";
+          const searchPaths = tool.name === "search" && Array.isArray((params as { paths?: unknown }).paths)
+            ? ((params as { paths?: unknown }).paths as unknown[]).filter(
+                (item): item is string => typeof item === "string",
+              )
+            : [];
+          const searchScope =
+            tool.name === "search" && searchMode === "text"
+              ? searchPaths.length > 0
+                ? searchPaths.slice().sort().join(",")
+                : String((params as { path?: unknown }).path ?? ".")
+              : "";
           const keyParams =
             tool.name === "issue"
               ? normalizedIssueKey(params as Record<string, unknown>)
               : params;
           const key = `${tool.name}:${stableKey(keyParams)}`;
-          if (key === lastCallKey && lastCallCount >= REPEAT_LIMIT) {
-            return block(
-              `Repeated identical ${tool.name} call blocked (${lastCallCount} earlier identical call(s)). ` +
-                `${repeatHint(tool.name)}${lastCallPreview ? ` Previous result: ${lastCallPreview}` : ""}`,
-              { args: capJson(params), repeats: lastCallCount },
-            );
-          }
           const commandAction =
             tool.name === "command" ? String((params as { action?: unknown }).action ?? "") : "";
           const commandName =
@@ -1118,7 +1072,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             input.commands.get(commandName)?.readonly === true;
           const cached = cacheableCommand ? commandCache.get(key) : undefined;
           if (cached && cached.epoch === changeEpoch) {
-            noteCall(key, cached.preview);
+            const check = evidence.observe(`command:${commandName}:cached`, false);
+            if (check.loop) return killLoop(`command:${commandName}:cached`, check.stale);
             return {
               content: [{
                 type: "text" as const,
@@ -1137,31 +1092,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             memory.note("next", "Execute the plan: make the first edit.", [], memory.currentTurn());
             packDirty = true;
           }
-          if (tool.name !== "read") {
-            lastReadUnit = "";
-            lastReadCount = 0;
-          } else if (!result.isError && readUnit) {
-            if (readUnit === lastReadUnit) lastReadCount += 1;
-            else {
-              lastReadUnit = readUnit;
-              lastReadCount = 1;
-            }
-          }
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
             changeEpoch += 1;
             commandCache.clear();
             packDirty = true;
-            const changed = (params as { path?: unknown }).path;
-            if (typeof changed === "string") {
-              if (
-                lastReadUnit === changed ||
-                lastReadUnit.startsWith(`${changed}@`) ||
-                lastReadUnit.startsWith(`${changed}#`)
-              ) {
-                lastReadUnit = "";
-                lastReadCount = 0;
-              }
-            }
           }
           if (!result.isError && tool.name === "command" && commandAction === "run" && !cacheableCommand) {
             // A mutating command can change files without an edit/write call.
@@ -1187,7 +1121,36 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               preview,
             });
           }
-          noteCall(key, preview);
+          // Evidence novelty: repeated reads of one band at the same file
+          // version, repeated search result sets, and repeated command output
+          // are not new information. A mutation resets the stale streak.
+          if (!result.isError) {
+            const resultText = result.content
+              .filter((item): item is { type: "text"; text: string } => item.type === "text")
+              .map((item) => item.text)
+              .join("\n");
+            const resultHash = createHash("sha1").update(resultText).digest("hex").slice(0, 16);
+            const isProgress =
+              tool.name === "edit" ||
+              tool.name === "write" ||
+              (tool.name === "command" && commandAction === "run" && !cacheableCommand);
+            let evidenceKey: string | null = null;
+            if (tool.name === "read" && readPath) {
+              evidenceKey = `read:${readBucket(params as Record<string, unknown>)}:${fileVersion(readPath) ?? resultHash}`;
+            } else if (tool.name === "search" && searchScope) {
+              evidenceKey = `search:${searchScope}:${searchMode}:${resultHash}`;
+            } else if (tool.name === "command" && commandAction === "run") {
+              evidenceKey = cacheableCommand
+                ? `command:${commandName}:cached`
+                : `command:${commandName}:${resultHash}`;
+            } else if (tool.name === "issue") {
+              evidenceKey = `issue:${issueAction}:${resultHash}`;
+            } else if (tool.name === "context" && contextAction === "recall") {
+              evidenceKey = `recall:${resultHash}`;
+            }
+            const check = evidence.observe(evidenceKey, isProgress);
+            if (check.loop) return killLoop(evidenceKey, check.stale);
+          }
           return result;
         },
       } as AgentTool;
@@ -1768,7 +1731,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       error =
         loopBlockedReason === "plan-required"
           ? "build plan required before more research"
-          : "repeated identical tool calls detected";
+          : loopBlockedReason === "loop"
+            ? "no new evidence; loop detected"
+            : "repeated identical tool calls detected";
     } else if (budgetExhausted) {
       status = "blocked";
       error = `token budget exhausted (${policy.budgetTokens})`;
@@ -1788,7 +1753,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         : loopBlocked
           ? loopBlockedReason === "plan-required"
             ? "The harness stopped the run: no concrete build plan was recorded. Return a 3-line change plan and stop."
-            : "The harness stopped repeated tool calls."
+            : loopBlockedReason === "loop"
+              ? "The harness stopped the run: recent actions produced no new evidence. Return the result and the blocking evidence."
+              : "The harness stopped repeated tool calls."
           : "The token budget is exhausted.";
       finalText = await finalAnswer(currentModel, reason);
     }

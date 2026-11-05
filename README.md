@@ -225,10 +225,11 @@ not `completed`, and says so in the summary.
 `max_turns` in `[agents.<role>]` sets an optional assistant-turn cap. The
 default is `0` (no cap); set it only when a role needs a bound.
 `budget_tokens` is also unset by default and is opt-in. The only loop guard is
-an exact repeat: the same tool call with the same arguments three times in a
-row. Provider retries and model rotations do not refill a configured turn or
-token budget. A token budget counts total tokens, including cache reads, so a
-cache-heavy run can hit it sooner than its cost suggests.
+evidence novelty: if recent actions add no new evidence and no edit, write, or
+mutating command, the run is killed with a `loop_blocked` event. Provider
+retries and model rotations do not refill a configured turn or token budget. A
+token budget counts total tokens, including cache reads, so a cache-heavy run
+can hit it sooner than its cost suggests.
 
 In the run detail Timeline, `j`/`k` moves between timestamp events. The timeline
 follows the newest event by default; `j`/`k` or `PgUp`/`PgDn` turns follow off,
@@ -256,11 +257,12 @@ picker open. The line under **Model[m]** shows the effective floor for the
 current tier and floor mode. Press `s` for settings; it explains every preset,
 the role mode, the effective agent parameters, and the policy floors.
 
-The harness blocks a third identical tool call with the same arguments and
-returns a corrective message; three blocked repeats end the run with a
-`loop_blocked` event and a summary that says so. That is the only research
-guard: different ranges, new files, and new search scopes are left to the
-model and the prompt. `command describe issue` returns a direct hint that
+The loop detector watches evidence, not call shape. A read is one 100-line band
+(or symbol/section) at a file version, a search is one scope with one result
+set, and a command is its output. Twenty stale actions in a row with no edit,
+write, or mutating command kill the run with a `loop_blocked` event and a
+summary that says so. Memory operations and new evidence reset nothing and do
+not count as progress. `command describe issue` returns a direct hint that
 `issue` is a tool, not a command.
 
 Typed commands and runner gates run through the per-run process supervisor. A

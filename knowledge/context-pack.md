@@ -88,11 +88,14 @@ Implemented:
 - Evidence ledger in `src/context/state.ts`: exact read bytes are kept for the
   run, unchanged re-reads return from cache, an edit drops the file's entries,
   and the renderer includes acquired bytes not already in the task pack.
+- Evidence-novelty loop detector in `src/state/progress.ts`: repeated reads of
+  one band at the same file version, repeated search result sets, or repeated
+  command output kill the run after twenty stale actions. It is the only loop
+  guard.
 
 Next:
 
 - batch `read symbols/sections/files` and patch-by-symbol;
 - a routing layer that auto-selects the best tool for a request;
 - planner staging: overview pack, then per-stage detail;
-- model-aware assembly for the overview layer, not only the task pack;
-- one loop detector that kills a run when recent actions add no new evidence.
+- model-aware assembly for the overview layer, not only the task pack.

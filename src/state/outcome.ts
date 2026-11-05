@@ -123,6 +123,8 @@ function loopHeadline(loopReason: string | undefined): string {
       return "Stopped: research continued without a next action.";
     case "plan-required":
       return "Stopped: no concrete build plan was recorded.";
+    case "loop":
+      return "Stopped: recent actions produced no new evidence.";
     default:
       return "Stopped: repeated identical tool calls detected.";
   }

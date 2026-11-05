@@ -21,8 +21,8 @@ state, selection, and verification; the model owns decisions and edits.
 ## Layers
 
 - **CLI** (`src/cli.ts`): commands, flags, TUI, run/report entry points.
-- **Run loop** (`src/loop.ts`): turn budget, token budget, exact-repeat guard,
-  retries, final-answer fallback, semantic refresh scheduling.
+- **Run loop** (`src/loop.ts`): turn budget, token budget, evidence-novelty
+  loop detector, retries, final-answer fallback, semantic refresh scheduling.
 - **Context** (`src/context/`): issue hierarchy, packets, knowledge files,
   plans, skills, tool index, run-state rendering, model-derived budgets
   (`budget.ts`), the task context pack (`pack.ts`), and manifest/provenance.
@@ -93,6 +93,9 @@ the remaining probe work.
   an `mc:context` file list from body paths and the semantic map when the body
   has no marker. Oversized Tasks are rejected before creation or build.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
+- The only loop stop is evidence novelty: repeated reads of one band at the
+  same file version, repeated search result sets, or repeated command output
+  kill the run after twenty stale actions.
 - A completed run stays completed even when a recoverable plan checkpoint fired.
 - An edit invalidates only overlapping read ranges; read coverage carries
   artifact ids for recall.

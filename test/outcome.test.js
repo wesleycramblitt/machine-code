@@ -102,6 +102,19 @@ test("the terminal loop block decides the headline", () => {
   assert.doesNotMatch(outcome.headline, /no concrete build plan/);
 });
 
+test("an evidence loop block is reported as no new evidence", () => {
+  const outcome = summarizeRun({
+    summary: summary({ status: "blocked", error: "no new evidence; loop detected" }),
+    events: [
+      { type: "tool_call_start", toolCallId: "r1", tool: "read", args: { path: "src/cli.ts", offset: 800 } },
+      { type: "loop_blocked", tool: "read", reason: "loop", stale: 20 },
+    ],
+  });
+  assert.equal(outcome.stopReason, "loop");
+  assert.match(outcome.headline, /no new evidence/);
+  assert.match(outcome.text, /no new evidence/);
+});
+
 test("a no-progress block is not reported as a repeated identical call", () => {
   const outcome = summarizeRun({
     summary: summary({ status: "blocked", error: "research continued without an edit, write, or command" }),
