@@ -13,7 +13,7 @@ This file details upgrades or issues to be planned for the TUI
 # Run details Page
 
 
-# Models Page
+- [ ] Feature #167: Run-start handoff: immediate run-details page with progressive fill-in
 - Can't see the selected item (hover color or indicator) when hovering a major category (like a provider)
 
 # Spend Page
