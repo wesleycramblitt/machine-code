@@ -49,8 +49,8 @@ import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
-import { AGENT_META, AGENT_NAMES, agentDef, roleSkillPresets, type AgentDef, type IssueAccess } from "./agents.js";
-import { PRESETS, resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
+import { AGENT_META, AGENT_NAMES, agentDef, roleSkillPresets, type IssueAccess } from "./agents.js";
+import { resolveAgent, resolveAgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { isGenericTaskRequest, issueRequestVerb, issueRunRequest } from "./issues/work.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
@@ -184,23 +184,6 @@ const RUN_SECTION_LABEL: Record<RunSection, string> = {
   context: "Context",
 };
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
-const NEW_RUN_PRESET_INFO: Record<string, string> = {
-  plan: "Planner flow. Creates issue graphs, uses direct verification, asks when needed.",
-  orchestrate: "Delegated flow. Verified checks and issue tracking; used by the Orchestrator.",
-  implement: "Build flow. Verified checks, no clarifying questions.",
-  review: "Review flow. Direct verification, no clarifying questions.",
-  assistant: "Assistant flow. Issues disabled; asks when needed.",
-  unrestricted: "Permissive flow. Verified checks, delegation on, asks when needed.",
-};
-const NEW_RUN_SETTING_FIELDS = [
-  "verification",
-  "worktree",
-  "approval",
-  "ambiguity",
-  "minFit",
-  "floors",
-] as const;
-type NewRunSettingField = (typeof NEW_RUN_SETTING_FIELDS)[number];
 
 interface ContextPanelItem {
   text: string;
@@ -213,10 +196,7 @@ interface ContextPanelItem {
 }
 const NEW_RUN_CONTEXT_TABS = ["Issues", "Files", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase", "Prompt"] as const;
 
-type NewRunState = ForkedRunSettings & {
-  /** Isolated worktree for the run (default on). */
-  worktree: boolean;
-};
+type NewRunState = ForkedRunSettings;
 
 interface ModelPickerEntry {
   row: CatalogueRow;
@@ -881,7 +861,6 @@ export async function runTui(): Promise<void> {
     tier: "free",
     minFit: undefined,
     floors: "role",
-    worktree: true,
     prompt: "",
   };
   let newRunRepo = l.repoRoot;
@@ -900,9 +879,6 @@ export async function runTui(): Promise<void> {
   let newRunInsert = false;
   /** `:` starts the two-key `:!` start command. */
   let newRunColon = false;
-  /** Advanced, rarely-touched new-run options live behind [s]. */
-  let newRunSettings = false;
-  let newRunSettingsSel = 0;
   let newRunContextTab = 0;
   let newRunContextItem = 0;
   let newRunContextItemKeys: string[] = [];
@@ -1131,8 +1107,6 @@ export async function runTui(): Promise<void> {
   const defaultNewRun = (): NewRunState => {
     const agent = "general";
     const repoLayout = layout(newRunRepo);
-    const def = agentDef(repoLayout, agent);
-    const preset = PRESETS[def.preset];
     // A new run starts from the machine selection tier, not a hard-coded free
     // default. The per-run toggle can still override it.
     let tier: "free" | "paid" = "free";
@@ -1143,38 +1117,24 @@ export async function runTui(): Promise<void> {
     }
     return {
       agent,
-      preset: def.preset,
-      verification: preset?.verification ?? "verified",
-      issues: preset?.issues ?? "optional",
-      ask: preset?.ask ?? true,
-      approval: preset?.approval ?? "human",
-      ambiguity: preset?.ambiguity ?? "precise",
+      preset: "unrestricted",
+      verification: "verified",
+      issues: "optional",
+      ask: true,
+      approval: "human",
+      ambiguity: "precise",
       tier,
       minFit: undefined,
       floors: "role",
-      worktree: true,
       prompt: "",
     };
   };
 
   newrun = defaultNewRun();
 
-  const applyPreset = (name: string) => {
-    const preset = PRESETS[name];
-    newrun.preset = name;
-    if (!preset) return;
-    newrun.verification = preset.verification;
-    newrun.issues = preset.issues;
-    newrun.ask = preset.ask;
-    newrun.approval = preset.approval;
-    newrun.ambiguity = preset.ambiguity;
-  };
-
   const resetNewRunUi = () => {
     newRunInsert = false;
     newRunColon = false;
-    newRunSettings = false;
-    newRunSettingsSel = 0;
     newRunContextTab = 0;
     newRunContextItem = 0;
     newRunContextFilter = "";
@@ -1209,13 +1169,11 @@ export async function runTui(): Promise<void> {
     newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
-      worktree: previous.worktree,
       ...(preferredAgent ? { agent: preferredAgent } : {}),
       ...(issue ? { issue } : {}),
     };
-    // Keep the selected agent's mode/preset coherent.
-    const def = agentDef(layout(newRunRepo), newrun.agent);
-    applyPreset(def.preset);
+    // Verification is role-shaped: build/sudo verify, the rest run direct.
+    newrun.verification = newrun.agent === "build" || newrun.agent === "sudo" ? "verified" : "direct";
     // A task-attached run starts with a concrete objective. The prompt stays
     // editable, but the human no longer has to type one.
     if (knownIssue) newrun.prompt = issuePrompt(knownIssue, newrun.agent);
@@ -1254,7 +1212,6 @@ export async function runTui(): Promise<void> {
         defaults,
         configuredProviders: configured,
       }),
-      worktree: newrun.worktree,
     };
     // A generic inherited request ("Build the task.") hides the real objective.
     // When the run is attached to an issue, derive the request from it instead.
@@ -1274,8 +1231,8 @@ export async function runTui(): Promise<void> {
     const previousPrompt = issuePrompt(issue, previousAgent);
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
     newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
-    const def = agentDef(layout(newRunRepo), newrun.agent);
-    applyPreset(def.preset);
+    // Verification follows the role: only build/sudo verify by default.
+    newrun.verification = newrun.agent === "build" || newrun.agent === "sudo" ? "verified" : "direct";
     // Keep an auto-derived objective in sync with the agent verb. A prompt the
     // human edited stays untouched.
     if (issue && (!newrun.prompt.trim() || newrun.prompt === previousPrompt)) {
@@ -1283,24 +1240,23 @@ export async function runTui(): Promise<void> {
     }
   };
 
-  const cycleNewRunSetting = (field: NewRunSettingField) => {
-    if (field === "verification") {
-      const values: NewRunState["verification"][] = ["direct", "verified"];
-      newrun.verification = values[(values.indexOf(newrun.verification) + 1) % values.length]!;
-      return;
-    }
-    if (field === "worktree") { newrun.worktree = !newrun.worktree; return; }
-    if (field === "approval") { newrun.approval = newrun.approval === "human" ? "agent" : "human"; return; }
-    if (field === "ambiguity") {
-      const values: NewRunState["ambiguity"][] = ["strict", "precise", "adaptive", "autonomous"];
-      newrun.ambiguity = values[(values.indexOf(newrun.ambiguity) + 1) % values.length]!;
-      return;
-    }
-    if (field === "minFit") {
-      const values: Array<number | null | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 8.5, 0];
-      newrun.minFit = values[(values.findIndex((value) => value === newrun.minFit) + 1) % values.length];
-      return;
-    }
+  /** Build-only verification mode, shown as submode[s] beside the agent row. */
+  const cycleSubmode = () => {
+    const values: NewRunState["verification"][] = ["direct", "verified"];
+    newrun.verification = values[(values.indexOf(newrun.verification) + 1) % values.length]!;
+  };
+
+  const cycleAmbiguity = () => {
+    const values: NewRunState["ambiguity"][] = ["strict", "precise", "adaptive", "autonomous"];
+    newrun.ambiguity = values[(values.indexOf(newrun.ambiguity) + 1) % values.length]!;
+  };
+
+  const cycleMinFit = () => {
+    const values: Array<number | null | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 8.5, 0];
+    newrun.minFit = values[(values.findIndex((value) => value === newrun.minFit) + 1) % values.length];
+  };
+
+  const cycleFloors = () => {
     const floors: NewRunState["floors"][] = ["role", "strict", "off"];
     newrun.floors = floors[(floors.indexOf(newrun.floors) + 1) % floors.length]!;
   };
@@ -1323,7 +1279,7 @@ export async function runTui(): Promise<void> {
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
-    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
+    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${skillModesKey}\0${includedFilesKey}`;
     const previewTtl = newRunInsert ? 60_000 : 5_000;
     if (
       !newRunPreviewCache ||
@@ -1371,7 +1327,6 @@ export async function runTui(): Promise<void> {
       runOverrides: {
         preset: newrun.preset,
         verification: newrun.verification === "redundant" ? "verified" : newrun.verification,
-        worktree: newrun.worktree,
         issues: newrun.issues,
         ask: newrun.ask,
         approval: newrun.approval,
@@ -1483,7 +1438,6 @@ export async function runTui(): Promise<void> {
       "--verify", newrun.verification,
       "--issues", newrun.issues,
       "--ask", String(newrun.ask),
-      "--worktree", newrun.worktree ? "true" : "false",
       "--approval", newrun.approval,
       "--ambiguity", newrun.ambiguity,
       ...(newRunParentId ? ["--parent", newRunParentId] : []),
@@ -1797,10 +1751,6 @@ export async function runTui(): Promise<void> {
             : page === "models" && screen === "model"
               ? `  ${B}${theme.headerFg}Model Details${R}`
               : "";
-    const headerRight =
-      page === "runs" && screen === "newrun" && !newRunInsert && !modelPick && !issuePick && !newRunSettings
-        ? command("s", "Settings", undefined, M)
-        : "";
     const backLine = `${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}${backTitle}`;
     const headerSubLines = runsListScreen
       ? wrapTokenList([...runIndicators, ...statusTokens], cols, "  ").map((line) => ` ${line}`)
@@ -1813,12 +1763,7 @@ export async function runTui(): Promise<void> {
     };
     const backSubLine = page === "runs" && screen === "newrun" ? rightHeaderPath(newRunRepo) : "";
     const header: string[] = backHeader
-      ? [
-          headerRight
-            ? `${backLine}${" ".repeat(Math.max(2, cols - visible(backLine) - visible(headerRight)))}${headerRight}`
-            : backLine,
-          backSubLine,
-        ]
+      ? [backLine, backSubLine]
       : [...wrapTokenList(tabTokens, cols, " "), ...headerSubLines];
     // The header shares the body surface; only the Back label keeps its own tone.
     const headerTone = theme.bodyBg;
@@ -2138,7 +2083,6 @@ export async function runTui(): Promise<void> {
         runOverrides: {
           preset: newrun.preset,
           verification: newrun.verification === "redundant" ? "verified" : newrun.verification,
-          worktree: newrun.worktree,
           issues: newrun.issues,
           ask: newrun.ask,
           approval: newrun.approval,
@@ -2369,25 +2313,13 @@ export async function runTui(): Promise<void> {
           ].find((line) => visible(line) <= cols) ?? ` ${modelIdentity}`;
       const floorsText = (() => {
         if (!ap) return "floors unavailable";
-        if (newrun.floors === "off") return "floors off · fit 0";
-        const fit =
-          newrun.minFit === null
-            ? 0
-            : newrun.minFit ?? (newrun.tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) ?? 0;
-        const axes =
-          newrun.floors === "strict"
-            ? Object.fromEntries(
-                CAPABILITY_AXES.map((axis) => [
-                  axis,
-                  Math.min(10, Math.round(((ap.minAxes?.[axis] ?? ap.minFit ?? 6) + 0.5) * 10) / 10),
-                ]),
-              )
-            : newrun.tier === "free"
-              ? { ...(ap.minAxes ?? {}), ...(ap.freeMinAxes ?? {}) }
-              : ap.minAxes;
-        return `${newrun.tier} floors ${newrun.floors} · fit ${fit.toFixed(1)} · axes ${axisFloorText(axes)}`;
+        if (newrun.floors === "off") return "off";
+        return newrun.floors;
       })();
-      const minimumsText = trunc(`${D}${floorsText}${R}`, Math.max(10, cols - 1));
+      const minimumsText = trunc(
+        `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}${R}`,
+        Math.max(10, cols - 1),
+      );
       const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
       const issueSources = ctx.sources.filter((source) => source.kind === "issue");
       const issueItems: ContextPanelItem[] = [];
@@ -2653,6 +2585,10 @@ export async function runTui(): Promise<void> {
         ? promptActions
         : joinCommands([
             command("a", "Agent", displayAgent, agentTone(newrun.agent)),
+            ...(newrun.agent === "build"
+              ? [command("s", "Submode", newrun.verification === "verified" ? "Verify" : "Direct", C)]
+              : []),
+            command("g", "Ambiguity", newrun.ambiguity, M),
             command("t", "Tier", displayTier, tierTone(newrun.tier)),
             promptActions,
           ]);
@@ -2756,61 +2692,6 @@ export async function runTui(): Promise<void> {
           command("Esc", "Close", undefined, GR),
         ]);
         secondary = `${D}${list.length} issue(s)${issuePickText ? ` · “${issuePickText}”` : ""}${R}`;
-      } else if (newRunSettings) {
-        const labels: Record<NewRunSettingField, string> = {
-          verification: "Verify",
-          worktree: "Worktree",
-          approval: "Approval",
-          ambiguity: "Ambiguity",
-          minFit: "Min fit",
-          floors: "Floors",
-        };
-        const values: Record<NewRunSettingField, string> = {
-          verification: newrun.verification,
-          worktree: newrun.worktree ? "on" : "off",
-          approval: newrun.approval,
-          ambiguity: newrun.ambiguity,
-          minFit: fitText,
-          floors: floorText,
-        };
-        const modeText = def.modes.length === 0
-          ? "single-agent (no role modes)"
-          : `${def.defaultMode ?? def.modes[0]} default · ${def.modes.join(", ")}`;
-        const lines: string[] = [
-          ` ${B}${W}New-run settings${R} ${D}· ${def.blurb}${R}`,
-          ` ${D}Agent${R} ${agentTone(newrun.agent)}${newrun.agent}${R} ${D}· ${def.readonly ? "read-only" : "can write"} · issue access ${def.issueAccess} · default preset ${def.preset}${R}`,
-          ` ${D}Mode${R}  ${W}${modeText}${R}`,
-          ` ${D}${def.modes.length === 0 ? "All current roles run as one agent. Orchestration is a separate command, not a run mode." : `Mode config: ${def.modes.map((mode) => { const cfg = def.modeConfig[mode]; return `${mode}=${cfg?.verification ?? "role"}${cfg?.review ? "+review" : ""}`; }).join(" · ")}`}${R}`,
-          ` ${D}Effective${R} ${D}${presetConfigText(resolvedAgent.config)} · issue access ${resolvedAgent.config.issueAccess ?? def.issueAccess}${R}`,
-          ` ${D}Policy${R} ${D}${policyFloorText(ap, newrun.tier)}${R}`,
-          ` ${D}Tools${R} ${D}${def.tools.join(", ")}${R}`,
-          "",
-        ];
-        const fieldLineIndexes: number[] = [];
-        for (let i = 0; i < NEW_RUN_SETTING_FIELDS.length; i++) {
-          fieldLineIndexes.push(lines.length);
-          const field = NEW_RUN_SETTING_FIELDS[i]!;
-          const value = values[field];
-          const tone = i % 2 === 0 ? C : M;
-          const line = `  ${pad(labels[field], 12)} ${tone}${B}${value}${R}`;
-          lines.push(selected(line, i === newRunSettingsSel));
-        }
-        const field = NEW_RUN_SETTING_FIELDS[newRunSettingsSel]!;
-        lines.push("", ` ${B}${C}${labels[field]}${R}`);
-        for (const line of wrapText(settingExplanation(field, newrun, ap, def), Math.max(20, cols - 4))) {
-          lines.push(` ${D}${line}${R}`);
-        }
-        const selectedLine = fieldLineIndexes[Math.min(newRunSettingsSel, fieldLineIndexes.length - 1)] ?? 0;
-        const start = Math.max(
-          0,
-          Math.min(selectedLine - Math.floor(bodyH / 3), Math.max(0, lines.length - bodyH)),
-        );
-        body = clipBody(lines.slice(start, start + bodyH));
-        actions = joinCommands([
-          command("j/k", "Move", undefined, M),
-          command("Enter", "Change", undefined, G),
-          command("Esc/s", "Close", undefined, GR),
-        ]);
       } else {
         // Context and inherited sources stay above; the composer is pinned to
         // the bottom of the body so it sits directly above the key-command row.
@@ -2824,8 +2705,9 @@ export async function runTui(): Promise<void> {
           ],
           filler: panelLine(""),
         };
-        // Agent, tier, issue, and prompt controls live beside the prompt or in
-        // the Issues panel; the bottom footer has no command row.
+        // Agent, submode, ambiguity, tier, issue, and prompt controls live
+        // beside the prompt or in the Issues panel; the bottom footer has no
+        // command row.
         actions = " ";
         secondaryStyled = true;
         secondary = toast ? `${D}· ${Y}${toast}${R}` : "";
@@ -4003,7 +3885,7 @@ export async function runTui(): Promise<void> {
     // a Feature is attached, default to the agent that does the work.
     if (!hadIssue && newrun.agent === "general") {
       newrun.agent = issue.kind === "feature" ? "build" : "planner";
-      applyPreset(agentDef(layout(newRunRepo), newrun.agent).preset);
+      newrun.verification = newrun.agent === "build" ? "verified" : "direct";
     }
     if (!newrun.prompt.trim() || newrun.prompt === previousPrompt) {
       newrun.prompt = issuePrompt(issue, newrun.agent);
@@ -4386,22 +4268,6 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (newRunSettings) {
-        if (data === "\x1b" || data === "s") { newRunSettings = false; draw(); return; }
-        if (data === "\x1b[A" || data === "k") { newRunSettingsSel = Math.max(0, newRunSettingsSel - 1); draw(); return; }
-        if (data === "\x1b[B" || data === "j") {
-          newRunSettingsSel = Math.min(NEW_RUN_SETTING_FIELDS.length - 1, newRunSettingsSel + 1);
-          draw();
-          return;
-        }
-        if (data === "\r" || data === "\n" || data === " ") {
-          cycleNewRunSetting(NEW_RUN_SETTING_FIELDS[newRunSettingsSel]!);
-          draw();
-          return;
-        }
-        draw();
-        return;
-      }
       if (newRunInsert) {
         if (data === "\x1b") { newRunInsert = false; draw(); return; }
         if (data === "\r" || data === "\n") {
@@ -4488,9 +4354,15 @@ export async function runTui(): Promise<void> {
       }
       if (data === "a") { cycleAgent(); draw(); return; }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
+      if (data === "s") {
+        if (newrun.agent !== "build") { notify("submode is build-only"); draw(); return; }
+        cycleSubmode(); draw(); return;
+      }
+      if (data === "g") { cycleAmbiguity(); draw(); return; }
+      if (data === "f") { cycleMinFit(); draw(); return; }
+      if (data === "F") { cycleFloors(); draw(); return; }
       if (data === "i" && newRunContextSectionKey === "section:issues") { startIssuePicker(); draw(); return; }
       if (data === "m") { startModelPicker(); draw(); return; }
-      if (data === "s") { newRunSettings = true; newRunSettingsSel = 0; draw(); return; }
       if (data === "e" || data === "p") { newRunInsert = true; draw(); return; }
       if (data === "X" && newrun.issue) { newrun.issue = undefined; draw(); return; }
       draw();
@@ -5359,46 +5231,7 @@ function modelWeightedFit(
   );
 }
 
-function presetConfigText(config: AgentConfig): string {
-  return (
-    `delegate ${config.delegate ? "on" : "off"} · verify ${config.verification}` +
-    ` · issues ${config.issues} · ask ${config.ask ? "on" : "off"}` +
-    ` · approval ${config.approval} · ambiguity ${config.ambiguity}` +
-    `${config.artifactScripts ? " · artifacts on" : ""}`
-  );
-}
-
 function axisFloorText(axes: Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> | undefined): string {
   return CAPABILITY_AXES.map((axis) => `${axis[0]!.toUpperCase()}${(axes?.[axis] ?? 0).toFixed(1)}`).join(" ");
 }
 
-function policyFloorText(ap: AgentPolicy | undefined, tier: "free" | "paid"): string {
-  if (!ap) return "no policy";
-  const fit = (tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) ?? 0;
-  const axes = tier === "free" ? { ...(ap.minAxes ?? {}), ...(ap.freeMinAxes ?? {}) } : ap.minAxes;
-  const turns = ap.maxTurns === undefined ? "default" : String(ap.maxTurns);
-  const budget = ap.budgetTokens === undefined ? "" : ` · budget ${ap.budgetTokens}`;
-  return `min fit ${fit.toFixed(1)} · axes ${axisFloorText(axes)} · max turns ${turns}${budget}`;
-}
-
-function settingExplanation(
-  field: NewRunSettingField,
-  state: NewRunState,
-  ap: AgentPolicy | undefined,
-  def: AgentDef,
-): string {
-  switch (field) {
-    case "verification":
-      return "direct runs the role's own checks. verified adds focused tests for acceptance.";
-    case "worktree":
-      return "on isolates the run in its own worktree on mc/feature/<n>-<slug>. off runs in the main tree.";
-    case "approval":
-      return "human requires human approval for the feature merge. agent lets the agent merge and close.";
-    case "ambiguity":
-      return "strict asks on any material gap. precise resolves low-impact gaps and asks when a choice changes the work. adaptive infers intent. autonomous decides without asking.";
-    case "minFit":
-      return "Hard floor for the role-weighted model fit. role uses the policy floor. 0 disables the floor.";
-    case "floors":
-      return "role uses the policy axis floors. strict adds 0.5 to each role axis floor. off removes axis floors.";
-  }
-}
