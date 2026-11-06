@@ -5131,6 +5131,7 @@ export async function runTui(): Promise<void> {
         const scope = pipelineScope;
         if (!scope) { notify("no orchestration scope"); draw(); return; }
         const ctx = scopeCtx();
+        let stoppedReason: string | undefined;
         if (scope.kind !== "task") {
           const state = listOrchestrations(ctx.layout).find(
             (candidate) =>
@@ -5144,6 +5145,9 @@ export async function runTui(): Promise<void> {
             draw();
             return;
           }
+          // A stopped orchestration refuses to tick until resumed. x means go,
+          // so resume it in place and keep its approvals and checkpoints.
+          stoppedReason = state && (!lease || lease.until <= Date.now()) ? state.stopReason : undefined;
         }
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         const args = scope.kind === "task"
@@ -5155,6 +5159,7 @@ export async function runTui(): Promise<void> {
               scope.kind,
               scope.kind === "epic" ? "--epic" : "--feature",
               String(scope.ref.number),
+              ...(stoppedReason ? ["--resume"] : []),
               "--tier", orchTier,
               ...(orchMinFit !== undefined ? ["--min-fit", String(orchMinFit)] : []),
               ...(orchFloors === "off"
@@ -5175,7 +5180,11 @@ export async function runTui(): Promise<void> {
           env: process.env,
         });
         child.unref();
-        notify(`started ${scope.kind} #${scope.ref.number}`);
+        notify(
+          stoppedReason
+            ? `resumed ${scope.kind} #${scope.ref.number} (was stopped: ${stoppedReason.slice(0, 100)})`
+            : `started ${scope.kind} #${scope.ref.number}`,
+        );
         draw();
         return;
       }
