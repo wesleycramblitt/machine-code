@@ -94,3 +94,27 @@ test("cycles are reported and not dispatchable", () => {
   assert.match(result.errors.join("\n"), /dependency cycle/);
   assert.equal(result.ready.length, 0);
 });
+
+test("deliverables wedged behind open reserved anchors are reported", () => {
+  const anchor = issue(40, {
+    title: "Task 0: Planning & Review",
+    reserved: { for: ref(36), kind: "feature-pr" },
+  });
+  const a = issue(45, { blockedBy: [ref(40)] });
+  const b = issue(46, { blockedBy: [ref(45)] });
+  const result = planSchedule({ issues: [anchor, a, b], scope: "project" });
+  assert.equal(result.ready.length, 0);
+  assert.match(result.errors.join("\n"), /plan wedged: .*#40/);
+});
+
+test("no wedge when deliverables chain among themselves", () => {
+  const anchor = issue(40, {
+    title: "Task 0: Planning & Review",
+    reserved: { for: ref(36), kind: "feature-pr" },
+  });
+  const a = issue(45);
+  const b = issue(46, { blockedBy: [ref(45)] });
+  const result = planSchedule({ issues: [anchor, a, b], scope: "project" });
+  assert.ok(!result.errors.some((error) => error.includes("plan wedged")));
+  assert.deepEqual(result.ready.map((task) => task.issue.ref.number), [45]);
+});

@@ -6,6 +6,7 @@
  * blockers are closed, and no active run already owns it.
  */
 import { refKey, type Issue, type IssueRef } from "../issues/provider.js";
+import { isReserved } from "../issues/reserved.js";
 import { validatePlanGraph, validatePlanIssue } from "../plan/validate.js";
 import { isReadyPlan, type PlanMarker } from "../plan/schema.js";
 import type { RunSummary } from "../state/runs.js";
@@ -94,6 +95,47 @@ function terminalTaskRuns(runs: readonly RunSummary[] | undefined): Map<string, 
   return out;
 }
 
+/**
+ * Wedge detector: deliverable Tasks blocked (transitively) only by open
+ * reserved anchors can never run — anchors stay open until their parent
+ * closes, and parents close only after deliverables close. Returns the
+ * sorted anchor numbers bottoming every chain, or [] when there is no wedge.
+ */
+function anchorWedge(tasks: readonly Issue[], byKey: ReadonlyMap<string, Issue>): number[] {
+  const openBlockers = (issue: Issue): IssueRef[] =>
+    issue.blockedBy.filter((blocker) => {
+      const target = byKey.get(refKey(blocker));
+      return target !== undefined && target.state !== "closed";
+    });
+  const roots = tasks.filter((issue) => !isReserved(issue) && openBlockers(issue).length > 0);
+  if (roots.length === 0) return [];
+  const terminals = new Map<string, Issue>();
+  const visit = (issue: Issue, seen: Set<string>): void => {
+    const key = refKey(issue.ref);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const next = openBlockers(issue);
+    if (next.length === 0) {
+      terminals.set(key, issue);
+      return;
+    }
+    for (const blocker of next) {
+      const target = byKey.get(refKey(blocker));
+      if (target) visit(target, seen);
+    }
+  };
+  for (const root of roots) visit(root, new Set());
+  if (terminals.size === 0) return [];
+  const anchors: number[] = [];
+  for (const terminal of terminals.values()) {
+    // A closed, external, or deliverable bottom is a different problem; only
+    // open reserved anchors bottoming every chain count as the wedge.
+    if (!isReserved(terminal) || terminal.state !== "open") return [];
+    anchors.push(terminal.ref.number);
+  }
+  return [...new Set(anchors)].sort((a, b) => a - b);
+}
+
 function deterministicOrder(tasks: readonly Issue[]): Issue[] {
   const byKey = new Map(tasks.map((issue) => [refKey(issue.ref), issue]));
   const indegree = new Map<string, number>();
@@ -180,6 +222,14 @@ export function planSchedule(input: ScheduleInput): ScheduleResult {
   const graph = validatePlanGraph(scopeTasks, { requireReady: true });
   for (const error of graph.errors) {
     if (error.includes("dependency cycle")) errors.push(error);
+  }
+  const wedge = anchorWedge(scopeTasks, byKey);
+  if (wedge.length > 0) {
+    errors.push(
+      `plan wedged: deliverable Tasks are blocked only by open reserved anchors (${wedge.map((n) => `#${n}`).join(", ")}), ` +
+        "which stay open until their parent closes — nothing behind them can ever run. " +
+        "Remove the links (issue edit remove_blocked_by) or close the anchors.",
+    );
   }
   const ready = scheduled.filter((task) => task.ready);
   const maxParallel = Math.max(0, Math.floor(input.maxParallel ?? ready.length));

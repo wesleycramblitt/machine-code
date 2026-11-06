@@ -98,6 +98,10 @@ class FakeProvider {
       issue.planError = parsed.error;
     }
     if (patch.blockedBy !== undefined) issue.blockedBy = patch.blockedBy;
+    if (patch.removeBlockedBy !== undefined) {
+      const gone = new Set(patch.removeBlockedBy.map((r) => r.number));
+      issue.blockedBy = issue.blockedBy.filter((r) => !gone.has(r.number));
+    }
     return issue;
   }
   async close(ref) { const i = this.issues.get(ref.number); if (i) i.state = "closed"; }
@@ -1212,4 +1216,90 @@ test("gh relation objects and arrays both normalize to node lists", async () => 
   assert.deepEqual(relationItems([{ number: 1 }]), [{ number: 1 }]);
   assert.deepEqual(relationItems({ nodes: [{ number: 2 }], totalCount: 1 }), [{ number: 2 }]);
   assert.deepEqual(relationItems(null), []);
+});
+
+test("issue create rejects a reserved anchor as a blocker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-anchor-block-"));
+  try {
+    const p = new FakeProvider();
+    const epic = p.addRaw({ title: "Epic", kind: "epic", body: issueBody("epic") });
+    const feature = p.addRaw({ title: "Feature", kind: "feature", parent: epic.ref, body: issueBody("feature") });
+    const anchor = p.addRaw({
+      title: "Task 0: Planning & Review",
+      kind: "task",
+      parent: feature.ref,
+      reserved: { for: feature.ref, kind: "feature-pr" },
+    });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "task",
+      parent: String(feature.ref.number),
+      title: "Dependent",
+      body: issueBody("task"),
+      blocked_by: [String(anchor.ref.number)],
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /dependency_reserved/);
+    assert.match(result.content[0].text, new RegExp(`#${anchor.ref.number}`));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue edit remove_blocked_by unwires a reserved anchor", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-anchor-unblock-"));
+  try {
+    const p = new FakeProvider();
+    const epic = p.addRaw({ title: "Epic", kind: "epic", body: issueBody("epic") });
+    const anchor = p.addRaw({
+      title: "Task 0: Planning & Review",
+      kind: "task",
+      parent: epic.ref,
+      reserved: { for: epic.ref, kind: "feature-pr" },
+    });
+    const deliverable = p.addRaw({ title: "Deliverable", kind: "task", parent: epic.ref });
+    deliverable.blockedBy = [anchor.ref];
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueTool(ctx).execute("e1", {
+      action: "edit",
+      issue: String(deliverable.ref.number),
+      remove_blocked_by: [String(anchor.ref.number)],
+    });
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(p.issues.get(deliverable.ref.number).blockedBy, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue_graph dry_run rejects a reserved anchor blocker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-anchor-"));
+  try {
+    const p = new FakeProvider();
+    const epic = p.addRaw({ title: "Epic", kind: "epic", body: issueBody("epic") });
+    const anchor = p.addRaw({
+      title: "Task 0: Planning & Review",
+      kind: "task",
+      parent: epic.ref,
+      reserved: { for: epic.ref, kind: "feature-pr" },
+    });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const result = await issueGraphTool(ctx).execute("g1", {
+      epic: { key: "epic", title: "Epic", body: issueBody("epic") },
+      features: [{ key: "f", title: "Feature", body: issueBody("feature") }],
+      tasks: [{
+        key: "t",
+        feature: "f",
+        title: "Task",
+        body: issueBody("task"),
+        blocked_by: [String(anchor.ref.number)],
+      }],
+      dry_run: true,
+    });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /dependency_reserved/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

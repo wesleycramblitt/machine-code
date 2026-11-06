@@ -392,6 +392,7 @@ export class GitHubIssueProvider implements IssueProvider {
     if (patch.parent === null) args.push("--remove-parent");
     else if (patch.parent) args.push("--parent", String(patch.parent.number));
     for (const blocker of patch.blockedBy ?? []) args.push("--add-blocked-by", String(blocker.number));
+    for (const blocker of patch.removeBlockedBy ?? []) args.push("--remove-blocked-by", String(blocker.number));
     await this.gh(args, 60_000);
     const updated = await this.get(ref);
     if (!updated) throw new IssueError("gh_bad_output", "updated issue could not be read back");

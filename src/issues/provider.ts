@@ -66,6 +66,8 @@ export interface IssuePatch {
   /** null removes the parent. */
   parent?: IssueRef | null;
   blockedBy?: IssueRef[];
+  /** Remove these blocked_by links (gh --remove-blocked-by). */
+  removeBlockedBy?: IssueRef[];
 }
 
 export interface IssueListFilter {

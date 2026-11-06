@@ -137,6 +137,8 @@ const IssueParams = Type.Object({
   blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." }))),
   /** Alias for blocked_by. Dependencies are the same graph. */
   depends_on: Type.Optional(Type.Array(Type.String({ description: "Alias for blocked_by." }))),
+  /** Edit only: remove these blocked_by links (e.g. a reserved anchor). */
+  remove_blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref to stop being blocked by." }))),
   state: Type.Optional(
     Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")], {
       description: "Issue-state filter for list/tree: open | closed | all. Use state, not status.",
@@ -180,6 +182,15 @@ function ok(text: string): AgentToolResult<undefined> {
 
 function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
+}
+
+function anchorBlockerMessage(found: Issue): string {
+  const anchor = found.kind === "feature" ? "Feature 0" : "Task 0";
+  return (
+    `#${found.ref.number} is a reserved ${anchor} Planning & Review anchor, not a gate. ` +
+    "Anchors stay open until their parent closes, so nothing blocked by one can ever run. " +
+    "Chain deliverable issues among themselves instead; to repair an existing link, use action=edit with remove_blocked_by."
+  );
 }
 
 function line(issue: Issue): string {
@@ -282,6 +293,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
   const dependencies = async (
     values: Array<readonly string[] | undefined>,
     owner?: IssueRef,
+    options?: { allowReserved?: boolean },
   ): Promise<IssueRef[] | undefined> => {
     const raw = values.flatMap((value) => value ?? []);
     if (raw.length === 0) return undefined;
@@ -299,6 +311,9 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
       }
       const found = await ctx.provider.get(dependency);
       if (!found) throw new IssueError("dependency_not_found", `dependency ${value} was not found`);
+      if (!options?.allowReserved && isReserved(found)) {
+        throw new IssueError("dependency_reserved", anchorBlockerMessage(found));
+      }
       unique.set(refKey(dependency), dependency);
     }
     return [...unique.values()];
@@ -372,6 +387,8 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
     label: "issue",
     description:
       "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
+      "blocked_by never targets a reserved Planning & Review anchor (anchors stay open until their parent closes, so they gate nothing); " +
+      "remove_blocked_by unwires links on edit. " +
       "Every created/edited body needs ## Context; Epic/Feature also need ## Goal and ## Scope (Feature: ## Success measures); Task needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
@@ -396,6 +413,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
     description:
       "Create an Epic with Features and Tasks in one call. Pass epic, features, and tasks at the top level. " +
       "Use issue_graph for small plans (<=3 features, <=8 tasks); otherwise create layers with the issue tool. " +
+      "blocked_by chains deliverables only, never a reserved anchor. " +
       "Every body needs ## Context; Epic/Feature also ## Goal and ## Scope (Feature: ## Success measures); " +
       "Task needs ## Deliverable and acceptance criteria. Use context_files for exact repo files. " +
       "Set dry_run=true to validate without creating issues.",
@@ -541,6 +559,35 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         for (const task of graph.tasks) {
           if (!featureKeys.has(task.feature)) {
             throw new IssueError("graph_parent_missing", `task ${task.key} references unknown feature ${task.feature}`);
+          }
+        }
+        // Validate blocked_by before anything is created (dry runs included):
+        // temp keys must exist, issue refs must exist and must not be reserved
+        // anchors, which can never close mid-plan and would wedge the graph.
+        const checkGraphDependency = async (ownerLabel: string, ownerKey: string, value: string): Promise<void> => {
+          if (keys.has(value)) {
+            if (value === ownerKey) throw new IssueError("dependency_self", `${ownerLabel} cannot block itself`);
+            return;
+          }
+          const dependency = parseIssueRef(value, ctx.repo, ctx.provider.kind);
+          if (ctx.repo && dependency.repo !== ctx.repo) {
+            throw new IssueError(
+              "dependency_repo",
+              `${ownerLabel}: dependency ${dependency.repo}#${dependency.number} must be in the same repository (${ctx.repo})`,
+            );
+          }
+          const found = await ctx.provider.get(dependency);
+          if (!found) throw new IssueError("dependency_not_found", `${ownerLabel}: dependency ${value} was not found`);
+          if (isReserved(found)) throw new IssueError("dependency_reserved", `${ownerLabel}: ${anchorBlockerMessage(found)}`);
+        };
+        for (const feature of graph.features) {
+          for (const value of feature.blocked_by ?? []) {
+            await checkGraphDependency(`feature ${feature.key}`, feature.key, value);
+          }
+        }
+        for (const task of graph.tasks) {
+          for (const value of task.blocked_by ?? []) {
+            await checkGraphDependency(`task ${task.key}`, task.key, value);
           }
         }
         const bodyErrors: string[] = [];
@@ -808,11 +855,17 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
           }
         }
         const blockedBy = await dependencies([params.blocked_by, params.depends_on], target.ref);
+        // Removal skips the reserved-anchor guard on purpose: unwiring an
+        // anchor is the repair, and anchors are never valid blockers anyway.
+        const removeBlockedBy = params.remove_blocked_by?.length
+          ? await dependencies([params.remove_blocked_by], undefined, { allowReserved: true })
+          : undefined;
         const updated = await ctx.provider.update(target.ref, {
           ...(params.title != null ? { title: params.title } : {}),
           ...(nextBody !== undefined ? { body: nextBody } : {}),
           ...(params.labels != null ? { labels: params.labels } : {}),
           ...(blockedBy ? { blockedBy } : {}),
+          ...(removeBlockedBy ? { removeBlockedBy } : {}),
         });
         remember(updated);
         ctx.state?.setPhase("act");
