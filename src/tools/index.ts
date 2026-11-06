@@ -458,7 +458,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     parameters: EditParams,
     async execute(_id, params: Static<typeof EditParams>) {
       try {
-        if (params.edits && (params.oldString !== undefined || params.newString !== undefined)) {
+        if (params.edits && params.edits.length > 0 && (params.oldString !== undefined || params.newString !== undefined)) {
           return fail("use edits or oldString/newString, not both");
         }
         const edits = params.edits && params.edits.length > 0
@@ -952,6 +952,18 @@ const CORE_TOOL_NAMES = new Set([
   "pr",
 ]);
 
+/** Weak models serialize absent optionals as the string "null". No command
+ * is named "null", so treat it as absent instead of failing the call. */
+function cleanCommandArgs(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  if (typeof out.name === "string" && (out.name.trim() === "null" || out.name.trim() === "undefined")) {
+    delete out.name;
+    return out;
+  }
+  return args;
+}
+
 export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
   return {
     name: "command",
@@ -960,10 +972,15 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
       "List all typed command schemas (large); describe one; or run it (core:* built-ins and allowlisted manifests). No arbitrary shell. " +
       "issue, pr, artifact, read, search, context, and ask are tools, not commands; call them directly.",
     parameters: CommandParams,
+    prepareArguments: (args) => cleanCommandArgs(args) as Static<typeof CommandParams>,
     async execute(_id, params: Static<typeof CommandParams>) {
       try {
         if (params.action === "list") {
-          if (params.name) return fail(`list takes no name; use describe name=${params.name}`);
+          if (params.name) {
+            return fail(
+              'list takes no name; call {"action":"list"} for every schema, or {"action":"describe","name":"..."} for one',
+            );
+          }
           const items = [...ctx.commands.keys()]
             .sort()
             .map((name) => describeCommand(name, ctx.commands));

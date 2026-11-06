@@ -50,7 +50,7 @@ test("command list with a name points at describe", async () => {
   assert.equal(result.isError, true);
   const text = result.content.map((c) => c.text ?? "").join("\n");
   assert.match(text, /list takes no name/);
-  assert.match(text, /describe name=core:status/);
+  assert.match(text, /"action":"describe","name":"\.\.\."/);
 });
 
 test("command describe points at tools, not commands", async () => {
@@ -584,6 +584,34 @@ test("read prepareArguments treats null strings as absent selectors", async () =
     assert.equal(result.isError, undefined);
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /export function foo/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("command list treats a null-string name as absent", async () => {
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  const prepared = tool.prepareArguments({ action: "list", name: "null" });
+  assert.deepEqual(prepared, { action: "list" });
+  const result = await tool.execute("id", prepared);
+  assert.equal(result.isError, undefined);
+});
+
+test("edit treats an empty edits array as absent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-edit-empty-"));
+  try {
+    writeFileSync(join(root, "a.ts"), "export const a = 1;\n", "utf8");
+    const tool = editTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", {
+      path: "a.ts",
+      oldString: "export const a = 1;",
+      newString: "export const a = 2;",
+      edits: [],
+    });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /1 replacement/);
+    assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "export const a = 2;\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
