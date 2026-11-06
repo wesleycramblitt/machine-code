@@ -203,7 +203,13 @@ export function planSchedule(input: ScheduleInput): ScheduleResult {
     if (!validation.ok) reasons.push(...validation.errors);
     if (active.has(key)) reasons.push("an active run already owns this task");
     const prior = terminal.get(key);
-    if (prior) reasons.push(`last run ${prior.id} is ${prior.status}; awaiting review/closure`);
+    // A terminal run proven to have zero model calls never started work
+    // (setup or worktree failure): there is nothing to review, so it must not
+    // suppress redispatch. Anything that ran — or might have — is held for
+    // review/closure as before.
+    if (prior && prior.modelCalls !== 0) {
+      reasons.push(`last run ${prior.id} is ${prior.status}; awaiting review/closure`);
+    }
     for (const blocker of issue.blockedBy) {
       const target = byKey.get(refKey(blocker));
       if (!target) reasons.push(`blocker ${blocker.repo}#${blocker.number} is not loaded`);

@@ -118,3 +118,19 @@ test("no wedge when deliverables chain among themselves", () => {
   assert.ok(!result.errors.some((error) => error.includes("plan wedged")));
   assert.deepEqual(result.ready.map((task) => task.issue.ref.number), [45]);
 });
+
+test("a terminal run that never started work does not suppress redispatch", () => {
+  const task = issue(30);
+  const setupFailure = {
+    id: "run-0",
+    status: "blocked",
+    startedAt: "2026-11-02T00:00:00.000Z",
+    taskIssue: ref(30),
+    issue: ref(30),
+    modelCalls: 0,
+    error: "branch_checked_out: branch mc/task/30 is already checked out",
+  };
+  const result = planSchedule({ issues: [task], scope: "project", runs: [setupFailure] });
+  assert.deepEqual(result.ready.map((entry) => entry.issue.ref.number), [30]);
+  assert.ok(!result.errors.some((error) => error.includes("awaiting review/closure")));
+});

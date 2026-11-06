@@ -52,7 +52,7 @@ import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
-import { executeTask, findRetryWorktree } from "./orchestrator/execute.js";
+import { executeTask, findRetryWorktree, selectRetrySeed } from "./orchestrator/execute.js";
 import { approveTask, cleanupTask, runTaskChecks, suggestedReviewChecks, taskRuns, taskStatus } from "./tasks/lifecycle.js";
 import { deleteIssue } from "./tasks/delete.js";
 import { deleteRun } from "./state/run-delete.js";
@@ -3622,7 +3622,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       const assigned = run.taskIssue ?? run.issue;
       return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
     }).length;
-    let retryEvidence: string | undefined;
+    let retryEvidence: string | undefined = selectRetrySeed(runs, task.issue.ref);
     // Retry on the previous attempt's worktree when it still exists: a fresh
     // createWorktree would fail with branch_checked_out because the failed
     // attempt still holds the branch.

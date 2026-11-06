@@ -143,3 +143,40 @@ test("findRetryWorktree returns undefined when no worktree survives", async () =
   assert.equal(findRetryWorktree({}, taskRef, Object.values(summaries), [], store), undefined);
   assert.equal(findRetryWorktree({}, taskRef, [], [], store), undefined);
 });
+
+test("selectRetrySeed uses the newest terminal error from a run that did work", async () => {
+  const { selectRetrySeed } = await import("../dist/orchestrator/execute.js");
+  const taskRef = { provider: "github", repo: "o/r", number: 31 };
+  const runs = [
+    {
+      id: "old", status: "failed", taskIssue: taskRef, startedAt: "2026-01-01T00:00:00.000Z",
+      modelCalls: 3, error: "old failure",
+    },
+    {
+      id: "infra", status: "blocked", taskIssue: taskRef, startedAt: "2026-01-02T00:00:00.000Z",
+      modelCalls: 0, error: "branch_checked_out: busy",
+    },
+    {
+      id: "newest", status: "failed", taskIssue: taskRef, startedAt: "2026-01-03T00:00:00.000Z",
+      modelCalls: 5, error: "newest failure",
+    },
+    {
+      id: "other", status: "failed",
+      taskIssue: { provider: "github", repo: "o/r", number: 99 },
+      startedAt: "2026-01-04T00:00:00.000Z", modelCalls: 5, error: "other task",
+    },
+    {
+      id: "active", status: "running", taskIssue: taskRef, startedAt: "2026-01-05T00:00:00.000Z",
+      modelCalls: 2, error: "still going",
+    },
+  ];
+  assert.equal(selectRetrySeed(runs, taskRef), "newest failure");
+  assert.equal(selectRetrySeed([], taskRef), undefined);
+  assert.equal(
+    selectRetrySeed(
+      [{ id: "x", status: "failed", taskIssue: taskRef, startedAt: "2026-01-01T00:00:00.000Z", modelCalls: 0 }],
+      taskRef,
+    ),
+    undefined,
+  );
+});

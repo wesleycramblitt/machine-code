@@ -15,7 +15,7 @@ import type { MachineConfig, Policy } from "../config.js";
 import type { MutableModels } from "../models.js";
 import type { CatalogueRow } from "../catalogue/types.js";
 import type { AgentConfig } from "../agents/config.js";
-import { RunRecorder, listRuns, readRun, registerProject, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
+import { RunRecorder, listRuns, readRun, registerProject, isActiveStatus, isTerminalStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { createWorktree, WorktreeError } from "../worktree.js";
 import { parseVerificationCommands, writePacket, type PacketAcceptance, type TaskPacket } from "../packet.js";
 import { parseArtifactReferences } from "../context/references.js";
@@ -186,6 +186,28 @@ export function findRetryWorktree(
     };
   }
   return undefined;
+}
+
+/**
+ * Seed evidence for a fresh tick attempt from the latest terminal run that
+ * did real work. Zero-call runs (died in setup) carry nothing to learn from;
+ * a missing error means there is no failure to explain.
+ */
+export function selectRetrySeed(
+  priorRuns: readonly RunSummary[],
+  taskRef: IssueRef,
+): string | undefined {
+  const mine = priorRuns
+    .filter((run) => {
+      const assigned = run.taskIssue ?? run.issue;
+      return assigned?.repo === taskRef.repo && assigned.number === taskRef.number;
+    })
+    .filter(
+      (run) =>
+        isTerminalStatus(run.status) && run.modelCalls !== 0 && (run.error ?? "").trim().length > 0,
+    )
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+  return mine[0]?.error;
 }
 
 function snapshotHash(packet: TaskPacket, plan: PlanMarker): string {
