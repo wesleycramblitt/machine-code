@@ -36,7 +36,7 @@ import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineI
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type AgentPolicy, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
-import { axisWeights, isMetaRouter, modelStatus, pick } from "./select.js";
+import { axisWeights, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pick } from "./select.js";
 import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
@@ -884,6 +884,8 @@ export async function runTui(): Promise<void> {
   let modelPick: "newrun" | null = null;
   let modelPickSel = 0;
   let modelPickText = "";
+  /** Picker sort: role fit (default) or estimated per-call price. Eligible rows always first. */
+  let modelPickSort: "fit" | "price" = "fit";
   let modelPickEntries: ModelPickerEntry[] = [];
   /** New-run prompt is modal: navigation keys are disabled while true. */
   let newRunInsert = false;
@@ -2723,7 +2725,7 @@ export async function runTui(): Promise<void> {
         const visible = Math.max(1, bodyH - 6);
         const start = Math.max(0, Math.min(modelPickSel - Math.floor(visible / 2), Math.max(0, total - visible)));
         const picker: string[] = [
-          ` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Select model${R} ${D}(type to filter; Enter selects)${R}`,
+          ` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Select model${R} ${D}(type to filter; Tab sorts ${modelPickSort === "price" ? "price" : "fit"}; Enter selects)${R}`,
           ` ${D}${summaryText}${R}`,
           "",
           ...entries.slice(start, start + visible),
@@ -2736,6 +2738,7 @@ export async function runTui(): Promise<void> {
         actions = joinCommands([
           command("Enter", "Select", undefined, G),
           command("j/k", "Move", undefined, M),
+          command("Tab", `Sort: ${modelPickSort}`, undefined, Y),
           command("Esc", "Close", undefined, GR),
         ]);
         secondary =
@@ -4073,6 +4076,7 @@ export async function runTui(): Promise<void> {
       weights,
       sort: "fit",
     });
+    const contextChars = (newRunPreviewCache?.context.chars ?? 0) + newrun.prompt.length + 2_000;
     const input = {
       agent: newrun.agent,
       policy: ap,
@@ -4080,10 +4084,14 @@ export async function runTui(): Promise<void> {
       catalogue: rows,
       configuredProviders: configured,
       fundedProviders: funded,
-      contextChars: (newRunPreviewCache?.context.chars ?? 0) + newrun.prompt.length + 2_000,
+      contextChars,
       tier: newrun.tier,
       availability,
     };
+    const estimate = estimateTokens(contextChars, ap.expectedOutputTokens);
+    const priceOf = (row: CatalogueRow): number =>
+      effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, machine);
+    const sortMode = modelPickSort;
     return rows
       .map((row): ModelPickerEntry => {
         const status = modelStatus(row, input);
@@ -4096,6 +4104,11 @@ export async function runTui(): Promise<void> {
       })
       .sort((a, b) => {
         if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+        if (sortMode === "price") {
+          const cost = priceOf(a.row) - priceOf(b.row);
+          if (cost !== 0) return cost;
+          return b.fit - a.fit || a.row.key.localeCompare(b.row.key);
+        }
         if (a.eligible) return b.fit - a.fit || a.row.key.localeCompare(b.row.key);
         const rank = modelReasonRank(a.reason) - modelReasonRank(b.reason);
         return rank || b.fit - a.fit || a.row.key.localeCompare(b.row.key);
@@ -4331,6 +4344,13 @@ export async function runTui(): Promise<void> {
       if (modelPick === "newrun") {
         const list = modelPickEntries;
         if (data === "\x1b") { modelPick = null; draw(); return; }
+        if (data === "\t") {
+          modelPickSort = modelPickSort === "price" ? "fit" : "price";
+          modelPickEntries = pickerModels();
+          modelPickSel = 0;
+          draw();
+          return;
+        }
         if (data === "\x1b[A" || data === "k") { modelPickSel = Math.max(0, modelPickSel - 1); draw(); return; }
         if (data === "\x1b[B" || data === "j") {
           modelPickSel = Math.min(list.length, modelPickSel + 1);
