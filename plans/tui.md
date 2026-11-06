@@ -19,3 +19,4 @@ This file details upgrades or issues to be planned for the TUI
 # Spend Page
 
 
+- [ ] Feature #166: Models page: visible selection indicator on provider/family group headers
