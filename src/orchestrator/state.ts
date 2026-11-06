@@ -127,6 +127,17 @@ export function listOrchestrations(layout: Layout): OrchestrationState[] {
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
 }
 
+/** Clear a stop reason so an operator can resume the scope after fixing the cause. */
+export function resumeOrchestration(layout: Layout, id: string): OrchestrationState | null {
+  const current = readOrchestration(layout, id);
+  if (!current) return null;
+  if (current.stopReason === undefined) return current;
+  const { stopReason: _stopped, ...rest } = current;
+  const next: OrchestrationState = rest;
+  writeJsonAtomic(orchestrationPath(layout, id), next);
+  return next;
+}
+
 export function updateOrchestration(
   layout: Layout,
   id: string,

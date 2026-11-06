@@ -83,3 +83,19 @@ test("an expired lease can be taken over", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("resume clears a stop reason; unknown ids stay unknown", async () => {
+  const { resumeOrchestration } = await import("../dist/orchestrator/state.js");
+  const { root, layout } = setup();
+  try {
+    const created = createOrchestration(layout, "feature", { provider: "github", repo: "o/r", number: 36 });
+    updateOrchestration(layout, created.id, { stopReason: "task #99 blocked: boom" });
+    assert.equal(readOrchestration(layout, created.id)?.stopReason, "task #99 blocked: boom");
+    const resumed = resumeOrchestration(layout, created.id);
+    assert.equal(resumed?.stopReason, undefined);
+    assert.equal(readOrchestration(layout, created.id)?.stopReason, undefined);
+    assert.equal(resumeOrchestration(layout, "orch-does-not-exist"), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

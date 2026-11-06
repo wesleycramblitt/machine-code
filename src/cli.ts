@@ -59,7 +59,7 @@ import { deleteRun } from "./state/run-delete.js";
 import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
 import { budgetStop } from "./orchestrator/budget.js";
-import { acquireLease, clearOrchestrationStop, createOrchestration, listOrchestrations, orchestrationStopRequested, readLease, readOrchestration, releaseLease, renewLease, requestOrchestrationStop, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
+import { acquireLease, clearOrchestrationStop, createOrchestration, listOrchestrations, orchestrationStopRequested, readLease, readOrchestration, releaseLease, renewLease, requestOrchestrationStop, resumeOrchestration, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
 import { filterRuns, issueGlyphKind, sortRuns, type RunFilter } from "./tui/status.js";
 import { readIssueCache } from "./issues/cache.js";
@@ -247,8 +247,10 @@ Usage:
                                     [--max-parallel N] [--max-minutes N] [--max-spend-usd N]
                                     [--checkpoint after-task] [--tier free|paid]
                                     [--min-fit N] [--min-capability N] [--min-axes axes|strict]
-                                    [--model <key>]
-                                    Compute or execute ready issue-graph tasks
+                                    [--model <key>] [--resume]
+                                    Compute or execute ready issue-graph tasks.
+                                    A stopped orchestration refuses to tick until
+                                    resumed with --resume.
   machine_code orchestrate stop --orchestration <id>
                                     Request a graceful stop after the current task
   machine_code orchestrate approve --orchestration <id> --task <n> [--result]
@@ -3467,7 +3469,19 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   } finally {
     if (scopeLocked) releaseLease(l, scopeLockId, owner);
   }
-  if (orchestration?.stopReason && !dryRun) fail(`orchestration ${orchestration.id} stopped: ${orchestration.stopReason}`);
+  if (orchestration?.stopReason && !dryRun) {
+    if (flags.has("resume")) {
+      const stopped = orchestration.stopReason;
+      orchestration = resumeOrchestration(l, orchestration.id) ?? orchestration;
+      clearOrchestrationStop(l, orchestration.id);
+      process.stdout.write(`resumed orchestration ${orchestration.id} (was stopped: ${stopped})\n`);
+    } else {
+      fail(
+        `orchestration ${orchestration.id} stopped: ${orchestration.stopReason}; ` +
+          "fix the cause, then resume with --resume",
+      );
+    }
+  }
 
   const maxParallelRaw = flags.get("max-parallel");
   const maxParallel = maxParallelRaw === undefined ? 2 : Number(maxParallelRaw);
