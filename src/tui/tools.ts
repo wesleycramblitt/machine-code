@@ -27,6 +27,7 @@ const DESCRIPTIONS: Record<string, string> = {
   command: "typed commands",
   context: "run memory",
   ask: "ask the human",
+  issue_graph: "create issue graph",
   artifact: "tools and scripts",
   skill: "skill bodies on demand",
   pr: "pull requests",
@@ -41,7 +42,13 @@ export function toolListItems(
   const names = tools as readonly CoreToolName[];
   const schemaChars = toolSchemaCharsByName(names);
   const core = tools.map((tool) => ({
-    text: `${tool} · ${tool === "issue" ? `GitHub issues · issues:${issueAccess}` : (DESCRIPTIONS[tool] ?? "tool")}`,
+    text: `${tool} · ${
+      tool === "issue"
+        ? `GitHub issues · issues:${issueAccess}`
+        : tool === "issue_graph"
+          ? `GitHub issue graphs · issues:${issueAccess}`
+          : (DESCRIPTIONS[tool] ?? "tool")
+    }`,
     chars: schemaChars.get(tool) ?? 0,
     exists: true,
     key: `core-tool:${tool}`,

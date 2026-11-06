@@ -155,3 +155,33 @@ The selector only checks the catalogue flag (`src/select.ts`,
 - `src/catalogue/openrouter.ts` — metadata inference.
 - `src/select.ts` — tool-support rejection.
 - `test/tool-call-text.test.js` — detector tests.
+
+## Observed failure 2026-11-05: flat graph arguments
+
+Run `20261105-234951-h566` used local `qwen3.8` after four free-model failures.
+The model understood the planning task but called the issue graph with
+`epic`, `features`, and `tasks` at the top level. The old `issue` schema nested
+them under `graph`, and `graph` was optional, so validation accepted the call
+and the handler returned only `graph action requires graph`. The model repeated
+the same call four times.
+
+Fix in this revision:
+
+- `issue_graph` is a separate tool with flat top-level `epic`, `features`, and
+  `tasks`. `issue` no longer exposes the `graph` action.
+- `issue_graph` `prepareArguments` parses JSON-string fields, wraps single
+  objects in arrays, and accepts a nested legacy `graph` object.
+- `issue prepareArguments` accepts `status: "open"` as the `tree`/`list` state
+  filter. `plan_status` is the clear name for the plan action; `status` remains
+  a legacy alias.
+- Repairs emit `tool_call_repaired` so we can measure how often fallback
+  models need help.
+- The loop now stops after three identical tool errors, not only after twenty
+  stale evidence actions.
+- The planner prompt uses `issue_graph` with top-level fields, tells the model
+  to research first, and limits one graph call to three features and eight
+  tasks.
+
+Design rule: if a tool has an object or array parameter, say that explicitly
+in both the tool description and the parameter description. Do not rely on a
+weak model to infer nesting from a schema.

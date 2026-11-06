@@ -84,9 +84,20 @@ const GraphParams = Type.Object({
   features: Type.Array(GraphNode),
   tasks: Type.Array(GraphTask),
 }, {
+  description: "Graph payload.",
+});
+
+const IssueGraphParams = Type.Object({
+  epic: GraphNode,
+  features: Type.Array(GraphNode),
+  tasks: Type.Array(GraphTask),
+  dry_run: Type.Optional(
+    Type.Boolean({ description: "Validate and summarize the graph without creating issues." }),
+  ),
+}, {
   description:
-    "Required for action=graph. Exact shape: {epic, features, tasks}. " +
-    "epic/features/tasks are nested here, never top-level parameters.",
+    "Create an Epic with Features and Tasks. Pass epic, features, and tasks at the top level. " +
+    "For more than 3 features or 8 tasks, create layers with the issue tool instead.",
 });
 
 const IssueParams = Type.Object({
@@ -96,7 +107,6 @@ const IssueParams = Type.Object({
       Type.Literal("view"),
       Type.Literal("tree"),
       Type.Literal("create"),
-      Type.Literal("graph"),
       Type.Literal("edit"),
       Type.Literal("plan"),
       Type.Literal("close"),
@@ -122,7 +132,6 @@ const IssueParams = Type.Object({
   context_files: Type.Optional(
     Type.Array(Type.String({ description: "Repo-relative files you chose after reading; recorded in mc:context." })),
   ),
-  graph: Type.Optional(GraphParams),
   labels: Type.Optional(Type.Array(Type.String())),
   /** Issue refs this issue is blocked by (create/edit). */
   blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." }))),
@@ -137,9 +146,15 @@ const IssueParams = Type.Object({
   reason: Type.Optional(Type.String({ description: "Close reason (close)." })),
   depth: Type.Optional(Type.Number({ description: "Tree depth (default 2)." })),
   /** mc:plan fields for the `plan` action. */
-  status: Type.Optional(
+  plan_status: Type.Optional(
     Type.Union([Type.Literal("draft"), Type.Literal("ready")], {
       description: "Plan status for action=plan: draft | ready. Not an issue filter.",
+    }),
+  ),
+  /** Legacy alias for plan_status. */
+  status: Type.Optional(
+    Type.Union([Type.Literal("draft"), Type.Literal("ready")], {
+      description: "Deprecated alias for plan_status.",
     }),
   ),
   plan_role: Type.Optional(Type.Union([Type.Literal("build"), Type.Literal("review")])),
@@ -151,6 +166,13 @@ const IssueParams = Type.Object({
   plan_review: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("human")])),
   result_review: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("human")])),
 });
+
+type IssueToolParams = Static<typeof IssueParams>;
+type InternalIssueParams = Omit<IssueToolParams, "action"> & {
+  action: IssueToolParams["action"] | "graph";
+  graph?: Static<typeof GraphParams>;
+  dry_run?: boolean;
+};
 
 function ok(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined };
@@ -181,37 +203,13 @@ function parseJsonish(value: unknown, label: string): unknown {
   }
 }
 
-/** Repair the common flat/string graph shape before schema validation. */
-function normalizeIssueArguments(args: unknown): unknown {
+/** Accept status=open as the tree/list filter alias for state. */
+function normalizeIssueArguments(
+  args: unknown,
+  recorder: RunRecorder,
+): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const out = { ...(args as Record<string, unknown>) };
-
-  let graph = out.graph;
-  if (typeof graph === "string") graph = parseJsonish(graph, "graph");
-  if (graph && typeof graph === "object" && !Array.isArray(graph)) {
-    const object = { ...(graph as Record<string, unknown>) };
-    for (const key of ["epic", "features", "tasks"] as const) {
-      if (key in object) object[key] = parseJsonish(object[key], `graph.${key}`);
-    }
-    if (object.features && !Array.isArray(object.features)) object.features = [object.features];
-    if (object.tasks && !Array.isArray(object.tasks)) object.tasks = [object.tasks];
-    out.graph = object;
-  } else if ((out.epic !== undefined || out.features !== undefined || out.tasks !== undefined) && !graph) {
-    const epic = parseJsonish(out.epic, "epic");
-    let features = parseJsonish(out.features, "features");
-    let tasks = parseJsonish(out.tasks, "tasks");
-    if (features && !Array.isArray(features)) features = [features];
-    if (tasks && !Array.isArray(tasks)) tasks = [tasks];
-    out.graph = { epic, features, tasks };
-  }
-  if (out.graph) {
-    delete out.epic;
-    delete out.features;
-    delete out.tasks;
-  }
-
-  // The model often says status=open for a tree/list filter; the schema calls
-  // that field state. Accept the alias instead of failing validation.
   if (
     (out.action === "list" || out.action === "tree") &&
     out.state === undefined &&
@@ -219,11 +217,44 @@ function normalizeIssueArguments(args: unknown): unknown {
   ) {
     out.state = out.status;
     delete out.status;
+    recorder.event("tool_call_repaired", { tool: "issue", repairs: ["status->state"] });
   }
   return out;
 }
 
-export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> {
+function normalizeIssueGraphArguments(
+  args: unknown,
+  recorder: RunRecorder,
+): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  const repairs: string[] = [];
+  const nested = out.graph;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    for (const key of ["epic", "features", "tasks"] as const) {
+      if (out[key] === undefined && key in nested) {
+        out[key] = (nested as Record<string, unknown>)[key];
+        repairs.push(`graph.${key}->${key}`);
+      }
+    }
+    delete out.graph;
+  }
+  delete out.action;
+  for (const key of ["epic", "features", "tasks"] as const) {
+    if (!(key in out)) continue;
+    const before = out[key];
+    let value = parseJsonish(before, key);
+    if ((key === "features" || key === "tasks") && value && !Array.isArray(value)) value = [value];
+    if (value !== before) repairs.push(`${key} JSON string`);
+    out[key] = value;
+  }
+  if (repairs.length > 0) {
+    recorder.event("tool_call_repaired", { tool: "issue_graph", repairs });
+  }
+  return out;
+}
+
+export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof IssueParams>; graph: AgentTool<typeof IssueGraphParams> } {
   /** The graph changes only through this tool; cache trees until a write. */
   const treeCache = new Map<string, string>();
   const require = (cap: string): void => {
@@ -336,12 +367,11 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     return { issue: updated };
   };
 
-  return {
+  const issue: AgentTool<typeof IssueParams> = {
     name: "issue",
     label: "issue",
     description:
-      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/graph/edit write; create/graph/edit accept blocked_by/depends_on; " +
-      "graph creates Epic→Features→Tasks in one call. Use exactly {\"action\":\"graph\",\"graph\":{\"epic\":{...},\"features\":[...],\"tasks\":[...]}}. epic/features/tasks are not top-level fields. Use graph for small plans (<=3 features, <=8 tasks); otherwise create layers with action=create. " +
+      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
       "Every created/edited body needs ## Context; Epic/Feature also need ## Goal and ## Scope (Feature: ## Success measures); Task needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
@@ -349,7 +379,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
       "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
     parameters: IssueParams,
-    prepareArguments: (args) => normalizeIssueArguments(args) as Static<typeof IssueParams>,
+    prepareArguments: (args) => normalizeIssueArguments(args, ctx.recorder) as Static<typeof IssueParams>,
     async execute(_id, params: Static<typeof IssueParams>) {
       try {
         return await run(params);
@@ -360,7 +390,35 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     },
   };
 
-  async function run(params: Static<typeof IssueParams>): Promise<AgentToolResult<undefined>> {
+  const graph: AgentTool<typeof IssueGraphParams> = {
+    name: "issue_graph",
+    label: "issue_graph",
+    description:
+      "Create an Epic with Features and Tasks in one call. Pass epic, features, and tasks at the top level. " +
+      "Use issue_graph for small plans (<=3 features, <=8 tasks); otherwise create layers with the issue tool. " +
+      "Every body needs ## Context; Epic/Feature also ## Goal and ## Scope (Feature: ## Success measures); " +
+      "Task needs ## Deliverable and acceptance criteria. Use context_files for exact repo files. " +
+      "Set dry_run=true to validate without creating issues.",
+    parameters: IssueGraphParams,
+    prepareArguments: (args) =>
+      normalizeIssueGraphArguments(args, ctx.recorder) as Static<typeof IssueGraphParams>,
+    async execute(_id, params: Static<typeof IssueGraphParams>) {
+      try {
+        return await run({
+          action: "graph",
+          graph: { epic: params.epic, features: params.features, tasks: params.tasks },
+          ...(params.dry_run === true ? { dry_run: true } : {}),
+        } as InternalIssueParams);
+      } catch (error) {
+        if (error instanceof IssueError) return fail(`${error.code}: ${error.message}`);
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+    },
+  };
+
+  return { issue, graph };
+
+  async function run(params: InternalIssueParams): Promise<AgentToolResult<undefined>> {
     switch (params.action) {
       case "list": {
         require("issue:read");
@@ -462,6 +520,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
           );
         }
         const graph = params.graph;
+        const dryRun = params.dry_run === true;
         graph.epic.body = withContextFiles(graph.epic.body ?? "", graph.epic.context_files);
         for (const feature of graph.features) {
           feature.body = withContextFiles(feature.body ?? "", feature.context_files);
@@ -511,6 +570,11 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
             `graph has oversized Tasks: ${oversized
               .map((task) => `${task.key} (${task.errors.join("; ")})`)
               .join(" | ")}. Split each into smaller Tasks and retry.`,
+          );
+        }
+        if (dryRun) {
+          return ok(
+            `graph valid: epic ${graph.epic.key}; features ${graph.features.length}; tasks ${graph.tasks.length}; no issues created`,
           );
         }
         const createdNodes = new Map<string, Issue>();
@@ -761,7 +825,8 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.kind !== "task") return fail("mc:plan applies to Task issues only");
         if (target.reserved) return fail("reserved anchors cannot carry a deliverable plan");
-        if (params.status === "ready" && target.acceptance.length === 0) {
+        const planStatus = params.plan_status ?? params.status;
+        if (planStatus === "ready" && target.acceptance.length === 0) {
           return fail("a ready plan needs acceptance criteria in the issue body");
         }
         const retries = params.retries_before_replan ?? target.plan?.retriesBeforeReplan ?? 2;
@@ -770,7 +835,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         }
         const plan: PlanMarker = {
           v: 1,
-          status: (params.status ?? target.plan?.status ?? "draft") as PlanStatus,
+          status: (planStatus ?? target.plan?.status ?? "draft") as PlanStatus,
           role: (params.plan_role ?? target.plan?.role ?? "build") as PlanRole,
           verification: (params.verification ?? target.plan?.verification ?? "verified") as PlanVerification,
           worktree: (params.worktree ?? target.plan?.worktree ?? "required") as PlanWorktree,
@@ -882,6 +947,14 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
         return fail(`unknown issue action: ${String((params as { action?: unknown }).action)}`);
     }
   }
+}
+
+export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> {
+  return issueTools(ctx).issue;
+}
+
+export function issueGraphTool(ctx: IssueToolContext): AgentTool<typeof IssueGraphParams> {
+  return issueTools(ctx).graph;
 }
 
 function withApproval(body: string, mode: "human" | "agent"): string {

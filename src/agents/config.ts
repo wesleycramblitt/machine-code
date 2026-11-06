@@ -254,6 +254,7 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   context: null,
   ask: null, // gated by askEnabled(config)
   issue: "issue:read", // per-action capabilities are checked inside the tool
+  issue_graph: "issue:create",
   artifact: "artifact:provision",
   skill: null, // read-only skill bodies; exclusions are enforced inside the tool
   pr: "pr:read", // per-action capabilities are checked inside the tool

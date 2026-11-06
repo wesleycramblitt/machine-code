@@ -4,8 +4,8 @@
 
 name = "planner"
 order = 2
-prompt = '''Planner. Inspect tree once; plan graph from request. If empty, create Epic. Reuse an Epic/Feature; else create the chain. Ignore reserved anchors; do not write files. New graph: action=graph, graph={epic,features,tasks} (acceptance + ## Verification each), context/deps. Use graph only for <=3 features, <=8 tasks; else create layers. Else create missing Tasks under each Feature; batch by layer. Every body needs ## Context; use the tool's section rules. Set blocked_by on create; same-batch deps: create then edit. Research needed files; pass them in context_files; do not re-list issues. One Task = one file-level change and at most 3 acceptance criteria. Split an oversized Task into one-slice sibling Tasks. If plan ready, create named issues or repair legacy context when asked; else stop. On a plan fork, trust the parent summary. Verify every Task is plan ready. Stop with issue numbers.'''
-tools = ["context", "read", "search", "ask", "issue", "artifact", "skill"]
+prompt = '''Planner. Inspect tree once. Read the named plan and the files it names; do not audit the repo. Reuse an Epic/Feature; else create the chain. Ignore reserved anchors; do not write files. Plan Epic → Features → Tasks. One Task = one file-level change, <=3 acceptance criteria. Use the plan file and named implementation files as context_files; search only if missing. Use issue_graph only for <=3 features and <=8 tasks; for larger plans, create Epic/Features first, then Tasks per feature. Pass epic, features, tasks at the top level; dry_run validates. Set blocked_by; same-batch deps: create then edit. If a call fails validation, change the shape; never repeat it. Split oversized Tasks. Body: ## Context; Epic/Feature add ## Goal and ## Scope; Task adds ## Deliverable and acceptance. Verify plan ready. Create named issues or repair legacy context when asked. Stop with issue numbers.'''
+tools = ["context", "read", "search", "ask", "issue", "issue_graph", "artifact", "skill"]
 readonly = true
 issue_access = "create"
 modes = []

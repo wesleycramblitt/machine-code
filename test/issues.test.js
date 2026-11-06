@@ -24,7 +24,7 @@ import {
   isReservedFor,
   isReservedTask,
 } from "../dist/issues/reserved.js";
-import { issueTool } from "../dist/tools/issues.js";
+import { issueGraphTool, issueTool } from "../dist/tools/issues.js";
 import { parseArtifactReferences } from "../dist/context/references.js";
 import { RunStateStore } from "../dist/context/state.js";
 import { parsePlanMarker } from "../dist/plan/schema.js";
@@ -433,25 +433,53 @@ test("create rejects issue bodies without the required context shape", async () 
   }
 });
 
-test("issue tool repairs flat graph arguments and status aliases", () => {
+test("issue tool repairs flat graph arguments and status aliases", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-normalize-"));
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const tool = issueTool(ctx);
-    const graph = tool.prepareArguments({
-      action: "graph",
+    const graphTool = issueGraphTool(ctx);
+    const graph = graphTool.prepareArguments({
       epic: JSON.stringify({ key: "e", title: "Epic", body: issueBody("epic") }),
       features: JSON.stringify([{ key: "f", title: "Feature", body: issueBody("feature") }]),
       tasks: JSON.stringify([{ key: "t", feature: "f", title: "Task", body: issueBody("task") }]),
     });
-    assert.equal(graph.graph.epic.key, "e");
-    assert.equal(graph.graph.features.length, 1);
-    assert.equal(graph.graph.tasks[0].feature, "f");
+    assert.equal(graph.epic.key, "e");
+    assert.equal(graph.features.length, 1);
+    assert.equal(graph.tasks[0].feature, "f");
+    const checked = await graphTool.execute("g0", { ...graph, dry_run: true });
+    assert.equal(checked.isError, undefined);
+    assert.match(checked.content[0].text, /graph valid/);
 
+    const tool = issueTool(ctx);
     const tree = tool.prepareArguments({ action: "tree", status: "open" });
     assert.equal(tree.state, "open");
     assert.equal(tree.status, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue_graph accepts flat args and dry_run validates without creating", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-tool-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const args = {
+      epic: { key: "epic", title: "Epic", body: issueBody("epic") },
+      features: [{ key: "f", title: "Feature", body: issueBody("feature") }],
+      tasks: [{ key: "t", feature: "f", title: "Task", body: issueBody("task") }],
+      dry_run: true,
+    };
+    const check = await issueGraphTool(ctx).execute("g0", args);
+    assert.equal(check.isError, undefined);
+    assert.match(check.content[0].text, /graph valid/);
+    assert.equal(p.issues.size, 0);
+
+    const created = await issueGraphTool(ctx).execute("g1", { ...args, dry_run: false });
+    assert.equal(created.isError, undefined);
+    assert.match(created.content[0].text, /created graph/);
+    assert.ok(p.issues.size >= 3, "graph nodes and reserved anchors were created");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

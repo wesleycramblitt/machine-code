@@ -273,10 +273,11 @@ the role mode, the effective agent parameters, and the policy floors.
 
 The loop detector watches evidence, not call shape. A read is one 100-line band
 (or symbol/section) at a file version, a search is one scope with one result
-set, a command is its output, and a failure is its message. Twenty stale actions
-in a row with no edit, write, or mutating command kill the run with a
-`loop_blocked` event and a summary that says so. Memory operations and new evidence reset nothing and do
-not count as progress. `command describe issue` returns a direct hint that
+set, a command is its output, and a failure is its message. Twenty stale
+actions, or three identical tool errors, in a row with no edit, write, or
+mutating command kill the run with a `loop_blocked` event and a summary that
+says so. New evidence resets the stale streak; memory operations do not count
+as progress. `command describe issue` returns a direct hint that
 `issue` is a tool, not a command.
 
 Typed commands and runner gates run through the per-run process supervisor. A
@@ -533,12 +534,20 @@ reserved **Task 0: Planning & Review**. These are coordination anchors, not
 deliverables. The Planner is told to ignore them; the issue tool marks them
 `[reserved]` in run state and rejects a Task created under reserved Feature 0.
 
+The Planner creates a small graph with `issue_graph`: pass `epic`, `features`,
+and `tasks` at the top level. Use `dry_run: true` to validate without creating
+anything. For more than three features or eight tasks, create the Epic and
+Features first, then Tasks per feature with `issue create`. The older nested
+`graph` action on `issue` is not part of the tool schema. Use `state` for the
+`tree`/`list` filter (`open|closed|all`) and `plan_status` for the `plan` action
+(`draft|ready`).
+
 Every issue body must carry its context when it is created or edited. All
 issues need `## Context`: why the issue exists, the parent scope, relevant
 files/symbols, and constraints. Epic and Feature bodies also need `## Goal` and
 `## Scope`; Features need `## Success measures`; Tasks need `## Deliverable` and
-acceptance criteria. The `issue` tool rejects a create, graph, or body edit that
-misses these sections. This keeps context at creation time instead of requiring
+acceptance criteria. The `issue` and `issue_graph` tools reject a create, graph,
+or body edit that misses these sections. This keeps context at creation time instead of requiring
 a later review. The Planner chooses context files after reading and passes them
 with `context_files`; the tool records that explicit list in `mc:context`.
 Nothing is inferred from prose. That list is what the context cascade shows and
@@ -664,8 +673,8 @@ and report blockers; their ambiguity policy matches.
 A Task is one deliverable: one file-level change and at most **three**
 acceptance criteria, with a body under 4,000 chars. Its body carries
 `## Context`, `## Deliverable`, and acceptance criteria. The harness enforces
-size when a Task is created, edited, or planned as ready, including graph
-creation. It enforces body context on create, graph, and body edit. An
+size when a Task is created, edited, or planned as ready, including
+`issue_graph` creation. It enforces body context on create, graph, and body edit. An
 oversized Task fails before it exists. A build run refuses an existing
 oversized Task and tells the operator to run the Planner. The Planner splits
 an oversized Task by editing it to one slice and creating sibling Tasks under

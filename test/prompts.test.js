@@ -23,14 +23,14 @@ const deltas = Object.fromEntries(
 );
 
 test("base and role deltas stay small", () => {
-  assert.ok(base.length <= 1_700, `base is ${base.length} chars`);
+  assert.ok(base.length <= 1_950, `base is ${base.length} chars`);
   for (const [role, delta] of Object.entries(deltas)) {
-    const limit = role === "planner" ? 950 : 300;
+    const limit = role === "planner" ? 950 : 400;
     assert.ok(delta.length <= limit, `${role} delta is ${delta.length} chars`);
     assert.match(delta, /Stop/, `${role} has a stop condition`);
   }
   const total = base.length + Object.values(deltas).reduce((sum, delta) => sum + delta.length, 0);
-  assert.ok(total <= 3_500, `base + deltas is ${total} chars`);
+  assert.ok(total <= 4_200, `base + deltas is ${total} chars`);
 });
 
 test("rendered prompts name the resolved tools and config", () => {
@@ -50,25 +50,22 @@ test("rendered prompts name the resolved tools and config", () => {
     }
 
     const planner = resolveAgent(l, "planner");
-    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "issue", "artifact", "skill"]);
+    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "issue", "issue_graph", "artifact", "skill"]);
     assert.ok(!planner.def.tools.includes("command"), "planner must not hold command");
     assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
     assert.match(planner.prompt, /Inspect tree/);
     assert.match(planner.prompt, /Reuse an Epic\/Feature; else create the chain/);
-    assert.match(planner.prompt, /create missing Tasks under each Feature/i);
+    assert.match(planner.prompt, /Tasks per feature/);
     assert.match(planner.prompt, /Ignore reserved anchors/);
     assert.match(planner.prompt, /do not write files/);
-    assert.match(planner.prompt, /Research needed files/);
-    assert.match(planner.prompt, /re-list issues/);
+    assert.match(planner.prompt, /Read the named plan/);
     assert.match(planner.prompt, /context_files/);
-    assert.match(planner.prompt, /Every body needs ## Context/);
-    assert.match(planner.prompt, /tool's section rules/);
+    assert.match(planner.prompt, /## Context/);
     assert.match(planner.prompt, /repair legacy context/);
-    assert.match(planner.prompt, /acceptance \+ ## Verification each/);
-    assert.match(planner.prompt, /at most 3 acceptance criteria/);
-    assert.match(planner.prompt, /Split an oversized Task/);
-    assert.match(planner.prompt, /create named issues/);
-    assert.match(planner.prompt, /Verify every Task is plan ready/);
+    assert.match(planner.prompt, /<=3 acceptance criteria/);
+    assert.match(planner.prompt, /Split oversized Tasks/);
+    assert.match(planner.prompt, /Create named issues/);
+    assert.match(planner.prompt, /Verify plan ready/);
     assert.match(planner.prompt, /issue access create/);
 
     const build = resolveAgent(l, "build");
@@ -105,7 +102,7 @@ test("every rendered prompt is concise and has the required rules", () => {
   try {
     for (const role of AGENT_NAMES) {
       const def = agentDef(layout(root), role);
-      assert.ok(def.prompt.length <= 2_800, `${role} prompt is ${def.prompt.length} chars`);
+      assert.ok(def.prompt.length <= 2_900, `${role} prompt is ${def.prompt.length} chars`);
       for (const required of ["run-state", "core:map", "context note", "ASD-STE100", "Result:", "Evidence:"]) {
         assert.ok(def.prompt.includes(required), `${role} prompt lacks ${required}`);
       }

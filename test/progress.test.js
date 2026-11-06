@@ -35,6 +35,26 @@ test("an edit or mutating command resets the streak", () => {
   assert.equal(tracker.observe("a").stale, 1);
 });
 
+test("three identical tool errors stop a stuck loop", () => {
+  const tracker = new EvidenceTracker(20, 3);
+  assert.equal(tracker.observeError("error:issue:same").loop, false);
+  assert.equal(tracker.observeError("error:issue:same").loop, false);
+  const third = tracker.observeError("error:issue:same");
+  assert.equal(third.loop, true);
+  assert.equal(third.stale, 3);
+});
+
+test("a different error or a success resets the error streak", () => {
+  const tracker = new EvidenceTracker(20, 3);
+  tracker.observeError("error:issue:a");
+  tracker.observeError("error:issue:a");
+  assert.equal(tracker.observeError("error:issue:b").loop, false);
+  tracker.observeError("error:issue:b");
+  assert.equal(tracker.observeError("error:issue:b").loop, true);
+  tracker.observe("read:src/a.ts@1", false);
+  assert.equal(tracker.observeError("error:issue:b").loop, false);
+});
+
 test("memory operations do not count as evidence", () => {
   const tracker = new EvidenceTracker(2);
   tracker.observe("a");

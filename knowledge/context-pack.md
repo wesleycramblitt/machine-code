@@ -109,7 +109,7 @@ Implemented:
   entries.
 - Evidence-novelty loop detector in `src/state/progress.ts`: repeated reads of
   one band at the same file version, repeated search result sets, repeated
-  command output, or repeated failures kill the run after twenty stale actions.
+  command output, or repeated failures kill the run after twenty stale actions or three identical tool errors.
   It is the only loop guard.
 - Build and sudo have the `artifact` tool with `artifact:provision`; the
   implement and unrestricted presets set `artifact_scripts = true`, so a

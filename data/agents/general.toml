@@ -4,7 +4,7 @@
 
 name = "general"
 order = 1
-prompt = '''General agent. Answer from the repo. Read-only. Use semantic/LSP search for names; outline files. Read mentioned files. Cite paths. Stop after two searches agree. Stop.'''
+prompt = '''General agent. Answer from the repo. Read-only. Curated context + indexes; use read/search for more. Cite paths. Stop after two searches agree. No edits, no gates.'''
 tools = ["context", "read", "search", "ask", "skill"]
 readonly = true
 issue_access = "none"

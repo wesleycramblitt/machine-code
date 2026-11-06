@@ -4,7 +4,7 @@
 
 name = "sudo"
 order = 5
-prompt = '''Sudo agent. If a task issue is attached, use its Deliverable and Acceptance. Do the explicit task with all allowed tools. Map first. Typed commands only. Verify once. Stop.'''
+prompt = '''Sudo agent. If a task issue is attached, use its Deliverable and Acceptance. Prompt has curated context and indexes; read/search for more. Map first. Typed commands only. Do not run gates before an edit. After an edit, run each gate once. If a gate fails, inspect; never rerun unchanged. Stop.'''
 tools = ["context", "read", "write", "edit", "search", "command", "ask", "issue", "artifact", "skill", "pr"]
 readonly = false
 issue_access = "read"

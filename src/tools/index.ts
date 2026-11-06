@@ -37,7 +37,7 @@ import {
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
 import { documentSections, sectionTitle } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
-import { issueTool, type IssueToolContext } from "./issues.js";
+import { issueGraphTool, issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
 import { prTool, type PrToolContext } from "./pr.js";
@@ -991,6 +991,20 @@ function issueUnavailable(): AgentTool<typeof IssueUnavailableParams> {
   };
 }
 
+const IssueGraphUnavailableParams = Type.Object({});
+
+function issueGraphUnavailable(): AgentTool<typeof IssueGraphUnavailableParams> {
+  return {
+    name: "issue_graph",
+    label: "issue_graph",
+    description: "Create an Epic with Features and Tasks.",
+    parameters: IssueGraphUnavailableParams,
+    async execute() {
+      return fail("issue tracking is not available in this run (disabled, no GitHub remote, or gh unauthenticated)");
+    },
+  };
+}
+
 /* ----------------------------------------------------------------- artifact */
 
 const ArtifactUnavailableParams = Type.Object({
@@ -1056,6 +1070,7 @@ export type CoreToolName =
   | "context"
   | "ask"
   | "issue"
+  | "issue_graph"
   | "artifact"
   | "skill"
   | "pr";
@@ -1070,6 +1085,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     context: contextTool(ctx),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     issue: ctx.issues ? issueTool(ctx.issues) : issueUnavailable(),
+    issue_graph: ctx.issues ? issueGraphTool(ctx.issues) : issueGraphUnavailable(),
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),
     pr: ctx.prs ? prTool(ctx.prs) : prUnavailable(),

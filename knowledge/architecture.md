@@ -87,14 +87,14 @@ the remaining probe work.
   criteria, and a body under 4,000 chars. Task bodies carry `## Context`,
   `## Deliverable`, and acceptance; runtime gates come from named acceptance
   commands or a `## Verification` section. Epic/Feature bodies carry
-  `## Context`, `## Goal`, and `## Scope` (Feature also `## Success measures`). The issue tool
-  rejects create/graph/body-edit requests that miss these sections. Context
+  `## Context`, `## Goal`, and `## Scope` (Feature also `## Success measures`). The issue and issue_graph tools
+  reject create/graph/body-edit requests that miss these sections. Context
   files come only from the explicit `context_files` parameter. Oversized Tasks
   are rejected before creation or build.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
 - The only loop stop is evidence novelty: repeated reads of one band at the
   same file version, repeated search result sets, or repeated command output
-  kill the run after twenty stale actions.
+  kill the run after twenty stale actions or three identical tool errors.
 - A completed run stays completed even when a recoverable plan checkpoint fired.
 - An edit invalidates only overlapping read ranges; read coverage carries
   artifact ids for recall.
