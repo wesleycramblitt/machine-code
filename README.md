@@ -108,6 +108,27 @@ unfunded providers are excluded. `free` only admits zero-price rows.
 The New Run composer starts from this tier; press `t` there to override it for
 one run. `--tier` overrides it from the CLI.
 
+A `--model <key>` (or `--provider <id>`) pin is a preference, not a hard
+constraint. If the pinned model is unavailable before start, or fails during
+the run, the pin is dropped and selection falls back to the catalogue; the
+fallback is logged (`model pin unavailable…` on stderr, `model_pin_relaxed`
+in run events). Without this, a failed pin would filter the catalogue down to
+the one model that just failed and the run would die with "no eligible model".
+
+Price is a soft trade by default: capability has twice the weight of cost, so
+roughly one point of role-weighted fit outweighs a 10x price gap. When spend
+matters, set a hard ceiling instead of retuning the weights:
+
+```toml
+# ~/.machine_code/config.toml (top level, next to [selection])
+price_caps = { input = 0.5, output = 2.0 }   # $ per 1M tokens, machine default
+```
+
+`machine_code run --max-price 0.5` sets both caps for one run;
+`--max-input-price` / `--max-output-price` set them independently
+(`--max-price 0` means free rows only). The same flags work on
+`machine_code models --agent <role>` to preview what survives the cap.
+
 Meta routers (ids or names containing `router`) are never selected: they
 forward to unknown upstream models, so their catalogue scores and capabilities
 are guesses. A provider call that produces no stream event within

@@ -195,8 +195,37 @@ function vetoed(row: CatalogueRow, vetoes: readonly string[]): boolean {
 }
 
 /** A model pin accepts the full catalogue key ("provider/id"), the bare id, or an id suffix. */
-function matchesModel(row: CatalogueRow, pin: string): boolean {
+export function matchesModel(row: Pick<CatalogueRow, "key" | "id">, pin: string): boolean {
   return row.key === pin || row.id === pin || row.key.endsWith(`/${pin}`);
+}
+
+export interface ModelPin {
+  model?: string;
+  provider?: string;
+}
+
+/**
+ * A `--model`/`--provider` pin is a preference, not a suicide pact. When the
+ * pinned model fails, drop the pin so the retry falls back to auto-selection
+ * instead of filtering the whole catalogue down to the one model that just
+ * failed ("no eligible model" with hundreds of rows available).
+ */
+export function relaxPinForFailure(
+  pin: ModelPin,
+  failedKey: string,
+  providerID: string,
+): { pin: ModelPin; dropped: string[] } {
+  const dropped: string[] = [];
+  let { model, provider } = pin;
+  if (model && failedKey && matchesModel({ key: failedKey, id: failedKey }, model)) {
+    dropped.push(`model:${model}`);
+    model = undefined;
+  }
+  if (provider && providerID && providerID === provider) {
+    dropped.push(`provider:${provider}`);
+    provider = undefined;
+  }
+  return { pin: { model, provider }, dropped };
 }
 
 function rejectReason(

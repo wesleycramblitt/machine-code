@@ -152,6 +152,9 @@ Usage:
                                     [--allow-artifact-scripts] permit executable artifact scripts
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
+                                    [--max-price $/M] [--max-input-price $/M] [--max-output-price $/M]
+                                    [--model <key>] is a preference: auto-selection
+                                    takes over if the pinned model fails (same for --provider)
                                     [--context-exclude '<json>'] omit selected context
                                     sections or sources from a run
                                     [--context-include '<json>'] add knowledge files
@@ -166,7 +169,8 @@ Usage:
   machine_code policy [role]        Show effective capability policy (--json)
   machine_code policy edit [--repo] Edit machine defaults or repo overrides
   machine_code models --agent <role> Dry-run selection (--context-chars N, --min-fit N,
-                                    --min-capability N, --min-axes code=6.5, --tier free|paid)
+                                    --min-capability N, --min-axes code=6.5, --tier free|paid,
+                                    --max-price $/M, --max-input-price $/M, --max-output-price $/M)
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
@@ -745,6 +749,18 @@ function cmdModels(argv: string[]): number {
     if (override !== undefined) ap.minCapability = override;
     const axesOverride = flags.get("min-axes");
     if (axesOverride) ap.minAxes = { ...(ap.minAxes ?? {}), ...parseAxisOverrides(axesOverride) };
+    const dryPrice = (name: string): number | undefined => {
+      const raw = flags.get(name);
+      if (raw === undefined) return undefined;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) fail(`--${name} needs a non-negative number ($ per 1M tokens)`);
+      return n;
+    };
+    const dryMax = dryPrice("max-price");
+    const dryMaxIn = dryPrice("max-input-price") ?? dryMax;
+    const dryMaxOut = dryPrice("max-output-price") ?? dryMax;
+    if (dryMaxIn !== undefined) machine.priceCaps.input = dryMaxIn;
+    if (dryMaxOut !== undefined) machine.priceCaps.output = dryMaxOut;
     const result = pick({
       agent,
       policy: ap,
@@ -922,8 +938,8 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (agentName !== undefined && !(AGENT_NAMES as readonly string[]).includes(agentName)) {
     fail(`unknown agent "${agentName}"; choose one of ${AGENT_NAMES.join(", ")}`);
   }
-  const requireProvider = flags.get("provider");
-  const requireModel = flags.get("model");
+  let requireProvider = flags.get("provider");
+  let requireModel = flags.get("model");
   const issueFlag = flags.get("issue");
   const issueTypeFlag = flags.get("issue-type") ?? "task";
   const featureFlag = flags.get("feature");
@@ -1023,6 +1039,20 @@ async function cmdRun(argv: string[]): Promise<number> {
     minAxesSnapshot = axes;
     for (const ap of Object.values(policy.agents)) ap.minAxes = { ...(ap.minAxes ?? {}), ...axes };
   }
+  // Per-run price ceiling ($ per 1M tokens). Narrows or replaces the machine
+  // selection.price_caps without persisting.
+  const priceFlag = (name: string): number | undefined => {
+    const raw = flags.get(name);
+    if (raw === undefined) return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) fail(`--${name} needs a non-negative number ($ per 1M tokens)`);
+    return n;
+  };
+  const maxPrice = priceFlag("max-price");
+  const maxInputPrice = priceFlag("max-input-price") ?? maxPrice;
+  const maxOutputPrice = priceFlag("max-output-price") ?? maxPrice;
+  if (maxInputPrice !== undefined) machine.priceCaps.input = maxInputPrice;
+  if (maxOutputPrice !== undefined) machine.priceCaps.output = maxOutputPrice;
   const contextExcludeFlag = flags.get("context-exclude");
   let contextExclude: import("./context/assemble.js").ContextExclusion | undefined;
   if (contextExcludeFlag !== undefined) {
@@ -1197,7 +1227,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       process.stderr.write(`availability: ${result.key} ${result.status}${result.message ? ` (${result.message})` : ""}\n`);
     }
   }
-  const preflight = pick({
+  const preflightInput = {
     agent: agentNameParsed,
     policy: policy.agents[agentNameParsed]!,
     machine,
@@ -1209,7 +1239,21 @@ async function cmdRun(argv: string[]): Promise<number> {
     tier: machine.selection.tier,
     requireProvider,
     requireModel,
-  });
+  };
+  let preflight = pick(preflightInput);
+  if ("error" in preflight && (requireModel || requireProvider)) {
+    // A pin is a preference: if the pinned model is not ready before start,
+    // fall back to auto-selection instead of refusing to start the run.
+    const relaxed = pick({ ...preflightInput, requireProvider: undefined, requireModel: undefined });
+    if (!("error" in relaxed)) {
+      process.stderr.write(
+        `model pin unavailable (${requireModel ?? requireProvider}); falling back to auto-selection\n`,
+      );
+      requireModel = undefined;
+      requireProvider = undefined;
+      preflight = relaxed;
+    }
+  }
   if ("error" in preflight) {
     fail(`no model is ready before run start: ${preflight.error}${preflight.rejected[0] ? ` (${preflight.rejected[0].key}: ${preflight.rejected[0].reason})` : ""}`);
   }

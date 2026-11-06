@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { pick, modelStatus, scoreCandidate, axisWeights, capabilityFit } from "../dist/select.js";
+import { pick, modelStatus, scoreCandidate, axisWeights, capabilityFit, matchesModel, relaxPinForFailure } from "../dist/select.js";
 import { loadPolicy, ConfigError } from "../dist/config.js";
 
 function axes(reasoning = 8, code = 8, agentic = 8, general = 8) {
@@ -405,3 +405,47 @@ test("provider cost multipliers change the effective winner", () => {
 });
 
 
+
+test("a failed pin relaxes so the retry falls back to auto-selection", () => {
+  assert.deepEqual(relaxPinForFailure({ model: "p/b" }, "p/b", "p"), {
+    pin: { model: undefined, provider: undefined },
+    dropped: ["model:p/b"],
+  });
+  // Suffix pins match too.
+  assert.deepEqual(relaxPinForFailure({ model: "b" }, "p/b", "p").dropped, ["model:b"]);
+  // A provider pin drops when its provider fails.
+  assert.deepEqual(relaxPinForFailure({ model: "p/a", provider: "q" }, "q/z", "q"), {
+    pin: { model: "p/a", provider: undefined },
+    dropped: ["provider:q"],
+  });
+  // An unrelated failure keeps the pin.
+  assert.deepEqual(relaxPinForFailure({ model: "p/a" }, "p/b", "p"), {
+    pin: { model: "p/a", provider: undefined },
+    dropped: [],
+  });
+  assert.deepEqual(relaxPinForFailure({}, "p/a", "p"), {
+    pin: { model: undefined, provider: undefined },
+    dropped: [],
+  });
+});
+
+test("matchesModel accepts key, id, and id suffix pins", () => {
+  assert.equal(matchesModel({ key: "p/model", id: "model" }, "p/model"), true);
+  assert.equal(matchesModel({ key: "p/model", id: "model" }, "model"), true);
+  assert.equal(matchesModel({ key: "p/model", id: "model" }, "other"), false);
+});
+
+test("price caps reject expensive rows and keep cheap ones", () => {
+  const cheap = row("p/cheap", { pricing: { input: 0.05, output: 0.1, cacheRead: 0, cacheWrite: 0 } });
+  const pricey = row("p/pricey", { pricing: { input: 5, output: 10, cacheRead: 0, cacheWrite: 0 } });
+  const capped = { ...machine, priceCaps: { input: 1, output: 2 } };
+  const result = pickOne([cheap, pricey], basePolicy, { machine: capped });
+  assert.ok(!("error" in result));
+  assert.equal(result.selected.key, "p/cheap");
+  assert.ok(result.rejected.some((r) => r.key === "p/pricey" && r.reason === "over-input-price-cap"));
+
+  const outputCapped = { ...machine, priceCaps: { output: 0.05 } };
+  const outResult = pickOne([cheap], basePolicy, { machine: outputCapped });
+  assert.ok("error" in outResult);
+  assert.ok(outResult.rejected.some((r) => r.reason === "over-output-price-cap"));
+});

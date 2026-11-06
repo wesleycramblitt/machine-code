@@ -14,7 +14,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-age
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
-import { estimateTokens, pick, providerMultiplier, isFreeRow } from "./select.js";
+import { estimateTokens, pick, providerMultiplier, isFreeRow, relaxPinForFailure } from "./select.js";
 import { applyClassification, classifyError, clearFreeModelCooldowns, clearFreeProviderCooldowns, loadAvailability, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
@@ -400,6 +400,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     Object.assign(availability, state);
   };
 
+  // A `--model`/`--provider` pin starts as a hard filter but relaxes to a
+  // preference the moment the pinned model fails (see relaxPin below).
+  let pinModel = input.requireModel;
+  let pinProvider = input.requireProvider;
+
   const selectFor = (chars: number) =>
     pick({
       agent: input.agent.name,
@@ -413,9 +418,28 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       availability,
       fundedProviders,
       contextChars: chars,
-      requireProvider: input.requireProvider,
-      requireModel: input.requireModel,
+      requireProvider: pinProvider,
+      requireModel: pinModel,
     });
+
+  /**
+   * A `--model`/`--provider` pin is a preference. Once the pinned model has
+   * failed, holding the pin across retries filters the catalogue down to the
+   * one model that just failed and the run dies with "no eligible model".
+   * Drop the pin so the retry falls back to auto-selection.
+   */
+  const relaxPin = (failedKey: string, providerID: string): void => {
+    const next = relaxPinForFailure({ model: pinModel, provider: pinProvider }, failedKey, providerID);
+    if (next.dropped.length > 0) {
+      recorder.event("model_pin_relaxed", {
+        failedModel: failedKey,
+        dropped: next.dropped,
+        attempt: triedModels.size,
+      });
+    }
+    pinModel = next.pin.model;
+    pinProvider = next.pin.provider;
+  };
 
   const mapRoot = input.toolRoot ?? input.root;
   /** A cheap file version for the loop detector; contents are not hashed. */
@@ -800,6 +824,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       const error = `catalogue row ${currentRow.key} is not in the provider's runtime catalog; run: machine_code catalogue refresh`;
       recorder.event("model_select", { call: 0, error });
       triedModels.add(currentRow.key);
+      relaxPin(currentRow.key, currentRow.providerID);
       lastFailure = error;
       recorder.event("retry", {
         failedModel: currentRow.key,
@@ -1642,6 +1667,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               }
               triedModels.add(failedKey);
             }
+            relaxPin(failedKey, provider);
             lastFailure = message;
             recorder.event("retry", {
               failedModel: failedKey || "(unknown)",
@@ -1695,6 +1721,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           ? `model ${failedKey} returned provider markup inside tool arguments`
           : `model ${failedKey} returned tool-call markup as plain text`;
       triedModels.add(failedKey);
+      relaxPin(failedKey, provider);
       lastFailure = message;
       try {
         const classified = classifyError(new Error(`malformed response: ${message}`));
@@ -1818,6 +1845,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         }
         const failedModel = currentRow?.key ?? failedKey;
         triedModels.add(failedModel);
+        relaxPin(failedModel, la.provider);
         lastFailure = la.errorMessage;
         recorder.event("retry", {
           failedModel,
