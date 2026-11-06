@@ -56,3 +56,16 @@ test("context item token estimates use the same chars/4 conversion", () => {
   assert.equal(tokensForChars(1000), 250);
   assert.equal(tokensForChars(1276), 319);
 });
+
+test("skill mode cycling never reorders rows: key list stays stable", () => {
+  const items = skillListItems(
+    [
+      { name: "alpha", description: "first" },
+      { name: "beta", description: "second" },
+      { name: "gamma", description: "third" },
+    ],
+    600,
+  );
+  const keys = items.map((item) => item.key);
+  assert.deepEqual(keys, ["skill:alpha", "skill:beta", "skill:gamma"]);
+});
