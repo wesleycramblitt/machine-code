@@ -110,33 +110,33 @@ test("worktree remove and prune helpers are recorded by the supervisor", async (
   }
 });
 
-test("task worktree is created on its issue branch, based on the feature branch", async () => {
+test("feature worktree is created on its issue branch, based on the parent feature branch", async () => {
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
     const spec = await createWorktree({
       layout,
       runId: "r1",
-      kind: "task",
+      kind: "feature",
       issueNumber: 31,
       featureNumber: 20,
     });
-    assert.equal(spec.branch, "mc/task/31");
+    assert.equal(spec.branch, "mc/feature/31");
     assert.equal(spec.baseBranch, "mc/feature/20");
     assert.ok(spec.createdBranches.includes("mc/feature/20"));
-    assert.ok(spec.createdBranches.includes("mc/task/31"));
+    assert.ok(spec.createdBranches.includes("mc/feature/31"));
     assert.ok(existsSync(join(spec.path, "README.md")));
 
     // Isolation: an edit in the worktree leaves the main tree untouched.
     writeFileSync(join(spec.path, "README.md"), "# edited in worktree\n", "utf8");
     assert.equal(readFileSync(join(dir, "README.md"), "utf8"), "# test repo\n");
 
-    // The commit lands on the task branch only.
+    // The commit lands on the feature branch only.
     const { sha } = await commitWorktree({ path: spec.path, message: "test commit" });
     assert.ok(sha && /^[0-9a-f]{40}$/.test(sha));
-    const featureTip = spawnSync("git", ["rev-parse", "mc/feature/20"], { cwd: dir, encoding: "utf8" }).stdout.trim();
-    const taskTip = spawnSync("git", ["rev-parse", "mc/task/31"], { cwd: dir, encoding: "utf8" }).stdout.trim();
-    assert.notEqual(taskTip, featureTip);
+    const parentTip = spawnSync("git", ["rev-parse", "mc/feature/20"], { cwd: dir, encoding: "utf8" }).stdout.trim();
+    const featureTip = spawnSync("git", ["rev-parse", "mc/feature/31"], { cwd: dir, encoding: "utf8" }).stdout.trim();
+    assert.notEqual(featureTip, parentTip);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -174,20 +174,20 @@ test("issue branches are reused across runs; same branch cannot be checked out t
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
-    const first = await createWorktree({ layout, runId: "r-a", kind: "task", issueNumber: 31 });
-    assert.ok(first.createdBranches.includes("mc/task/31"));
+    const first = await createWorktree({ layout, runId: "r-a", kind: "feature", issueNumber: 31 });
+    assert.ok(first.createdBranches.includes("mc/feature/31"));
 
-    // A second concurrent run on the same Task branch is refused.
+    // A second concurrent run on the same feature branch is refused.
     await assert.rejects(
-      createWorktree({ layout, runId: "r-b", kind: "task", issueNumber: 31 }),
+      createWorktree({ layout, runId: "r-b", kind: "feature", issueNumber: 31 }),
       (error) => error instanceof WorktreeError && error.code === "branch_checked_out",
     );
 
     // After removing the first worktree (branch kept), the branch is reused.
     await removeWorktree({ layout, runId: "r-a" });
-    const second = await createWorktree({ layout, runId: "r-c", kind: "task", issueNumber: 31 });
-    assert.equal(second.branch, "mc/task/31");
-    assert.ok(!second.createdBranches.includes("mc/task/31"), "existing branch must be reused, not recreated");
+    const second = await createWorktree({ layout, runId: "r-c", kind: "feature", issueNumber: 31 });
+    assert.equal(second.branch, "mc/feature/31");
+    assert.ok(!second.createdBranches.includes("mc/feature/31"), "existing branch must be reused, not recreated");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -197,17 +197,21 @@ test("a terminal parent worktree can be reused by a fork on the same branch", as
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
-    const spec = await createWorktree({ layout, runId: "r-parent", kind: "task", issueNumber: 31 });
+    const spec = await createWorktree({ layout, runId: "r-parent", kind: "feature", issueNumber: 31 });
+    assert.equal(spec.branch, "mc/feature/31");
     const parent = { worktree: spec.path, branch: spec.branch, status: "failed" };
-    assert.equal(reusableWorktree(parent, "mc/task/31"), spec.path);
-    assert.equal(reusableWorktree({ ...parent, status: "running" }, "mc/task/31"), undefined);
-    assert.equal(reusableWorktree(parent, "mc/task/32"), undefined);
-    assert.equal(reusableWorktree({ ...parent, worktree: join(dir, "missing") }, "mc/task/31"), undefined);
+    assert.equal(reusableWorktree(parent, "mc/feature/31"), spec.path);
+    assert.equal(reusableWorktree({ ...parent, status: "running" }, "mc/feature/31"), undefined);
+    assert.equal(reusableWorktree(parent, "mc/feature/32"), undefined);
+    assert.equal(reusableWorktree({ ...parent, worktree: join(dir, "missing") }, "mc/feature/31"), undefined);
     assert.equal(
-      reusableWorktreeOwner([{ ...parent, status: "running" }, parent], "mc/task/31")?.path,
+      reusableWorktreeOwner([{ ...parent, status: "running" }, parent], "mc/feature/31")?.path,
       spec.path,
       "skip an active run and use the nearest terminal owner",
     );
+    // Legacy mc/task/* branches from old-run fixtures still match by name.
+    const legacy = { worktree: spec.path, branch: "mc/task/31", status: "failed" };
+    assert.equal(reusableWorktree(legacy, "mc/task/31"), spec.path);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

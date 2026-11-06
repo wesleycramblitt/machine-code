@@ -70,13 +70,13 @@ test("role presets resolve to the documented defaults", () => {
   assert.equal(sudo.issueAccess, "read");
 });
 
-test("override precedence: run flag > repo policy > machine > preset", () => {
+test("override precedence: run flag > repo policy > machine; presets no longer steer", () => {
   // run overrides win
   assert.equal(
     resolveAgentConfig({
       role: "build",
-      agentPolicy: { preset: "plan" },
-      machineOverrides: { ambiguity: "adaptive" },
+      agentPolicy: { ambiguity: "adaptive" },
+      machineOverrides: { ambiguity: "precise" },
       runOverrides: { ambiguity: "strict" },
     }).ambiguity,
     "strict",
@@ -85,24 +85,33 @@ test("override precedence: run flag > repo policy > machine > preset", () => {
   assert.equal(
     resolveAgentConfig({
       role: "build",
-      agentPolicy: { preset: "plan" },
-      machineOverrides: { preset: "implement" },
-    }).preset,
-    "plan",
+      agentPolicy: { ambiguity: "adaptive" },
+      machineOverrides: { ambiguity: "precise" },
+    }).ambiguity,
+    "adaptive",
   );
-  // machine beats preset
+  // machine beats the preset default
   assert.equal(
-    resolveAgentConfig({ role: "build", machineOverrides: { preset: "plan" } }).preset,
-    "plan",
+    resolveAgentConfig({ role: "build", machineOverrides: { ambiguity: "adaptive" } }).ambiguity,
+    "adaptive",
   );
+  // preset overrides are ignored: the role default always wins
+  assert.equal(
+    resolveAgentConfig({ role: "build", agentPolicy: { preset: "plan" }, machineOverrides: { preset: "review" } })
+      .preset,
+    "implement",
+  );
+  assert.equal(resolveAgentConfig({ role: "planner", runOverrides: { preset: "implement" } }).preset, "plan");
 });
 
-test("verification is an explicit agent override, not a global mode", () => {
+test("verification is direct|verified; redundant normalizes to verified", () => {
   const verified = resolveAgentConfig({ role: "build", runOverrides: { verification: "verified" } });
   assert.equal(verified.verification, "verified");
   assert.equal(verified.delegate, false, "build cannot delegate regardless of verification");
   const redundant = resolveAgentConfig({ role: "build", runOverrides: { verification: "redundant" } });
-  assert.equal(redundant.verification, "redundant");
+  assert.equal(redundant.verification, "verified");
+  const direct = resolveAgentConfig({ role: "review", runOverrides: { verification: "direct" } });
+  assert.equal(direct.verification, "direct");
 });
 
 
@@ -211,12 +220,15 @@ test("tools are capability-gated and no role has the task tool", () => {
 
     const build = resolveAgent(layout, "build");
     assert.ok(!build.def.tools.includes("task"));
-    assert.ok(!build.def.tools.includes("ask"), "build asks are off by default");
+    assert.ok(build.def.tools.includes("ask"), "ask is available unless autonomous");
     assert.ok(build.def.tools.includes("write"));
     assert.ok(build.def.tools.includes("artifact"));
 
     const buildAsk = resolveAgent(layout, "build", { runOverrides: { ask: true } });
     assert.ok(buildAsk.def.tools.includes("ask"), "build may be configured to ask");
+
+    const buildAuto = resolveAgent(layout, "build", { runOverrides: { ambiguity: "autonomous" } });
+    assert.ok(!buildAuto.def.tools.includes("ask"), "autonomous runs never get ask");
 
     const generalAuto = resolveAgent(layout, "general", { runOverrides: { ambiguity: "autonomous" } });
     assert.ok(!generalAuto.def.tools.includes("ask"), "autonomous runs never get ask");
@@ -225,15 +237,18 @@ test("tools are capability-gated and no role has the task tool", () => {
   }
 });
 
-test("composed prompt states preset and ambiguity", () => {
+test("composed prompt states worktree, verification, approval, and ambiguity", () => {
   const root = tempDir("prompt");
   try {
     const layout = fakeLayout(root);
     const resolved = resolveAgent(layout, "planner", { runOverrides: { ambiguity: "strict" } });
-    assert.match(resolved.prompt, /preset plan/);
+    assert.match(resolved.prompt, /Config: worktree (on|off) · verification \S+ · approval (human|agent)\./);
+    assert.doesNotMatch(resolved.prompt, /preset/);
     assert.match(resolved.prompt, /Ambiguity policy STRICT/);
     assert.match(resolved.prompt, /core:map/);
     assert.match(resolved.prompt, /context note/);
+    const off = resolveAgent(layout, "planner", { runOverrides: { worktree: false } });
+    assert.match(off.prompt, /Config: worktree off ·/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

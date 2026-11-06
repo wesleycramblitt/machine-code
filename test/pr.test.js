@@ -83,7 +83,7 @@ class FakePrProvider {
 
 class FakeIssues {
   constructor(approval) { this.kind = "fake"; this.approval = approval; }
-  async get(ref) { return { ref, approval: this.approval, kind: "task", labels: [], children: [], blockedBy: [], blocking: [], acceptance: [], title: "t", body: "", state: "open" }; }
+  async get(ref) { return { ref, approval: this.approval, kind: "feature", labels: [], children: [], blockedBy: [], blocking: [], acceptance: [], title: "t", body: "", state: "open" }; }
 }
 
 const MACHINE = {
@@ -100,19 +100,23 @@ async function makeRun(layout, repo, approvalDefault = "human") {
   const spec = await createWorktree({
     layout,
     runId: recorder.id,
-    kind: "task",
+    kind: "feature",
     issueNumber: 31,
     featureNumber: 20,
   });
   recorder.patchSummary({
     worktree: spec.path,
-    branch: spec.branch,
+    branch: "mc/task/31",
     baseBranch: spec.baseBranch,
     baseRef: spec.baseRef,
     issue: { provider: "github", repo: "o/r", number: 31 },
   });
   writeFileSync(join(spec.path, "OUT.txt"), "ok", "utf8");
   const { sha } = await commitWorktree({ path: spec.path, message: "do work" });
+  // The Task→Feature publish pipeline still operates on legacy mc/task/*
+  // heads (new worktrees mint mc/feature/* branches), so pin an explicit
+  // legacy head at the committed tip for the run under test.
+  git(repo, ["branch", "-f", "mc/task/31", spec.branch]);
   recorder.patchSummary({ commit: sha });
   return { recorder, spec };
 }
@@ -321,13 +325,13 @@ function featureIssue(approval = "human") {
   };
 }
 
-function taskIssue(n, state) {
+function subIssue(n, state) {
   return {
     ref: { provider: "github", repo: "o/r", number: n },
-    title: `Task ${n}`,
+    title: `Sub-issue ${n}`,
     body: "",
     state,
-    kind: "task",
+    kind: "feature",
     labels: [],
     children: [],
     blockedBy: [],
@@ -351,7 +355,7 @@ test("feature publish fast-forwards a stale local branch after a Task PR merge",
     git(repo, ["checkout", "-q", "main"]);
     git(repo, ["branch", "-D", "advance"]);
     const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
-    const issues = new FakeIssueGraph(featureIssue("human"), [taskIssue(31, "closed")]);
+    const issues = new FakeIssueGraph(featureIssue("human"), [subIssue(31, "closed")]);
     const result = await publishFeature({ layout, machine: MACHINE, recorder, feature: issues.feature.ref, issues, prs: new FakePrProvider() });
     assert.notEqual(result.status, "failed");
     const local = git(repo, ["rev-parse", "mc/feature/20"]).trim();
@@ -363,16 +367,16 @@ test("feature publish fast-forwards a stale local branch after a Task PR merge",
   }
 });
 
-test("feature PR is blocked while deliverable tasks are open", async () => {
+test("feature PR is blocked while sub-issues are open", async () => {
   const { root, repo } = tempRepoWithOrigin();
   try {
     const layout = fakeLayout(repo);
     const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
-    const issues = new FakeIssueGraph(featureIssue(), [taskIssue(31, "closed"), taskIssue(32, "open")]);
+    const issues = new FakeIssueGraph(featureIssue(), [subIssue(31, "closed"), subIssue(32, "open")]);
     const prs = new FakePrProvider();
     const result = await publishFeature({ layout, machine: MACHINE, recorder, feature: issues.feature.ref, issues, prs });
     assert.equal(result.status, "blocked");
-    assert.match(result.error, /open tasks: #32/);
+    assert.match(result.error, /open sub-issues: #32/);
     assert.equal(prs.created.length, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -385,7 +389,7 @@ test("feature PR runs integration gates, pushes the branch, and opens to main", 
     const layout = fakeLayout(repo);
     git(repo, ["branch", "mc/feature/20", "main"]);
     const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
-    const issues = new FakeIssueGraph(featureIssue("human"), [taskIssue(31, "closed"), taskIssue(32, "closed")]);
+    const issues = new FakeIssueGraph(featureIssue("human"), [subIssue(31, "closed"), subIssue(32, "closed")]);
     const prs = new FakePrProvider();
     const result = await publishFeature({
       layout,
@@ -415,7 +419,7 @@ test("feature PR blocks when an integration gate fails and merges with agent app
     const layout = fakeLayout(repo);
     git(repo, ["branch", "mc/feature/20", "main"]);
     const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "publish", repoRoot: repo });
-    const issues = new FakeIssueGraph(featureIssue("agent"), [taskIssue(31, "closed")]);
+    const issues = new FakeIssueGraph(featureIssue("agent"), [subIssue(31, "closed")]);
     const prs = new FakePrProvider();
 
     const failed = await publishFeature({

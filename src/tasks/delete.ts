@@ -1,5 +1,5 @@
 /**
- * machine_code — destructive Task/Feature cleanup.
+ * machine_code — destructive Feature cleanup.
  *
  * Deleting an issue also closes its open PRs, removes its worktrees, and
  * deletes the associated local and remote branches. Parent issues require an
@@ -125,8 +125,7 @@ async function cleanupIssue(
   }
 
   const branches = new Set<string>();
-  if (issue.kind === "task") branches.add(`mc/task/${issue.ref.number}`);
-  if (issue.kind === "feature") branches.add(`mc/feature/${issue.ref.number}`);
+  branches.add(`mc/feature/${issue.ref.number}`);
   for (const run of runs) {
     if (run.branch && (run.branch.startsWith("mc/task/") || run.branch.startsWith("mc/feature/"))) {
       branches.add(run.branch);
@@ -152,7 +151,6 @@ function removeIssueRuns(input: DeleteIssueInput, issue: Issue, result: DeleteIs
 }
 
 export async function deleteIssue(input: DeleteIssueInput): Promise<DeleteIssueResult> {
-  if (input.issue.reserved) throw new Error(`reserved issue #${input.issue.ref.number} cannot be deleted`);
   const children = await input.provider.children(input.issue.ref);
   if (children.length > 0 && !input.cascade) {
     throw new Error(

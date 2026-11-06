@@ -227,18 +227,18 @@ test("picker orders issues parent-first with real depth", () => {
   );
 });
 
-test("runs page epic rollups include nested feature tasks and runs", () => {
+test("runs page epic rollups include nested features and runs", () => {
   const epic = issue(8, "epic", "Epic");
-  const feature = issue(34, "feature", "Feature", { parent: epic.ref });
-  const task1 = issue(36, "task", "Done", { parent: feature.ref, state: "closed" });
-  const task2 = issue(37, "task", "Open", { parent: feature.ref });
+  const feature1 = issue(34, "feature", "Done", { parent: epic.ref, state: "closed" });
+  const feature2 = issue(35, "feature", "Open", { parent: epic.ref });
   const runs = [
-    run({ id: "a", status: "completed", issue: task1.ref }),
-    run({ id: "b", status: "running", issue: task2.ref }),
+    run({ id: "a", status: "completed", issue: feature1.ref }),
+    run({ id: "b", status: "running", issue: feature2.ref }),
+    run({ id: "c", status: "running", issue: epic.ref }),
   ];
   const index = buildRunIndex({
     runs,
-    issuesByRepo: new Map([[repoA, [epic, feature, task1, task2]]]),
+    issuesByRepo: new Map([[repoA, [epic, feature1, feature2]]]),
   });
   const epicRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 8);
   const featureRow = index.rows.find((row) => row.kind === "issue" && row.issue.ref.number === 34);
@@ -247,10 +247,11 @@ test("runs page epic rollups include nested feature tasks and runs", () => {
   assert.equal(epicRow.rollup.tasksClosed, 1);
   assert.equal(epicRow.rollup.tasksTotal, 2);
   assert.equal(epicRow.rollup.pct, 50);
-  assert.equal(epicRow.rollup.runsTotal, 2);
-  assert.equal(epicRow.rollup.runsActive, 1);
-  assert.equal(featureRow.rollup.tasksTotal, 2);
-  assert.equal(featureRow.rollup.runsTotal, 2);
+  assert.equal(epicRow.rollup.runsTotal, 3);
+  assert.equal(epicRow.rollup.runsActive, 2);
+  assert.equal(featureRow.rollup.tasksTotal, 0, "features have no sub-issues to count");
+  assert.equal(featureRow.rollup.pct, undefined);
+  assert.equal(featureRow.rollup.runsTotal, 1);
 });
 
 test("planning runs appear under the reserved Task 0 anchor", () => {
@@ -292,19 +293,15 @@ test("focus keeps the selected branch, its peers, and descendants bright", () =>
   const featureA = issue(20, "feature", "Feature A", { parent: epicA.ref });
   const featureA2 = issue(21, "feature", "Feature A2", { parent: epicA.ref });
   const featureB = issue(22, "feature", "Feature B", { parent: epicB.ref });
-  const taskA = issue(30, "task", "Task A", { parent: featureA.ref });
-  const taskB = issue(31, "task", "Task B", { parent: featureA.ref });
-  const taskB2 = issue(32, "task", "Task B2", { parent: featureB.ref });
   const now = "2026-01-01T00:00:00.000Z";
   const runs = [
-    run({ id: "a", issue: taskA.ref, startedAt: now, lastActivityAt: now }),
-    run({ id: "a2", issue: taskA.ref, startedAt: now, lastActivityAt: now }),
-    run({ id: "b", issue: taskB.ref, startedAt: now, lastActivityAt: now }),
-    run({ id: "b2", issue: taskB2.ref, startedAt: now, lastActivityAt: now }),
+    run({ id: "a", issue: featureA.ref, startedAt: now, lastActivityAt: now }),
+    run({ id: "a2", issue: featureA.ref, startedAt: now, lastActivityAt: now }),
+    run({ id: "b2", issue: featureB.ref, startedAt: now, lastActivityAt: now }),
   ];
   const index = buildRunIndex({
     runs,
-    issuesByRepo: new Map([[repoA, [epicA, epicB, featureA, featureA2, featureB, taskA, taskB, taskB2]]]),
+    issuesByRepo: new Map([[repoA, [epicA, epicB, featureA, featureA2, featureB]]]),
   });
   const issueRow = (number) => {
     const row = index.rows.find((candidate) => candidate.kind === "issue" && candidate.issue.ref.number === number);
@@ -326,9 +323,9 @@ test("focus keeps the selected branch, its peers, and descendants bright", () =>
   };
 
   assert.deepEqual(bright(issueRow(10)), ["#10", "#11", "#20", "#21"]);
-  assert.deepEqual(bright(issueRow(20)), ["#10", "#20", "#21", "#30", "#31"]);
-  assert.deepEqual(bright(issueRow(30)), ["#10", "#20", "#30", "#31", "a", "a2"]);
-  assert.deepEqual(bright(runRow("a")), ["#10", "#20", "#30", "a", "a2"]);
+  assert.deepEqual(bright(issueRow(20)), ["#10", "#20", "#21", "a", "a2"]);
+  assert.deepEqual(bright(issueRow(22)), ["#11", "#22", "b2"]);
+  assert.deepEqual(bright(runRow("a")), ["#10", "#20", "a", "a2"]);
   assert.equal(focusRowIds(index.rows, index.rows[0]), null);
 });
 

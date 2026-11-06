@@ -387,13 +387,13 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
       ...(input.resultReview === "human" || input.review === false
         ? { approvalOverride: "human" as const }
         : {}),
-      title: `Task: ${packet.goal}`,
+      title: `Feature: ${packet.goal}`,
     });
     if (published.status === "failed") {
       return {
         status: "blocked",
         finalText: buildResult.finalText,
-        error: published.error ?? "Task PR publish failed",
+        error: published.error ?? "Feature PR publish failed",
         packet,
         runId: recorder.id,
         ...(commit ? { commit } : {}),
@@ -434,8 +434,7 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
 export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateResult> {
   const { layout, machine, policy, root, recorder } = input;
   if (input.packet) {
-    const verification: Verification =
-      input.packet.mode === "direct" || input.packet.mode === "redundant" ? input.packet.mode : "verified";
+    const verification: Verification = input.packet.mode === "direct" ? "direct" : "verified";
     return executePacket({
       models: input.models,
       catalogue: input.catalogue,

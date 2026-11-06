@@ -2,13 +2,13 @@
  * machine_code — the `issue` tool: structured, capability-gated issue access.
  *
  * One tool with an action enum keeps the tool surface small while enforcing
- * hierarchy and reserved-issue invariants in the harness:
- *   - create Epic    → ensures Feature 0 + Task 0
- *   - create Feature → ensures Task 0 (and the parent Epic's chain)
- *   - create Task    → ensures the parent Feature's Task 0 first
- *   - link           → Feature→Epic and Task→Feature only
+ * the Epic → Feature hierarchy in the harness:
+ *   - create Epic    → no parent
+ *   - create Feature → requires a parent Epic
+ *   - link           → Feature→Epic only
+ *   - plan           → Feature issues only
  *   - close          → acceptance + approval policy (human requests approval)
- *   - ensure         → repairs missing/duplicate reserved issues
+ *   - ensure         → validates the Epic → Feature hierarchy
  *
  * Reads are issue:read; creating needs issue:create; editing, linking, and
  * ensure need issue:plan (legacy issue:write / issue:hierarchy:write remain
@@ -26,19 +26,14 @@ import {
   type IssueRef,
 } from "../issues/provider.js";
 import { issueContextErrors, withContextFiles } from "../issues/context.js";
-import {
-  ensureEpicReserved,
-  ensureFeatureReserved,
-  isReserved,
-  isReservedTask,
-  runCountsFrom,
-} from "../issues/reserved.js";
-import { checkCompletion, cascadeReserved } from "../issues/completion.js";
+import { checkCompletion } from "../issues/completion.js";
 import { renderPlanMarker, type PlanMarker, type PlanReview, type PlanRole, type PlanStatus, type PlanVerification, type PlanWorktree } from "../plan/schema.js";
-import { taskSizeErrors, validatePlanIssue } from "../plan/validate.js";
+import { featureSizeErrors, validatePlanIssue } from "../plan/validate.js";
 import type { Layout } from "../paths.js";
 import type { RunRecorder } from "../state/runs.js";
 import type { RunStateStore } from "../context/state.js";
+import { loadMachineConfig } from "../config.js";
+import { appendPlanTracking, findPlanFiles, planTrackingLine, removePlanTracking } from "../plan/tracking.js";
 
 export interface IssueToolContext {
   provider: IssueProvider;
@@ -59,20 +54,8 @@ const GraphNode = Type.Object({
   title: Type.String(),
   body: Type.Optional(
     Type.String({
-      description: "Required. ## Context; Epic/Feature also ## Goal and ## Scope (Feature also ## Success measures).",
+      description: "Required. Epic needs ## Context; Feature needs ## Deliverable and acceptance criteria.",
     }),
-  ),
-  context_files: Type.Optional(
-    Type.Array(Type.String({ description: "Repo-relative files you chose after reading; recorded in mc:context." })),
-  ),
-  blocked_by: Type.Optional(Type.Array(Type.String({ description: "Temporary key or issue ref." }))),
-});
-const GraphTask = Type.Object({
-  key: Type.String({ description: "Temporary key used by later nodes." }),
-  feature: Type.String({ description: "Feature key." }),
-  title: Type.String(),
-  body: Type.Optional(
-    Type.String({ description: "Required. ## Context, ## Deliverable, and ## Acceptance criteria." }),
   ),
   context_files: Type.Optional(
     Type.Array(Type.String({ description: "Repo-relative files you chose after reading; recorded in mc:context." })),
@@ -82,7 +65,6 @@ const GraphTask = Type.Object({
 const GraphParams = Type.Object({
   epic: GraphNode,
   features: Type.Array(GraphNode),
-  tasks: Type.Array(GraphTask),
 }, {
   description: "Graph payload.",
 });
@@ -90,14 +72,13 @@ const GraphParams = Type.Object({
 const IssueGraphParams = Type.Object({
   epic: GraphNode,
   features: Type.Array(GraphNode),
-  tasks: Type.Array(GraphTask),
   dry_run: Type.Optional(
     Type.Boolean({ description: "Validate and summarize the graph without creating issues." }),
   ),
 }, {
   description:
-    "Create an Epic with Features and Tasks. Pass epic, features, and tasks at the top level. " +
-    "For more than 3 features or 8 tasks, create layers with the issue tool instead.",
+    "Create an Epic with Features in one call. Pass epic and features at the top level. " +
+    "For more than 3 features, create layers with the issue tool instead.",
 });
 
 const IssueParams = Type.Object({
@@ -118,7 +99,7 @@ const IssueParams = Type.Object({
   issue: Type.Optional(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." })),
   parent: Type.Optional(Type.String({ description: "Parent ref (link/create)." })),
   kind: Type.Optional(
-    Type.Union([Type.Literal("epic"), Type.Literal("feature"), Type.Literal("task")], {
+    Type.Union([Type.Literal("epic"), Type.Literal("feature")], {
       description: "Issue kind for create.",
     }),
   ),
@@ -126,7 +107,7 @@ const IssueParams = Type.Object({
   body: Type.Optional(
     Type.String({
       description:
-        "Required for create/edit. ## Context; Epic/Feature also ## Goal and ## Scope (Feature also ## Success measures); Task also ## Deliverable and acceptance criteria.",
+        "Required for create/edit. Epic needs ## Context; Feature needs ## Deliverable and acceptance criteria.",
     }),
   ),
   context_files: Type.Optional(
@@ -137,7 +118,7 @@ const IssueParams = Type.Object({
   blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." }))),
   /** Alias for blocked_by. Dependencies are the same graph. */
   depends_on: Type.Optional(Type.Array(Type.String({ description: "Alias for blocked_by." }))),
-  /** Edit only: remove these blocked_by links (e.g. a reserved anchor). */
+  /** Edit only: remove these blocked_by links. */
   remove_blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref to stop being blocked by." }))),
   state: Type.Optional(
     Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")], {
@@ -161,7 +142,7 @@ const IssueParams = Type.Object({
   ),
   plan_role: Type.Optional(Type.Union([Type.Literal("build"), Type.Literal("review")])),
   verification: Type.Optional(
-    Type.Union([Type.Literal("direct"), Type.Literal("verified"), Type.Literal("redundant")]),
+    Type.Union([Type.Literal("direct"), Type.Literal("verified")]),
   ),
   worktree: Type.Optional(Type.Union([Type.Literal("required"), Type.Literal("optional")])),
   retries_before_replan: Type.Optional(Type.Number({ description: "Integer 0-20 (default 2)." })),
@@ -184,18 +165,69 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
-function anchorBlockerMessage(found: Issue): string {
-  const anchor = found.kind === "feature" ? "Feature 0" : "Task 0";
-  return (
-    `#${found.ref.number} is a reserved ${anchor} Planning & Review anchor, not a gate. ` +
-    "Anchors stay open until their parent closes, so nothing blocked by one can ever run. " +
-    "Chain deliverable issues among themselves instead; to repair an existing link, use action=edit with remove_blocked_by."
-  );
+/**
+ * Plan file to track an issue in: the configured `context.plan_file` when
+ * set, otherwise a `plans/<name>.md` reference in the issue body.
+ */
+function trackingPlanFile(ctx: IssueToolContext, body: string): string | undefined {
+  try {
+    const configured = loadMachineConfig(ctx.layout)?.context?.planFile;
+    if (configured) return configured;
+  } catch {
+    // A broken machine config must not block issue tracking.
+  }
+  const match = body.match(/plans\/[A-Za-z0-9][\w\-.]*\.md/);
+  return match ? match[0] : undefined;
+}
+
+/**
+ * Best-effort tracking-line append. Records a `plan_tracking` event either
+ * way and never throws: tracking must not fail the issue tool.
+ */
+function trackCreated(
+  ctx: IssueToolContext,
+  kind: "epic" | "feature",
+  number: number,
+  title: string,
+  planFile: string,
+): string {
+  try {
+    appendPlanTracking(ctx.layout.repoRoot, planFile, planTrackingLine(kind, number, title));
+    ctx.recorder.event("plan_tracking", { action: "append", issue: number, planFile });
+    return ` Tracked in ${planFile}.`;
+  } catch (error) {
+    ctx.recorder.event("plan_tracking", {
+      action: "append_failed",
+      issue: number,
+      planFile,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return "";
+  }
+}
+
+/** Best-effort tracking-line removal from every plans/*.md file. */
+function untrackClosed(ctx: IssueToolContext, number: number): string {
+  try {
+    const touched: string[] = [];
+    for (const planFile of findPlanFiles(ctx.layout.repoRoot)) {
+      removePlanTracking(ctx.layout.repoRoot, planFile, number);
+      touched.push(planFile);
+    }
+    ctx.recorder.event("plan_tracking", { action: "remove", issue: number, planFiles: touched });
+    return touched.length > 0 ? ` Removed tracking from ${touched.join(", ")}.` : "";
+  } catch (error) {
+    ctx.recorder.event("plan_tracking", {
+      action: "remove_failed",
+      issue: number,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return "";
+  }
 }
 
 function line(issue: Issue): string {
   const bits = [`#${issue.ref.number}`, issue.kind, issue.state, issue.title];
-  if (isReserved(issue)) bits.push("[reserved]");
   if (issue.parent) bits.push(`parent=#${issue.parent.number}`);
   if (issue.approval) bits.push(`approval=${issue.approval}`);
   if (issue.plan) bits.push(`plan=${issue.plan.status}`);
@@ -242,7 +274,7 @@ function normalizeIssueGraphArguments(
   const repairs: string[] = [];
   const nested = out.graph;
   if (nested && typeof nested === "object" && !Array.isArray(nested)) {
-    for (const key of ["epic", "features", "tasks"] as const) {
+    for (const key of ["epic", "features"] as const) {
       if (out[key] === undefined && key in nested) {
         out[key] = (nested as Record<string, unknown>)[key];
         repairs.push(`graph.${key}->${key}`);
@@ -251,11 +283,11 @@ function normalizeIssueGraphArguments(
     delete out.graph;
   }
   delete out.action;
-  for (const key of ["epic", "features", "tasks"] as const) {
+  for (const key of ["epic", "features"] as const) {
     if (!(key in out)) continue;
     const before = out[key];
     let value = parseJsonish(before, key);
-    if ((key === "features" || key === "tasks") && value && !Array.isArray(value)) value = [value];
+    if (key === "features" && value && !Array.isArray(value)) value = [value];
     if (value !== before) repairs.push(`${key} JSON string`);
     out[key] = value;
   }
@@ -293,7 +325,6 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
   const dependencies = async (
     values: Array<readonly string[] | undefined>,
     owner?: IssueRef,
-    options?: { allowReserved?: boolean },
   ): Promise<IssueRef[] | undefined> => {
     const raw = values.flatMap((value) => value ?? []);
     if (raw.length === 0) return undefined;
@@ -311,9 +342,6 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
       }
       const found = await ctx.provider.get(dependency);
       if (!found) throw new IssueError("dependency_not_found", `dependency ${value} was not found`);
-      if (!options?.allowReserved && isReserved(found)) {
-        throw new IssueError("dependency_reserved", anchorBlockerMessage(found));
-      }
       unique.set(refKey(dependency), dependency);
     }
     return [...unique.values()];
@@ -322,7 +350,6 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
     if (!value) throw new IssueError("argument_missing", `${label} is required`);
     return parseIssueRef(value, ctx.repo, ctx.provider.kind);
   };
-  const counts = () => runCountsFrom(requireRuns(ctx.recorder));
   const remember = (issue: Issue, extra = ""): void => {
     const parent = issue.parent ? ` parent #${issue.parent.number}` : "";
     const plan = issue.plan ? ` plan ${issue.plan.status}` : "";
@@ -330,32 +357,13 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
     const blocked = issue.blockedBy.length > 0
       ? ` blocked-by ${issue.blockedBy.map((dependency) => `#${dependency.number}`).join(",")}`
       : "";
-    const reserved = isReserved(issue) ? " [reserved]" : "";
     ctx.state?.addIssueFact(
       issue.ref.number,
-      `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${accept}${blocked}${reserved}${extra ? ` ${extra}` : ""}`,
+      `#${issue.ref.number} ${issue.kind} ${issue.state} "${issue.title}"${parent}${plan}${accept}${blocked}${extra ? ` ${extra}` : ""}`,
     );
   };
-  /**
-   * A planner run often starts before the Epic/Feature exists. When it creates
-   * the first issue, attach the run to that scope's reserved Task 0 so the
-   * Runs page shows it under Planning & Review, never directly under an Epic
-   * or Feature.
-   */
-  const linkPlanningRun = (anchor: Issue): void => {
-    const current = ctx.recorder.current;
-    if (current.issue) return;
-    if (current.agent !== "planner") return;
-    ctx.recorder.patchSummary({ issue: anchor.ref });
-    ctx.recorder.event("issue_linked", {
-      issue: anchor.ref.number,
-      kind: anchor.kind,
-      source: "planning-anchor",
-    });
-    remember(anchor);
-  };
 
-  /** A Task with acceptance is ready by default; do not spend a turn on plan. */
+  /** A Feature with acceptance is ready by default; do not spend a turn on plan. */
   const autoPlan = async (target: Issue): Promise<{ issue?: Issue; error?: string }> => {
     if (target.plan || target.acceptance.length === 0) return {};
     const plan: PlanMarker = {
@@ -385,16 +393,14 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
   const issue: AgentTool<typeof IssueParams> = {
     name: "issue",
     label: "issue",
-    description:
-      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
-      "blocked_by never targets a reserved Planning & Review anchor (anchors stay open until their parent closes, so they gate nothing); " +
-      "remove_blocked_by unwires links on edit. " +
-      "Every created/edited body needs ## Context; Epic/Feature also need ## Goal and ## Scope (Feature: ## Success measures); Task needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
-      "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
-      "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
-      "Pass context_files for the exact repo files you chose after reading; the tool records them in mc:context. Nothing is inferred. " +
-      "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
-      "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
+      description:
+        "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
+        "remove_blocked_by unwires links on edit. " +
+        "Every created/edited Epic needs ## Context; every Feature needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
+        "plan writes the Feature mc:plan marker; link sets the Feature→Epic parent; ensure validates hierarchy; close follows approval. " +
+        "Independent create/edit calls in one assistant turn run in parallel; send a whole layer of Features together. " +
+        "Pass context_files for the exact repo files you chose after reading; the tool records them in mc:context. Nothing is inferred. " +
+        "Reuse a suitable Epic; otherwise create Epic→Feature, then plan each Feature.",
     parameters: IssueParams,
     prepareArguments: (args) => normalizeIssueArguments(args, ctx.recorder) as Static<typeof IssueParams>,
     async execute(_id, params: Static<typeof IssueParams>) {
@@ -411,12 +417,11 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
     name: "issue_graph",
     label: "issue_graph",
     description:
-      "Create an Epic with Features and Tasks in one call. Pass epic, features, and tasks at the top level. " +
-      "Use issue_graph for small plans (<=3 features, <=8 tasks); otherwise create layers with the issue tool. " +
-      "blocked_by chains deliverables only, never a reserved anchor. " +
-      "Every body needs ## Context; Epic/Feature also ## Goal and ## Scope (Feature: ## Success measures); " +
-      "Task needs ## Deliverable and acceptance criteria. Use context_files for exact repo files. " +
-      "Set dry_run=true to validate without creating issues.",
+        "Create an Epic with Features in one call. Pass epic and features at the top level. " +
+        "Use issue_graph for small plans (<=3 features); otherwise create layers with the issue tool. " +
+        "blocked_by chains deliverables only. " +
+        "Every Epic body needs ## Context; every Feature needs ## Deliverable and acceptance criteria. Use context_files for exact repo files. " +
+        "Set dry_run=true to validate without creating issues.",
     parameters: IssueGraphParams,
     prepareArguments: (args) =>
       normalizeIssueGraphArguments(args, ctx.recorder) as Static<typeof IssueGraphParams>,
@@ -424,7 +429,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
       try {
         return await run({
           action: "graph",
-          graph: { epic: params.epic, features: params.features, tasks: params.tasks },
+          graph: { epic: params.epic, features: params.features },
           ...(params.dry_run === true ? { dry_run: true } : {}),
         } as InternalIssueParams);
       } catch (error) {
@@ -470,16 +475,16 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         const treeKey = rootRef ? `${refKey(rootRef)}:${depth}` : `roots:${state}:${depth}`;
         const cached = treeCache.get(treeKey);
         if (cached) return ok(`${cached}\n[cached tree; issue graph unchanged]`);
-        let deliverableTasks = 0;
-        let readyTasks = 0;
+        let deliverableFeatures = 0;
+        let readyFeatures = 0;
         let contextMissing = 0;
         const inspect = (issue: Issue): void => {
-          if (!isReserved(issue) && issueContextErrors({ kind: issue.kind, body: issue.body }).length > 0) {
+          if (issueContextErrors({ kind: issue.kind, body: issue.body }).length > 0) {
             contextMissing += 1;
           }
-          if (issue.kind !== "task" || isReserved(issue)) return;
-          deliverableTasks += 1;
-          if (issue.plan?.status === "ready") readyTasks += 1;
+          if (issue.kind !== "feature") return;
+          deliverableFeatures += 1;
+          if (issue.plan?.status === "ready") readyFeatures += 1;
         };
         const lines: string[] = [];
         const walk = async (issue: Issue, level: number): Promise<void> => {
@@ -516,11 +521,11 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
           lines.push(line(root));
           await walk(root, 0);
         }
-        const graphNote = deliverableTasks === 0
+        const graphNote = deliverableFeatures === 0
           ? ""
-          : deliverableTasks === readyTasks
-            ? `Graph complete: all ${deliverableTasks} deliverable Tasks are plan ready. Create a named Epic/Feature/Task only when the request asks; else stop with issue numbers.`
-            : `Graph incomplete: ${deliverableTasks - readyTasks} of ${deliverableTasks} deliverable Tasks are not plan ready.`;
+          : deliverableFeatures === readyFeatures
+            ? `Graph complete: all ${deliverableFeatures} deliverable Features are plan ready. Create a named Epic/Feature only when the request asks; else stop with issue numbers.`
+            : `Graph incomplete: ${deliverableFeatures - readyFeatures} of ${deliverableFeatures} deliverable Features are not plan ready.`;
         const contextNote = contextMissing > 0
           ? `Context incomplete: ${contextMissing} issue(s) miss required body sections. Repair them with action=edit when the request asks.`
           : "";
@@ -533,8 +538,8 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         requireCreate();
         if (!params.graph) {
           return fail(
-            "graph action requires graph. Send {\"action\":\"graph\",\"graph\":{\"epic\":{...},\"features\":[...],\"tasks\":[...]}}. " +
-              "epic/features/tasks are not top-level parameters.",
+            "graph action requires graph. Send {\"action\":\"graph\",\"graph\":{\"epic\":{...},\"features\":[...]}}. " +
+              "epic/features are not top-level parameters.",
           );
         }
         const graph = params.graph;
@@ -542,9 +547,6 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         graph.epic.body = withContextFiles(graph.epic.body ?? "", graph.epic.context_files);
         for (const feature of graph.features) {
           feature.body = withContextFiles(feature.body ?? "", feature.context_files);
-        }
-        for (const task of graph.tasks) {
-          task.body = withContextFiles(task.body ?? "", task.context_files);
         }
         const keys = new Set<string>();
         const addKey = (key: string): void => {
@@ -554,16 +556,8 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         };
         addKey(graph.epic.key);
         for (const feature of graph.features) addKey(feature.key);
-        for (const task of graph.tasks) addKey(task.key);
-        const featureKeys = new Set(graph.features.map((feature) => feature.key));
-        for (const task of graph.tasks) {
-          if (!featureKeys.has(task.feature)) {
-            throw new IssueError("graph_parent_missing", `task ${task.key} references unknown feature ${task.feature}`);
-          }
-        }
         // Validate blocked_by before anything is created (dry runs included):
-        // temp keys must exist, issue refs must exist and must not be reserved
-        // anchors, which can never close mid-plan and would wedge the graph.
+        // temp keys must exist in the payload, issue refs must exist.
         const checkGraphDependency = async (ownerLabel: string, ownerKey: string, value: string): Promise<void> => {
           if (keys.has(value)) {
             if (value === ownerKey) throw new IssueError("dependency_self", `${ownerLabel} cannot block itself`);
@@ -578,50 +572,43 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
           }
           const found = await ctx.provider.get(dependency);
           if (!found) throw new IssueError("dependency_not_found", `${ownerLabel}: dependency ${value} was not found`);
-          if (isReserved(found)) throw new IssueError("dependency_reserved", `${ownerLabel}: ${anchorBlockerMessage(found)}`);
         };
         for (const feature of graph.features) {
           for (const value of feature.blocked_by ?? []) {
             await checkGraphDependency(`feature ${feature.key}`, feature.key, value);
           }
         }
-        for (const task of graph.tasks) {
-          for (const value of task.blocked_by ?? []) {
-            await checkGraphDependency(`task ${task.key}`, task.key, value);
-          }
-        }
         const bodyErrors: string[] = [];
-        const checkBody = (label: string, kind: "epic" | "feature" | "task", body = ""): void => {
+        const checkBody = (label: string, kind: "epic" | "feature", body = ""): void => {
           for (const error of issueContextErrors({ kind, body })) bodyErrors.push(`${label} ${error}`);
         };
         checkBody(`epic ${graph.epic.key}`, "epic", graph.epic.body);
         for (const feature of graph.features) checkBody(`feature ${feature.key}`, "feature", feature.body);
-        for (const task of graph.tasks) checkBody(`task ${task.key}`, "task", task.body);
         if (bodyErrors.length > 0) {
           return fail(
             `graph issues need body context: ${bodyErrors.join(" | ")}. ` +
               "Add the required sections and retry.",
           );
         }
-        const oversized = graph.tasks
-          .map((task) => ({
-            key: task.key,
-            errors: taskSizeErrors({
-              acceptance: parseAcceptance(task.body ?? ""),
-              body: task.body ?? "",
+        const oversized = graph.features
+          .map((feature) => ({
+            key: feature.key,
+            errors: featureSizeErrors({
+              acceptance: parseAcceptance(feature.body ?? ""),
+              body: feature.body ?? "",
             }),
           }))
-          .filter((task) => task.errors.length > 0);
+          .filter((feature) => feature.errors.length > 0);
         if (oversized.length > 0) {
           return fail(
-            `graph has oversized Tasks: ${oversized
-              .map((task) => `${task.key} (${task.errors.join("; ")})`)
-              .join(" | ")}. Split each into smaller Tasks and retry.`,
+            `graph has oversized Features: ${oversized
+              .map((feature) => `${feature.key} (${feature.errors.join("; ")})`)
+              .join(" | ")}. Split each into smaller Features and retry.`,
           );
         }
         if (dryRun) {
           return ok(
-            `graph valid: epic ${graph.epic.key}; features ${graph.features.length}; tasks ${graph.tasks.length}; no issues created`,
+            `graph valid: epic ${graph.epic.key}; features ${graph.features.length}; no issues created`,
           );
         }
         const createdNodes = new Map<string, Issue>();
@@ -643,10 +630,6 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         remember(epic);
         ctx.state?.setPhase("act");
         ctx.recorder.event("issue_created", { number: epic.ref.number, kind: epic.kind, title: epic.title });
-        const epicReserved = await ensureEpicReserved(ctx.provider, epic.ref, { runCounts: counts() });
-        remember(epicReserved.feature0);
-        remember(epicReserved.task0);
-        linkPlanningRun(epicReserved.task0);
         for (const feature of graph.features) {
           const created = await ctx.provider.create({
             title: feature.title,
@@ -662,32 +645,9 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
             title: created.title,
             parent: epic.ref.number,
           });
-          const task0 = await ensureFeatureReserved(ctx.provider, created.ref, { runCounts: counts() });
-          remember(task0);
-          linkPlanningRun(task0);
-        }
-        for (const task of graph.tasks) {
-          const parent = createdNodes.get(task.feature);
-          if (!parent || parent.kind !== "feature") {
-            throw new IssueError("graph_parent_missing", `feature ${task.feature} was not created`);
-          }
-          const created = await ctx.provider.create({
-            title: task.title,
-            body: withApproval(task.body ?? "", ctx.defaultApproval),
-            kind: "task",
-            parent: parent.ref,
-          });
-          createdNodes.set(task.key, created);
-          remember(created);
-          ctx.recorder.event("issue_created", {
-            number: created.ref.number,
-            kind: created.kind,
-            title: created.title,
-            parent: parent.ref.number,
-          });
           const auto = await autoPlan(created);
           if (auto.issue) remember(auto.issue, "plan ready");
-          else notReady.push(`${task.key}: ${auto.error ?? "missing acceptance criteria"}`);
+          else notReady.push(`${feature.key}: ${auto.error ?? "missing acceptance criteria"}`);
         }
         for (const feature of graph.features) {
           const target = createdNodes.get(feature.key)!;
@@ -697,79 +657,64 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
             remember(updated);
           }
         }
-        for (const task of graph.tasks) {
-          const target = createdNodes.get(task.key)!;
-          const blockedBy = resolveDependencies(task.blocked_by);
-          if (blockedBy) {
-            const updated = await ctx.provider.update(target.ref, { blockedBy });
-            remember(updated);
-          }
-        }
         treeCache.clear();
         const summary = [
           `epic #${epic.ref.number}`,
           `features ${graph.features.map((feature) => `${feature.key}=#${createdNodes.get(feature.key)!.ref.number}`).join(", ") || "none"}`,
-          `tasks ${graph.tasks.map((task) => `${task.key}=#${createdNodes.get(task.key)!.ref.number}`).join(", ") || "none"}`,
         ].join("; ");
+        let tracking = "";
+        const graphPlanFile = trackingPlanFile(ctx, "");
+        if (graphPlanFile) {
+          tracking += trackCreated(ctx, "epic", epic.ref.number, epic.title, graphPlanFile);
+          for (const feature of graph.features) {
+            const created = createdNodes.get(feature.key)!;
+            tracking += trackCreated(ctx, "feature", created.ref.number, created.title, graphPlanFile);
+          }
+        }
         return ok(
-          `created graph: ${summary}` +
+          `created graph: ${summary}${tracking}` +
             (notReady.length > 0 ? `\nnot plan-ready: ${notReady.join("; ")}` : ""),
         );
       }
       case "create": {
         requireCreate();
         treeCache.clear();
-        if (!params.kind) return fail("create requires kind (epic|feature|task)");
+        const kind = params.kind as string | undefined;
+        if (!kind) return fail("create requires kind (epic|feature)");
+        if (kind === "task") return fail("Tasks are no longer tracked; create a Feature under its Epic instead");
+        if (kind !== "epic" && kind !== "feature") return fail("create requires kind (epic|feature)");
         if (!params.title) return fail("create requires title");
         const body = withContextFiles(
           withApproval(params.body ?? "", ctx.defaultApproval),
           params.context_files,
         );
-        const contextErrors = issueContextErrors({ kind: params.kind, body });
+        const contextErrors = issueContextErrors({ kind, body });
         if (contextErrors.length > 0) {
           return fail(
-            `${params.kind} body needs context: ${contextErrors.join("; ")}. ` +
+            `${kind} body needs context: ${contextErrors.join("; ")}. ` +
               "Add the required sections and retry.",
           );
         }
         const parent = params.parent ? ref(params.parent, "parent") : undefined;
-        let parentFeatureTask0: Issue | undefined;
-        let parentEpicTask0: Issue | undefined;
-        if (params.kind === "task") {
-          if (!parent) return fail("creating a Task requires parent (its Feature)");
-          const parentIssue = await ctx.provider.get(parent);
-          if (!parentIssue) return fail(`parent not found: ${params.parent}`);
-          if (parentIssue.kind !== "feature") return fail(`a Task's parent must be a Feature (got ${parentIssue.kind})`);
-          if (isReserved(parentIssue)) {
-            return fail(
-              `parent #${parentIssue.ref.number} is a reserved planning anchor; ` +
-                "create a normal Feature under the Epic and put Tasks there",
-            );
-          }
-          // Repair the parent chain before adding a deliverable.
-          if (parentIssue.kind === "feature") {
-            parentFeatureTask0 = await ensureFeatureReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
-          }
-        }
-        if (params.kind === "feature") {
+        if (kind === "epic") {
+          if (parent) return fail("an Epic has no parent");
+        } else {
           if (!parent) return fail("creating a Feature requires parent (its Epic)");
           const parentIssue = await ctx.provider.get(parent);
           if (!parentIssue) return fail(`parent not found: ${params.parent}`);
           if (parentIssue.kind !== "epic") return fail(`a Feature's parent must be an Epic (got ${parentIssue.kind})`);
-          const reserved = await ensureEpicReserved(ctx.provider, parentIssue.ref, { runCounts: counts() });
-          parentEpicTask0 = reserved.task0;
         }
-        if (params.kind === "task") {
-          const errors = taskSizeErrors({ acceptance: parseAcceptance(body), body });
+        if (kind === "feature") {
+          const errors = featureSizeErrors({ acceptance: parseAcceptance(body), body });
           if (errors.length > 0) {
-            return fail(`Task is too large: ${errors.join("; ")}. Split it into smaller Tasks and retry.`);
+            return fail(`Feature is too large: ${errors.join("; ")}. Split it into smaller Features and retry.`);
           }
         }
         const blockedBy = await dependencies([params.blocked_by, params.depends_on]);
         const created = await ctx.provider.create({
           title: params.title,
           body,
-          kind: params.kind,
+          kind,
           parent,
           ...(params.labels != null ? { labels: params.labels } : {}),
           ...(blockedBy ? { blockedBy } : {}),
@@ -782,26 +727,10 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         });
         remember(created);
         ctx.state?.setPhase("act");
-        if (created.kind === "task" && parentFeatureTask0) linkPlanningRun(parentFeatureTask0);
-        if (created.kind === "feature" && parentEpicTask0) linkPlanningRun(parentEpicTask0);
         let note = "";
         if (created.kind === "epic") {
-          const reserved = await ensureEpicReserved(ctx.provider, created.ref, { runCounts: counts() });
-          remember(reserved.feature0);
-          remember(reserved.task0);
-          linkPlanningRun(reserved.task0);
           note =
-            `\nreserved: Feature 0 #${reserved.feature0.ref.number} "Feature 0: Planning & Review", ` +
-            `Task 0 #${reserved.task0.ref.number} "Task 0: Planning & Review"` +
-            `\nThese are coordination anchors, not deliverables. Do not add work under them.` +
             `\nNext: create Features with action=create kind=feature parent=#${created.ref.number}.`;
-        } else if (created.kind === "feature") {
-          const task0 = await ensureFeatureReserved(ctx.provider, created.ref, { runCounts: counts() });
-          remember(task0);
-          note =
-            `\nreserved: Task 0 #${task0.ref.number} "Task 0: Planning & Review"` +
-            `\nThis is a coordination anchor, not a deliverable. Do not add work under it.` +
-            `\nNext: create Tasks with action=create kind=task parent=#${created.ref.number}.`;
         } else if (created.plan) {
           note = `\nplan already ${created.plan.status}.`;
         } else {
@@ -811,7 +740,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
             note =
               `\nplan ready on #${auto.issue.ref.number}. ` +
               "Use context_files for the exact files you chose after reading. " +
-              "Then create the next Task or stop.";
+              "Then create the next Feature or stop.";
           } else if (created.acceptance.length > 0) {
             note =
               `\nNext: plan failed (${auto.error ?? "unknown error"}); fix the body ` +
@@ -822,6 +751,8 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
               `then action=plan issue=#${created.ref.number} status=ready.`;
           }
         }
+        const planFile = trackingPlanFile(ctx, params.body ?? "");
+        if (planFile) note += trackCreated(ctx, created.kind, created.ref.number, created.title, planFile);
         return ok(`created #${created.ref.number} (${created.kind}): ${created.title}${note}`);
       }
       case "edit": {
@@ -829,17 +760,15 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         treeCache.clear();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
-        if (target.reserved && params.title != null) {
-          return fail("reserved issues cannot be retitled (their identity is the reserved role)");
+        if (target.kind !== "epic" && target.kind !== "feature") {
+          return fail(`only Epic or Feature issues can be edited (got ${target.kind})`);
         }
-        const nextBody = target.reserved
-          ? (params.body ?? undefined)
-          : params.body == null
-            ? (params.context_files && params.context_files.length > 0
-                ? withContextFiles(target.body ?? "", params.context_files)
-                : undefined)
-            : withContextFiles(params.body, params.context_files);
-        if (!target.reserved && nextBody !== undefined) {
+        const nextBody = params.body == null
+          ? (params.context_files && params.context_files.length > 0
+              ? withContextFiles(target.body ?? "", params.context_files)
+              : undefined)
+          : withContextFiles(params.body, params.context_files);
+        if (nextBody !== undefined) {
           const contextErrors = issueContextErrors({ kind: target.kind, body: nextBody });
           if (contextErrors.length > 0) {
             return fail(
@@ -848,24 +777,33 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
             );
           }
         }
-        if (target.kind === "task" && nextBody !== undefined) {
-          const errors = taskSizeErrors({ acceptance: parseAcceptance(nextBody), body: nextBody });
+        if (target.kind === "feature" && nextBody !== undefined) {
+          const errors = featureSizeErrors({ acceptance: parseAcceptance(nextBody), body: nextBody });
           if (errors.length > 0) {
-            return fail(`Task is too large: ${errors.join("; ")}. Split it into smaller Tasks and retry.`);
+            return fail(`Feature is too large: ${errors.join("; ")}. Split it into smaller Features and retry.`);
           }
         }
         const blockedBy = await dependencies([params.blocked_by, params.depends_on], target.ref);
-        // Removal skips the reserved-anchor guard on purpose: unwiring an
-        // anchor is the repair, and anchors are never valid blockers anyway.
         const removeBlockedBy = params.remove_blocked_by?.length
-          ? await dependencies([params.remove_blocked_by], undefined, { allowReserved: true })
+          ? await dependencies([params.remove_blocked_by], undefined)
           : undefined;
+        let nextParent: IssueRef | null | undefined;
+        if (params.parent !== undefined) {
+          const candidate = ref(params.parent, "parent");
+          const parentIssue = await ctx.provider.get(candidate);
+          if (!parentIssue) return fail(`parent not found: ${params.parent}`);
+          if (!(target.kind === "feature" && parentIssue.kind === "epic")) {
+            return fail(`invalid hierarchy: ${target.kind} cannot be a child of ${parentIssue.kind} (Feature→Epic)`);
+          }
+          nextParent = candidate;
+        }
         const updated = await ctx.provider.update(target.ref, {
           ...(params.title != null ? { title: params.title } : {}),
           ...(nextBody !== undefined ? { body: nextBody } : {}),
           ...(params.labels != null ? { labels: params.labels } : {}),
           ...(blockedBy ? { blockedBy } : {}),
           ...(removeBlockedBy ? { removeBlockedBy } : {}),
+          ...(nextParent !== undefined ? { parent: nextParent } : {}),
         });
         remember(updated);
         ctx.state?.setPhase("act");
@@ -876,8 +814,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         treeCache.clear();
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
-        if (target.kind !== "task") return fail("mc:plan applies to Task issues only");
-        if (target.reserved) return fail("reserved anchors cannot carry a deliverable plan");
+        if (target.kind !== "feature") return fail("mc:plan applies to Feature issues only");
         const planStatus = params.plan_status ?? params.status;
         if (planStatus === "ready" && target.acceptance.length === 0) {
           return fail("a ready plan needs acceptance criteria in the issue body");
@@ -938,14 +875,15 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
           );
         }
         await ctx.provider.close(target.ref, params.reason ?? "completed");
-        const cascaded = await cascadeReserved(ctx.provider, target, "close");
         ctx.recorder.event("issue_closed", {
           issue: target.ref.number,
           by: ctx.recorder.id,
           reason: params.reason,
-          cascaded,
         });
-        return ok(`closed #${target.ref.number}${cascaded.length ? ` (reserved: ${cascaded.map((n) => `#${n}`).join(", ")})` : ""}`);
+        const untracked = target.kind === "epic" || target.kind === "feature"
+          ? untrackClosed(ctx, target.ref.number)
+          : "";
+        return ok(`closed #${target.ref.number}${untracked}`);
       }
       case "link": {
         requirePlan();
@@ -955,11 +893,9 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         if (!params.parent) return fail("link requires parent");
         const parent = await ctx.provider.get(ref(params.parent, "parent"));
         if (!parent) return fail(`parent not found: ${params.parent}`);
-        if (!(child.kind === "feature" && parent.kind === "epic") && !(child.kind === "task" && parent.kind === "feature")) {
-          return fail(`invalid hierarchy: ${child.kind} cannot be a child of ${parent.kind} (Feature→Epic, Task→Feature)`);
+        if (!(child.kind === "feature" && parent.kind === "epic")) {
+          return fail(`invalid hierarchy: ${child.kind} cannot be a child of ${parent.kind} (Feature→Epic)`);
         }
-        if (child.kind === "task") await ensureFeatureReserved(ctx.provider, parent.ref, { runCounts: counts() });
-        if (child.kind === "feature") await ensureEpicReserved(ctx.provider, parent.ref, { runCounts: counts() });
         await ctx.provider.linkParent(child.ref, parent.ref);
         ctx.recorder.event("issue_linked", { issue: child.ref.number, parent: parent.ref.number });
         remember(child, `parent #${parent.ref.number}`);
@@ -971,30 +907,27 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         const target = await ctx.provider.get(ref(params.issue, "issue"));
         if (!target) return fail(`issue not found: ${params.issue}`);
         if (target.kind === "epic") {
-          const reserved = await ensureEpicReserved(ctx.provider, target.ref, { runCounts: counts() });
+          const children = await ctx.provider.children(target.ref);
+          const features = children.filter((child) => child.kind === "feature");
+          for (const feature of features.slice(0, 50)) remember(feature);
           remember(target);
-          remember(reserved.feature0);
-          remember(reserved.task0);
+          const other = children.length - features.length;
           return ok(
-            `epic #${target.ref.number}: Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}`,
+            `epic #${target.ref.number}: ${features.length} feature(s)` +
+              (other > 0 ? `, ${other} non-feature child(ren)` : ""),
           );
         }
         if (target.kind === "feature") {
-          const task0 = await ensureFeatureReserved(ctx.provider, target.ref, { runCounts: counts() });
-          remember(target);
-          remember(task0);
-          return ok(`feature #${target.ref.number}: Task 0 #${task0.ref.number}`);
-        }
-        if (target.parent) {
+          if (!target.parent) return fail(`feature #${target.ref.number} has no parent Epic`);
           const parent = await ctx.provider.get(target.parent);
-          if (parent?.kind === "feature") {
-            const task0 = await ensureFeatureReserved(ctx.provider, parent.ref, { runCounts: counts() });
-            remember(target);
-            remember(task0);
-            return ok(`task #${target.ref.number}: parent Task 0 #${task0.ref.number}`);
+          if (!parent) return fail(`parent not found for feature #${target.ref.number}`);
+          if (parent.kind !== "epic") {
+            return fail(`a Feature's parent must be an Epic (got ${parent.kind})`);
           }
+          remember(target);
+          return ok(`feature #${target.ref.number}: parent epic #${parent.ref.number}`);
         }
-        return ok(`task #${target.ref.number}: no reserved hierarchy to ensure`);
+        return fail(`only Epic or Feature issues carry a hierarchy (got ${target.kind})`);
       }
       default:
         return fail(`unknown issue action: ${String((params as { action?: unknown }).action)}`);
@@ -1015,12 +948,3 @@ function withApproval(body: string, mode: "human" | "agent"): string {
   return `${body.replace(/\s+$/, "")}\n\n<!-- mc:approval {"mode":"${mode}"} -->\n`;
 }
 
-/**
- * Run counts for reserved-duplicate decisions. The issue tool only knows its
- * own run, so callers pass a provider-backed count when available.
- */
-function requireRuns(recorder: RunRecorder): Array<{ issue?: IssueRef }> {
-  return [{ issue: recorder.current.issue }];
-}
-
-export { isReservedTask };

@@ -1,6 +1,7 @@
 /**
  * Phase 8 tests: acceptance evidence, parent completion checks, and the
- * reserved-issue close/reopen cascade.
+ * (removed) reserved-issue cascade. All children are deliverables; there are
+ * no reserved anchors, so cascadeReserved is a no-op returning [].
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,7 +11,6 @@ import { tmpdir } from "node:os";
 
 import { checkCompletion, acceptanceEvidence, cascadeReserved } from "../dist/issues/completion.js";
 import { RunRecorder } from "../dist/state/runs.js";
-import { parseReservedMarker } from "../dist/issues/provider.js";
 
 function fakeLayout(root) {
   return {
@@ -62,10 +62,6 @@ class FakeProvider {
     const i = issue(number, input.kind, input.title, {
       body: input.body,
       parent: input.parent,
-      reserved: (() => {
-        const m = parseReservedMarker(input.body ?? "");
-        return m ? { for: { provider: "github", repo: "o/r", number: Number(m.for.split("#")[1]) }, kind: m.kind } : undefined;
-      })(),
     });
     this.map.set(number, i);
     return i;
@@ -84,97 +80,69 @@ test("completion requires closed deliverable children and acceptance evidence", 
     const layout = fakeLayout(root);
     const epic = issue(10, "epic", "Epic");
     const feature = issue(20, "feature", "Feature", { parent: epic.ref });
-    const t1 = issue(31, "task", "Task A", { parent: feature.ref });
-    const t2 = issue(32, "task", "Task B", { parent: feature.ref });
-    const feature0 = issue(11, "feature", "Feature 0: Planning & Review", {
-      parent: epic.ref,
-      labels: ["mc:reserved"],
-      reserved: { for: epic.ref, kind: "epic-pr" },
-    });
-    const task0 = issue(21, "task", "Task 0: Planning & Review", {
-      parent: feature.ref,
-      labels: ["mc:reserved"],
-      reserved: { for: feature.ref, kind: "feature-pr" },
-    });
-    const provider = new FakeProvider([epic, feature, t1, t2, feature0, task0]);
+    const f1 = issue(31, "feature", "Feature A", { parent: epic.ref });
+    const f2 = issue(32, "feature", "Feature B", { parent: epic.ref });
+    const provider = new FakeProvider([epic, feature, f1, f2]);
 
-    const open = await checkCompletion(provider, layout, feature);
+    const open = await checkCompletion(provider, layout, epic);
     assert.equal(open.ok, false);
-    assert.deepEqual(open.openChildren, [31, 32]);
+    assert.deepEqual(open.openChildren, [20, 31, 32]);
     assert.equal(open.acceptance.verified, false);
 
-    t1.state = "closed";
-    t2.state = "closed";
-    const noAcceptance = await checkCompletion(provider, layout, feature);
+    feature.state = "closed";
+    f1.state = "closed";
+    f2.state = "closed";
+    const noAcceptance = await checkCompletion(provider, layout, epic);
     assert.equal(noAcceptance.ok, false);
     assert.match(noAcceptance.reason, /acceptance/);
 
-    const recorder = new RunRecorder(layout, { agent: "review", mode: "", request: "review", repoRoot: root, issue: feature.ref });
-    recorder.event("acceptance_verified", { issue: 20, by: "human", criteria: [] });
+    const recorder = new RunRecorder(layout, { agent: "review", mode: "", request: "review", repoRoot: root, issue: epic.ref });
+    recorder.event("acceptance_verified", { issue: 10, by: "human", criteria: [] });
     recorder.finalize("completed");
-    assert.equal((await acceptanceEvidence(layout, feature.ref)).verified, true);
-    const ok = await checkCompletion(provider, layout, feature);
+    assert.equal((await acceptanceEvidence(layout, epic.ref)).verified, true);
+    const ok = await checkCompletion(provider, layout, epic);
     assert.equal(ok.ok, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("a Task with an open PR cannot close", async () => {
+test("a Feature with an open PR cannot close", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-comp-pr-"));
   try {
     const layout = fakeLayout(root);
-    const task = issue(31, "task", "Task A");
-    const provider = new FakeProvider([task]);
-    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "build", repoRoot: root, issue: task.ref });
+    const feature = issue(31, "feature", "Feature A");
+    const provider = new FakeProvider([feature]);
+    const recorder = new RunRecorder(layout, { agent: "build", mode: "", request: "build", repoRoot: root, issue: feature.ref });
     recorder.event("acceptance_verified", { issue: 31, by: "human", criteria: [] });
-    recorder.patchSummary({ prNumber: 7, prState: "open", branch: "mc/task/31", baseBranch: "mc/feature/30" });
+    recorder.patchSummary({ prNumber: 7, prState: "open", branch: "mc/feature/31", baseBranch: "main" });
     recorder.finalize("completed");
-    const blocked = await checkCompletion(provider, layout, task);
+    const blocked = await checkCompletion(provider, layout, feature);
     assert.equal(blocked.ok, false);
     assert.match(blocked.reason, /PR #7 is still open/);
 
     const run = recorder.current;
     const merged = RunRecorder.reopen(layout, run);
     merged.patchSummary({ prState: "merged" });
-    assert.equal((await checkCompletion(provider, layout, task)).ok, true);
+    assert.equal((await checkCompletion(provider, layout, feature)).ok, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("closing a parent cascades to reserved anchors; reopening restores them", async () => {
+test("closing a parent has no reserved cascade; cascadeReserved returns []", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-casc-"));
   try {
     const epic = issue(10, "epic", "Epic");
-    const feature0 = issue(11, "feature", "Feature 0: Planning & Review", {
-      parent: epic.ref,
-      labels: ["mc:reserved"],
-      reserved: { for: epic.ref, kind: "epic-pr" },
-    });
-    const task00 = issue(12, "task", "Task 0: Planning & Review", {
-      parent: feature0.ref,
-      labels: ["mc:reserved"],
-      reserved: { for: feature0.ref, kind: "feature-pr" },
-    });
     const feature = issue(20, "feature", "Feature", { parent: epic.ref });
-    const task0 = issue(21, "task", "Task 0: Planning & Review", {
-      parent: feature.ref,
-      labels: ["mc:reserved"],
-      reserved: { for: feature.ref, kind: "feature-pr" },
-    });
-    const provider = new FakeProvider([epic, feature0, task00, feature, task0]);
+    const provider = new FakeProvider([epic, feature]);
 
     const closed = await cascadeReserved(provider, epic, "close");
-    assert.deepEqual(closed.sort((a, b) => a - b), [11, 12]);
-    assert.equal(provider.map.get(11).state, "closed");
-    assert.equal(provider.map.get(12).state, "closed");
-    assert.equal(provider.map.get(21).state, "open", "other features' anchors untouched");
+    assert.deepEqual(closed, []);
+    assert.equal(provider.map.get(20).state, "open", "children are deliverables, untouched by the cascade");
 
     const reopened = await cascadeReserved(provider, epic, "reopen");
-    assert.deepEqual(reopened.sort((a, b) => a - b), [11, 12]);
-    assert.equal(provider.map.get(11).state, "open");
-    assert.equal(provider.map.get(12).state, "open");
+    assert.deepEqual(reopened, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

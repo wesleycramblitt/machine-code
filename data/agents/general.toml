@@ -11,6 +11,7 @@ issue_access = "none"
 modes = []
 blurb = "answers questions; read tool only"
 preset = "assistant"
+worktree = false
 capabilities = ["code:read", "context:inherit"]
 
 [weights]

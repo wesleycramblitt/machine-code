@@ -1,13 +1,13 @@
 /**
  * machine_code — the `mc:plan` issue marker.
  *
- * A deliverable Task carries one JSON marker. Draft tasks are ignored by the
- * orchestrator; a ready marker supplies the build/review policy. Unknown keys
- * are ignored so the marker can grow without breaking older readers.
+ * A deliverable Feature carries one JSON marker. Draft features are ignored by
+ * the orchestrator; a ready marker supplies the build/review policy. Unknown
+ * keys are ignored so the marker can grow without breaking older readers.
  */
 export type PlanStatus = "draft" | "ready";
 export type PlanRole = "build" | "review";
-export type PlanVerification = "direct" | "verified" | "redundant";
+export type PlanVerification = "direct" | "verified";
 export type PlanWorktree = "required" | "optional";
 export type PlanReview = "agent" | "human";
 
@@ -31,7 +31,7 @@ export interface PlanParseResult {
 
 const STATUSES: readonly PlanStatus[] = ["draft", "ready"];
 const ROLES: readonly PlanRole[] = ["build", "review"];
-const VERIFICATIONS: readonly PlanVerification[] = ["direct", "verified", "redundant"];
+const VERIFICATIONS: readonly PlanVerification[] = ["direct", "verified"];
 const WORKTREES: readonly PlanWorktree[] = ["required", "optional"];
 const REVIEWS: readonly PlanReview[] = ["agent", "human"];
 
@@ -62,9 +62,15 @@ export function parsePlanMarker(body: string): PlanParseResult {
   if (value.role !== undefined && !oneOf(value.role, ROLES)) {
     errors.push("role must be build or review");
   }
-  const verification = oneOf(value.verification, VERIFICATIONS) ?? "verified";
-  if (value.verification !== undefined && !oneOf(value.verification, VERIFICATIONS)) {
-    errors.push("verification must be direct, verified, or redundant");
+  const rawVerification = value.verification;
+  let verification: PlanVerification = "verified";
+  if (rawVerification === "redundant") {
+    verification = "verified";
+  } else {
+    verification = oneOf(rawVerification, VERIFICATIONS) ?? "verified";
+    if (value.verification !== undefined && !oneOf(value.verification, VERIFICATIONS)) {
+      errors.push("verification must be direct or verified");
+    }
   }
   const worktree = oneOf(value.worktree, WORKTREES) ?? "required";
   if (value.worktree !== undefined && !oneOf(value.worktree, WORKTREES)) {

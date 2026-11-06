@@ -229,15 +229,16 @@ export function reusableWorktreeOwner(
 
 /* ------------------------------------------------------------- creation */
 
-export type WorktreeKind = "task" | "feature" | "run";
+export type WorktreeKind = "feature" | "task" | "run";
 
 export interface WorktreeRequest {
   layout: Layout;
   runId: string;
+  /** "task" is a deprecated alias for "feature" (same branch layout). */
   kind: WorktreeKind;
   /** Numeric issue precursor (Phase 4 adds provider-backed validation). */
   issueNumber?: number;
-  /** Task runs: explicit parent Feature for the branch base. */
+  /** Feature runs: explicit parent Epic for the branch base. */
   featureNumber?: number;
   /** Explicit base branch/ref override. */
   base?: string;
@@ -259,11 +260,7 @@ export interface WorktreeSpec {
 }
 
 function branchFor(kind: WorktreeKind, runId: string, issueNumber?: number): string {
-  if (kind === "task") {
-    if (!issueNumber) throw new WorktreeError("issue_required", "a task worktree needs --issue <n>");
-    return `mc/task/${issueNumber}`;
-  }
-  if (kind === "feature") {
+  if (kind === "feature" || kind === "task") {
     if (!issueNumber) throw new WorktreeError("issue_required", "a feature worktree needs --issue <n>");
     return `mc/feature/${issueNumber}`;
   }
@@ -341,8 +338,8 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   // Clean preflight always applies to the MAIN worktree.
   await ensureCleanMainTree(mainRoot);
 
-  // Base resolution: explicit --base wins; a task with a known feature bases
-  // on the feature branch; otherwise the default base branch.
+  // Base resolution: explicit --base wins; a feature with a known parent bases
+  // on the parent branch; otherwise the default base branch.
   let configuredBase: string | undefined;
   try {
     configuredBase = loadMachineConfig(layout).git?.baseBranch;
@@ -353,14 +350,14 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   let baseBranch: string;
   if (req.base) {
     baseBranch = req.base;
-  } else if (req.kind === "task" && req.featureNumber) {
+  } else if ((req.kind === "task" || req.kind === "feature") && req.featureNumber) {
     baseBranch = `mc/feature/${req.featureNumber}`;
   } else {
     baseBranch = defaultBase;
   }
 
-  // Ensure the parent feature branch exists before basing a task on it.
-  if (!req.base && req.kind === "task" && req.featureNumber) {
+  // Ensure the parent feature branch exists before basing a feature on it.
+  if (!req.base && (req.kind === "task" || req.kind === "feature") && req.featureNumber) {
     const featureBranch = `mc/feature/${req.featureNumber}`;
     if (!(await branchExists(mainRoot, featureBranch))) {
       const featureBase = await resolveBaseRef(mainRoot, defaultBase);

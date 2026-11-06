@@ -153,6 +153,7 @@ export interface AgentConfigOverrides {
   ask?: boolean;
   approval?: string;
   ambiguity?: string;
+  worktree?: boolean;
 }
 
 export type CapabilityAxis = "reasoning" | "code" | "agentic" | "general";
@@ -205,6 +206,8 @@ export interface AgentPolicy {
   approval?: string;
   /** Ambiguity mode: strict | precise | adaptive | autonomous. */
   ambiguity?: string;
+  /** Whether the run works in an isolated worktree (default on). */
+  worktree?: boolean;
 }
 
 export interface Policy {
@@ -297,6 +300,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       ask: typeof r.ask === "boolean" ? r.ask : undefined,
       approval: typeof r.approval === "string" ? r.approval : undefined,
       ambiguity: typeof r.ambiguity === "string" ? r.ambiguity : undefined,
+      worktree: typeof r.worktree === "boolean" ? r.worktree : undefined,
     };
   }
   const issuesRaw = (raw.issues ?? {}) as Record<string, unknown>;
@@ -456,6 +460,7 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     ask: typeof raw.ask === "boolean" ? raw.ask : base.ask,
     approval: typeof raw.approval === "string" ? raw.approval : base.approval,
     ambiguity: typeof raw.ambiguity === "string" ? raw.ambiguity : base.ambiguity,
+    worktree: typeof raw.worktree === "boolean" ? raw.worktree : base.worktree,
   };
 }
 

@@ -51,6 +51,8 @@ test("creates, reads, lists, and updates ledger state", () => {
     assert.deepEqual(readOrchestration(layout, state.id).approvedPackets, [31, 32]);
     updateOrchestration(layout, state.id, { approvedResults: [32], checkpoint: "result_approved" });
     assert.deepEqual(readOrchestration(layout, state.id).approvedResults, [32]);
+    updateOrchestration(layout, state.id, { approvedResults: [32], approvedFeatures: [32] });
+    assert.deepEqual(readOrchestration(layout, state.id).approvedFeatures, [32]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

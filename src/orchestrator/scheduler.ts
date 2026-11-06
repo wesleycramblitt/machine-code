@@ -1,14 +1,14 @@
 /**
- * machine_code — deterministic task readiness and dispatch selection.
+ * machine_code — deterministic feature readiness and dispatch selection.
  *
  * The scheduler reads issues and run records only. It never calls a model and
- * never writes project state. A task is ready when its plan is ready, all
- * blockers are closed, and no active run already owns it.
+ * never writes project state. A feature is ready when it is open, carries
+ * acceptance criteria, all blockers are closed, and no active run owns it.
+ * No `mc:plan` marker is required.
  */
 import { refKey, type Issue, type IssueRef } from "../issues/provider.js";
-import { isReserved } from "../issues/reserved.js";
-import { validatePlanGraph, validatePlanIssue } from "../plan/validate.js";
-import { isReadyPlan, type PlanMarker } from "../plan/schema.js";
+import { validatePlanGraph } from "../plan/validate.js";
+import { parsePlanMarker, type PlanMarker } from "../plan/schema.js";
 import type { RunSummary } from "../state/runs.js";
 
 export type OrchestrationScope = "project" | "epic" | "feature";
@@ -44,96 +44,46 @@ export interface ScheduleResult {
 
 const ACTIVE_RUN_STATUSES = new Set(["created", "running", "awaiting_input", "paused", "interrupted"]);
 
-function parentOf(issue: Issue, byKey: ReadonlyMap<string, Issue>): Issue | undefined {
-  return issue.parent ? byKey.get(refKey(issue.parent)) : undefined;
-}
-
-function inScope(issue: Issue, root: Issue, byKey: ReadonlyMap<string, Issue>): boolean {
-  const rootKey = refKey(root.ref);
-  let current: Issue | undefined = issue;
-  const seen = new Set<string>();
-  while (current?.parent) {
-    const key = refKey(current.parent);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    if (key === rootKey) return true;
-    current = parentOf(current, byKey);
-  }
-  return false;
+function assignedIssue(run: RunSummary): IssueRef | undefined {
+  return run.issue ?? run.taskIssue;
 }
 
 function tasksForScope(issues: readonly Issue[], scope: OrchestrationScope, scopeRef?: IssueRef): Issue[] {
-  if (scope === "project") return issues.filter((issue) => issue.kind === "task");
+  const features = issues.filter((issue) => issue.kind === "feature");
+  // "project" is a deprecated alias for an epic-wide sweep: every feature.
+  if (scope === "project") return features;
   if (!scopeRef) return [];
-  const byKey = new Map(issues.map((issue) => [refKey(issue.ref), issue]));
-  const root = byKey.get(refKey(scopeRef));
-  if (!root) return [];
-  return issues.filter((issue) => issue.kind === "task" && inScope(issue, root, byKey));
+  if (scope === "feature") {
+    return features.filter((issue) => issue.ref.repo === scopeRef.repo && issue.ref.number === scopeRef.number);
+  }
+  // Epic scope: features whose parent is the epic root.
+  return features.filter(
+    (issue) => issue.parent?.repo === scopeRef.repo && issue.parent.number === scopeRef.number,
+  );
 }
 
-function activeTaskKeys(runs: readonly RunSummary[] | undefined): Set<string> {
+function activeFeatureKeys(runs: readonly RunSummary[] | undefined): Set<string> {
   const keys = new Set<string>();
   for (const run of runs ?? []) {
     if (!ACTIVE_RUN_STATUSES.has(run.status)) continue;
-    const task = run.taskIssue ?? run.issue;
-    if (task) keys.add(refKey(task));
+    const assigned = assignedIssue(run);
+    if (assigned) keys.add(refKey(assigned));
   }
   return keys;
 }
 
-/** Latest terminal run per task; automatic dispatch waits for review/closure. */
-function terminalTaskRuns(runs: readonly RunSummary[] | undefined): Map<string, RunSummary> {
+/** Latest terminal run per feature; automatic dispatch waits for review/closure. */
+function terminalFeatureRuns(runs: readonly RunSummary[] | undefined): Map<string, RunSummary> {
   const out = new Map<string, RunSummary>();
   for (const run of runs ?? []) {
     if (ACTIVE_RUN_STATUSES.has(run.status)) continue;
-    const task = run.taskIssue ?? run.issue;
-    if (!task) continue;
-    const key = refKey(task);
+    const assigned = assignedIssue(run);
+    if (!assigned) continue;
+    const key = refKey(assigned);
     const prior = out.get(key);
     if (!prior || prior.startedAt <= run.startedAt) out.set(key, run);
   }
   return out;
-}
-
-/**
- * Wedge detector: deliverable Tasks blocked (transitively) only by open
- * reserved anchors can never run — anchors stay open until their parent
- * closes, and parents close only after deliverables close. Returns the
- * sorted anchor numbers bottoming every chain, or [] when there is no wedge.
- */
-function anchorWedge(tasks: readonly Issue[], byKey: ReadonlyMap<string, Issue>): number[] {
-  const openBlockers = (issue: Issue): IssueRef[] =>
-    issue.blockedBy.filter((blocker) => {
-      const target = byKey.get(refKey(blocker));
-      return target !== undefined && target.state !== "closed";
-    });
-  const roots = tasks.filter((issue) => !isReserved(issue) && openBlockers(issue).length > 0);
-  if (roots.length === 0) return [];
-  const terminals = new Map<string, Issue>();
-  const visit = (issue: Issue, seen: Set<string>): void => {
-    const key = refKey(issue.ref);
-    if (seen.has(key)) return;
-    seen.add(key);
-    const next = openBlockers(issue);
-    if (next.length === 0) {
-      terminals.set(key, issue);
-      return;
-    }
-    for (const blocker of next) {
-      const target = byKey.get(refKey(blocker));
-      if (target) visit(target, seen);
-    }
-  };
-  for (const root of roots) visit(root, new Set());
-  if (terminals.size === 0) return [];
-  const anchors: number[] = [];
-  for (const terminal of terminals.values()) {
-    // A closed, external, or deliverable bottom is a different problem; only
-    // open reserved anchors bottoming every chain count as the wedge.
-    if (!isReserved(terminal) || terminal.state !== "open") return [];
-    anchors.push(terminal.ref.number);
-  }
-  return [...new Set(anchors)].sort((a, b) => a - b);
 }
 
 function deterministicOrder(tasks: readonly Issue[]): Issue[] {
@@ -182,8 +132,8 @@ export function planSchedule(input: ScheduleInput): ScheduleResult {
   const byKey = new Map(input.issues.map((issue) => [refKey(issue.ref), issue]));
   const scopeTasks = tasksForScope(input.issues, input.scope, input.scopeRef);
   const order = deterministicOrder(scopeTasks);
-  const active = activeTaskKeys(input.runs);
-  const terminal = terminalTaskRuns(input.runs);
+  const active = activeFeatureKeys(input.runs);
+  const terminal = terminalFeatureRuns(input.runs);
   const errors: string[] = [];
   if (input.scope !== "project" && !input.scopeRef) {
     errors.push(`${input.scope} scope requires scopeRef`);
@@ -195,13 +145,11 @@ export function planSchedule(input: ScheduleInput): ScheduleResult {
   for (let index = 0; index < order.length; index++) {
     const issue = order[index]!;
     const key = refKey(issue.ref);
-    const validation = validatePlanIssue(issue, { requireReady: true });
-    const plan = validation.plan;
+    const plan = parsePlanMarker(issue.body).plan;
     const reasons: string[] = [];
     if (issue.state !== "open") reasons.push("issue is closed");
-    if (!isReadyPlan(plan)) reasons.push("plan is not ready");
-    if (!validation.ok) reasons.push(...validation.errors);
-    if (active.has(key)) reasons.push("an active run already owns this task");
+    if (issue.acceptance.length === 0) reasons.push("feature has no acceptance criteria");
+    if (active.has(key)) reasons.push("an active run already owns this feature");
     const prior = terminal.get(key);
     // A terminal run proven to have zero model calls never started work
     // (setup or worktree failure): there is nothing to review, so it must not
@@ -228,14 +176,6 @@ export function planSchedule(input: ScheduleInput): ScheduleResult {
   const graph = validatePlanGraph(scopeTasks, { requireReady: true });
   for (const error of graph.errors) {
     if (error.includes("dependency cycle")) errors.push(error);
-  }
-  const wedge = anchorWedge(scopeTasks, byKey);
-  if (wedge.length > 0) {
-    errors.push(
-      `plan wedged: deliverable Tasks are blocked only by open reserved anchors (${wedge.map((n) => `#${n}`).join(", ")}), ` +
-        "which stay open until their parent closes — nothing behind them can ever run. " +
-        "Remove the links (issue edit remove_blocked_by) or close the anchors.",
-    );
   }
   const ready = scheduled.filter((task) => task.ready);
   const maxParallel = Math.max(0, Math.floor(input.maxParallel ?? ready.length));

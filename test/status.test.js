@@ -125,75 +125,74 @@ test("issue rows progressively hide detail as width shrinks", () => {
   assert.equal(issueRowDetail(20), "identity");
 });
 
-test("rollups exclude reserved tasks and aggregate runs/cost", () => {
+test("rollups aggregate runs and cost; epic percent counts closed features", () => {
   const now = Date.now();
-  const feature = issue(20, "feature", "Feature");
-  const t1 = issue(31, "task", "Deliverable A", { parent: feature.ref, state: "closed" });
-  const t2 = issue(32, "task", "Deliverable B", { parent: feature.ref });
-  const t0 = issue(21, "task", "Task 0: Planning & Review", {
-    parent: feature.ref,
-    labels: ["mc:reserved"],
-    reserved: { for: feature.ref, kind: "feature-pr" },
-  });
+  const epic = issue(10, "epic", "Epic");
+  const f1 = issue(20, "feature", "Done", { parent: epic.ref, state: "closed" });
+  const f2 = issue(21, "feature", "Open", { parent: epic.ref });
   const runs = [
-    run({ status: "running", cost: { actual: 0.2, estimated: 0 }, issue: t2.ref }),
-    run({ status: "completed", cost: { actual: 0.1, estimated: 0 }, issue: t1.ref }),
-    run({ status: "awaiting_input", cost: { actual: 0.05, estimated: 0 }, issue: t0.ref }),
+    run({ status: "running", cost: { actual: 0.2, estimated: 0 }, issue: f2.ref }),
+    run({ status: "completed", cost: { actual: 0.1, estimated: 0 }, issue: f1.ref }),
+    run({ status: "completed", cost: { actual: 0.05, estimated: 0 }, issue: epic.ref }),
   ];
-  const rollup = rollupIssue(feature, [], [t1, t2, t0], runs, now);
-  assert.equal(rollup.tasksTotal, 2, "reserved Task 0 is not a deliverable");
+  const featureRollup = rollupIssue(f2, [runs[0]], [], [], now);
+  assert.equal(featureRollup.tasksTotal, 0, "features have no sub-issues to count");
+  assert.equal(featureRollup.pct, undefined);
+  assert.equal(featureRollup.runsTotal, 1);
+  assert.equal(featureRollup.runsActive, 1);
+  const rollup = rollupIssue(epic, [runs[2]], [f1, f2], [runs[0], runs[1]], now);
+  assert.equal(rollup.tasksTotal, 2, "epic progress counts features, not tasks");
   assert.equal(rollup.tasksClosed, 1);
   assert.equal(rollup.pct, 50);
   assert.equal(rollup.runsTotal, 3);
-  assert.equal(rollup.runsActive, 2);
+  assert.equal(rollup.runsActive, 1);
   assert.ok(Math.abs(rollup.cost - 0.35) < 1e-9);
 });
 
-test("epic rollups aggregate nested feature tasks and runs", () => {
+test("epic rollups aggregate nested features and runs", () => {
   const now = Date.now();
   const epic = issue(10, "epic", "Epic");
-  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
-  const t1 = issue(31, "task", "Done", { parent: feature.ref, state: "closed" });
-  const t2 = issue(32, "task", "Open", { parent: feature.ref });
+  const f1 = issue(20, "feature", "Done", { parent: epic.ref, state: "closed" });
+  const f2 = issue(21, "feature", "Open", { parent: epic.ref });
   const runs = [
-    run({ id: "a", status: "completed", issue: t1.ref, cost: { actual: 0.1, estimated: 0 } }),
-    run({ id: "b", status: "running", issue: t2.ref, cost: { actual: 0.2, estimated: 0 } }),
+    run({ id: "a", status: "completed", issue: f1.ref, cost: { actual: 0.1, estimated: 0 } }),
+    run({ id: "b", status: "running", issue: f2.ref, cost: { actual: 0.2, estimated: 0 } }),
+    run({ id: "c", status: "running", issue: epic.ref, cost: { actual: 0.05, estimated: 0 } }),
   ];
-  const tree = buildIssueTree([epic, feature, t1, t2], runs, now);
+  const tree = buildIssueTree([epic, f1, f2], runs, now);
   const rollup = tree.epics[0].rollup;
   assert.equal(rollup.tasksClosed, 1);
   assert.equal(rollup.tasksTotal, 2);
   assert.equal(rollup.pct, 50);
-  assert.equal(rollup.runsTotal, 2);
-  assert.equal(rollup.runsActive, 1);
-  assert.ok(Math.abs(rollup.cost - 0.3) < 1e-9);
+  assert.equal(rollup.runsTotal, 3);
+  assert.equal(rollup.runsActive, 2);
+  assert.ok(Math.abs(rollup.cost - 0.35) < 1e-9);
+  assert.equal(tree.epics[0].features.length, 2);
+  assert.deepEqual(tree.epics[0].features[0].tasks, [], "task level is dropped");
+  assert.equal(tree.epics[0].features[0].rollup.runsTotal, 1);
+  assert.equal(tree.epics[0].features[1].rollup.runsTotal, 1);
 });
 
-test("buildIssueTree nests epics→features→tasks and separates categories", () => {
+test("buildIssueTree nests epics→features and separates categories", () => {
   const now = Date.now();
   const epic = issue(10, "epic", "Epic");
-  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
-  const task = issue(31, "task", "Task", { parent: feature.ref });
-  const task0 = issue(21, "task", "Task 0: Planning & Review", {
-    parent: feature.ref,
-    labels: ["mc:reserved"],
-    reserved: { for: feature.ref, kind: "feature-pr" },
-  });
+  const f1 = issue(20, "feature", "Feature One", { parent: epic.ref });
+  const f2 = issue(21, "feature", "Feature Two", { parent: epic.ref });
   const runs = [
-    run({ id: "t31", status: "running", issue: task.ref }),
-    run({ id: "t0", status: "completed", issue: task0.ref }),
+    run({ id: "f1run", status: "running", issue: f1.ref }),
+    run({ id: "epicrun", status: "completed", issue: epic.ref }),
     run({ id: "plan", agent: "build" }),
     run({ id: "gen", agent: "general" }),
     run({ id: "orphan", issue: ref(999) }),
   ];
-  const tree = buildIssueTree([epic, feature, task, task0], runs, now);
+  const tree = buildIssueTree([epic, f1, f2], runs, now);
   assert.equal(tree.epics.length, 1);
-  assert.equal(tree.epics[0].features.length, 1);
-  assert.equal(tree.epics[0].features[0].tasks.length, 2);
-  assert.ok(tree.epics[0].features[0].tasks[0].task.labels.includes("mc:reserved"), "reserved first");
-  assert.equal(tree.epics[0].features[0].rollup.tasksTotal, 1);
-  assert.equal(tree.epics[0].features[0].rollup.runsTotal, 2);
-  assert.equal(tree.epics[0].rollup.tasksTotal, 1);
+  assert.equal(tree.epics[0].features.length, 2);
+  assert.deepEqual(tree.epics[0].features[0].tasks, [], "task level is dropped");
+  assert.deepEqual(tree.epics[0].features[1].tasks, [], "task level is dropped");
+  assert.equal(tree.epics[0].rollup.tasksTotal, 2);
+  assert.equal(tree.epics[0].rollup.tasksClosed, 0);
+  assert.equal(tree.epics[0].rollup.pct, 0);
   assert.equal(tree.epics[0].rollup.runsTotal, 2);
   assert.deepEqual(tree.planning.map((r) => r.id), []);
   assert.deepEqual(tree.untracked.map((r) => r.id), ["plan", "gen"]);

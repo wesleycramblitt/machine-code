@@ -1,11 +1,11 @@
 /**
- * machine_code — resolve a selected issue into the Task a run can attach to.
+ * machine_code — resolve a selected issue into the Feature a run can attach to.
  *
- * Runs attach to Tasks. A human can still select an Epic or Feature in the
- * TUI/new-run composer; with `autoCreate`, the harness fills the missing
- * levels (Epic → Feature → Task, or Feature → Task) using the run objective as
+ * Runs attach to Features (build/review) or Epics (planner). A human can
+ * still select an Epic in the TUI/new-run composer; with `autoCreate`, the
+ * harness fills the missing level (Epic → Feature) using the run objective as
  * the title. Exact-title open children are reused so a retry does not create a
- * duplicate task every time.
+ * duplicate feature every time.
  */
 import {
   IssueError,
@@ -15,11 +15,6 @@ import {
   type NewIssue,
 } from "./provider.js";
 import {
-  ensureEpicReserved,
-  ensureFeatureReserved,
-  isReserved,
-  isReservedTask,
-  resolvePlanningAnchor,
   validateRunIssue,
   type ReservedOptions,
 } from "./reserved.js";
@@ -29,19 +24,20 @@ export interface ResolveRunTargetInput {
   ref: IssueRef;
   request: string;
   agent?: string;
-  /** Fill Epic/Feature gaps with a new Feature/Task. */
+  /** Fill an Epic gap with a new Feature. */
   autoCreate?: boolean;
+  /** Accepted but ignored (reserved anchors were removed). */
   reserved?: ReservedOptions;
 }
 
 export interface ResolveRunTargetResult {
   issue: Issue;
   created: Issue[];
-  /** The issue the human selected, before resolving to its planning anchor. */
+  /** The issue the human selected, before resolving it to the run target. */
   scope?: Issue;
 }
 
-export function objectiveTitle(request: string, fallback = "machine_code task"): string {
+export function objectiveTitle(request: string, fallback = "machine_code feature"): string {
   const first = request
     .split("\n")
     .map((line) => line.replace(/^#+\s*/, "").trim())
@@ -102,16 +98,19 @@ export function issueRequestVerb(agent: string): IssueRequestVerb {
 }
 
 /**
- * The default run objective for a task-attached run. A human can start a run
- * from a Task without typing a prompt; the issue title and Deliverable become
+ * The default run objective for a feature-attached run. A human can start a run
+ * from a Feature without typing a prompt; the issue title and Scope become
  * the request, so the run state names the actual work.
  */
 export function issueRunRequest(issue: Issue, verb: IssueRequestVerb = "Implement"): string {
   const ref = `${issue.ref.repo}#${issue.ref.number}`;
-  const title = issue.title.trim() || `Task ${ref}`;
-  const deliverable = bodySection(issue.body, "Deliverable") || firstParagraph(issue.body);
+  const title = issue.title.trim() || `Feature ${ref}`;
+  const scope = bodySection(issue.body, "Scope")
+    || bodySection(issue.body, "Goal")
+    || bodySection(issue.body, "Deliverable")
+    || firstParagraph(issue.body);
   const lines = [`${verb} ${ref}: ${title}`];
-  if (deliverable) lines.push("", `Deliverable: ${deliverable.replace(/\s+/g, " ").slice(0, 800)}`);
+  if (scope) lines.push("", `Scope: ${scope.replace(/\s+/g, " ").slice(0, 800)}`);
   if (issue.acceptance.length > 0) {
     lines.push("", "Acceptance:");
     for (const item of issue.acceptance.slice(0, 6)) lines.push(`- ${item}`);
@@ -121,7 +120,7 @@ export function issueRunRequest(issue: Issue, verb: IssueRequestVerb = "Implemen
 
 function objectiveBody(request: string): string {
   return [
-    "<!-- mc:task {\"createdBy\":\"machine_code\",\"auto\":true} -->",
+    '<!-- mc:auto {"createdBy":"machine_code","auto":true} -->',
     "",
     "## Objective",
     "",
@@ -129,10 +128,10 @@ function objectiveBody(request: string): string {
     "",
     "## Notes",
     "",
-    "This Task was created by machine_code because the selected issue was an Epic or Feature.",
+    "This Feature was created by machine_code because the selected issue was an Epic.",
     "Inherited context comes from the parent hierarchy; use `mc:context` on the parent to add files, tools, or scripts.",
     "",
-    '<!-- mc:approval {"mode":"human","reason":"auto-created task"} -->',
+    '<!-- mc:approval {"mode":"human","reason":"auto-created feature"} -->',
     "",
   ].join("\n");
 }
@@ -149,7 +148,7 @@ function findReusable(children: readonly Issue[], title: string, kind: Issue["ki
 async function createChild(
   provider: IssueProvider,
   parent: Issue,
-  kind: "feature" | "task",
+  kind: "feature",
   title: string,
   body: string,
 ): Promise<{ issue: Issue; created: boolean }> {
@@ -161,39 +160,27 @@ async function createChild(
   };
 }
 
-function planningAgent(agent?: string): boolean {
-  return agent === "planner" || agent === "review";
-}
-
 export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<ResolveRunTargetResult> {
   const { provider, ref, request, autoCreate } = input;
   const issue = await provider.get(ref);
   if (!issue) throw new IssueError("issue_not_found", `issue ${ref.repo}#${ref.number} not found`);
 
-  // A Review run judges the deliverable it was pointed at. Planner runs move
-  // up to the Feature's Planning & Review task so their Runs row stays with
-  // the planning work.
-  if (input.agent === "review" && issue.kind === "task") {
-    return { issue, created: [], scope: issue };
-  }
-  if (planningAgent(input.agent) || (input.agent === "general" && issue.kind !== "task")) {
-    const anchor = await resolvePlanningAnchor(provider, issue.ref, input.reserved);
-    const resolved = await provider.get(anchor);
-    if (!resolved) throw new IssueError("issue_not_found", `planning anchor ${anchor.repo}#${anchor.number} not found`);
-    return { issue: resolved, created: [], scope: issue };
-  }
-
-  // Never auto-create work under a reserved Planning & Review anchor.
-  if (autoCreate && isReserved(issue)) {
+  // Planner runs attach to Epics; every other agent attaches to Features.
+  if (input.agent === "planner") {
+    if (issue.kind === "epic") return { issue, created: [], scope: issue };
+    if (issue.kind === "feature" && issue.parent) {
+      const parent = await provider.get(issue.parent);
+      if (parent && parent.kind === "epic") return { issue: parent, created: [], scope: issue };
+    }
     throw new IssueError(
-      "issue_is_reserved",
-      `${ref.repo}#${ref.number} is a reserved Planning & Review anchor; choose a deliverable Task`,
+      "issue_not_epic",
+      `planner runs attach to Epics (${ref.repo}#${ref.number} is a ${issue.kind})`,
     );
   }
 
   if (!autoCreate) {
     return {
-      issue: await validateRunIssue(provider, issue.ref, { allowReserved: input.agent === "sudo" }),
+      issue: await validateRunIssue(provider, issue.ref),
       created: [],
       scope: issue,
     };
@@ -202,7 +189,6 @@ export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<Re
   const created: Issue[] = [];
   let current = issue;
   if (current.kind === "epic") {
-    await ensureEpicReserved(provider, current.ref, input.reserved);
     const feature = await createChild(
       provider,
       current,
@@ -213,20 +199,8 @@ export async function resolveRunTarget(input: ResolveRunTargetInput): Promise<Re
     if (feature.created) created.push(feature.issue);
     current = feature.issue;
   }
-  if (current.kind === "feature") {
-    await ensureFeatureReserved(provider, current.ref, input.reserved);
-    const task = await createChild(provider, current, "task", objectiveTitle(request), objectiveBody(request));
-    if (task.created) created.push(task.issue);
-    current = task.issue;
-  }
-  if (current.kind !== "task") {
-    throw new IssueError("issue_not_task", `could not resolve ${issue.ref.repo}#${issue.ref.number} to a Task`);
-  }
-  if (isReservedTask(current) && input.agent !== "sudo") {
-    throw new IssueError(
-      "issue_is_reserved_task",
-      `${current.ref.repo}#${current.ref.number} is a reserved Task 0; implementation runs need a deliverable Task`,
-    );
+  if (current.kind !== "feature") {
+    throw new IssueError("issue_not_feature", `could not resolve ${issue.ref.repo}#${issue.ref.number} to a Feature`);
   }
   return { issue: current, created, scope: issue };
 }
@@ -237,16 +211,5 @@ export async function createFeatureForEpic(
   epic: Issue,
   request: string,
 ): Promise<Issue> {
-  await ensureEpicReserved(provider, epic.ref);
   return (await createChild(provider, epic, "feature", objectiveTitle(request), objectiveBody(request))).issue;
-}
-
-/** Explicit Task creation under a Feature. */
-export async function createTaskForFeature(
-  provider: IssueProvider,
-  feature: Issue,
-  request: string,
-): Promise<Issue> {
-  await ensureFeatureReserved(provider, feature.ref);
-  return (await createChild(provider, feature, "task", objectiveTitle(request), objectiveBody(request))).issue;
 }

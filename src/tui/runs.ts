@@ -150,7 +150,7 @@ const STATUS_ORDER: Array<{ status: RunSummary["status"]; label: string }> = [
   { status: "cancelled", label: "Cancelled" },
 ];
 
-const KIND_RANK: Record<string, number> = { epic: 0, feature: 1, task: 2 };
+const KIND_RANK: Record<string, number> = { epic: 0, feature: 1 };
 
 function issueRoots(issues: readonly Issue[]): Issue[] {
   const known = new Set(issues.map((issue) => keyOf(issue.ref)));
@@ -368,7 +368,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       const tasks: Issue[] = [];
       const runs: RunSummary[] = [];
       for (const child of childrenOf(issue)) {
-        if (child.kind === "task" && isDeliverable(child)) tasks.push(child);
+        if (child.kind === "feature" && isDeliverable(child)) tasks.push(child);
         runs.push(...issueRuns(child));
         const nested = descendantsOf(child);
         tasks.push(...nested.tasks);
@@ -467,8 +467,8 @@ export function buildRunIndex(options: RunOptions): RunIndex {
  * Rows that stay bright while the cursor sits on an issue or run.
  *
  * A focus keeps the selected row, its issue ancestors, its peers at the same
- * level, and its immediate children bright: features under an epic, tasks
- * under a feature, and runs under a task. Repo and section headings always
+ * level, and its immediate children bright: features under an epic and runs
+ * under a feature. Repo and section headings always
  * stay bright; selecting one disables dimming.
  */
 export function focusRowIds(
@@ -515,11 +515,7 @@ export function focusRowIds(
     selected.kind === "issue"
       ? selected.issue.kind === "epic"
         ? "feature"
-        : selected.issue.kind === "feature"
-          ? "task"
-          : selected.issue.kind === "task"
-            ? "run"
-            : undefined
+        : "run"
       : undefined;
   for (const row of rows) {
     if (row.kind !== "issue" && row.kind !== "run") continue;

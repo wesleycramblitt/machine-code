@@ -1,7 +1,7 @@
 /**
- * machine_code — execute one ready task.
+ * machine_code — execute one ready feature.
  *
- * Builds a frozen packet from the issue plan, creates the Task worktree,
+ * Builds a frozen packet from the feature, creates the Feature worktree,
  * delegates Build/gates/review/PR to the existing mode orchestrator, and
  * records orchestration lineage on the run. Issue closure remains a human
  * acceptance step.
@@ -39,7 +39,8 @@ export interface ExecuteTaskInput {
   home: string;
   provider: IssueProvider;
   issue: Issue;
-  plan: PlanMarker;
+  /** Build policy; defaults to a ready marker derived from the feature. */
+  plan?: PlanMarker;
   orchestrationId?: string;
   orchestrationScope?: OrchestrationScope;
   scopeRef?: IssueRef;
@@ -51,7 +52,7 @@ export interface ExecuteTaskInput {
   review?: boolean;
   /** Worktree base override; defaults to the parent Feature branch. */
   base?: string;
-  /** Reuse an existing Task worktree instead of creating a new one. */
+  /** Reuse an existing Feature worktree instead of creating a new one. */
   worktree?: string;
   worktreeOwnerRunId?: string;
   branch?: string;
@@ -108,7 +109,8 @@ function packetAcceptance(line: string): PacketAcceptance | null {
   return { command, ...(Object.keys(args).length > 0 ? { args } : {}) };
 }
 
-export function packetForTask(issue: Issue, plan: PlanMarker, attempt: number): TaskPacket {
+export function packetForTask(issue: Issue, plan?: PlanMarker, attempt = 1): TaskPacket {
+  const resolved = plan ?? defaultPlan(issue);
   const references = parseArtifactReferences(issue.body);
   const acceptance: PacketAcceptance[] = [];
   const seen = new Set<string>();
@@ -123,13 +125,29 @@ export function packetForTask(issue: Issue, plan: PlanMarker, attempt: number): 
   }
   return {
     id: `issue-${issue.ref.number}-${attempt}`,
-    mode: plan.verification,
+    mode: resolved.verification,
     goal: issue.title,
     context: references.files,
     constraints: [issue.body.slice(0, 8_000)],
     acceptance,
   };
 }
+
+/** Default build policy for a feature without an explicit plan marker. */
+export function defaultPlan(issue: Issue): PlanMarker {
+  return {
+    v: 1,
+    status: "ready",
+    role: "build",
+    verification: "verified",
+    worktree: "required",
+    retriesBeforeReplan: 2,
+    planReview: "agent",
+    resultReview: issue.approval === "agent" ? "agent" : "human",
+  };
+}
+
+export const packetForFeature = packetForTask;
 
 export interface RetryWorktree {
   path: string;
@@ -161,7 +179,7 @@ export function findRetryWorktree(
   const exists = store?.exists ?? existsSync;
   const candidates = priorRuns
     .filter((run) => {
-      const assigned = run.taskIssue ?? run.issue;
+      const assigned = run.issue ?? run.taskIssue;
       return assigned?.repo === taskRef.repo && assigned.number === taskRef.number;
     })
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
@@ -199,7 +217,7 @@ export function selectRetrySeed(
 ): string | undefined {
   const mine = priorRuns
     .filter((run) => {
-      const assigned = run.taskIssue ?? run.issue;
+      const assigned = run.issue ?? run.taskIssue;
       return assigned?.repo === taskRef.repo && assigned.number === taskRef.number;
     })
     .filter(
@@ -215,7 +233,8 @@ function snapshotHash(packet: TaskPacket, plan: PlanMarker): string {
 }
 
 export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskResult> {
-  const { layout, issue, plan } = input;
+  const { layout, issue } = input;
+  const plan = input.plan ?? defaultPlan(issue);
   const attempt = input.attempt ?? 1;
   const packet = packetForTask(issue, plan, attempt);
   if (input.retryEvidence) {
@@ -231,7 +250,6 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
     ...(input.orchestrationId ? { orchestrationId: input.orchestrationId } : {}),
     ...(input.orchestrationScope ? { orchestrationScope: input.orchestrationScope } : {}),
     ...(input.scopeRef ? { scopeRef: input.scopeRef } : {}),
-    taskIssue: issue.ref,
     attempt,
     phase: "build",
     planSnapshotHash: hash,
@@ -272,9 +290,8 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
       const spec = await createWorktree({
         layout,
         runId: recorder.id,
-        kind: "task",
+        kind: "feature",
         issueNumber: issue.ref.number,
-        ...(issue.parent ? { featureNumber: issue.parent.number } : {}),
         ...(input.base ? { base: input.base } : {}),
         processes: setupProcesses,
       });
@@ -364,3 +381,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
     return { runId: recorder.id, status: "failed", error: message };
   }
 }
+
+export const executeFeature = executeTask;
+export type ExecuteFeatureInput = ExecuteTaskInput;
+export type ExecuteFeatureResult = ExecuteTaskResult;

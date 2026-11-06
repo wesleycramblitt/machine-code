@@ -8,17 +8,13 @@
  *
  * Hierarchy uses native parent/sub-issue relationships when GitHub reports
  * them; issue types are used when the repository has them configured, with
- * `mc:epic|feature|task` labels and the mc:reserved body marker as the
- * fallback (the current repo reports issueTypes: null).
+ * `mc:epic|feature` labels as the fallback.
  */
 import { runProc } from "../proc.js";
 import {
   IssueError,
   parseAcceptance,
   parseApprovalMarker,
-  parseReservedMarker,
-  RESERVED_LABELS,
-  RESERVED_TITLES,
   type Issue,
   type IssueKind,
   type IssueListFilter,
@@ -26,7 +22,6 @@ import {
   type IssueProvider,
   type IssueRef,
   type NewIssue,
-  type ReservedKind,
 } from "./provider.js";
 import { parsePlanMarker } from "../plan/schema.js";
 
@@ -121,7 +116,7 @@ export class GitHubIssueProvider implements IssueProvider {
   private readonly repo: string;
   private readonly repoRoot: string;
   private readonly timeoutMs: number;
-  private issueTypes: { epic?: string; feature?: string; task?: string } | null | undefined;
+  private issueTypes: { epic?: string; feature?: string } | null | undefined;
   /** Labels already created or confirmed in this process. */
   private readonly ensuredLabels = new Set<string>();
 
@@ -191,7 +186,7 @@ export class GitHubIssueProvider implements IssueProvider {
     return { provider: this.kind, repo: this.repo, number };
   }
 
-  private async detectIssueTypes(): Promise<{ epic?: string; feature?: string; task?: string } | null> {
+  private async detectIssueTypes(): Promise<{ epic?: string; feature?: string } | null> {
     if (this.issueTypes !== undefined) return this.issueTypes;
     try {
       const [owner, name] = this.repo.split("/");
@@ -213,7 +208,6 @@ export class GitHubIssueProvider implements IssueProvider {
       this.issueTypes = {
         epic: find("epic"),
         feature: find("feature"),
-        task: find("task"),
       };
       return this.issueTypes;
     } catch {
@@ -222,32 +216,23 @@ export class GitHubIssueProvider implements IssueProvider {
     }
   }
 
-  private inferKind(j: GhJsonIssue, reservedKind: ReservedKind | null): IssueKind {
-    if (reservedKind === "epic-pr") return "feature";
-    if (reservedKind === "feature-pr") return "task";
+  private inferKind(j: GhJsonIssue): IssueKind {
     const typeName = j.issueType?.name?.toLowerCase() ?? "";
     if (typeName.includes("epic")) return "epic";
-    if (typeName.includes("feature")) return "feature";
-    if (typeName.includes("task")) return "task";
+    // Legacy task types and labels read as Features; only Epic and Feature remain.
+    if (typeName.includes("feature") || typeName.includes("task")) return "feature";
     const labels = (j.labels ?? []).map((l) => (typeof l === "string" ? l : l.name ?? "")).map((l) => l.toLowerCase());
     if (labels.includes("mc:epic")) return "epic";
-    if (labels.includes("mc:feature")) return "feature";
-    if (labels.includes("mc:task")) return "task";
-    // Depth fallback: child of something with children is a Feature, childless
-    // child of a Feature is a Task, root with children is an Epic.
+    if (labels.includes("mc:feature") || labels.includes("mc:task")) return "feature";
+    // Depth fallback: roots are Epics, children are Features.
     const hasParent = Boolean(j.parent?.number);
-    const hasChildren = relationItems(j.subIssues).length > 0;
-    if (!hasParent && hasChildren) return "epic";
-    if (hasParent && hasChildren) return "feature";
-    if (hasParent) return "task";
-    return "task";
+    return hasParent ? "feature" : "epic";
   }
 
   private toIssue(j: GhJsonIssue): Issue {
     const number = j.number;
     if (typeof number !== "number") throw new IssueError("gh_bad_output", "issue JSON is missing a number");
     const body = j.body ?? "";
-    const reserved = parseReservedMarker(body);
     const plan = parsePlanMarker(body);
     const labels = (j.labels ?? [])
       .map((l) => (typeof l === "string" ? l : l.name ?? ""))
@@ -264,25 +249,13 @@ export class GitHubIssueProvider implements IssueProvider {
       title: j.title ?? "",
       body,
       state: j.state === "CLOSED" || j.state === "closed" ? "closed" : "open",
-      kind: this.inferKind(j, reserved?.kind ?? null),
+      kind: this.inferKind(j),
       issueType: j.issueType?.name,
       labels,
       parent,
       children,
       blockedBy: refs(j.blockedBy),
       blocking: refs(j.blocking),
-      ...(reserved
-        ? {
-            reserved: {
-              for: {
-                provider: this.kind,
-                repo: reserved.for.includes("#") ? reserved.for.split("#")[0]! : this.repo,
-                number: Number(reserved.for.split("#")[1]),
-              },
-              kind: reserved.kind,
-            },
-          }
-        : {}),
       acceptance: parseAcceptance(body),
       approval: parseApprovalMarker(body),
       ...(plan.plan ? { plan: plan.plan } : {}),
@@ -354,7 +327,29 @@ export class GitHubIssueProvider implements IssueProvider {
     return issue?.blockedBy ?? [];
   }
 
+  /** Hierarchy rule: Features live under Epics; Epics have no parent. */
+  private async assertParentRule(kind: IssueKind, parent: IssueRef | undefined): Promise<void> {
+    if (kind === "epic") {
+      if (parent) {
+        throw new IssueError("invalid_parent", "an Epic cannot have a parent");
+      }
+      return;
+    }
+    if (!parent) return;
+    const parentIssue = await this.get(parent);
+    if (!parentIssue) {
+      throw new IssueError("parent_not_found", `parent ${parent.repo}#${parent.number} not found`);
+    }
+    if (parentIssue.kind !== "epic") {
+      throw new IssueError(
+        "invalid_parent",
+        `a Feature's parent must be an Epic (got ${parentIssue.kind} #${parentIssue.ref.number})`,
+      );
+    }
+  }
+
   async create(input: NewIssue): Promise<Issue> {
+    await this.assertParentRule(input.kind, input.parent);
     const args = [
       "issue",
       "create",
@@ -385,6 +380,10 @@ export class GitHubIssueProvider implements IssueProvider {
 
   async update(ref: IssueRef, patch: IssuePatch): Promise<Issue> {
     if (patch.labels) await this.ensureLabels(patch.labels);
+    if (patch.parent) {
+      const target = await this.get(ref);
+      if (target) await this.assertParentRule(target.kind, patch.parent);
+    }
     const args = ["issue", "edit", String(ref.number), "--repo", this.repo];
     if (patch.title !== undefined) args.push("--title", patch.title);
     if (patch.body !== undefined) args.push("--body", patch.body);
@@ -414,11 +413,13 @@ export class GitHubIssueProvider implements IssueProvider {
   }
 
   async linkParent(child: IssueRef, parent: IssueRef | null): Promise<void> {
+    if (parent) {
+      const childIssue = await this.get(child);
+      if (childIssue) await this.assertParentRule(childIssue.kind, parent);
+    }
     const args = ["issue", "edit", String(child.number), "--repo", this.repo];
     if (parent) args.push("--parent", String(parent.number));
     else args.push("--remove-parent");
     await this.gh(args, 30_000);
   }
 }
-
-export { RESERVED_TITLES, RESERVED_LABELS };

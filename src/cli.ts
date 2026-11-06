@@ -42,7 +42,7 @@ import { createPrProviderFor } from "./pr/factory.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
 import { ensureEpicReserved, ensureFeatureReserved } from "./issues/reserved.js";
 import { isGenericTaskRequest, issueRequestVerb, issueRunRequest, resolveRunTarget } from "./issues/work.js";
-import { taskSizeErrors } from "./plan/validate.js";
+import { featureSizeErrors } from "./plan/validate.js";
 import { checkCompletion, cascadeReserved } from "./issues/completion.js";
 import { closeCompletedTask } from "./orchestrator/closure.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "./availability.js";
@@ -53,7 +53,7 @@ import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
 import { executeTask, findRetryWorktree, selectRetrySeed } from "./orchestrator/execute.js";
-import { approveTask, cleanupTask, runTaskChecks, suggestedReviewChecks, taskRuns, taskStatus } from "./tasks/lifecycle.js";
+import { featureStatus, approveFeature, cleanupFeature, runFeatureChecks, suggestedReviewChecks, featureRuns } from "./tasks/lifecycle.js";
 import { deleteIssue } from "./tasks/delete.js";
 import { deleteRun } from "./state/run-delete.js";
 import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
@@ -134,19 +134,17 @@ const HELP = `machine_code ${VERSION}
 Usage:
   machine_code run --agent general [--provider <id>] [--model <key>] "<question>"
   machine_code run --agent planner "<plan a project>" [--issue <n>]
-  machine_code run --agent planner|build|review|general|sudo "<task>" [--issue <n> [--auto-issue]]
+  machine_code run --agent planner|build|review|general|sudo "<feature>" [--issue <n> [--auto-issue]]
   machine_code run --agent build --issue <n>
-                                    Run the task attached to issue <n> without a prompt.
+                                    Run the feature attached to issue <n> without a prompt.
                                     The issue title and Deliverable become the objective.
-  machine_code run --agent sudo "<rare task>" [--worktree]
-                                    Sudo edits the main tree by default; --worktree isolates it.
-                                    Build and orchestrated runs use an isolated worktree:
-                                    [--issue <n>] [--auto-issue] [--issue-type task|feature]
+  machine_code run --agent sudo "<rare feature>" [--worktree true|false]
+                                    Sudo edits the main tree by default; --worktree true isolates it.
+                                    Build and orchestrated runs use an isolated worktree (default on):
+                                    [--issue <n>] [--auto-issue] [--issue-type feature]
                                     [--feature <n>] [--base <ref>]
                                     Agent config overrides:
-                                    [--preset plan|orchestrate|implement|review|assistant|unrestricted]
-                                    [--verify direct|verified|redundant]
-                                    [--issues required|optional|disabled] [--ask true|false]
+                                    [--verify direct|verified]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
                                     [--allow-issue-create] explicit issue:create override
                                     [--allow-artifact-scripts] permit executable artifact scripts
@@ -221,18 +219,19 @@ Usage:
                                     [--cascade] [--keep-runs] [--yes]
   machine_code approve <issue|pr>   Approve a pending human close/merge request
   machine_code accept <issue>       Record a human acceptance verdict (needed to close)
-  machine_code task status <issue>  Show the task lifecycle and the next action
-  machine_code task start <issue>   Build, review, commit, and open the Task PR
-                                    [--review agent|human] [--no-review] [--base <ref>] [--retry] [--dry-run]
-  machine_code task review <issue>  Review the PR/worktree and run verification checks
-                                    [--check <cmd>|--checks a,b] [--no-checks]
-  machine_code task approve <issue> Merge, accept, close, and clean up the Task
-                                    [--run <id>] [--no-commit] [--no-merge]
-                                    [--keep-worktree] [--keep-branch] [--force]
-  machine_code task cleanup <issue> Remove the Task worktree after closure
-                                    [--force] [--keep-branch]
-  machine_code pr feature <n>       Review, gate, and open the Feature PR to main
-                                    [--gates cmd1,cmd2] [--approval human|agent] [--no-review]
+  machine_code feature status <issue>  Show the feature lifecycle and the next action
+  machine_code feature start <issue>   Build, review, commit, and merge the Feature
+                                     [--review agent|human] [--no-review] [--base <ref>] [--retry] [--dry-run]
+  machine_code feature review <issue>  Review the worktree and run verification checks
+                                     [--check <cmd>|--checks a,b] [--no-checks]
+  machine_code feature approve <issue> Merge, accept, close, and clean up the Feature
+                                     [--run <id>] [--no-commit] [--no-merge]
+                                     [--keep-worktree] [--keep-branch] [--force]
+  machine_code feature cleanup <issue> Remove the Feature worktree after closure
+                                     [--force] [--keep-branch]
+  machine_code pr feature <n>       deprecated: approval merges directly (kept working):
+                                     review, gate, and open the Feature PR to main
+                                     [--gates cmd1,cmd2] [--approval human|agent] [--no-review]
   machine_code pr list|status <n>   Inspect pull requests
   machine_code provider disable|enable <name>
   machine_code provider cooldown <name> [minutes] | cooldown clear <name>
@@ -244,16 +243,16 @@ Usage:
   machine_code orchestrate status [--all] [--json]
   machine_code orchestrate tick|start [--dry-run]
                                     [--scope project|epic|feature] [--epic <n>|--feature <n>]
-                                    [--max-parallel N] [--max-minutes N] [--max-spend-usd N]
+                                    [--max-parallel 1|2|4|8] [--max-minutes N] [--max-spend-usd N]
                                     [--checkpoint after-task] [--tier free|paid]
                                     [--min-fit N] [--min-capability N] [--min-axes axes|strict]
                                     [--model <key>] [--resume]
-                                    Compute or execute ready issue-graph tasks.
+                                    Compute or execute ready issue-graph features.
                                     A stopped orchestration refuses to tick until
                                     resumed with --resume.
   machine_code orchestrate stop --orchestration <id>
-                                    Request a graceful stop after the current task
-  machine_code orchestrate approve --orchestration <id> --task <n> [--result]
+                                    Request a graceful stop after the current feature
+  machine_code orchestrate approve --orchestration <id> --feature <n> [--result]
                                     Approve a packet or result checkpoint
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code queue               Process committed packets in .machine_code/tasks/
@@ -289,7 +288,6 @@ const BOOLEAN_FLAGS = new Set([
   "result",
   "tool",
   "inherit-worktree",
-  "worktree",
   "json",
   "recreate",
   "status",
@@ -935,6 +933,8 @@ async function cmdCatalogueRefresh(snapshot = false): Promise<number> {
 /* ---------------------------------------------------------------------- run */
 
 async function cmdRun(argv: string[]): Promise<number> {
+  // Bare --worktree predates the true|false value; treat it as --worktree true.
+  argv = argv.flatMap((arg) => (arg === "--worktree" ? ["--worktree", "true"] : [arg]));
   const { flags, positional } = parseFlags(argv);
   const modeFlag = flags.get("mode");
   const agentName = flags.get("agent");
@@ -952,7 +952,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   // A task-attached run can derive its objective from the issue. Only an
   // untracked run needs the human to type one.
   if (request.length === 0 && issueFlag === undefined) {
-    fail(`run needs a question, or pass --issue N to run a task`);
+    fail(`run needs a question, or pass --issue N to run a feature`);
   }
   if (issueTypeFlag !== "task" && issueTypeFlag !== "feature") fail(`--issue-type must be task or feature`);
 
@@ -971,35 +971,19 @@ async function cmdRun(argv: string[]): Promise<number> {
 
   // Run-level agent configuration overrides (Phase 3).
   const agentOverrides: Partial<AgentConfig> = {};
-  const presetFlag = flags.get("preset");
-  if (presetFlag !== undefined) {
-    const valid = ["plan", "orchestrate", "implement", "review", "assistant", "unrestricted"] as readonly string[];
-    if (!valid.includes(presetFlag)) fail(`--preset must be one of ${valid.join(", ")}`);
-    agentOverrides.preset = presetFlag as AgentConfig["preset"];
-  }
-  const boolFlag = (name: string): boolean | undefined => {
-    const v = flags.get(name);
-    if (v === undefined) return undefined;
-    if (v === "true" || v === "1" || v === "yes") return true;
-    if (v === "false" || v === "0" || v === "no") return false;
-    fail(`--${name} must be true|false`);
-  };
+  // (--preset was removed; if passed it is ignored.)
   const verifyFlag = flags.get("verify");
   if (verifyFlag !== undefined) {
-    if (verifyFlag !== "direct" && verifyFlag !== "verified" && verifyFlag !== "redundant") {
-      fail("--verify must be direct|verified|redundant");
+    if (verifyFlag === "redundant") {
+      process.stderr.write("warning: --verify redundant is now verified\n");
+      agentOverrides.verification = "verified";
+    } else if (verifyFlag === "direct" || verifyFlag === "verified") {
+      agentOverrides.verification = verifyFlag;
+    } else {
+      fail("--verify must be direct|verified");
     }
-    agentOverrides.verification = verifyFlag;
   }
-  const issuesFlag = flags.get("issues");
-  if (issuesFlag !== undefined) {
-    if (issuesFlag !== "required" && issuesFlag !== "optional" && issuesFlag !== "disabled") {
-      fail("--issues must be required|optional|disabled");
-    }
-    agentOverrides.issues = issuesFlag;
-  }
-  const askFlag = boolFlag("ask");
-  if (askFlag !== undefined) agentOverrides.ask = askFlag;
+  // (--ask and --issues were removed; if passed they are ignored.)
   const approvalFlag = flags.get("approval");
   if (approvalFlag !== undefined) {
     if (approvalFlag !== "human" && approvalFlag !== "agent") fail("--approval must be human|agent");
@@ -1136,12 +1120,12 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (flags.has("auto-issue") && runIssueAccess !== "create") {
     fail(
       `--auto-issue requires issue_access=create; ${agentNameParsed} has issue_access=${runIssueAccess}. ` +
-        "Select an existing Task or use an agent with issue creation access.",
+        "Select an existing Feature or use an agent with issue creation access.",
     );
   }
 
-  // Issue association: runs attach to Tasks only. Resolve before the run
-  // record so a task-attached run can derive its request from the issue
+  // Issue association: runs attach to Features. Resolve before the run
+  // record so a feature-attached run can derive its request from the issue
   // instead of a typed prompt.
   let issueRef: IssueRef | undefined;
   let linkedIssue: Issue | undefined;
@@ -1158,7 +1142,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     } else {
       const rawRef = parseIssueRef(issueFlag, issueBundle.repo, "github");
       if (request.length === 0 && flags.has("auto-issue")) {
-        fail("--auto-issue needs a task description");
+        fail("--auto-issue needs a feature description");
       }
       let resolved;
       try {
@@ -1189,14 +1173,14 @@ async function cmdRun(argv: string[]): Promise<number> {
     fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
   }
   if (
-    linkedIssue?.kind === "task" &&
+    linkedIssue?.kind === "feature" &&
     (agentNameParsed === "build" || agentNameParsed === "sudo")
   ) {
-    const errors = taskSizeErrors(linkedIssue);
+    const errors = featureSizeErrors({ acceptance: linkedIssue.acceptance, body: linkedIssue.body ?? "" });
     if (errors.length > 0) {
       fail(
-        `Task #${linkedIssue.ref.number} is not task-sized: ${errors.join("; ")}. ` +
-          `Run the planner to split it into smaller Tasks, then build one Task.`,
+        `Feature #${linkedIssue.ref.number} is not feature-sized: ${errors.join("; ")}. ` +
+          `Run the planner to split it into smaller Features, then build one Feature.`,
       );
     }
   }
@@ -1338,7 +1322,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   // Record the resolved issue on the run after the recorder exists.
   if (issueRef) {
     recorder.patchSummary({ issue: issueRef });
-    recorder.event("issue_linked", { issue: issueRef.number, kind: linkedIssue?.kind ?? "task", source: "cli" });
+    recorder.event("issue_linked", { issue: issueRef.number, kind: linkedIssue?.kind ?? "feature", source: "cli" });
     for (const created of createdIssues) {
       recorder.event("issue_created", {
         issue: created.ref.number,
@@ -1350,17 +1334,24 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   // Build and orchestrated runs work in an isolated worktree on an issue
-  // branch. Sudo edits the main tree by default; --worktree opts it in.
-  // General and review never create one: General is read-only, and Review
-  // reads the worktree it inspects.
-  const forceWorktree = flags.has("worktree");
+  // branch. Sudo edits the main tree by default; --worktree true|false opts
+  // in (default true). General and review never create one: General is
+  // read-only, and Review reads the worktree it inspects.
+  const worktreeFlag = flags.get("worktree");
+  if (worktreeFlag !== undefined && worktreeFlag !== "true" && worktreeFlag !== "false") {
+    fail("--worktree must be true|false");
+  }
+  const worktreeOn = worktreeFlag !== "false";
+  const forceWorktree = worktreeOn && flags.has("worktree");
   const mutating =
     agentNameParsed === "general" || agentNameParsed === "review"
       ? false
-      : forceWorktree || agentNameParsed === "build";
+      : agentNameParsed === "build"
+        ? worktreeOn
+        : forceWorktree;
   let toolRoot = l.repoRoot;
   if (mutating) {
-    const expectedBranch = issueRef ? `mc/task/${issueRef.number}` : undefined;
+    const expectedBranch = issueRef ? `mc/feature/${issueRef.number}` : undefined;
     const reuse = reusableWorktreeOwner(
       [
         ...parentChainRuns,
@@ -1395,7 +1386,7 @@ async function cmdRun(argv: string[]): Promise<number> {
         const spec = await createWorktree({
           layout: l,
           runId: recorder.id,
-          kind: issueRef ? "task" : "run",
+          kind: issueRef ? "feature" : "run",
           issueNumber: issueRef?.number,
           featureNumber,
           base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
@@ -1579,7 +1570,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       machine,
       recorder,
       defaultApproval: agentOverrides.approval ?? "human",
-      title: `Task: ${request.split("\n")[0]!.slice(0, 120)}`,
+      title: `Feature: ${request.split("\n")[0]!.slice(0, 120)}`,
     });
   }
 
@@ -2096,7 +2087,7 @@ async function cmdIssue(argv: string[]): Promise<number> {
       const issues = await provider.list({ state, limit: Number(flags.get("limit") ?? 100) });
       for (const issue of issues) {
         process.stdout.write(
-          `#${issue.ref.number}  ${issue.kind.padEnd(7)} ${issue.state.padEnd(6)} ${issue.title}${issue.reserved ? "  [reserved]" : ""}${issue.parent ? `  parent=#${issue.parent.number}` : ""}\n`,
+          `#${issue.ref.number}  ${issue.kind.padEnd(7)} ${issue.state.padEnd(6)} ${issue.title}${issue.parent ? `  parent=#${issue.parent.number}` : ""}\n`,
         );
       }
       if (issues.length === 0) process.stdout.write("no issues\n");
@@ -2118,7 +2109,7 @@ async function cmdIssue(argv: string[]): Promise<number> {
       const depth = Math.max(0, Number(flags.get("depth") ?? 2));
       const walk = async (issue: typeof root, level: number): Promise<void> => {
         process.stdout.write(
-          `${"  ".repeat(level)}#${issue.ref.number} ${issue.kind} ${issue.state} ${issue.title}${issue.reserved ? " [reserved]" : ""}\n`,
+          `${"  ".repeat(level)}#${issue.ref.number} ${issue.kind} ${issue.state} ${issue.title}\n`,
         );
         if (level >= depth) return;
         for (const child of await provider.children(issue.ref)) await walk(child, level + 1);
@@ -2127,18 +2118,15 @@ async function cmdIssue(argv: string[]): Promise<number> {
       return 0;
     }
     case "create": {
-      const kind = flags.get("kind") as "epic" | "feature" | "task" | undefined;
+      const kind = flags.get("kind") as "epic" | "feature" | undefined;
       const title = flags.get("title");
-      if (!kind || !title) fail("usage: machine_code issue create --kind epic|feature|task --title <t> [--parent <ref>] [--body <b>]");
+      if (!kind || !title) fail("usage: machine_code issue create --kind epic|feature --title <t> [--parent <ref>] [--body <b>]");
       const parent = flags.get("parent") ? parseIssueRef(flags.get("parent")!, bundle.repo, "github") : undefined;
-      if (kind === "task" && !parent) fail("creating a Task requires --parent <feature>");
       if (kind === "feature" && !parent) fail("creating a Feature requires --parent <epic>");
       if (parent) {
         const parentIssue = await provider.get(parent);
         if (!parentIssue) fail(`parent not found: ${flags.get("parent")}`);
-        if (kind === "task" && parentIssue.kind !== "feature") fail("a Task's parent must be a Feature");
         if (kind === "feature" && parentIssue.kind !== "epic") fail("a Feature's parent must be an Epic");
-        if (kind === "task") await ensureFeatureReserved(provider, parentIssue.ref);
         if (kind === "feature") await ensureEpicReserved(provider, parentIssue.ref);
       }
       const body = flags.get("body") ?? "";
@@ -2146,11 +2134,9 @@ async function cmdIssue(argv: string[]): Promise<number> {
       if (created.kind === "epic") {
         const reserved = await ensureEpicReserved(provider, created.ref);
         process.stdout.write(`created epic #${created.ref.number}; reserved Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}\n`);
-      } else if (created.kind === "feature") {
+      } else {
         const task0 = await ensureFeatureReserved(provider, created.ref);
         process.stdout.write(`created feature #${created.ref.number}; reserved Task 0 #${task0.ref.number}\n`);
-      } else {
-        process.stdout.write(`created task #${created.ref.number}\n`);
       }
       return 0;
     }
@@ -2211,10 +2197,8 @@ async function cmdIssue(argv: string[]): Promise<number> {
       if (!parentArg) fail("usage: machine_code issue link <issue> --parent <ref>");
       const parent = await provider.get(parseIssueRef(parentArg, bundle.repo, "github"));
       if (!parent) fail(`parent not found: ${parentArg}`);
-      const valid =
-        (issue.kind === "feature" && parent.kind === "epic") || (issue.kind === "task" && parent.kind === "feature");
-      if (!valid) fail(`invalid hierarchy: ${issue.kind} cannot be a child of ${parent.kind} (Feature→Epic, Task→Feature)`);
-      if (issue.kind === "task") await ensureFeatureReserved(provider, parent.ref);
+      const valid = issue.kind === "feature" && parent.kind === "epic";
+      if (!valid) fail(`invalid hierarchy: ${issue.kind} cannot be a child of ${parent.kind} (Feature→Epic)`);
       if (issue.kind === "feature") await ensureEpicReserved(provider, parent.ref);
       await provider.linkParent(issue.ref, parent.ref);
       process.stdout.write(`linked #${issue.ref.number} under #${parent.ref.number}\n`);
@@ -2279,6 +2263,38 @@ async function cmdApprove(argv: string[]): Promise<number> {
   if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown"}`);
   const issue = await bundle.provider.get(ref);
   if (!issue) fail(`issue not found: ${target}`);
+
+  // Feature issues merge directly: route them through the feature lifecycle.
+  if (issue.kind === "feature") {
+    const approved = await approveFeature({
+      layout: l,
+      machine,
+      provider: bundle.provider,
+      issue,
+      ...(prs.provider.kind !== "none" ? { prs: prs.provider } : {}),
+      clean: true,
+    });
+    const featureRuns = listRuns(l).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+    for (const run of featureRuns) {
+      const detail = readRun(l, run.id);
+      if (!detail) continue;
+      const requested = detail.events.some(
+        (e) => e.type === "approval_requested" && (e as { issue?: number }).issue === issue.ref.number,
+      );
+      if (!requested) continue;
+      const recorder = RunRecorder.reopen(l, detail.summary);
+      recorder.event("approval_granted", { issue: issue.ref.number, by: "human" });
+      recorder.event("issue_closed", { issue: issue.ref.number, by: run.id, approval: "human" });
+      break;
+    }
+    process.stdout.write(
+      `approved and merged feature #${issue.ref.number}` +
+        `${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
+        `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
+        `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+    );
+    return 0;
+  }
 
   // Find the newest run in this repo that requested approval for the issue.
   const runs = listRuns(l).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
@@ -2397,15 +2413,15 @@ async function cmdPr(argv: string[]): Promise<number> {
   fail("usage: machine_code pr feature <n> | list | status <n>");
 }
 
-/* -------------------------------------------------------------------- task */
+/* ------------------------------------------------------------------ feature */
 
-function taskRefNumber(value: string | undefined): number {
+function featureRefNumber(value: string | undefined): number {
   const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code task <status|start|review|approve|cleanup> <issue>");
+  if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code feature <status|start|review|approve|cleanup> <issue>");
   return n;
 }
 
-function printTaskStatus(status: Awaited<ReturnType<typeof taskStatus>>): void {
+function printFeatureStatus(status: Awaited<ReturnType<typeof featureStatus>>): void {
   const issue = status.issue;
   process.stdout.write(`#${issue.ref.number} ${issue.title}  [${issue.kind}, ${issue.state}]\n`);
   process.stdout.write(`Stage: ${status.stage}\n`);
@@ -2446,7 +2462,7 @@ function printTaskStatus(status: Awaited<ReturnType<typeof taskStatus>>): void {
   }
 }
 
-async function taskIssue(l: ReturnType<typeof layout>, number: number): Promise<{
+async function featureIssue(l: ReturnType<typeof layout>, number: number): Promise<{
   machine: ReturnType<typeof loadMachineConfig>;
   bundle: Awaited<ReturnType<typeof createIssueProvider>>;
   issue: Issue;
@@ -2457,45 +2473,45 @@ async function taskIssue(l: ReturnType<typeof layout>, number: number): Promise<
   const ref = parseIssueRef(String(number), bundle.repo, "github");
   const issue = await bundle.provider.get(ref);
   if (!issue) fail(`issue not found: #${number}`);
-  if (issue.kind !== "task") fail(`#${number} is a ${issue.kind}; task commands require a Task`);
+  if (issue.kind !== "feature") fail(`#${number} is a ${issue.kind}; feature commands require a Feature`);
   return { machine, bundle, issue };
 }
 
-async function prProviderForTask(l: ReturnType<typeof layout>) {
+async function prProviderForFeature(l: ReturnType<typeof layout>) {
   const bundle = await createPrProviderFor(l);
   return bundle.provider.kind === "none" ? undefined : bundle.provider;
 }
 
-async function cmdTask(argv: string[]): Promise<number> {
+async function cmdFeature(argv: string[]): Promise<number> {
   const sub = argv[0];
   if (!sub || !["status", "start", "review", "approve", "cleanup"].includes(sub)) {
-    fail("usage: machine_code task status|start|review|approve|cleanup <issue>");
+    fail("usage: machine_code feature status|start|review|approve|cleanup <issue>");
   }
   const { flags, positional } = parseFlags(argv.slice(1));
-  const number = taskRefNumber(positional[0] ?? flags.get("issue"));
+  const number = featureRefNumber(positional[0] ?? flags.get("issue"));
   const l = layout();
-  const { machine, bundle, issue } = await taskIssue(l, number);
-  const prs = await prProviderForTask(l);
+  const { machine, bundle, issue } = await featureIssue(l, number);
+  const prs = await prProviderForFeature(l);
 
   if (sub === "status") {
-    const status = await taskStatus(l, issue, prs ? { prs } : {});
+    const status = await featureStatus(l, issue, prs ? { prs } : {});
     if (flags.has("json")) {
       process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
     } else {
-      printTaskStatus(status);
+      printFeatureStatus(status);
     }
     return 0;
   }
 
   if (sub === "start") {
     const parsed = parsePlanMarker(issue.body);
-    if (!parsed.plan || !isReadyPlan(parsed.plan)) fail(`task #${number} does not have a ready plan`);
-    if (issue.state !== "open") fail(`task #${number} is ${issue.state}`);
-    const runs = taskRuns(l, issue.ref);
+    if (!parsed.plan || !isReadyPlan(parsed.plan)) fail(`feature #${number} does not have a ready plan`);
+    if (issue.state !== "open") fail(`feature #${number} is ${issue.state}`);
+    const runs = featureRuns(l, issue.ref);
     const active = runs.find((run) => ["created", "running", "awaiting_input", "paused", "interrupted"].includes(run.status));
     if (active) {
       fail(
-        `task #${number} already has an active run: ${active.id}` +
+        `feature #${number} already has an active run: ${active.id}` +
           (active.status === "interrupted" ? `; resume it with "machine_code resume ${active.id}"` : ""),
       );
     }
@@ -2506,18 +2522,18 @@ async function cmdTask(argv: string[]): Promise<number> {
     );
     if (latest && latest.status !== "failed" && latest.status !== "blocked" && latest.status !== "cancelled") {
       fail(
-        `task #${number} already has run ${latest.id} (${latest.status}); ` +
-          `use "machine_code task status ${number}" and "machine_code task review ${number}"`,
+        `feature #${number} already has run ${latest.id} (${latest.status}); ` +
+          `use "machine_code feature status ${number}" and "machine_code feature review ${number}"`,
       );
     }
     if (latestWorktree && !retryable) {
       fail(
-        `task #${number} already has a worktree at ${latestWorktree}; ` +
-          `use "machine_code task cleanup ${number}" or finish the existing run`,
+        `feature #${number} already has a worktree at ${latestWorktree}; ` +
+          `use "machine_code feature cleanup ${number}" or finish the existing run`,
       );
     }
     if (retryable && !flags.has("retry")) {
-      fail(`task #${number} has a reviewable worktree; rerun with --retry to build on it`);
+      fail(`feature #${number} has a reviewable worktree; rerun with --retry to build on it`);
     }
     if (flags.has("retry") && !retryable) {
       fail("--retry needs the latest run to be blocked or failed with an existing worktree");
@@ -2537,16 +2553,16 @@ async function cmdTask(argv: string[]): Promise<number> {
     if (flags.has("dry-run")) {
       process.stdout.write(`#${number} ${issue.title}\n`);
       process.stdout.write(`Plan: ${plan.status}/${plan.verification} · review ${plan.planReview}/${plan.resultReview}\n`);
-      process.stdout.write(`Branch: mc/task/${number}${issue.parent ? ` → mc/feature/${issue.parent.number}` : ""}\n`);
+      process.stdout.write(`Branch: mc/feature/${number}${issue.parent ? ` → mc/epic/${issue.parent.number}` : ""}\n`);
       process.stdout.write(`Review agent: ${flags.has("no-review") ? "off" : "on"}\n`);
-      process.stdout.write(`Verification: ${checks.join(", ") || "(none; pass --check during task review)"}\n`);
+      process.stdout.write(`Verification: ${checks.join(", ") || "(none; pass --check during feature review)"}\n`);
       process.stdout.write(`Human approval: ${issue.approval ?? "human"}\n`);
       return 0;
     }
     const runtime = await loadRuntime(l);
     if (checks.length === 0) {
       process.stderr.write(
-        `warning: task #${number} has no ## Verification commands; task review needs --check <command>\n`,
+        `warning: feature #${number} has no ## Verification commands; feature review needs --check <command>\n`,
       );
     }
     const result = await executeTask({
@@ -2577,13 +2593,13 @@ async function cmdTask(argv: string[]): Promise<number> {
     const detail = readRun(l, result.runId);
     if (detail?.summary.finalText) process.stdout.write(`${detail.summary.finalText}\n`);
     if (result.status !== "completed") {
-      process.stdout.write(`task #${number} stopped: ${result.status}${result.error ? ` · ${result.error}` : ""}\n`);
+      process.stdout.write(`feature #${number} stopped: ${result.status}${result.error ? ` · ${result.error}` : ""}\n`);
       return EXIT[result.status];
     }
-    const status = await taskStatus(l, issue, prs ? { prs } : {});
-    printTaskStatus(status);
+    const status = await featureStatus(l, issue, prs ? { prs } : {});
+    printFeatureStatus(status);
     if (plan.resultReview === "agent" && (issue.approval ?? "human") === "agent" && !flags.has("no-review")) {
-      const approved = await approveTask({
+      const approved = await approveFeature({
         layout: l,
         machine: runtime.machine,
         provider: bundle.provider,
@@ -2593,17 +2609,17 @@ async function cmdTask(argv: string[]): Promise<number> {
         clean: true,
       });
       process.stdout.write(
-        `task #${number} agent-approved and closed${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+        `feature #${number} agent-approved and closed${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
       );
     } else {
-      process.stdout.write(`task #${number} is awaiting human review/merge.\n`);
+      process.stdout.write(`feature #${number} is awaiting human review/merge.\n`);
     }
     return 0;
   }
 
   if (sub === "review") {
-    const status = await taskStatus(l, issue, prs ? { prs } : {});
-    printTaskStatus(status);
+    const status = await featureStatus(l, issue, prs ? { prs } : {});
+    printFeatureStatus(status);
     const explicit = flags.get("checks") ?? flags.get("check");
     const checks = flags.has("no-checks")
       ? []
@@ -2615,7 +2631,7 @@ async function cmdTask(argv: string[]): Promise<number> {
       return 0;
     }
     process.stdout.write(`Running ${checks.length} review check(s) in ${status.worktree ?? "the worktree"}:\n`);
-    const results = await runTaskChecks(l, issue, checks);
+    const results = await runFeatureChecks(l, issue, checks);
     for (const result of results) {
       process.stdout.write(`  ${result.passed ? "PASS" : "FAIL"}  ${result.command}  ${result.durationMs}ms\n`);
       if (!result.passed && result.output.trim()) {
@@ -2625,14 +2641,14 @@ async function cmdTask(argv: string[]): Promise<number> {
     const failed = results.filter((result) => !result.passed);
     process.stdout.write(
       failed.length === 0
-        ? `All review checks passed. Approve with: machine_code task approve ${number}\n`
+        ? `All review checks passed. Approve with: machine_code feature approve ${number}\n`
         : `Review failed: ${failed.map((result) => result.command).join(", ")}\n`,
     );
     return failed.length === 0 ? 0 : 2;
   }
 
   if (sub === "approve") {
-    const approved = await approveTask({
+    const approved = await approveFeature({
       layout: l,
       machine,
       provider: bundle.provider,
@@ -2646,15 +2662,15 @@ async function cmdTask(argv: string[]): Promise<number> {
       force: flags.has("force"),
     });
     process.stdout.write(
-      `task #${number} closed${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
+      `feature #${number} closed${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
         `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
         `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
     );
     return 0;
   }
 
-  const status = await taskStatus(l, issue, prs ? { prs } : {});
-  const cleaned = await cleanupTask({
+  const status = await featureStatus(l, issue, prs ? { prs } : {});
+  const cleaned = await cleanupFeature({
     layout: l,
     issue,
     ...(status.latest ? { run: status.latest } : {}),
@@ -3117,12 +3133,11 @@ function rowText(row: RunRow, width: number, group: RunGroup): string {
   if (row.kind === "issue") {
     const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
     const pct = row.rollup.pct === undefined ? "" : `${row.rollup.pct}%`;
-    const badge = row.issue.reserved ? " [P&R]" : "";
     const runs = row.rollup.runsTotal > 0 ? `runs ${row.rollup.runsTotal}` : "runs 0";
-    const tasks = row.issue.kind === "task" || row.issue.reserved || row.rollup.tasksTotal === 0
+    const tasks = row.rollup.tasksTotal === 0
       ? ""
       : ` ${row.rollup.tasksClosed}/${row.rollup.tasksTotal} ·`;
-    const head = `${indent}${fold} ${issueGlyph(row.issue)} #${row.issue.ref.number} ${row.issue.kind}${badge} ${row.issue.title}`;
+    const head = `${indent}${fold} ${issueGlyph(row.issue)} #${row.issue.ref.number} ${row.issue.kind} ${row.issue.title}`;
     const tail = `  ${pct}${tasks} ${runs}${row.rollup.runsActive ? ` (${row.rollup.runsActive})` : ""} · ${fmtMoney(row.rollup.cost)}`;
     if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
     return cell(head, width - visibleWidth(tail)) + tail;
@@ -3344,7 +3359,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       clearOrchestrationStop(l, id);
       process.stdout.write(`orchestration ${id} is not running; marked stopped\n`);
     } else {
-      process.stdout.write(`stop requested for orchestration ${id} (${lease!.owner}, pid ${lease!.pid}); it stops after the current task\n`);
+      process.stdout.write(`stop requested for orchestration ${id} (${lease!.owner}, pid ${lease!.pid}); it stops after the current feature\n`);
     }
     return 0;
   }
@@ -3380,9 +3395,9 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   }
   if (sub === "approve") {
     const id = flags.get("orchestration");
-    const task = Number(flags.get("task"));
+    const task = Number(flags.get("feature") ?? flags.get("task"));
     if (!id || !Number.isInteger(task) || task <= 0) {
-      fail("usage: machine_code orchestrate approve --orchestration <id> --task <number>");
+      fail("usage: machine_code orchestrate approve --orchestration <id> --feature <number>");
     }
     const state = readOrchestration(l, id);
     if (!state) fail(`no such orchestration: ${id}`);
@@ -3394,9 +3409,9 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       const repo = state.scopeRef?.repo ?? issueBundle.repo;
       const ref = parseIssueRef(String(task), repo, "github");
       const issue = await issueBundle.provider.get(ref);
-      if (!issue) fail(`task #${task} not found`);
+      if (!issue) fail(`feature #${task} not found`);
       const prBundle = await createPrProviderFor(l);
-      const approved = await approveTask({
+      const approved = await approveFeature({
         layout: l,
         machine,
         provider: issueBundle.provider,
@@ -3405,7 +3420,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
         clean: true,
       });
       process.stdout.write(
-        `closed task #${task} after human result approval` +
+        `closed feature #${task} after human result approval` +
           `${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
           `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
       );
@@ -3416,7 +3431,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       ...(resultApproval ? { approvedResults: approved } : { approvedPackets: approved }),
       checkpoint: resultApproval ? "result_approved" : "packet_approved",
     });
-    process.stdout.write(`approved ${resultApproval ? "result" : "packet"} for task #${task} in orchestration ${id}\n`);
+    process.stdout.write(`approved ${resultApproval ? "result" : "packet"} for feature #${task} in orchestration ${id}\n`);
     return 0;
   }
   const bundle = await createIssueProvider(l, machine);
@@ -3485,8 +3500,13 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   }
 
   const maxParallelRaw = flags.get("max-parallel");
-  const maxParallel = maxParallelRaw === undefined ? 2 : Number(maxParallelRaw);
-  if (!Number.isInteger(maxParallel) || maxParallel < 0) fail("--max-parallel must be a non-negative integer");
+  let maxParallel = maxParallelRaw === undefined ? 2 : Number(maxParallelRaw);
+  if (!Number.isFinite(maxParallel)) fail("--max-parallel must be one of 1|2|4|8");
+  if (![1, 2, 4, 8].includes(maxParallel)) {
+    const nearest = [1, 2, 4, 8].reduce((a, b) => (Math.abs(b - maxParallel) < Math.abs(a - maxParallel) ? b : a));
+    process.stderr.write(`warning: --max-parallel ${maxParallelRaw} clamped to ${nearest}\n`);
+    maxParallel = nearest;
+  }
   const maxMinutesRaw = flags.get("max-minutes");
   const maxMinutes = maxMinutesRaw === undefined ? undefined : Number(maxMinutesRaw);
   if (maxMinutes !== undefined && (!Number.isFinite(maxMinutes) || maxMinutes <= 0)) {
@@ -3562,7 +3582,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
 
   const scopeText = result.scopeRef ? `${result.scope} #${result.scopeRef.number}` : result.scope;
   process.stdout.write(
-    `orchestration${orchestration ? ` ${orchestration.id}` : ""} ${scopeText}: ${result.tasks.length} task(s), ` +
+    `orchestration${orchestration ? ` ${orchestration.id}` : ""} ${scopeText}: ${result.tasks.length} feature(s), ` +
       `${result.ready.length} ready, ${result.dispatch.length} dispatch` +
       `${running ? ` · RUNNING ${lease!.owner} pid ${lease!.pid}` : " · idle"}` +
       `${orchestration?.stopReason ? ` · STOPPED ${orchestration.stopReason}` : ""}\n`,
@@ -3625,7 +3645,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   ): Promise<{ stop?: string; checkpoint?: string }> => {
     if (!task.plan) return {};
     if (task.plan.role !== "build") {
-      const stop = `task #${task.issue.ref.number} has role ${task.plan.role}; review dispatch is not implemented`;
+      const stop = `feature #${task.issue.ref.number} has role ${task.plan.role}; review dispatch is not implemented`;
       process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stop}\n`);
       return { stop };
     }
@@ -3678,7 +3698,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
             : {}),
         });
       } catch (error) {
-        const stop = `task #${task.issue.ref.number} crashed: ${(error as Error).message}`;
+        const stop = `feature #${task.issue.ref.number} crashed: ${(error as Error).message}`;
         process.stdout.write(`  STOP  #${task.issue.ref.number}  ${stop}\n`);
         return { stop };
       }
@@ -3706,7 +3726,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
               });
               if (closed.status !== "closed") {
                 return {
-                  stop: `task #${task.issue.ref.number} ${closed.status}: ${closed.error ?? "closure failed"}`,
+                  stop: `feature #${task.issue.ref.number} ${closed.status}: ${closed.error ?? "closure failed"}`,
                 };
               }
               const parents = closed.closedParents.length > 0
@@ -3714,7 +3734,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
                 : "";
               process.stdout.write(`  CLOSE #${task.issue.ref.number}  agent-approved result${parents}\n`);
             } catch (error) {
-              return { stop: `task #${task.issue.ref.number} closure failed: ${(error as Error).message}` };
+              return { stop: `feature #${task.issue.ref.number} closure failed: ${(error as Error).message}` };
             }
           }
         }
@@ -3725,7 +3745,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       }
       retryEvidence = outcome.error ?? outcome.status;
       if (!isRetryableFailure(retryEvidence)) {
-        return { stop: `task #${task.issue.ref.number} ${outcome.status}: ${retryEvidence}` };
+        return { stop: `feature #${task.issue.ref.number} ${outcome.status}: ${retryEvidence}` };
       }
       reuseTree = findRetryWorktree(
         l,
@@ -3736,11 +3756,11 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       if (reuseTree) {
         process.stdout.write(`  REUSE #${task.issue.ref.number}  worktree ${reuseTree.path}\n`);
       }      if (retry >= task.plan.retriesBeforeReplan) {
-        return { stop: `task #${task.issue.ref.number} needs_planning after ${task.plan.retriesBeforeReplan + 1} attempt(s)` };
+        return { stop: `feature #${task.issue.ref.number} needs_planning after ${task.plan.retriesBeforeReplan + 1} attempt(s)` };
       }
       process.stdout.write(`  RETRY #${task.issue.ref.number}  evidence: ${retryEvidence.slice(0, 200)}\n`);
     }
-    return { stop: `task #${task.issue.ref.number} did not complete` };
+    return { stop: `feature #${task.issue.ref.number} did not complete` };
   };
 
   const queue = [...result.dispatch];
@@ -3918,7 +3938,7 @@ function cmdShow(argv: string[]): number {
         `  orchestration ${s.orchestrationId}${s.orchestrationScope ? ` (${s.orchestrationScope})` : ""}\n`,
       );
     }
-    if (s.taskIssue) process.stdout.write(`  task          #${s.taskIssue.number}\n`);
+    if (s.taskIssue) process.stdout.write(`  feature       #${s.taskIssue.number}\n`);
     if (s.attempt !== undefined) process.stdout.write(`  attempt       ${s.attempt}\n`);
     if (s.phase) process.stdout.write(`  phase         ${s.phase}\n`);
     if (s.planReview) process.stdout.write(`  plan review   ${s.planReview}\n`);
@@ -4665,8 +4685,12 @@ async function main(): Promise<void> {
     case "accept":
       code = await cmdAccept(rest);
       break;
+    case "feature":
+      code = await cmdFeature(rest);
+      break;
     case "task":
-      code = await cmdTask(rest);
+      process.stderr.write("task is now feature\n");
+      code = await cmdFeature(rest);
       break;
     case "pr":
       code = await cmdPr(rest);

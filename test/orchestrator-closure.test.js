@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { closeCompletedTask } from "../dist/orchestrator/closure.js";
+import { closeCompletedFeature, closeCompletedTask } from "../dist/orchestrator/closure.js";
+import { cascadeReserved } from "../dist/issues/completion.js";
 import { RunRecorder } from "../dist/state/runs.js";
 
 function layout(root) {
@@ -21,12 +22,12 @@ function layout(root) {
   };
 }
 
-function task() {
+function feature(number = 31, extra = {}) {
   return {
-    ref: { provider: "github", repo: "o/r", number: 31 },
-    kind: "task",
+    ref: { provider: "github", repo: "o/r", number },
+    kind: "feature",
     state: "open",
-    title: "Task",
+    title: `Feature ${number}`,
     body: "",
     labels: [],
     children: [],
@@ -34,49 +35,105 @@ function task() {
     blocking: [],
     acceptance: ["typescript:test"],
     approval: "agent",
+    ...extra,
   };
 }
 
 class FakeProvider {
-  constructor(issue) {
+  constructor(issues) {
     this.kind = "github";
-    this.issue = issue;
+    this.map = new Map(issues.map((i) => [i.ref.number, i]));
     this.closed = [];
   }
   async get(ref) {
-    return ref.number === this.issue.ref.number ? this.issue : null;
+    return this.map.get(ref.number) ?? null;
   }
-  async children() {
-    return [];
+  async children(ref) {
+    return [...this.map.values()].filter((candidate) => candidate.parent?.number === ref.number);
   }
   async close(ref) {
-    this.issue = { ...this.issue, state: "closed" };
+    const issue = this.map.get(ref.number);
+    if (issue) this.map.set(ref.number, { ...issue, state: "closed" });
     this.closed.push(ref.number);
   }
 }
 
-test("agent result approval records evidence and closes the task", async () => {
+function buildRun(l, issue) {
+  const recorder = new RunRecorder(l, {
+    agent: "build",
+    mode: "verified",
+    request: "finish feature",
+    repoRoot: l.repoRoot,
+    issue: issue.ref,
+  });
+  return recorder;
+}
+
+test("closeCompletedFeature aliases closeCompletedTask", () => {
+  assert.equal(closeCompletedFeature, closeCompletedTask);
+});
+
+test("agent result approval records evidence and closes the feature", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-closure-"));
   try {
     const l = layout(root);
-    const recorder = new RunRecorder(l, {
-      agent: "build",
-      mode: "verified",
-      request: "finish task",
-      repoRoot: root,
-      issue: task().ref,
-    });
-    const provider = new FakeProvider(task());
+    const target = feature();
+    const recorder = buildRun(l, target);
+    const provider = new FakeProvider([target]);
     const result = await closeCompletedTask({
       provider,
       layout: l,
-      issue: task(),
+      issue: target,
       runId: recorder.id,
       by: "agent",
     });
     assert.equal(result.status, "closed");
     assert.deepEqual(provider.closed, [31]);
     assert.deepEqual(result.closedParents, []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("closure walks feature -> epic one level and stops", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-closure-epic-"));
+  try {
+    const l = layout(root);
+    const grandparent = { ...feature(5, { kind: "epic", approval: "agent", acceptance: [] }), parent: undefined };
+    const epic = { ...feature(10, { kind: "epic", approval: "agent" }), parent: grandparent.ref };
+    const target = { ...feature(31), parent: epic.ref };
+    const sibling = { ...feature(32, { state: "closed" }), parent: epic.ref };
+    const provider = new FakeProvider([grandparent, epic, target, sibling]);
+    const recorder = buildRun(l, target);
+    // The epic's own completion gate needs acceptance evidence for the epic.
+    RunRecorder.reopen(l, recorder.current).event("acceptance_verified", {
+      issue: epic.ref.number,
+      by: "agent",
+      criteria: epic.acceptance,
+      evidence: "agent result approval",
+    });
+    const result = await closeCompletedFeature({
+      provider,
+      layout: l,
+      issue: target,
+      runId: recorder.id,
+      by: "agent",
+    });
+    assert.equal(result.status, "closed");
+    assert.deepEqual(provider.closed, [31, 10]);
+    assert.deepEqual(result.closedParents, [10]);
+    assert.equal(provider.map.get(5).state, "open", "walk stops at the epic; grandparent stays open");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cascadeReserved is a no-op", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-closure-res-"));
+  try {
+    const provider = new FakeProvider([feature()]);
+    assert.deepEqual(await cascadeReserved(provider, feature(), "close"), []);
+    assert.deepEqual(await cascadeReserved(provider, feature(), "reopen"), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

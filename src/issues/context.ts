@@ -66,11 +66,6 @@ export function issueContextErrors(input: IssueContextInput): string[] {
     if (!sectionText(sections, /^scope$/i)) errors.push(missing("Scope"));
   }
   if (input.kind === "feature") {
-    if (!sectionText(sections, /^success(?:\s+(?:measures|criteria))?$/i)) {
-      errors.push(missing("Success measures"));
-    }
-  }
-  if (input.kind === "task") {
     if (!sectionText(sections, /^deliverable$/i)) errors.push(missing("Deliverable"));
     if (parseAcceptance(input.body).length === 0) {
       errors.push(

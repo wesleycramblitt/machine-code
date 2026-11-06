@@ -137,15 +137,18 @@ export function buildSettings(
       file: configFile,
       editable: false,
     });
+    const worktreeOverrides = Object.entries(machine.agents)
+      .filter(([, overrides]) => overrides.worktree !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([role, overrides]) => `${role} ${overrides.worktree ? "on" : "off"}`);
     rows.push({
-      id: "issues.policy",
-      section: "context",
-      label: "Issue policy",
-      value: machine.issues.policy,
+      id: "agents.worktree",
+      section: "agents",
+      label: "Worktree",
+      value: worktreeOverrides.length > 0 ? worktreeOverrides.join("  ") : "on (default)",
       file: configFile,
-      detail: `provider ${machine.issues.provider}, cache ${machine.issues.cacheTtlSeconds}s`,
+      detail: "Isolated worktree per run (default on); sudo edits the main tree by default.",
       editable: true,
-      choices: ["optional", "required", "disabled"],
     });
     const themeKeys = [
       "header_bg",

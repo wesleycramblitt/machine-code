@@ -26,10 +26,10 @@ const base = {
 function issue(number, extra = {}) {
   return {
     ref: { provider: "github", repo: "o/r", number },
-    title: `Task ${number}`,
+    title: `Feature ${number}`,
     body: marker(base),
     state: "open",
-    kind: "task",
+    kind: "feature",
     labels: [],
     children: [],
     blockedBy: [],
@@ -59,7 +59,7 @@ test("planner fixture matrix", () => {
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "present.ts"), "export const present = true;\n", "utf8");
 
-    // greenfield extension: a clean ready task
+    // greenfield extension: a clean ready feature
     assert.equal(validatePlanIssue(issue(1), { requireReady: true }).ok, true);
 
     // extension: a draft is structurally valid but not dispatchable

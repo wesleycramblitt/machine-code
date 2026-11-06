@@ -3,7 +3,7 @@
  *
  * Four separate axes (never conflated):
  *   role        — identity: general | planner | build | review | sudo
- *   config      — behavior: delegate / verification / issues / ask / approval
+ *   config      — behavior: delegate / verification / worktree / issues / ask / approval
  *   mode        — legacy orchestration mode declared by a role; the
  *                 Orchestrator now schedules Build and Review directly
  *   ambiguity   — clarification policy; independent of everything above
@@ -27,7 +27,7 @@ import type { Layout } from "../paths.js";
 import type { CoreToolName } from "../tools/index.js";
 import { capabilitiesFor, type Capability } from "../policy/capabilities.js";
 
-export type Verification = "direct" | "verified" | "redundant";
+export type Verification = "direct" | "verified";
 export type IssueTracking = "required" | "optional" | "disabled";
 export type ApprovalMode = "human" | "agent";
 export type AmbiguityMode = "strict" | "precise" | "adaptive" | "autonomous";
@@ -37,6 +37,7 @@ export interface AgentConfig {
   preset: PresetName;
   delegate: boolean;
   verification: Verification;
+  worktree: boolean;
   issues: IssueTracking;
   /** Resolved by resolveAgentConfig; absent on raw presets. */
   issueAccess?: IssueAccess;
@@ -46,7 +47,7 @@ export interface AgentConfig {
   ambiguity: AmbiguityMode;
 }
 
-const VERIFICATIONS: readonly Verification[] = ["direct", "verified", "redundant"];
+const VERIFICATIONS: readonly Verification[] = ["direct", "verified"];
 const ISSUE_TRACKINGS: readonly IssueTracking[] = ["required", "optional", "disabled"];
 const AMBIGUITIES: readonly AmbiguityMode[] = ["strict", "precise", "adaptive", "autonomous"];
 
@@ -54,9 +55,8 @@ function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig
   return {
     preset: name,
     delegate: raw.delegate === true,
-    verification: (VERIFICATIONS as readonly string[]).includes(String(raw.verification))
-      ? (raw.verification as Verification)
-      : "direct",
+    verification: pick(raw.verification, VERIFICATIONS) ?? "direct",
+    worktree: raw.worktree !== false,
     issues: (ISSUE_TRACKINGS as readonly string[]).includes(String(raw.issues))
       ? (raw.issues as IssueTracking)
       : "optional",
@@ -80,10 +80,13 @@ export const ROLE_PRESET: Record<string, PresetName> = Object.fromEntries(
   AGENT_NAMES.map((name) => [name, rolePreset(name)]),
 );
 
-const PRESET_NAMES: readonly PresetName[] = Object.keys(PRESETS);
-
 function pick<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
+  // Legacy "redundant" verification narrows to "verified".
+  const normalized =
+    value === "redundant" && (allowed as readonly string[]).includes("verified") ? "verified" : value;
+  return typeof normalized === "string" && (allowed as readonly string[]).includes(normalized)
+    ? (normalized as T)
+    : undefined;
 }
 
 export interface ResolveInput {
@@ -107,6 +110,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     preset: "assistant",
     delegate: false,
     verification: "direct",
+    worktree: true,
     issues: "disabled",
     issueAccess: "none",
     artifactScripts: false,
@@ -126,6 +130,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     if (layer.delegate !== undefined) config.delegate = layer.delegate;
     const v = pick(layer.verification, VERIFICATIONS);
     if (v) config.verification = v;
+    if (layer.worktree !== undefined) config.worktree = layer.worktree;
     const it = pick(layer.issues, ISSUE_TRACKINGS);
     if (it) config.issues = it;
     if (isIssueAccess(layer.issueAccess)) config.issueAccess = layer.issueAccess;
@@ -139,7 +144,9 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
   // Run-level overrides win over everything.
   if (input.runOverrides) {
     if (input.runOverrides.delegate !== undefined) config.delegate = input.runOverrides.delegate;
-    if (input.runOverrides.verification !== undefined) config.verification = input.runOverrides.verification;
+    const rv = pick(input.runOverrides.verification, VERIFICATIONS);
+    if (rv) config.verification = rv;
+    if (input.runOverrides.worktree !== undefined) config.worktree = input.runOverrides.worktree;
     if (input.runOverrides.issues !== undefined) config.issues = input.runOverrides.issues;
     if (isIssueAccess(input.runOverrides.issueAccess)) config.issueAccess = input.runOverrides.issueAccess;
     if (input.runOverrides.artifactScripts !== undefined) config.artifactScripts = input.runOverrides.artifactScripts;
@@ -151,15 +158,7 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
 }
 
 function pickPreset(input: ResolveInput): PresetName {
-  const candidates = [
-    input.runOverrides?.preset,
-    input.agentPolicy?.preset,
-    input.machineOverrides?.preset,
-  ];
-  for (const c of candidates) {
-    const p = pick(c, PRESET_NAMES);
-    if (p) return p;
-  }
+  // Presets no longer steer resolution; the role default always wins.
   return ROLE_PRESET[input.role] ?? "assistant";
 }
 
@@ -175,6 +174,7 @@ function agentPolicyToConfig(policy: AgentPolicy | undefined): AgentConfigOverri
   if (policy.ask !== undefined) out.ask = policy.ask;
   if (policy.approval !== undefined) out.approval = policy.approval;
   if (policy.ambiguity !== undefined) out.ambiguity = policy.ambiguity;
+  if (policy.worktree !== undefined) out.worktree = policy.worktree;
   const hasAny = Object.values(out).some((v) => v !== undefined);
   return hasAny ? out : undefined;
 }
@@ -215,7 +215,7 @@ export function ambiguityPrompt(mode: AmbiguityMode, askAvailable = true): strin
 
 /** `ask` is available in strict/precise/adaptive — never in autonomous. */
 export function askEnabled(config: AgentConfig): boolean {
-  return config.ask && config.ambiguity !== "autonomous";
+  return config.ambiguity !== "autonomous";
 }
 
 /* ------------------------------------------------------ prompt composition */
@@ -225,12 +225,11 @@ export function composePrompt(
   config: AgentConfig,
   tools: readonly CoreToolName[],
 ): string {
-  const access = config.issueAccess ?? "none";
   const ask = askEnabled(config);
   return [
     def.prompt,
     "",
-    `Config: preset ${config.preset} · issues ${config.issues} · issue access ${access} · verification ${config.verification} · ask ${ask ? "on" : "off"} · approval ${config.approval}.`,
+    `Config: worktree ${config.worktree ? "on" : "off"} · verification ${config.verification} · approval ${config.approval}.`,
     `Tools: ${tools.length > 0 ? tools.join(", ") : "(none)"}.`,
     ambiguityPrompt(config.ambiguity, ask),
   ].join("\n");

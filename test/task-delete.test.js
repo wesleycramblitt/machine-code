@@ -1,10 +1,11 @@
 /**
- * Destructive issue cleanup: reserved protection, subtree gating, and cascade
- * deletion order.
+ * Destructive issue cleanup: subtree gating, cascade deletion order, and
+ * branch cleanup for both the Feature branch and legacy Task branches.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -60,11 +61,17 @@ class FakeProvider {
 
 const machine = {};
 
+function git(dir, args) {
+  const r = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+  return r.stdout;
+}
+
 test("cascade deletes children before the parent", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-del-"));
   try {
     const parent = issue(20, "feature");
-    const child = issue(31, "task", { parent: parent.ref });
+    const child = issue(31, "feature", { parent: parent.ref });
     parent.children.push(child.ref);
     const provider = new FakeProvider([parent, child]);
     const result = await deleteIssue({
@@ -85,7 +92,7 @@ test("a parent with children needs an explicit cascade", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-del-gate-"));
   try {
     const parent = issue(20, "feature");
-    const child = issue(31, "task", { parent: parent.ref });
+    const child = issue(31, "feature", { parent: parent.ref });
     parent.children.push(child.ref);
     const provider = new FakeProvider([parent, child]);
     await assert.rejects(
@@ -102,7 +109,7 @@ test("issue deletion removes terminal run records unless keepRuns is set", async
   const root = mkdtempSync(join(tmpdir(), "mc-del-runs-"));
   try {
     const l = layout(root);
-    const target = issue(31, "task");
+    const target = issue(31, "feature");
     const provider = new FakeProvider([target]);
     const recorder = new RunRecorder(l, { agent: "build", mode: "", request: "run", repoRoot: root, issue: target.ref });
     recorder.finalize("completed");
@@ -119,7 +126,7 @@ test("tombstones hide a deleted issue even when a stale cache writes it back", (
   const root = mkdtempSync(join(tmpdir(), "mc-del-cache-"));
   try {
     const l = layout(root);
-    const target = issue(31, "task");
+    const target = issue(31, "feature");
     writeIssueCache(l, "o/r", [target]);
     addTombstones(l, [target.ref]);
     assert.deepEqual(readIssueCache(l).issues, []);
@@ -130,18 +137,44 @@ test("tombstones hide a deleted issue even when a stale cache writes it back", (
   }
 });
 
-test("reserved issues cannot be deleted", async () => {
+test("legacy reserved anchors are gone: reserved-shaped issues delete normally", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-del-reserved-"));
   try {
-    const reserved = issue(21, "task", {
-      reserved: { for: issue(20, "feature").ref, kind: "feature-pr" },
+    const legacy = issue(21, "feature", {
+      reserved: { for: issue(20, "epic").ref, kind: "feature-pr" },
     });
-    const provider = new FakeProvider([reserved]);
-    await assert.rejects(
-      deleteIssue({ layout: layout(root), machine, provider, issue: reserved, cascade: true }),
-      /reserved issue/,
-    );
-    assert.deepEqual(provider.deleted, []);
+    const provider = new FakeProvider([legacy]);
+    const result = await deleteIssue({ layout: layout(root), machine, provider, issue: legacy, cascade: true });
+    assert.deepEqual(result.deleted, [21]);
+    assert.deepEqual(provider.deleted, [21]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("feature deletion cleans the feature branch and legacy task branches", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-del-branch-"));
+  try {
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.email", "t@t.local"]);
+    git(root, ["config", "user.name", "T"]);
+    writeFileSync(join(root, "README.md"), "# t\n", "utf8");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-qm", "init"]);
+    git(root, ["branch", "mc/feature/31"]);
+    git(root, ["branch", "mc/task/31"]);
+    const l = layout(root);
+    const target = issue(31, "feature");
+    const provider = new FakeProvider([target]);
+    const recorder = new RunRecorder(l, { agent: "build", mode: "", request: "run", repoRoot: root, issue: target.ref });
+    recorder.patchSummary({ branch: "mc/task/31" });
+    recorder.finalize("completed");
+    const result = await deleteIssue({ layout: l, machine, provider, issue: target });
+    assert.deepEqual(provider.deleted, [31]);
+    assert.ok(result.deletedBranches.includes("mc/feature/31"));
+    assert.ok(result.deletedBranches.includes("mc/task/31"));
+    assert.equal(git(root, ["branch", "--list", "mc/feature/31"]).trim(), "");
+    assert.equal(git(root, ["branch", "--list", "mc/task/31"]).trim(), "");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

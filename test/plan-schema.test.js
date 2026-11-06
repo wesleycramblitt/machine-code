@@ -19,10 +19,10 @@ const marker = (value) => `<!-- mc:plan\n${JSON.stringify(value)}\n-->`;
 function issue(number, body, extra = {}) {
   return {
     ref: { provider: "github", repo: "o/r", number },
-    title: `Issue ${number}`,
+    title: `Feature ${number}`,
     body,
     state: "open",
-    kind: "task",
+    kind: "feature",
     labels: [],
     children: [],
     blockedBy: [],
@@ -93,11 +93,11 @@ test("marker defaults and invalid fields", () => {
   }
 });
 
-test("plan issue validation checks task shape, readiness, and dependencies", () => {
-  const task = issue(10, marker(valid), {
+test("plan issue validation checks feature shape, readiness, and dependencies", () => {
+  const feature = issue(10, marker(valid), {
     blockedBy: [{ provider: "github", repo: "o/r", number: 9 }],
   });
-  assert.equal(validatePlanIssue(task, { requireReady: true }).ok, true);
+  assert.equal(validatePlanIssue(feature, { requireReady: true }).ok, true);
 
   const draft = issue(11, marker({ ...valid, status: "draft" }));
   assert.equal(validatePlanIssue(draft).ok, true);
@@ -109,20 +109,21 @@ test("plan issue validation checks task shape, readiness, and dependencies", () 
   assert.equal(missing.ok, false);
   assert.match(missing.errors.join("\n"), /missing mc:plan/);
 
-  const nonTask = validatePlanIssue(issue(13, marker(valid), { kind: "feature" }));
-  assert.match(nonTask.errors.join("\n"), /Task issues/);
-
-  const reserved = validatePlanIssue(issue(14, marker(valid), { reserved: { kind: "feature-pr" } }));
-  assert.match(reserved.errors.join("\n"), /reserved/);
+  const nonFeature = validatePlanIssue(issue(13, marker(valid), { kind: "epic" }));
+  assert.match(nonFeature.errors.join("\n"), /Feature issues/);
 
   const noAcceptance = validatePlanIssue(issue(15, marker(valid), { acceptance: [] }));
   assert.match(noAcceptance.errors.join("\n"), /acceptance/);
 
   const oversized = validatePlanIssue(
-    issue(15.5, marker(valid), { acceptance: ["one", "two", "three", "four"] }),
+    issue(15.5, marker(valid), { acceptance: ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"] }),
   );
   assert.equal(oversized.ok, false);
-  assert.match(oversized.errors.join("\n"), /split it into smaller Tasks/);
+  assert.match(oversized.errors.join("\n"), /split it into smaller Features/);
+
+  const broad = validatePlanIssue(issue(15.6, marker(valid), { acceptance: ["x".repeat(241)] }));
+  assert.equal(broad.ok, false);
+  assert.match(broad.errors.join("\n"), /240 chars/);
 
   const crossRepo = validatePlanIssue(
     issue(16, marker(valid), {

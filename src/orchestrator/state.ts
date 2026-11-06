@@ -28,10 +28,12 @@ export interface OrchestrationState {
   stopReason?: string;
   pid?: number;
   lease?: OrchestrationLease;
-  /** Task numbers whose before-build packet a human approved. */
+  /** Feature numbers whose before-build packet a human approved. */
   approvedPackets?: number[];
-  /** Task numbers whose completed result a human approved. */
+  /** Feature numbers whose completed result a human approved. */
   approvedResults?: number[];
+  /** Alias of approvedResults kept for feature-named readers. */
+  approvedFeatures?: number[];
 }
 
 export function orchestrationsDir(layout: Layout): string {

@@ -12,7 +12,6 @@ import type { Layout } from "../paths.js";
 import type { MachineConfig, Policy } from "../config.js";
 import type { IssueProvider, IssueRef } from "../issues/provider.js";
 import { createIssueProvider } from "../issues/index.js";
-import { isReserved } from "../issues/reserved.js";
 import { createPrProviderFor } from "./factory.js";
 import { PrError, type PullRequest, type PullRequestProvider } from "./provider.js";
 import { allCommands } from "../commands/profiles.js";
@@ -72,11 +71,11 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
   if (feature.kind !== "feature") throw new PrError("not_feature", `#${feature.ref.number} is a ${feature.kind}, not a Feature`);
 
   const children = await issues.children(feature.ref);
-  const open = children.filter((c) => c.kind === "task" && !isReserved(c) && c.state !== "closed");
+  const open = children.filter((c) => c.state !== "closed");
   if (open.length > 0) {
     return {
       status: "blocked",
-      error: `feature #${feature.ref.number} has open tasks: ${open.map((c) => `#${c.ref.number}`).join(", ")}`,
+      error: `feature #${feature.ref.number} has open sub-issues: ${open.map((c) => `#${c.ref.number}`).join(", ")}`,
     };
   }
 
@@ -214,7 +213,7 @@ export async function publishFeature(input: PublishFeatureInput): Promise<Publis
     title: `Feature #${feature.ref.number}: ${feature.title}`,
     body: [
       `Feature: #${feature.ref.number}`,
-      `Tasks: ${children.filter((c) => c.kind === "task" && !isReserved(c)).map((c) => `#${c.ref.number}`).join(", ") || "(none)"}`,
+      `Sub-issues: ${children.map((c) => `#${c.ref.number}`).join(", ") || "(none)"}`,
       `Run: \`${recorder.id}\``,
       "",
       feature.body.slice(0, 2000),

@@ -1,10 +1,13 @@
 /**
- * Manual Task lifecycle: status, review checks, approval, closure, and the
+ * Manual Feature lifecycle: status, review checks, approval, closure, and the
  * terminal-run summary guard used by approval events.
+ *
+ * Approval merges the feature branch directly into its base branch (no PR).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -26,6 +29,27 @@ function setup() {
   };
   mkdirSync(layout.runsDir, { recursive: true });
   return { root, layout };
+}
+
+function git(dir, args) {
+  const r = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+  return r.stdout;
+}
+
+/** Temp git repo with main + an mc/feature/<n> branch carrying one commit. */
+function setupRepoWithFeatureBranch(root, number) {
+  git(root, ["init", "-q", "-b", "main"]);
+  git(root, ["config", "user.email", "t@t.local"]);
+  git(root, ["config", "user.name", "T"]);
+  writeFileSync(join(root, "README.md"), "# t\n", "utf8");
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-qm", "init"]);
+  git(root, ["checkout", "-q", "-b", `mc/feature/${number}`]);
+  writeFileSync(join(root, "WORK.txt"), "feature work\n", "utf8");
+  git(root, ["add", "-A"]);
+  git(root, ["commit", "-qm", `feature ${number}`]);
+  git(root, ["checkout", "-q", "main"]);
 }
 
 function issue(number = 31, extra = {}) {
@@ -55,7 +79,7 @@ function issue(number = 31, extra = {}) {
       "",
     ].join("\n"),
     state: "open",
-    kind: "task",
+    kind: "feature",
     labels: [],
     children: [],
     blockedBy: [],
@@ -91,7 +115,6 @@ function createRun(layout, target, extra = {}) {
     request: "Implement thermal model",
     repoRoot: layout.repoRoot,
     issue: target.ref,
-    taskIssue: target.ref,
     attempt: 1,
     phase: "build",
     resultReview: "human",
@@ -108,14 +131,14 @@ function createRun(layout, target, extra = {}) {
   return recorder.current;
 }
 
-test("task status points at the next lifecycle action", async () => {
+test("feature status points at the next lifecycle action", async () => {
   const { root, layout } = setup();
   try {
     const target = issue();
     const status = await taskStatus(layout, target);
     assert.equal(status.stage, "ready");
     assert.equal(status.worktreeExists, false);
-    assert.match(status.next.join("\n"), /task start 31/);
+    assert.match(status.next.join("\n"), /feature status 31/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -127,7 +150,7 @@ test("review checks run in the worktree and are recorded on the run", async () =
     const worktree = join(root, "worktree");
     mkdirSync(worktree, { recursive: true });
     const target = issue();
-    const run = createRun(layout, target, { worktree, branch: "mc/task/31", baseBranch: "mc/feature/30" });
+    const run = createRun(layout, target, { worktree, branch: "mc/feature/31", baseBranch: "main" });
     const results = await runTaskChecks(layout, target, ["node -e \"process.exit(0)\"", "false"]);
     assert.equal(results.length, 2);
     assert.equal(results[0].passed, true);
@@ -141,12 +164,13 @@ test("review checks run in the worktree and are recorded on the run", async () =
   }
 });
 
-test("task approve records acceptance, closes the issue, and keeps the terminal summary", async () => {
+test("feature approve merges directly, closes the issue, and keeps the terminal summary", async () => {
   const { root, layout } = setup();
   try {
+    setupRepoWithFeatureBranch(root, 31);
     const target = issue();
     const provider = fakeProvider(target);
-    const run = createRun(layout, target);
+    const run = createRun(layout, target, { branch: "mc/feature/31", baseBranch: "main" });
     const approved = await approveTask({
       layout,
       machine: {},
@@ -158,11 +182,15 @@ test("task approve records acceptance, closes the issue, and keeps the terminal 
       clean: false,
     });
     assert.equal(target.state, "closed");
+    assert.equal(approved.pr, undefined, "approval merges directly; no PR involved");
     assert.equal(approved.worktreeRemoved, false);
+    assert.ok(git(root, ["branch", "--list", "mc/feature/31"]).trim().length > 0);
+    assert.match(git(root, ["log", "--oneline", "main"]), /Merge feature #31/);
     const detail = readRun(layout, run.id);
     assert.equal(detail.summary.summary, run.summary);
     const events = readFileSync(join(layout.runsDir, run.id, "events.jsonl"), "utf8");
     assert.match(events, /acceptance_verified/);
+    assert.match(events, /feature_merged/);
     assert.match(events, /issue_closed/);
   } finally {
     rmSync(root, { recursive: true, force: true });

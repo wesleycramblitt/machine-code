@@ -42,10 +42,10 @@ export function runIssueKey(run: RunSummary): string | null {
 }
 
 export function isReservedIssue(issue: Issue): boolean {
-  return Boolean(issue.reserved) || issue.labels.some((l) => l.startsWith("mc:reserved"));
+  return issue.labels.some((l) => l.startsWith("mc:reserved"));
 }
 
-/** Reserved Feature 0 / Task 0 are coordination anchors, not deliverables. */
+/** All cached issues are deliverables; reserved anchors no longer exist. */
 export function isDeliverable(issue: Issue): boolean {
   return !isReservedIssue(issue);
 }
@@ -164,10 +164,8 @@ export function issueGlyphKind(issue: Issue): IssueGlyphKind {
   if (issue.state === "closed") return "closed";
   if (issue.kind === "epic") return "open";
   if (issue.blockedBy.length > 0) return "blocked";
-  if (issue.kind === "task") {
-    if (issue.plan?.status === "ready") return "ready";
-    if (issue.plan?.status === "draft") return "draft";
-  }
+  if (issue.plan?.status === "ready") return "ready";
+  if (issue.plan?.status === "draft") return "draft";
   return "open";
 }
 
@@ -197,7 +195,7 @@ export function rollupIssue(
   now = Date.now(),
 ): IssueRollup {
   const allRuns = [...runs, ...descendantRuns];
-  const deliverableTasks = tasks.filter((c) => c.kind === "task" && isDeliverable(c));
+  const deliverableTasks = tasks.filter((c) => c.kind === "feature" && isDeliverable(c));
   const tasksClosed = deliverableTasks.filter((c) => c.state === "closed").length;
   const tasksTotal = deliverableTasks.length;
   const latest = allRuns.reduce((max, r) => Math.max(max, lastActivity(r)), 0);
@@ -245,37 +243,25 @@ export function buildIssueTree(
       const features = childrenOf(epic)
         .filter((f) => f.kind === "feature")
         .map((feature) => {
-          const tasks = childrenOf(feature)
-            .filter((t) => t.kind === "task")
-            .map((task) => ({
-              task,
-              rollup: rollupIssue(task, runsFor(task, byIssue), [], [], now),
-              runs: sortRuns(runsFor(task, byIssue), "activity"),
-            }));
-          const deliverableTasks = tasks.filter((t) => isDeliverable(t.task));
+          const tasks: Array<{ task: Issue; rollup: IssueRollup; runs: RunSummary[] }> = [];
           return {
             feature,
             rollup: rollupIssue(
               feature,
               runsFor(feature, byIssue),
-              deliverableTasks.map((t) => t.task),
-              tasks.flatMap((t) => runsFor(t.task, byIssue)),
+              [],
+              [],
               now,
             ),
             tasks: sortTasks(tasks),
             runs: sortRuns(runsFor(feature, byIssue), "activity"),
           };
         });
-      const allFeatureTasks = features.flatMap((f) =>
-        f.tasks.filter((t) => isDeliverable(t.task)).map((t) => t.task),
-      );
-      const allFeatureRuns = features.flatMap((f) => [
-        ...f.runs,
-        ...f.tasks.flatMap((t) => t.runs),
-      ]);
+      const allFeatures = features.map((f) => f.feature);
+      const allFeatureRuns = features.flatMap((f) => f.runs);
       return {
         epic,
-        rollup: rollupIssue(epic, runsFor(epic, byIssue), allFeatureTasks, allFeatureRuns, now),
+        rollup: rollupIssue(epic, runsFor(epic, byIssue), allFeatures, allFeatureRuns, now),
         features: sortFeatures(features),
         runs: sortRuns(runsFor(epic, byIssue), "activity"),
       };

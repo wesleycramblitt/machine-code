@@ -1,18 +1,13 @@
 /**
- * machine_code — issue completion: acceptance evidence, parent closure rules,
- * and the reserved-issue lifecycle cascade.
+ * machine_code — issue completion: acceptance evidence and parent closure rules.
  *
  * A parent closes only when:
- *   - every deliverable child is closed (reserved anchors excluded),
+ *   - every child is closed,
  *   - an `acceptance_verified` event exists for the issue (child counts alone
  *     are never evidence), and
  *   - the approval policy allows it (human approval queues a request).
- *
- * Closing a parent cascades to its reserved Feature 0 / Task 0; reopening the
- * parent reopens them.
  */
 import type { Issue, IssueProvider, IssueRef } from "./provider.js";
-import { isReserved, isReservedFor } from "./reserved.js";
 import { readRun, listRuns, type RunSummary } from "../state/runs.js";
 import type { Layout } from "../paths.js";
 
@@ -57,7 +52,7 @@ export interface CompletionCheck {
 function openIssuePr(layout: Layout, issue: IssueRef): { runId: string; pr: number } | undefined {
   const runs = listRuns(layout)
     .filter((summary) => {
-      const assigned = summary.taskIssue ?? summary.issue;
+      const assigned = summary.issue;
       return Boolean(assigned && assigned.repo === issue.repo && assigned.number === issue.number);
     })
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
@@ -76,12 +71,11 @@ export async function checkCompletion(
 ): Promise<CompletionCheck> {
   const acceptance = acceptanceEvidence(layout, issue.ref);
   const children = await provider.children(issue.ref);
-  const deliverables = children.filter((c) => !isReserved(c));
-  const openChildren = deliverables.filter((c) => c.state !== "closed").map((c) => c.ref.number);
+  const openChildren = children.filter((c) => c.state !== "closed").map((c) => c.ref.number);
   if (openChildren.length > 0) {
     return {
       ok: false,
-      reason: `open deliverable children: ${openChildren.map((n) => `#${n}`).join(", ")}`,
+      reason: `open children: ${openChildren.map((n) => `#${n}`).join(", ")}`,
       openChildren,
       acceptance,
     };
@@ -107,48 +101,13 @@ export async function checkCompletion(
 }
 
 /**
- * Close/reopen the reserved anchors that belong to a parent issue.
- * Only existing reserved issues are touched — nothing is created here.
+ * Close/reopen cascade for a parent issue. Reserved anchors were removed, so
+ * there is nothing to cascade to; kept as a no-op for call-site compatibility.
  */
 export async function cascadeReserved(
-  provider: IssueProvider,
-  issue: Issue,
-  action: "close" | "reopen",
+  _provider: IssueProvider,
+  _issue: Issue,
+  _action: "close" | "reopen",
 ): Promise<number[]> {
-  if (issue.kind === "task") return [];
-  const touched: number[] = [];
-  const children = await provider.children(issue.ref);
-
-  const flip = async (target: Issue): Promise<void> => {
-    if (action === "close") {
-      if (target.state !== "closed") {
-        await provider.close(target.ref, "completed");
-        touched.push(target.ref.number);
-      }
-    } else if (target.state === "closed") {
-      await provider.reopen(target.ref);
-      touched.push(target.ref.number);
-    }
-  };
-
-  const reservedTasks = children.filter((c) => c.kind === "task" && isReservedFor(c, issue.ref, "feature-pr"));
-  for (const task0 of reservedTasks) {
-    await flip(task0);
-    if (issue.kind === "epic" && task0.parent) {
-      // Task 0 lives under the epic's Feature 0; that feature is flipped below.
-    }
-  }
-
-  if (issue.kind === "epic") {
-    const feature0s = children.filter((c) => c.kind === "feature" && isReservedFor(c, issue.ref, "epic-pr"));
-    for (const feature0 of feature0s) {
-      const grandchildren = await provider.children(feature0.ref);
-      for (const task0 of grandchildren.filter((g) => g.kind === "task" && isReservedFor(g, feature0.ref, "feature-pr"))) {
-        const already = touched.includes(task0.ref.number);
-        if (!already) await flip(task0);
-      }
-      await flip(feature0);
-    }
-  }
-  return touched;
+  return [];
 }

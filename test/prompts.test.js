@@ -33,15 +33,15 @@ test("base and role deltas stay small", () => {
   assert.ok(total <= 4_200, `base + deltas is ${total} chars`);
 });
 
-test("rendered prompts name the resolved tools and config", () => {
-  const home = mkdtempSync(join(tmpdir(), "mc-prompt-tools-"));
+test("rendered prompts name the resolved tools and config", () => {  const home = mkdtempSync(join(tmpdir(), "mc-prompt-tools-"));
   const previous = process.env.MACHINE_CODE_HOME;
   process.env.MACHINE_CODE_HOME = home;
   try {
     const l = layout(root);
     for (const role of AGENT_NAMES) {
       const resolved = resolveAgent(l, role);
-      assert.match(resolved.prompt, /Config: preset /, `${role} prompt lacks the config line`);
+      assert.match(resolved.prompt, /Config: worktree (on|off) · verification \S+ · approval (human|agent)\./, `${role} prompt lacks the config line`);
+      assert.doesNotMatch(resolved.prompt, /preset /, `${role} prompt must not mention presets`);
       assert.ok(
         resolved.prompt.includes(`Tools: ${resolved.def.tools.join(", ")}.`),
         `${role} prompt does not match its filtered tools`,
@@ -55,25 +55,30 @@ test("rendered prompts name the resolved tools and config", () => {
     assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
     assert.match(planner.prompt, /Inspect tree/);
     assert.match(planner.prompt, /Reuse an Epic\/Feature; else create the chain/);
-    assert.match(planner.prompt, /Tasks per feature/);
-    assert.match(planner.prompt, /Ignore reserved anchors/);
+    assert.match(planner.prompt, /Epic→Features only/);
+    assert.match(planner.prompt, /One Feature = one worktree\/branch unit/);
     assert.match(planner.prompt, /do not write files/);
     assert.match(planner.prompt, /Read the named plan/);
     assert.match(planner.prompt, /context_files/);
     assert.match(planner.prompt, /## Context/);
     assert.match(planner.prompt, /repair legacy context/);
     assert.match(planner.prompt, /<=3 acceptance criteria/);
-    assert.match(planner.prompt, /Split oversized Tasks/);
+    assert.match(planner.prompt, /as Features/);
     assert.match(planner.prompt, /Create named issues/);
     assert.match(planner.prompt, /Verify plan ready/);
-    assert.match(planner.prompt, /issue access create/);
+    assert.match(planner.prompt, /blocked_by between deliverables/);
 
     const build = resolveAgent(l, "build");
-    assert.match(build.prompt, /Task packet/);
+    assert.match(build.prompt, /Feature Deliverable/);
     assert.match(build.prompt, /if empty, stop/);
     assert.match(build.prompt, /3-line change plan/);
     assert.match(build.prompt, /Next must be an edit or needs_planning/);
     assert.match(build.prompt, /map\/sections/);
+    assert.match(build.prompt, /Outcome:/);
+
+    const review = resolveAgent(l, "review");
+    assert.match(review.prompt, /Feature build/);
+    assert.match(review.prompt, /Verdict:/);
 
     const sudo = resolveAgent(l, "sudo");
     assert.match(sudo.prompt, /use its Deliverable and Acceptance/);
@@ -85,9 +90,12 @@ test("rendered prompts name the resolved tools and config", () => {
 
     for (const role of ["build", "review"]) {
       const resolved = resolveAgent(l, role);
-      assert.match(resolved.prompt, /ask off/, `${role} must say ask is off`);
-      assert.match(resolved.prompt, /stop and report/, `${role} must report blockers instead of asking`);
+      assert.match(resolved.prompt, /ask is available/, `${role} must describe ask availability`);
+      assert.match(resolved.prompt, /wrong change is likely/, `${role} must scope asking to risky changes`);
     }
+    const autonomous = resolveAgent(l, "build", { runOverrides: { ambiguity: "autonomous" } });
+    assert.match(autonomous.prompt, /Do not ask/, "autonomous prompt must forbid asking");
+    assert.match(autonomous.prompt, /stop and report/, "autonomous prompt must report blockers instead of asking");
   } finally {
     if (previous === undefined) delete process.env.MACHINE_CODE_HOME;
     else process.env.MACHINE_CODE_HOME = previous;

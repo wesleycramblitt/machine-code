@@ -1,7 +1,10 @@
 /**
- * Phase 4 tests: reserved-issue invariants, duplicate canonicalisation,
- * planning-anchor resolution, Task-only run association, and the issue tool's
- * hierarchy + capability enforcement. Uses an in-memory provider (no gh).
+ * Phase 4 tests: Epic/Feature hierarchy, planning-anchor resolution,
+ * Feature-only run association, and the issue tool's hierarchy + capability
+ * enforcement. Uses an in-memory provider (no gh).
+ *
+ * Model: IssueKind = epic|feature only. No reserved issues, no Task 0, no
+ * `reserved` field. ensure* stubs throw; isReserved* are always false.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,10 +14,10 @@ import { tmpdir } from "node:os";
 
 import {
   parseIssueRef,
-  parseReservedMarker,
   parseApprovalMarker,
   parseAcceptance,
-} from "../dist/issues/provider.js";import {
+} from "../dist/issues/provider.js";
+import {
   ensureEpicReserved,
   ensureFeatureReserved,
   ensureReserved,
@@ -22,6 +25,7 @@ import {
   resolvePlanningAnchor,
   validateRunIssue,
   isReservedFor,
+  isReserved,
   isReservedTask,
 } from "../dist/issues/reserved.js";
 import { issueGraphTool, issueTool } from "../dist/tools/issues.js";
@@ -36,15 +40,6 @@ class FakeProvider {
     this.kind = "github";
     this.next = 1;
     this.issues = new Map();
-  }
-  reservedFrom(body, explicit) {
-    if (explicit) return explicit;
-    const marker = parseReservedMarker(body ?? "");
-    if (!marker) return undefined;
-    return {
-      for: { provider: "github", repo: "o/r", number: Number(marker.for.split("#")[1]) },
-      kind: marker.kind,
-    };
   }
   async available() { return true; }
   async get(ref) { return this.issues.get(ref.number) ?? null; }
@@ -61,6 +56,7 @@ class FakeProvider {
   async blockers(ref) { return this.issues.get(ref.number)?.blockedBy ?? []; }
   async create(input) {
     const number = this.next++;
+    const parsed = parsePlanMarker(input.body ?? "");
     const issue = {
       ref: { provider: "github", repo: "o/r", number },
       title: input.title,
@@ -72,11 +68,10 @@ class FakeProvider {
       children: [],
       blockedBy: input.blockedBy ?? [],
       blocking: [],
-      acceptance: parseAcceptance(input.body),
-      approval: parseApprovalMarker(input.body),
-      plan: parsePlanMarker(input.body).plan,
-      planError: parsePlanMarker(input.body).error,
-      reserved: this.reservedFrom(input.body),
+      acceptance: parseAcceptance(input.body ?? ""),
+      approval: parseApprovalMarker(input.body ?? ""),
+      plan: parsed.plan,
+      planError: parsed.error,
       createdAt: `2026-01-0${Math.min(9, number)}T00:00:00Z`,
     };
     this.issues.set(number, issue);
@@ -114,19 +109,22 @@ class FakeProvider {
   }
   addRaw(fields) {
     const number = this.next++;
+    const parsed = parsePlanMarker(fields.body ?? "");
     const issue = {
       ref: { provider: "github", repo: "o/r", number },
       title: fields.title ?? `Issue ${number}`,
       body: fields.body ?? "",
       state: "open",
-      kind: fields.kind ?? "task",
+      kind: fields.kind ?? "feature",
       labels: fields.labels ?? [],
       parent: fields.parent,
       children: [],
       blockedBy: [],
       blocking: [],
-      acceptance: [],
-      reserved: this.reservedFrom(fields.body, fields.reserved),
+      acceptance: parseAcceptance(fields.body ?? ""),
+      approval: parseApprovalMarker(fields.body ?? ""),
+      plan: parsed.plan,
+      planError: parsed.error,
       createdAt: fields.createdAt ?? `2026-01-0${Math.min(9, number)}T00:00:00Z`,
     };
     this.issues.set(number, issue);
@@ -141,12 +139,9 @@ const CONTEXT = "## Context\nParent scope, relevant files and symbols, and const
 
 function issueBody(kind, extra = "") {
   if (kind === "epic") {
-    return `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope\n${extra ? `\n${extra}` : ""}`;
+    return `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope${extra ? `\n${extra}` : ""}`;
   }
-  if (kind === "feature") {
-    return `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope\n\n## Success measures\nMeasured.\n${extra ? `\n${extra}` : ""}`;
-  }
-  return `${CONTEXT}\n\n## Deliverable\nOne file-level change.\n\n## Acceptance criteria\n- one\n${extra ? `\n${extra}` : ""}`;
+  return `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope\n\n## Deliverable\nOne file-level change.\n\n## Acceptance criteria\n- one${extra ? `\n${extra}` : ""}`;
 }
 
 /* ------------------------------------------------------------- parsing */
@@ -161,17 +156,15 @@ test("parseIssueRef accepts bare numbers, owner/repo#n, and URLs", () => {
 
 test("marker and acceptance parsers", () => {
   const body = [
-    '<!-- mc:reserved {"for":"o/r#10","kind":"epic-pr"} -->',
-    '<!-- mc:approval {"mode":"agent","reason":"tests"} -->',
+    '<!-- mc:approval {"mode":"agent"} -->',
     "",
     "## Acceptance criteria",
     "- one",
     "- two",
   ].join("\n");
-  assert.deepEqual(parseReservedMarker(body), { for: "o/r#10", kind: "epic-pr" });
   assert.equal(parseApprovalMarker(body), "agent");
   assert.deepEqual(parseAcceptance(body), ["one", "two"]);
-  assert.equal(parseReservedMarker("no marker"), null);
+  assert.equal(parseApprovalMarker("no marker"), undefined);
 
   const plain = [
     "Scope:",
@@ -195,121 +188,38 @@ test("marker and acceptance parsers", () => {
   );
 });
 
-/* ------------------------------------------------- reserved invariants */
+/* ------------------------------------------- reserved anchors removed */
 
-test("ensureEpicReserved creates Feature 0 and Task 0 once", async () => {
+test("reserved ensure calls throw; predicates are always false", async () => {
   const p = new FakeProvider();
   const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-  const first = await ensureEpicReserved(p, epic.ref);
-  assert.equal(first.feature0.title, "Feature 0: Planning & Review");
-  assert.equal(first.task0.title, "Task 0: Planning & Review");
-  assert.equal(first.feature0.parent.number, epic.ref.number);
-  assert.equal(first.task0.parent.number, first.feature0.ref.number);
-  assert.ok(isReservedFor(first.feature0, epic.ref, "epic-pr"));
-  assert.ok(isReservedTask(first.task0));
-
-  const second = await ensureEpicReserved(p, epic.ref);
-  assert.equal(second.feature0.ref.number, first.feature0.ref.number);
-  assert.equal(second.task0.ref.number, first.task0.ref.number);
-  assert.equal(p.issues.size, 3, "no duplicates created");
+  await assert.rejects(ensureEpicReserved(p, epic.ref), /reserved anchors removed/);
+  await assert.rejects(ensureFeatureReserved(p, epic.ref), /reserved anchors removed/);
+  await assert.rejects(ensureReserved(p, epic.ref, "epic-pr"), /reserved anchors removed/);
+  assert.equal(isReservedFor(epic, epic.ref, "epic-pr"), false);
+  assert.equal(isReserved(epic), false);
+  assert.equal(isReservedTask(epic), false);
 });
 
-test("ensureFeatureReserved creates exactly one Task 0", async () => {
+test("auditHierarchy is empty and the planning anchor is the issue itself", async () => {
   const p = new FakeProvider();
   const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
   const feature = await p.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
-  const a = await ensureFeatureReserved(p, feature.ref);
-  const b = await ensureFeatureReserved(p, feature.ref);
-  assert.equal(a.ref.number, b.ref.number);
-  assert.equal(p.issues.size, 3);
+  assert.deepEqual(await auditHierarchy(p, epic.ref), { missing: [], duplicates: [], conflicts: [] });
+  assert.deepEqual(await resolvePlanningAnchor(p, epic.ref), epic.ref);
+  assert.deepEqual(await resolvePlanningAnchor(p, feature.ref), feature.ref);
 });
 
-test("duplicate reserved issues: marker wins, empty duplicates close, ones with runs stay", async () => {
-  const p = new FakeProvider();
-  const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-  const marked = p.addRaw({
-    title: "Feature 0: Planning & Review",
-    body: '<!-- mc:reserved {"for":"o/r#1","kind":"epic-pr"} -->',
-    kind: "feature",
-    parent: epic.ref,
-    labels: ["mc:reserved"],
-    createdAt: "2026-01-05T00:00:00Z",
-  });
-  const dupEmpty = p.addRaw({
-    title: "Feature 0: Planning & Review",
-    kind: "feature",
-    parent: epic.ref,
-    createdAt: "2026-01-01T00:00:00Z",
-  });
-  const dupWithRuns = p.addRaw({
-    title: "Feature 0: Planning & Review",
-    kind: "feature",
-    parent: epic.ref,
-    createdAt: "2026-01-02T00:00:00Z",
-  });
-  const runCounts = new Map([[dupWithRuns.ref.number, 2]]);
-  const result = await ensureReserved(p, epic.ref, "epic-pr", { runCounts });
-  assert.equal(result.issue.ref.number, marked.ref.number, "marker match is canonical");
-  assert.deepEqual(result.duplicatesClosed, [dupEmpty.ref.number]);
-  assert.deepEqual(result.duplicatesWithRuns, [dupWithRuns.ref.number]);
-  assert.equal(p.issues.get(dupEmpty.ref.number).state, "closed");
-  assert.equal(p.issues.get(dupWithRuns.ref.number).state, "open");
-});
-
-test("auditHierarchy reports missing reserved issues", async () => {
-  const p = new FakeProvider();
-  const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-  const audit = await auditHierarchy(p, epic.ref);
-  assert.deepEqual(audit.missing, [{ parent: epic.ref, kind: "epic-pr" }]);
-  assert.deepEqual(audit.duplicates, []);
-});
-
-/* ------------------------------------------------------------- anchors */
-
-test("resolvePlanningAnchor maps Epic/Feature to reserved Task 0", async () => {
+test("validateRunIssue enforces Feature-only runs with an Epic opt-in", async () => {
   const p = new FakeProvider();
   const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
   const feature = await p.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
-  const task = await p.create({ title: "Task", body: "", kind: "task", parent: feature.ref });
 
-  const epicAnchor = await resolvePlanningAnchor(p, epic.ref);
-  const epicReserved = await ensureEpicReserved(p, epic.ref);
-  assert.equal(epicAnchor.number, epicReserved.task0.ref.number);
-
-  const featureAnchor = await resolvePlanningAnchor(p, feature.ref);
-  const featureReserved = await ensureFeatureReserved(p, feature.ref);
-  assert.equal(featureAnchor.number, featureReserved.ref.number);
-
-  const taskAnchor = await resolvePlanningAnchor(p, task.ref);
-  assert.equal(taskAnchor.number, featureReserved.ref.number);
-});
-
-test("a Task under reserved Feature 0 uses the Epic planning Task 0", async () => {
-  const p = new FakeProvider();
-  const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-  const reserved = await ensureEpicReserved(p, epic.ref);
-  const task = await p.create({
-    title: "Deliverable under planning",
-    body: "",
-    kind: "task",
-    parent: reserved.feature0.ref,
-  });
-  const anchor = await resolvePlanningAnchor(p, task.ref);
-  assert.equal(anchor.number, reserved.task0.ref.number);
-});
-
-test("validateRunIssue enforces Task-only and reserved rules", async () => {
-  const p = new FakeProvider();
-  const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-  const feature = await p.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
-  const task = await p.create({ title: "Task", body: "", kind: "task", parent: feature.ref });
-  const task0 = await ensureFeatureReserved(p, feature.ref);
-
-  await assert.rejects(validateRunIssue(p, epic.ref), /Tasks only/);
-  await assert.rejects(validateRunIssue(p, feature.ref), /Tasks only/);
-  await assert.rejects(validateRunIssue(p, task0.ref), /reserved Task 0/);
-  assert.equal((await validateRunIssue(p, task.ref)).ref.number, task.ref.number);
-  assert.equal((await validateRunIssue(p, task0.ref, { allowReserved: true })).ref.number, task0.ref.number);
+  assert.equal((await validateRunIssue(p, feature.ref)).ref.number, feature.ref.number);
+  await assert.rejects(validateRunIssue(p, epic.ref), /Features/);
+  assert.equal((await validateRunIssue(p, epic.ref, { allowEpic: true })).ref.number, epic.ref.number);
+  const legacy = p.addRaw({ title: "Legacy task", kind: "task" });
+  await assert.rejects(validateRunIssue(p, legacy.ref), /no longer exists as a kind/);
 });
 
 /* ------------------------------------------------------------ issue tool */
@@ -377,7 +287,7 @@ test("empty issue list does not tell a read-only role to create", async () => {
   }
 });
 
-test("graph action rejects incomplete task bodies before creating anything", async () => {
+test("graph action rejects incomplete feature bodies before creating anything", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-accept-"));
   try {
     const p = new FakeProvider();
@@ -387,7 +297,6 @@ test("graph action rejects incomplete task bodies before creating anything", asy
       graph: {
         epic: { key: "epic", title: "Epic" },
         features: [{ key: "f", title: "Feature" }],
-        tasks: [{ key: "t", feature: "f", title: "Task" }],
       },
     });
     assert.equal(result.isError, true);
@@ -420,7 +329,7 @@ test("create rejects issue bodies without the required context shape", async () 
       body: `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope`,
     });
     assert.equal(feature.isError, true);
-    assert.match(feature.content[0].text, /missing ## Success measures/);
+    assert.match(feature.content[0].text, /missing ## Deliverable/);
 
     const created = await issueTool(ctx).execute("c3", {
       action: "create",
@@ -450,11 +359,9 @@ test("issue tool repairs flat graph arguments and status aliases", async () => {
     const graph = graphTool.prepareArguments({
       epic: JSON.stringify({ key: "e", title: "Epic", body: issueBody("epic") }),
       features: JSON.stringify([{ key: "f", title: "Feature", body: issueBody("feature") }]),
-      tasks: JSON.stringify([{ key: "t", feature: "f", title: "Task", body: issueBody("task") }]),
     });
     assert.equal(graph.epic.key, "e");
     assert.equal(graph.features.length, 1);
-    assert.equal(graph.tasks[0].feature, "f");
     const checked = await graphTool.execute("g0", { ...graph, dry_run: true });
     assert.equal(checked.isError, undefined);
     assert.match(checked.content[0].text, /graph valid/);
@@ -476,7 +383,6 @@ test("issue_graph accepts flat args and dry_run validates without creating", asy
     const args = {
       epic: { key: "epic", title: "Epic", body: issueBody("epic") },
       features: [{ key: "f", title: "Feature", body: issueBody("feature") }],
-      tasks: [{ key: "t", feature: "f", title: "Task", body: issueBody("task") }],
       dry_run: true,
     };
     const check = await issueGraphTool(ctx).execute("g0", args);
@@ -487,7 +393,8 @@ test("issue_graph accepts flat args and dry_run validates without creating", asy
     const created = await issueGraphTool(ctx).execute("g1", { ...args, dry_run: false });
     assert.equal(created.isError, undefined);
     assert.match(created.content[0].text, /created graph/);
-    assert.ok(p.issues.size >= 3, "graph nodes and reserved anchors were created");
+    assert.ok(p.issues.size >= 2, "graph nodes were created without reserved anchors");
+    assert.ok(![...p.issues.values()].some((issue) => /Planning & Review/.test(issue.title)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -502,27 +409,27 @@ test("issue create records explicit context_files and does not infer them", asyn
     const epic = await p.create({ title: "Epic", body: issueBody("epic"), kind: "epic" });
     const feature = await p.create({ title: "Feature", body: issueBody("feature"), kind: "feature", parent: epic.ref });
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const task = await issueTool(ctx).execute("c1", {
+    const other = await issueTool(ctx).execute("c1", {
       action: "create",
-      kind: "task",
-      parent: `#${feature.ref.number}`,
-      title: "Task",
-      body: `${issueBody("task")}\n\n## Relevant files\n\nChange \`src/tui.ts\`.\n`,
+      kind: "feature",
+      parent: `#${epic.ref.number}`,
+      title: "Second feature",
+      body: `${issueBody("feature")}\n\n## Relevant files\n\nChange \`src/tui.ts\`.\n`,
       context_files: ["src/tui.ts"],
     });
-    assert.equal(task.isError, undefined);
-    const created = [...p.issues.values()].find((issue) => issue.title === "Task");
+    assert.equal(other.isError, undefined);
+    const created = [...p.issues.values()].find((issue) => issue.title === "Second feature");
     assert.deepEqual(parseArtifactReferences(created.body).files, ["src/tui.ts"]);
 
     const bodyOnly = await issueTool(ctx).execute("c2", {
       action: "create",
-      kind: "task",
-      parent: `#${feature.ref.number}`,
-      title: "Task without explicit files",
-      body: `${issueBody("task")}\n\n## Relevant files\n\nChange \`src/tui.ts\`.\n`,
+      kind: "feature",
+      parent: `#${epic.ref.number}`,
+      title: "Feature without explicit files",
+      body: `${issueBody("feature")}\n\n## Relevant files\n\nChange \`src/tui.ts\`.\n`,
     });
     assert.equal(bodyOnly.isError, undefined);
-    const inferred = [...p.issues.values()].find((issue) => issue.title === "Task without explicit files");
+    const inferred = [...p.issues.values()].find((issue) => issue.title === "Feature without explicit files");
     assert.deepEqual(parseArtifactReferences(inferred.body).files, []);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -548,7 +455,7 @@ test("tree reports legacy issues that lack required context", async () => {
   }
 });
 
-test("graph action creates the Epic, Features, Tasks, and dependencies in one call", async () => {
+test("graph action creates the Epic, Features, and dependencies in one call", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-"));
   try {
     const p = new FakeProvider();
@@ -559,46 +466,34 @@ test("graph action creates the Epic, Features, Tasks, and dependencies in one ca
         epic: { key: "epic", title: "Epic", body: issueBody("epic", "## Feature plan\nDeliver as Features.") },
         features: [
           { key: "a", title: "Feature A", body: issueBody("feature", "## Problem\nA") },
-          { key: "b", title: "Feature B", body: issueBody("feature", "## Problem\nB") },
-        ],
-        tasks: [
-          {
-            key: "a1",
-            feature: "a",
-            title: "Task A1",
-            body: issueBody("task", "## Notes\nA1"),
-          },
-          {
-            key: "b1",
-            feature: "b",
-            title: "Task B1",
-            body: issueBody("task", "## Notes\nB1"),
-            blocked_by: ["a1"],
-          },
+          { key: "b", title: "Feature B", body: issueBody("feature", "## Problem\nB"), blocked_by: ["a"] },
         ],
       },
     });
     assert.equal(result.isError, undefined);
     assert.match(result.content[0].text, /created graph/);
-    const tasks = [...p.issues.values()].filter((issue) => issue.kind === "task" && !issue.reserved);
-    assert.equal(tasks.length, 2);
-    const a1 = tasks.find((issue) => issue.title === "Task A1");
-    const b1 = tasks.find((issue) => issue.title === "Task B1");
-    assert.ok(a1 && b1);
-    assert.equal(b1.blockedBy[0].number, a1.ref.number);
-    assert.ok(tasks.every((issue) => issue.plan?.status === "ready"));
+    const features = [...p.issues.values()].filter((issue) => issue.kind === "feature");
+    assert.equal(features.length, 2);
+    const a = features.find((issue) => issue.title === "Feature A");
+    const b = features.find((issue) => issue.title === "Feature B");
+    assert.ok(a && b);
+    assert.equal(b.blockedBy[0].number, a.ref.number);
 
-    const tree = await issueTool(ctx).execute("c3", { action: "tree", depth: 3 });
+    for (const f of features) {
+      const planned = await issueTool(ctx).execute("c3", { action: "plan", issue: `#${f.ref.number}`, status: "ready" });
+      assert.equal(planned.isError, undefined);
+    }
+    const tree = await issueTool(ctx).execute("c4", { action: "tree", depth: 3 });
     assert.equal(tree.isError, undefined);
     assert.match(tree.content[0].text, /Graph complete/);
-    assert.match(tree.content[0].text, /Create a named Epic\/Feature\/Task only when the request asks/);
+    assert.match(tree.content[0].text, /Create a named Epic\/Feature only when the request asks/);
     assert.doesNotMatch(tree.content[0].text, /Context incomplete/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("tree without an issue shows every root and its reserved anchors", async () => {
+test("tree without an issue shows every root", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-tree-"));
   try {
     const p = new FakeProvider();
@@ -614,8 +509,8 @@ test("tree without an issue shows every root and its reserved anchors", async ()
     assert.equal(result.isError, undefined);
     const text = result.content[0].text;
     assert.match(text, /#1 epic open Epic/);
-    assert.match(text, /Feature 0: Planning & Review/);
-    assert.match(text, /Task 0: Planning & Review/);
+    assert.doesNotMatch(text, /Feature 0/);
+    assert.doesNotMatch(text, /Task 0/);
     assert.doesNotMatch(text, /argument_missing/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -654,15 +549,13 @@ test("issue creation is remembered in run state", async () => {
     const block = state.renderBlock();
     assert.match(block, /Issues:/);
     assert.match(block, /#1 epic open "Epic"/);
-    assert.match(block, /Feature 0: Planning & Review/);
-    assert.match(block, /Task 0: Planning & Review/);
-    assert.match(block, /\[reserved\]/, "reserved anchors are remembered");
+    assert.doesNotMatch(block, /\[reserved\]/, "no reserved anchors exist to remember");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("planner creation links the run to the new Epic's reserved Task 0", async () => {
+test("planner creates link no reserved anchor; the run tracks the Epic", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-link-"));
   try {
     const p = new FakeProvider();
@@ -673,12 +566,9 @@ test("planner creation links the run to the new Epic's reserved Task 0", async (
       title: "Epic",
       body: issueBody("epic"),
     });
+    assert.equal(p.issues.size, 1, "no reserved chain is created");
     const epic = [...p.issues.values()].find((issue) => issue.kind === "epic");
-    const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
-    const task0 = [...p.issues.values()].find(
-      (issue) => issue.reserved?.kind === "feature-pr" && issue.parent?.number === feature0.ref.number,
-    );
-    assert.equal(ctx.recorder.current.issue.number, task0.ref.number);
+    assert.ok(epic);
 
     await issueTool(ctx).execute("c2", {
       action: "create",
@@ -687,87 +577,38 @@ test("planner creation links the run to the new Epic's reserved Task 0", async (
       title: "Feature",
       body: issueBody("feature"),
     });
-    assert.equal(ctx.recorder.current.issue.number, task0.ref.number, "the Epic anchor is not replaced");
+    assert.equal(p.issues.size, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("planner creating a Feature under an existing Epic links to the Epic's Task 0", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-feature-"));
-  try {
-    const p = new FakeProvider();
-    const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root, "planner");
-    await issueTool(ctx).execute("c1", {
-      action: "create",
-      kind: "feature",
-      parent: `#${epic.ref.number}`,
-      title: "Feature",
-      body: issueBody("feature"),
-    });
-    const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
-    const epicTask0 = [...p.issues.values()].find(
-      (issue) => issue.reserved?.kind === "feature-pr" && issue.parent?.number === feature0.ref.number,
-    );
-    assert.equal(ctx.recorder.current.issue.number, epicTask0.ref.number);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("planner creating a Task links to that Feature's reserved Task 0", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-task-"));
-  try {
-    const p = new FakeProvider();
-    const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-    const feature = await p.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
-    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root, "planner");
-    await issueTool(ctx).execute("c1", {
-      action: "create",
-      kind: "task",
-      parent: `#${feature.ref.number}`,
-      title: "Task",
-      body: issueBody("task"),
-    });
-    const task0 = [...p.issues.values()].find(
-      (issue) => issue.reserved?.kind === "feature-pr" && issue.parent?.number === feature.ref.number,
-    );
-    assert.equal(ctx.recorder.current.issue.number, task0.ref.number);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("a Task cannot be created under the reserved Feature 0 anchor", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-iss-reserved-"));
+test("task kinds are rejected; work is tracked as Features", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-no-task-"));
   try {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const created = await issueTool(ctx).execute("c1", {
+    await issueTool(ctx).execute("c1", {
       action: "create",
       kind: "epic",
       title: "Epic",
       body: issueBody("epic"),
     });
-    assert.equal(created.isError, undefined);
-    const feature0 = [...p.issues.values()].find((issue) => issue.reserved?.kind === "epic-pr");
-    assert.ok(feature0, "Epic creation reserves Feature 0");
     const result = await issueTool(ctx).execute("c2", {
       action: "create",
       kind: "task",
-      parent: `#${feature0.ref.number}`,
+      parent: "#1",
       title: "Task",
-      body: issueBody("task"),
+      body: issueBody("feature"),
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /reserved planning anchor/);
+    assert.match(result.content[0].text, /no longer tracked/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("creating a Task with acceptance auto-writes a ready plan", async () => {
+test("creating a Feature with acceptance auto-writes a ready plan", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-autoplan-"));
   try {
     const p = new FakeProvider();
@@ -783,20 +624,11 @@ test("creating a Task with acceptance auto-writes a ready plan", async () => {
       kind: "feature",
       parent: "#1",
       title: "Feature",
-      body: issueBody("feature"),
+      body: issueBody("feature", "## Acceptance criteria\n- two\n"),
     });
     assert.equal(feature.isError, undefined);
-    const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
-    const task = await issueTool(ctx).execute("c3", {
-      action: "create",
-      kind: "task",
-      parent: `#${featureIssue.ref.number}`,
-      title: "Task",
-      body: issueBody("task", "## Acceptance criteria\n- two\n"),
-    });
-    assert.equal(task.isError, undefined);
-    assert.match(task.content[0].text, /plan ready/);
-    const created = [...p.issues.values()].find((issue) => issue.title === "Task");
+    assert.match(feature.content[0].text, /plan ready/);
+    const created = [...p.issues.values()].find((issue) => issue.title === "Feature");
     assert.equal(created.acceptance.length, 2);
     assert.equal(created.plan?.status, "ready");
   } finally {
@@ -804,7 +636,7 @@ test("creating a Task with acceptance auto-writes a ready plan", async () => {
   }
 });
 
-test("graph rejects a feature-sized Task before creating anything", async () => {
+test("graph rejects a feature-sized Feature before creating anything", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-size-"));
   try {
     const p = new FakeProvider();
@@ -813,25 +645,23 @@ test("graph rejects a feature-sized Task before creating anything", async () => 
       action: "graph",
       graph: {
         epic: { key: "epic", title: "Epic", body: issueBody("epic") },
-        features: [{ key: "f", title: "Feature", body: issueBody("feature") }],
-        tasks: [{
-          key: "t",
-          feature: "f",
-          title: "Feature-sized Task",
-          body: issueBody("task").replace("- one", "- one\n- two\n- three\n- four"),
+        features: [{
+          key: "f",
+          title: "Oversized Feature",
+          body: issueBody("feature").replace("- one", "- one\n- two\n- three\n- four\n- five\n- six\n- seven\n- eight\n- nine"),
         }],
       },
     });
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /oversized Tasks/);
-    assert.match(result.content[0].text, /max at most 3|at most 3/i);
+    assert.match(result.content[0].text, /smaller Features/);
+    assert.match(result.content[0].text, /at most 8/i);
     assert.equal(p.issues.size, 0, "no partial graph is created");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("creating a feature-sized Task is rejected before it exists", async () => {
+test("creating an oversized Feature is rejected before it exists", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-oversized-"));
   try {
     const p = new FakeProvider();
@@ -842,31 +672,23 @@ test("creating a feature-sized Task is rejected before it exists", async () => {
       title: "Epic",
       body: issueBody("epic"),
     });
-    await issueTool(ctx).execute("c2", {
+    const feature = await issueTool(ctx).execute("c2", {
       action: "create",
       kind: "feature",
       parent: "#1",
-      title: "Feature",
-      body: issueBody("feature"),
+      title: "Oversized Feature",
+      body: issueBody("feature").replace("- one", "- one\n- two\n- three\n- four\n- five\n- six\n- seven\n- eight\n- nine"),
     });
-    const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
-    const task = await issueTool(ctx).execute("c3", {
-      action: "create",
-      kind: "task",
-      parent: `#${featureIssue.ref.number}`,
-      title: "Feature-sized Task",
-      body: issueBody("task").replace("- one", "- one\n- two\n- three\n- four"),
-    });
-    assert.equal(task.isError, true);
-    assert.match(task.content[0].text, /too large/);
-    assert.match(task.content[0].text, /split it into smaller Tasks/);
-    assert.equal([...p.issues.values()].some((issue) => issue.title === "Feature-sized Task"), false);
+    assert.equal(feature.isError, true);
+    assert.match(feature.content[0].text, /too large/);
+    assert.match(feature.content[0].text, /split it into smaller Features/);
+    assert.equal([...p.issues.values()].some((issue) => issue.title === "Oversized Feature"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("creating a Task without acceptance is rejected", async () => {
+test("creating a Feature without acceptance is rejected", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-autoplan-none-"));
   try {
     const p = new FakeProvider();
@@ -877,24 +699,16 @@ test("creating a Task without acceptance is rejected", async () => {
       title: "Epic",
       body: issueBody("epic"),
     });
-    await issueTool(ctx).execute("c2", {
+    const feature = await issueTool(ctx).execute("c2", {
       action: "create",
       kind: "feature",
       parent: "#1",
       title: "Feature",
-      body: issueBody("feature"),
+      body: `${CONTEXT}\n\n## Goal\nGoal\n\n## Scope\nScope\n\n## Deliverable\nOne file-level change.\n`,
     });
-    const featureIssue = [...p.issues.values()].find((issue) => issue.title === "Feature");
-    const task = await issueTool(ctx).execute("c3", {
-      action: "create",
-      kind: "task",
-      parent: `#${featureIssue.ref.number}`,
-      title: "Task",
-      body: `${CONTEXT}\n\n## Deliverable\nOne file-level change.\n`,
-    });
-    assert.equal(task.isError, true);
-    assert.match(task.content[0].text, /missing acceptance criteria/);
-    assert.equal([...p.issues.values()].some((issue) => issue.title === "Task"), false);
+    assert.equal(feature.isError, true);
+    assert.match(feature.content[0].text, /missing acceptance criteria/);
+    assert.equal([...p.issues.values()].some((issue) => issue.title === "Feature"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -930,7 +744,7 @@ test("issue tool requires issue:create for new issues and issue:plan for edits",
   }
 });
 
-test("issue tool creates an Epic with its reserved chain", async () => {
+test("issue tool creates an Epic with no reserved chain", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss2-"));
   try {
     const p = new FakeProvider();
@@ -942,13 +756,10 @@ test("issue tool creates an Epic with its reserved chain", async () => {
       body: issueBody("epic"),
     });
     assert.equal(result.isError, undefined);
-    assert.match(result.content[0].text, /reserved: Feature 0 #/);
-    assert.match(result.content[0].text, /Feature 0: Planning & Review/);
-    assert.match(result.content[0].text, /Task 0: Planning & Review/);
-    assert.match(result.content[0].text, /coordination anchors/);
-    assert.equal(p.issues.size, 3);
+    assert.match(result.content[0].text, /Next: create Features/);
+    assert.equal(p.issues.size, 1);
     const epic = [...p.issues.values()].find((i) => i.kind === "epic");
-    assert.equal((await p.children(epic.ref)).length, 1);
+    assert.equal((await p.children(epic.ref)).length, 0);
 
     const feature = await issueTool(ctx).execute("c2", {
       action: "create",
@@ -958,9 +769,7 @@ test("issue tool creates an Epic with its reserved chain", async () => {
       body: issueBody("feature"),
     });
     assert.equal(feature.isError, undefined);
-    assert.match(feature.content[0].text, /reserved: Task 0 #/);
-    assert.match(feature.content[0].text, /Task 0: Planning & Review/);
-    assert.match(feature.content[0].text, /coordination anchor/);
+    assert.match(feature.content[0].text, /plan ready/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -970,8 +779,8 @@ test("issue tool records dependencies on create and edit", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-deps-"));
   try {
     const p = new FakeProvider();
-    const blocker = p.addRaw({ title: "Blocker", kind: "task" });
-    const dependent = p.addRaw({ title: "Dependent", kind: "task" });
+    const blocker = p.addRaw({ title: "Blocker", kind: "feature" });
+    const dependent = p.addRaw({ title: "Dependent", kind: "feature" });
     const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
 
     const created = await issueTool(ctx).execute("c1", {
@@ -1014,47 +823,47 @@ test("issue tool records dependencies on create and edit", async () => {
   }
 });
 
-test("issue tool writes and replaces mc:plan markers", async () => {
+test("issue tool writes and replaces mc:plan markers on Features", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-plan-"));
   try {
     const p = new FakeProvider();
-    const task = await p.create({
+    const feature = await p.create({
       title: "Plan me",
-      body: "## Acceptance criteria\n- gate passes",
-      kind: "task",
+      body: issueBody("feature"),
+      kind: "feature",
     });
     const { ctx } = toolCtx(p, ["issue:read", "issue:plan"], root);
     const ready = await issueTool(ctx).execute("c1", {
       action: "plan",
-      issue: String(task.ref.number),
+      issue: String(feature.ref.number),
       status: "ready",
       plan_role: "build",
       verification: "verified",
       plan_review: "human",
     });
     assert.equal(ready.isError, undefined);
-    const parsed = parsePlanMarker(p.issues.get(task.ref.number).body);
+    const parsed = parsePlanMarker(p.issues.get(feature.ref.number).body);
     assert.equal(parsed.plan.status, "ready");
     assert.equal(parsed.plan.planReview, "human");
 
     const draft = await issueTool(ctx).execute("c1", {
       action: "plan",
-      issue: String(task.ref.number),
+      issue: String(feature.ref.number),
       status: "draft",
     });
     assert.equal(draft.isError, undefined);
-    const body = p.issues.get(task.ref.number).body;
+    const body = p.issues.get(feature.ref.number).body;
     assert.equal((body.match(/mc:plan/g) ?? []).length, 1, "replaces, not duplicates");
     assert.equal(parsePlanMarker(body).plan.status, "draft");
 
-    const noAcceptance = await p.create({ title: "No acceptance", body: "", kind: "task" });
+    const epic = await p.create({ title: "Epic", body: issueBody("epic"), kind: "epic" });
     const refused = await issueTool(ctx).execute("c1", {
       action: "plan",
-      issue: String(noAcceptance.ref.number),
+      issue: String(epic.ref.number),
       status: "ready",
     });
     assert.equal(refused.isError, true);
-    assert.match(refused.content[0].text, /acceptance/);
+    assert.match(refused.content[0].text, /Feature issues only/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1066,8 +875,8 @@ test("issue tool rejects invalid hierarchy links", async () => {
     const p = new FakeProvider();
     const { ctx } = toolCtx(p, ["issue:read", "issue:hierarchy:write"], root);
     const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-    const task = await p.create({ title: "Task", body: "", kind: "task" });
-    const result = await issueTool(ctx).execute("c1", { action: "link", issue: String(task.ref.number), parent: String(epic.ref.number) });
+    const feature = await p.create({ title: "Feature", body: "", kind: "feature" });
+    const result = await issueTool(ctx).execute("c1", { action: "link", issue: String(epic.ref.number), parent: String(feature.ref.number) });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /invalid hierarchy/);
   } finally {
@@ -1079,8 +888,8 @@ test("issue close respects approval: human requests, agent closes", async () => 
   const root = mkdtempSync(join(tmpdir(), "mc-iss4-"));
   try {
     const p = new FakeProvider();
-    const humanIssue = await p.create({ title: "Human", body: '<!-- mc:approval {"mode":"human"} -->', kind: "task" });
-    const agentIssue = await p.create({ title: "Agent", body: '<!-- mc:approval {"mode":"agent"} -->', kind: "task" });
+    const humanIssue = await p.create({ title: "Human", body: `${issueBody("feature")}\n<!-- mc:approval {"mode":"human"} -->`, kind: "feature" });
+    const agentIssue = await p.create({ title: "Agent", body: `${issueBody("feature")}\n<!-- mc:approval {"mode":"agent"} -->`, kind: "feature" });
     const { ctx, layout } = toolCtx(p, ["issue:read", "issue:close"], root);
     // Acceptance evidence is required before closure.
     for (const target of [humanIssue, agentIssue]) {
@@ -1099,62 +908,28 @@ test("issue close respects approval: human requests, agent closes", async () => 
   }
 });
 
-test("planner and review targets resolve Epic/Feature to reserved Task 0", async () => {
+test("planner targets resolve to the Epic; builds attach to Features", async () => {
   const provider = new FakeProvider();
   const epic = await provider.create({ title: "Epic", body: "", kind: "epic" });
   const feature = await provider.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
-  const task = await provider.create({ title: "Task", body: "", kind: "task", parent: feature.ref });
 
-  for (const agent of ["planner", "review"]) {
-    const epicTarget = await resolveRunTarget({ provider, ref: epic.ref, request: "plan", agent });
-    assert.equal(epicTarget.issue.kind, "task");
-    assert.equal(epicTarget.issue.reserved?.kind, "feature-pr");
-    assert.equal(epicTarget.scope?.ref.number, epic.ref.number);
-    assert.match(issueRunRequest(epicTarget.scope, "Plan"), /^Plan o\/r#\d+: Epic/);
+  const epicTarget = await resolveRunTarget({ provider, ref: epic.ref, request: "plan", agent: "planner" });
+  assert.equal(epicTarget.issue.kind, "epic");
+  assert.equal(epicTarget.issue.ref.number, epic.ref.number);
+  assert.equal(epicTarget.scope?.ref.number, epic.ref.number);
 
-    const featureTarget = await resolveRunTarget({ provider, ref: feature.ref, request: "plan", agent });
-    assert.equal(featureTarget.issue.kind, "task");
-    assert.equal(featureTarget.issue.reserved?.kind, "feature-pr");
-    assert.equal(featureTarget.scope?.ref.number, feature.ref.number);
+  const featureTarget = await resolveRunTarget({ provider, ref: feature.ref, request: "plan", agent: "planner" });
+  assert.equal(featureTarget.issue.kind, "epic");
+  assert.equal(featureTarget.issue.ref.number, epic.ref.number);
+  assert.equal(featureTarget.scope?.ref.number, feature.ref.number);
 
-    const taskTarget = await resolveRunTarget({ provider, ref: task.ref, request: "plan", agent });
-    if (agent === "planner") {
-      assert.equal(taskTarget.issue.reserved?.kind, "feature-pr");
-      assert.equal(taskTarget.issue.ref.number, featureTarget.issue.ref.number);
-    } else {
-      assert.equal(taskTarget.issue.ref.number, task.ref.number);
-    }
-    assert.equal(taskTarget.scope?.ref.number, task.ref.number);
-  }
+  const buildTarget = await resolveRunTarget({ provider, ref: feature.ref, request: "build", agent: "build" });
+  assert.equal(buildTarget.issue.kind, "feature");
+  assert.equal(buildTarget.issue.ref.number, feature.ref.number);
+  assert.equal(buildTarget.scope?.ref.number, feature.ref.number);
 });
 
-test("auto-issue refuses to create work under reserved anchors", async () => {
-  const provider = new FakeProvider();
-  const epic = await provider.create({ title: "Epic", body: "", kind: "epic" });
-  const reserved = await ensureEpicReserved(provider, epic.ref);
-  await assert.rejects(
-    resolveRunTarget({
-      provider,
-      ref: reserved.feature0.ref,
-      request: "Implement",
-      agent: "build",
-      autoCreate: true,
-    }),
-    /reserved Planning & Review anchor/,
-  );
-  await assert.rejects(
-    resolveRunTarget({
-      provider,
-      ref: reserved.task0.ref,
-      request: "Implement",
-      agent: "build",
-      autoCreate: true,
-    }),
-    /reserved Planning & Review anchor/,
-  );
-});
-
-test("auto-issue fills Epic → Feature → Task and reuses exact open children", async () => {
+test("auto-issue fills Epic → Feature and reuses exact open children", async () => {
   const provider = new FakeProvider();
   const epic = provider.addRaw({ kind: "epic", title: "Propulsion" });
   const first = await resolveRunTarget({
@@ -1164,10 +939,9 @@ test("auto-issue fills Epic → Feature → Task and reuses exact open children"
     agent: "build",
     autoCreate: true,
   });
-  assert.equal(first.issue.kind, "task");
-  assert.equal(first.created.length, 2, "a feature and a task were created");
-  assert.equal(first.issue.parent.number, first.created[0].ref.number);
-  assert.equal(first.created[0].parent.number, epic.ref.number);
+  assert.equal(first.issue.kind, "feature");
+  assert.equal(first.created.length, 1, "a feature was created");
+  assert.equal(first.issue.parent.number, epic.ref.number);
 
   const second = await resolveRunTarget({
     provider,
@@ -1177,15 +951,20 @@ test("auto-issue fills Epic → Feature → Task and reuses exact open children"
     autoCreate: true,
   });
   assert.equal(second.issue.ref.number, first.issue.ref.number);
-  assert.equal(second.created.length, 0, "the exact-title open task is reused");
+  assert.equal(second.created.length, 0, "the exact-title open feature is reused");
 });
 
-test("issueRunRequest derives a concrete objective from the task packet", () => {
+test("issueRunRequest derives a concrete objective from the feature packet", async () => {
+  const { issueRunRequest: runRequest } = await import("../dist/issues/work.js");
   const issue = {
     ref: { provider: "github", repo: "o/r", number: 100 },
     title: "Improve run tab hierarchy and integrate orchestrator kickoff",
     body: [
-      "## Deliverable",
+      "## Context",
+      "",
+      "Parent scope and constraints.",
+      "",
+      "## Scope",
       "",
       "Improve run tab readability for orchestrator items.",
       "",
@@ -1194,18 +973,17 @@ test("issueRunRequest derives a concrete objective from the task packet", () => 
       "- Run tab displays the hierarchy.",
     ].join("\n"),
     state: "open",
-    kind: "task",
-    labels: ["mc:task"],
+    kind: "feature",
+    labels: ["mc:feature"],
     children: [],
     blockedBy: [],
     blocking: [],
     acceptance: ["Run tab displays the hierarchy."],
   };
-  const request = issueRunRequest(issue);
+  const request = runRequest(issue);
   assert.match(request, /^Implement o\/r#100: Improve run tab hierarchy/);
-  assert.match(request, /Deliverable: Improve run tab readability/);
+  assert.match(request, /Scope: Improve run tab readability/);
   assert.match(request, /Acceptance:\n- Run tab displays the hierarchy/);
-  assert.doesNotMatch(request, /## Deliverable/);
   assert.equal(isGenericTaskRequest("Build the task."), true);
   assert.equal(isGenericTaskRequest("Do the issue"), true);
   assert.equal(isGenericTaskRequest("Implement #100 in the run tab"), false);
@@ -1216,90 +994,4 @@ test("gh relation objects and arrays both normalize to node lists", async () => 
   assert.deepEqual(relationItems([{ number: 1 }]), [{ number: 1 }]);
   assert.deepEqual(relationItems({ nodes: [{ number: 2 }], totalCount: 1 }), [{ number: 2 }]);
   assert.deepEqual(relationItems(null), []);
-});
-
-test("issue create rejects a reserved anchor as a blocker", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-iss-anchor-block-"));
-  try {
-    const p = new FakeProvider();
-    const epic = p.addRaw({ title: "Epic", kind: "epic", body: issueBody("epic") });
-    const feature = p.addRaw({ title: "Feature", kind: "feature", parent: epic.ref, body: issueBody("feature") });
-    const anchor = p.addRaw({
-      title: "Task 0: Planning & Review",
-      kind: "task",
-      parent: feature.ref,
-      reserved: { for: feature.ref, kind: "feature-pr" },
-    });
-    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const result = await issueTool(ctx).execute("c1", {
-      action: "create",
-      kind: "task",
-      parent: String(feature.ref.number),
-      title: "Dependent",
-      body: issueBody("task"),
-      blocked_by: [String(anchor.ref.number)],
-    });
-    assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /dependency_reserved/);
-    assert.match(result.content[0].text, new RegExp(`#${anchor.ref.number}`));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("issue edit remove_blocked_by unwires a reserved anchor", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-iss-anchor-unblock-"));
-  try {
-    const p = new FakeProvider();
-    const epic = p.addRaw({ title: "Epic", kind: "epic", body: issueBody("epic") });
-    const anchor = p.addRaw({
-      title: "Task 0: Planning & Review",
-      kind: "task",
-      parent: epic.ref,
-      reserved: { for: epic.ref, kind: "feature-pr" },
-    });
-    const deliverable = p.addRaw({ title: "Deliverable", kind: "task", parent: epic.ref });
-    deliverable.blockedBy = [anchor.ref];
-    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const result = await issueTool(ctx).execute("e1", {
-      action: "edit",
-      issue: String(deliverable.ref.number),
-      remove_blocked_by: [String(anchor.ref.number)],
-    });
-    assert.equal(result.isError, undefined);
-    assert.deepEqual(p.issues.get(deliverable.ref.number).blockedBy, []);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("issue_graph dry_run rejects a reserved anchor blocker", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-iss-graph-anchor-"));
-  try {
-    const p = new FakeProvider();
-    const epic = p.addRaw({ title: "Epic", kind: "epic", body: issueBody("epic") });
-    const anchor = p.addRaw({
-      title: "Task 0: Planning & Review",
-      kind: "task",
-      parent: epic.ref,
-      reserved: { for: epic.ref, kind: "feature-pr" },
-    });
-    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
-    const result = await issueGraphTool(ctx).execute("g1", {
-      epic: { key: "epic", title: "Epic", body: issueBody("epic") },
-      features: [{ key: "f", title: "Feature", body: issueBody("feature") }],
-      tasks: [{
-        key: "t",
-        feature: "f",
-        title: "Task",
-        body: issueBody("task"),
-        blocked_by: [String(anchor.ref.number)],
-      }],
-      dry_run: true,
-    });
-    assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /dependency_reserved/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
 });

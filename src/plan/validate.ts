@@ -74,39 +74,50 @@ function contextErrors(issue: Issue, layout: Layout): string[] {
   return errors;
 }
 
-/** A Task is one deliverable, not a feature. */
-export const TASK_MAX_ACCEPTANCE = 3;
-export const TASK_MAX_BODY_CHARS = 4_000;
-export const TASK_MAX_ACCEPTANCE_CHARS = 240;
+/** A Feature is one deliverable, not a project. */
+export const FEATURE_MAX_ACCEPTANCE = 8;
+export const FEATURE_MAX_BODY_CHARS = 12_000;
+export const FEATURE_MAX_ACCEPTANCE_CHARS = 240;
 
-export interface TaskSizeInput {
+/** Legacy aliases for previous Task-based limits. */
+export const TASK_MAX_ACCEPTANCE = FEATURE_MAX_ACCEPTANCE;
+export const TASK_MAX_BODY_CHARS = FEATURE_MAX_BODY_CHARS;
+export const TASK_MAX_ACCEPTANCE_CHARS = FEATURE_MAX_ACCEPTANCE_CHARS;
+
+export interface FeatureSizeInput {
   acceptance: readonly string[];
   body: string;
 }
 
-/** Structural size limits for a Task packet. */
-export function taskSizeErrors(task: TaskSizeInput): string[] {
+/** Legacy alias. */
+export type TaskSizeInput = FeatureSizeInput;
+
+/** Structural size limits for a Feature packet. */
+export function featureSizeErrors(feature: FeatureSizeInput): string[] {
   const errors: string[] = [];
-  if (task.acceptance.length > TASK_MAX_ACCEPTANCE) {
+  if (feature.acceptance.length > FEATURE_MAX_ACCEPTANCE) {
     errors.push(
-      `task has ${task.acceptance.length} acceptance criteria; split it into smaller Tasks ` +
-        `with at most ${TASK_MAX_ACCEPTANCE} each`,
+      `feature has ${feature.acceptance.length} acceptance criteria; split it into smaller Features ` +
+        `with at most ${FEATURE_MAX_ACCEPTANCE} each`,
     );
   }
-  const broad = task.acceptance.filter((item) => item.length > TASK_MAX_ACCEPTANCE_CHARS);
+  const broad = feature.acceptance.filter((item) => item.length > FEATURE_MAX_ACCEPTANCE_CHARS);
   if (broad.length > 0) {
     errors.push(
-      `${broad.length} acceptance criterion/criteria exceed ${TASK_MAX_ACCEPTANCE_CHARS} chars; ` +
+      `${broad.length} acceptance criterion/criteria exceed ${FEATURE_MAX_ACCEPTANCE_CHARS} chars; ` +
         "make each a single verifiable result",
     );
   }
-  if (task.body.length > TASK_MAX_BODY_CHARS) {
+  if (feature.body.length > FEATURE_MAX_BODY_CHARS) {
     errors.push(
-      `task body is ${task.body.length} chars; keep a Task packet under ${TASK_MAX_BODY_CHARS} chars and split the work`,
+      `feature body is ${feature.body.length} chars; keep a Feature packet under ${FEATURE_MAX_BODY_CHARS} chars and split the work`,
     );
   }
   return errors;
 }
+
+/** Legacy alias. */
+export const taskSizeErrors = featureSizeErrors;
 
 export function validatePlanIssue(issue: Issue, options: ValidatePlanOptions = {}): PlanValidation {
   const parsed = parsePlanMarker(issue.body);
@@ -114,16 +125,15 @@ export function validatePlanIssue(issue: Issue, options: ValidatePlanOptions = {
   if (parsed.error || !parsed.plan) return { ok: false, errors: [parsed.error ?? "invalid mc:plan marker"] };
   const plan = parsed.plan;
   const errors: string[] = [];
-  if (issue.kind !== "task") errors.push("mc:plan applies to Task issues");
-  if (issue.reserved) errors.push("reserved anchors cannot be deliverable plans");
+  if (issue.kind !== "feature") errors.push("mc:plan applies to Feature issues");
   if (issue.acceptance.length === 0) errors.push("missing acceptance criteria");
-  errors.push(...taskSizeErrors(issue));
+  errors.push(...featureSizeErrors(issue));
   for (const blocker of issue.blockedBy) {
     if (blocker.repo !== issue.ref.repo) {
       errors.push(`blocker ${blocker.repo}#${blocker.number} is in another repository`);
     }
     if (blocker.repo === issue.ref.repo && blocker.number === issue.ref.number) {
-      errors.push("a task cannot block itself");
+      errors.push("a feature cannot block itself");
     }
   }
   if (options.requireReady && plan.status !== "ready") {
@@ -138,12 +148,12 @@ export interface PlanGraphValidation {
   errors: string[];
 }
 
-/** Validate markers plus cycles across a set of Task issues. */
+/** Validate markers plus cycles across a set of Feature issues. */
 export function validatePlanGraph(issues: readonly Issue[], options: ValidatePlanOptions = {}): PlanGraphValidation {
   const errors: string[] = [];
-  const tasks = issues.filter((issue) => issue.kind === "task");
-  const byKey = new Map(tasks.map((issue) => [refKey(issue.ref), issue]));
-  for (const issue of tasks) {
+  const features = issues.filter((issue) => issue.kind === "feature");
+  const byKey = new Map(features.map((issue) => [refKey(issue.ref), issue]));
+  for (const issue of features) {
     const result = validatePlanIssue(issue, options);
     for (const error of result.errors) errors.push(`#${issue.ref.number}: ${error}`);
   }
@@ -164,6 +174,6 @@ export function validatePlanGraph(issues: readonly Issue[], options: ValidatePla
     visiting.delete(key);
     visited.add(key);
   };
-  for (const issue of tasks) visit(issue, []);
+  for (const issue of features) visit(issue, []);
   return { ok: errors.length === 0, errors };
 }
