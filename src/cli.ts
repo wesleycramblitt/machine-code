@@ -813,7 +813,7 @@ function cmdModels(argv: string[]): number {
       );
     }
     process.stdout.write(
-      `\nfiltered: ${result.rejectedCount} ineligible; showing top ${result.candidates.length}\n`,
+      `\nfiltered: ${result.rejectedCount} ineligible; eligible ${result.eligibleCount}; showing top ${result.candidates.length}\n`,
     );
     const byReason = Object.entries(result.rejectedByReason).sort((a, b) => b[1] - a[1]);
     if (byReason.length > 0) {

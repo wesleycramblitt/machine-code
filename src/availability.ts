@@ -187,6 +187,17 @@ export function clearProviderCooldown(state: AvailabilityState, providerId: stri
   }
 }
 
+/**
+ * Free providers are retried from a clean slate each run. A previous run's
+ * provider-wide 429 (or a misclassification) must not hide every free offer
+ * on that provider for the next 30 minutes.
+ */
+export function clearFreeProviderCooldowns(state: AvailabilityState, providerIds: readonly string[]): void {
+  for (const providerId of new Set(providerIds)) {
+    clearProviderCooldown(state, providerId);
+  }
+}
+
 /** Reset a model's tier on success. */
 export function resetModelTier(state: AvailabilityState, key: string): void {
   const h = state.models[key];
@@ -240,13 +251,19 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     msg.includes("requests per") ||
     msg.includes("tokens per")
   ) {
+    // "Provider returned error" is OpenRouter's generic wrapper for an
+    // upstream model failure. It is not a provider-wide limit. Only explicit
+    // account/plan/workspace limits cool the whole provider.
     const isProvider =
-      msg.includes("provider") ||
       msg.includes("organization") ||
       msg.includes("account") ||
       msg.includes("quota") ||
       msg.includes("monthly") ||
-      msg.includes("plan limit");
+      msg.includes("plan limit") ||
+      msg.includes("workspace") ||
+      msg.includes("provider rate limit") ||
+      msg.includes("provider-wide") ||
+      msg.includes("provider wide");
     return {
       kind: isProvider ? "rate-limit-provider" : "rate-limit-model",
       message: msg,

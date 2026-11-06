@@ -15,7 +15,7 @@ import { createAssistantMessageEventStream, type Api, type AssistantMessage, typ
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
 import { estimateTokens, pick, providerMultiplier, isFreeRow } from "./select.js";
-import { applyClassification, classifyError, clearFreeModelCooldowns, loadAvailability, saveAvailability } from "./availability.js";
+import { applyClassification, classifyError, clearFreeModelCooldowns, clearFreeProviderCooldowns, loadAvailability, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
@@ -337,6 +337,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   try {
     const persistedFreeKeys = input.catalogue.filter((row) => isFreeRow(row)).map((row) => row.key);
     clearFreeModelCooldowns(availability, persistedFreeKeys);
+    clearFreeProviderCooldowns(
+      availability,
+      input.catalogue.filter((row) => isFreeRow(row)).map((row) => row.providerID),
+    );
   } catch {
     // catalogue scan failure must not block the run
   }
@@ -810,8 +814,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       call: callIndex,
       key: currentRow.key,
       estimate: first.estimate,
+      eligibleCount: first.eligibleCount,
       candidates: first.candidates,
       rejectedCount: first.rejectedCount,
+      rejectedByReason: first.rejectedByReason,
     });
 
     // The ask tool needs a suspension hook that checkpoints the transcript
@@ -1408,8 +1414,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           call: callIndex,
           key: currentRow.key,
           estimate: estimateTokens(chars, policy.expectedOutputTokens),
+          eligibleCount: result.eligibleCount,
           candidates: result.candidates,
           rejectedCount: result.rejectedCount,
+          rejectedByReason: result.rejectedByReason,
           ...(repickReason ? { repick: repickReason } : {}),
         });
         if (!model) return undefined;

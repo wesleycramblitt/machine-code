@@ -14,7 +14,7 @@ state, selection, and verification; the model owns decisions and edits.
 3. Each turn renders a fresh prompt from run state, the last step, and the
    bounded context bundle. Earlier tool output is not replayed.
 4. Tools act on the worktree: `read`, `search`, `edit`, `write`, `command`,
-   `context`, `issue`, `artifact`, `pr`, `ask`.
+   `context`, `issue`, `issue_graph`, `artifact`, `pr`, `ask`.
 5. `src/state/runs.ts` records events, usage, changes, and the final summary.
 6. `src/state/outcome.ts` derives a deterministic summary and stop reason.
 
@@ -25,9 +25,11 @@ state, selection, and verification; the model owns decisions and edits.
   loop detector, retries, final-answer fallback, semantic refresh scheduling.
 - **Context** (`src/context/`): issue hierarchy, packets, knowledge files,
   plans, skills, tool index, run-state rendering, model-derived budgets
-  (`budget.ts`), the task context pack (`pack.ts`), and manifest/provenance.
+  (`budget.ts`), and manifest/provenance.
 - **Selection** (`src/select.ts`, `src/catalogue/`): capability floors, cost,
-  availability, provider multipliers, free/paid tiers.
+  availability, provider multipliers, free/paid tiers. Free cloud offers and
+  free providers start each run without prior cooldowns; Ollama is the final
+  fallback. An OpenRouter upstream 429 cools only that model, not the provider.
 - **Tools** (`src/tools/`): read/search/edit/write, typed commands, issues,
   artifacts, PRs, ask. There is no shell tool.
 - **State** (`src/state/`, `src/context/state.ts`): run schema, events,

@@ -118,10 +118,11 @@ is known to exist locally but may be busy with another request. Rate limits,
 free-tier usage limits, timeouts, and other retryable provider errors rotate
 the same way until a model succeeds or none remain; a free-tier limit cools
 every free offer on that provider rather than only the model that answered
-first. Free-model cooldowns are per run and are never written to disk, so each
-free run loops from best fit to worst across every listed free model instead
-of inheriting the previous run's 30m+ cooldowns. Paid cooldowns persist with
-the 1m→5m→30m→2h→12h→1d→7d→30d tier schedule.
+first. Free-model and free-provider cooldowns are per run and are never written
+to disk, so each free run loops from best fit to worst across every listed free
+model instead of inheriting the previous run's 30m+ cooldowns. Paid cooldowns
+persist with the 1m→5m→30m→2h→12h→1d→7d→30d tier schedule. Ollama is the
+final selection fallback: another eligible cloud model always wins first.
 
 The TUI palette is machine-configurable with hex colors. Header and footer share
 a surface, subpage chrome uses a contrasting accent, and inner section tabs get
@@ -148,7 +149,8 @@ tab_active_fg = "#0d1117"
 
 ### Local models
 
-Ollama is a first-class, keyless provider. With the daemon running on its default
+Ollama is a first-class, keyless provider and the final fallback after eligible
+cloud models. With the daemon running on its default
 port, refresh once and the local chat models appear beside remote models:
 
 ```bash

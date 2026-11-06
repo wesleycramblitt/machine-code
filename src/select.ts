@@ -102,6 +102,8 @@ export interface PickResult {
   selected: CatalogueRow;
   estimate: PickEstimate;
   tier: SelectionTier;
+  /** All eligible candidates after filtering, before the display cap. */
+  eligibleCount: number;
   /** Top candidates after filtering, ascending score (best first), max 5. */
   candidates: CandidateScore[];
   rejectedCount: number;
@@ -341,18 +343,21 @@ export function pick(
   }
 
   // Ascending score; exact ties go to the lexicographically smaller key.
-  candidates.sort((a, b) =>
-    a.scored.score !== b.scored.score
-      ? a.scored.score - b.scored.score
-      : a.row.key < b.row.key
-        ? -1
-        : 1,
-  );
+  // Ollama is the final fallback: local models do not hide a cloud free model
+  // that is still eligible. Within each group, the normal score order applies.
+  candidates.sort((a, b) => {
+    const aLocal = a.row.providerID === "ollama" ? 1 : 0;
+    const bLocal = b.row.providerID === "ollama" ? 1 : 0;
+    if (aLocal !== bLocal) return aLocal - bLocal;
+    if (a.scored.score !== b.scored.score) return a.scored.score - b.scored.score;
+    return a.row.key < b.row.key ? -1 : 1;
+  });
 
   const best = candidates[0]!;
   return {
     selected: best.row,
     estimate,
+    eligibleCount: candidates.length,
     candidates: candidates.slice(0, 5).map((c) => c.scored),
     tier: selectionTier(input),
     rejectedCount: rejected.length,

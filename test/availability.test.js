@@ -13,6 +13,7 @@ import {
   isModelCooling,
   isProviderDisabled,
   clearModelCooldown,
+  clearFreeProviderCooldowns,
   saveAvailability,
 } from "../dist/availability.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -55,6 +56,20 @@ test("free usage limits cool every free offer, not just the first model", () => 
   assert.equal(isModelCooling(state, "opencode/deepseek-v4.1-flash-free"), true);
   assert.equal(isModelCooling(state, "opencode/glm-5.3-flash-free"), true);
   assert.equal(isProviderCooling(state, "opencode"), false, "paid models stay usable");
+});
+
+test("OpenRouter upstream provider errors cool the model, not the provider", () => {
+  const error = classifyError(
+    new Error(
+      '429: {"message":"Provider returned error","code":429,"metadata":{"raw":"xingchen-agi/xing4.0-29b-a4b:free is temporarily rate-limited upstream.","provider_name":"Phala","limit_source":"upstream_provider_shared_pool"}}',
+    ),
+  );
+  assert.equal(error.kind, "rate-limit-model");
+  assert.equal(error.target, "model");
+  const state = empty();
+  applyClassification(state, "openrouter", "openrouter/xingchen-agi/xing4.0-29b-a4b:free", error);
+  assert.equal(isModelCooling(state, "openrouter/xingchen-agi/xing4.0-29b-a4b:free"), true);
+  assert.equal(isProviderCooling(state, "openrouter"), false, "other OpenRouter free models stay usable");
 });
 
 test("repeated rate limits escalate the cooldown tier", () => {
@@ -108,6 +123,14 @@ test("funds errors disable the provider; auth marks needs-auth", () => {
   const state2 = empty();
   applyClassification(state2, "q", "q/m", auth);
   assert.equal(state2.providers.q.needsAuth, true);
+});
+
+test("free provider cooldowns reset at run start", () => {
+  const state = empty();
+  state.providers.opencode = { cooldownUntil: Date.now() + 60_000, tier: 3 };
+  clearFreeProviderCooldowns(state, ["opencode"]);
+  assert.equal(isProviderCooling(state, "opencode"), false);
+  assert.equal(state.providers.opencode.tier, 0);
 });
 
 test("availability state round-trips through disk", () => {

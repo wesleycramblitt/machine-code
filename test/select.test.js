@@ -226,6 +226,29 @@ test("a materially better model can beat a cheaper one", () => {
   assert.equal(pickOne([cheap, better]).selected.key, "p/better");
 });
 
+test("ollama is the final fallback when another eligible model exists", () => {
+  const cloud = row("p/cloud", {
+    free: true,
+    pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    scores: axes(8, 8, 8, 8),
+  });
+  const local = row("ollama/best", {
+    free: true,
+    pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    scores: axes(10, 10, 10, 10),
+  });
+  const policy = { ...basePolicy, minCapability: 0 };
+  const result = pickOne([local, cloud], policy, { tier: "free" });
+  assert.ok(!("error" in result));
+  assert.equal(result.selected.key, "p/cloud");
+  assert.equal(result.eligibleCount, 2);
+  assert.equal(result.candidates[0].key, "p/cloud");
+
+  const onlyLocal = pickOne([local], policy, { tier: "free" });
+  assert.ok(!("error" in onlyLocal));
+  assert.equal(onlyLocal.selected.key, "ollama/best");
+});
+
 test("hard filters: tool support, min context, provider, pin", () => {
   const noTools = row("p/no-tools", { toolCall: false });
   const small = row("p/small", { context: 16_000 });
