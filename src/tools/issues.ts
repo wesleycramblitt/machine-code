@@ -34,6 +34,9 @@ import type { RunRecorder } from "../state/runs.js";
 import type { RunStateStore } from "../context/state.js";
 import { loadMachineConfig } from "../config.js";
 import { parsePlanRef, readPlanLines, trackIssueInPlan, untrackIssueInPlans } from "../plan/tracking.js";
+import { isSecretPath } from "./safety.js";
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 export interface IssueToolContext {
   provider: IssueProvider;
@@ -200,6 +203,54 @@ function trackingPlanFile(ctx: IssueToolContext, body: string): string | undefin
  * Best-effort tracking-line append. Records a `plan_tracking` event either
  * way and never throws: tracking must not fail the issue tool.
  */
+/**
+ * Repo files this run actually read, most recent first. The planner reads
+ * the code its features describe; attaching those paths as issue context
+ * means the builder starts with the files pinned instead of re-discovering
+ * them over several turns. Attribution is windowed: reads since this run's
+ * last issue creation, so sequential creates each get their own context.
+ * Best-effort: anything unreadable or out of scope is skipped silently.
+ */
+function recentlyReadFiles(ctx: IssueToolContext, limit = 6, windowed = true): string[] {
+  let events: Array<Record<string, unknown>>;
+  try {
+    events = ctx.recorder.readEvents() as Array<Record<string, unknown>>;
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: unknown): void => {
+    if (typeof raw !== "string") return;
+    const cleaned = raw.trim().replace(/^\.\//, "");
+    if (!cleaned || cleaned === "null" || cleaned === "undefined") return;
+    if (cleaned.startsWith("/") || cleaned.split("/").includes("..")) return;
+    if (cleaned.startsWith("plans/") || cleaned.startsWith("knowledge/") || cleaned.startsWith(".")) return;
+    if (isSecretPath(cleaned) || seen.has(cleaned)) return;
+    let abs: string;
+    try {
+      abs = join(ctx.layout.repoRoot, cleaned);
+      if (!existsSync(abs) || !statSync(abs).isFile()) return;
+    } catch {
+      return;
+    }
+    seen.add(cleaned);
+    if (out.length < limit) out.push(cleaned);
+  };
+  for (let index = events.length - 1; index >= 0 && out.length < limit; index--) {
+    const event = events[index]!;
+    if (windowed && event.type === "issue_created") break;
+    if (event.type !== "tool_call_start") continue;
+    const tool = event.tool;
+    const args = (event.args ?? {}) as Record<string, unknown>;
+    if (tool === "read" && typeof args.path === "string") push(args.path);
+    else if (tool === "search" && Array.isArray(args.paths)) {
+      for (const item of args.paths as unknown[]) push(item);
+    }
+  }
+  return out;
+}
+
 function trackCreated(
   ctx: IssueToolContext,
   kind: "epic" | "feature",
@@ -639,9 +690,20 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         }
         const graph = params.graph;
         const dryRun = params.dry_run === true;
-        graph.epic.body = withContextFiles(graph.epic.body ?? "", graph.epic.context_files);
+        // Attach what this run actually read: the planner's working set
+        // becomes each node's context, so the builder starts pinned. One
+        // snapshot for the whole graph — creates run back-to-back with no
+        // reads between them, so per-node windowing would starve every node.
+        const graphReads = recentlyReadFiles(ctx, 8, false);
+        graph.epic.body = withContextFiles(graph.epic.body ?? "", [
+          ...(graph.epic.context_files ?? []),
+          ...graphReads,
+        ]);
         for (const feature of graph.features) {
-          feature.body = withContextFiles(feature.body ?? "", feature.context_files);
+          feature.body = withContextFiles(feature.body ?? "", [
+            ...(feature.context_files ?? []),
+            ...graphReads,
+          ]);
         }
         const keys = new Set<string>();
         const addKey = (key: string): void => {
@@ -790,10 +852,10 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         if (kind === "task") return fail("Tasks are no longer tracked; create a Feature under its Epic instead");
         if (kind !== "epic" && kind !== "feature") return fail("create requires kind (epic|feature)");
         if (!params.title) return fail("create requires title");
-        const body = withContextFiles(
-          withApproval(params.body ?? "", ctx.defaultApproval),
-          params.context_files,
-        );
+        const body = withContextFiles(withApproval(params.body ?? "", ctx.defaultApproval), [
+          ...(params.context_files ?? []),
+          ...recentlyReadFiles(ctx),
+        ]);
         const contextErrors = issueContextErrors({ kind, body });
         if (contextErrors.length > 0) {
           return fail(

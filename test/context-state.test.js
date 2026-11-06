@@ -769,3 +769,21 @@ test("working context keeps early tool reads on long runs (no recency eviction)"
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("seedWorkingFiles skips oversized files", () => {
+  const dir = tempDir();
+  const root = tempDir("mc-state-seedcap-");
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "small.ts"), "export const s = 1;\n", "utf8");
+    writeFileSync(join(root, "src", "big.ts"), `export const b = 1;\n// ${"x".repeat(70 * 1024)}\n`, "utf8");
+    const store = new RunStateStore({ runDir: dir, runId: "r-seedcap", goal: "goal", repoRoot: root });
+    store.seedWorkingFiles(["src/small.ts", "src/big.ts", "src/missing.ts"], 0);
+    const working = store.renderWorkingContext();
+    assert.match(working, /small\.ts/);
+    assert.doesNotMatch(working, /big\.ts/, "files over the seed cap stay discoverable, not pinned");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});

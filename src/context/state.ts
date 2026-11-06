@@ -534,12 +534,13 @@ export class RunStateStore {
   }
 
   /** Put task-relevant files in the working set before the first model call. */
-  seedWorkingFiles(paths: readonly string[], turn = 0): void {
+  seedWorkingFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
     if (!this.repoRoot) return;
     for (const path of paths) {
       try {
         const abs = isAbsolute(path) ? path : join(this.repoRoot, path);
         const content = readFileSync(abs, "utf8");
+        if (Buffer.byteLength(content, "utf8") > maxBytes) continue;
         const artifact = this.putArtifact(content);
         const total = content.length === 0 ? 1 : content.split("\n").length;
         const ref: Ref = {

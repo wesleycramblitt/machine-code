@@ -1149,3 +1149,46 @@ test("single create with plan_ref replaces the source lines", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("create attaches files this run actually read", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-autoread-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
+    writeFileSync(join(root, "src", "b.ts"), "export const b = 1;\n", "utf8");
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "tui.md"), "# TUI\n", { flag: "w" });
+    const p = new FakeProvider();
+    const epic = await p.create({ title: "Epic", body: issueBody("epic"), kind: "epic" });
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    ctx.recorder.event("tool_call_start", { tool: "read", toolCallId: "r1", args: { path: "src/a.ts" } });
+    ctx.recorder.event("tool_call_start", { tool: "read", toolCallId: "r2", args: { path: "plans/tui.md" } });
+    const created = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "feature",
+      parent: `#${epic.ref.number}`,
+      title: "Feature",
+      body: issueBody("feature"),
+    });
+    assert.equal(created.isError, undefined);
+    const issue = [...p.issues.values()].find((i) => i.title === "Feature");
+    assert.match(issue.body, /"src\/a\.ts"/, "read source file is attached as context");
+    assert.doesNotMatch(issue.body, /plans\/tui\.md/, "plan files are not attached as code context");
+    // Reads since the last creation attribute to the next issue only.
+    ctx.recorder.event("issue_created", { number: 1 });
+    ctx.recorder.event("tool_call_start", { tool: "read", toolCallId: "r3", args: { path: "src/b.ts" } });
+    const second = await issueTool(ctx).execute("c2", {
+      action: "create",
+      kind: "feature",
+      parent: `#${epic.ref.number}`,
+      title: "Second",
+      body: issueBody("feature"),
+    });
+    assert.equal(second.isError, undefined);
+    const issue2 = [...p.issues.values()].find((i) => i.title === "Second");
+    assert.match(issue2.body, /"src\/b\.ts"/);
+    assert.doesNotMatch(issue2.body, /"src\/a\.ts"/, "pre-creation reads do not leak into later issues");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

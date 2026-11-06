@@ -169,6 +169,8 @@ export interface RunLoopInput {
   requireProvider?: string;
   /** Pin model selection to one catalogue key/id (debug or policy). */
   requireModel?: string;
+  /** Repo-relative files pinned into the working set before the first model call. */
+  seedFiles?: string[];
   /** Layout + full policy: enable the task tool (delegation). */
   layout?: Layout;
   fullPolicy?: Policy;
@@ -572,6 +574,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     recorder,
     processes,
   });
+  // Preload the task files so the first prompt already carries them.
+  // Working context re-reads from disk, so pins never go stale.
+  if (input.seedFiles && input.seedFiles.length > 0) {
+    memory.seedWorkingFiles(input.seedFiles, 0);
+  }
   // Semantic refresh after a changed turn. Coalesce so a burst of edits
   // produces at most one in-flight refresh plus one follow-up.
   let semanticRefreshInFlight = false;

@@ -44,13 +44,12 @@ test("core:diff can compare a base ref to HEAD", async () => {
   }
 });
 
-test("command list with a name points at describe", async () => {
+test("command list with a name describes it directly", async () => {
   const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
   const result = await tool.execute("id", { action: "list", name: "core:status" });
-  assert.equal(result.isError, true);
+  assert.equal(result.isError, undefined);
   const text = result.content.map((c) => c.text ?? "").join("\n");
-  assert.match(text, /list takes no name/);
-  assert.match(text, /"action":"describe","name":"\.\.\."/);
+  assert.match(text, /core:status/);
 });
 
 test("command describe points at tools, not commands", async () => {
@@ -690,4 +689,46 @@ test("write prepareArguments drops a literal null path", () => {
   const tool = writeTool({ root: process.cwd(), commands: CORE_COMMANDS });
   assert.deepEqual(tool.prepareArguments({ path: "null", content: "x" }), { content: "x" });
   assert.deepEqual(tool.prepareArguments({ path: "src/a.ts", content: "x" }), { path: "src/a.ts", content: "x" });
+});
+
+test("edit merges a single hunk with an edits array instead of failing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-edit-merge-"));
+  try {
+    writeFileSync(join(root, "a.ts"), "export const a = 1;\nexport const b = 1;\n", "utf8");
+    const tool = editTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", {
+      path: "a.ts",
+      oldString: "export const a = 1;",
+      newString: "export const a = 2;",
+      edits: [{ oldString: "export const b = 1;", newString: "export const b = 2;" }],
+    });
+    assert.equal(result.isError, undefined);
+    assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "export const a = 2;\nexport const b = 2;\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read combines symbols and sections in one call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-merge-"));
+  try {
+    writeFileSync(
+      join(root, "a.ts"),
+      "export function alpha() {\n  return 1;\n}\n\nexport function beta() {\n  return 2;\n}\n",
+      "utf8",
+    );
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const both = await tool.execute("id", { path: "a.ts", symbols: ["alpha"], sections: ["nope"] });
+    assert.equal(both.isError, undefined);
+    const text = both.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /alpha/);
+    assert.match(text, /no section/);
+    // A lone miss returns an informative note, not an error strike: the
+    // model can try outline or search next instead of handling a failure.
+    const miss = await tool.execute("id", { path: "a.ts", symbols: ["missing"] });
+    assert.equal(miss.isError, undefined);
+    assert.match(miss.content.map((c) => c.text ?? "").join("\n"), /no symbol: missing/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

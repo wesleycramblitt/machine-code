@@ -1463,7 +1463,12 @@ async function cmdRun(argv: string[]): Promise<number> {
     recorder.event("context_assembled", { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
   }
   const contextText = contextBundle.text || undefined;
-
+  // Pin the assembled file sources into the working set so the first prompt
+  // already carries the code the run is about, instead of the model paging
+  // for it over several turns.
+  const seedFiles = contextBundle.sources
+    .filter((source) => source.kind === "file" && typeof source.ref === "string")
+    .map((source) => source.ref as string);
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -1534,6 +1539,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       requireProvider,
       requireModel,
       contextText,
+      ...(seedFiles.length > 0 ? { seedFiles } : {}),
       skipMap,
       skipSemantic,
       skillExcludes,
@@ -1559,6 +1565,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       requireProvider,
       requireModel,
       contextText,
+      ...(seedFiles.length > 0 ? { seedFiles } : {}),
       skipMap,
       skipSemantic,
       signal: abort.signal,

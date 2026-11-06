@@ -59,6 +59,8 @@ export interface OrchestrateInput {
   agentOverrides?: Partial<AgentConfig>;
   /** Assembled context block prepended to each phase's first prompt. */
   contextText?: string;
+  /** Repo-relative files pinned into the working set before the first model call. */
+  seedFiles?: string[];
   /** Skip the deterministic map index / semantic annotations up front. */
   skipMap?: boolean;
   skipSemantic?: boolean;
@@ -102,6 +104,8 @@ export async function singleAgentRun(input: {
   requireProvider?: string;
   requireModel?: string;
   contextText?: string;
+  /** Repo-relative files pinned into the working set before the first model call. */
+  seedFiles?: string[];
   skipMap?: boolean;
   skipSemantic?: boolean;
   signal?: AbortSignal;
@@ -127,6 +131,7 @@ export async function singleAgentRun(input: {
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
     contextText: input.contextText,
+    ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,
@@ -212,6 +217,9 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
     contextText: input.contextText,
+    // The packet's context files land in the working set up front, so the
+    // first prompt already carries the code the deliverable names.
+    ...(packet.context.length > 0 ? { seedFiles: [...packet.context] } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,
@@ -419,6 +427,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       requireModel: input.requireModel,
       agentOverrides: input.agentOverrides,
       contextText: input.contextText,
+      ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
       skipMap: input.skipMap,
       skipSemantic: input.skipSemantic,
       signal: input.signal,
@@ -467,6 +476,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
     contextText: input.contextText,
+    ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,
