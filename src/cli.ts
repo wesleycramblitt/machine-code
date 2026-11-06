@@ -123,6 +123,22 @@ async function loadRuntime(l: ReturnType<typeof layout>): Promise<Runtime> {
     const result = await refreshCatalogue(l, [...available], { openRouterKey: process.env.OPENROUTER_API_KEY });
     for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
     catalogue = result.document;
+  } else {
+    // Live listings drift (models added/removed upstream); fold fresh
+    // provider data into the catalogue file so selection sees it.
+    try {
+      const { reconcileCatalogue } = await import("./catalogue/reconcile.js");
+      const { providerFetchOk } = await import("./models/providers.js");
+      const reconciled = await reconcileCatalogue(l, models, (id) => providerFetchOk(id));
+      for (const warning of reconciled.warnings) process.stderr.write(`warning: catalogue reconcile: ${warning}\n`);
+      if (reconciled.changed) {
+        for (const key of reconciled.added) process.stderr.write(`catalogue: +${key}\n`);
+        for (const key of reconciled.removed) process.stderr.write(`catalogue: -${key}\n`);
+        catalogue = loadCatalogue(l.catalogueFile) ?? catalogue;
+      }
+    } catch (error) {
+      process.stderr.write(`warning: catalogue reconcile failed (${(error as Error).message}); using cached catalogue\n`);
+    }
   }
   return { machine, policy, models, catalogue, configuredProviders };
 }
@@ -169,6 +185,8 @@ Usage:
                                     --min-capability N, --min-axes code=6.5, --tier free|paid,
                                     --max-price $/M, --max-input-price $/M, --max-output-price $/M)
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
+                                    (listings for Ollama/OpenRouter-style providers
+                                    reconcile automatically; refresh re-scores everything)
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
   machine_code runs [--group gh-issue|status|overall] [--filter ...] [--text Q]

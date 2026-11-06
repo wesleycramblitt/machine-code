@@ -95,6 +95,20 @@ async function fetchOllamaModels(
   return results.filter((model): model is Model<"openai-completions"> => model !== null);
 }
 
+/** Last listing outcome per dynamic provider id. True only after a fetch
+ * that actually reached the provider; stale-cache fallbacks record false.
+ * The catalogue reconciler uses this to tell "provider emptied its models"
+ * apart from "provider unreachable" — only the former prunes rows. */
+const fetchStatus = new Map<string, { ok: boolean; at: number }>();
+
+export function providerFetchOk(id: string): boolean | undefined {
+  return fetchStatus.get(id)?.ok;
+}
+
+function markFetch(id: string, ok: boolean): void {
+  fetchStatus.set(id, { ok, at: Date.now() });
+}
+
 /** Builds a provider whose model list comes from GET <baseUrl>/models. */
 export function openAiCompatibleProvider(options: OpenAiCompatibleOptions): Provider {
   const { id, name, baseUrl, envKeys } = options;
@@ -111,8 +125,10 @@ export function openAiCompatibleProvider(options: OpenAiCompatibleOptions): Prov
         try {
           const models = await fetchOllamaModels(context.baseUrl ?? baseUrl, context.signal);
           await context.publish({ update: () => { dynamicModels = models; } });
+          markFetch(id, true);
           return models;
         } catch {
+          markFetch(id, false);
           return currentModels();
         }
       }
@@ -122,7 +138,10 @@ export function openAiCompatibleProvider(options: OpenAiCompatibleOptions): Prov
           signal: context.signal,
           headers: { accept: "application/json" },
         });
-        if (!r.ok) return [];
+        if (!r.ok) {
+          markFetch(id, false);
+          return [];
+        }
         const parsed = chatModels(await r.json());
         const models = parsed
           .filter((m) => {
@@ -164,8 +183,10 @@ export function openAiCompatibleProvider(options: OpenAiCompatibleOptions): Prov
             dynamicModels = models;
           },
         });
+        markFetch(id, true);
         return models;
       } catch {
+        markFetch(id, false);
         return currentModels().length > 0 ? currentModels() : [];
       }
     },

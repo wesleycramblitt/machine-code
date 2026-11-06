@@ -758,6 +758,26 @@ export async function runTui(): Promise<void> {
   const l = layout();
   mkdirSync(l.localDir, { recursive: true });
 
+  // Fold fresh provider listings into the catalogue file so the model picker
+  // reflects added/removed models without a manual refresh. Best-effort and
+  // silent: the picker reads whatever is on disk either way.
+  try {
+    const [{ createModelsCollection }, { loadProviderDefinitions }] = await Promise.all([
+      import("./models.js"),
+      import("./data.js"),
+    ]);
+    const models = createModelsCollection();
+    const dynamic = Object.entries(loadProviderDefinitions())
+      .filter(([, def]) => def.discovery === "openai-compatible" || def.discovery === "ollama")
+      .map(([id]) => id);
+    if (dynamic.length > 0) await models.refresh({ allowNetwork: true, providers: dynamic });
+    const { reconcileCatalogue } = await import("./catalogue/reconcile.js");
+    const { providerFetchOk } = await import("./models/providers.js");
+    await reconcileCatalogue(l, models, (id) => providerFetchOk(id));
+  } catch {
+    // discovery/reconcile failures leave the cached catalogue in place
+  }
+
   let page: Page = "runs";
   let screen: Screen = "list";
   /** Repo scope for the runs list. `f` toggles all repos vs the TUI cwd. */
