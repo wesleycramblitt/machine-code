@@ -69,8 +69,10 @@ Consequences:
 | `clean-code` | Build, Planner | Every coding/planning run (mode default) | about 5.7 KiB |
 | `verified-testing` | Build | Verification verified or higher (mode default) | about 2.0 KiB |
 | `safe-refactor` | Build | Refactor issue declares it in `mc:context` | about 1.6 KiB |
+| `knowledge-curation` | Build, Planner | Issue declares it in `mc:context` | about 1.8 KiB |
+| `plan-curation` | Build, Planner | Issue declares it in `mc:context` | about 1.8 KiB |
 
-The six descriptions use about 720 chars. The whole description block must
+The eight descriptions use about 950 chars. The whole description block must
 stay under 1 KiB.
 
 ## How an agent gets a kept skill
@@ -81,9 +83,9 @@ stay under 1 KiB.
    skills, lose ties to them, and honor `section:skills` / `skill:name`
    exclusions (`src/context/assemble.ts`, `src/context/preview.ts`).
 2. Preferred for conditional skills: the issue adds
-   `{"skills":["systematic-debugging"]}` (or `["safe-refactor"]`) to its
-   `mc:context` block. The body is then injected for that issue and its
-   descendants.
+   `{"skills":["systematic-debugging"]}` (or `["safe-refactor"]`,
+   `["knowledge-curation"]`, `["plan-curation"]`) to its `mc:context`
+   block. The body is then injected for that issue and its descendants.
 3. If the issue has no block: the Architect names the exact path in the packet
    constraints. Build reads it once.
 4. Do not add a skill to every issue. A large body pushes out task and packet
