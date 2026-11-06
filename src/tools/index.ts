@@ -440,8 +440,62 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
 
 /* -------------------------------------------------------------------- edit */
 
-const EditParams = Type.Object({
-  path: Type.String({ description: "File path, relative to the worktree root." }),
+/**
+ * Weak models fill every field: a multi-hunk call arrives with top-level
+ * `oldString: ""` / `newString: ""` alongside a real `edits` array, which
+ * the tool rejects as mixed forms. Empty strings are never a real anchor
+ * (exact match needs text) and never a real path, so drop them before
+ * schema validation. A real oldString with an empty newString is a
+ * legitimate deletion and is kept.
+ */
+function cleanEditArgs(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  let changed = false;
+  const isNullish = (value: unknown): boolean =>
+    typeof value === "string" && (value.trim() === "" || value.trim() === "null" || value.trim() === "undefined");
+  if (isNullish(out.path)) {
+    delete out.path;
+    changed = true;
+  }
+  if (isNullish(out.symbol)) {
+    delete out.symbol;
+    changed = true;
+  }
+  if (isNullish(out.section)) {
+    delete out.section;
+    changed = true;
+  }
+  if (isNullish(out.oldString)) {
+    delete out.oldString;
+    changed = true;
+  }
+  // An empty replacement is only meaningful against a real anchor.
+  if (typeof out.newString === "string" && out.newString.trim() === "" && out.oldString === undefined) {
+    delete out.newString;
+    changed = true;
+  } else if (typeof out.newString === "string" && (out.newString.trim() === "null" || out.newString.trim() === "undefined")) {
+    delete out.newString;
+    changed = true;
+  }
+  if (Array.isArray(out.edits)) {
+    const kept = out.edits.filter(
+      (hunk): hunk is { oldString: string; newString: string } =>
+        !!hunk &&
+        typeof hunk === "object" &&
+        typeof (hunk as Record<string, unknown>).oldString === "string" &&
+        ((hunk as Record<string, unknown>).oldString as string).trim() !== "",
+    );
+    if (kept.length !== out.edits.length) {
+      if (kept.length > 0) out.edits = kept;
+      else delete out.edits;
+      changed = true;
+    }
+  }
+  return changed ? out : args;
+}
+
+const EditParams = Type.Object({  path: Type.String({ description: "File path, relative to the worktree root." }),
   oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
   newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form)." })),
   edits: Type.Optional(
@@ -470,6 +524,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
       "symbol or section scopes the match so an identical anchor elsewhere cannot win. " +
       "Without replaceAll each hunk must be unique inside its scope.",
     parameters: EditParams,
+    prepareArguments: (args) => cleanEditArgs(args) as Static<typeof EditParams>,
     async execute(_id, params: Static<typeof EditParams>) {
       try {
         if (params.edits && params.edits.length > 0 && (params.oldString !== undefined || params.newString !== undefined)) {
@@ -1007,7 +1062,7 @@ const CORE_TOOL_NAMES = new Set([
 function cleanCommandArgs(args: unknown): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const out = { ...(args as Record<string, unknown>) };
-  if (typeof out.name === "string" && (out.name.trim() === "null" || out.name.trim() === "undefined")) {
+  if (typeof out.name === "string" && (out.name.trim() === "" || out.name.trim() === "null" || out.name.trim() === "undefined")) {
     delete out.name;
     return out;
   }

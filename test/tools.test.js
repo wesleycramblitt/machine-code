@@ -589,12 +589,62 @@ test("read prepareArguments treats null strings as absent selectors", async () =
   }
 });
 
+test("edit prepareArguments drops empty-string old/newString alongside edits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-edit-emptystr-"));
+  try {
+    writeFileSync(join(root, "a.ts"), "export const a = 1;\n", "utf8");
+    const tool = editTool({ root, commands: CORE_COMMANDS });
+    // The exact weak-model shape that stalled a build: real edits plus
+    // empty-string single-hunk fields. Repair leaves a valid multi-hunk call.
+    const prepared = tool.prepareArguments({
+      path: "a.ts",
+      oldString: "",
+      newString: "",
+      edits: [{ oldString: "export const a = 1;", newString: "export const a = 2;" }],
+    });
+    assert.deepEqual(prepared, {
+      path: "a.ts",
+      edits: [{ oldString: "export const a = 1;", newString: "export const a = 2;" }],
+    });
+    const result = await tool.execute("id", prepared);
+    assert.equal(result.isError, undefined);
+    assert.equal(readFileSync(join(root, "a.ts"), "utf8"), "export const a = 2;\n");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("edit keeps a real deletion and drops empty anchors", async () => {
+  const tool = editTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  // Empty replacement against a real anchor is a deletion: keep it.
+  assert.deepEqual(
+    tool.prepareArguments({ path: "a.ts", oldString: "x", newString: "" }),
+    { path: "a.ts", oldString: "x", newString: "" },
+  );
+  // Empty hunks can never match; emptied arrays fall back to single-hunk validation.
+  assert.deepEqual(
+    tool.prepareArguments({ path: "a.ts", edits: [{ oldString: "", newString: "x" }] }),
+    { path: "a.ts" },
+  );
+  // An empty path is absent, not the repo root.
+  assert.deepEqual(tool.prepareArguments({ path: "", oldString: "x", newString: "y" }), {
+    oldString: "x",
+    newString: "y",
+  });
+});
+
 test("command list treats a null-string name as absent", async () => {
   const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
   const prepared = tool.prepareArguments({ action: "list", name: "null" });
   assert.deepEqual(prepared, { action: "list" });
   const result = await tool.execute("id", prepared);
   assert.equal(result.isError, undefined);
+});
+
+test("command list treats an empty name as absent", async () => {
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  const prepared = tool.prepareArguments({ action: "list", name: "" });
+  assert.deepEqual(prepared, { action: "list" });
 });
 
 test("edit treats an empty edits array as absent", async () => {

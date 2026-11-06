@@ -476,17 +476,16 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   });
   const wantMap = input.skipMap !== true;
   const wantSemantic = input.skipSemantic !== true;
-  // Survey agents range over the whole repo, so they get the per-file symbol
-  // map up front: stable content the provider cache absorbs once, instead of
-  // dozens of locate-me searches. Packet/diff agents keep the summary.
-  const surveyAgents = new Set(["planner", "general", "sudo"]);
-  const wantSymbols = wantMap && surveyAgents.has(input.agent.name);
+  // The per-file symbol map rides up front for every agent: stable content
+  // the provider cache absorbs once, instead of dozens of locate-me searches
+  // and paged re-reads. renderRepoMap caps itself; packet/diff agents keep
+  // the summary line as well so small-context budgets still see the shape.
   let mapIndex = "";
   let semanticMap: SemanticMap | null = null;
   const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"], semantic: SemanticMap | null): string =>
     [
       wantMap ? renderMapIndex(map) : "",
-      wantSymbols ? renderRepoMap(map) : "",
+      wantMap ? renderRepoMap(map) : "",
       wantSemantic ? renderSemanticIndex(semantic, 3_072, input.request) : "",
     ].filter(Boolean).join("\n");
   if (wantMap || wantSemantic) try {
