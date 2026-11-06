@@ -70,3 +70,56 @@ test("tool args render as human one-liners, not JSON", async () => {
   assert.equal(describeToolArgs("mystery", { path: "x", name: "y" }), "x y");
   assert.equal(describeToolArgs("read", null), "");
 });
+
+test("waitingForRun names the open model, tool, process, or child wait", async () => {
+  const { waitingForRun } = await import("../dist/tui/timeline.js");
+  const t = "2026-01-01T00:00:00.000Z";
+  // Open model request: waiting on that model.
+  assert.equal(
+    waitingForRun({ status: "running", lastActivityAt: t }, [
+      { type: "model_request", call: 1, provider: "openai", model: "gpt-5", t },
+    ]).label,
+    "model openai/gpt-5",
+  );
+  // Streaming deltas flag the wait as flowing, not stuck.
+  assert.equal(
+    waitingForRun({ status: "running", lastActivityAt: t }, [
+      { type: "model_request", call: 1, provider: "openai", model: "gpt-5", t },
+      { type: "model_delta", call: 1, kind: "text", text: "hi", t },
+    ]).streaming,
+    true,
+  );
+  // Completed model + open tool: the tool wins as the newest open marker.
+  const toolWait = waitingForRun({ status: "running", lastActivityAt: t }, [
+    { type: "model_request", call: 1, provider: "p", model: "m", t },
+    { type: "model_call_end", call: 1, provider: "p", model: "m", stopReason: "tool", t },
+    { type: "tool_call_start", toolCallId: "a", tool: "search", args: { pattern: "foo" }, t },
+  ]);
+  assert.equal(toolWait.kind, "tool");
+  assert.match(toolWait.label, /search/);
+  assert.match(toolWait.label, /foo/);
+  // Closed tool with nothing open: still busy between steps.
+  assert.equal(
+    waitingForRun({ status: "running", lastActivityAt: t }, [
+      { type: "tool_call_start", toolCallId: "a", tool: "read", t },
+      { type: "tool_call", toolCallId: "a", tool: "read", isError: false, t },
+    ]).kind,
+    "working",
+  );
+  // Terminal runs never wait.
+  assert.equal(
+    waitingForRun({ status: "completed", lastActivityAt: t }, [
+      { type: "model_request", call: 1, t },
+    ]),
+    null,
+  );
+  // Unanswered ask waits on the human, not the model.
+  assert.equal(
+    waitingForRun(
+      { status: "awaiting_input", lastActivityAt: t },
+      [{ type: "question", questionId: "q", t }],
+      { hasPendingQuestion: true },
+    ).kind,
+    "input",
+  );
+});

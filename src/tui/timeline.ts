@@ -206,3 +206,167 @@ export function describeTimelineEvent(event: TimelineEventLike): string {
       return type;
   }
 }
+
+/** What an active run is currently waiting on, for the run-details header. */
+export interface WaitingState {
+  kind: "model" | "tool" | "process" | "child" | "input" | "paused" | "starting" | "working";
+  /** Human noun: "model p/m", "tool search …", "process …", "working", … */
+  label: string;
+  /** ISO timestamp the wait started (the causing event, or last activity). */
+  since: string;
+  /** True when stream deltas arrived after the open request (tokens flowing). */
+  streaming?: boolean;
+}
+
+const TERMINAL_RUN_STATUSES = new Set(["completed", "blocked", "failed", "cancelled"]);
+
+function eventTime(value: unknown): string {
+  return typeof value === "string" && value.length > 0 ? value : "";
+}
+
+/**
+ * Derive what a run is waiting on from its status and event stream.
+ *
+ * Open markers win: the most recent uncompleted `model_request`,
+ * `tool_call_start`, `process_started`, or `child_spawned` names the wait.
+ * With no open marker a running run is still busy between steps
+ * (`working`); terminal runs return null. Pass `hasPendingQuestion` from the
+ * TUI's inbox check so an unanswered `ask` reads as waiting on the human.
+ */
+export function waitingForRun(
+  summary: { status?: unknown; lastActivityAt?: unknown },
+  events: readonly TimelineEventLike[],
+  opts?: { hasPendingQuestion?: boolean },
+): WaitingState | null {
+  const status = String(summary.status ?? "");
+  if (TERMINAL_RUN_STATUSES.has(status)) return null;
+  const fallbackSince =
+    eventTime(summary.lastActivityAt) ||
+    eventTime(events.length > 0 ? events[events.length - 1]?.t : "") ||
+    new Date().toISOString();
+
+  if (opts?.hasPendingQuestion || status === "awaiting_input") {
+    let since = "";
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      if (String(events[i]?.type) === "question") {
+        since = eventTime(events[i]?.t);
+        break;
+      }
+    }
+    return { kind: "input", label: "your answer", since: since || fallbackSince };
+  }
+  if (status === "paused" || status === "interrupted") {
+    return { kind: "paused", label: status, since: fallbackSince };
+  }
+
+  const completedTools = new Set<string>();
+  const completedModels = new Set<string>();
+  const exitedProcesses = new Set<string>();
+  const completedChildren = new Set<string>();
+  for (const event of events) {
+    const type = String(event.type ?? "");
+    if (type === "tool_call") {
+      const id = event.toolCallId;
+      if (typeof id === "string" && id) completedTools.add(id);
+      else if (typeof id === "number") completedTools.add(String(id));
+    } else if (type === "model_call_end") {
+      const call = (event as { call?: unknown }).call;
+      if (typeof call === "number" || typeof call === "string") completedModels.add(String(call));
+    } else if (type === "process_exited" || type === "process_killed") {
+      const id = (event as { processId?: unknown }).processId;
+      if (typeof id === "string" && id) exitedProcesses.add(id);
+      else if (typeof id === "number") exitedProcesses.add(String(id));
+    } else if (type === "child_completed") {
+      const id = (event as { childRunId?: unknown }).childRunId;
+      if (typeof id === "string" && id) completedChildren.add(id);
+    }
+  }
+  // Starts without an id still count as open when no completion of that
+  // kind follows them.
+  let toolCallAfter = false;
+  const toolOpenFrom: boolean[] = new Array(events.length).fill(false);
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    if (String(events[i]?.type) === "tool_call") toolCallAfter = true;
+    if (String(events[i]?.type) === "tool_call_start") toolOpenFrom[i] = !toolCallAfter;
+  }
+
+  const streamingCalls = new Set<string>();
+  for (const event of events) {
+    if (String(event.type ?? "") !== "model_delta") continue;
+    const call = (event as { call?: unknown }).call;
+    if (typeof call === "number" || typeof call === "string") {
+      if (!completedModels.has(String(call))) streamingCalls.add(String(call));
+    }
+  }
+
+  let open: { index: number; kind: WaitingState["kind"]; label: string; since: string; streaming?: boolean } | null = null;
+  for (let i = 0; i < events.length; i += 1) {
+    const event = events[i]!;
+    const type = String(event.type ?? "");
+    const t = eventTime(event.t) || fallbackSince;
+    if (type === "tool_call_start") {
+      const rawId = (event as { toolCallId?: unknown }).toolCallId;
+      const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
+      const isOpen = id ? !completedTools.has(id) : toolOpenFrom[i];
+      if (!isOpen) continue;
+      const tool = text(event.tool) || "tool";
+      const args = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
+      const human = args ? describeToolArgs(tool, args) : "";
+      const candidate = {
+        index: i,
+        kind: "tool" as const,
+        label: human ? `tool ${tool} ${human}` : `tool ${tool}`,
+        since: t,
+      };
+      if (!open || candidate.index > open.index) open = candidate;
+    } else if (type === "model_request") {
+      const call = (event as { call?: unknown }).call;
+      const key = typeof call === "number" || typeof call === "string" ? String(call) : "";
+      if (key && completedModels.has(key)) continue;
+      const provider = text(event.provider);
+      const model = text(event.model);
+      const name = provider || model ? `${provider}${provider && model ? "/" : ""}${model}` : "model";
+      const candidate = {
+        index: i,
+        kind: "model" as const,
+        label: `model ${name}`,
+        since: t,
+        streaming: key ? streamingCalls.has(key) : undefined,
+      };
+      if (!open || candidate.index > open.index) open = candidate;
+    } else if (type === "process_started") {
+      const rawId = (event as { processId?: unknown }).processId;
+      const id = typeof rawId === "string" ? rawId : typeof rawId === "number" ? String(rawId) : "";
+      if (id && exitedProcesses.has(id)) continue;
+      const name = text((event as { name?: unknown }).name) || (id ? `process ${id.slice(-8)}` : "process");
+      const candidate = { index: i, kind: "process" as const, label: `process ${name}`, since: t };
+      if (!open || candidate.index > open.index) open = candidate;
+    } else if (type === "child_spawned") {
+      const rawId = (event as { childRunId?: unknown }).childRunId;
+      const id = typeof rawId === "string" ? rawId : "";
+      if (id && completedChildren.has(id)) continue;
+      const role = text((event as { role?: unknown }).role);
+      const candidate = {
+        index: i,
+        kind: "child" as const,
+        label: `child ${role ? `${role} ` : ""}${id ? id.slice(-8) : ""}`.trim(),
+        since: t,
+      };
+      if (!open || candidate.index > open.index) open = candidate;
+    }
+  }
+  if (open) return { kind: open.kind, label: open.label, since: open.since, streaming: open.streaming };
+
+  if (events.length === 0 || status === "created") {
+    return { kind: "starting", label: "starting", since: fallbackSince };
+  }
+  let last: TimelineEventLike | null = null;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    if (isTimelineEvent(events[i], true)) {
+      last = events[i]!;
+      break;
+    }
+  }
+  const since = (last && eventTime(last.t)) || fallbackSince;
+  return { kind: "working", label: "working", since };
+}

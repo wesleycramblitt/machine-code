@@ -32,7 +32,7 @@ import {
   type RunRow,
 } from "./tui/runs.js";
 import { scrollLines, selectableLines } from "./tui/scroll.js";
-import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "./tui/timeline.js";
+import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineIndex, stepTimelineSelection, waitingForRun } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, DEFAULT_THEME, type AgentPolicy, type MachineConfig, type Policy, type ThemeConfig } from "./config.js";
@@ -3275,6 +3275,34 @@ export async function runTui(): Promise<void> {
             finalText: s.finalText,
           }).text;
         const recentActivity = ev.filter((event) => isTimelineEvent(event, false)).slice(-8);
+        // What the run is currently waiting on. The 1s redraw tick animates
+        // the dots, so a live wait visibly advances instead of looking frozen.
+        const waiting = waitingForRun(s, ev, { hasPendingQuestion: Boolean(pending) });
+        const waitingDots = ".".repeat(1 + (Math.floor(Date.now() / 500) % 3));
+        const waitingLine = (): string | null => {
+          if (!waiting) return null;
+          const elapsed = ago(waiting.since);
+          const age = elapsed === "—" ? "" : ` ${D}(${elapsed})${R}`;
+          const label = trunc(waiting.label, Math.max(12, cols - 32));
+          switch (waiting.kind) {
+            case "input":
+              return ` ${Y}?${R} ${B}awaiting your answer${R} ${D}press ${B}${Y}a${R}${D} to reply${R}`;
+            case "paused":
+              return ` ${Y}⏸${R} ${B}${waiting.label}${R}${age}`;
+            case "model":
+              return ` ${BL}◌${R} ${B}waiting on ${label}${R}${waiting.streaming ? ` ${G}streaming${R}` : ""}${C}${waitingDots}${R}${age}`;
+            case "tool":
+              return ` ${Y}◌${R} ${B}waiting on ${label}${R}${Y}${waitingDots}${R}${age}`;
+            case "process":
+              return ` ${C}◌${R} ${B}waiting on ${label}${R}${C}${waitingDots}${R}${age}`;
+            case "child":
+              return ` ${M}◌${R} ${B}waiting on ${label}${R}${M}${waitingDots}${R}${age}`;
+            case "starting":
+              return ` ${C}◌${R} ${B}starting${R}${C}${waitingDots}${R}${age}`;
+            case "working":
+              return ` ${C}◌${R} ${B}working${R}${C}${waitingDots}${R}${age}`;
+          }
+        };
         const thinkingByCall = new Map<string, ThinkingChunk[]>();
         for (const chunk of thinking) {
           if (typeof chunk.call !== "number") continue;
@@ -3344,6 +3372,8 @@ export async function runTui(): Promise<void> {
         const accessMeta = `${D}issues${R} ${issueAccessTone(runIssueAccess)}${runIssueAccess}${R}`;
         if (issueMeta) lines.push(` ${D}${issueMeta}${R}  ${accessMeta}`);
         else lines.push(` ${accessMeta}`);
+        const wl = waitingLine();
+        if (wl) lines.push(wl);
         lines.push("", ...sectionBar, "");
         if (runSection === "overview") {
           // Lean overview: header already carries status/agent/cost. Show the
@@ -3378,7 +3408,13 @@ export async function runTui(): Promise<void> {
             }
           }
           if (recentActivity.length) {
-            lines.push("", ` ${B}${C}Activity snippet${R}${s.status === "running" ? ` ${G}live${R}` : ""} ${D}full log in Timeline${R}`);
+            const activityLive =
+              waiting && waiting.kind !== "input" && waiting.kind !== "paused"
+                ? ` ${C}◌ waiting on ${trunc(waiting.label, Math.max(12, cols - 48))}${waitingDots}${R}`
+                : s.status === "running"
+                  ? ` ${G}live${R}`
+                  : "";
+            lines.push("", ` ${B}${C}Activity snippet${R}${activityLive} ${D}full log in Timeline${R}`);
             for (const event of recentActivity.slice(-4)) {
               const time = String(event.t ?? "").slice(11, 19);
               lines.push(`  ${D}${time}${R} ${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}`);
@@ -3600,7 +3636,9 @@ export async function runTui(): Promise<void> {
               eventLines[line] = background(fit(eventLines[line]!, cols), ZEBRA_BG);
             }
           }
-          const visibleCount = Math.max(1, bodyH - 4);
+          const timeWait =
+            waiting && timelineFollow && waiting.kind !== "input" && waiting.kind !== "paused" ? waitingLine() : null;
+          const visibleCount = Math.max(1, bodyH - 4 - (timeWait ? 1 : 0));
           const start = starts[eventSel] ?? 0;
           const end = starts[eventSel + 1] ?? eventLines.length;
           if (end - start <= visibleCount) {
@@ -3618,6 +3656,7 @@ export async function runTui(): Promise<void> {
           }
           eventScroll = Math.max(0, Math.min(eventScroll, Math.max(0, eventLines.length - visibleCount)));
           lines.push(...eventLines.slice(eventScroll, eventScroll + visibleCount));
+          if (timeWait) lines.push(timeWait);
           body = clipBody(lines);
         } else if (runSection === "thinking") {
           // Human-readable output: assistant text interleaved with edit/write
@@ -3657,10 +3696,15 @@ export async function runTui(): Promise<void> {
             thinkingLines.push("");
           }
           if (thinkingLines.length === 0) thinkingLines.push(` ${D}No assistant text recorded yet.${R}`);
-          const viewport = bodyH - lines.length;
+          // In follow mode the eye is on the bottom line, so pin the wait
+          // there too — the header copy covers the top of the viewport.
+          const thinkWait =
+            waiting && thinkingFollow && waiting.kind !== "input" && waiting.kind !== "paused" ? waitingLine() : null;
+          const viewport = bodyH - lines.length - (thinkWait ? 1 : 0);
           if (thinkingFollow) thinkingScroll = Math.max(0, thinkingLines.length - viewport);
           thinkingScroll = Math.max(0, Math.min(thinkingScroll, Math.max(0, thinkingLines.length - viewport)));
           lines.push(...thinkingLines.slice(thinkingScroll, thinkingScroll + viewport));
+          if (thinkWait) lines.push(thinkWait);
           body = clipBody(lines);
         } else if (runSection === "changes") {
           const changes = currentChanges(detail);
