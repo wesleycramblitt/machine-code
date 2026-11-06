@@ -580,13 +580,11 @@ export class RunStateStore {
       (focus.has(entry.path) ? 200 : 0) +
       (nextText.includes(entry.path) || nextText.includes(basename(entry.path)) ? 500 : 0) +
       Math.min(200, entry.lastTurn);
-    const currentTurn = this.currentTurn();
+    // Changed, preloaded, and focused files always survive: the model is
+    // acting on them. Everything else competes on score and the file/byte
+    // budget below — there is no recency cutoff, so early reads on long runs
+    // stay pinned instead of forcing re-reads.
     const entries = [...this.workingFiles.values()]
-      .filter((entry) => {
-        if (entry.changed || entry.preloaded || focus.has(entry.path)) return true;
-        if (nextText.includes(entry.path) || nextText.includes(basename(entry.path))) return true;
-        return currentTurn - entry.lastTurn <= 8;
-      })
       .sort((a, b) => score(b) - score(a) || b.lastTurn - a.lastTurn || a.path.localeCompare(b.path))
       .slice(0, maxFiles);
 

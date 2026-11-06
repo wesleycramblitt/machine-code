@@ -739,3 +739,33 @@ test("git status detects command-side mutations without duplicating edits", () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("working context keeps early tool reads on long runs (no recency eviction)", () => {
+  const dir = tempDir();
+  const root = tempDir("mc-state-noreevict-");
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "early.ts"), "export const early = 1;\nexport const late = 2;\n", "utf8");
+    const store = new RunStateStore({ runDir: dir, runId: "r-noreevict", goal: "goal", repoRoot: root });
+    store.ingestTurn(
+      [
+        system,
+        user,
+        assistant({ id: "r1", name: "read", args: { path: "src/early.ts", offset: 1, limit: 2 } }),
+        result({ id: "r1", name: "read", text: "1: export const early = 1;\n2: export const late = 2;" }),
+      ],
+      0,
+    );
+    let working = store.renderWorkingContext();
+    assert.match(working, /early\.ts/);
+    // Advance the clock far past the old 8-turn eviction window.
+    store.note("next", "keep surveying", [], 20);
+    working = store.renderWorkingContext();
+    assert.match(working, /early\.ts/, "early paged read stays pinned instead of forcing a re-read");
+    assert.match(working, /export const early = 1;/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});

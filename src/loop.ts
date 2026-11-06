@@ -30,7 +30,7 @@ import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
-import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
+import { buildRepoMap, mapBytes, renderMapIndex, renderRepoMap, symbolCount } from "./map/deterministic.js";
 import { ensureSemanticMap } from "./map/ensure.js";
 import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
@@ -476,11 +476,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   });
   const wantMap = input.skipMap !== true;
   const wantSemantic = input.skipSemantic !== true;
+  // Survey agents range over the whole repo, so they get the per-file symbol
+  // map up front: stable content the provider cache absorbs once, instead of
+  // dozens of locate-me searches. Packet/diff agents keep the summary.
+  const surveyAgents = new Set(["planner", "general", "sudo"]);
+  const wantSymbols = wantMap && surveyAgents.has(input.agent.name);
   let mapIndex = "";
   let semanticMap: SemanticMap | null = null;
   const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"], semantic: SemanticMap | null): string =>
     [
       wantMap ? renderMapIndex(map) : "",
+      wantSymbols ? renderRepoMap(map) : "",
       wantSemantic ? renderSemanticIndex(semantic, 3_072, input.request) : "",
     ].filter(Boolean).join("\n");
   if (wantMap || wantSemantic) try {
