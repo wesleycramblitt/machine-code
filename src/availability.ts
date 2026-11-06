@@ -204,6 +204,12 @@ export function resetModelTier(state: AvailabilityState, key: string): void {
   if (h) h.tier = 0;
 }
 
+/** Reset a provider's tier on success: a healthy call clears the escalation. */
+export function resetProviderTier(state: AvailabilityState, providerId: string): void {
+  const h = state.providers[providerId];
+  if (h) h.tier = 0;
+}
+
 /** Classify a provider error. */
 export function classifyError(error: unknown, status?: number): ClassifiedError {
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();

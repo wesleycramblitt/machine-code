@@ -349,6 +349,28 @@ test("policy.toml parses axis floors and weights, and rejects out-of-range value
   }
 });
 
+test("paid tier prefers paid rows; free rows are the fallback", () => {
+  const paid = row("p/paid", { pricing: { input: 1, output: 4, cacheRead: 0, cacheWrite: 0 } });
+  const free = row("p/free", {
+    free: true,
+    pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  });
+  const policy = { ...basePolicy, minCapability: 0, minFit: 0 };
+  const result = pickOne([free, paid], policy);
+  assert.ok(!("error" in result));
+  assert.equal(result.selected.key, "p/paid", "paid wins when both are eligible");
+  assert.equal(result.tier, "paid");
+  assert.ok(result.candidates.some((c) => c.key === "p/free"), "free stays eligible as fallback");
+
+  const freeOnly = pickOne([free], policy);
+  assert.ok(!("error" in freeOnly));
+  assert.equal(freeOnly.selected.key, "p/free", "free is still the fallback when no paid row is eligible");
+
+  const freeTier = pickOne([free, paid], policy, { tier: "free" });
+  assert.ok(!("error" in freeTier));
+  assert.equal(freeTier.selected.key, "p/free");
+});
+
 test("free tier admits only zero-price rows; paid admits both", () => {
   const paid = row("p/paid", { pricing: { input: 1, output: 4, cacheRead: 0, cacheWrite: 0 } });
   const free = row("p/free", {
@@ -357,8 +379,8 @@ test("free tier admits only zero-price rows; paid admits both", () => {
   });
   const paidPick = pickOne([paid, free]);
   assert.ok(!("error" in paidPick));
-  // Paid mode may choose a free model; it is simply the cheaper eligible row.
-  assert.equal(paidPick.selected.key, "p/free");
+  // Paid tier admits free rows but prefers paid; free is the fallback.
+  assert.equal(paidPick.selected.key, "p/paid");
   assert.equal(paidPick.tier, "paid");
 
   const onlyFree = pickOne([paid, free], basePolicy, { tier: "free" });

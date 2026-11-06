@@ -372,12 +372,20 @@ export function pick(
   }
 
   // Ascending score; exact ties go to the lexicographically smaller key.
-  // Ollama is the final fallback: local models do not hide a cloud free model
-  // that is still eligible. Within each group, the normal score order applies.
+  // Paid tier prefers paid rows: zero-price rows are a fallback when no paid
+  // row is eligible, not the default pick. Ollama is the final fallback: local
+  // models do not hide a cloud model that is still eligible. Within each
+  // group, the normal score order applies.
+  const paidFirst = selectionTier(input) === "paid";
   candidates.sort((a, b) => {
     const aLocal = a.row.providerID === "ollama" ? 1 : 0;
     const bLocal = b.row.providerID === "ollama" ? 1 : 0;
     if (aLocal !== bLocal) return aLocal - bLocal;
+    if (paidFirst) {
+      const aFree = isFreeRow(a.row) ? 1 : 0;
+      const bFree = isFreeRow(b.row) ? 1 : 0;
+      if (aFree !== bFree) return aFree - bFree;
+    }
     if (a.scored.score !== b.scored.score) return a.scored.score - b.scored.score;
     return a.row.key < b.row.key ? -1 : 1;
   });

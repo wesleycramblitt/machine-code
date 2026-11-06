@@ -15,7 +15,7 @@ import { createAssistantMessageEventStream, type Api, type AssistantMessage, typ
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
 import { estimateTokens, pick, providerMultiplier, isFreeRow, relaxPinForFailure } from "./select.js";
-import { applyClassification, classifyError, clearFreeModelCooldowns, clearFreeProviderCooldowns, loadAvailability, saveAvailability } from "./availability.js";
+import { applyClassification, classifyError, clearFreeModelCooldowns, clearFreeProviderCooldowns, loadAvailability, resetModelTier, resetProviderTier, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
@@ -396,6 +396,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
     const state = loadAvailability(input.home);
     applyClassification(state, provider, modelKey, classified);
+    saveAvailability(input.home, state);
+    Object.assign(availability, state);
+  };
+
+  /**
+   * A completed call proves the provider and model are healthy: clear any
+   * escalated cooldown tier so one transient failure cannot ratchet a
+   * provider toward day-long bans forever. Mirrors applyErrorState's
+   * free/paid split: free health stays in memory, paid health persists.
+   */
+  const resetSuccessState = (provider: string, modelKey: string): void => {
+    if (isFreeKey(modelKey)) {
+      resetModelTier(availability, modelKey);
+      return;
+    }
+    const state = loadAvailability(input.home);
+    resetModelTier(state, modelKey);
+    resetProviderTier(state, provider);
     saveAvailability(input.home, state);
     Object.assign(availability, state);
   };
@@ -1600,6 +1618,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
                   needsAuth: classified.needsAuth,
                 });
                 // retry decision is made after the run completes
+              } catch {
+                // availability update failure must not break the run
+              }
+            } else if (message.stopReason !== "aborted") {
+              // A completed call proves the route is healthy: drop any
+              // escalated tier so transient blips do not ratchet a provider
+              // toward day-long bans.
+              try {
+                const provider = message.provider || currentRow?.providerID || "";
+                const key = currentRow?.key ?? (provider ? `${provider}/${message.model}` : "");
+                if (provider && key) resetSuccessState(provider, key);
               } catch {
                 // availability update failure must not break the run
               }

@@ -14,6 +14,8 @@ import {
   isProviderDisabled,
   clearModelCooldown,
   clearFreeProviderCooldowns,
+  resetModelTier,
+  resetProviderTier,
   saveAvailability,
 } from "../dist/availability.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -156,4 +158,17 @@ test("availability state round-trips through disk", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("success resets escalated model and provider tiers", () => {
+  const state = empty();
+  state.models["p/m"] = { cooldownUntil: Date.now() + 60_000, tier: 4 };
+  state.providers.p = { cooldownUntil: Date.now() + 3_600_000, tier: 5 };
+  resetModelTier(state, "p/m");
+  resetProviderTier(state, "p");
+  assert.equal(state.models["p/m"].tier, 0);
+  assert.equal(state.providers.p.tier, 0);
+  // Missing entries are a no-op, not a crash.
+  resetModelTier(state, "q/nonexistent");
+  resetProviderTier(state, "q");
 });

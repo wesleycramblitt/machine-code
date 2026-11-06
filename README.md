@@ -103,8 +103,9 @@ cost_multiplier = 0.5
 funded = true
 ```
 
-`paid` considers free and paid rows (a free model can win); paid rows from
-unfunded providers are excluded. `free` only admits zero-price rows.
+`paid` considers paid rows first and free rows as fallback (a free model wins
+only when no paid row is eligible); paid rows from unfunded providers are
+excluded. `free` only admits zero-price rows.
 The New Run composer starts from this tier; press `t` there to override it for
 one run. `--tier` overrides it from the CLI.
 
@@ -142,7 +143,9 @@ only the model that answered unless the error explicitly says all free models
 or offers are affected. Free-model and free-provider cooldowns are per run and are never written
 to disk, so each free run loops from best fit to worst across every listed free
 model instead of inheriting the previous run's 30m+ cooldowns. Paid cooldowns
-persist with the 1m→5m→30m→2h→12h→1d→7d→30d tier schedule. Ollama is the
+persist with the 1m→5m→30m→2h→12h→1d→7d→30d tier schedule. A completed call
+resets the serving provider and model tiers, so transient blips cannot ratchet
+a provider toward day-long bans. Ollama is the
 final selection fallback: another eligible cloud model always wins first.
 
 The TUI palette is machine-configurable with hex colors. Header and footer share

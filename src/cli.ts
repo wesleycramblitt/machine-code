@@ -1621,10 +1621,13 @@ async function cmdProvider(argv: string[]): Promise<number> {
     avail.enableProvider(state, name);
     avail.saveAvailability(l.home, state);
     process.stdout.write(`provider ${name} enabled; cooldowns cleared\n`);
-  } else if (sub === "cooldown" && argv[2] === "clear") {
-    avail.clearProviderCooldown(state, name);
+  } else if (sub === "cooldown" && (argv[2] === "clear" || argv[1] === "clear")) {
+    // Accept both `cooldown clear <name>` (documented) and `cooldown <name> clear`.
+    const target = argv[1] === "clear" ? argv[2] : name;
+    if (!target) fail("usage: machine_code provider disable|enable|cooldown <name> [minutes]|cooldown clear <name>");
+    avail.clearProviderCooldown(state, target);
     avail.saveAvailability(l.home, state);
-    process.stdout.write(`provider ${name} cooldown cleared\n`);
+    process.stdout.write(`provider ${target} cooldown cleared\n`);
   } else if (sub === "cooldown") {
     const minutes = argv[2] === undefined ? 60 : Number(argv[2]);
     if (!Number.isFinite(minutes) || minutes <= 0) fail("provider cooldown needs a positive number of minutes");
@@ -1769,6 +1772,7 @@ async function cmdModel(argv: string[]): Promise<number> {
   const avail = await import("./availability.js");
   const state = avail.loadAvailability(l.home);
   avail.clearModelCooldown(state, id);
+  avail.resetModelTier(state, id);
   avail.saveAvailability(l.home, state);
   process.stdout.write(`model ${id} cooldown cleared\n`);
   return 0;

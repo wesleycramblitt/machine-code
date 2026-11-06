@@ -274,6 +274,11 @@ function modelReasonLabel(reason: string | undefined): string {
   }
 }
 
+function modelPriceText(row: CatalogueRow): string {
+  if (row.free || (row.pricing.input === 0 && row.pricing.output === 0)) return "";
+  return ` ${D}$${row.pricing.input}/$${row.pricing.output}${R}`;
+}
+
 function modelReasonText(entry: ModelPickerEntry, availability: AvailabilityState): string {
   if (entry.eligible) return "";
   if (entry.reason === "model-cooling" || entry.reason === "provider-cooling") {
@@ -2688,7 +2693,7 @@ export async function runTui(): Promise<void> {
               ? `${Y}⏸${R}`
               : `${RED}✕${R}`;
           const reason = entry.eligible ? "" : ` ${D}${modelReasonText(entry, availability)}${R}`;
-          const line = ` ${chosen ? `${C}▸` : " "} ${status} ${C}${row.key}${R} ${D}fit ${entry.fit.toFixed(2)}${R}${free}${reason}`;
+          const line = ` ${chosen ? `${C}▸` : " "} ${status} ${C}${row.key}${R} ${D}fit ${entry.fit.toFixed(2)}${R}${modelPriceText(row)}${free}${reason}`;
           entries.push(selected(line, modelPickSel === i + 1));
         }
         const eligibleCount = list.filter((entry) => entry.eligible).length;
