@@ -1137,7 +1137,7 @@ export async function runTui(): Promise<void> {
 
   newrun = defaultNewRun();
 
-  /** Roles that isolate in a worktree and expose the verify submode. */
+  /** Roles that isolate in a worktree and expose the verify switch. */
   const agentIsolates = (agent: string): boolean => agent === "build" || agent === "sudo";
 
   const resetNewRunUi = () => {
@@ -1184,6 +1184,7 @@ export async function runTui(): Promise<void> {
     // fresh build isolates while sudo starts on the main tree.
     newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
     newrun.worktree = newrun.agent !== "sudo";
+    enforceLockedSkills(true);
     // A task-attached run starts with a concrete objective. The prompt stays
     // editable, but the human no longer has to type one.
     if (knownIssue) newrun.prompt = issuePrompt(knownIssue, newrun.agent);
@@ -1246,6 +1247,7 @@ export async function runTui(): Promise<void> {
     // sudo starts on the main tree until its worktree toggle is flipped.
     newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
     newrun.worktree = newrun.agent !== "sudo";
+    enforceLockedSkills(true);
     // Keep an auto-derived objective in sync with the agent verb. A prompt the
     // human edited stays untouched.
     if (issue && (!newrun.prompt.trim() || newrun.prompt === previousPrompt)) {
@@ -1253,10 +1255,32 @@ export async function runTui(): Promise<void> {
     }
   };
 
-  /** Build-only verification mode, shown as submode[s] beside the agent row. */
-  const cycleSubmode = () => {
+  /** Build/sudo verification mode, shown as verify[v] beside the agent row. */
+  const cycleVerify = () => {
     const values: NewRunState["verification"][] = ["direct", "verified"];
     newrun.verification = values[(values.indexOf(newrun.verification) + 1) % values.length]!;
+    enforceLockedSkills(true);
+  };
+
+  /**
+   * Skills the current mode requires. verified-testing carries the TDD
+   * discipline that Verify promises; excluding it would silently downgrade
+   * the mode, so the composer refuses and submit re-admits it.
+   */
+  const lockedSkills = (): string[] =>
+    newrun.verification === "verified" ? ["verified-testing"] : [];
+
+  /** Re-admit mode-locked skills excluded under a previous mode. */
+  const enforceLockedSkills = (announce: boolean): void => {
+    let fixed = false;
+    for (const name of lockedSkills()) {
+      if (newRunSkillModes.get(name) === "exclude") {
+        newRunSkillModes.delete(name);
+        fixed = true;
+      }
+      if (newRunContextExcluded.delete(`skill:${name}`)) fixed = true;
+    }
+    if (fixed && announce) notify("verified-testing is required by Verify; switch to Direct to exclude it");
   };
 
   const cycleAmbiguity = () => {
@@ -1509,6 +1533,8 @@ export async function runTui(): Promise<void> {
 
   const submitNewRun = () => {
     newRunColon = false;
+    // Authoritative guard: locked skills survive any path that excluded them.
+    enforceLockedSkills(false);
     const args = buildNewRunArgs();
     if (!args) return;
     if (launch(args, newRunRepo)) {
@@ -2246,26 +2272,40 @@ export async function runTui(): Promise<void> {
       }
       // Three modes per skill: include (description + body, marked ✓ body),
       // on-demand (description only, pulled with the skill tool), exclude (✕).
-      // Space cycles include → on-demand → exclude. Active modes sort first.
+      // Space cycles include → on-demand → exclude. Mode-locked skills show
+      // · required and cannot cycle to exclude. Tags sit right after the name
+      // so row truncation cannot hide them. Active modes sort first.
+      const locked = new Set(lockedSkills());
+      const tagLocked = (text: string, tags: string[]): string => {
+        if (tags.length === 0) return text;
+        const insert = ` · ${tags.join(" · ")}`;
+        const sep = text.indexOf(" · ");
+        return sep < 0 ? text + insert : text.slice(0, sep) + insert + text.slice(sep);
+      };
       newRunSkillShown.clear();
       for (const item of skillItems) {
         const name = item.key.slice("skill:".length);
         const mode = skillModeOf(name);
         newRunSkillShown.set(name, mode);
+        const tags: string[] = [];
         if (mode === "include") {
           item.chars += bodyChars.get(name) ?? 0;
-          item.text += " · body";
+          tags.push("body");
         } else if (mode === "on-demand") {
-          item.text += " · on-demand";
+          tags.push("on-demand");
         }
+        if (locked.has(name)) tags.push("required");
+        item.text = tagLocked(item.text, tags);
         bodyChars.delete(name);
       }
       for (const [name, chars] of bodyChars) {
         const mode = skillModeOf(name);
         newRunSkillShown.set(name, mode);
         if (mode === "exclude") continue;
+        const tags: string[] = [mode === "include" ? "body" : "on-demand"];
+        if (locked.has(name)) tags.push("required");
         skillItems.push({
-          text: mode === "include" ? `${name} · body` : `${name} · on-demand`,
+          text: tagLocked(name, tags),
           chars: mode === "include" ? chars : 0,
           exists: true,
           key: `skill:${name}`,
@@ -2333,7 +2373,7 @@ export async function runTui(): Promise<void> {
         return newrun.floors;
       })();
       const minimumsText = trunc(
-        `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}${R}`,
+        `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}  ${command("t", "Tier", displayTier, tierTone(newrun.tier))}${R}`,
         Math.max(10, cols - 1),
       );
       const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
@@ -2597,23 +2637,27 @@ export async function runTui(): Promise<void> {
             command("p", "Prompt", undefined, M),
             newrun.prompt.trim() || newrun.issue ? commandBadge("Start", ":!", START_BG, WHITE) : "",
           ]);
-      const promptControls = newRunInsert
-        ? promptActions
+      const agentControls = newRunInsert
+        ? ""
         : joinCommands([
             command("a", "Agent", displayAgent, agentTone(newrun.agent)),
             ...(agentIsolates(newrun.agent)
               ? [
-                  command("s", "Submode", newrun.verification === "verified" ? "Verify" : "Direct", C),
+                  command("v", "Verify", newrun.verification === "verified" ? "Verified" : "Direct", C),
                   command("w", "Worktree", newrun.worktree ? "on" : "off", newrun.worktree ? G : D),
                 ]
               : []),
             command("g", "Ambiguity", newrun.ambiguity, M),
-            command("t", "Tier", displayTier, tierTone(newrun.tier)),
+          ]);
+      const runControls = newRunInsert
+        ? promptActions
+        : joinCommands([
             promptActions,
           ]);
-      const promptHint = promptControls
-        ? ` ${" ".repeat(Math.max(0, boxWidth - visible(promptControls)))}${promptControls}`
-        : "";
+      const promptHint =
+        !agentControls && !runControls
+          ? ""
+          : ` ${agentControls}${" ".repeat(Math.max(1, boxWidth - visible(agentControls) - visible(runControls) - 1))}${runControls}`;
       const availableForPrompt = Math.max(3, bodyH - summary.length - (promptHint ? 7 : 6));
       const promptHeight = Math.max(3, Math.min(16, availableForPrompt, Math.floor(bodyH * 0.5)));
       const shownPrompt = promptLines.slice(-promptHeight);
@@ -2724,9 +2768,9 @@ export async function runTui(): Promise<void> {
           ],
           filler: panelLine(""),
         };
-        // Agent, submode, ambiguity, tier, issue, and prompt controls live
-        // beside the prompt or in the Issues panel; the bottom footer has no
-        // command row.
+        // Agent, verify, worktree, and ambiguity controls sit left-aligned
+        // beside the prompt; Prompt/Start stay right-aligned. Tier moved to
+        // the top fit line. The bottom footer has no command row.
         actions = " ";
         secondaryStyled = true;
         secondary = toast ? `${D}· ${Y}${toast}${R}` : "";
@@ -3906,6 +3950,7 @@ export async function runTui(): Promise<void> {
       newrun.agent = issue.kind === "feature" ? "build" : "planner";
       newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
       newrun.worktree = newrun.agent !== "sudo";
+      enforceLockedSkills(true);
     }
     if (!newrun.prompt.trim() || newrun.prompt === previousPrompt) {
       newrun.prompt = issuePrompt(issue, newrun.agent);
@@ -4343,6 +4388,11 @@ export async function runTui(): Promise<void> {
           const name = key.slice("skill:".length);
           const current = newRunSkillShown.get(name) ?? "on-demand";
           const next: SkillMode = current === "include" ? "on-demand" : current === "on-demand" ? "exclude" : "include";
+          if (next === "exclude" && lockedSkills().includes(name)) {
+            notify("verified-testing is required by Verify; switch to Direct to exclude it");
+            draw();
+            return;
+          }
           newRunSkillModes.set(name, next);
           if (next === "exclude") newRunContextExcluded.add(key);
           else newRunContextExcluded.delete(key);
@@ -4374,9 +4424,9 @@ export async function runTui(): Promise<void> {
       }
       if (data === "a") { cycleAgent(); draw(); return; }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
-      if (data === "s") {
-        if (!agentIsolates(newrun.agent)) { notify("submode is build/sudo-only"); draw(); return; }
-        cycleSubmode(); draw(); return;
+      if (data === "v") {
+        if (!agentIsolates(newrun.agent)) { notify("verify is build/sudo-only"); draw(); return; }
+        cycleVerify(); draw(); return;
       }
       if (data === "w") {
         if (!agentIsolates(newrun.agent)) { notify("worktree is build/sudo-only"); draw(); return; }
