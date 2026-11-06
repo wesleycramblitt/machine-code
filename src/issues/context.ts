@@ -72,7 +72,13 @@ export function issueContextErrors(input: IssueContextInput): string[] {
   }
   if (input.kind === "task") {
     if (!sectionText(sections, /^deliverable$/i)) errors.push(missing("Deliverable"));
-    if (parseAcceptance(input.body).length === 0) errors.push("missing acceptance criteria");
+    if (parseAcceptance(input.body).length === 0) {
+      errors.push(
+        sectionText(sections, /^acceptance/i)
+          ? "acceptance criteria section has no bullet or numbered items"
+          : "missing acceptance criteria",
+      );
+    }
   }
   return errors;
 }

@@ -44,6 +44,15 @@ test("three identical tool errors stop a stuck loop", () => {
   assert.equal(third.stale, 3);
 });
 
+test("parallel errors in one model turn are one strike", () => {
+  const tracker = new EvidenceTracker(20, 3);
+  assert.equal(tracker.observeError("error:issue:same", 5).loop, false);
+  assert.equal(tracker.observeError("error:issue:same", 5).loop, false);
+  assert.equal(tracker.observeError("error:issue:same", 5).loop, false);
+  assert.equal(tracker.observeError("error:issue:same", 6).loop, false);
+  assert.equal(tracker.observeError("error:issue:same", 7).loop, true);
+});
+
 test("a different error or a success resets the error streak", () => {
   const tracker = new EvidenceTracker(20, 3);
   tracker.observeError("error:issue:a");

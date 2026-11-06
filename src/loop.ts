@@ -1136,7 +1136,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const resultHash = createHash("sha1").update(resultText).digest("hex").slice(0, 16);
           if (result.isError) {
             const errorKey = `error:${tool.name}:${resultHash}`;
-            const check = evidence.observeError(errorKey);
+            const check = evidence.observeError(errorKey, memory.currentTurn());
             if (check.loop) return killLoop(errorKey, check.stale);
           } else {
             const isProgress =

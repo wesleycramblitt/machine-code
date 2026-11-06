@@ -17,6 +17,7 @@ export class EvidenceTracker {
   private staleCount = 0;
   private errorKey: string | undefined;
   private errorCount = 0;
+  private errorTurn: number | undefined;
 
   constructor(
     private readonly limit = 8,
@@ -30,6 +31,7 @@ export class EvidenceTracker {
   observe(key: string | null | undefined, progress = false): ProgressCheck {
     this.errorKey = undefined;
     this.errorCount = 0;
+    this.errorTurn = undefined;
     if (progress) {
       this.staleCount = 0;
       return { loop: false, stale: 0, novel: true };
@@ -45,13 +47,21 @@ export class EvidenceTracker {
     return { loop: false, stale: 0, novel: true };
   }
 
-  /** A repeated identical tool error is a stuck loop, not new evidence. */
-  observeError(key: string | null | undefined): ProgressCheck {
+  /**
+   * A repeated identical tool error is a stuck loop, not new evidence. Count
+   * at most one strike per model turn: parallel calls in one assistant turn
+   * can all fail for the same reason, and that is one bad decision, not a
+   * loop. Without a turn, every observation counts (unit-test mode).
+   */
+  observeError(key: string | null | undefined, turn?: number): ProgressCheck {
     if (!key) return { loop: false, stale: this.errorCount, novel: false };
-    if (this.errorKey === key) this.errorCount += 1;
-    else {
+    if (this.errorKey !== key) {
       this.errorKey = key;
       this.errorCount = 1;
+      this.errorTurn = turn;
+    } else if (turn === undefined || this.errorTurn === undefined || turn > this.errorTurn) {
+      this.errorCount += 1;
+      this.errorTurn = turn;
     }
     return { loop: this.errorCount >= this.errorLimit, stale: this.errorCount, novel: false };
   }

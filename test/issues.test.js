@@ -185,6 +185,10 @@ test("marker and acceptance parsers", () => {
     parseAcceptance("**Acceptance criteria:**\n- one\n\n**Out of scope:**\n- two"),
     ["one"],
   );
+  assert.deepEqual(
+    parseAcceptance("## Acceptance criteria\n1. one\n2) two\n- [ ] three\n- [x] four"),
+    ["one", "two", "three", "four"],
+  );
 });
 
 /* ------------------------------------------------- reserved invariants */

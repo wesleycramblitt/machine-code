@@ -196,8 +196,12 @@ export function parseAcceptance(body: string): string[] {
       }
     }
     if (!inSection) continue;
-    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-    if (bullet && bullet[1]) out.push(bullet[1].trim());
+    // Planners use bullets and numbered lists. Accept both, and strip a
+    // markdown checkbox prefix so acceptance text stays clean.
+    const item = line.match(/^\s*(?:[-*]|\d+[.)])\s+(.*)$/);
+    if (!item || !item[1]) continue;
+    const text = item[1].replace(/^\[[ xX]\]\s*/, "").trim();
+    if (text) out.push(text);
   }
   return out;
 }
