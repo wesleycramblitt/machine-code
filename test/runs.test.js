@@ -355,3 +355,41 @@ test("a Task lists every run associated with it", () => {
     ["first", "second"],
   );
 });
+
+test("reserved anchors blocking open work stay visible without runs", () => {
+  const epic = issue(10, "epic", "Epic");
+  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
+  const task0 = issue(21, "task", "Task 0", {
+    parent: feature.ref,
+    reserved: { for: feature.ref, kind: "feature-pr" },
+    labels: ["mc:reserved"],
+  });
+  const task = issue(31, "task", "Task", { parent: feature.ref, blockedBy: [task0.ref] });
+  const index = buildRunIndex({
+    runs: [run({ id: "x", agent: "general", mode: "", status: "completed" })],
+    issuesByRepo: new Map([[repoA, [epic, feature, task, task0]]]),
+  });
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
+    [10, 20, 21, 31],
+  );
+});
+
+test("idle reserved anchors stay hidden", () => {
+  const epic = issue(10, "epic", "Epic");
+  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
+  const task0 = issue(21, "task", "Task 0", {
+    parent: feature.ref,
+    reserved: { for: feature.ref, kind: "feature-pr" },
+    labels: ["mc:reserved"],
+  });
+  const task = issue(31, "task", "Task", { parent: feature.ref });
+  const index = buildRunIndex({
+    runs: [run({ id: "x", agent: "general", mode: "", status: "completed" })],
+    issuesByRepo: new Map([[repoA, [epic, feature, task, task0]]]),
+  });
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
+    [10, 20, 31],
+  );
+});

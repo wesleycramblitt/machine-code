@@ -340,6 +340,13 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       );
     const ownMatch = (issue: Issue): boolean => text.length > 0 && issueText(issue).toLowerCase().includes(text);
     const issueRuns = (issue: Issue): RunSummary[] => byIssue.get(keyOf(issue.ref)) ?? [];
+    // An anchor gating open work stays visible: a hidden blocker makes a
+    // stalled plan unreadable in exactly the situation that needs debugging.
+    const blockingKeys = new Set<string>();
+    for (const issue of issues) {
+      if (issue.state === "closed") continue;
+      for (const blocker of issue.blockedBy) blockingKeys.add(keyOf(blocker));
+    }
     const relevantCache = new Map<string, boolean>();
     const issueRelevant = (issue: Issue): boolean => {
       const key = keyOf(issue.ref);
@@ -347,11 +354,13 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       if (cached !== undefined) return cached;
       const hasRun = issueRuns(issue).length > 0;
       const childRelevant = childrenOf(issue).some((child) => issueRelevant(child));
-      // Reserved anchors stay hidden unless a run is attached to them or to a
-      // descendant. Every other issue is part of the repo's plan.
+      const blocksOpen = issue.state !== "closed" && blockingKeys.has(key);
+      // Reserved anchors stay hidden unless a run is attached to them, a
+      // descendant has one, or they block open work. Every other issue is
+      // part of the repo's plan.
       const relevant =
-        (!issue.reserved || hasRun || childRelevant) &&
-        (text.length === 0 || ownMatch(issue) || hasRun || childRelevant);
+        (!issue.reserved || hasRun || childRelevant || blocksOpen) &&
+        (text.length === 0 || ownMatch(issue) || hasRun || childRelevant || blocksOpen);
       relevantCache.set(key, relevant);
       return relevant;
     };
