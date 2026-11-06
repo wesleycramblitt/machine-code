@@ -304,6 +304,7 @@ const BOOLEAN_FLAGS = new Set([
   "keep-worktree",
   "keep-branch",
   "retry",
+  "resume",
   "cascade",
   "yes",
   "keep-runs",
