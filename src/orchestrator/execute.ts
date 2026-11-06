@@ -15,7 +15,7 @@ import type { MachineConfig, Policy } from "../config.js";
 import type { MutableModels } from "../models.js";
 import type { CatalogueRow } from "../catalogue/types.js";
 import type { AgentConfig } from "../agents/config.js";
-import { RunRecorder, registerProject, type RunStatus } from "../state/runs.js";
+import { RunRecorder, listRuns, readRun, registerProject, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { createWorktree, WorktreeError } from "../worktree.js";
 import { parseVerificationCommands, writePacket, type PacketAcceptance, type TaskPacket } from "../packet.js";
 import { parseArtifactReferences } from "../context/references.js";
@@ -129,6 +129,63 @@ export function packetForTask(issue: Issue, plan: PlanMarker, attempt: number): 
     constraints: [issue.body.slice(0, 8_000)],
     acceptance,
   };
+}
+
+export interface RetryWorktree {
+  path: string;
+  ownerRunId?: string;
+  branch?: string;
+  baseBranch?: string;
+  baseRef?: string;
+}
+
+/**
+ * Find the previous attempt's worktree for an orchestrator retry. A fresh
+ * createWorktree would fail with branch_checked_out because the failed
+ * attempt still holds the branch, so retries build on the existing tree.
+ * Skips missing paths and trees an active run is still using.
+ */
+export function findRetryWorktree(
+  layout: Layout,
+  taskRef: IssueRef,
+  priorRuns: readonly RunSummary[],
+  freshRunIds: readonly string[],
+  store?: {
+    readRun: (id: string) => { summary: RunSummary } | null | undefined;
+    listRuns: () => readonly RunSummary[];
+    exists: (path: string) => boolean;
+  },
+): RetryWorktree | undefined {
+  const read = store?.readRun ?? ((id: string) => readRun(layout, id));
+  const list = store?.listRuns ?? (() => listRuns(layout));
+  const exists = store?.exists ?? existsSync;
+  const candidates = priorRuns
+    .filter((run) => {
+      const assigned = run.taskIssue ?? run.issue;
+      return assigned?.repo === taskRef.repo && assigned.number === taskRef.number;
+    })
+    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
+  for (const id of [...freshRunIds.slice().reverse(), ...candidates.map((run) => run.id)]) {
+    const summary = read(id)?.summary;
+    const path = summary?.worktree;
+    if (!path || !exists(path)) continue;
+    const owner = summary.worktreeOwnerRunId ?? id;
+    const busy = list().some(
+      (run) =>
+        run.id !== id &&
+        isActiveStatus(run.status) &&
+        (run.worktree === path || run.worktreeOwnerRunId === owner),
+    );
+    if (busy) continue;
+    return {
+      path,
+      ownerRunId: owner,
+      ...(summary.branch ? { branch: summary.branch } : {}),
+      ...(summary.baseBranch ? { baseBranch: summary.baseBranch } : {}),
+      ...(summary.baseRef ? { baseRef: summary.baseRef } : {}),
+    };
+  }
+  return undefined;
 }
 
 function snapshotHash(packet: TaskPacket, plan: PlanMarker): string {

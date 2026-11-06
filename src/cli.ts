@@ -22,7 +22,7 @@ import { CAPABILITY_AXES } from "./config.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 // agents resolved inside orchestrate.ts
 import { orchestrate } from "./orchestrate.js";
-import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, type RunStatus, type RunSummary } from "./state/runs.js";
+import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "./state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "./state/question.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { isTimelineEvent } from "./tui/timeline.js";
@@ -52,7 +52,7 @@ import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
-import { executeTask } from "./orchestrator/execute.js";
+import { executeTask, findRetryWorktree } from "./orchestrator/execute.js";
 import { approveTask, cleanupTask, runTaskChecks, suggestedReviewChecks, taskRuns, taskStatus } from "./tasks/lifecycle.js";
 import { deleteIssue } from "./tasks/delete.js";
 import { deleteRun } from "./state/run-delete.js";
@@ -3623,6 +3623,13 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
     }).length;
     let retryEvidence: string | undefined;
+    // Retry on the previous attempt's worktree when it still exists: a fresh
+    // createWorktree would fail with branch_checked_out because the failed
+    // attempt still holds the branch.
+    let reuseTree = findRetryWorktree(l, task.issue.ref, runs, []);
+    if (reuseTree) {
+      process.stdout.write(`  REUSE #${task.issue.ref.number}  worktree ${reuseTree.path}\n`);
+    }
     for (let retry = 0; retry <= task.plan.retriesBeforeReplan; retry++) {
       const attempt = priorAttempts + retry + 1;
       process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempt}${retry > 0 ? ` (retry ${retry})` : ""}\n`);
@@ -3645,6 +3652,15 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
           attempt,
           requireModel: flags.get("model"),
           ...(retryEvidence ? { retryEvidence } : {}),
+          ...(reuseTree
+            ? {
+                worktree: reuseTree.path,
+                ...(reuseTree.ownerRunId ? { worktreeOwnerRunId: reuseTree.ownerRunId } : {}),
+                ...(reuseTree.branch ? { branch: reuseTree.branch } : {}),
+                ...(reuseTree.baseBranch ? { baseBranch: reuseTree.baseBranch } : {}),
+                ...(reuseTree.baseRef ? { baseRef: reuseTree.baseRef } : {}),
+              }
+            : {}),
         });
       } catch (error) {
         const stop = `task #${task.issue.ref.number} crashed: ${(error as Error).message}`;
@@ -3696,7 +3712,15 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       if (!isRetryableFailure(retryEvidence)) {
         return { stop: `task #${task.issue.ref.number} ${outcome.status}: ${retryEvidence}` };
       }
-      if (retry >= task.plan.retriesBeforeReplan) {
+      reuseTree = findRetryWorktree(
+        l,
+        task.issue.ref,
+        runs,
+        executed.filter((entry) => entry.issue === task.issue.ref.number).map((entry) => entry.runId),
+      );
+      if (reuseTree) {
+        process.stdout.write(`  REUSE #${task.issue.ref.number}  worktree ${reuseTree.path}\n`);
+      }      if (retry >= task.plan.retriesBeforeReplan) {
         return { stop: `task #${task.issue.ref.number} needs_planning after ${task.plan.retriesBeforeReplan + 1} attempt(s)` };
       }
       process.stdout.write(`  RETRY #${task.issue.ref.number}  evidence: ${retryEvidence.slice(0, 200)}\n`);

@@ -74,3 +74,72 @@ test("prose acceptance criteria use the Verification section as gates", () => {
   );
   assert.deepEqual(packet.acceptance, [{ command: "typescript:typecheck" }, { command: "typescript:test" }]);
 });
+
+test("findRetryWorktree reuses the newest existing task worktree", async () => {
+  const { findRetryWorktree } = await import("../dist/orchestrator/execute.js");
+  const taskRef = { provider: "github", repo: "o/r", number: 31 };
+  const summaries = {
+    old: {
+      id: "old", status: "failed", taskIssue: taskRef, startedAt: "2026-01-01T00:00:00.000Z",
+      worktree: "/wt/old", branch: "mc/task/31",
+    },
+    fresh: {
+      id: "fresh", status: "failed", taskIssue: taskRef, startedAt: "2026-01-02T00:00:00.000Z",
+      worktree: "/wt/fresh", branch: "mc/task/31", baseBranch: "mc/feature/3", baseRef: "abc",
+    },
+    other: {
+      id: "other", status: "failed", taskIssue: { provider: "github", repo: "o/r", number: 99 },
+      startedAt: "2026-01-03T00:00:00.000Z", worktree: "/wt/other",
+    },
+  };
+  const store = {
+    readRun: (id) => (summaries[id] ? { summary: summaries[id] } : null),
+    listRuns: () => Object.values(summaries),
+    exists: (path) => path !== "/wt/old",
+  };
+  const found = findRetryWorktree({}, taskRef, Object.values(summaries), [], store);
+  assert.deepEqual(found, {
+    path: "/wt/fresh",
+    ownerRunId: "fresh",
+    branch: "mc/task/31",
+    baseBranch: "mc/feature/3",
+    baseRef: "abc",
+  });
+});
+
+test("findRetryWorktree skips trees an active run is still using", async () => {
+  const { findRetryWorktree } = await import("../dist/orchestrator/execute.js");
+  const taskRef = { provider: "github", repo: "o/r", number: 31 };
+  const summaries = {
+    failed: {
+      id: "failed", status: "failed", taskIssue: taskRef, startedAt: "2026-01-02T00:00:00.000Z",
+      worktree: "/wt/shared",
+    },
+    live: { id: "live", status: "running", worktree: "/wt/shared" },
+  };
+  const store = {
+    readRun: (id) => (summaries[id] ? { summary: summaries[id] } : null),
+    listRuns: () => Object.values(summaries),
+    exists: () => true,
+  };
+  assert.equal(findRetryWorktree({}, taskRef, Object.values(summaries), [], store), undefined);
+});
+
+test("findRetryWorktree returns undefined when no worktree survives", async () => {
+  const { findRetryWorktree } = await import("../dist/orchestrator/execute.js");
+  const taskRef = { provider: "github", repo: "o/r", number: 31 };
+  const summaries = {
+    gone: {
+      id: "gone", status: "failed", taskIssue: taskRef, startedAt: "2026-01-01T00:00:00.000Z",
+      worktree: "/wt/gone",
+    },
+    nontree: { id: "nontree", status: "failed", taskIssue: taskRef, startedAt: "2026-01-02T00:00:00.000Z" },
+  };
+  const store = {
+    readRun: (id) => (summaries[id] ? { summary: summaries[id] } : null),
+    listRuns: () => Object.values(summaries),
+    exists: () => false,
+  };
+  assert.equal(findRetryWorktree({}, taskRef, Object.values(summaries), [], store), undefined);
+  assert.equal(findRetryWorktree({}, taskRef, [], [], store), undefined);
+});
