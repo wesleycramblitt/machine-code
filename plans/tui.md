@@ -27,3 +27,6 @@ This file details upgrades or issues to be planned for the TUI
 
 
 # Settings Page
+- [ ] Feature #160: Remove redundant overall status group on runs page
+- [ ] Feature #161: New-run transition to blank run details page
+- [ ] Feature #162: Vim keybindings and cursor for new-run prompt box

@@ -107,7 +107,7 @@ const IssueParams = Type.Object({
   body: Type.Optional(
     Type.String({
       description:
-        "Required for create/edit. Epic needs ## Context; Feature needs ## Deliverable and acceptance criteria.",
+        "Required for create/edit. Epic needs ## Context, ## Goal, ## Scope. Feature needs ## Context, ## Deliverable and acceptance criteria.",
     }),
   ),
   context_files: Type.Optional(
@@ -246,6 +246,28 @@ function parseJsonish(value: unknown, label: string): unknown {
   }
 }
 
+/** Weak models serialize absent optionals as the string "null". No optional
+ * field ever means the literal text "null", so drop null-like scalar values
+ * (and null-like entries inside string arrays) before schema validation.
+ * A successfully repaired call still must satisfy the real schema. */
+function stripNullStrings(out: Record<string, unknown>, repairs: string[]): void {
+  for (const [key, value] of Object.entries(out)) {
+    if (typeof value === "string" && (value.trim() === "null" || value.trim() === "undefined")) {
+      delete out[key];
+      repairs.push(`${key}:"null" dropped`);
+    } else if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      const kept = (value as string[]).filter(
+        (item) => item.trim() !== "null" && item.trim() !== "undefined",
+      );
+      if (kept.length !== value.length) {
+        if (kept.length > 0) out[key] = kept;
+        else delete out[key];
+        repairs.push(`${key} null entries dropped`);
+      }
+    }
+  }
+}
+
 /** Accept status=open as the tree/list filter alias for state. */
 function normalizeIssueArguments(
   args: unknown,
@@ -253,6 +275,8 @@ function normalizeIssueArguments(
 ): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const out = { ...(args as Record<string, unknown>) };
+  const repairs: string[] = [];
+  stripNullStrings(out, repairs);
   if (
     (out.action === "list" || out.action === "tree") &&
     out.state === undefined &&
@@ -260,7 +284,10 @@ function normalizeIssueArguments(
   ) {
     out.state = out.status;
     delete out.status;
-    recorder.event("tool_call_repaired", { tool: "issue", repairs: ["status->state"] });
+    repairs.push("status->state");
+  }
+  if (repairs.length > 0) {
+    recorder.event("tool_call_repaired", { tool: "issue", repairs });
   }
   return out;
 }
@@ -290,6 +317,12 @@ function normalizeIssueGraphArguments(
     if (key === "features" && value && !Array.isArray(value)) value = [value];
     if (value !== before) repairs.push(`${key} JSON string`);
     out[key] = value;
+  }
+  // Null-string scalars inside graph items mean "absent", not literal text.
+  for (const item of [out.epic, ...(Array.isArray(out.features) ? out.features : [])]) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      stripNullStrings(item as Record<string, unknown>, repairs);
+    }
   }
   if (repairs.length > 0) {
     recorder.event("tool_call_repaired", { tool: "issue_graph", repairs });
@@ -396,7 +429,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
       description:
         "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/edit write; create/edit accept blocked_by/depends_on; " +
         "remove_blocked_by unwires links on edit. " +
-        "Every created/edited Epic needs ## Context; every Feature needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
+        "Every created/edited Epic needs ## Context, ## Goal, ## Scope; every Feature needs ## Context, ## Deliverable and acceptance criteria. The tool rejects missing context. " +
         "plan writes the Feature mc:plan marker; link sets the Feature→Epic parent; ensure validates hierarchy; close follows approval. " +
         "Independent create/edit calls in one assistant turn run in parallel; send a whole layer of Features together. " +
         "Pass context_files for the exact repo files you chose after reading; the tool records them in mc:context. Nothing is inferred. " +
@@ -420,7 +453,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         "Create an Epic with Features in one call. Pass epic and features at the top level. " +
         "Use issue_graph for small plans (<=3 features); otherwise create layers with the issue tool. " +
         "blocked_by chains deliverables only. " +
-        "Every Epic body needs ## Context; every Feature needs ## Deliverable and acceptance criteria. Use context_files for exact repo files. " +
+        "Every Epic body needs ## Context, ## Goal, ## Scope; every Feature needs ## Context, ## Deliverable and acceptance criteria. Use context_files for exact repo files. " +
         "Set dry_run=true to validate without creating issues.",
     parameters: IssueGraphParams,
     prepareArguments: (args) =>
@@ -587,7 +620,10 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         if (bodyErrors.length > 0) {
           return fail(
             `graph issues need body context: ${bodyErrors.join(" | ")}. ` +
-              "Add the required sections and retry.",
+              "Add the required sections and retry. Template per feature: " +
+              "## Context (why + files/symbols) ## Deliverable (done-state) " +
+              "## Acceptance criteria (- one verifiable item per line, <=3). " +
+              "The epic additionally needs ## Goal and ## Scope.",
           );
         }
         const oversized = graph.features

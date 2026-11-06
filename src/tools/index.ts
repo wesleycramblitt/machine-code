@@ -609,24 +609,34 @@ const POSITION_MODES = new Set(["definition", "references", "info"]);
 /** Weak models serialize absent optionals as the string "null". A null mode
  * means "no mode asked for", so drop it (the default applies); null entries
  * in paths are never real targets. The pattern itself is left alone — "null"
- * is legitimate search text. */
+ * is legitimate search text. path and paths together mean the union: fold a
+ * real path into the paths list instead of failing. */
 function cleanSearchArgs(args: unknown): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const out = { ...(args as Record<string, unknown>) };
   let changed = false;
-  if (typeof out.mode === "string" && (out.mode.trim() === "null" || out.mode.trim() === "undefined")) {
+  const isNullish = (value: unknown): boolean =>
+    typeof value === "string" && (value.trim() === "null" || value.trim() === "undefined");
+  if (isNullish(out.mode)) {
     delete out.mode;
     changed = true;
   }
+  if (isNullish(out.path)) {
+    delete out.path;
+    changed = true;
+  }
   if (Array.isArray(out.paths)) {
-    const kept = out.paths.filter(
-      (item) => !(typeof item === "string" && (item.trim() === "null" || item.trim() === "undefined")),
-    );
+    const kept = out.paths.filter((item) => !isNullish(item));
     if (kept.length !== out.paths.length) {
       if (kept.length > 0) out.paths = kept;
       else delete out.paths;
       changed = true;
     }
+  }
+  if (typeof out.path === "string" && Array.isArray(out.paths) && out.paths.length > 0) {
+    out.paths = [out.path, ...out.paths.filter((item) => item !== out.path)];
+    delete out.path;
+    changed = true;
   }
   return changed ? out : args;
 }

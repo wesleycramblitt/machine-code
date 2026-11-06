@@ -319,6 +319,15 @@ function parseFlags(argv: string[]): { flags: Map<string, string>; positional: s
       }
       const name = arg.slice(2);
       if (BOOLEAN_FLAGS.has(name)) {
+        // A bare switch never consumes the next arg — unless it is an
+        // explicit boolean word, so `--auto-issue true "Do X"` does not leak
+        // "true" into the positional request.
+        const next = argv[i + 1];
+        if (next !== undefined && /^(true|false|1|0|yes|no)$/i.test(next)) {
+          flags.set(name, next);
+          i += 1;
+          continue;
+        }
         flags.set(name, "true");
         continue;
       }

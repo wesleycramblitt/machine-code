@@ -626,6 +626,16 @@ test("search prepareArguments drops null-string mode and paths", () => {
   assert.deepEqual(tool.prepareArguments({ mode: "text", pattern: "x" }), { mode: "text", pattern: "x" });
 });
 
+test("search prepareArguments drops a null path and merges path into paths", () => {
+  const tool = searchTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  assert.deepEqual(tool.prepareArguments({ mode: "outline", path: "null" }), { mode: "outline" });
+  // path and paths together mean the union, not an error.
+  assert.deepEqual(
+    tool.prepareArguments({ mode: "text", pattern: "x", path: "src", paths: ["lib"] }),
+    { mode: "text", pattern: "x", paths: ["src", "lib"] },
+  );
+});
+
 test("write prepareArguments drops a literal null path", () => {
   const tool = writeTool({ root: process.cwd(), commands: CORE_COMMANDS });
   assert.deepEqual(tool.prepareArguments({ path: "null", content: "x" }), { content: "x" });

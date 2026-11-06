@@ -124,12 +124,16 @@ export function issueRequestVerb(agent: string): IssueRequestVerb {
 export function issueRunRequest(issue: Issue, verb: IssueRequestVerb = "Implement"): string {
   const ref = `${issue.ref.repo}#${issue.ref.number}`;
   const title = issue.title.trim() || `Feature ${ref}`;
+  const deliverable = bodySection(issue.body, "Deliverable");
   const scope = bodySection(issue.body, "Scope")
     || bodySection(issue.body, "Goal")
-    || bodySection(issue.body, "Deliverable")
     || firstParagraph(issue.body);
+  // Features are defined by their Deliverable; epics by Scope/Goal.
+  const focus = issue.kind === "feature"
+    ? deliverable || scope
+    : scope || deliverable;
   const lines = [`${verb} ${ref}: ${title}`];
-  if (scope) lines.push("", `Scope: ${scope.replace(/\s+/g, " ").slice(0, 800)}`);
+  if (focus) lines.push("", `Scope: ${focus.replace(/\s+/g, " ").slice(0, 800)}`);
   if (issue.acceptance.length > 0) {
     lines.push("", "Acceptance:");
     for (const item of issue.acceptance.slice(0, 6)) lines.push(`- ${item}`);

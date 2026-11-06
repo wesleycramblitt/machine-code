@@ -4,7 +4,7 @@
  * enforcement. Uses an in-memory provider (no gh).
  *
  * Model: IssueKind = epic|feature only. No reserved issues, no Task 0, no
- * `reserved` field. ensure* stubs throw; isReserved* are always false.
+ * `reserved` field.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,17 +17,7 @@ import {
   parseApprovalMarker,
   parseAcceptance,
 } from "../dist/issues/provider.js";
-import {
-  ensureEpicReserved,
-  ensureFeatureReserved,
-  ensureReserved,
-  auditHierarchy,
-  resolvePlanningAnchor,
-  validateRunIssue,
-  isReservedFor,
-  isReserved,
-  isReservedTask,
-} from "../dist/issues/reserved.js";
+import { validateRunIssue } from "../dist/issues/work.js";
 import { issueGraphTool, issueTool } from "../dist/tools/issues.js";
 import { parseArtifactReferences } from "../dist/context/references.js";
 import { RunStateStore } from "../dist/context/state.js";
@@ -186,28 +176,6 @@ test("marker and acceptance parsers", () => {
     parseAcceptance("## Acceptance criteria\n1. one\n2) two\n- [ ] three\n- [x] four"),
     ["one", "two", "three", "four"],
   );
-});
-
-/* ------------------------------------------- reserved anchors removed */
-
-test("reserved ensure calls throw; predicates are always false", async () => {
-  const p = new FakeProvider();
-  const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-  await assert.rejects(ensureEpicReserved(p, epic.ref), /reserved anchors removed/);
-  await assert.rejects(ensureFeatureReserved(p, epic.ref), /reserved anchors removed/);
-  await assert.rejects(ensureReserved(p, epic.ref, "epic-pr"), /reserved anchors removed/);
-  assert.equal(isReservedFor(epic, epic.ref, "epic-pr"), false);
-  assert.equal(isReserved(epic), false);
-  assert.equal(isReservedTask(epic), false);
-});
-
-test("auditHierarchy is empty and the planning anchor is the issue itself", async () => {
-  const p = new FakeProvider();
-  const epic = await p.create({ title: "Epic", body: "", kind: "epic" });
-  const feature = await p.create({ title: "Feature", body: "", kind: "feature", parent: epic.ref });
-  assert.deepEqual(await auditHierarchy(p, epic.ref), { missing: [], duplicates: [], conflicts: [] });
-  assert.deepEqual(await resolvePlanningAnchor(p, epic.ref), epic.ref);
-  assert.deepEqual(await resolvePlanningAnchor(p, feature.ref), feature.ref);
 });
 
 test("validateRunIssue enforces Feature-only runs with an Epic opt-in", async () => {
@@ -370,6 +338,54 @@ test("issue tool repairs flat graph arguments and status aliases", async () => {
     const tree = tool.prepareArguments({ action: "tree", status: "open" });
     assert.equal(tree.state, "open");
     assert.equal(tree.status, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("issue tool drops null-string optionals before validation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-nulls-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const tool = issueTool(ctx);
+    // The exact weak-model shape from a stalled plan run: every absent
+    // optional serialized as the string "null". Only action + state survive.
+    const repaired = tool.prepareArguments({
+      action: "tree",
+      blocked_by: null,
+      body: "null",
+      depth: 2,
+      dry_run: "null",
+      issue: "null",
+      kind: "null",
+      limit: 100,
+      parent: "null",
+      plan_review: "null",
+      plan_role: "null",
+      plan_status: "null",
+      reason: "null",
+      result_review: "null",
+      state: "open",
+      status: "null",
+      title: "null",
+      verification: "null",
+      worktree: "null",
+    });
+    assert.deepEqual(repaired, { action: "tree", blocked_by: null, depth: 2, limit: 100, state: "open" });
+
+    // Null-like entries inside string arrays are dropped; emptied arrays go too.
+    const blocked = tool.prepareArguments({ action: "create", blocked_by: ["null"], depends_on: ["1", "null"] });
+    assert.deepEqual(blocked, { action: "create", depends_on: ["1"] });
+
+    // The same repair applies inside graph items.
+    const graphTool = issueGraphTool(ctx);
+    const graph = graphTool.prepareArguments({
+      epic: { key: "e", title: "Epic", body: issueBody("epic"), verification: "null" },
+      features: [{ key: "f1", title: "F", body: issueBody("feature"), result_review: "null" }],
+    });
+    assert.equal(graph.epic.verification, undefined);
+    assert.equal(graph.features[0].result_review, undefined);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

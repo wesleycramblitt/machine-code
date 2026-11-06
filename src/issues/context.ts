@@ -50,7 +50,9 @@ export interface IssueContextInput {
 
 /**
  * Reject an issue body that does not carry the context its children or Build
- * need. The checks are structural: they do not call a model.
+ * need. The checks are structural: they do not call a model. Epics carry the
+ * full planning context (Context, Goal, Scope); features are work units and
+ * need Context plus a Deliverable with acceptance criteria.
  */
 export function issueContextErrors(input: IssueContextInput): string[] {
   const sections = bodySections(input.body);
@@ -61,7 +63,7 @@ export function issueContextErrors(input: IssueContextInput): string[] {
       `missing ## Context (at least ${MIN_CONTEXT_CHARS} chars): why this exists, parent scope, relevant files/symbols, and constraints`,
     );
   }
-  if (input.kind === "epic" || input.kind === "feature") {
+  if (input.kind === "epic") {
     if (!sectionText(sections, /^goal$/i)) errors.push(missing("Goal"));
     if (!sectionText(sections, /^scope$/i)) errors.push(missing("Scope"));
   }
