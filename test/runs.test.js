@@ -65,7 +65,7 @@ test("gh issue groups by repository, then full issue hierarchy and untracked", (
   assert.equal(repoRow.count, 3);
 
   const issueNumbers = index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number);
-  assert.deepEqual(issueNumbers, [10, 20, 31, 5]);
+  assert.deepEqual(issueNumbers, [10, 20, 21, 31, 5]);
   const runIds = index.rows.filter((row) => row.kind === "run").map((row) => row.run.id);
   assert.deepEqual(new Set(runIds), new Set(["a", "free", "plan", "b"]));
   assert.deepEqual(index.untracked.map((entry) => entry.id), ["free", "plan"]);
@@ -192,16 +192,16 @@ test("gh issue grouping shows the plan even when no run is linked", () => {
 
   assert.deepEqual(
     index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
-    [8, 34, 36, 37],
+    [8, 34, 35, 36, 37],
   );
   const section = index.rows.find((row) => row.kind === "section" && row.label === "Git issues");
   assert.ok(section);
-  assert.equal(section.count, 4);
+  assert.equal(section.count, 5);
   assert.deepEqual(
     index.rows
       .filter((row) => row.kind === "issue")
       .map((row) => [row.issue.ref.number, row.depth]),
-    [[8, 2], [34, 3], [36, 4], [37, 4]],
+    [[8, 2], [34, 3], [35, 4], [36, 4], [37, 4]],
   );
 });
 
@@ -356,26 +356,7 @@ test("a Task lists every run associated with it", () => {
   );
 });
 
-test("reserved anchors blocking open work stay visible without runs", () => {
-  const epic = issue(10, "epic", "Epic");
-  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
-  const task0 = issue(21, "task", "Task 0", {
-    parent: feature.ref,
-    reserved: { for: feature.ref, kind: "feature-pr" },
-    labels: ["mc:reserved"],
-  });
-  const task = issue(31, "task", "Task", { parent: feature.ref, blockedBy: [task0.ref] });
-  const index = buildRunIndex({
-    runs: [run({ id: "x", agent: "general", mode: "", status: "completed" })],
-    issuesByRepo: new Map([[repoA, [epic, feature, task, task0]]]),
-  });
-  assert.deepEqual(
-    index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
-    [10, 20, 21, 31],
-  );
-});
-
-test("idle reserved anchors stay hidden", () => {
+test("planning anchors are always visible, even idle", () => {
   const epic = issue(10, "epic", "Epic");
   const feature = issue(20, "feature", "Feature", { parent: epic.ref });
   const task0 = issue(21, "task", "Task 0", {
@@ -390,6 +371,6 @@ test("idle reserved anchors stay hidden", () => {
   });
   assert.deepEqual(
     index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
-    [10, 20, 31],
+    [10, 20, 21, 31],
   );
 });
