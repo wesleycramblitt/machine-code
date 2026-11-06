@@ -405,12 +405,26 @@ const WriteParams = Type.Object({
   content: Type.String({ description: "Full file content to write." }),
 });
 
+/** A path literally named "null" is a serialization artifact, never a real
+ * target — and unlike read/edit, write would create the junk file. Drop it
+ * so schema validation names the missing path instead. */
+function cleanWritePath(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  if (typeof out.path === "string" && (out.path.trim() === "null" || out.path.trim() === "undefined")) {
+    delete out.path;
+    return out;
+  }
+  return args;
+}
+
 export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
   return {
     name: "write",
     label: "write",
     description: "Write a file inside the worktree, creating parent directories.",
     parameters: WriteParams,
+    prepareArguments: (args) => cleanWritePath(args) as Static<typeof WriteParams>,
     async execute(_id, params: Static<typeof WriteParams>) {
       try {
         const abs = resolveWithin(ctx.root, params.path);
@@ -592,6 +606,31 @@ async function exec(
 
 const POSITION_MODES = new Set(["definition", "references", "info"]);
 
+/** Weak models serialize absent optionals as the string "null". A null mode
+ * means "no mode asked for", so drop it (the default applies); null entries
+ * in paths are never real targets. The pattern itself is left alone — "null"
+ * is legitimate search text. */
+function cleanSearchArgs(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  let changed = false;
+  if (typeof out.mode === "string" && (out.mode.trim() === "null" || out.mode.trim() === "undefined")) {
+    delete out.mode;
+    changed = true;
+  }
+  if (Array.isArray(out.paths)) {
+    const kept = out.paths.filter(
+      (item) => !(typeof item === "string" && (item.trim() === "null" || item.trim() === "undefined")),
+    );
+    if (kept.length !== out.paths.length) {
+      if (kept.length > 0) out.paths = kept;
+      else delete out.paths;
+      changed = true;
+    }
+  }
+  return changed ? out : args;
+}
+
 export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
   return {
     name: "search",
@@ -605,6 +644,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
       "text accepts paths to search a specific file list. Examples: {\"mode\":\"sections\",\"path\":\"src/tui.ts\"}; {\"mode\":\"outline\",\"path\":\"src/tui.ts\"}; {\"mode\":\"graph\",\"pattern\":\"context\"}. " +
       "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
     parameters: SearchParams,
+    prepareArguments: (args) => cleanSearchArgs(args) as Static<typeof SearchParams>,
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
       let mode = params.mode ?? "text";

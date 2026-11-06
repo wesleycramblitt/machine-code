@@ -176,7 +176,7 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
           case "state":
             return ok(memory.renderMarkdown());
           default:
-            return fail(`unknown context action: ${params.action}`);
+            return fail(`unknown context action "${params.action}". Use one of: ${[...CONTEXT_ACTIONS].join(", ")}.`);
         }
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));

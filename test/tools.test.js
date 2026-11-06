@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { commandTool, editTool, readTool, searchTool } from "../dist/tools/index.js";
+import { commandTool, editTool, readTool, searchTool, writeTool } from "../dist/tools/index.js";
 import { contextTool } from "../dist/tools/context.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 import { RunStateStore } from "../dist/context/state.js";
@@ -615,4 +615,19 @@ test("edit treats an empty edits array as absent", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("search prepareArguments drops null-string mode and paths", () => {
+  const tool = searchTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  assert.deepEqual(
+    tool.prepareArguments({ mode: "null", pattern: "null", paths: ["null", "src"] }),
+    { pattern: "null", paths: ["src"] },
+  );
+  assert.deepEqual(tool.prepareArguments({ mode: "text", pattern: "x" }), { mode: "text", pattern: "x" });
+});
+
+test("write prepareArguments drops a literal null path", () => {
+  const tool = writeTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  assert.deepEqual(tool.prepareArguments({ path: "null", content: "x" }), { content: "x" });
+  assert.deepEqual(tool.prepareArguments({ path: "src/a.ts", content: "x" }), { path: "src/a.ts", content: "x" });
 });
