@@ -17,7 +17,7 @@ function normalize(value: string): string {
 }
 
 export function parseBuildOutcome(text: string): BuildOutcome | undefined {
-  const match = text.match(/(?:^|\n)\s*Outcome\s*:\s*([A-Za-z_ -]+)/i);
+  const match = text.match(/(?:^|\n)\s*Outcome\s*:\s*\*{0,2}\s*([A-Za-z_ -]+)/i);
   if (!match) return undefined;
   const value = normalize(match[1]!);
   if (value === "completed" || value === "needs_planning" || value === "blocked" || value === "failed") {
@@ -27,7 +27,7 @@ export function parseBuildOutcome(text: string): BuildOutcome | undefined {
 }
 
 export function parseReviewVerdict(text: string): ReviewVerdict | undefined {
-  const match = text.match(/(?:^|\n)\s*Verdict\s*:\s*([A-Za-z_ -]+)/i);
+  const match = text.match(/(?:^|\n)\s*Verdict\s*:\s*\*{0,2}\s*([A-Za-z_ -]+)/i);
   if (!match) return undefined;
   const value = normalize(match[1]!);
   if (value === "approved" || value === "changes_requested" || value === "needs_planning" || value === "blocked" || value === "failed") {

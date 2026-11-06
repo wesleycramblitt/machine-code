@@ -959,7 +959,15 @@ async function cmdCatalogueRefresh(snapshot = false): Promise<number> {
 
 async function cmdRun(argv: string[]): Promise<number> {
   // Bare --worktree predates the true|false value; treat it as --worktree true.
-  argv = argv.flatMap((arg) => (arg === "--worktree" ? ["--worktree", "true"] : [arg]));
+  // Only fill in the value when no explicit value follows: rewriting every
+  // `--worktree` unconditionally turned `--worktree false` into
+  // `--worktree true false`, and the leftover leaked into the request as a
+  // "true"/"false" prefix on every TUI run.
+  argv = argv.flatMap((arg, i) =>
+    arg === "--worktree" && (i + 1 >= argv.length || argv[i + 1]!.startsWith("--"))
+      ? ["--worktree", "true"]
+      : [arg],
+  );
   const { flags, positional } = parseFlags(argv);
   const modeFlag = flags.get("mode");
   const agentName = flags.get("agent");
@@ -1364,7 +1372,11 @@ async function cmdRun(argv: string[]): Promise<number> {
         ? worktreeOn
         : forceWorktree;
   let toolRoot = l.repoRoot;
-  if (mutating) {
+  // Standalone reviews are read-only, but an issue-attached review should
+  // still inspect the feature worktree instead of the main tree (whose diff
+  // is empty and loops the reviewer on cached no-output calls).
+  const reviewWithIssue = !mutating && agentNameParsed === "review" && issueRef !== undefined;
+  if (mutating || reviewWithIssue) {
     // A slugged branch (`mc/feature/<n>-<slug>`) and its bare form are the
     // same branch: match a prior run by number prefix so title edits reuse it.
     const branchPrefix = issueRef ? `mc/feature/${issueRef.number}` : undefined;
@@ -1397,7 +1409,17 @@ async function cmdRun(argv: string[]): Promise<number> {
         branch: reuse.run.branch,
       });
       process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
-    } else {
+      if (reviewWithIssue && reuse.run.baseRef) {
+        // A standalone review has no orchestrated BASE/packet context. Point
+        // it at the feature base so core:diff has a non-empty target.
+        request = `${request}\n\nBASE: ${reuse.run.baseRef} (branch ${reuse.run.branch} → ${reuse.run.baseBranch ?? "unknown base"})`;
+        recorder.event("review_base", {
+          branch: reuse.run.branch,
+          baseBranch: reuse.run.baseBranch,
+          baseRef: reuse.run.baseRef,
+        });
+      }
+    } else if (mutating) {
       try {
         const worktreeProcesses = new ProcessSupervisor({
           runId: recorder.id,

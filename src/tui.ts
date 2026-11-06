@@ -63,6 +63,7 @@ import { contextBudget } from "./context/budget.js";
 import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "./context/references.js";
 import { listReferenceEntries } from "./references/store.js";
 import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
+import { featurePanel, featureStageLite, type FeaturePanel } from "./tui/feature-status.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
@@ -872,6 +873,8 @@ export async function runTui(): Promise<void> {
   } | null = null;
   const expanded = new Set<string>();
   let changesCache: ChangesCache | null = null;
+  /** Feature merge/issue panel for the run detail; git-backed, so keep a TTL like changesCache. */
+  let featureCache: { key: string; at: number; data: FeaturePanel | null } | null = null;
 
   let newrun: NewRunState = {
     agent: "general",
@@ -1676,6 +1679,65 @@ export async function runTui(): Promise<void> {
     return data;
   };
 
+  const currentFeatureForIssue = (issue: Issue, repoRoot: string): FeaturePanel | null => {
+    const key = `issue:${refKey(issue.ref)}`;
+    if (featureCache && featureCache.key === key && Date.now() - featureCache.at < 5_000) {
+      return featureCache.data;
+    }
+    const data = featurePanel(layout(repoRoot), issue, issue.ref);
+    featureCache = { key, at: Date.now(), data };
+    return data;
+  };
+
+  const stageTone = (stage: string): string =>
+    stage === "closed" ? G
+    : stage === "blocked" ? RED
+    : stage === "needs-human-review" ? Y
+    : stage === "building" || stage === "reviewing" ? C
+    : D;
+
+  /** Feature status block for the issue screen (the feature's home). */
+  const renderFeaturePanel = (panel: FeaturePanel, cols: number): string[] => {
+    const stateTone = panel.issueState === "closed" ? G : panel.issueState === "open" ? Y : D;
+    const lines = [
+      "",
+      ` ${B}${M}Feature${R} ${W}#${panel.number}${R} ${stateTone}${panel.issueState.toUpperCase()}${R} ${D}·${R} ${stageTone(panel.stage)}${panel.stage}${R}`,
+    ];
+    const mergeBit = !panel.branchExists
+      ? `${RED}branch gone${R}`
+      : panel.merged === true
+        ? `${G}merged into ${panel.baseBranch ?? "base"}${R}`
+        : panel.merged === false
+          ? `${Y}not merged${R}` +
+            (panel.ahead !== undefined ? ` ${D}ahead ${panel.ahead} behind ${panel.behind ?? 0}${R}` : "")
+          : `${D}merge state unknown${R}`;
+    const wtBit = !panel.worktree
+      ? `${D}no worktree${R}`
+      : !panel.worktreeExists
+        ? `${D}worktree removed${R}`
+        : panel.dirtyCount > 0
+          ? `${Y}${panel.dirtyCount} uncommitted${R}`
+          : `${G}clean${R}`;
+    lines.push(
+      `  ${D}${trunc(panel.branch, Math.max(16, cols - 52))}${R}` +
+      (panel.baseBranch ? ` ${D}→ ${panel.baseBranch}${R}` : "") +
+      `  ${mergeBit}  ${D}wt ${panel.worktree ? basename(panel.worktree) : "—"}${R} ${wtBit}` +
+      (panel.commit ? `  ${D}${panel.commit}${R}` : ""),
+    );
+    const runBits: string[] = [];
+    if (panel.build) runBits.push(`${D}build${R} ${panel.build.id.slice(-8)} ${panel.build.status}`);
+    if (panel.review) {
+      runBits.push(
+        `${D}review${R} ${panel.review.id.slice(-8)} ${panel.review.status}` +
+        (panel.review.verdict
+          ? ` ${panel.review.verdict === "approved" ? G : Y}${panel.review.verdict}${R}`
+          : ""),
+      );
+    }
+    if (runBits.length > 0) lines.push(`  ${runBits.join(`  ${D}·${R}  `)}`);
+    return lines;
+  };
+
   const searchSeed = (): string => {
     if (page === "runs") return runsText;
     if (page === "models") return modelText;
@@ -1908,6 +1970,13 @@ export async function runTui(): Promise<void> {
             parts.push(detail === "compact"
               ? `${roll.runsTotal}r`
               : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`);
+            if ((detail === "full" || detail === "medium") && row.issue.kind === "feature") {
+              const fstage = featureStageLite(
+                row.issue,
+                allRuns.filter((run) => refKey(run.issue) === refKey(row.issue.ref)),
+              );
+              parts.push(`${stageTone(fstage)}${fstage}${R}`);
+            }
             if (detail === "full") {
               if (roll.prState) parts.push(`${Y}PR ${roll.prState}${R}`);
               parts.push(`${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`);
@@ -2012,6 +2081,15 @@ export async function runTui(): Promise<void> {
       if (ancestors.length) lines.push(` ${D}${ancestors.reverse().map((parent) => `#${parent.ref.number} ${parent.title}`).join("  ←  ")}${R}`);
       lines.push(` ${D}${issue.labels.join(" · ") || "no labels"}${R}`);
       if (issue.blockedBy.length) lines.push(` ${Y}blocked by ${issue.blockedBy.map((ref) => `#${ref.number}`).join(", ")}${R}`);
+      if (issue.kind === "feature") {
+        const panel = currentFeatureForIssue(issue, issueRoot);
+        if (panel) {
+          lines.push(...renderFeaturePanel(panel, cols));
+          if (panel.stage === "needs-human-review") {
+            lines.push(` ${D}press ${Y}p${D} to approve & merge (Finish #${issue.ref.number})${R}`);
+          }
+        }
+      }
       lines.push("");
       for (const line of wrapText(issue.body || "(no body)", Math.max(20, cols - 4)).slice(0, short ? 4 : 10)) lines.push(` ${W}${line}${R}`);
       if (issue.acceptance.length) {

@@ -50,7 +50,7 @@ export async function runMapCommand(
           `cache: ${built.cached ? "fresh" : "rebuilt"}`,
           `semantic: ${semanticFresh && semantic?.model !== "deterministic" ? "annotated" : "deterministic"} · ` +
             `${Object.keys(merged.modules).length} modules` +
-            `${semanticDirty.length ? ` · ${semanticDirty.length} dirty` : ""}`,
+            `${semanticDirty.length ? ` · ${semanticDirty.length} changed since map index (map cache, not git changes)` : ""}`,
           formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path))),
         ].join("\n"),
         isError: false,
@@ -101,7 +101,7 @@ export async function runStatusCommand(root: string, processes?: ProcessSupervis
     const semanticLine =
       `semantic ${semanticMode} · ` +
       `${Object.keys(merged.modules).length} modules` +
-      `${dirty.length ? ` · ${dirty.length} dirty` : ""}`;
+      `${dirty.length ? ` · ${dirty.length} changed since map index (map cache, not git changes)` : ""}`;
     const lspLine = formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path)));
     return {
       text: [gitText, "", mapLine, semanticLine, lspLine].filter(Boolean).join("\n"),
