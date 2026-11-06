@@ -211,7 +211,18 @@ interface ContextPanelItem {
   available?: boolean;
   counted?: boolean;
 }
-const NEW_RUN_CONTEXT_TABS = ["Issues", "Files", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase", "Prompt"] as const;
+const NEW_RUN_CONTEXT_TABS = [
+  "Issues",
+  "Plans",
+  "Knowledge",
+  "Skills",
+  "Scripts",
+  "Tools",
+  "Codebase",
+  "References",
+  "Agent Prompt",
+  "Files",
+] as const;
 
 type NewRunState = ForkedRunSettings;
 
@@ -2478,15 +2489,15 @@ export async function runTui(): Promise<void> {
         }));
       const sections = [
         { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
-        { label: "Files", tone: C, sectionKey: "section:files", items: fileItems },
-        { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
-        { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
-        { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
-        { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
-        { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
         { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
+        { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
+        { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
+        { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
+        { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
         { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
-        { label: "Prompt", tone: W, sectionKey: "section:prompt", items: promptItems },
+        { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
+        { label: "Agent Prompt", tone: W, sectionKey: "section:prompt", items: promptItems },
+        { label: "Files", tone: C, sectionKey: "section:files", items: fileItems },
       ];
       if (newRunContextTab >= sections.length) newRunContextTab = 0;
       const isIncludedAvailable = (item: unknown): boolean => {
