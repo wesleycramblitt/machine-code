@@ -94,7 +94,7 @@ the remaining probe work.
 - Every terminal run has a summary, a stop reason, and a typed outcome.
 - The only loop stop is evidence novelty: repeated reads of one band at the
   same file version, repeated search result sets, or repeated command output
-  kill the run after twenty stale actions or three identical tool errors.
+  kill the run after twenty stale actions or the same tool error in three turns.
 - A completed run stays completed even when a recoverable plan checkpoint fired.
 - An edit invalidates only overlapping read ranges; read coverage carries
   artifact ids for recall.

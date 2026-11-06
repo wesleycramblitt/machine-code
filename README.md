@@ -274,7 +274,7 @@ the role mode, the effective agent parameters, and the policy floors.
 The loop detector watches evidence, not call shape. A read is one 100-line band
 (or symbol/section) at a file version, a search is one scope with one result
 set, a command is its output, and a failure is its message. Twenty stale
-actions, or three identical tool errors, in a row with no edit, write, or
+actions, or the same tool error in three turns, with no edit, write, or
 mutating command kill the run with a `loop_blocked` event and a summary that
 says so. New evidence resets the stale streak; memory operations do not count
 as progress. `command describe issue` returns a direct hint that

@@ -176,7 +176,7 @@ Fix in this revision:
   a legacy alias.
 - Repairs emit `tool_call_repaired` so we can measure how often fallback
   models need help.
-- The loop now stops after three identical tool errors, not only after twenty
+- The loop stops after the same tool error in three turns, not only after twenty
   stale evidence actions.
 - The planner prompt uses `issue_graph` with top-level fields, tells the model
   to research first, and limits one graph call to three features and eight
@@ -185,3 +185,33 @@ Fix in this revision:
 Design rule: if a tool has an object or array parameter, say that explicitly
 in both the tool description and the parameter description. Do not rely on a
 weak model to infer nesting from a schema.
+
+## Observed failure 2026-11-06: false loop on a parallel batch
+
+Run `20261106-004546-su91` was a planner run on local `qwen3.8`. It read
+`plans/tui.md`, created the Epic and three Features, then sent eleven Task
+creates in one assistant turn. Every body used:
+
+```markdown
+## Acceptance criteria
+1. ...
+2. ...
+```
+
+`parseAcceptance` only accepted `-` bullets, so every Task looked like it was
+missing acceptance criteria. The new three-error guard then counted three of
+the parallel failures as three strikes and terminated the batch. The model was
+not looping; one bad validation rule rejected a valid body shape, and the guard
+mistook parallel calls for repeated turns.
+
+Fix in this revision:
+
+- `parseAcceptance` accepts bullets, numbered items, and checkbox prefixes.
+- `issueContextErrors` distinguishes a missing acceptance section from an
+  empty one whose items are not bullets or numbers.
+- The error guard counts at most one strike per model turn. Parallel calls in
+  one assistant turn are one bad decision; the run stops only after the same
+  error appears in three turns.
+
+Design rule: a batch of independent calls is one model decision. Never turn
+per-call failures inside that batch into a turn-level loop verdict.
