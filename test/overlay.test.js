@@ -73,6 +73,24 @@ test("explicit composite wins over recomputation; bad values are ignored", () =>
   assert.equal(r.scores.general, 6, "out-of-range axis ignored");
 });
 
-test("shipped model-overrides.toml starts with no overrides", () => {
-  assert.equal(loadModelOverrides().size, 0);
+test("tool_call override excludes a model from tool agents only", () => {
+  const r = row();
+  const changed = applyModelOverrides(r, { tool_call: false });
+  assert.equal(r.toolCall, false);
+  assert.equal(r.capabilities.toolCall, false);
+  assert.ok(!r.modes.includes("tools"));
+  assert.ok(changed.includes("tool_call"));
+
+  const back = row();
+  applyModelOverrides(back, { toolCall: true });
+  assert.equal(back.toolCall, true);
+  assert.ok(back.modes.includes("tools"));
+});
+
+test("shipped model-overrides.toml vetoes gemma4 tool calls", () => {
+  const overrides = loadModelOverrides();
+  const entry = overrides.get("ollama/gemma4:12b");
+  assert.ok(entry, "gemma4 override ships");
+  const raw = entry;
+  assert.equal(raw.tool_call ?? raw.toolCall, false);
 });

@@ -28,4 +28,9 @@
 # coding = true            # false removes the model from all coding selection
 # modes = ["reasoning", "tools", "vision", "structured-output"]
 
-[models]
+[models."ollama/gemma4:12b"]
+# Proven unable to emit native tool calls (run 20261106-011722-ak5v: 16
+# consecutive "Tool tool_call not found" rejections; the model wraps calls as
+# {"tool": ..., "args": ...} text instead of native blocks). Exclude it from
+# tool agents; it stays eligible for non-tool use.
+tool_call = false

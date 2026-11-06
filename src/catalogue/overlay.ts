@@ -25,6 +25,8 @@ export interface ModelOverride {
   kind?: string;
   coding?: boolean;
   modes?: string[];
+  /** Native tool-call support. TOML key may be `tool_call` or `toolCall`. */
+  toolCall?: boolean;
 }
 
 function num(value: unknown, max = 10): number | undefined {
@@ -92,6 +94,24 @@ export function applyModelOverrides(row: CatalogueRow, override: ModelOverride):
   if (Array.isArray(override.modes)) {
     row.modes = override.modes.filter((m): m is string => typeof m === "string");
     curated.push("modes");
+  }
+  // Native tool-call support. pi-ai carries no tool-use flag, so dynamic
+  // rows (e.g. Ollama) default to true; correct models proven unable to
+  // emit native calls here so tool agents stop selecting them.
+  const toolCall =
+    typeof override.toolCall === "boolean"
+      ? override.toolCall
+      : typeof (override as Record<string, unknown>).tool_call === "boolean"
+        ? ((override as Record<string, unknown>).tool_call as boolean)
+        : undefined;
+  if (toolCall !== undefined) {
+    row.toolCall = toolCall;
+    row.capabilities.toolCall = toolCall;
+    const modes = new Set(row.modes);
+    if (toolCall) modes.add("tools");
+    else modes.delete("tools");
+    row.modes = [...modes];
+    curated.push("tool_call");
   }
 
   if (curated.length > 0) {
