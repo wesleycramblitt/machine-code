@@ -83,6 +83,10 @@ const GraphParams = Type.Object({
   epic: GraphNode,
   features: Type.Array(GraphNode),
   tasks: Type.Array(GraphTask),
+}, {
+  description:
+    "Required for action=graph. Exact shape: {epic, features, tasks}. " +
+    "epic/features/tasks are nested here, never top-level parameters.",
 });
 
 const IssueParams = Type.Object({
@@ -124,12 +128,20 @@ const IssueParams = Type.Object({
   blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref: 123, owner/repo#123, or a URL." }))),
   /** Alias for blocked_by. Dependencies are the same graph. */
   depends_on: Type.Optional(Type.Array(Type.String({ description: "Alias for blocked_by." }))),
-  state: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")])),
+  state: Type.Optional(
+    Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")], {
+      description: "Issue-state filter for list/tree: open | closed | all. Use state, not status.",
+    }),
+  ),
   limit: Type.Optional(Type.Number({ description: "Max issues to list (default 100, max 200)." })),
   reason: Type.Optional(Type.String({ description: "Close reason (close)." })),
   depth: Type.Optional(Type.Number({ description: "Tree depth (default 2)." })),
   /** mc:plan fields for the `plan` action. */
-  status: Type.Optional(Type.Union([Type.Literal("draft"), Type.Literal("ready")])),
+  status: Type.Optional(
+    Type.Union([Type.Literal("draft"), Type.Literal("ready")], {
+      description: "Plan status for action=plan: draft | ready. Not an issue filter.",
+    }),
+  ),
   plan_role: Type.Optional(Type.Union([Type.Literal("build"), Type.Literal("review")])),
   verification: Type.Optional(
     Type.Union([Type.Literal("direct"), Type.Literal("verified"), Type.Literal("redundant")]),
@@ -158,6 +170,57 @@ function line(issue: Issue): string {
   if (issue.acceptance.length > 0) bits.push(`accept=${issue.acceptance.length}`);
   if (issue.blockedBy.length > 0) bits.push(`blocked-by=${issue.blockedBy.map((b) => `#${b.number}`).join(",")}`);
   return bits.join(" ");
+}
+
+function parseJsonish(value: unknown, label: string): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`${label} must be a JSON object or array, not a string`);
+  }
+}
+
+/** Repair the common flat/string graph shape before schema validation. */
+function normalizeIssueArguments(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+
+  let graph = out.graph;
+  if (typeof graph === "string") graph = parseJsonish(graph, "graph");
+  if (graph && typeof graph === "object" && !Array.isArray(graph)) {
+    const object = { ...(graph as Record<string, unknown>) };
+    for (const key of ["epic", "features", "tasks"] as const) {
+      if (key in object) object[key] = parseJsonish(object[key], `graph.${key}`);
+    }
+    if (object.features && !Array.isArray(object.features)) object.features = [object.features];
+    if (object.tasks && !Array.isArray(object.tasks)) object.tasks = [object.tasks];
+    out.graph = object;
+  } else if ((out.epic !== undefined || out.features !== undefined || out.tasks !== undefined) && !graph) {
+    const epic = parseJsonish(out.epic, "epic");
+    let features = parseJsonish(out.features, "features");
+    let tasks = parseJsonish(out.tasks, "tasks");
+    if (features && !Array.isArray(features)) features = [features];
+    if (tasks && !Array.isArray(tasks)) tasks = [tasks];
+    out.graph = { epic, features, tasks };
+  }
+  if (out.graph) {
+    delete out.epic;
+    delete out.features;
+    delete out.tasks;
+  }
+
+  // The model often says status=open for a tree/list filter; the schema calls
+  // that field state. Accept the alias instead of failing validation.
+  if (
+    (out.action === "list" || out.action === "tree") &&
+    out.state === undefined &&
+    (out.status === "open" || out.status === "closed" || out.status === "all")
+  ) {
+    out.state = out.status;
+    delete out.status;
+  }
+  return out;
 }
 
 export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> {
@@ -277,7 +340,8 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
     name: "issue",
     label: "issue",
     description:
-      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/graph/edit write; create/graph/edit accept blocked_by/depends_on; graph creates Epic→Features→Tasks with temporary keys in one call; " +
+      "Structured GitHub issue access. list/view/tree read (tree without issue shows all roots); create/graph/edit write; create/graph/edit accept blocked_by/depends_on; " +
+      "graph creates Epic→Features→Tasks in one call. Use exactly {\"action\":\"graph\",\"graph\":{\"epic\":{...},\"features\":[...],\"tasks\":[...]}}. epic/features/tasks are not top-level fields. Use graph for small plans (<=3 features, <=8 tasks); otherwise create layers with action=create. " +
       "Every created/edited body needs ## Context; Epic/Feature also need ## Goal and ## Scope (Feature: ## Success measures); Task needs ## Deliverable and acceptance criteria. The tool rejects missing context. " +
       "plan writes the Task mc:plan marker; link sets parent-child; ensure repairs reserved anchors; close follows approval. " +
       "Independent create/edit calls in one assistant turn run in parallel; send a whole layer (Features or Tasks) together. " +
@@ -285,6 +349,7 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       "Creating an Epic also creates reserved Feature 0: Planning & Review and Task 0: Planning & Review; creating a Feature also creates reserved Task 0: Planning & Review. " +
       "These anchors are not deliverables. Reuse a suitable non-reserved Epic/Feature; otherwise create Epic→Feature→Task, then plan each Task.",
     parameters: IssueParams,
+    prepareArguments: (args) => normalizeIssueArguments(args) as Static<typeof IssueParams>,
     async execute(_id, params: Static<typeof IssueParams>) {
       try {
         return await run(params);
@@ -390,7 +455,12 @@ export function issueTool(ctx: IssueToolContext): AgentTool<typeof IssueParams> 
       }
       case "graph": {
         requireCreate();
-        if (!params.graph) return fail("graph action requires graph");
+        if (!params.graph) {
+          return fail(
+            "graph action requires graph. Send {\"action\":\"graph\",\"graph\":{\"epic\":{...},\"features\":[...],\"tasks\":[...]}}. " +
+              "epic/features/tasks are not top-level parameters.",
+          );
+        }
         const graph = params.graph;
         graph.epic.body = withContextFiles(graph.epic.body ?? "", graph.epic.context_files);
         for (const feature of graph.features) {

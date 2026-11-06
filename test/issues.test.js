@@ -433,6 +433,30 @@ test("create rejects issue bodies without the required context shape", async () 
   }
 });
 
+test("issue tool repairs flat graph arguments and status aliases", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-normalize-"));
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const tool = issueTool(ctx);
+    const graph = tool.prepareArguments({
+      action: "graph",
+      epic: JSON.stringify({ key: "e", title: "Epic", body: issueBody("epic") }),
+      features: JSON.stringify([{ key: "f", title: "Feature", body: issueBody("feature") }]),
+      tasks: JSON.stringify([{ key: "t", feature: "f", title: "Task", body: issueBody("task") }]),
+    });
+    assert.equal(graph.graph.epic.key, "e");
+    assert.equal(graph.graph.features.length, 1);
+    assert.equal(graph.graph.tasks[0].feature, "f");
+
+    const tree = tool.prepareArguments({ action: "tree", status: "open" });
+    assert.equal(tree.state, "open");
+    assert.equal(tree.status, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("issue create records explicit context_files and does not infer them", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-iss-context-files-"));
   try {
