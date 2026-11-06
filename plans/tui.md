@@ -16,11 +16,7 @@ This file details upgrades or issues to be planned for the TUI
 - When a run is started, we should go to a blank run details page with partial information filled in until the run starts (then fill the rest in). Currently it goes to the runs page for a moment, confusing.
 - Probably need somewhere we can see the repo map and semantic index visually?
 
-# Runs Page
-- No longer using PRs, so remove PR 0 open at the top.
-- Color encodings for epic vs feature vs task would help a lot for visiblity. 
-- See branch names on features, orchestration status, and whether it is merged into main.
-- Default to cwd filter.
+- [ ] Feature #164: Runs page hierarchy colors, branch/orchestration visibility, cwd default, PR removal
 
 # Orchestration
 
