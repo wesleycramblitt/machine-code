@@ -206,7 +206,7 @@ export function reusableWorktree(
   parent: Pick<RunSummary, "worktree" | "branch" | "status"> | undefined,
   branch: string | undefined,
 ): string | undefined {
-  if (!parent?.worktree || !branch || parent.branch !== branch) return undefined;
+  if (!parent || typeof parent.worktree !== "string" || !branch || parent.branch !== branch) return undefined;
   if (parent.status === "created" || parent.status === "running" || parent.status === "awaiting_input") {
     return undefined;
   }

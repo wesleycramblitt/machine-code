@@ -2730,6 +2730,21 @@ function cmdRespond(argv: string[]): number {
 
 /* --------------------------------------------------------------------- fork */
 
+/**
+ * Worktree path for a parent run, tolerating legacy records whose
+ * `worktree` was clobbered to a boolean (see recordConfig). Falls back to
+ * the conventional on-disk location.
+ */
+function parentWorktreePath(
+  parent: Pick<RunSummary, "id" | "worktree">,
+  localDir: string,
+): string | undefined {
+  if (typeof parent.worktree === "string" && existsSync(parent.worktree)) return parent.worktree;
+  const conventional = join(localDir, "worktrees", parent.id);
+  if (existsSync(conventional)) return conventional;
+  return typeof parent.worktree === "string" ? parent.worktree : undefined;
+}
+
 async function cmdFork(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const id = positional[0];
@@ -2758,7 +2773,12 @@ async function cmdFork(argv: string[]): Promise<number> {
     parent.id,
     "--agent",
     parent.agent,
-    ...(flags.has("inherit-worktree") && parent.worktree ? ["--inherit-worktree"] : []),
+    // Forward the parent's issue so the child resolves the same feature
+    // branch and hits the worktree-reuse path instead of branch_checked_out.
+    ...(parent.issue?.number ? ["--issue", String(parent.issue.number)] : []),
+    ...(flags.has("inherit-worktree") && parentWorktreePath(parent, found.layout.localDir)
+      ? ["--inherit-worktree"]
+      : []),
     objective,
   ];
   const child = spawn(process.execPath, [cliPath, ...args], {
@@ -4521,7 +4541,7 @@ async function cmdCorrect(argv: string[]): Promise<number> {
   }
   const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
   const args = ["run", "--parent", parent.id];
-  if (parent.worktree && existsSync(parent.worktree)) args.push("--inherit-worktree");
+  if (parentWorktreePath(parent, found.layout.localDir)) args.push("--inherit-worktree");
   if (parent.issue) args.push("--issue", String(parent.issue.number), "--auto-issue");
   args.push("--agent", parent.agent);
   if (flags.get("tier")) args.push("--tier", flags.get("tier")!);

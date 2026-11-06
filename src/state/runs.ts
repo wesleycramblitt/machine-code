@@ -480,7 +480,21 @@ export class RunRecorder {
     ambiguity?: string;
     capabilities?: string[];
   }): void {
-    Object.assign(this.summary, config);
+    // NOTE: AgentConfig carries a `worktree: boolean` preference flag that
+    // must never clobber RunSummary.worktree (the worktree *path* string).
+    // Whitelist fields instead of Object.assign so extra spread keys
+    // (e.g. {...resolved.config}) cannot corrupt VCS metadata.
+    const { preset, delegate, verification, issues, ask, approval, ambiguity, capabilities } = config;
+    Object.assign(this.summary, {
+      ...(preset !== undefined ? { preset } : {}),
+      ...(delegate !== undefined ? { delegate } : {}),
+      ...(verification !== undefined ? { verification } : {}),
+      ...(issues !== undefined ? { issues } : {}),
+      ...(ask !== undefined ? { ask } : {}),
+      ...(approval !== undefined ? { approval } : {}),
+      ...(ambiguity !== undefined ? { ambiguity } : {}),
+      ...(capabilities !== undefined ? { capabilities } : {}),
+    });
     this.writeSummary();
     this.event("agent_config", { ...config });
   }
