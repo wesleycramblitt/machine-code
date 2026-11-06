@@ -8,7 +8,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -1010,4 +1011,141 @@ test("gh relation objects and arrays both normalize to node lists", async () => 
   assert.deepEqual(relationItems([{ number: 1 }]), [{ number: 1 }]);
   assert.deepEqual(relationItems({ nodes: [{ number: 2 }], totalCount: 1 }), [{ number: 2 }]);
   assert.deepEqual(relationItems(null), []);
+});
+
+/* --------------------------------------- plan_ref line replacement */
+
+function gitRepoWithPlan() {
+  const root = mkdtempSync(join(tmpdir(), "mc-iss-planref-"));
+  const git = (args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git(["init", "-q", "-b", "main"]);
+  git(["config", "user.email", "t@t.local"]);
+  git(["config", "user.name", "T"]);
+  mkdirSync(join(root, "plans"), { recursive: true });
+  writeFileSync(
+    join(root, "plans", "tui.md"),
+    ["# TUI", "", "- X needs to do A, B, and C", "- Y needs polish", "", "# Later", "", "- Z can wait", ""].join("\n"),
+    "utf8",
+  );
+  git(["add", "-A"]);
+  git(["commit", "-qm", "init"]);
+  return { root, git };
+}
+
+test("graph dry_run rejects invalid plan_refs", async () => {
+  const { root, git } = gitRepoWithPlan();
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const base = {
+      epic: { key: "e", title: "Epic", body: issueBody("epic"), plan_ref: "plans/tui.md:1" },
+      features: [{ key: "f", title: "Feature", body: issueBody("feature"), plan_ref: "plans/tui.md:3" }],
+      dry_run: true,
+    };
+    const check = await issueGraphTool(ctx).execute("g0", base);
+    assert.equal(check.isError, undefined);
+
+    const badShape = await issueGraphTool(ctx).execute("g1", {
+      ...base,
+      features: [{ key: "f", title: "Feature", body: issueBody("feature"), plan_ref: "nope" }],
+      dry_run: true,
+    });
+    assert.equal(badShape.isError, true);
+    assert.match(badShape.content[0].text, /plan_ref.*must look like/);
+
+    const missing = await issueGraphTool(ctx).execute("g2", {
+      ...base,
+      features: [{ key: "f", title: "Feature", body: issueBody("feature"), plan_ref: "plans/other.md:1" }],
+      dry_run: true,
+    });
+    assert.equal(missing.isError, true);
+    assert.match(missing.content[0].text, /plan file not found/);
+
+    const bounds = await issueGraphTool(ctx).execute("g3", {
+      ...base,
+      features: [{ key: "f", title: "Feature", body: issueBody("feature"), plan_ref: "plans/tui.md:99" }],
+      dry_run: true,
+    });
+    assert.equal(bounds.isError, true);
+    assert.match(bounds.content[0].text, /out of bounds/);
+
+    const overlap = await issueGraphTool(ctx).execute("g4", {
+      epic: { key: "e", title: "Epic", body: issueBody("epic"), plan_ref: "plans/tui.md:1-3" },
+      features: [{ key: "f", title: "Feature", body: issueBody("feature"), plan_ref: "plans/tui.md:3" }],
+      dry_run: true,
+    });
+    assert.equal(overlap.isError, true);
+    assert.match(overlap.content[0].text, /overlaps/);
+    assert.equal(p.issues.size, 0, "dry runs create nothing");
+    assert.equal(git(["status", "--porcelain", "--", "plans/"]), "", "dry runs touch nothing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("graph create with plan_ref replaces lines and commits on main", async () => {
+  const { root, git } = gitRepoWithPlan();
+  try {
+    const p = new FakeProvider();
+    const { ctx, layout } = toolCtx(p, ["issue:read", "issue:create", "issue:plan", "issue:close"], root);
+    const agentBody = (kind) => `${issueBody(kind)}\n<!-- mc:approval {"mode":"agent"} -->`;
+    const created = await issueGraphTool(ctx).execute("g1", {
+      epic: { key: "e", title: "TUI epic", body: agentBody("epic"), plan_ref: "plans/tui.md:1" },
+      features: [
+        { key: "f1", title: "Do A, B, and C", body: agentBody("feature"), plan_ref: "plans/tui.md:3" },
+        { key: "f2", title: "Polish Y", body: agentBody("feature") },
+      ],
+    });
+    assert.equal(created.isError, undefined);
+    const text = created.content[0].text;
+    assert.match(text, /Replaced plans\/tui\.md:3-3/);
+    const body = readFileSync(join(root, "plans", "tui.md"), "utf8");
+    assert.match(body, /- \[ \] Feature #\d+: Do A, B, and C/);
+    assert.doesNotMatch(body, /X needs to do A, B, and C/);
+    assert.match(body, /Y needs polish/);
+    const log = git(["log", "--oneline", "-3"]);
+    assert.match(log, /plans: track/);
+    // Closing a feature removes its line and commits the removal.
+    const numbers = [...p.issues.values()].filter((i) => i.kind === "feature").map((i) => i.ref.number);
+    const rec = new RunRecorder(layout, { agent: "review", mode: "", request: "review", repoRoot: root, issue: { provider: "github", repo: "o/r", number: numbers[0] } });
+    rec.event("acceptance_verified", { issue: numbers[0], by: "human", criteria: [] });
+    rec.finalize("completed");
+    const closed = await issueTool(ctx).execute("c1", { action: "close", issue: String(numbers[0]) });
+    assert.equal(closed.isError, undefined);
+    const after = readFileSync(join(root, "plans", "tui.md"), "utf8");
+    assert.doesNotMatch(after, new RegExp(`Feature #${numbers[0]}`));
+    assert.match(git(["log", "--oneline", "-1"]), /untrack closed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("single create with plan_ref replaces the source lines", async () => {
+  const { root } = gitRepoWithPlan();
+  try {
+    const p = new FakeProvider();
+    const { ctx } = toolCtx(p, ["issue:read", "issue:create", "issue:plan"], root);
+    const epic = await issueTool(ctx).execute("c0", {
+      action: "create",
+      kind: "epic",
+      title: "TUI epic",
+      body: issueBody("epic"),
+    });
+    assert.equal(epic.isError, undefined);
+    const created = await issueTool(ctx).execute("c1", {
+      action: "create",
+      kind: "feature",
+      parent: "#1",
+      title: "Polish Y",
+      body: issueBody("feature"),
+      plan_ref: "plans/tui.md:4",
+    });
+    assert.equal(created.isError, undefined);
+    assert.match(created.content[0].text, /Replaced plans\/tui\.md:4-4/);
+    const body = readFileSync(join(root, "plans", "tui.md"), "utf8");
+    assert.match(body, /- \[ \] Feature #2: Polish Y/);
+    assert.doesNotMatch(body, /Y needs polish/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

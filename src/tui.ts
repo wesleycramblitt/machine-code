@@ -4174,21 +4174,26 @@ export async function runTui(): Promise<void> {
         const target = deleteTarget;
         if (!target) { screen = deleteReturn; draw(); return; }
         deleteInFlight = true;
+        // Branches, worktrees, and runs live in the issue's repo, which may
+        // differ from the TUI cwd in multi-repo setups. Resolve it first so
+        // the CLI deletes the associated resources in the right place.
+        const deleteRepo = issueRepoOf(target.ref) ?? l.repoRoot;
+        const deleteLayout = deleteRepo === l.repoRoot ? l : layout(deleteRepo);
         const deleteRefs = [target.ref, ...descendantRefs(target)];
-        addTombstones(l, deleteRefs);
+        addTombstones(deleteLayout, deleteRefs);
         for (const ref of deleteRefs) deletingIssues.add(refKey(ref));
-        const cache = readIssueCache(l);
+        const cache = readIssueCache(deleteLayout);
         if (cache) {
           const next = cache.issues.filter((issue) => !deletingIssues.has(refKey(issue.ref)));
-          writeIssueCache(l, cache.repo, next);
-          issueCachesByRepo.set(l.repoRoot, next);
+          writeIssueCache(deleteLayout, cache.repo, next);
+          issueCachesByRepo.set(deleteRepo, next);
         }
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         const child = spawn(
           process.execPath,
           [cliPath, "issue", "delete", String(target.ref.number), "--cascade", "--yes"],
           {
-            cwd: l.repoRoot,
+            cwd: deleteRepo,
             stdio: ["ignore", "pipe", "pipe"],
             env: process.env,
           },
@@ -4200,7 +4205,7 @@ export async function runTui(): Promise<void> {
         child.on("close", (code) => {
           const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
           try {
-            writeFileSync(join(l.localDir, "delete.log"), `${new Date().toISOString()} #${target.ref.number}\n${output}\n`, "utf8");
+            writeFileSync(join(deleteLayout.localDir, "delete.log"), `${new Date().toISOString()} #${target.ref.number}\n${output}\n`, "utf8");
           } catch {
             // best-effort diagnostics
           }
@@ -4209,7 +4214,7 @@ export async function runTui(): Promise<void> {
             notify(`deleted #${target.ref.number}`);
           } else {
             deletingIssues.clear();
-            removeTombstones(l, deleteRefs);
+            removeTombstones(deleteLayout, deleteRefs);
             const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
             notify(`delete failed for #${target.ref.number}: ${trunc(last, 80)}`);
           }

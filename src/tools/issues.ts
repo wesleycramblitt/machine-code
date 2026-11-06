@@ -33,7 +33,7 @@ import type { Layout } from "../paths.js";
 import type { RunRecorder } from "../state/runs.js";
 import type { RunStateStore } from "../context/state.js";
 import { loadMachineConfig } from "../config.js";
-import { appendPlanTracking, findPlanFiles, planTrackingLine, removePlanTracking } from "../plan/tracking.js";
+import { parsePlanRef, readPlanLines, trackIssueInPlan, untrackIssueInPlans } from "../plan/tracking.js";
 
 export interface IssueToolContext {
   provider: IssueProvider;
@@ -55,6 +55,14 @@ const GraphNode = Type.Object({
   body: Type.Optional(
     Type.String({
       description: "Required. Epic needs ## Context; Feature needs ## Deliverable and acceptance criteria.",
+    }),
+  ),
+  /** Source plan lines this node replaces, e.g. `plans/tui.md:12-14`. */
+  plan_ref: Type.Optional(
+    Type.String({
+      description:
+        "Optional plan source: plans/<name>.md:<start>[-<end>] (1-based lines). " +
+        "The tracking line replaces those lines and the plan file is committed on main.",
     }),
   ),
   context_files: Type.Optional(
@@ -120,6 +128,14 @@ const IssueParams = Type.Object({
   depends_on: Type.Optional(Type.Array(Type.String({ description: "Alias for blocked_by." }))),
   /** Edit only: remove these blocked_by links. */
   remove_blocked_by: Type.Optional(Type.Array(Type.String({ description: "Issue ref to stop being blocked by." }))),
+  /** Create only: plan source lines this issue replaces, e.g. `plans/tui.md:12-14`. */
+  plan_ref: Type.Optional(
+    Type.String({
+      description:
+        "Optional plan source for create: plans/<name>.md:<start>[-<end>] (1-based lines). " +
+        "The tracking line replaces those lines and the plan file is committed on main.",
+    }),
+  ),
   state: Type.Optional(
     Type.Union([Type.Literal("open"), Type.Literal("closed"), Type.Literal("all")], {
       description: "Issue-state filter for list/tree: open | closed | all. Use state, not status.",
@@ -189,41 +205,85 @@ function trackCreated(
   kind: "epic" | "feature",
   number: number,
   title: string,
-  planFile: string,
-): string {
-  try {
-    appendPlanTracking(ctx.layout.repoRoot, planFile, planTrackingLine(kind, number, title));
-    ctx.recorder.event("plan_tracking", { action: "append", issue: number, planFile });
-    return ` Tracked in ${planFile}.`;
-  } catch (error) {
+  planFile?: string,
+  planRef?: string,
+): Promise<string> {
+  return trackIssueInPlan(ctx.layout.repoRoot, {
+    kind,
+    number,
+    title,
+    ...(planFile ? { planFile } : {}),
+    ...(planRef ? { planRef } : {}),
+  }).then(({ note, committed }) => {
     ctx.recorder.event("plan_tracking", {
-      action: "append_failed",
+      action: planRef ? "replace" : "append",
       issue: number,
-      planFile,
+      ...(planFile ? { planFile } : {}),
+      ...(planRef ? { planRef } : {}),
+      committed,
+    });
+    return note;
+  }).catch((error) => {
+    ctx.recorder.event("plan_tracking", {
+      action: planRef ? "replace_failed" : "append_failed",
+      issue: number,
       error: error instanceof Error ? error.message : String(error),
     });
     return "";
-  }
+  });
 }
 
-/** Best-effort tracking-line removal from every plans/*.md file. */
-function untrackClosed(ctx: IssueToolContext, number: number): string {
-  try {
-    const touched: string[] = [];
-    for (const planFile of findPlanFiles(ctx.layout.repoRoot)) {
-      removePlanTracking(ctx.layout.repoRoot, planFile, number);
-      touched.push(planFile);
-    }
-    ctx.recorder.event("plan_tracking", { action: "remove", issue: number, planFiles: touched });
-    return touched.length > 0 ? ` Removed tracking from ${touched.join(", ")}.` : "";
-  } catch (error) {
+/** Best-effort tracking-line removal from every plans/*.md file, committed on main. */
+function untrackClosed(ctx: IssueToolContext, number: number): Promise<string> {
+  return untrackIssueInPlans(ctx.layout.repoRoot, number).then(({ files, committed }) => {
+    ctx.recorder.event("plan_tracking", { action: "remove", issue: number, planFiles: files, committed });
+    return files.length > 0 ? ` Removed tracking from ${files.join(", ")}.` : "";
+  }).catch((error) => {
     ctx.recorder.event("plan_tracking", {
       action: "remove_failed",
       issue: number,
       error: error instanceof Error ? error.message : String(error),
     });
     return "";
+  });
+}
+
+/**
+ * Validate `plan_ref` source refs without touching anything: parseable shape,
+ * an existing plans/*.md file, an in-bounds range, and no overlaps between
+ * items in one call.
+ */
+function validatePlanRefs(
+  repoRoot: string,
+  items: Array<{ label: string; planRef?: string }>,
+): string[] {
+  const errors: string[] = [];
+  const seen: Array<{ label: string; file: string; start: number; end: number }> = [];
+  for (const item of items) {
+    if (!item.planRef) continue;
+    const parsed = parsePlanRef(item.planRef);
+    if (parsed.error || !parsed.ref) {
+      errors.push(`${item.label}: ${parsed.error ?? "invalid plan_ref"}`);
+      continue;
+    }
+    const { file, start, end } = parsed.ref;
+    const lines = readPlanLines(repoRoot, file);
+    if (!lines) {
+      errors.push(`${item.label}: plan file not found: ${file}`);
+      continue;
+    }
+    if (end > lines.length) {
+      errors.push(`${item.label}: plan_ref ${file}:${start}-${end} is out of bounds (${lines.length} lines)`);
+      continue;
+    }
+    for (const prior of seen) {
+      if (prior.file === file && start <= prior.end && prior.start <= end) {
+        errors.push(`${item.label} plan_ref ${file}:${start}-${end} overlaps ${prior.label} (${prior.start}-${prior.end})`);
+      }
+    }
+    seen.push({ label: item.label, file, start, end });
   }
+  return errors;
 }
 
 function line(issue: Issue): string {
@@ -454,6 +514,8 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         "Use issue_graph for small plans (<=3 features); otherwise create layers with the issue tool. " +
         "blocked_by chains deliverables only. " +
         "Every Epic body needs ## Context, ## Goal, ## Scope; every Feature needs ## Context, ## Deliverable and acceptance criteria. Use context_files for exact repo files. " +
+        "When working from a plan file, pass plan_ref like plans/tui.md:12-14 on each node naming its source lines; " +
+        "the tracking line replaces those lines and the plan file is committed on main. " +
         "Set dry_run=true to validate without creating issues.",
     parameters: IssueGraphParams,
     prepareArguments: (args) =>
@@ -642,6 +704,16 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
               .join(" | ")}. Split each into smaller Features and retry.`,
           );
         }
+        const refErrors = validatePlanRefs(ctx.layout.repoRoot, [
+          { label: `epic ${graph.epic.key}`, planRef: graph.epic.plan_ref },
+          ...graph.features.map((feature) => ({ label: `feature ${feature.key}`, planRef: feature.plan_ref })),
+        ]);
+        if (refErrors.length > 0) {
+          return fail(
+            `graph plan_refs are invalid: ${refErrors.join(" | ")}. ` +
+              "Use plans/<name>.md:<start>[-<end>] with 1-based lines that exist and do not overlap.",
+          );
+        }
         if (dryRun) {
           return ok(
             `graph valid: epic ${graph.epic.key}; features ${graph.features.length}; no issues created`,
@@ -700,12 +772,10 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
         ].join("; ");
         let tracking = "";
         const graphPlanFile = trackingPlanFile(ctx, "");
-        if (graphPlanFile) {
-          tracking += trackCreated(ctx, "epic", epic.ref.number, epic.title, graphPlanFile);
-          for (const feature of graph.features) {
-            const created = createdNodes.get(feature.key)!;
-            tracking += trackCreated(ctx, "feature", created.ref.number, created.title, graphPlanFile);
-          }
+        tracking += await trackCreated(ctx, "epic", epic.ref.number, epic.title, graphPlanFile, graph.epic.plan_ref);
+        for (const feature of graph.features) {
+          const created = createdNodes.get(feature.key)!;
+          tracking += await trackCreated(ctx, "feature", created.ref.number, created.title, graphPlanFile, feature.plan_ref);
         }
         return ok(
           `created graph: ${summary}${tracking}` +
@@ -788,7 +858,9 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
           }
         }
         const planFile = trackingPlanFile(ctx, params.body ?? "");
-        if (planFile) note += trackCreated(ctx, created.kind, created.ref.number, created.title, planFile);
+        if (planFile || params.plan_ref) {
+          note += await trackCreated(ctx, created.kind, created.ref.number, created.title, planFile, params.plan_ref);
+        }
         return ok(`created #${created.ref.number} (${created.kind}): ${created.title}${note}`);
       }
       case "edit": {
@@ -917,7 +989,7 @@ export function issueTools(ctx: IssueToolContext): { issue: AgentTool<typeof Iss
           reason: params.reason,
         });
         const untracked = target.kind === "epic" || target.kind === "feature"
-          ? untrackClosed(ctx, target.ref.number)
+          ? await untrackClosed(ctx, target.ref.number)
           : "";
         return ok(`closed #${target.ref.number}${untracked}`);
       }
