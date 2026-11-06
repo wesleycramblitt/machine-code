@@ -39,13 +39,14 @@ test("429 classifies as a retryable rate limit and still cools the target", () =
   assert.equal(isProviderCooling(state2, "opencode-go"), true);
 });
 
-test("free usage limits cool every free offer, not just the first model", () => {
+test("free usage limits cool only the model unless the error names all free offers", () => {
   const classified = classifyError(
     new Error(
       '429: {"type":"FreeUsageLimitError","message":"Free usage limit reached. Free models work in OpenCode; subscribe to OpenCode Go to keep going."}',
     ),
   );
   assert.equal(classified.kind, "free-limit");
+  assert.equal(classified.target, "model");
   assert.equal(classified.retryable, true);
   assert.ok(classified.cooldownMs >= 30 * 60_000 - 1000);
 
@@ -54,8 +55,19 @@ test("free usage limits cool every free offer, not just the first model", () => 
     freeKeys: ["opencode/deepseek-v4.1-flash-free", "opencode/glm-5.3-flash-free"],
   });
   assert.equal(isModelCooling(state, "opencode/deepseek-v4.1-flash-free"), true);
-  assert.equal(isModelCooling(state, "opencode/glm-5.3-flash-free"), true);
+  assert.equal(isModelCooling(state, "opencode/glm-5.3-flash-free"), false, "sibling free model stays usable");
   assert.equal(isProviderCooling(state, "opencode"), false, "paid models stay usable");
+
+  const allFree = classifyError(
+    new Error("429: Free usage limit reached for all free models on this provider"),
+  );
+  assert.equal(allFree.target, "free-models");
+  const state2 = empty();
+  applyClassification(state2, "opencode", "opencode/deepseek-v4.1-flash-free", allFree, {
+    freeKeys: ["opencode/deepseek-v4.1-flash-free", "opencode/glm-5.3-flash-free"],
+  });
+  assert.equal(isModelCooling(state2, "opencode/deepseek-v4.1-flash-free"), true);
+  assert.equal(isModelCooling(state2, "opencode/glm-5.3-flash-free"), true);
 });
 
 test("OpenRouter upstream provider errors cool the model, not the provider", () => {

@@ -377,12 +377,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     modelKey: string,
     classified: ReturnType<typeof classifyError>,
   ): void => {
-    // Per-run free semantics: free-model failures (including a free-tier
-    // limit, which cools every free offer on that provider) cool the
-    // in-memory availability and join `triedModels` so this run rotates from
-    // best fit to worst. Nothing is written to disk, so the next run starts
-    // fresh instead of inheriting a 30m+ cooldown.
-    if (classified.kind === "free-limit") {
+    // Per-run free semantics: free-model failures cool the in-memory
+    // availability and join `triedModels` so this run rotates from best fit to
+    // worst. A free-tier limit is model-specific unless the provider says all
+    // free models/offers are affected. Nothing is written to disk, so the next
+    // run starts fresh instead of inheriting a 30m+ cooldown.
+    if (classified.target === "free-models") {
       const freeKeys = freeKeysForProvider(provider);
       const keys = freeKeys.length > 0 ? freeKeys : [modelKey];
       applyClassification(availability, provider, modelKey, classified, { freeKeys: keys });

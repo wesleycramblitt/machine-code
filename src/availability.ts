@@ -31,7 +31,7 @@ export interface ClassifiedError {
   /** Suggested cooldown in ms; 0 means no cooldown (or manual action). */
   cooldownMs: number;
   /** Whether the model should be cooled (vs the provider). */
-  target: "model" | "provider" | "none";
+  target: "model" | "provider" | "free-models" | "none";
   /** Whether to disable the provider entirely until manual re-enable. */
   disableProvider: boolean;
   /** Whether to mark the provider needs-auth. */
@@ -209,21 +209,26 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
   const code = status ?? 0;
 
-  // Free-tier account limit: every free offer on that provider is affected,
-  // not just the model that happened to answer first. This must precede the
-  // generic 429 branch (OpenCode returns a 429 FreeUsageLimitError).
+  // Free-tier limits are usually model-specific. Do not assume that one
+  // model's 429 means every free offer on the provider is blocked; users
+  // routinely see sibling free models work. Widen the target only when the
+  // error explicitly says all free models/offers are affected. This must
+  // precede the generic 429 branch (OpenCode returns FreeUsageLimitError).
   if (
     msg.includes("free usage limit") ||
     msg.includes("freeusagelimiterror") ||
     msg.includes("free tier limit") ||
     (msg.includes("free models") && msg.includes("subscribe"))
   ) {
+    const allFree =
+      /\b(?:all|every)\s+free\s+(?:models?|offers?)\b/i.test(msg) ||
+      /\bfree\s+(?:models?|offers?)\s+(?:are|is)\s+(?:all\s+)?(?:blocked|limited|unavailable|exhausted)\b/i.test(msg);
     return {
       kind: "free-limit",
       message: msg,
       retryable: true,
       cooldownMs: FREE_LIMIT_COOLDOWN,
-      target: "none",
+      target: allFree ? "free-models" : "model",
       disableProvider: false,
       needsAuth: false,
     };
@@ -348,7 +353,7 @@ export function applyClassification(
   if (classified.disableProvider) disableProvider(state, providerId);
   if (classified.needsAuth) markNeedsAuth(state, providerId);
   if (!(classified.cooldownMs > 0 || classified.retryable)) return;
-  if (classified.kind === "free-limit") {
+  if (classified.target === "free-models") {
     const keys = options?.freeKeys?.length ? options.freeKeys : [modelKey];
     for (const key of new Set(keys)) {
       state.models[key] = { ...(state.models[key] ?? {}), lastErrorKind: classified.kind };
