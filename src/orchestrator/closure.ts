@@ -8,6 +8,7 @@
  */
 import type { Issue, IssueProvider } from "../issues/provider.js";
 import { checkCompletion } from "../issues/completion.js";
+import { untrackIssueInPlans } from "../plan/tracking.js";
 import type { Layout } from "../paths.js";
 import { readRun, RunRecorder } from "../state/runs.js";
 
@@ -23,11 +24,13 @@ export interface CloseFeatureResult {
   status: "closed" | "blocked" | "failed";
   error?: string;
   closedParents: number[];
+  /** plans/*.md files the closed issues were untracked from. */
+  untrackedPlans: string[];
 }
 
 export async function closeCompletedFeature(input: CloseFeatureInput): Promise<CloseFeatureResult> {
   const detail = readRun(input.layout, input.runId);
-  if (!detail) return { status: "failed", error: `run ${input.runId} is unreadable`, closedParents: [] };
+  if (!detail) return { status: "failed", error: `run ${input.runId} is unreadable`, closedParents: [], untrackedPlans: [] };
   const recorder = RunRecorder.reopen(input.layout, detail.summary);
   recorder.event("acceptance_verified", {
     issue: input.issue.ref.number,
@@ -38,7 +41,7 @@ export async function closeCompletedFeature(input: CloseFeatureInput): Promise<C
 
   const completion = await checkCompletion(input.provider, input.layout, input.issue);
   if (!completion.ok) {
-    return { status: "blocked", error: completion.reason ?? "completion check failed", closedParents: [] };
+    return { status: "blocked", error: completion.reason ?? "completion check failed", closedParents: [], untrackedPlans: [] };
   }
 
   await input.provider.close(input.issue.ref, "completed");
@@ -69,6 +72,21 @@ export async function closeCompletedFeature(input: CloseFeatureInput): Promise<C
       }
     }
   }
-  return { status: "closed", closedParents };
+  // Plan tracking lines are removed as their issues close (committed on
+  // main by the tracking helper). Best-effort: never fail the closure.
+  const untracked: string[] = [];
+  for (const n of [input.issue.ref.number, ...closedParents]) {
+    const removed = await untrackIssueInPlans(input.layout.repoRoot, n);
+    for (const file of removed.files) {
+      if (!untracked.includes(file)) untracked.push(file);
+    }
+  }
+  recorder.event("plan_tracking", {
+    action: "remove",
+    issue: input.issue.ref.number,
+    planFiles: untracked,
+    parents: closedParents,
+  });
+  return { status: "closed", closedParents, untrackedPlans: untracked };
 }
 

@@ -163,3 +163,66 @@ test("commitPlanFile is a no-op without changes", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+class CloseFakeProvider {
+  constructor(issues) {
+    this.kind = "github";
+    this.issues = new Map(issues.map((issue) => [issue.ref.number, issue]));
+  }
+  async get(ref) { return this.issues.get(ref.number) ?? null; }
+  async children(ref) {
+    return [...this.issues.values()].filter((i) => i.parent?.number === ref.number);
+  }
+  async close(ref) { const i = this.issues.get(ref.number); if (i) i.state = "closed"; }
+}
+
+function closeLayout(root) {
+  return {
+    home: join(root, "machine-home"),
+    machineConfig: "",
+    curation: "",
+    catalogueFile: "",
+    repoRoot: root,
+    repoDir: join(root, ".machine_code"),
+    localDir: join(root, ".machine_code", "local"),
+    policyFile: "",
+    runsDir: join(root, ".machine_code", "local", "runs"),
+  };
+}
+
+test("closeCompletedFeature untracks the plan line on close", async () => {
+  const { closeCompletedFeature } = await import("../dist/orchestrator/closure.js");
+  const { RunRecorder } = await import("../dist/state/runs.js");
+  const root = tempRepo();
+  try {
+    appendPlanTracking(root, "plans/tui.md", planTrackingLine("feature", 7, "Do the thing"));
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-qm", "tracked"]);
+    const layout = closeLayout(root);
+    const issue = {
+      ref: { provider: "github", repo: "o/r", number: 7 },
+      title: "Do the thing",
+      body: "",
+      state: "open",
+      kind: "feature",
+      labels: [],
+      children: [],
+      acceptance: ["it works"],
+    };
+    const provider = new CloseFakeProvider([issue]);
+    const recorder = new RunRecorder(layout, {
+      agent: "build",
+      mode: "verified",
+      request: "x",
+      repoRoot: root,
+      issue: issue.ref,
+    });
+    const result = await closeCompletedFeature({ provider, layout, issue, runId: recorder.id, by: "human" });
+    assert.equal(result.status, "closed");
+    assert.deepEqual(result.untrackedPlans, ["plans/tui.md"]);
+    assert.doesNotMatch(readFileSync(join(root, "plans/tui.md"), "utf8"), /#7\b/);
+    assert.match(git(root, ["log", "--oneline", "-1"]), /untrack closed #7/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

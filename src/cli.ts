@@ -2315,7 +2315,8 @@ async function cmdApprove(argv: string[]): Promise<number> {
       `approved and merged feature #${issue.ref.number}` +
         `${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
         `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
-        `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+        `${approved.worktreeRemoved ? "; worktree removed" : ""}` +
+        `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
     );
     return 0;
   }
@@ -2577,7 +2578,8 @@ async function cmdFeature(argv: string[]): Promise<number> {
         clean: true,
       });
       process.stdout.write(
-        `feature #${number} agent-approved and closed${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+        `feature #${number} agent-approved and closed${approved.worktreeRemoved ? "; worktree removed" : ""}` +
+        `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
       );
     } else {
       process.stdout.write(`feature #${number} is awaiting human review/merge.\n`);
@@ -2632,7 +2634,8 @@ async function cmdFeature(argv: string[]): Promise<number> {
     process.stdout.write(
       `feature #${number} closed${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
         `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
-        `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+        `${approved.worktreeRemoved ? "; worktree removed" : ""}` +
+        `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
     );
     return 0;
   }
@@ -3430,7 +3433,8 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       process.stdout.write(
         `closed feature #${task} after human result approval` +
           `${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
-          `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
+          `${approved.worktreeRemoved ? "; worktree removed" : ""}` +
+          `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
       );
     }
     const current = resultApproval ? state.approvedResults ?? [] : state.approvedPackets ?? [];
@@ -3736,7 +3740,8 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
               const parents = closed.closedParents.length > 0
                 ? `; closed parent(s) ${closed.closedParents.map((number) => `#${number}`).join(", ")}`
                 : "";
-              process.stdout.write(`  CLOSE #${task.issue.ref.number}  agent-approved result${parents}\n`);
+              const untracked = closed.untrackedPlans.length > 0 ? `; untracked in ${closed.untrackedPlans.join(", ")}` : "";
+              process.stdout.write(`  CLOSE #${task.issue.ref.number}  agent-approved result${parents}${untracked}\n`);
             } catch (error) {
               return { stop: `feature #${task.issue.ref.number} closure failed: ${(error as Error).message}` };
             }

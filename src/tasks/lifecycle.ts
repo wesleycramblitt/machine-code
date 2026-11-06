@@ -390,6 +390,7 @@ export interface ApproveFeatureResult {
   pr?: PullRequest;
   closedParents: number[];
   worktreeRemoved: boolean;
+  untrackedPlans: string[];
 }
 
 export async function approveFeature(input: ApproveFeatureInput): Promise<ApproveFeatureResult> {
@@ -526,7 +527,7 @@ export async function approveFeature(input: ApproveFeatureInput): Promise<Approv
     }
   }
 
-  return { run: current, closedParents: closed.closedParents, worktreeRemoved };
+  return { run: current, closedParents: closed.closedParents, worktreeRemoved, untrackedPlans: closed.untrackedPlans };
 }
 
 export interface CleanupFeatureInput {
