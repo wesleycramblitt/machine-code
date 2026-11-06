@@ -196,7 +196,10 @@ interface ContextPanelItem {
 }
 const NEW_RUN_CONTEXT_TABS = ["Issues", "Files", "Knowledge", "References", "Skills", "Tools", "Scripts", "Plans", "Codebase", "Prompt"] as const;
 
-type NewRunState = ForkedRunSettings;
+type NewRunState = ForkedRunSettings & {
+  /** Isolation worktree. Shown only for build/sudo; other agents ignore it. */
+  worktree: boolean;
+};
 
 interface ModelPickerEntry {
   row: CatalogueRow;
@@ -861,6 +864,7 @@ export async function runTui(): Promise<void> {
     tier: "free",
     minFit: undefined,
     floors: "role",
+    worktree: true,
     prompt: "",
   };
   let newRunRepo = l.repoRoot;
@@ -1126,11 +1130,15 @@ export async function runTui(): Promise<void> {
       tier,
       minFit: undefined,
       floors: "role",
+      worktree: true,
       prompt: "",
     };
   };
 
   newrun = defaultNewRun();
+
+  /** Roles that isolate in a worktree and expose the verify submode. */
+  const agentIsolates = (agent: string): boolean => agent === "build" || agent === "sudo";
 
   const resetNewRunUi = () => {
     newRunInsert = false;
@@ -1172,8 +1180,10 @@ export async function runTui(): Promise<void> {
       ...(preferredAgent ? { agent: preferredAgent } : {}),
       ...(issue ? { issue } : {}),
     };
-    // Verification is role-shaped: build/sudo verify, the rest run direct.
-    newrun.verification = newrun.agent === "build" || newrun.agent === "sudo" ? "verified" : "direct";
+    // Verification and isolation are role-shaped: build/sudo verify, and a
+    // fresh build isolates while sudo starts on the main tree.
+    newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
+    newrun.worktree = newrun.agent !== "sudo";
     // A task-attached run starts with a concrete objective. The prompt stays
     // editable, but the human no longer has to type one.
     if (knownIssue) newrun.prompt = issuePrompt(knownIssue, newrun.agent);
@@ -1212,6 +1222,7 @@ export async function runTui(): Promise<void> {
         defaults,
         configuredProviders: configured,
       }),
+      worktree: newrun.worktree,
     };
     // A generic inherited request ("Build the task.") hides the real objective.
     // When the run is attached to an issue, derive the request from it instead.
@@ -1231,8 +1242,10 @@ export async function runTui(): Promise<void> {
     const previousPrompt = issuePrompt(issue, previousAgent);
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
     newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
-    // Verification follows the role: only build/sudo verify by default.
-    newrun.verification = newrun.agent === "build" || newrun.agent === "sudo" ? "verified" : "direct";
+    // Verification and isolation follow the role: only build/sudo verify, and
+    // sudo starts on the main tree until its worktree toggle is flipped.
+    newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
+    newrun.worktree = newrun.agent !== "sudo";
     // Keep an auto-derived objective in sync with the agent verb. A prompt the
     // human edited stays untouched.
     if (issue && (!newrun.prompt.trim() || newrun.prompt === previousPrompt)) {
@@ -1279,7 +1292,7 @@ export async function runTui(): Promise<void> {
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
-    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${skillModesKey}\0${includedFilesKey}`;
+    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
     const previewTtl = newRunInsert ? 60_000 : 5_000;
     if (
       !newRunPreviewCache ||
@@ -1327,6 +1340,7 @@ export async function runTui(): Promise<void> {
       runOverrides: {
         preset: newrun.preset,
         verification: newrun.verification === "redundant" ? "verified" : newrun.verification,
+        worktree: newrun.worktree,
         issues: newrun.issues,
         ask: newrun.ask,
         approval: newrun.approval,
@@ -1438,6 +1452,7 @@ export async function runTui(): Promise<void> {
       "--verify", newrun.verification,
       "--issues", newrun.issues,
       "--ask", String(newrun.ask),
+      "--worktree", newrun.worktree ? "true" : "false",
       "--approval", newrun.approval,
       "--ambiguity", newrun.ambiguity,
       ...(newRunParentId ? ["--parent", newRunParentId] : []),
@@ -2083,6 +2098,7 @@ export async function runTui(): Promise<void> {
         runOverrides: {
           preset: newrun.preset,
           verification: newrun.verification === "redundant" ? "verified" : newrun.verification,
+          worktree: newrun.worktree,
           issues: newrun.issues,
           ask: newrun.ask,
           approval: newrun.approval,
@@ -2585,8 +2601,11 @@ export async function runTui(): Promise<void> {
         ? promptActions
         : joinCommands([
             command("a", "Agent", displayAgent, agentTone(newrun.agent)),
-            ...(newrun.agent === "build"
-              ? [command("s", "Submode", newrun.verification === "verified" ? "Verify" : "Direct", C)]
+            ...(agentIsolates(newrun.agent)
+              ? [
+                  command("s", "Submode", newrun.verification === "verified" ? "Verify" : "Direct", C),
+                  command("w", "Worktree", newrun.worktree ? "on" : "off", newrun.worktree ? G : D),
+                ]
               : []),
             command("g", "Ambiguity", newrun.ambiguity, M),
             command("t", "Tier", displayTier, tierTone(newrun.tier)),
@@ -3885,7 +3904,8 @@ export async function runTui(): Promise<void> {
     // a Feature is attached, default to the agent that does the work.
     if (!hadIssue && newrun.agent === "general") {
       newrun.agent = issue.kind === "feature" ? "build" : "planner";
-      newrun.verification = newrun.agent === "build" ? "verified" : "direct";
+      newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
+      newrun.worktree = newrun.agent !== "sudo";
     }
     if (!newrun.prompt.trim() || newrun.prompt === previousPrompt) {
       newrun.prompt = issuePrompt(issue, newrun.agent);
@@ -4355,8 +4375,12 @@ export async function runTui(): Promise<void> {
       if (data === "a") { cycleAgent(); draw(); return; }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
       if (data === "s") {
-        if (newrun.agent !== "build") { notify("submode is build-only"); draw(); return; }
+        if (!agentIsolates(newrun.agent)) { notify("submode is build/sudo-only"); draw(); return; }
         cycleSubmode(); draw(); return;
+      }
+      if (data === "w") {
+        if (!agentIsolates(newrun.agent)) { notify("worktree is build/sudo-only"); draw(); return; }
+        newrun.worktree = !newrun.worktree; draw(); return;
       }
       if (data === "g") { cycleAmbiguity(); draw(); return; }
       if (data === "f") { cycleMinFit(); draw(); return; }
