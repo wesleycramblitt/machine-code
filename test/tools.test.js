@@ -556,3 +556,35 @@ test("text search respects ignore rules and a specific paths list", async () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("read prepareArguments treats null strings as absent selectors", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-nullstr-"));
+  try {
+    writeFileSync(join(root, "a.ts"), "export function foo() {\n  return 1;\n}\n", "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const prepared = tool.prepareArguments({
+      path: "a.ts",
+      offset: 1,
+      limit: 100,
+      symbol: "null",
+      symbols: null,
+      around: null,
+      section: "null",
+      sections: null,
+    });
+    assert.deepEqual(prepared, {
+      path: "a.ts",
+      offset: 1,
+      limit: 100,
+      symbols: null,
+      around: null,
+      sections: null,
+    });
+    const result = await tool.execute("id", prepared);
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /export function foo/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

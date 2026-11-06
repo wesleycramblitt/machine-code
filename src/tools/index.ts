@@ -134,6 +134,42 @@ function readTargetLabel(path: string, params: { symbol?: string | null; symbols
   return path;
 }
 
+/** Weak models serialize absent optionals as the string "null". No definable
+ * symbol or section is literally named "null", so treat it as absent before
+ * the mutual-exclusion checks below. Anything else passes through untouched
+ * for schema validation to judge. */
+const NULL_SELECTOR = new Set(["null", "undefined"]);
+
+function cleanReadSelectors(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  let changed = false;
+  for (const key of ["symbol", "section"] as const) {
+    const value = out[key];
+    if (typeof value === "string" && NULL_SELECTOR.has(value.trim())) {
+      delete out[key];
+      changed = true;
+    }
+  }
+  for (const key of ["symbols", "sections"] as const) {
+    const value = out[key];
+    if (Array.isArray(value)) {
+      const kept = value.filter(
+        (item) => !(typeof item === "string" && NULL_SELECTOR.has(item.trim())),
+      );
+      if (kept.length !== value.length) {
+        if (kept.length > 0) out[key] = kept;
+        else delete out[key];
+        changed = true;
+      }
+    } else if (typeof value === "string" && NULL_SELECTOR.has(value.trim())) {
+      delete out[key];
+      changed = true;
+    }
+  }
+  return changed ? out : args;
+}
+
 export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
   return {
     name: "read",
@@ -145,6 +181,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
       "Examples: {\"path\":\"src/tui.ts\",\"symbol\":\"runTui\"}; {\"path\":\"README.md\",\"section\":\"Configuration\"}; " +
       "{\"path\":\"src/tui.ts\",\"offset\":2400,\"limit\":120}.",
     parameters: ReadParams,
+    prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
     async execute(_id, params: Static<typeof ReadParams>) {
       try {
         const abs = resolveWithin(ctx.root, params.path);
