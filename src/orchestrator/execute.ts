@@ -29,7 +29,7 @@ import { executePacket } from "../orchestrate.js";
 import type { PlanMarker } from "../plan/schema.js";
 import type { OrchestrationScope } from "./scheduler.js";
 
-export interface ExecuteTaskInput {
+export interface ExecuteFeatureInput {
   layout: Layout;
   machine: MachineConfig;
   policy: Policy;
@@ -62,7 +62,7 @@ export interface ExecuteTaskInput {
   retryEvidence?: string;
 }
 
-export interface ExecuteTaskResult {
+export interface ExecuteFeatureResult {
   runId: string;
   status: RunStatus;
   error?: string;
@@ -109,7 +109,7 @@ function packetAcceptance(line: string): PacketAcceptance | null {
   return { command, ...(Object.keys(args).length > 0 ? { args } : {}) };
 }
 
-export function packetForTask(issue: Issue, plan?: PlanMarker, attempt = 1): TaskPacket {
+export function packetForFeature(issue: Issue, plan?: PlanMarker, attempt = 1): TaskPacket {
   const resolved = plan ?? defaultPlan(issue);
   const references = parseArtifactReferences(issue.body);
   const acceptance: PacketAcceptance[] = [];
@@ -147,7 +147,6 @@ export function defaultPlan(issue: Issue): PlanMarker {
   };
 }
 
-export const packetForFeature = packetForTask;
 
 export interface RetryWorktree {
   path: string;
@@ -232,11 +231,11 @@ function snapshotHash(packet: TaskPacket, plan: PlanMarker): string {
   return createHash("sha256").update(JSON.stringify({ packet, plan })).digest("hex");
 }
 
-export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskResult> {
+export async function executeFeature(input: ExecuteFeatureInput): Promise<ExecuteFeatureResult> {
   const { layout, issue } = input;
   const plan = input.plan ?? defaultPlan(issue);
   const attempt = input.attempt ?? 1;
-  const packet = packetForTask(issue, plan, attempt);
+  const packet = packetForFeature(issue, plan, attempt);
   if (input.retryEvidence) {
     packet.constraints = [...packet.constraints, `Previous attempt failed:\n${input.retryEvidence.slice(0, 4_000)}`];
   }
@@ -292,6 +291,7 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
         runId: recorder.id,
         kind: "feature",
         issueNumber: issue.ref.number,
+        issueTitle: issue.title,
         ...(input.base ? { base: input.base } : {}),
         processes: setupProcesses,
       });
@@ -382,6 +382,3 @@ export async function executeTask(input: ExecuteTaskInput): Promise<ExecuteTaskR
   }
 }
 
-export const executeFeature = executeTask;
-export type ExecuteFeatureInput = ExecuteTaskInput;
-export type ExecuteFeatureResult = ExecuteTaskResult;

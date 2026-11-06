@@ -1,17 +1,16 @@
 /**
- * machine_code — worktree isolation: one worktree per run, one branch per issue.
+ * machine_code — worktree isolation: one worktree per run, one branch per feature.
  *
- * Branches belong to issues (`mc/feature/<n>`, `mc/task/<n>`); worktrees belong
+ * Branches belong to features (`mc/feature/<n>-<slug>`); worktrees belong
  * to runs (`.machine_code/local/worktrees/<run-id>`). A mutating run never
  * touches the main tree: tools, commands, gates, and LSP all run with
  * `toolRoot` = the run's worktree, while run state, spend, instances, and
  * context sources stay rooted at `repoRoot`.
  *
- * Branch names are numbered for now; slugs are added in Phase 4 when issue
- * titles are available (branch reuse matches by exact name until then). The
- * task→feature base wiring arrives with the issue provider; until then
- * `featureNumber` supplies the parent explicitly and runs without an issue use
- * a run-scoped branch (`mc/run/<run-id>`).
+ * Branch slugs come from the feature title (`mc/feature/12-login-form`);
+ * a bare `mc/feature/<n>` (no slug) is accepted as the same branch. When the
+ * title changes, the existing branch is reused — never renamed — so rename
+ * lookups always check git for `mc/feature/<n>*` before creating.
  *
  * All git calls are argument vectors through runProc — no shell, no network,
  * no provider secrets.
@@ -229,17 +228,16 @@ export function reusableWorktreeOwner(
 
 /* ------------------------------------------------------------- creation */
 
-export type WorktreeKind = "feature" | "task" | "run";
+export type WorktreeKind = "feature" | "run";
 
 export interface WorktreeRequest {
   layout: Layout;
   runId: string;
-  /** "task" is a deprecated alias for "feature" (same branch layout). */
   kind: WorktreeKind;
-  /** Numeric issue precursor (Phase 4 adds provider-backed validation). */
+  /** Feature number for feature worktrees (--issue <n>). */
   issueNumber?: number;
-  /** Feature runs: explicit parent Epic for the branch base. */
-  featureNumber?: number;
+  /** Feature title: the branch slug comes from here when creating. */
+  issueTitle?: string;
   /** Explicit base branch/ref override. */
   base?: string;
   /** Queue packets: materialize the packet snapshot into the worktree. */
@@ -259,10 +257,47 @@ export interface WorktreeSpec {
   materialized: string[];
 }
 
-function branchFor(kind: WorktreeKind, runId: string, issueNumber?: number): string {
-  if (kind === "feature" || kind === "task") {
+/** Slug for a feature branch: lowercase, hyphen-separated, max 40 chars. */
+export function slugifyTitle(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+  return slug;
+}
+
+/** Canonical branch for a feature: `mc/feature/<n>-<slug>`, or bare when titleless. */
+export function featureBranchFor(number: number, title?: string): string {
+  const slug = title ? slugifyTitle(title) : "";
+  return slug ? `mc/feature/${number}-${slug}` : `mc/feature/${number}`;
+}
+
+/** List local branches matching a `git branch --list` pattern. */
+export async function listBranches(mainRoot: string, pattern: string): Promise<string[]> {
+  const result = await git(mainRoot, ["branch", "--list", "--format=%(refname:short)", pattern]);
+  if (result.code !== 0) return [];
+  return result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
+/**
+ * The existing branch for a feature, if any: exact `mc/feature/<n>` wins,
+ * otherwise the first slugged `mc/feature/<n>-*` match. Title renames never
+ * orphan a branch because creation checks this first.
+ */
+export async function findFeatureBranch(mainRoot: string, number: number): Promise<string | undefined> {
+  const exact = `mc/feature/${number}`;
+  if (await branchExists(mainRoot, exact)) return exact;
+  const slugged = await listBranches(mainRoot, `mc/feature/${number}-*`);
+  slugged.sort();
+  return slugged[0];
+}
+
+function branchFor(kind: WorktreeKind, runId: string, issueNumber?: number, issueTitle?: string): string {
+  if (kind === "feature") {
     if (!issueNumber) throw new WorktreeError("issue_required", "a feature worktree needs --issue <n>");
-    return `mc/feature/${issueNumber}`;
+    return featureBranchFor(issueNumber, issueTitle);
   }
   return `mc/run/${runId}`;
 }
@@ -332,14 +367,19 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   const layout = req.layout;
   const mainRoot = await mainWorktreeRoot(layout.repoRoot);
   const path = join(layout.localDir, "worktrees", req.runId);
-  const branch = branchFor(req.kind, req.runId, req.issueNumber);
+  // Reuse the feature's existing branch (exact or slugged) so title edits
+  // never strand work on a second branch.
+  const existingBranch =
+    req.kind === "feature" && req.issueNumber ? await findFeatureBranch(mainRoot, req.issueNumber) : undefined;
+  const branch = existingBranch ?? branchFor(req.kind, req.runId, req.issueNumber, req.issueTitle);
   const createdBranches: string[] = [];
 
   // Clean preflight always applies to the MAIN worktree.
   await ensureCleanMainTree(mainRoot);
 
-  // Base resolution: explicit --base wins; a feature with a known parent bases
-  // on the parent branch; otherwise the default base branch.
+  // Feature branches base on the default base (or --base). No parent-branch
+  // wiring: features are leaves under epics, which have no branch.
+  // Base resolution: explicit --base wins; otherwise the default base branch.
   let configuredBase: string | undefined;
   try {
     configuredBase = loadMachineConfig(layout).git?.baseBranch;
@@ -347,24 +387,7 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
     configuredBase = undefined;
   }
   const defaultBase = configuredBase ?? (await defaultBaseBranch(mainRoot));
-  let baseBranch: string;
-  if (req.base) {
-    baseBranch = req.base;
-  } else if ((req.kind === "task" || req.kind === "feature") && req.featureNumber) {
-    baseBranch = `mc/feature/${req.featureNumber}`;
-  } else {
-    baseBranch = defaultBase;
-  }
-
-  // Ensure the parent feature branch exists before basing a feature on it.
-  if (!req.base && (req.kind === "task" || req.kind === "feature") && req.featureNumber) {
-    const featureBranch = `mc/feature/${req.featureNumber}`;
-    if (!(await branchExists(mainRoot, featureBranch))) {
-      const featureBase = await resolveBaseRef(mainRoot, defaultBase);
-      await gitOrThrow(mainRoot, ["branch", featureBranch, featureBase], `branch ${featureBranch}`);
-      createdBranches.push(featureBranch);
-    }
-  }
+  const baseBranch = req.base ?? defaultBase;
 
   const baseRef = await resolveBaseRef(mainRoot, baseBranch);
 

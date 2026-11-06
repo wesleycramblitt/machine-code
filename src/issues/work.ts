@@ -14,10 +14,31 @@ import {
   type IssueRef,
   type NewIssue,
 } from "./provider.js";
-import {
-  validateRunIssue,
-  type ReservedOptions,
-} from "./reserved.js";
+/**
+ * Validate a run's primary issue association: it must be a Feature, or an
+ * Epic when `allowEpic` is set (planner runs attach to Epics).
+ */
+export async function validateRunIssue(
+  provider: IssueProvider,
+  ref: IssueRef,
+  opts: { allowEpic?: boolean } = {},
+): Promise<Issue> {
+  const issue = await provider.get(ref);
+  if (!issue) throw new IssueError("issue_not_found", `issue ${ref.repo}#${ref.number} not found`);
+  if ((issue.kind as string) === "task") {
+    throw new IssueError(
+      "issue_not_task",
+      `runs attach to Features or Epics only (${ref.repo}#${ref.number} is a task, which no longer exists as a kind)`,
+    );
+  }
+  if (issue.kind === "epic" && !opts.allowEpic) {
+    throw new IssueError(
+      "issue_not_feature",
+      `runs attach to Features (${ref.repo}#${ref.number} is an epic); planner runs may pass allowEpic`,
+    );
+  }
+  return issue;
+}
 
 export interface ResolveRunTargetInput {
   provider: IssueProvider;
@@ -26,8 +47,6 @@ export interface ResolveRunTargetInput {
   agent?: string;
   /** Fill an Epic gap with a new Feature. */
   autoCreate?: boolean;
-  /** Accepted but ignored (reserved anchors were removed). */
-  reserved?: ReservedOptions;
 }
 
 export interface ResolveRunTargetResult {

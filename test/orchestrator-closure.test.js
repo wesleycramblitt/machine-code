@@ -4,8 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { closeCompletedFeature, closeCompletedTask } from "../dist/orchestrator/closure.js";
-import { cascadeReserved } from "../dist/issues/completion.js";
+import { closeCompletedFeature } from "../dist/orchestrator/closure.js";
 import { RunRecorder } from "../dist/state/runs.js";
 
 function layout(root) {
@@ -69,10 +68,6 @@ function buildRun(l, issue) {
   return recorder;
 }
 
-test("closeCompletedFeature aliases closeCompletedTask", () => {
-  assert.equal(closeCompletedFeature, closeCompletedTask);
-});
-
 test("agent result approval records evidence and closes the feature", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-closure-"));
   try {
@@ -80,7 +75,7 @@ test("agent result approval records evidence and closes the feature", async () =
     const target = feature();
     const recorder = buildRun(l, target);
     const provider = new FakeProvider([target]);
-    const result = await closeCompletedTask({
+    const result = await closeCompletedFeature({
       provider,
       layout: l,
       issue: target,
@@ -128,13 +123,3 @@ test("closure walks feature -> epic one level and stops", async () => {
   }
 });
 
-test("cascadeReserved is a no-op", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-closure-res-"));
-  try {
-    const provider = new FakeProvider([feature()]);
-    assert.deepEqual(await cascadeReserved(provider, feature(), "close"), []);
-    assert.deepEqual(await cascadeReserved(provider, feature(), "reopen"), []);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});

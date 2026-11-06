@@ -373,49 +373,12 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
     }
   }
 
-  let mergeState: MergeState | undefined;
-  let prNumber: number | undefined;
-  let prUrl: string | undefined;
-  let prState: "none" | "open" | "merged" | "closed" | undefined;
-  if (toolRoot !== root) {
-    const { maybePublish } = await import("./pr/publish.js");
-    const published = await maybePublish({
-      layout,
-      machine,
-      recorder,
-      defaultApproval: resolvedBuild.config.approval,
-      ...(input.resultReview === "human" || input.review === false
-        ? { approvalOverride: "human" as const }
-        : {}),
-      title: `Feature: ${packet.goal}`,
-    });
-    if (published.status === "failed") {
-      return {
-        status: "blocked",
-        finalText: buildResult.finalText,
-        error: published.error ?? "Feature PR publish failed",
-        packet,
-        runId: recorder.id,
-        ...(commit ? { commit } : {}),
-        ...(reviewVerdict ? { reviewVerdict } : {}),
-        mergeState: "failed",
-      };
-    }
-    mergeState =
-      published.status === "merged"
-        ? "merged"
-        : published.status === "awaiting_approval"
-          ? "awaiting_approval"
-          : "skipped";
-    prNumber = published.pr?.number;
-    prUrl = published.pr?.url;
-    prState =
-      published.status === "merged"
-        ? "merged"
-        : published.status === "awaiting_approval"
-          ? "open"
-          : undefined;
-  }
+  // No PR step: the feature branch merges directly on human/agent approval
+  // (feature approve). The run record keeps merge fields unset.
+  const mergeState: MergeState | undefined = toolRoot !== root ? "skipped" : undefined;
+  const prNumber: number | undefined = undefined;
+  const prUrl: string | undefined = undefined;
+  const prState: "none" | "open" | "merged" | "closed" | undefined = undefined;
 
   return {
     status: "completed",

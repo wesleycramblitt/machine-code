@@ -139,7 +139,7 @@ export interface RunSummary {
   worktree?: string;
   /** Run that owns the worktree this run inspects (Review shares Build's). */
   worktreeOwnerRunId?: string;
-  /** Branch checked out in this run's worktree (mc/feature/<n>, mc/task/<n>, mc/run/<id>). */
+  /** Branch checked out in this run's worktree (mc/feature/<n>[-<slug>], mc/run/<id>). */
   branch?: string;
   /** Branch the worktree was based on. */
   baseBranch?: string;

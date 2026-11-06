@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { approveTask, runTaskChecks, taskStatus } from "../dist/tasks/lifecycle.js";
+import { approveFeature, runFeatureChecks, featureStatus } from "../dist/tasks/lifecycle.js";
 import { RunRecorder, readRun } from "../dist/state/runs.js";
 
 function setup() {
@@ -135,7 +135,7 @@ test("feature status points at the next lifecycle action", async () => {
   const { root, layout } = setup();
   try {
     const target = issue();
-    const status = await taskStatus(layout, target);
+    const status = await featureStatus(layout, target);
     assert.equal(status.stage, "ready");
     assert.equal(status.worktreeExists, false);
     assert.match(status.next.join("\n"), /feature status 31/);
@@ -151,7 +151,7 @@ test("review checks run in the worktree and are recorded on the run", async () =
     mkdirSync(worktree, { recursive: true });
     const target = issue();
     const run = createRun(layout, target, { worktree, branch: "mc/feature/31", baseBranch: "main" });
-    const results = await runTaskChecks(layout, target, ["node -e \"process.exit(0)\"", "false"]);
+    const results = await runFeatureChecks(layout, target, ["node -e \"process.exit(0)\"", "false"]);
     assert.equal(results.length, 2);
     assert.equal(results[0].passed, true);
     assert.equal(results[1].passed, false);
@@ -171,7 +171,7 @@ test("feature approve merges directly, closes the issue, and keeps the terminal 
     const target = issue();
     const provider = fakeProvider(target);
     const run = createRun(layout, target, { branch: "mc/feature/31", baseBranch: "main" });
-    const approved = await approveTask({
+    const approved = await approveFeature({
       layout,
       machine: {},
       provider,

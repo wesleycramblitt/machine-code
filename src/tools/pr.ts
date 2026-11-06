@@ -3,8 +3,8 @@
  *
  * Reads (list/status) need pr:read; creation/request-review need pr:create;
  * merge needs pr:merge AND the per-issue approval policy (human requests an
- * approval instead of merging). The normal Task/Feature publish pipeline is
- * runner-owned; this tool is for coordination and explicit merges.
+ * approval instead of merging). Feature merges are runner-owned
+ * (feature approve); this tool is for coordination and explicit merges.
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -88,13 +88,6 @@ export function prTool(ctx: PrToolContext): AgentTool<typeof PrParams> {
       case "create": {
         require("pr:create");
         if (!params.head || !params.base) return fail("create requires head and base");
-        const taskToFeature = params.head.startsWith("mc/task/") && params.base.startsWith("mc/feature/");
-        const featureToMain = params.head.startsWith("mc/feature/") && params.base === "main";
-        if (!taskToFeature && !featureToMain) {
-          return fail(
-            `invalid PR direction: ${params.head} → ${params.base} (Task→Feature or Feature→main only; Task PRs never target main)`,
-          );
-        }
         const pr = await ctx.provider.create({
           head: params.head,
           base: params.base,

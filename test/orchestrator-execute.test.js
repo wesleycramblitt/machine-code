@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { defaultPlan, packetForFeature, packetForTask } from "../dist/orchestrator/execute.js";
+import { defaultPlan, packetForFeature } from "../dist/orchestrator/execute.js";
 
 const plan = {
   v: 1,
@@ -19,7 +19,7 @@ const plan = {
 };
 
 test("feature packets carry goal, context, and typed acceptance", () => {
-  const packet = packetForTask(
+  const packet = packetForFeature(
     {
       ref: { provider: "github", repo: "o/r", number: 31 },
       title: "Implement thermal model",
@@ -47,7 +47,7 @@ test("feature packets carry goal, context, and typed acceptance", () => {
 });
 
 test("prose acceptance criteria use the Verification section as gates", () => {
-  const packet = packetForTask(
+  const packet = packetForFeature(
     {
       ref: { provider: "github", repo: "o/r", number: 31 },
       title: "Implement thermal model",
@@ -88,11 +88,11 @@ test("packet plan is optional: defaultPlan derives verification and result revie
     blocking: [],
     acceptance: ["typescript:test"],
   };
-  assert.equal(packetForFeature, packetForTask);
+  assert.ok(typeof packetForFeature === "function");
   assert.deepEqual(defaultPlan(human).verification, "verified");
   assert.deepEqual(defaultPlan(human).resultReview, "human");
   assert.deepEqual(defaultPlan({ ...human, approval: "agent" }).resultReview, "agent");
-  const packet = packetForTask(human);
+  const packet = packetForFeature(human);
   assert.equal(packet.id, "issue-31-1");
   assert.equal(packet.mode, "verified");
   assert.equal(packet.goal, "Implement thermal model");

@@ -99,15 +99,3 @@ export async function checkCompletion(
   }
   return { ok: true, openChildren, acceptance };
 }
-
-/**
- * Close/reopen cascade for a parent issue. Reserved anchors were removed, so
- * there is nothing to cascade to; kept as a no-op for call-site compatibility.
- */
-export async function cascadeReserved(
-  _provider: IssueProvider,
-  _issue: Issue,
-  _action: "close" | "reopen",
-): Promise<number[]> {
-  return [];
-}

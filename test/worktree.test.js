@@ -68,9 +68,8 @@ test("worktree git helpers are recorded by the supervisor", async () => {
     await createWorktree({
       layout,
       runId: "r-supervised",
-      kind: "task",
+      kind: "feature",
       issueNumber: 41,
-      featureNumber: 40,
       processes: supervisor,
     });
     const records = readProcessRecords(runDir);
@@ -110,7 +109,7 @@ test("worktree remove and prune helpers are recorded by the supervisor", async (
   }
 });
 
-test("feature worktree is created on its issue branch, based on the parent feature branch", async () => {
+test("feature worktree is created on a slugged issue branch from the base branch", async () => {
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
@@ -119,12 +118,11 @@ test("feature worktree is created on its issue branch, based on the parent featu
       runId: "r1",
       kind: "feature",
       issueNumber: 31,
-      featureNumber: 20,
+      issueTitle: "Add login form",
     });
-    assert.equal(spec.branch, "mc/feature/31");
-    assert.equal(spec.baseBranch, "mc/feature/20");
-    assert.ok(spec.createdBranches.includes("mc/feature/20"));
-    assert.ok(spec.createdBranches.includes("mc/feature/31"));
+    assert.equal(spec.branch, "mc/feature/31-add-login-form");
+    assert.equal(spec.baseBranch, "main");
+    assert.ok(spec.createdBranches.includes("mc/feature/31-add-login-form"));
     assert.ok(existsSync(join(spec.path, "README.md")));
 
     // Isolation: an edit in the worktree leaves the main tree untouched.
@@ -134,9 +132,9 @@ test("feature worktree is created on its issue branch, based on the parent featu
     // The commit lands on the feature branch only.
     const { sha } = await commitWorktree({ path: spec.path, message: "test commit" });
     assert.ok(sha && /^[0-9a-f]{40}$/.test(sha));
-    const parentTip = spawnSync("git", ["rev-parse", "mc/feature/20"], { cwd: dir, encoding: "utf8" }).stdout.trim();
-    const featureTip = spawnSync("git", ["rev-parse", "mc/feature/31"], { cwd: dir, encoding: "utf8" }).stdout.trim();
-    assert.notEqual(featureTip, parentTip);
+    const baseTip = spawnSync("git", ["rev-parse", "main"], { cwd: dir, encoding: "utf8" }).stdout.trim();
+    const featureTip = spawnSync("git", ["rev-parse", "mc/feature/31-add-login-form"], { cwd: dir, encoding: "utf8" }).stdout.trim();
+    assert.notEqual(featureTip, baseTip);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -334,6 +332,40 @@ test("pruneWorktrees removes only orphaned worktree directories", async () => {
     assert.equal(removed, 1);
     assert.ok(existsSync(live.path), "worktree with a run record must survive");
     assert.ok(!existsSync(dead));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("slugged branches: bare when titleless, reused across title edits", async () => {
+  const { dir } = tempRepo();
+  try {
+    const layout = fakeLayout(dir);
+    const bare = await createWorktree({ layout, runId: "r-bare", kind: "feature", issueNumber: 44 });
+    assert.equal(bare.branch, "mc/feature/44");
+    await removeWorktree({ layout, runId: "r-bare" });
+    spawnSync("git", ["branch", "-D", "mc/feature/44"], { cwd: dir });
+
+    const slugged = await createWorktree({
+      layout,
+      runId: "r-slug",
+      kind: "feature",
+      issueNumber: 44,
+      issueTitle: "Add Login Form!!",
+    });
+    assert.equal(slugged.branch, "mc/feature/44-add-login-form");
+    await removeWorktree({ layout, runId: "r-slug" });
+
+    // A later title edit finds the existing branch instead of minting another.
+    const renamed = await createWorktree({
+      layout,
+      runId: "r-renamed",
+      kind: "feature",
+      issueNumber: 44,
+      issueTitle: "Totally different title",
+    });
+    assert.equal(renamed.branch, "mc/feature/44-add-login-form");
+    assert.ok(!renamed.createdBranches.includes("mc/feature/44-add-login-form"));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

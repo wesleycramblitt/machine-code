@@ -28,6 +28,7 @@ import { summarizeRun, readStateView } from "./state/outcome.js";
 import { isTimelineEvent } from "./tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "./state/transcript.js";
 import { packetPath, parseVerificationCommands, readPacket } from "./packet.js";
+import { runProc } from "./proc.js";
 import { agentDef, type AgentName } from "./agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
 import { issueAccessFromCapabilities } from "./policy/capabilities.js";
@@ -36,15 +37,14 @@ import { policyFor, type OrchestrateResult } from "./orchestrate.js";
 import { resolveGates, runGates } from "./verify.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { allCommands } from "./commands/profiles.js";
-import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, reusableWorktreeOwner, WorktreeError } from "./worktree.js";
+import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, featureBranchFor, reusableWorktreeOwner, WorktreeError } from "./worktree.js";
 import { createIssueProvider } from "./issues/index.js";
 import { createPrProviderFor } from "./pr/factory.js";
 import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
-import { ensureEpicReserved, ensureFeatureReserved } from "./issues/reserved.js";
 import { isGenericTaskRequest, issueRequestVerb, issueRunRequest, resolveRunTarget } from "./issues/work.js";
 import { featureSizeErrors } from "./plan/validate.js";
-import { checkCompletion, cascadeReserved } from "./issues/completion.js";
-import { closeCompletedTask } from "./orchestrator/closure.js";
+import { checkCompletion } from "./issues/completion.js";
+import { closeCompletedFeature } from "./orchestrator/closure.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { isFreeRow } from "./select.js";
@@ -52,7 +52,7 @@ import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
-import { executeTask, findRetryWorktree, selectRetrySeed } from "./orchestrator/execute.js";
+import { executeFeature, findRetryWorktree, selectRetrySeed } from "./orchestrator/execute.js";
 import { featureStatus, approveFeature, cleanupFeature, runFeatureChecks, suggestedReviewChecks, featureRuns } from "./tasks/lifecycle.js";
 import { deleteIssue } from "./tasks/delete.js";
 import { deleteRun } from "./state/run-delete.js";
@@ -141,8 +141,7 @@ Usage:
   machine_code run --agent sudo "<rare feature>" [--worktree true|false]
                                     Sudo edits the main tree by default; --worktree true isolates it.
                                     Build and orchestrated runs use an isolated worktree (default on):
-                                    [--issue <n>] [--auto-issue] [--issue-type feature]
-                                    [--feature <n>] [--base <ref>]
+                                    [--issue <n>] [--auto-issue] [--base <ref>]
                                     Agent config overrides:
                                     [--verify direct|verified]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
@@ -222,6 +221,8 @@ Usage:
   machine_code feature status <issue>  Show the feature lifecycle and the next action
   machine_code feature start <issue>   Build, review, commit, and merge the Feature
                                      [--review agent|human] [--no-review] [--base <ref>] [--retry] [--dry-run]
+  machine_code feature checkout <issue>  Check out the feature branch for human review
+                                     (reuses the run worktree or materializes human-<n>)
   machine_code feature review <issue>  Review the worktree and run verification checks
                                      [--check <cmd>|--checks a,b] [--no-checks]
   machine_code feature approve <issue> Merge, accept, close, and clean up the Feature
@@ -229,9 +230,6 @@ Usage:
                                      [--keep-worktree] [--keep-branch] [--force]
   machine_code feature cleanup <issue> Remove the Feature worktree after closure
                                      [--force] [--keep-branch]
-  machine_code pr feature <n>       deprecated: approval merges directly (kept working):
-                                     review, gate, and open the Feature PR to main
-                                     [--gates cmd1,cmd2] [--approval human|agent] [--no-review]
   machine_code pr list|status <n>   Inspect pull requests
   machine_code provider disable|enable <name>
   machine_code provider cooldown <name> [minutes] | cooldown clear <name>
@@ -944,29 +942,20 @@ async function cmdRun(argv: string[]): Promise<number> {
   let requireProvider = flags.get("provider");
   let requireModel = flags.get("model");
   const issueFlag = flags.get("issue");
-  const issueTypeFlag = flags.get("issue-type") ?? "task";
-  const featureFlag = flags.get("feature");
   const baseFlag = flags.get("base");
   let request = positional.join(" ").trim();
 
-  // A task-attached run can derive its objective from the issue. Only an
+  // A feature-attached run can derive its objective from the issue. Only an
   // untracked run needs the human to type one.
   if (request.length === 0 && issueFlag === undefined) {
     fail(`run needs a question, or pass --issue N to run a feature`);
   }
-  if (issueTypeFlag !== "task" && issueTypeFlag !== "feature") fail(`--issue-type must be task or feature`);
 
   let issueNumber: number | undefined;
   if (issueFlag !== undefined) {
     const n = Number(issueFlag);
     if (!Number.isInteger(n) || n <= 0) fail(`--issue must be a positive issue number`);
     issueNumber = n;
-  }
-  let featureNumber: number | undefined;
-  if (featureFlag !== undefined) {
-    const n = Number(featureFlag);
-    if (!Number.isInteger(n) || n <= 0) fail(`--feature must be a positive issue number`);
-    featureNumber = n;
   }
 
   // Run-level agent configuration overrides (Phase 3).
@@ -1149,10 +1138,9 @@ async function cmdRun(argv: string[]): Promise<number> {
         resolved = await resolveRunTarget({
           provider: issueBundle.provider,
           ref: rawRef,
-          request: request || "task",
+          request: request || "feature",
           agent: agentNameParsed,
           autoCreate: flags.has("auto-issue"),
-          reserved: { runCounts: new Map(), autoCloseEmpty: true },
         });
       } catch (error) {
         if (error instanceof Error && "code" in error) fail((error as { message: string }).message);
@@ -1162,7 +1150,6 @@ async function cmdRun(argv: string[]): Promise<number> {
       requestIssue = resolved.scope ?? linkedIssue;
       issueRef = linkedIssue.ref;
       issueNumber = linkedIssue.ref.number;
-      if (featureNumber === undefined && linkedIssue.parent?.number) featureNumber = linkedIssue.parent.number;
       createdIssues = resolved.created;
     }
   }
@@ -1351,7 +1338,14 @@ async function cmdRun(argv: string[]): Promise<number> {
         : forceWorktree;
   let toolRoot = l.repoRoot;
   if (mutating) {
-    const expectedBranch = issueRef ? `mc/feature/${issueRef.number}` : undefined;
+    // A slugged branch (`mc/feature/<n>-<slug>`) and its bare form are the
+    // same branch: match a prior run by number prefix so title edits reuse it.
+    const branchPrefix = issueRef ? `mc/feature/${issueRef.number}` : undefined;
+    const expectedBranch = branchPrefix
+      ? [...parentChainRuns, ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot)]
+          .map((run) => run.branch)
+          .find((branch) => branch === branchPrefix || branch?.startsWith(`${branchPrefix}-`))
+      : undefined;
     const reuse = reusableWorktreeOwner(
       [
         ...parentChainRuns,
@@ -1388,7 +1382,7 @@ async function cmdRun(argv: string[]): Promise<number> {
           runId: recorder.id,
           kind: issueRef ? "feature" : "run",
           issueNumber: issueRef?.number,
-          featureNumber,
+          issueTitle: linkedIssue?.title,
           base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
           processes: worktreeProcesses,
         });
@@ -1559,18 +1553,6 @@ async function cmdRun(argv: string[]): Promise<number> {
       skipMap,
       skipSemantic,
       signal: abort.signal,
-    });
-  }
-
-  // Publish is runner-owned: the direct-exec path publishes too.
-  if (directExec && result.status === "completed" && toolRoot !== l.repoRoot) {
-    const { maybePublish } = await import("./pr/publish.js");
-    await maybePublish({
-      layout: l,
-      machine,
-      recorder,
-      defaultApproval: agentOverrides.approval ?? "human",
-      title: `Feature: ${request.split("\n")[0]!.slice(0, 120)}`,
     });
   }
 
@@ -2127,17 +2109,10 @@ async function cmdIssue(argv: string[]): Promise<number> {
         const parentIssue = await provider.get(parent);
         if (!parentIssue) fail(`parent not found: ${flags.get("parent")}`);
         if (kind === "feature" && parentIssue.kind !== "epic") fail("a Feature's parent must be an Epic");
-        if (kind === "feature") await ensureEpicReserved(provider, parentIssue.ref);
       }
       const body = flags.get("body") ?? "";
       const created = await provider.create({ title, body, kind, parent });
-      if (created.kind === "epic") {
-        const reserved = await ensureEpicReserved(provider, created.ref);
-        process.stdout.write(`created epic #${created.ref.number}; reserved Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}\n`);
-      } else {
-        const task0 = await ensureFeatureReserved(provider, created.ref);
-        process.stdout.write(`created feature #${created.ref.number}; reserved Task 0 #${task0.ref.number}\n`);
-      }
+      process.stdout.write(`created ${created.kind} #${created.ref.number}\n`);
       return 0;
     }
     case "edit": {
@@ -2156,16 +2131,14 @@ async function cmdIssue(argv: string[]): Promise<number> {
       const completion = await checkCompletion(provider, l, issue);
       if (!completion.ok) fail(`cannot close #${issue.ref.number}: ${completion.reason}`);
       await provider.close(issue.ref, flags.get("reason") ?? "completed");
-      const cascaded = await cascadeReserved(provider, issue, "close");
-      process.stdout.write(`closed #${issue.ref.number}${cascaded.length ? ` (reserved: ${cascaded.map((n) => `#${n}`).join(", ")})` : ""}\n`);
+      process.stdout.write(`closed #${issue.ref.number}\n`);
       return 0;
     }
     case "reopen": {
       const issue = await provider.get(ref("issue"));
       if (!issue) fail(`issue not found: ${refArg}`);
       await provider.reopen(issue.ref);
-      const cascaded = await cascadeReserved(provider, issue, "reopen");
-      process.stdout.write(`reopened #${issue.ref.number}${cascaded.length ? ` (reserved: ${cascaded.map((n) => `#${n}`).join(", ")})` : ""}\n`);
+      process.stdout.write(`reopened #${issue.ref.number}\n`);
       return 0;
     }
     case "delete": {
@@ -2199,7 +2172,6 @@ async function cmdIssue(argv: string[]): Promise<number> {
       if (!parent) fail(`parent not found: ${parentArg}`);
       const valid = issue.kind === "feature" && parent.kind === "epic";
       if (!valid) fail(`invalid hierarchy: ${issue.kind} cannot be a child of ${parent.kind} (Feature→Epic)`);
-      if (issue.kind === "feature") await ensureEpicReserved(provider, parent.ref);
       await provider.linkParent(issue.ref, parent.ref);
       process.stdout.write(`linked #${issue.ref.number} under #${parent.ref.number}\n`);
       return 0;
@@ -2207,15 +2179,11 @@ async function cmdIssue(argv: string[]): Promise<number> {
     case "ensure": {
       const issue = await provider.get(ref("issue"));
       if (!issue) fail(`issue not found: ${refArg}`);
-      if (issue.kind === "epic") {
-        const reserved = await ensureEpicReserved(provider, issue.ref);
-        process.stdout.write(`epic #${issue.ref.number}: Feature 0 #${reserved.feature0.ref.number}, Task 0 #${reserved.task0.ref.number}\n`);
-      } else if (issue.kind === "feature") {
-        const task0 = await ensureFeatureReserved(provider, issue.ref);
-        process.stdout.write(`feature #${issue.ref.number}: Task 0 #${task0.ref.number}\n`);
-      } else {
-        process.stdout.write(`task #${issue.ref.number}: nothing to ensure\n`);
-      }
+      const children = await provider.children(issue.ref);
+      const kinds = children.map((c) => c.kind).join(", ");
+      process.stdout.write(
+        `${issue.kind} #${issue.ref.number}: ${children.length} child issue(s)${kinds ? ` (${kinds})` : ""}\n`,
+      );
       return 0;
     }
     default:
@@ -2320,9 +2288,8 @@ async function cmdApprove(argv: string[]): Promise<number> {
   const completion = await checkCompletion(bundle.provider, l, issue);
   if (!completion.ok) fail(`cannot close #${issue.ref.number}: ${completion.reason}`);
   await bundle.provider.close(issue.ref, "completed");
-  const cascaded = await cascadeReserved(bundle.provider, issue, "close");
   const recorder = RunRecorder.reopen(l, readRun(l, requestingRunId)!.summary);
-  recorder.event("approval_granted", { issue: issue.ref.number, by: "human", cascaded });
+  recorder.event("approval_granted", { issue: issue.ref.number, by: "human" });
   recorder.event("issue_closed", { issue: issue.ref.number, by: requestingRunId, approval: "human" });
   process.stdout.write(`approved and closed #${issue.ref.number} (requested by run ${requestingRunId})\n`);
   return 0;
@@ -2336,62 +2303,7 @@ async function cmdPr(argv: string[]): Promise<number> {
   const l = layout();
   const machine = loadMachineConfig(l);
   if (sub === "feature") {
-    const n = Number(positional[0]);
-    if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code pr feature <feature#> [--gates cmd1,cmd2] [--approval human|agent] [--no-review]");
-    const bundle = await createIssueProvider(l, machine);
-    if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown"}`);
-    const gates = (flags.get("gates") ?? "")
-      .split(",")
-      .map((g) => g.trim())
-      .filter(Boolean)
-      .map((command) => ({ command }));
-    const recorder = new RunRecorder(l, {
-      agent: "build",
-      mode: "",
-      request: `publish feature #${n}`,
-      repoRoot: l.repoRoot,
-      issue: { provider: "github", repo: bundle.repo ?? "", number: n },
-    });
-    registerProject(l.home, l.repoRoot);
-    const review = !flags.has("no-review");
-    const runtime = review ? await loadRuntime(l) : undefined;
-    const { publishFeature } = await import("./pr/feature.js");
-    try {
-      const result = await publishFeature({
-        layout: l,
-        machine,
-        recorder,
-        feature: { provider: "github", repo: bundle.repo ?? "", number: n },
-        gates,
-        defaultApproval: flags.get("approval") === "agent" ? "agent" : "human",
-        review,
-        ...(runtime
-          ? {
-              models: runtime.models,
-              catalogue: runtime.catalogue.models,
-              configuredProviders: runtime.configuredProviders,
-              policy: runtime.policy,
-              home: l.home,
-            }
-          : {}),
-        ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
-      });
-      recorder.finalize(
-        result.status === "merged" || result.status === "awaiting_approval" ? "completed" : "blocked",
-        result.error,
-        result.pr ? `PR #${result.pr.number} ${result.pr.url}` : result.error,
-      );
-      if (result.reviewVerdict) process.stdout.write(`Feature Review: ${result.reviewVerdict}\n`);
-      if (result.pr) process.stdout.write(`PR #${result.pr.number} ${result.status}: ${result.pr.url}
-`);
-      else process.stdout.write(`${result.status}: ${result.error ?? ""}
-`);
-      return result.status === "blocked" || result.status === "failed" ? EXIT.blocked : 0;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      recorder.finalize("failed", message);
-      fail(message);
-    }
+    fail("pr feature was removed: features merge directly with \"machine_code feature approve <n>\"");
   }
   if (sub === "list" || sub === "status") {
     const { createPrProviderFor } = await import("./pr/factory.js");
@@ -2410,14 +2322,14 @@ async function cmdPr(argv: string[]): Promise<number> {
     process.stdout.write(`#${pr.number} ${pr.state}${pr.isDraft ? " draft" : ""} ${pr.head} → ${pr.base}\n${pr.title}\n${pr.url}\n`);
     return 0;
   }
-  fail("usage: machine_code pr feature <n> | list | status <n>");
+  fail("usage: machine_code pr list | status <n>");
 }
 
 /* ------------------------------------------------------------------ feature */
 
 function featureRefNumber(value: string | undefined): number {
   const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code feature <status|start|review|approve|cleanup> <issue>");
+  if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code feature <status|start|review|approve|cleanup|checkout> <issue>");
   return n;
 }
 
@@ -2484,8 +2396,8 @@ async function prProviderForFeature(l: ReturnType<typeof layout>) {
 
 async function cmdFeature(argv: string[]): Promise<number> {
   const sub = argv[0];
-  if (!sub || !["status", "start", "review", "approve", "cleanup"].includes(sub)) {
-    fail("usage: machine_code feature status|start|review|approve|cleanup <issue>");
+  if (!sub || !["status", "start", "review", "approve", "cleanup", "checkout"].includes(sub)) {
+    fail("usage: machine_code feature status|start|review|approve|cleanup|checkout <issue>");
   }
   const { flags, positional } = parseFlags(argv.slice(1));
   const number = featureRefNumber(positional[0] ?? flags.get("issue"));
@@ -2565,7 +2477,7 @@ async function cmdFeature(argv: string[]): Promise<number> {
         `warning: feature #${number} has no ## Verification commands; feature review needs --check <command>\n`,
       );
     }
-    const result = await executeTask({
+    const result = await executeFeature({
       layout: l,
       machine: runtime.machine,
       policy: runtime.policy,
@@ -2666,6 +2578,26 @@ async function cmdFeature(argv: string[]): Promise<number> {
         `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
         `${approved.worktreeRemoved ? "; worktree removed" : ""}\n`,
     );
+    return 0;
+  }
+
+  if (sub === "checkout") {
+    // Human review: make sure the feature branch is checked out in a worktree
+    // and print the `cd` path. Reuses the run worktree when it still exists;
+    // otherwise materializes a stable human-<n> worktree from the branch.
+    const checkoutStatus = await featureStatus(l, issue, prs ? { prs } : {});
+    const checkoutBranch = checkoutStatus.branch ?? featureBranchFor(issue.ref.number, issue.title);
+    const mainRoot = await mainWorktreeRoot(l.repoRoot);
+    if (!(await branchExists(mainRoot, checkoutBranch))) {
+      fail(`feature #${number} has no branch yet (${checkoutBranch} missing); start it with "machine_code feature start ${number}"`);
+    }
+    const checkedOut = await branchCheckedOutAt(mainRoot, checkoutBranch);
+    const checkoutPath = checkedOut ?? (await recreateWorktreeFromBranch(l, `human-${number}`, checkoutBranch));
+    const head = await runProc("git", ["log", "-1", "--format=%h %s"], { cwd: checkoutPath, timeoutMs: 30_000 });
+    process.stdout.write(`Branch: ${checkoutBranch}${checkoutStatus.baseBranch ? ` → ${checkoutStatus.baseBranch}` : ""}\n`);
+    process.stdout.write(`Worktree: ${checkoutPath}${checkedOut ? "" : " (materialized for review)"}\n`);
+    if (head.code === 0 && head.stdout.trim()) process.stdout.write(`HEAD: ${head.stdout.trim()}\n`);
+    process.stdout.write(`Review: cd ${checkoutPath}\n`);
     return 0;
   }
 
@@ -3395,7 +3327,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
   }
   if (sub === "approve") {
     const id = flags.get("orchestration");
-    const task = Number(flags.get("feature") ?? flags.get("task"));
+    const task = Number(flags.get("feature"));
     if (!id || !Number.isInteger(task) || task <= 0) {
       fail("usage: machine_code orchestrate approve --orchestration <id> --feature <number>");
     }
@@ -3670,7 +3602,7 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
       process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempt}${retry > 0 ? ` (retry ${retry})` : ""}\n`);
       let outcome;
       try {
-        outcome = await executeTask({
+        outcome = await executeFeature({
           layout: l,
           machine: runtime.machine,
           policy: runtime.policy,
@@ -3709,15 +3641,11 @@ async function cmdOrchestrate(argv: string[]): Promise<number> {
           process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting result approval\n`);
           return { checkpoint: "awaiting_result_approval" };
         }
-        if (outcome.mergeState === "awaiting_approval") {
-          process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting PR merge approval\n`);
-          return { checkpoint: "awaiting_merge" };
-        }
         if (task.plan.resultReview === "agent") {
           const fresh = await bundle.provider.get(task.issue.ref);
           if (fresh) {
             try {
-              const closed = await closeCompletedTask({
+              const closed = await closeCompletedFeature({
                 provider: bundle.provider,
                 layout: l,
                 issue: fresh,
@@ -4686,10 +4614,6 @@ async function main(): Promise<void> {
       code = await cmdAccept(rest);
       break;
     case "feature":
-      code = await cmdFeature(rest);
-      break;
-    case "task":
-      process.stderr.write("task is now feature\n");
       code = await cmdFeature(rest);
       break;
     case "pr":

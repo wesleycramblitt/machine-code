@@ -103,7 +103,7 @@ export interface AssembleInput {
 }
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
-  issues: ["task", "feature", "epic"],
+  issues: ["feature", "epic"],
   files: ["file"],
   knowledge: ["knowledge"],
   references: ["reference"],
@@ -405,10 +405,10 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // Task / Feature / Epic blocks (task first, then nearest ancestor).
+  // Current issue block, then nearest ancestor.
   if (current) {
     pending.push({
-      kind: "task",
+      kind: current.kind,
       origin: "explicit",
       ref: `${current.ref.repo}#${current.ref.number}`,
       depth: 0,

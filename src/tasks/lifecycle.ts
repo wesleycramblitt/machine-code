@@ -6,20 +6,21 @@
  * status, review checks, approval, closure, and worktree cleanup.
  *
  * Approval merges the feature branch directly into its base branch (no PR).
- * Legacy `Task*` names remain as aliases for compatibility.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import type { Issue, IssueProvider, IssueRef } from "../issues/provider.js";
 import { acceptanceEvidence } from "../issues/completion.js";
-import { closeCompletedTask } from "../orchestrator/closure.js";
+import { closeCompletedFeature } from "../orchestrator/closure.js";
 import { readOrchestration, updateOrchestration } from "../orchestrator/state.js";
 import { parsePlanMarker, isReadyPlan, type PlanMarker } from "../plan/schema.js";
 import { listRuns, readRun, RunRecorder, type RunSummary } from "../state/runs.js";
 import {
   commitWorktree,
   defaultBaseBranch,
+  featureBranchFor,
+  findFeatureBranch,
   mainWorktreeRoot,
   recreateWorktreeFromBranch,
   removeWorktree,
@@ -197,7 +198,7 @@ export async function featureStatus(
   const latest = runs[0];
   const build = latestBuildRun(runs);
   const review = latestReviewRun(runs);
-  const branch = build?.branch ?? latest?.branch ?? `mc/feature/${issue.ref.number}`;
+  const branch = build?.branch ?? latest?.branch ?? featureBranchFor(issue.ref.number, issue.title);
   const baseBranch = build?.baseBranch ?? latest?.baseBranch;
   const worktree = build?.worktree ?? latest?.worktree;
   const state = await worktreeState(worktree);
@@ -426,8 +427,13 @@ export async function approveFeature(input: ApproveFeatureInput): Promise<Approv
     }
   }
 
-  const branch = current.branch ?? `mc/feature/${issue.ref.number}`;
   const mainRoot = await mainRepoRoot(layout);
+  // A run record without a branch (old runs, bare checkouts) still merges the
+  // feature's existing branch; only mint the slugged name when none exists.
+  const branch =
+    current.branch ??
+    (await findFeatureBranch(mainRoot, issue.ref.number)) ??
+    featureBranchFor(issue.ref.number, issue.title);
   const baseBranch = current.baseBranch ?? (await defaultBaseBranch(mainRoot));
 
   const branchCheck = await runProc("git", ["rev-parse", "--verify", `refs/heads/${branch}`], {
@@ -478,7 +484,7 @@ export async function approveFeature(input: ApproveFeatureInput): Promise<Approv
     current = recorder.current;
   }
 
-  const closed = await closeCompletedTask({
+  const closed = await closeCompletedFeature({
     provider,
     layout,
     issue,
@@ -552,22 +558,3 @@ export async function cleanupFeature(input: CleanupFeatureInput): Promise<{ remo
   }
 }
 
-// ---------------------------------------------------------------------------
-// Legacy Task* aliases. New code uses the Feature* names above.
-// ---------------------------------------------------------------------------
-
-export type TaskStage = FeatureStage;
-export type TaskStatus = FeatureStatus;
-export type TaskReviewCheck = FeatureReviewCheck;
-export type TaskCheckResult = FeatureCheckResult;
-export type TaskStatusOptions = FeatureStatusOptions;
-export type ApproveTaskInput = ApproveFeatureInput;
-export type ApproveTaskResult = ApproveFeatureResult;
-export type CleanupTaskInput = CleanupFeatureInput;
-
-export const taskRuns = featureRuns;
-export const latestTaskRun = latestFeatureRun;
-export const taskStatus = featureStatus;
-export const runTaskChecks = runFeatureChecks;
-export const approveTask = approveFeature;
-export const cleanupTask = cleanupFeature;

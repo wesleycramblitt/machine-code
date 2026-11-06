@@ -12,7 +12,7 @@ import type { MachineConfig } from "../config.js";
 import type { Issue, IssueProvider } from "../issues/provider.js";
 import { listRuns, readRun, RunRecorder } from "../state/runs.js";
 import { isActiveStatus } from "../state/run-schema.js";
-import { removeWorktree } from "../worktree.js";
+import { listBranches, mainWorktreeRoot, removeWorktree } from "../worktree.js";
 import { createPrProviderFor } from "../pr/factory.js";
 import type { PullRequestProvider } from "../pr/provider.js";
 import { runProc } from "../proc.js";
@@ -126,6 +126,15 @@ async function cleanupIssue(
 
   const branches = new Set<string>();
   branches.add(`mc/feature/${issue.ref.number}`);
+  // A renamed title leaves the old slug behind; clean every variant.
+  try {
+    const mainRoot = await mainWorktreeRoot(input.layout.repoRoot);
+    for (const slugged of await listBranches(mainRoot, `mc/feature/${issue.ref.number}-*`)) {
+      branches.add(slugged);
+    }
+  } catch {
+    // branch listing is best-effort; exact names below still apply
+  }
   for (const run of runs) {
     if (run.branch && (run.branch.startsWith("mc/task/") || run.branch.startsWith("mc/feature/"))) {
       branches.add(run.branch);

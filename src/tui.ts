@@ -42,6 +42,7 @@ import { loadAvailability, saveAvailability, type AvailabilityState } from "./av
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
 import { planSchedule, type ScheduledTask } from "./orchestrator/scheduler.js";
+import { featureBranchFor } from "./worktree.js";
 import { listOrchestrations, orchestrationStopRequested, readLease, requestOrchestrationStop } from "./orchestrator/state.js";
 import { skillListItems, toolListItems, tokensForChars } from "./tui/tools.js";
 import { toolSchemaChars } from "./tools/schema.js";
@@ -3096,7 +3097,7 @@ export async function runTui(): Promise<void> {
             const selBuild = runsDesc.find((run) => run.agent === "build" || run.phase === "build") ?? selLatest;
             const selPlan = sel.plan ? `${sel.plan.status}/${sel.plan.verification}` : "missing plan";
             const selModel = sel.ready ? orchModelForTask(feature.title.length, sel.plan?.verification) : "—";
-            const branch = selBuild?.branch ?? selLatest?.branch ?? `mc/feature/${feature.ref.number}`;
+            const branch = selBuild?.branch ?? selLatest?.branch ?? featureBranchFor(feature.ref.number, feature.title);
             const worktree = selBuild?.worktree ?? selLatest?.worktree ?? "none";
             lines.push("", ` ${B}${word.dim ? D : word.tone}${word.text}${R} ${D}#${feature.ref.number}${R} ${W}${trunc(feature.title, Math.max(16, cols - 24))}${R}`);
             lines.push(`   ${D}plan${R}  ${C}${selPlan}${R}`);
@@ -3112,6 +3113,7 @@ export async function runTui(): Promise<void> {
             );
             lines.push(`   ${D}worktree${R} ${W}${trunc(worktree, Math.max(16, cols - 16))}${R}`);
             lines.push(`   ${D}branch${R}   ${W}${branch}${R}  ${D}approval${R} ${W}${feature.approval ?? "human"}${R}`);
+            lines.push(`   ${D}review${R}    ${W}machine_code feature checkout ${feature.ref.number}${R}`);
             const next = selLatest?.status === "completed"
               ? `machine_code feature approve ${feature.ref.number}`
               : sel.plan?.status === "ready"
@@ -3129,7 +3131,7 @@ export async function runTui(): Promise<void> {
             const latest = runsDesc[0];
             const build = runsDesc.find((run) => run.agent === "build" || run.phase === "build") ?? latest;
             const worktree = build?.worktree ?? latest?.worktree ?? "—";
-            const branch = build?.branch ?? latest?.branch ?? `mc/feature/${feature.ref.number}`;
+            const branch = build?.branch ?? latest?.branch ?? featureBranchFor(feature.ref.number, feature.title);
             const approval = feature.approval ?? "human";
             rows.push({
               line: selected(
@@ -3156,6 +3158,7 @@ export async function runTui(): Promise<void> {
           command(":!", "Tick", undefined, G),
           command("i", "Stop", undefined, RED),
           command("x", "Resume", undefined, G),
+          command("w", "Worktree", undefined, C),
           command("Enter", "Open feature", undefined, G),
           command("Esc", "Back", undefined, GR),
         ]);
@@ -5223,6 +5226,20 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
+      if (data === "w") {
+        const checkoutTask = selected();
+        if (!checkoutTask) { notify("no feature selected"); draw(); return; }
+        const checkoutCli = fileURLToPath(new URL("./cli.js", import.meta.url));
+        const checkoutOut = spawnSync(
+          process.execPath,
+          [checkoutCli, "feature", "checkout", String(checkoutTask.issue.ref.number)],
+          { cwd: scopeCtx().repo, encoding: "utf8", timeout: 60_000 },
+        );
+        const checkoutText = `${checkoutOut.stdout ?? ""}${checkoutOut.stderr ?? ""}`.trim();
+        notify(checkoutOut.status === 0 ? checkoutText.split("\n").slice(0, 3).join(" · ") : `checkout failed: ${checkoutText.slice(0, 200)}`);
+        draw();
+        return;
+      }
       if (data === "\r" || data === "\n") {
         const task = selected()?.issue ?? (pipelineScope ? issueByRef(pipelineScope.ref) : undefined);
         if (task) {
@@ -5374,9 +5391,9 @@ function settingExplanation(
     case "verification":
       return "direct runs the role's own checks. verified adds focused tests for acceptance.";
     case "worktree":
-      return "on isolates the run in its own worktree on mc/feature/<n>. off runs in the main tree.";
+      return "on isolates the run in its own worktree on mc/feature/<n>-<slug>. off runs in the main tree.";
     case "approval":
-      return "human requires human approval for issue close and PR merge. agent lets the agent approve its own result.";
+      return "human requires human approval for the feature merge. agent lets the agent merge and close.";
     case "ambiguity":
       return "strict asks on any material gap. precise resolves low-impact gaps and asks when a choice changes the work. adaptive infers intent. autonomous decides without asking.";
     case "minFit":

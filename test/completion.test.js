@@ -1,7 +1,6 @@
 /**
- * Phase 8 tests: acceptance evidence, parent completion checks, and the
- * (removed) reserved-issue cascade. All children are deliverables; there are
- * no reserved anchors, so cascadeReserved is a no-op returning [].
+ * Acceptance evidence and parent completion checks. All children are
+ * deliverables; there are no reserved anchors and no cascade.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { checkCompletion, acceptanceEvidence, cascadeReserved } from "../dist/issues/completion.js";
+import { checkCompletion, acceptanceEvidence } from "../dist/issues/completion.js";
 import { RunRecorder } from "../dist/state/runs.js";
 
 function fakeLayout(root) {
@@ -130,20 +129,3 @@ test("a Feature with an open PR cannot close", async () => {
   }
 });
 
-test("closing a parent has no reserved cascade; cascadeReserved returns []", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-casc-"));
-  try {
-    const epic = issue(10, "epic", "Epic");
-    const feature = issue(20, "feature", "Feature", { parent: epic.ref });
-    const provider = new FakeProvider([epic, feature]);
-
-    const closed = await cascadeReserved(provider, epic, "close");
-    assert.deepEqual(closed, []);
-    assert.equal(provider.map.get(20).state, "open", "children are deliverables, untouched by the cascade");
-
-    const reopened = await cascadeReserved(provider, epic, "reopen");
-    assert.deepEqual(reopened, []);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});

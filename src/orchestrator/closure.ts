@@ -11,7 +11,7 @@ import { checkCompletion } from "../issues/completion.js";
 import type { Layout } from "../paths.js";
 import { readRun, RunRecorder } from "../state/runs.js";
 
-export interface CloseTaskInput {
+export interface CloseFeatureInput {
   provider: IssueProvider;
   layout: Layout;
   issue: Issue;
@@ -19,13 +19,13 @@ export interface CloseTaskInput {
   by: "agent" | "human";
 }
 
-export interface CloseTaskResult {
+export interface CloseFeatureResult {
   status: "closed" | "blocked" | "failed";
   error?: string;
   closedParents: number[];
 }
 
-export async function closeCompletedTask(input: CloseTaskInput): Promise<CloseTaskResult> {
+export async function closeCompletedFeature(input: CloseFeatureInput): Promise<CloseFeatureResult> {
   const detail = readRun(input.layout, input.runId);
   if (!detail) return { status: "failed", error: `run ${input.runId} is unreadable`, closedParents: [] };
   const recorder = RunRecorder.reopen(input.layout, detail.summary);
@@ -72,6 +72,3 @@ export async function closeCompletedTask(input: CloseTaskInput): Promise<CloseTa
   return { status: "closed", closedParents };
 }
 
-export const closeCompletedFeature = closeCompletedTask;
-export type CloseFeatureInput = CloseTaskInput;
-export type CloseFeatureResult = CloseTaskResult;

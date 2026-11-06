@@ -12,6 +12,7 @@ export type ContextKind =
   | "project"
   | "epic"
   | "feature"
+  /** Legacy manifests used "task" for the current issue block. */
   | "task"
   | "packet"
   | "knowledge"
