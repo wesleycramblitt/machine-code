@@ -52,6 +52,32 @@ export function removeTombstones(layout: Layout, refs: Iterable<IssueRef>): void
   writeJsonAtomic(tombstonesPath(layout), { deleted: [...deleted].sort() });
 }
 
+/**
+ * Self-healing tombstones: drop entries the provider still lists. A tombstone
+ * means "a delete was requested"; if the provider still returns the issue and
+ * the caller confirms no delete is in flight, the delete never landed and the
+ * issue must become visible again instead of staying hidden forever.
+ * Returns the cleared keys.
+ */
+export function reconcileTombstones(
+  layout: Layout,
+  listed: readonly IssueRef[],
+  isInFlight: (key: string) => boolean,
+): string[] {
+  const tombstoned = readTombstones(layout);
+  if (tombstoned.size === 0) return [];
+  const cleared: string[] = [];
+  for (const ref of listed) {
+    const key = issueKey(ref);
+    if (tombstoned.has(key) && !isInFlight(key)) {
+      tombstoned.delete(key);
+      cleared.push(key);
+    }
+  }
+  if (cleared.length > 0) writeJsonAtomic(tombstonesPath(layout), { deleted: [...tombstoned].sort() });
+  return cleared;
+}
+
 export function readIssueCache(layout: Layout): IssueCacheFile | null {
   const file = issueCachePath(layout);
   if (!existsSync(file)) return null;

@@ -125,10 +125,17 @@ export function parsePlanRef(value: string): { ref?: PlanSourceRef; error?: stri
   return { ref: { file, start, end } };
 }
 
+/** A markdown ATX heading (`#`, `##`, …) starts a general section: it is never part of a plan item. */
+function isHeadingLine(line: string): boolean {
+  return /^\s*#{1,6}(\s|$)/.test(line);
+}
+
 /**
  * Replace plan file lines [start, end] (1-based inclusive) with `line`.
- * Returns `{ replaced: true }`, or `{ replaced: false, error }` when the
- * file is missing or the range is out of bounds.
+ * Heading lines in the range belong to the section, not the plan item, so
+ * they stay in place and only the remaining lines collapse into `line`.
+ * Returns `{ replaced: false, error }` when the file is missing, the range
+ * is out of bounds, or the range holds only headings (nothing to replace).
  */
 export function replacePlanLines(
   repoRoot: string,
@@ -148,7 +155,20 @@ export function replacePlanLines(
   if (start < 1 || end > lines.length || end < start) {
     return { replaced: false, error: `plan_ref ${planFile}:${start}-${end} is out of bounds (${lines.length} lines)` };
   }
-  lines.splice(start - 1, end - start + 1, line);
+  const segment = lines.slice(start - 1, end);
+  const kept: string[] = [];
+  let inserted = false;
+  for (const entry of segment) {
+    if (isHeadingLine(entry)) kept.push(entry);
+    else if (!inserted) {
+      kept.push(line);
+      inserted = true;
+    }
+  }
+  if (!inserted) {
+    return { replaced: false, error: `plan_ref ${planFile}:${start}-${end} names only headings; nothing to replace` };
+  }
+  lines.splice(start - 1, segment.length, ...kept);
   try {
     writeFileSync(abs, `${lines.join("\n").replace(/\n$/, "")}\n`, "utf8");
   } catch (error) {

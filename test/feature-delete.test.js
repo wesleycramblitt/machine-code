@@ -137,6 +137,27 @@ test("tombstones hide a deleted issue even when a stale cache writes it back", (
   }
 });
 
+test("reconcileTombstones unhides provider-listed issues with no delete in flight", async () => {
+  const { reconcileTombstones, readTombstones } = await import("../dist/issues/cache.js");
+  const root = mkdtempSync(join(tmpdir(), "mc-del-reconcile-"));
+  try {
+    const l = layout(root);
+    const alive = issue(31, "feature");
+    const gone = issue(32, "feature");
+    const inflight = issue(33, "feature");
+    writeIssueCache(l, "o/r", [alive, inflight]);
+    addTombstones(l, [alive.ref, gone.ref, inflight.ref]);
+    assert.deepEqual(readIssueCache(l).issues, []);
+    // Provider still lists alive + inflight; gone stays hidden.
+    const cleared = reconcileTombstones(l, [alive.ref, inflight.ref], (key) => key === "o/r#33");
+    assert.deepEqual(cleared, ["o/r#31"]);
+    assert.deepEqual([...readTombstones(l)].sort(), ["o/r#32", "o/r#33"]);
+    assert.deepEqual(readIssueCache(l).issues.map((i) => i.ref.number), [31]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("legacy reserved anchors are gone: reserved-shaped issues delete normally", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-del-reserved-"));
   try {

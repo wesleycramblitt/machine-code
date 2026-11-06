@@ -17,7 +17,7 @@ import { layout, type Layout } from "./paths.js";
 import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
-import { addTombstones, readIssueCache, removeTombstones, writeIssueCache } from "./issues/cache.js";
+import { addTombstones, readIssueCache, reconcileTombstones, removeTombstones, writeIssueCache } from "./issues/cache.js";
 import type { Issue, IssueRef } from "./issues/provider.js";
 import { headerCounts, issueGlyphKind, issueRowDetail, sortRuns } from "./tui/status.js";
 import {
@@ -991,7 +991,9 @@ export async function runTui(): Promise<void> {
     for (const repoRoot of repos) {
       if (!repoRoot) continue;
       const cache = readIssueCache(layout(repoRoot));
-      if (cache) caches.set(repoRoot, cache.issues);
+      // In-flight deletes hide here (in memory); the cache file itself is
+      // never hand-edited, only written from provider data on refresh.
+      if (cache) caches.set(repoRoot, cache.issues.filter((issue) => !deletingIssues.has(refKey(issue.ref))));
     }
     return caches;
   };
@@ -1065,6 +1067,14 @@ export async function runTui(): Promise<void> {
           }
           const issues = (await bundle.provider.list({ state: "all", limit: 300 }))
             .filter((issue) => !deletingIssues.has(refKey(issue.ref)));
+          // Self-healing tombstones: the provider still lists these and no
+          // delete is in flight, so a previous delete never landed — unhide
+          // them instead of hiding live issues forever.
+          reconcileTombstones(
+            repoLayout,
+            issues.map((issue) => issue.ref),
+            (key) => deletingIssues.has(key),
+          );
           writeIssueCache(repoLayout, bundle.repo ?? "", issues);
           refreshed += 1;
         } catch {
@@ -1081,18 +1091,6 @@ export async function runTui(): Promise<void> {
         issueRefreshQueued = false;
         void refreshIssues(scope);
       }
-    }
-  };
-
-  const openUrl = (url: string | undefined) => {
-    if (!url) { notify("no URL for this item"); return; }
-    try {
-      const child = spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
-      child.on("error", () => notify(url));
-      child.unref();
-      notify(`opened ${url}`);
-    } catch {
-      notify(url);
     }
   };
 
@@ -2036,7 +2034,7 @@ export async function runTui(): Promise<void> {
       actions = narrow
         ? joinCommands([
             command("n", "New", undefined, C),
-            command("p", "Orchestrate", undefined, Y),
+            command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
             ...answerAction,
             command("space", "Fold", undefined, Y),
@@ -2045,7 +2043,7 @@ export async function runTui(): Promise<void> {
           ])
         : joinCommands([
             command("n", "New run", undefined, C),
-            command("p", "Orchestrate", undefined, Y),
+            command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
             ...answerAction,
             command("space", "Fold", undefined, Y),
@@ -2058,6 +2056,8 @@ export async function runTui(): Promise<void> {
         command("D", "Delete", undefined, RED),
       ]);
       if (toast) secondary = `${Y}${toast}${R}`;
+      else if (issueRefreshing) secondary = `${D}syncing issues…${R}`;
+      else if (issueRefreshAt > 0) secondary = `${D}issues synced ${ago(new Date(issueRefreshAt).toISOString())} ago${R}`;
     }
 
     /* ------------------------------------------------------------ issue */
@@ -2139,9 +2139,8 @@ export async function runTui(): Promise<void> {
         command("Enter", "Open", undefined, G),
         command("j/k", "Select", undefined, M),
         command("p", approveLabel, undefined, Y),
-        command("P", "Orchestrate", undefined, C),
+        command("P", "Pipeline", undefined, C),
         command("D", "Delete", undefined, RED),
-        command("o", "Open URL", undefined, BL),
         command("Esc", "Back", undefined, GR),
       ]);
       secondary = `${D}${issue.kind} #${issue.ref.number} · ${issueRuns.length} run(s) · ${preview.chars.toLocaleString()} context chars${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
@@ -3365,7 +3364,6 @@ export async function runTui(): Promise<void> {
           `${B}${tone}${key}${R} ${D}${label}${R}`;
         runHints = joinCommands([
           command("f", "fork", undefined, Y),
-          hint("P", "orchestrate", C),
           hint("D", "delete", RED),
           ...(pending ? [hint("a", "answer", Y)] : []),
           ...(["running", "awaiting_input", "paused"].includes(s.status)
@@ -4283,12 +4281,9 @@ export async function runTui(): Promise<void> {
         const deleteRefs = [target.ref, ...descendantRefs(target)];
         addTombstones(deleteLayout, deleteRefs);
         for (const ref of deleteRefs) deletingIssues.add(refKey(ref));
-        const cache = readIssueCache(deleteLayout);
-        if (cache) {
-          const next = cache.issues.filter((issue) => !deletingIssues.has(refKey(issue.ref)));
-          writeIssueCache(deleteLayout, cache.repo, next);
-          issueCachesByRepo.set(deleteRepo, next);
-        }
+        // Hiding is in-memory only (deletingIssues, consulted on every draw).
+        // The cache file stays a pure write-through of provider data; the
+        // post-close refresh rewrites it from the source of truth.
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         const child = spawn(
           process.execPath,
@@ -4688,26 +4683,6 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "o") {
-        const row = index.selectable[runsSel];
-        const issue = row?.kind === "issue"
-          ? row.issue
-          : row?.kind === "run"
-            ? issueByRef(row.run.issue)
-            : undefined;
-        if (!issue || (issue.kind !== "epic" && issue.kind !== "feature")) {
-          notify("select an Epic or Feature first");
-          draw();
-          return;
-        }
-        pipelineScope = { kind: issue.kind, ref: issue.ref };
-        pipelineSel = 0;
-        pipelineScroll = 0;
-        pipelineColon = false;
-        screen = "pipeline";
-        draw();
-        return;
-      }
       if (data === "!") { runsAttention = !runsAttention; runsSel = 0; draw(); return; }
       if (data === "g") {
         runsGroup = RUN_GROUPS[(RUN_GROUPS.indexOf(runsGroup) + 1) % RUN_GROUPS.length]!;
@@ -4756,7 +4731,6 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "o") { openUrl(issue.url); draw(); return; }
       draw();
       return;
     }
@@ -4909,17 +4883,6 @@ export async function runTui(): Promise<void> {
       if (data === "i") { interrupt(detail.summary); draw(); return; }
       if (data === "c") { startCorrect(detail.summary); draw(); return; }
       if (data === "p") { approveSelected(issueByRef(detail.summary.issue), detail.summary, detail.summary.repoRoot); draw(); return; }
-      if (data === "P") {
-        const issue = issueByRef(detail.summary.issue);
-        if (issue) {
-          pipelineScope = { kind: issue.kind, ref: issue.ref };
-          pipelineSel = 0;
-          pipelineScroll = 0;
-          screen = "pipeline";
-          draw();
-          return;
-        }
-      }
       if (data === "D") {
         deleteRunTarget = detail.summary;
         deleteTarget = undefined;
@@ -4928,7 +4891,6 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "o") { openUrl(issueByRef(detail.summary.issue)?.url ?? detail.summary.prUrl); draw(); return; }
       if (data === "\r" || data === "\n") {
         if (runSection === "timeline") toggleEvent();
         else if (runSection === "processes") {

@@ -76,6 +76,27 @@ test("replacePlanLines swaps the range for the tracking line", () => {
   }
 });
 
+test("replacePlanLines keeps headings in place", () => {
+  const root = tempRepo();
+  try {
+    const line = planTrackingLine("feature", 120, "Do A, B, C");
+    // Lines 1-3 are a heading, a blank, and a plan item.
+    const done = replacePlanLines(root, "plans/tui.md", 1, 3, line);
+    assert.equal(done.replaced, true);
+    const result = readFileSync(join(root, "plans/tui.md"), "utf8").split("\n");
+    assert.equal(result[0], "# TUI");
+    assert.match(result[1] ?? "", /- \[ \] Feature #120/);
+    assert.doesNotMatch(result.join("\n"), /X needs to do/);
+    // A range of only headings replaces nothing.
+    const onlyHeadings = replacePlanLines(root, "plans/tui.md", 1, 1, line);
+    assert.equal(onlyHeadings.replaced, false);
+    assert.match(onlyHeadings.error ?? "", /only headings/);
+    assert.equal(readFileSync(join(root, "plans/tui.md"), "utf8").split("\n")[0], "# TUI");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("trackIssueInPlan replaces source lines and commits on main", async () => {
   const root = tempRepo();
   try {
