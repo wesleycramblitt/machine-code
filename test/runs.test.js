@@ -115,6 +115,33 @@ test("overall status mode drops repository headings and sorts by status", () => 
   );
 });
 
+test("gh-issue shows cached issues for a repo with no runs at all", () => {
+  const epic = issue(10, "epic", "Epic");
+  const feature = issue(20, "feature", "Feature", { parent: epic.ref });
+  const byRepo = new Map([[repoA, [epic, feature]]]);
+  const index = buildRunIndex({ runs: [], issuesByRepo: byRepo });
+  assert.deepEqual(index.rows.filter((row) => row.kind === "repo").map((row) => row.repoRoot), [repoA]);
+  assert.equal(index.rows.find((row) => row.kind === "repo")?.count, 0);
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "issue").map((row) => row.issue.ref.number),
+    [10, 20],
+  );
+  assert.ok(!index.rows.some((row) => row.kind === "section" && row.label === "Untracked"));
+  assert.ok(!index.rows.some((row) => row.kind === "run"));
+
+  const searched = buildRunIndex({ runs: [], issuesByRepo: byRepo, text: "zzz-nomatch" });
+  assert.deepEqual(searched.rows, []);
+
+  const matched = buildRunIndex({ runs: [], issuesByRepo: byRepo, text: "epic" });
+  assert.ok(matched.rows.some((row) => row.kind === "issue" && row.issue.ref.number === 10));
+
+  const status = buildRunIndex({ runs: [], issuesByRepo: byRepo, group: "status" });
+  assert.deepEqual(status.rows, []);
+
+  const attention = buildRunIndex({ runs: [], issuesByRepo: byRepo, attentionOnly: true });
+  assert.deepEqual(attention.rows, []);
+});
+
 test("repository, section, and issue headings fold their contents", () => {
   const epic = issue(10, "epic", "Epic");
   const feature = issue(20, "feature", "Feature", { parent: epic.ref });

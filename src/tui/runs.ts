@@ -410,7 +410,15 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     for (const root of roots) walk(root, depth + 1, sectionId);
   };
 
-  const repoNames = [...new Set(baseRuns.map(repoOf))];
+  const issueOnlyRepos =
+    group === "gh-issue" && !options.attentionOnly && options.issuesByRepo
+      ? [...options.issuesByRepo.entries()]
+          .filter(([, issues]) => issues.length > 0)
+          .map(([repoRoot]) => repoRoot)
+      : [];
+  // Repos with cached issues but no runs still show their issue tree;
+  // otherwise deleting the last run hides the whole repo and its issues.
+  const repoNames = [...new Set([...baseRuns.map(repoOf), ...issueOnlyRepos])];
   const preferred = options.preferredRepo;
   repoNames.sort((a, b) => {
     if (preferred) {
@@ -425,7 +433,16 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   } else {
     for (const repoRoot of repoNames) {
       const repoRuns = baseRuns.filter((run) => repoOf(run) === repoRoot && visibleRun(run));
-      if (repoRuns.length === 0) continue;
+      if (repoRuns.length === 0) {
+        if (group !== "gh-issue" || options.attentionOnly) continue;
+        // Issue-only repo (no runs at all): keep the tree so cached issues
+        // stay visible. During text search only repos with a matching issue
+        // stay; repos that merely have non-matching runs keep prior behavior.
+        if (baseRuns.some((run) => repoOf(run) === repoRoot)) continue;
+        const repoIssues = issuesFor(repoRoot);
+        if (repoIssues.length === 0) continue;
+        if (text && !repoIssues.some((issue) => issueText(issue).toLowerCase().includes(text))) continue;
+      }
       if (!pushRepo(repoRoot, repoRuns.length)) continue;
       if (group === "status") {
         pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
