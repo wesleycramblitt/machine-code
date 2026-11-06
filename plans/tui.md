@@ -1,6 +1,7 @@
 # Overview
 This file details upgrades or issues to be planned for the TUI
 
+# New Run Page
 - [ ] Feature #165: New Run page: tab order, skill symbols, tools required indicator, Agent Prompt, token sums, vim prompt
 - When a run is started, we should go to a blank run details page with partial information filled in until the run starts (then fill the rest in). Currently it goes to the runs page for a moment, confusing.
 - Probably need somewhere we can see the repo map and semantic index visually?
