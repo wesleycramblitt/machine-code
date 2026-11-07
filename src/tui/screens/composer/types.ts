@@ -100,3 +100,5 @@ export interface ComposerFrame {
   modelPickSel: number;
   packetPickSel: number;
 }
+
+export const NEW_RUN_CONTEXT_TABS = ["Packets", "Plans", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;

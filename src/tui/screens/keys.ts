@@ -38,6 +38,8 @@ export interface KeyServices {
   startModelPicker: () => void;
   buildNewRunArgs: () => string[] | null;
   submitNewRun: () => void;
+  agentIsolates: (agent: string) => boolean;
+  lockedSkills: () => string[];
   searchSeed: () => string;
   repoRoot: string;
 }
