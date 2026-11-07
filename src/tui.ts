@@ -15,7 +15,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
 import { readPacketFile, writePacketFile, listPacketFiles, planCategories, type PacketFile } from "./plan/packets.js";
-import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
+import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { headerCounts, sortRuns } from "./tui/status.js";
@@ -30,6 +30,11 @@ import {
   type RunRow,
 } from "./tui/runs.js";
 import { scrollLines, selectableLines } from "./tui/scroll.js";
+import { renderDeleteConfirm } from "./tui/screens/delete.js";
+import { renderPacket } from "./tui/screens/packet.js";
+import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
+import { renderSettings } from "./tui/screens/settings.js";
+import { renderSpend } from "./tui/screens/spend.js";
 import {
   agentTone,
   ago, ALT, ALT_L, B, background, BG, BL, C, CLEAR_BELOW, command, commandBadge, contextTone,
@@ -47,7 +52,7 @@ import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, type AgentPolicy, type MachineConfig, type Policy } from "./config.js";
 import { axisWeights, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pick } from "./select.js";
-import { readSpendSummary, spendBar, spendDays } from "./spend.js";
+
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
@@ -1143,36 +1148,14 @@ export async function runTui(): Promise<void> {
 
     /* ----------------------------------------------------------- delete */
     else if (screen === "delete") {
-      if (!deleteRunTarget) {
+      const frame = renderDeleteConfirm(deleteRunTarget, bodyH);
+      if (!frame) {
         screen = deleteReturn;
         return draw();
       }
-      {
-        const run = deleteRunTarget;
-        const lines = [
-          "",
-          ` ${RED}${B}Delete run ${run.id}${R}`,
-          "",
-          ` ${D}Status:${R} ${run.status}   ${D}Agent:${R} ${run.agent}${run.mode ? `/${run.mode}` : ""}`,
-          ` ${D}Request:${R} ${run.request.replace(/\s+/g, " ").slice(0, 100)}`,
-          "",
-          ...(isActiveStatus(run.status)
-            ? [` ${Y}This run is active. It will be cancelled and stopped first.${R}`, ""]
-            : []),
-          ` ${D}This permanently deletes:${R}`,
-          `   ${Y}•${R} the run record, events, transcript, and reports`,
-          `   ${Y}•${R} its worktree when no other run shares it`,
-          `   ${Y}•${R} its branch when no other run shares it and no open PR owns it`,
-          "",
-          ` ${RED}This cannot be undone.${R}`,
-        ];
-        body = clipBody(lines);
-        actions = joinCommands([
-          command("D", "Confirm delete", undefined, RED),
-          command("Esc", "Cancel", undefined, GR),
-        ]);
-        secondary = `${D}run ${run.id}${R}`;
-      }
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* ---------------------------------------------------------- new run */
@@ -1815,262 +1798,95 @@ export async function runTui(): Promise<void> {
 
     /* ------------------------------------------------------------ model */
     else if (page === "models" && screen === "model" && selectedModelKey) {
-      const model = catalogueRows.find((row) => row.key === selectedModelKey);
-      if (!model) {
+      const frame = renderModelDetail({
+        cols, narrow, bodyH, theme, toast,
+        home: l.home,
+        row: catalogueRows.find((row) => row.key === selectedModelKey),
+        rows: catalogueRows,
+        agent: newrun.agent,
+        weights: policyWeightsFor(newrun.agent),
+        probing: probingModels.has(selectedModelKey),
+        scroll: modelScroll,
+      });
+      if (!frame) {
         screen = "list";
         return draw();
       }
-      const weights = policyWeightsFor(newrun.agent);
-      const offers = siblingOffers(catalogueRows, model);
-      const lines: string[] = [
-        ` ${B}${W}${model.key}${R}`,
-        ` ${D}${model.kind} · ${model.coding ? "coding" : "non-coding"} · ${model.modes.join(", ") || "plain chat"}${R}`,
-        "",
-        ` ${B}${C}Capability${R}`,
-      ];
-      for (const axis of CAPABILITY_AXES) {
-        const score = model.scores[axis];
-        lines.push(`   ${axis.padEnd(10)} ${progress(score * 10, Math.min(24, Math.max(8, Math.floor(cols / 4))))} ${score.toFixed(2)}`);
-      }
-      lines.push(`   ${"weighted".padEnd(10)} ${weights ? `${D}role ${R}${agentTone(newrun.agent)}${newrun.agent}${R}` : `${D}neutral${R}`} ${modelWeightedFit(model, weights).toFixed(2)}`);
-      lines.push("", ` ${B}${C}Offer${R}`);
-      lines.push(`   context ${C}${fmtContext(model.context)}${R} · max out ${C}${fmtContext(model.maxOutput)}${R} · in ${Y}$${model.pricing.input}${R}/M · out ${Y}$${model.pricing.output}${R}/M ${model.free ? `${G}free${R}` : `${RED}paid${R}`}`);
-      if (model.benchmarks) {
-        lines.push(`   benchmarks ${D}${Object.entries(model.benchmarks).filter(([, value]) => typeof value === "number").slice(0, 6).map(([key, value]) => `${key} ${value}`).join("  ")}${R}`);
-      }
-      const availabilityState = loadAvailability(l.home);
-      const modelHealth = availabilityState.models[model.key];
-      const providerHealth = availabilityState.providers[model.providerID];
-      const coolingUntil = modelHealth?.cooldownUntil ?? 0;
-      const lastProbe = modelHealth?.lastProbeResult;
-      const probeTone =
-        lastProbe === "ready" ? G : lastProbe === "cooling" ? Y : lastProbe === "unknown" || lastProbe === "skipped" ? D : RED;
-      const healthText = probingModels.has(model.key)
-        ? `${C}probing${R}`
-        : coolingUntil > Date.now()
-          ? `${Y}cooling ${Math.max(1, Math.ceil((coolingUntil - Date.now()) / 60_000))}m${R}`
-          : lastProbe
-            ? `${probeTone}${lastProbe}${R}`
-            : `${D}not probed${R}`;
-      lines.push("", ` ${B}${C}Availability${R}`);
-      lines.push(`   ${healthText}${modelHealth?.lastProbeAt ? ` ${D}· ${ago(new Date(modelHealth.lastProbeAt).toISOString())}${R}` : ""}`);
-      const providerBits = [
-        providerHealth?.disabled ? `${RED}funds${R}` : "",
-        providerHealth?.needsAuth ? `${RED}auth${R}` : "",
-        (providerHealth?.cooldownUntil ?? 0) > Date.now()
-          ? `${Y}provider cooling ${Math.max(1, Math.ceil(((providerHealth?.cooldownUntil ?? 0) - Date.now()) / 60_000))}m${R}`
-          : "",
-      ].filter(Boolean);
-      if (providerBits.length > 0) lines.push(`   provider ${model.providerID} · ${providerBits.join(" · ")}`);
-      lines.push("", ` ${B}${C}Providers offering this model${R}`);
-      for (const offer of offers.slice(0, Math.max(3, Math.floor(bodyH / 2)))) {
-        lines.push(`   ${offer.providerID === model.providerID ? C + "▸" : " "} ${pad(offer.providerID, 18)} ${Y}$${offer.pricing.input}${R}/${Y}$${offer.pricing.output}${R}  ${D}ctx ${fmtContext(offer.context)}${R}`);
-      }
-      const w = selectableLines(lines, modelScroll, modelScroll, bodyH);
-      modelScroll = w.scroll;
-      body = clipBody(w.lines);
-      actions = joinCommands([
-        command("Esc", "Back", undefined, GR),
-        command("j/k", "Scroll", undefined, M),
-        command("^D/^U", "Page", undefined, M),
-        command("t", "Probe", undefined, G),
-        command("p", "Copy key", undefined, C),
-        command("o", "Provider", undefined, BL),
-      ]);
-      secondary = `${D}${model.key}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+      modelScroll = frame.scroll;
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* ----------------------------------------------------------- models */
     else if (page === "models" && screen === "list") {
-      const lines: string[] = [];
-      const groups = groupModels(modelRows, modelGroup);
-      // Cursor stops on headers and rows alike: collapsing every group can
-      // never strand the cursor, and space on a header reopens it.
-      const stops: typeof modelDisplay = [];
-      for (const group of groups) {
-        stops.push({ kind: "header", key: group.key });
-        if (!modelCollapsed.has(group.key)) {
-          for (const row of group.rows) stops.push({ kind: "row", key: group.key, row });
-        }
-      }
-      modelDisplay = stops;
-      if (modelSel >= stops.length) modelSel = Math.max(0, stops.length - 1);
-      const modelsAvail = loadAvailability(l.home);
-      const now = Date.now();
-      let selectedLine = 0;
-      for (let s = 0; s < stops.length; s++) {
-        const stop = stops[s]!;
-        const isSelected = s === modelSel;
-        if (isSelected) selectedLine = lines.length;
-        if (stop.kind === "header") {
-          const group = groups.find((candidate) => candidate.key === stop.key)!;
-          const isCollapsed = modelCollapsed.has(group.key);
-          const marker = isCollapsed ? "▸" : "▾";
-          const headerText = fit(` ${B}${theme.sectionFg}${marker} ${group.key}${R} ${D}(${group.rows.length})${R}`, cols);
-          // A focused header gets the same BG selection as model rows; the
-          // section background is reserved for the idle state so selection
-          // stays obvious instead of drowning in the panel color.
-          lines.push(
-            isSelected ? selected(headerText, true) : background(headerText, theme.sectionBg),
-          );
-          continue;
-        }
-        const row = stop.row;
-        {
-          const free = row.free || (row.pricing.input === 0 && row.pricing.output === 0) ? ` ${G}free${R}` : "";
-          const cooling = (() => {
-            if (probingModels.has(row.key)) return ` ${C}…${R}`;
-            const phase = modelsAvail.models[row.key];
-            if (!phase?.cooldownUntil || phase.cooldownUntil <= now) return "";
-            const minutes = Math.max(1, Math.ceil((phase.cooldownUntil - now) / 60_000));
-            return ` ${Y}⏱${minutes >= 60 ? `${Math.ceil(minutes / 60)}h` : `${minutes}m`}${R}`;
-          })();
-          const axes = narrow ? "" : ` ${D}R${row.scores.reasoning.toFixed(1)} C${row.scores.code.toFixed(1)} A${row.scores.agentic.toFixed(1)} G${row.scores.general.toFixed(1)}${R}`;
-          const left = `   ${row.coding === false ? `${GR}○${R}` : `${G}●${R}`} ${BL}${trunc(row.name, narrow ? 20 : 30)}${R}${free}${cooling}`;
-          const right = `${D}${fmtContext(row.context)}${R} ${D}cap${R} ${row.scores.capability.toFixed(1)}${axes} ${Y}$${row.pricing.input}${R}/${Y}$${row.pricing.output}${R}`;
-          lines.push(selected(` ${narrow ? trunc(left, Math.max(18, cols - 18)) + " " + right : pad(left, Math.max(26, cols - visible(right) - 2)) + right}`, isSelected));
-        }
-      }
-      if (lines.length === 0) lines.push(` ${D}No matching models.${R}`);
-      // Vetoed rows never enter the catalogue; list them dimmed with their
-      // reason so a missing model is explainable in place (curation.toml).
-      const vetoed = [...loadCuration(l).models.entries()].filter(([, entry]) => entry.veto === true);
-      const vetoQuery = modelText.trim().toLowerCase();
-      const shownVetoed = vetoed.filter(([key]) => vetoQuery.length === 0 || key.toLowerCase().includes(vetoQuery));
-      if (shownVetoed.length > 0) {
-        lines.push("", ` ${D}Vetoed (${shownVetoed.length}) — excluded by ~/.machine_code/curation.toml; remove the stanza to restore${R}`);
-        for (const [key, entry] of shownVetoed) {
-          const why = [entry.source ?? entry.note, entry.date].filter((part) => part && part.length > 0).join(" · ");
-          lines.push(`  ${GR}✕ ${key}${R}${why ? ` ${D}${trunc(why, Math.max(10, cols - key.length - 8))}${R}` : ""}`);
-        }
-      }
-      const w = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), modelScroll, bodyH);
-      modelScroll = w.scroll;
-      body = clipBody(w.lines);
-      actions = joinCommands([
-        command("Enter", "Details", undefined, G),
-        command("space", "Fold", undefined, Y),
-        command("/", "Search", undefined, BL),
-        command("a", "Providers", modelsAll ? "all" : "configured", C),
-        command("f", "Free", modelsFree ? "only" : "all", modelsFree ? G : GR),
-        command("c", "Coding", modelsCoding ? "only" : "all", modelsCoding ? G : GR),
-        command("g", "Group", modelGroup, BL),
-        command("s", "Sort", modelSort, C),
-        command("j/k", "Move", undefined, GR),
-        command("^D/^U", "Page", undefined, GR),
-      ]);
-      secondary = `${D}space folds groups · Enter opens details${R}`;
+      const frame = renderModelsList({
+        cols, narrow, bodyH, theme, toast,
+        home: l.home,
+        repoRoot: l.repoRoot,
+        rows: modelRows,
+        group: modelGroup,
+        collapsed: modelCollapsed,
+        selected: modelSel,
+        scroll: modelScroll,
+        filterText: modelText,
+        showAllProviders: modelsAll,
+        freeOnly: modelsFree,
+        codingOnly: modelsCoding,
+        sort: modelSort,
+        probing: probingModels,
+      });
+      modelDisplay = frame.display;
+      modelSel = frame.selected;
+      modelScroll = frame.scroll;
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* ------------------------------------------------------------ spend */
     else if (page === "spend") {
-      const query = { days: spendDaysWindow === 0 ? undefined : spendDaysWindow };
-      const summary = readSpendSummary(l.home, query);
-      const headerLines = [
-        ` ${B}${W}Spend${R} ${D}${spendDaysWindow === 0 ? "all time" : `last ${spendDaysWindow} days`}${R}`,
-        ` ${Y}$${summary.totalActual.toFixed(4)}${R} actual  ${D}$${summary.totalEstimated.toFixed(4)} estimate${R}  ${C}${fmtTokens(summary.totalTokens)}${R} tok  ${G}${fmtTokens(summary.freeTokens)}${R} free`,
-      ];
-      const lines: string[] = [
-        ...headerLines.map((line) => background(fit(line, cols), theme.sectionBg)),
-        "",
-      ];
-      if (spendBy === "day") {
-        const series = spendDays(summary, spendDaysWindow === 0 ? 30 : Math.min(spendDaysWindow, 90));
-        const max = Math.max(0, ...series.map((entry) => entry.bucket.actual));
-        for (const entry of series.slice(-Math.max(4, bodyH - 5))) {
-          lines.push(`  ${entry.day} ${spendBar(entry.bucket.actual, max, Math.max(8, Math.min(24, cols - 28)))} ${fmtMoney(entry.bucket.actual)}  ${D}${fmtTokens(entry.bucket.tokens)} tok${R}`);
-        }
-      } else {
-        const buckets =
-          spendBy === "provider" ? summary.byProvider :
-          spendBy === "model" ? summary.byModel :
-          summary.byAgent;
-        const entries = Object.entries(buckets).sort((a, b) => b[1].actual - a[1].actual).slice(0, 40);
-        const max = Math.max(0, ...entries.map(([, bucket]) => bucket.actual));
-        for (const [key, bucket] of entries) {
-          const label = key === "map" ? "map (semantic)" : key;
-          const perMillion = bucket.tokens > 0 ? bucket.actual / (bucket.tokens / 1_000_000) : 0;
-          const keyTone = spendBy === "agent" ? agentTone(key) : W;
-          lines.push(`  ${keyTone}${pad(label, narrow ? 20 : 38)}${R} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
-        }
-      }
-      const w = selectableLines(lines, spendScroll, spendScroll, bodyH);
-      spendScroll = w.scroll;
-      body = clipBody(w.lines);
-      actions = joinCommands([
-        command("g", "Group", spendBy, C),
-        command("d", "Range", spendDaysWindow === 0 ? "all" : `${spendDaysWindow}d`, Y),
-        command("j/k", "Scroll", undefined, M),
-        command("^D/^U", "Page", undefined, M),
-        command("r", "Refresh", undefined, GR),
-      ]);
-      secondary = `${D}ledger ${join(l.home, "spend.jsonl")}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+      const frame = renderSpend({
+        cols, narrow, bodyH, theme, toast,
+        home: l.home,
+        daysWindow: spendDaysWindow,
+        groupBy: spendBy,
+        scroll: spendScroll,
+      });
+      spendScroll = frame.scroll;
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* --------------------------------------------------------- settings */
     else if (page === "settings") {
-      const lines: string[] = [];
-      let section = "";
-      let index = 0;
-      let selectedLine = 0;
-      const visibleRows: SettingRow[] = [];
-      for (const row of settingsRows) {
-        if (row.section !== section) {
-          section = row.section;
-          lines.push(background(fit(` ${B}${theme.sectionFg}${section.toUpperCase()}${R}`, cols), theme.sectionBg));
-        }
-        const isSelected = index === settingsSel;
-        if (isSelected) selectedLine = lines.length;
-        const path = settingsFileFor(l, row);
-        const line = `   ${isSelected ? C + "▸" : " "} ${pad(row.label, narrow ? 20 : 28)} ${W}${trunc(row.value, Math.max(10, cols - (narrow ? 32 : 54)))}${R} ${D}${path ? basename(path) : ""}${R}`;
-        lines.push(selected(line, isSelected));
-        if (row.detail && !narrow) lines.push(`       ${D}${trunc(row.detail, cols - 8)}${R}`);
-        visibleRows.push(row);
-        index++;
-      }
-      const w = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), settingsScroll, bodyH);
-      settingsScroll = w.scroll;
-      body = clipBody(w.lines);
-      const row = visibleRows[Math.min(settingsSel, visibleRows.length - 1)];
-      actions = command("j/k", "Select", undefined, M);
-      secondary = row ? `${D}${row.label} · ${settingsFileFor(l, row) ?? "(no file)"}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "";
+      const frame = renderSettings({
+        cols, narrow, bodyH, theme, toast,
+        layout: l,
+        rows: settingsRows,
+        selectedIndex: settingsSel,
+        scroll: settingsScroll,
+      });
+      settingsScroll = frame.scroll;
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* ---------------------------------------------------------- packet */
     else if (page === "runs" && screen === "packet") {
-      const slug = selectedPacketSlug;
-      const packet = slug ? readPacketFile(l, slug) : null;
-      const lines: string[] = [];
-      if (!packet || !slug) {
-        lines.push("", ` ${Y}packet not found${R}`);
-      } else {
-        lines.push(` ${B}${W}${slug}${R}  ${D}[${packet.status}]  gate ${packet.review ?? "gates"}${R}`);
-        lines.push(` ${W}${packet.deliverable || "(no deliverable)"}${R}`);
-        if (packet.deps.length > 0) lines.push(` ${D}deps: ${packet.deps.join(", ")}${R}`);
-        if (packet.files.length > 0) {
-          lines.push(` ${D}files:${R}`);
-          for (const file of packet.files) lines.push(`   ${C}${file}${R}`);
-        }
-        if (packet.acceptance.length > 0) lines.push(` ${D}acceptance: ${packet.acceptance.join("; ")}${R}`);
-        lines.push(` ${D}verify: ${packet.verify.length ? packet.verify.join(", ") : "(none)"}${R}`);
-        const runs = allRuns.filter((run) => run.packetId === slug);
-        lines.push("", ` ${B}runs${R} ${D}(${runs.length})${R}`);
-        for (const run of sortRuns(runs, "activity")) {
-          lines.push(`   ${W}${run.id.slice(-8)}${R} ${D}${run.agent}${R} ${run.status}${run.error ? ` ${Y}${trunc(run.error, 40)}${R}` : ""}`);
-        }
-      }
-      const w = selectableLines(lines, packetScroll, packetScroll, bodyH);
-      packetScroll = w.scroll;
-      body = clipBody(w.lines);
-      actions = joinCommands([
-        command("g", "Gate", packet?.review ?? "gates", packet?.review === "agent" ? C : packet?.review === "human" ? Y : D),
-        command("o", "Orchestrate", undefined, GR),
-        command("b", "Build", undefined, C),
-        command("a", "Approve", undefined, G),
-        command("d", "Delete", undefined, RED),
-        command("esc", "Back"),
-      ]);
-      secondary = slug ? `${D}packets/${slug}.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "";
+      const frame = renderPacket({
+        cols, narrow, bodyH, theme, toast,
+        slug: selectedPacketSlug,
+        packet: selectedPacketSlug ? readPacketFile(l, selectedPacketSlug) : null,
+        runs: allRuns,
+        scroll: packetScroll,
+      });
+      packetScroll = frame.scroll;
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* ------------------------------------------------------------- run */
@@ -3761,33 +3577,6 @@ export async function runTui(): Promise<void> {
 }
 
 /* ---------------------------------------------------------------- helpers */
-
-function policyWeightsFor(agent: string): Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> | undefined {
-  try {
-    const l = layout();
-    const policy = loadPolicy(l);
-    const ap = policy.agents[agent];
-    return ap ? axisWeights(agent, ap) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function modelWeightedFit(
-  row: CatalogueRow,
-  weights: Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> | undefined,
-): number {
-  if (!weights) return row.scores.capability;
-  const base = { reasoning: weights.reasoning ?? 0.25, code: weights.code ?? 0.25, agentic: weights.agentic ?? 0.25, general: weights.general ?? 0.25 };
-  const sum = base.reasoning + base.code + base.agentic + base.general;
-  if (sum <= 0) return row.scores.capability;
-  return (
-    row.scores.reasoning * (base.reasoning / sum) +
-    row.scores.code * (base.code / sum) +
-    row.scores.agentic * (base.agentic / sum) +
-    row.scores.general * (base.general / sum)
-  );
-}
 
 function axisFloorText(axes: Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> | undefined): string {
   return CAPABILITY_AXES.map((axis) => `${axis[0]!.toUpperCase()}${(axes?.[axis] ?? 0).toFixed(1)}`).join(" ");
