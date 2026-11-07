@@ -34,6 +34,7 @@ import { renderDeleteConfirm } from "./tui/screens/delete.js";
 import { renderPacket } from "./tui/screens/packet.js";
 import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
 import { renderAnswer } from "./tui/screens/answer.js";
+import { TABS, renderFooterRows, renderHeader, rightHeaderPath } from "./tui/screens/chrome.js";
 import { renderComposer } from "./tui/screens/composer/composer.js";
 import { renderCorrect } from "./tui/screens/correct.js";
 import { renderRunDetail } from "./tui/screens/run-detail/run-detail.js";
@@ -94,13 +95,6 @@ type Screen = "list" | "run" | "newrun" | "answer" | "correct" | "model" | "dele
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
 type RunsRepoScope = "all" | "cwd";
 
-const TABS: Array<{ id: Page; label: string; key: string }> = [
-  { id: "runs", label: "Runs", key: "1" },
-  { id: "models", label: "Models", key: "2" },
-  { id: "spend", label: "Spend", key: "3" },
-  { id: "settings", label: "Settings", key: "4" },
-];
-const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
 const NEW_RUN_CONTEXT_TABS = ["Packets", "Plans", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;
@@ -957,43 +951,19 @@ export async function runTui(): Promise<void> {
     const settingsRows = page === "settings" ? buildSettings(l, settingsMachine, settingsPolicy) : [];
     if (settingsSel >= settingsRows.length) settingsSel = Math.max(0, settingsRows.length - 1);
 
-    const tabTokens = TABS.map((tab) =>
-      tab.id === page
-        ? `${theme.tabActiveBg}${theme.tabActiveFg}${B} ${tab.key}:${tab.label} ${R}`
-        : `${theme.headerFg}${D}${tab.key}:${tab.label}${R}`,
-    );
-    // Detail screens replace the whole header (tabs included) with a Back bar.
-    const runDetailHeader = page === "runs" && screen === "run";
-    const backHeader =
-      runDetailHeader ||
-      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct")) ||
-      (page === "models" && screen === "model");
-    // Tabs stay visible on every other screen. Runs and models replace the
-    // blank separator with a live summary line; other pages keep the blank.
-    const backTitle =
-      page === "runs" && screen === "newrun"
-        ? `  ${B}${theme.headerFg}New Run${R}`
-        : runDetailHeader
-          ? `  ${B}${theme.headerFg}Run Details${R}`
-          : page === "models" && screen === "model"
-            ? `  ${B}${theme.headerFg}Model Details${R}`
-            : "";
-    const backLine = `${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}${backTitle}`;
-    const headerSubLines = runsListScreen
-      ? wrapTokenList([...runIndicators, ...statusTokens], cols, "  ").map((line) => ` ${line}`)
-      : page === "models" && screen === "list"
-        ? [` ${D}${modelRows.length} model(s)${modelText ? ` · “${modelText}”` : ""}${toast ? ` · ${Y}${toast}${R}` : ""}${R}`]
-        : [""];
-    const rightHeaderPath = (path: string): string => {
-      const text = trunc(path, Math.max(10, cols - 2));
-      return `${" ".repeat(Math.max(0, cols - visible(text) - 1))}${GR}${text}${R}`;
-    };
-    const backSubLine = page === "runs" && screen === "newrun" ? rightHeaderPath(newRunRepo) : "";
-    const header: string[] = backHeader
-      ? [backLine, backSubLine]
-      : [...wrapTokenList(tabTokens, cols, " "), ...headerSubLines];
-    // The header shares the body surface; only the Back label keeps its own tone.
-    const headerTone = theme.bodyBg;
+    const chrome = renderHeader({
+      cols, theme, page, screen, toast,
+      runIndicators,
+      statusTokens,
+      modelCount: modelRows.length,
+      modelFilter: modelText,
+      newRunRepo,
+      runsList: runsListScreen,
+    });
+    const header = chrome.header;
+    const headerTone = chrome.headerTone;
+    const backHeader = chrome.backHeader;
+    const runDetailHeader = chrome.runDetailHeader;
     // Prompt editing moves its controls into the body but keeps the model line.
     const hideFooter = screen === "newrun" && newRunInsert;
     const bodyH = Math.max(1, rows - header.length - footerReserve);
@@ -1302,7 +1272,7 @@ export async function runTui(): Promise<void> {
       secondary = frame.secondary;
     }
 
-    if (runDetailHeader && runCwd) header[1] = rightHeaderPath(runCwd);
+    if (runDetailHeader && runCwd) header[1] = rightHeaderPath(cols, runCwd);
 
     /* ------------------------------------------------------------ compose */
     if (searchMode) {
@@ -1313,39 +1283,14 @@ export async function runTui(): Promise<void> {
       ]);
       secondary = `${D}filters ${page} · type to edit${R}`;
     }
-    const defaultActions = joinCommands([
-      command("1-4", "Pages", undefined, C),
-      command("q", "Quit", undefined, GR),
-    ]);
-    const commandRows = hideFooter
-      ? []
-      : runDetailHeader
-        ? [
-            ...(runHints ? wrapCommands(runHints, cols) : []),
-            ...(extraActions ? wrapCommands(extraActions, cols) : []),
-          ]
-        : [
-            ...wrapCommands(actions || defaultActions, cols),
-            ...(extraActions ? wrapCommands(extraActions, cols) : []),
-          ];
-    const secondaryRows = runDetailHeader
-      ? []
-      : secondaryStyled
-        ? wrapCommands(secondary, cols).slice(0, 2)
-        : wrapPlain(secondary, cols).slice(0, narrow ? 2 : 1);
-    const rightFooter = footerMapTokens.join("  ");
-    const mapFooterLine = (() => {
-      if (!footerCtx && !rightFooter) return "";
-      if (!rightFooter) return ` ${footerCtx}`;
-      if (!footerCtx) return `${" ".repeat(Math.max(0, cols - visible(rightFooter)))}${rightFooter}`;
-      const left = ` ${footerCtx}`;
-      const gap = Math.max(1, cols - visible(left) - visible(rightFooter));
-      return `${left}${" ".repeat(gap)}${rightFooter}`;
-    })();
-    const mapFooterSurface = runDetailHeader ? theme.sectionBg : screen === "newrun" ? theme.bodyBg : "";
-    const styledMapFooterLine =
-      mapFooterLine && mapFooterSurface ? background(mapFooterLine, mapFooterSurface) : mapFooterLine;
-    const bottomLines = styledMapFooterLine ? [styledMapFooterLine] : [];
+    const footerRows = renderFooterRows({
+      cols, narrow, theme, screen, hideFooter, runDetailHeader,
+      runHints, extraActions, actions, secondary, secondaryStyled,
+      footerCtx, footerMapTokens,
+    });
+    const commandRows = footerRows.commandRows;
+    const secondaryRows = footerRows.secondaryRows;
+    const bottomLines = footerRows.bottomLines;
     const footer = [...commandRows, ...secondaryRows, ...bottomLines];
     // Key legends sit on the near-black surface; trailing rows keep the footer band.
     const legendRows = commandRows.length;
@@ -1789,7 +1734,7 @@ export async function runTui(): Promise<void> {
     // Page switching.
     const tabIndex = Number(data);
     if (data.length === 1 && tabIndex >= 1 && tabIndex <= TABS.length) {
-      page = TABS[tabIndex - 1]!.id;
+      page = TABS[tabIndex - 1]!.id as Page;
       screen = "list";
       searchText = "";
       draw();
@@ -1797,7 +1742,7 @@ export async function runTui(): Promise<void> {
     }
     if (data === "\t") {
       const index = TABS.findIndex((tab) => tab.id === page);
-      page = TABS[(index + 1) % TABS.length]!.id;
+      page = TABS[(index + 1) % TABS.length]!.id as Page;
       screen = "list";
       searchText = "";
       draw();
