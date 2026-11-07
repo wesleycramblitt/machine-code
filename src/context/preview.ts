@@ -16,7 +16,7 @@ import { readReference, referenceFileSize } from "../references/store.js";
 import { discoverPlanFiles } from "./plans.js";
 
 export interface PreviewSource {
-  kind: "issue" | "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project";
+  kind: "issue" | "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "packet";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;
@@ -80,6 +80,8 @@ export function issueChain(issues: readonly Issue[], ref?: IssueRef): Issue[] {
 export interface PreviewContextOptions {
   /** Role name; the plan map is inherited only by the planner. */
   agent?: string;
+  /** Packet slug attached in the composer; its contract is explicit context. */
+  packet?: string;
   planFile?: string;
   knowledgeIndex?: string;
   /** Explicit repo-relative files selected in the composer. */
@@ -211,6 +213,18 @@ export function previewContext(
     chars += size;
     sources.push({ kind: "file", ref: path, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`file ${path} is missing or outside the repo`);
+  }
+
+  if (options.packet) {
+    const packetPath = join("packets", `${options.packet}.md`);
+    const root = resolve(layout.repoRoot);
+    const abs = resolve(root, packetPath);
+    const inside = abs === root || abs.startsWith(root + sep);
+    const exists = inside && existsSync(abs);
+    const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
+    chars += size;
+    sources.push({ kind: "packet", ref: options.packet, origin: "explicit", depth: 0, chars: size, exists });
+    if (!exists) warnings.push(`packet ${options.packet} is missing`);
   }
 
   if (options.agent === "planner") {

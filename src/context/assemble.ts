@@ -106,6 +106,7 @@ export interface AssembleInput {
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
   issues: ["feature", "epic"],
+  packets: ["packet"],
   files: ["file"],
   knowledge: ["knowledge"],
   references: ["reference"],

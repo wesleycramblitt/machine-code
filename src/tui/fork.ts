@@ -20,6 +20,8 @@ export interface ForkedRunSettings {
   minFit: number | null | undefined;
   floors: "role" | "strict" | "off";
   issue?: IssueRef;
+  /** Packet slug attached in the composer; run with `--packet <slug>`. */
+  packet?: string;
   prompt: string;
 }
 
@@ -114,6 +116,7 @@ export function forkSettingsFromRun(input: {
     minFit: settings?.minFit,
     floors,
     ...(summary.issue ? { issue: summary.issue } : {}),
+    ...(summary.packetId ? { packet: summary.packetId } : {}),
     prompt: summary.request,
   };
 }

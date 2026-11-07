@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { renderPlan, readPacketFile, writePacketFile, renderPacketFile, listPacketFiles, planCategories, type PlanItem } from "./plan/packets.js";
+import { renderPlan, readPacketFile, writePacketFile, renderPacketFile, listPacketFiles, planCategories, type PacketFile, type PlanItem } from "./plan/packets.js";
 import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -26,7 +26,6 @@ import {
   RUN_GROUP_LABELS,
   buildRunIndex,
   focusRowIds,
-  orderIssueTree,
   repoLabel,
   repoOf,
   type RunGroup,
@@ -198,7 +197,7 @@ interface ContextPanelItem {
   available?: boolean;
   counted?: boolean;
 }
-const NEW_RUN_CONTEXT_TABS = ["Issues", "Plans", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;
+const NEW_RUN_CONTEXT_TABS = ["Packets", "Plans", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;
 
 type NewRunState = ForkedRunSettings & {
   /** Isolation worktree. Shown only for build/sudo; other agents ignore it. */
@@ -904,9 +903,9 @@ export async function runTui(): Promise<void> {
   let newRunRepo = l.repoRoot;
   /** Parent run id when the composer was opened with fork[f]. */
   let newRunParentId: string | null = null;
-  let issuePick: "newrun" | null = null;
-  let issuePickSel = 0;
-  let issuePickText = "";
+  let packetPick: "newrun" | null = null;
+  let packetPickSel = 0;
+  let packetPickText = "";
   let modelPick: "newrun" | null = null;
   let modelPickSel = 0;
   let modelPickText = "";
@@ -1191,38 +1190,43 @@ export async function runTui(): Promise<void> {
     modelPickSel = 0;
     modelPickText = "";
     modelPickEntries = [];
-    issuePick = null;
-    issuePickSel = 0;
-    issuePickText = "";
+    packetPick = null;
+    packetPickSel = 0;
+    packetPickText = "";
   };
 
-  const startNewRun = (issue?: IssueRef, repoRoot = l.repoRoot, issueObj?: Issue) => {
+  const startNewRun = (packetSlug?: string, repoRoot = l.repoRoot, issue?: IssueRef, issueObj?: Issue) => {
     const previous = newrun;
     newRunRepo = repoRoot;
+    const packetFile = packetSlug ? readPacketFile(layout(repoRoot), packetSlug) : null;
     const knownIssue = issueObj ?? issueByRef(issue);
-    // A Feature is implementation work: start with Build. An Epic is
+    // A packet is implementation work: start with Build. A legacy Epic is
     // planning work: start with Planner. Untracked runs keep the last agent.
-    const preferredAgent = knownIssue
-      ? knownIssue.kind === "feature"
-        ? "build"
-        : "planner"
-      : issue
-        ? "build"
-        : previous.agent;
+    const preferredAgent = packetSlug
+      ? "build"
+      : knownIssue
+        ? knownIssue.kind === "feature"
+          ? "build"
+          : "planner"
+        : issue
+          ? "build"
+          : previous.agent;
     newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
-      ...(issue ? { issue } : {}),
+      ...(packetSlug ? { packet: packetSlug } : {}),
+      ...(issue && !packetSlug ? { issue } : {}),
     };
     // Verification and isolation are role-shaped: build/sudo verify, and a
     // fresh build isolates while sudo starts on the main tree.
     newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
     newrun.worktree = true;
     enforceLockedSkills(true);
-    // A task-attached run starts with a concrete objective. The prompt stays
+    // A packet-attached run starts with a concrete objective. The prompt stays
     // editable, but the human no longer has to type one.
-    if (knownIssue) newrun.prompt = issuePrompt(knownIssue, newrun.agent);
+    if (packetFile) newrun.prompt = packetFile.deliverable || packetSlug ?? "";
+    else if (knownIssue) newrun.prompt = issuePrompt(knownIssue, newrun.agent);
     resetNewRunUi();
     screen = "newrun";
   };
@@ -1261,8 +1265,12 @@ export async function runTui(): Promise<void> {
       worktree: newrun.worktree,
     };
     // A generic inherited request ("Build the task.") hides the real objective.
-    // When the run is attached to an issue, derive the request from it instead.
-    const forkIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
+    // When the run is attached to a packet or issue, derive the request from it.
+    const forkPacket = newrun.packet ? readPacketFile(repoLayout, newrun.packet) : null;
+    if (forkPacket && (!newrun.prompt.trim() || isGenericTaskRequest(newrun.prompt))) {
+      newrun.prompt = forkPacket.deliverable || newrun.packet ?? "";
+    }
+    const forkIssue = !forkPacket && newrun.issue ? issueByRef(newrun.issue) : undefined;
     if (forkIssue && (!newrun.prompt.trim() || isGenericTaskRequest(newrun.prompt))) {
       newrun.prompt = issuePrompt(forkIssue, agent);
     }
@@ -1347,11 +1355,11 @@ export async function runTui(): Promise<void> {
     machine?: MachineConfig;
   } => {
     const newRunLayout = layout(newRunRepo);
-    // Everything below depends on the repo/issue, not on the text being typed.
+    // Everything below depends on the repo/packet, not on the text being typed.
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
-    const previewKey = `${newRunRepo}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
+    const previewKey = `${newRunRepo}\0${newrun.packet ?? ""}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
     const previewTtl = newRunInsert ? 60_000 : 5_000;
     if (
       !newRunPreviewCache ||
@@ -1366,6 +1374,7 @@ export async function runTui(): Promise<void> {
         at: Date.now(),
         context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, "", {
           agent: newrun.agent,
+          ...(newrun.packet ? { packet: newrun.packet } : {}),
           planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
           files: [...newRunContextIncluded]
@@ -1384,8 +1393,10 @@ export async function runTui(): Promise<void> {
     }
     const base = newRunPreviewCache;
     const previewIssue = issueByRef(newrun.issue);
+    const previewPacket = newrun.packet ? readPacketFile(newRunLayout, newrun.packet) : null;
     const previewPrompt =
       newrun.prompt.trim() ||
+      (previewPacket ? previewPacket.deliverable : "") ||
       (previewIssue ? issuePrompt(previewIssue, newrun.agent) : "");
     const context: ContextPreview = { ...base.context, promptChars: previewPrompt.length };
     const policy = base.policy;
@@ -1472,7 +1483,7 @@ export async function runTui(): Promise<void> {
   };
 
   const buildNewRunArgs = (): string[] | null => {
-    if (newrun.prompt.trim().length === 0 && !newrun.issue) {
+    if (newrun.prompt.trim().length === 0 && !newrun.issue && !newrun.packet) {
       notify("type a task before starting");
       return null;
     }
@@ -1494,6 +1505,7 @@ export async function runTui(): Promise<void> {
     const selectedIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
     const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
     if (
+      !newrun.packet &&
       !planningAgent &&
       newrun.agent !== "research" &&
       selectedIssue &&
@@ -1536,6 +1548,9 @@ export async function runTui(): Promise<void> {
         return `${axis}=${Math.min(10, Math.round((current + 0.5) * 10) / 10)}`;
       });
       args.push("--min-axes", floors.join(","));
+    }
+    if (newrun.packet) {
+      args.push("--packet", newrun.packet);
     }
     if (newrun.issue) {
       args.push("--issue", String(newrun.issue.number));
@@ -2243,9 +2258,9 @@ export async function runTui(): Promise<void> {
       const ctx = preview.context;
       const ap = preview.policy?.agents[newrun.agent];
       const def = agentDef(layout(newRunRepo), newrun.agent);
-      const issueChain = ctx.issueChain;
       const issueObj = newrun.issue ? issueByRef(newrun.issue) : undefined;
-      const issueValue = newrun.issue ? `#${newrun.issue.number} ${issueObj?.kind ?? ""}`.trim() : "NA";
+      const newRunPacketFile = newrun.packet ? readPacketFile(layout(newRunRepo), newrun.packet) : null;
+      const packetValue = newrun.packet ?? "NA";
       const displayAgent = newrun.agent ? `${newrun.agent[0]!.toUpperCase()}${newrun.agent.slice(1)}` : newrun.agent;
       const resolvedAgent = resolveAgent(layout(newRunRepo), newrun.agent, {
         agentPolicy: ap,
@@ -2261,18 +2276,14 @@ export async function runTui(): Promise<void> {
         },
       });
       const issueAccess = resolvedAgent.config.issueAccess ?? def.issueAccess;
-      const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
-      const issueOutcome = (() => {
-        if (!newrun.issue) return "no issue · run is untracked";
-        if (!issueObj) return "issue is not in the cache";
-        if (issueObj.kind === "feature") {
-          return "runs attach here";
+      const packetOutcome = (() => {
+        if (newrun.packet) {
+          if (!newRunPacketFile) return "packet file is missing";
+          return `ready · ${newRunPacketFile.status} · gate ${newRunPacketFile.review ?? "gates"}`;
         }
-        if (planningAgent) return "planning attaches to the epic";
-        if (issueAccess === "create") {
-          return "will auto-create a Feature";
-        }
-        return "choose a Feature or an agent with issue creation access";
+        if (!newrun.issue) return "no packet · run is untracked";
+        if (!issueObj) return "legacy issue is not in the cache";
+        return "legacy issue link (prefer a packet)";
       })();
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
       const itemsFor = (kinds: readonly string[]) =>
@@ -2506,41 +2517,20 @@ export async function runTui(): Promise<void> {
         Math.max(10, cols - 1),
       );
       const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
-      const issueSources = ctx.sources.filter((source) => source.kind === "issue");
-      const issueItems: ContextPanelItem[] = [];
-      for (let index = 0; index < issueChain.length; index++) {
-        const issue = issueChain[index]!;
-        const source = issueSources[index];
-        const contextKind = index === 0 ? "feature" : "epic";
-        const files = ctx.sources.filter((item) => item.kind === "file" && item.depth === index);
-        const otherContext = ctx.sources.filter(
-          (item) =>
-            item.depth === index &&
-            (item.kind === "knowledge" ||
-              item.kind === "reference" ||
-              item.kind === "tool" ||
-              item.kind === "script" ||
-              (item.kind === "skill" && !/^\d+ skills$/.test(item.ref))),
-        );
-        const fileSummary = files.length > 0
-          ? `${files.length} file${files.length === 1 ? "" : "s"}`
-          : "no mc:context files";
-        issueItems.push({
+      const packetSource = ctx.sources.find((source) => source.kind === "packet");
+      const packetItems: ContextPanelItem[] = [];
+      for (const packet of listPacketFiles(newRunLayout)) {
+        const selected = newrun.packet === packet.slug;
+        packetItems.push({
           text:
-            `#${issue.ref.number} ${issue.kind} ${issue.title} · ${fileSummary}` +
-            (otherContext.length > 0 ? ` · ${otherContext.length} other context` : ""),
-          chars: source?.chars ?? 0,
-          exists: source?.exists ?? true,
-          key: `${contextKind}:${issue.ref.repo}#${issue.ref.number}`,
+            `${packet.slug} · ${trunc(packet.deliverable || "(no deliverable)", Math.max(12, cols - 40))} ` +
+            `[${packet.status}]` +
+            (selected ? " · selected" : ""),
+          chars: selected ? (packetSource?.chars ?? 0) : 0,
+          exists: true,
+          key: `packet:${packet.slug}`,
+          ...(selected ? {} : { available: true, counted: false }),
         });
-        for (const file of files) {
-          issueItems.push({
-            text: `  ${file.ref}${file.note ? ` · ${file.note}` : ""}`,
-            chars: file.chars,
-            exists: file.exists,
-            key: `file:${file.ref}`,
-          });
-        }
       }
       const mapEnabled = preview.machine?.map.enabled !== false;
       const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
@@ -2586,7 +2576,7 @@ export async function runTui(): Promise<void> {
           counted: false,
         }));
       const sections = [
-        { label: "Issues", tone: Y, sectionKey: "section:issues", items: issueItems },
+        { label: "Packets", tone: Y, sectionKey: "section:packets", items: packetItems },
         { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
         { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
         { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
@@ -2694,8 +2684,8 @@ export async function runTui(): Promise<void> {
         false,
         true,
       );
-      const issueHint = activeSection.sectionKey === "section:issues"
-        ? panelLine(` ${D}${issueOutcome}${R}`, false, true)
+      const packetHint = activeSection.sectionKey === "section:packets"
+        ? panelLine(` ${D}${packetOutcome}${R}`, false, true)
         : "";
       const itemRoom = Math.max(1, Math.floor(bodyH * 0.28));
       const itemStart = Math.max(
@@ -2731,8 +2721,8 @@ export async function runTui(): Promise<void> {
           activeSection.sectionKey === "section:skills"
             ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
             : `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
-          !newRunInsert && activeSection.sectionKey === "section:issues"
-            ? command("i", "Issue", issueValue, newrun.issue ? C : GR)
+          !newRunInsert && activeSection.sectionKey === "section:packets"
+            ? command("i", "Packet", packetValue, newrun.packet ? C : GR)
             : "",
         ]),
         false,
@@ -2745,14 +2735,14 @@ export async function runTui(): Promise<void> {
         ...tabBar,
         panelLine(""),
         sectionHeader,
-        ...(issueHint ? [issueHint] : []),
+        ...(packetHint ? [packetHint] : []),
         ...(itemLines.length ? itemLines : [panelLine(`  ${D}none${R}`)]),
       ];
       if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
 
       const boxWidth = panelWidth;
       const inner = Math.max(12, boxWidth - 2);
-      const promptText = newrun.prompt || (newRunInsert ? "" : newrun.issue ? "Press :! to run the selected task" : "Press p to type the task");
+      const promptText = newrun.prompt || (newRunInsert ? "" : newrun.packet ? "Press :! to run the packet" : newrun.issue ? "Press :! to run the selected task" : "Press p to type the task");
       // Include the cursor before wrapping so a freshly typed trailing space is
       // not trimmed away until the next keystroke.
       const promptLines = wrapText(newRunInsert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
@@ -2764,7 +2754,7 @@ export async function runTui(): Promise<void> {
           ])
         : joinCommands([
             command("p", "Prompt", undefined, M),
-            newrun.prompt.trim() || newrun.issue ? commandBadge("Start", ":!", START_BG, WHITE) : "",
+            newrun.prompt.trim() || newrun.packet || newrun.issue ? commandBadge("Start", ":!", START_BG, WHITE) : "",
           ]);
       const agentControls = newRunInsert
         ? ""
@@ -2865,25 +2855,24 @@ export async function runTui(): Promise<void> {
           `${D}${list.length} model(s) · ✓ eligible · ⏸ cooling · ✕ ineligible` +
           `${modelPickText ? ` · “${modelPickText}”` : ""}${R}` +
           `${toast ? ` · ${Y}${toast}${R}` : ""}`;
-      } else if (issuePick === "newrun") {
-        const list = pickerIssues();
-        if (issuePickSel >= list.length) issuePickSel = Math.max(0, list.length - 1);
-        const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link an issue${R} ${D}(type to filter; Enter selects)${R}`, ""];
+      } else if (packetPick === "newrun") {
+        const list = pickerPackets();
+        if (packetPickSel >= list.length) packetPickSel = Math.max(0, list.length - 1);
+        const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link a packet${R} ${D}(type to filter; Enter selects)${R}`, ""];
         for (let i = 0; i < list.length; i++) {
-          const { issue, depth } = list[i]!;
-          const indent = "  ".repeat(depth);
-          const selectedIssue = newrun.issue && refKey(issue.ref) === refKey(newrun.issue);
-          const line = ` ${indent}${selectedIssue ? C + "▸" : " "} ${BL}#${issue.ref.number}${R} ${D}${issue.kind}${R} ${W}${issue.title}${R}`;
-          picker.push(selected(line, i === issuePickSel));
+          const packet = list[i]!;
+          const isSelected = newrun.packet === packet.slug;
+          const line = ` ${isSelected ? C + "▸" : " "} ${C}${packet.slug}${R} ${D}[${packet.status}]${R} ${W}${trunc(packet.deliverable || "(no deliverable)", Math.max(12, cols - packet.slug.length - 24))}${R}`;
+          picker.push(selected(line, i === packetPickSel));
         }
-        picker.push("", ` ${D}filter: ${issuePickText || "(all)"}${R}`);
+        picker.push("", ` ${D}filter: ${packetPickText || "(all)"}${R}`);
         body = clipBody(picker.slice(0, bodyH));
         actions = joinCommands([
           command("Enter", "Select", undefined, G),
           command("j/k", "Move", undefined, M),
           command("Esc", "Close", undefined, GR),
         ]);
-        secondary = `${D}${list.length} issue(s)${issuePickText ? ` · “${issuePickText}”` : ""}${R}`;
+        secondary = `${D}${list.length} packet(s)${packetPickText ? ` · “${packetPickText}”` : ""}${R}`;
       } else {
         // Context and inherited sources stay above; the composer is pinned to
         // the bottom of the body so it sits directly above the key-command row.
@@ -4164,62 +4153,42 @@ export async function runTui(): Promise<void> {
 
   /* ------------------------------------------------------------ issue modal helpers */
 
-  const startIssuePicker = () => {
-    issuePick = "newrun";
-    issuePickSel = 0;
-    issuePickText = "";
+  /* ------------------------------------------------------------ packet modal helpers */
+
+  const startPacketPicker = () => {
+    packetPick = "newrun";
+    packetPickSel = 0;
+    packetPickText = "";
   };
 
-  const pickerIssues = () => {
-    const cache = readIssueCache(layout(newRunRepo));
-    if (!cache) return [];
-    return orderIssueTree(cache.issues, issuePickText);
-  };
-
-  const newRunIssueAccess = (): IssueAccess => {
-    const newRunLayout = layout(newRunRepo);
-    const policy = effectivePolicy(newRunRepo);
-    const machine = (() => {
-      try { return loadMachineConfig(newRunLayout); } catch { return undefined; }
-    })();
-    return (
-      resolveAgentConfig({
-        role: newrun.agent,
-        agentPolicy: policy?.agents[newrun.agent],
-        machineOverrides: machine?.agents[newrun.agent],
-      }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess
+  const pickerPackets = () => {
+    const needle = packetPickText.trim().toLowerCase();
+    const packets = listPacketFiles(layout(newRunRepo));
+    if (!needle) return packets;
+    return packets.filter((packet) =>
+      `${packet.slug} ${packet.deliverable} ${packet.status}`.toLowerCase().includes(needle),
     );
   };
 
-  const chooseIssue = (issue: Issue) => {
-    const previousIssue = issueByRef(newrun.issue);
-    const previousPrompt = issuePrompt(previousIssue, newrun.agent);
-    const hadIssue = Boolean(newrun.issue);
-    newrun.issue = issue.ref;
-    // A blank composer that was opened with `N` still starts as general. Once
-    // a Feature is attached, default to the agent that does the work.
-    if (!hadIssue && newrun.agent === "research") {
-      newrun.agent = issue.kind === "feature" ? "build" : "planner";
+  const choosePacket = (packet: PacketFile) => {
+    const previousPacket = newrun.packet ? readPacketFile(layout(newRunRepo), newrun.packet) : null;
+    const previousPrompt = previousPacket?.deliverable ?? "";
+    const hadPacket = Boolean(newrun.packet);
+    newrun.packet = packet.slug;
+    newrun.issue = undefined;
+    // A blank composer that was opened with `N` still starts as research. Once
+    // a packet is attached, default to the agent that does the work.
+    if (!hadPacket && newrun.agent === "research") {
+      newrun.agent = "build";
       newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
       newrun.worktree = true;
       enforceLockedSkills(true);
     }
-    if (!newrun.prompt.trim() || newrun.prompt === previousPrompt) {
-      newrun.prompt = issuePrompt(issue, newrun.agent);
+    if (!newrun.prompt.trim() || (previousPrompt && newrun.prompt === previousPrompt)) {
+      newrun.prompt = packet.deliverable || packet.slug;
     }
-    issuePick = null;
-    const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
-    let outcome: string;
-    if (issue.kind === "feature") {
-      outcome = "runs attach here";
-    } else if (planningAgent) {
-      outcome = "planning attaches to the epic";
-    } else if (newRunIssueAccess() === "create") {
-      outcome = "a child Feature will be created";
-    } else {
-      outcome = "choose a Feature or an agent with issue creation access";
-    }
-    notify(`linked #${issue.ref.number}; ${outcome}`);
+    packetPick = null;
+    notify(`linked ${packet.slug}; ready · ${packet.status} · gate ${packet.review ?? "gates"}`);
   };
 
   const newRunWeights = () => {
@@ -4577,13 +4546,13 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (issuePick === "newrun") {
-        if (data === "\x1b") { issuePick = null; draw(); return; }
-        if (data === "\x1b[A" || data === "k") { issuePickSel = Math.max(0, issuePickSel - 1); draw(); return; }
-        if (data === "\x1b[B" || data === "j") { const list = pickerIssues(); issuePickSel = Math.min(Math.max(0, list.length - 1), issuePickSel + 1); draw(); return; }
-        if (data === "\r" || data === "\n") { const list = pickerIssues(); const picked = list[issuePickSel]; if (picked) chooseIssue(picked.issue); draw(); return; }
-        if (data === "\x7f" || data === "\b") { issuePickText = issuePickText.slice(0, -1); issuePickSel = 0; draw(); return; }
-        if (!data.startsWith("\x1b")) { issuePickText += printable(data); issuePickSel = 0; draw(); return; }
+      if (packetPick === "newrun") {
+        if (data === "\x1b") { packetPick = null; draw(); return; }
+        if (data === "\x1b[A" || data === "k") { packetPickSel = Math.max(0, packetPickSel - 1); draw(); return; }
+        if (data === "\x1b[B" || data === "j") { const list = pickerPackets(); packetPickSel = Math.min(Math.max(0, list.length - 1), packetPickSel + 1); draw(); return; }
+        if (data === "\r" || data === "\n") { const list = pickerPackets(); const picked = list[packetPickSel]; if (picked) choosePacket(picked); draw(); return; }
+        if (data === "\x7f" || data === "\b") { packetPickText = packetPickText.slice(0, -1); packetPickSel = 0; draw(); return; }
+        if (!data.startsWith("\x1b")) { packetPickText += printable(data); packetPickSel = 0; draw(); return; }
         draw();
         return;
       }
@@ -4636,6 +4605,14 @@ export async function runTui(): Promise<void> {
       if (data === " ") {
         const key = newRunContextItemKeys[newRunContextItem];
         const available = newRunContextItemAvailable[newRunContextItem] === true;
+        if (key && key.startsWith("packet:")) {
+          const slug = key.slice("packet:".length);
+          const packet = readPacketFile(layout(newRunRepo), slug);
+          if (packet) choosePacket(packet);
+          else notify(`packet ${slug} is missing`);
+          draw();
+          return;
+        }
         if (key && key.startsWith("skill:")) {
           // Three modes cycle: include (body inlined) → on-demand
           // (description only, pulled with the skill tool) → exclude.
@@ -4689,10 +4666,10 @@ export async function runTui(): Promise<void> {
       if (data === "g") { cycleAmbiguity(); draw(); return; }
       if (data === "f") { cycleMinFit(); draw(); return; }
       if (data === "F") { cycleFloors(); draw(); return; }
-      if (data === "i" && newRunContextSectionKey === "section:issues") { startIssuePicker(); draw(); return; }
+      if (data === "i" && newRunContextSectionKey === "section:packets") { startPacketPicker(); draw(); return; }
       if (data === "m") { startModelPicker(); draw(); return; }
       if (data === "e" || data === "p") { newRunInsert = true; draw(); return; }
-      if (data === "X" && newrun.issue) { newrun.issue = undefined; draw(); return; }
+      if (data === "X" && (newrun.packet || newrun.issue)) { newrun.packet = undefined; newrun.issue = undefined; draw(); return; }
       draw();
       return;
     }
@@ -4891,8 +4868,9 @@ export async function runTui(): Promise<void> {
       }
       if (data === "n") {
         const row = index.selectable[runsSel];
+        const packet = row?.kind === "packet" ? row.slug : row?.kind === "run" ? row.run.packetId : undefined;
         const issue = row?.kind === "issue" ? row.issue.ref : row?.kind === "run" ? row.run.issue : undefined;
-        startNewRun(issue, repoForRow(row), row?.kind === "issue" ? row.issue : undefined);
+        startNewRun(packet, repoForRow(row), issue, row?.kind === "issue" ? row.issue : undefined);
         draw();
         return;
       }
@@ -4980,7 +4958,7 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[A" || data === "k") { issueRunSel = Math.max(0, issueRunSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") { issueRunSel = Math.min(Math.max(0, issueRuns.length - 1), issueRunSel + 1); draw(); return; }
       if (data === "\r" || data === "\n") { const run = issueRuns[issueRunSel]; if (run) { selectedRunId = run.id; runSection = "overview"; screen = "run"; } draw(); return; }
-      if (data === "n") { startNewRun(issue.ref, issueRoot, issue); draw(); return; }
+      if (data === "n") { startNewRun(undefined, issueRoot, issue.ref, issue); draw(); return; }
       if (data === "p") { approveSelected(issue, issueRuns[issueRunSel] ?? issueRuns[0], issueRoot); draw(); return; }
       if (data === "P") {
         pipelineScope = { kind: issue.kind, ref: issue.ref };
