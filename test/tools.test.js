@@ -113,7 +113,7 @@ test("semantic search returns module summaries and key files", async () => {
   assert.match(text, /files: src\/context\/state\.ts/);
 });
 
-test("text search is the default when mode is omitted", async () => {
+test("auto is the default; pattern plus file searches text", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-search-"));
   try {
     writeFileSync(join(root, "package.json"), '{"scripts":{"test":"node --test"}}\n', "utf8");
@@ -123,6 +123,138 @@ test("text search is the default when mode is omitted", async () => {
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /package\.json:1/);
     assert.match(text, /scripts/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("default bare identifier locates definitions and references", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-sym-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "src.ts"), "export function alpha() { return 1; }\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { pattern: "alpha" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /definitions:/);
+    assert.match(text, /src\.ts:1/);
+    assert.match(text, /alpha/);
+    assert.match(text, /references:/);
+    assert.match(text, /next: read \{ "path": "src\.ts", "around": 1 \}/);
+    assert.doesNotMatch(text, /no symbols/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("default bare file path returns its outline", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-outline-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "src.ts"), "export function alpha() { return 1; }\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "src.ts" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /alpha/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("locate mode annotates references with the enclosing symbol", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-locate-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    const lines = [
+      "export function outer() {",
+      "  const target = 1;",
+      "  return target;",
+      "}",
+      "",
+      "export function other() {",
+      "  return 0;",
+      "}",
+    ];
+    writeFileSync(join(root, "a.ts"), lines.join("\n") + "\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "locate", pattern: "target" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /0 definition\(s\), 2 reference\(s\)/);
+    assert.doesNotMatch(text, /definitions:/);
+    assert.match(text, /\[in outer\]/);
+    assert.match(text, /next: read \{ "path": "a\.ts", "around": 2 \}/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("auto falls back to references when no symbol matches", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-fallback-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "src.ts"), 'const filter = "cwd";\nconsole.log(filter);\n', "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { pattern: "cwd" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /src\.ts:1/);
+    assert.doesNotMatch(text, /no symbols/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("text search carries context lines with each hit", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-ctx-"));
+  try {
+    const lines = ["line one", "line two", "needle here", "line four", "line five"];
+    writeFileSync(join(root, "a.txt"), lines.join("\n") + "\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "text", pattern: "needle" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /a\.txt:3:needle here/);
+    assert.match(text, /line two/);
+    assert.match(text, /line four/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("text hits in a huge file name a read-around line", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-big-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    const lines = Array.from(
+      { length: 900 },
+      (_, i) => `const pad${i} = "padding line number ${i} to pass forty bytes easily";`,
+    );
+    lines[450] = 'const target = "needle";';
+    writeFileSync(join(root, "big.ts"), lines.join("\n") + "\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "text", pattern: "needle" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /big\.ts:451/);
+    assert.match(text, /"around": 451/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("text hits in a small file carry no large-file hint", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-small-"));
+  try {
+    writeFileSync(join(root, "a.txt"), "needle\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "text", pattern: "needle" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /needle/);
+    assert.doesNotMatch(text, /around/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -504,7 +636,7 @@ test("text search returns repo-relative paths for a directory scope", async () =
   }
 });
 
-test("search auto picks symbols for an identifier and outline for a file", async () => {
+test("search auto locates an identifier and outlines a file", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-search-auto-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: root });

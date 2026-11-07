@@ -659,17 +659,19 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
 
 const SEARCH_MODES: readonly string[] = [
   "auto", "map", "files", "outline", "sections", "text", "structure", "json", "yaml",
-  "definition", "references", "symbols", "info", "semantic", "graph",
+  "definition", "references", "symbols", "info", "semantic", "graph", "locate",
 ];
 
 const SearchParams = Type.Object({
   mode: Type.Optional(
     Type.String({
-      enum: ["auto", "map", "files", "outline", "sections", "text", "structure", "json", "yaml", "definition", "references", "symbols", "info", "semantic", "graph"],
+      enum: ["auto", "map", "files", "outline", "sections", "text", "structure", "json", "yaml", "definition", "references", "symbols", "info", "semantic", "graph", "locate"],
       description:
         "Search mode: auto | map | files | outline | sections | text | structure | json | yaml | " +
-        "definition | references | symbols | info | semantic | graph (default text). " +
-        "Use auto to pick symbols for a bare identifier, outline for a file path, or text otherwise.",
+        "definition | references | symbols | info | semantic | graph | locate (default auto). " +
+        "Use auto to pick locate for a bare identifier, text for a pattern plus a file path, " +
+        "outline for a bare file path, or text otherwise. locate answers " +
+        "definition + references with read anchors in one call.",
     }),
   ),
   pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic/graph, symbol filter for LSP modes. outline/sections use path." })),
@@ -743,32 +745,82 @@ function cleanSearchArgs(args: unknown): unknown {
   return changed ? out : args;
 }
 
+/** Files above this size get a line count before any hint decision. */
+const LARGE_FILE_BYTES = 40 * 1024;
+/** A hit file with more lines than this earns a read-around hint. */
+const LARGE_FILE_LINES = 800;
+
+/** Append a read-around hint for hits inside huge files. A bare `path:line:`
+ * match in a 5,000-line file invites another dozen offset pages; one line
+ * naming `read { around }` points at the one call that resolves it. Only
+ * files above LARGE_FILE_LINES are named, at most three, each with its first
+ * hit line. Never fires on "no matches". */
+function withLargeFileHint(root: string, text: string): string {
+  if (!text || text === "no matches") return text;
+  const hits = new Map<string, number>();
+  for (const line of text.split("\n")) {
+    const match = /^(.+?):(\d+)[:-]/.exec(line);
+    if (!match || hits.has(match[1]!)) continue;
+    if (hits.size >= 8) break;
+    hits.set(match[1]!, Number(match[2]));
+  }
+  const notes: string[] = [];
+  for (const [rel, line] of hits) {
+    if (notes.length >= 3) break;
+    let size = 0;
+    try {
+      size = statSync(resolveWithin(root, rel)).size;
+    } catch {
+      continue;
+    }
+    if (size < LARGE_FILE_BYTES) continue;
+    let lines = 0;
+    try {
+      const raw = readFileSync(resolveWithin(root, rel), "utf8");
+      lines = raw.split("\n").length;
+    } catch {
+      continue;
+    }
+    if (lines > LARGE_FILE_LINES) {
+      notes.push(
+        `[${rel} is ${lines} lines; page it with read { "path": "${rel}", "around": ${line} } or batch read { "symbols": [...] }, not offset pages]`,
+      );
+    }
+  }
+  return notes.length > 0 ? `${text}\n${notes.join("\n")}` : text;
+}
+
 export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
   return {
     name: "search",
     label: "search",
     description:
       "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing, globs support {a,b}), outline (one file's symbols; path or pattern), " +
-      "sections (comment headings inside one file, e.g. `/* ---- run keys ---- */`; path required), text (regex), " +
+      "sections (comment headings inside one file, e.g. `/* ---- run keys ---- */`; path required), text (regex, 2 context lines; " +
+      "large-file hits name a read-around line), " +
       "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), semantic (rank modules/key files by concept or filename), " +
       "graph (module import overview; optional pattern query), " +
-      "symbols (LSP document/workspace symbols when a server is available, else repo map), and LSP definition/references/info (needs path+line+column). " +
+      "symbols (LSP document/workspace symbols when a server is available, else repo map), locate (identifier: definitions + " +
+      "references with enclosing code and read anchors, one call), and LSP definition/references/info (needs path+line+column). " +
       "text accepts paths to search a specific file list. Examples: {\"mode\":\"sections\",\"path\":\"src/tui.ts\"}; {\"mode\":\"outline\",\"path\":\"src/tui.ts\"}; {\"mode\":\"graph\",\"pattern\":\"context\"}. " +
       "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
     parameters: SearchParams,
     prepareArguments: (args) => cleanSearchArgs(args) as Static<typeof SearchParams>,
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
-      let mode = params.mode ?? "text";
+      const requestedMode = params.mode ?? "auto";
+      let mode = requestedMode;
       if (mode === "auto") {
         if (params.path) {
           try {
-            mode = statSync(scope).isFile() ? "outline" : "text";
+            // A pattern plus a file path asks for matches inside that file;
+            // a bare file path asks for its outline.
+            mode = statSync(scope).isFile() ? (params.pattern ? "text" : "outline") : "text";
           } catch {
             mode = "text";
           }
         } else if (params.pattern && /^[A-Za-z_$][\w$]*$/.test(params.pattern.trim())) {
-          mode = "symbols";
+          mode = "locate";
         } else {
           mode = "text";
         }
@@ -777,6 +829,73 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
         return fail(`unknown search mode "${mode}". Use one of: ${SEARCH_MODES.join(", ")}.`);
       }
       const limit = Math.max(1, Math.floor(params.limit ?? 200));
+      // Text search as a callable unit: `auto` falls back to it when a bare
+      // identifier matches no symbol, and `locate` composes it with symbol
+      // lookup. Returns raw matches; callers add presentation.
+      const execTextSearch = async (): Promise<AgentToolResult<undefined>> => {
+        if (!params.pattern) return fail("text mode requires a pattern");
+        if (params.path && params.paths && params.paths.length > 0) {
+          return fail("text mode accepts path or paths, not both");
+        }
+        // rg needs a directory as cwd. When the caller scopes to one file,
+        // run from the worktree root and pass the file explicitly.
+        const scopeIsFile = (() => {
+          try {
+            return statSync(scope).isFile();
+          } catch {
+            return false;
+          }
+        })();
+        if (scopeIsFile && isSecretPath(toRelative(ctx.root, scope))) return ok("no matches");
+        const args = [
+          "--line-number",
+          "--with-filename",
+          "--max-count",
+          String(limit),
+          "--context",
+          "2",
+          ...excludeGlobs(),
+          "--",
+          params.pattern,
+        ];
+        if (params.paths && params.paths.length > 0) {
+          const targets = params.paths.map((path) => resolveWithin(ctx.root, path));
+          const visible = targets.filter((target) => !isSecretPath(toRelative(ctx.root, target)));
+          if (visible.length === 0) return ok("no matches");
+          args.push(...visible);
+          const result = await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
+          if (result.isError) return result;
+          // rg prints absolute targets; keep state and model paths repo-relative.
+          const text = result.content
+            .map((item) => (item.type === "text" ? item.text : ""))
+            .join("\n")
+            .replaceAll(`${ctx.root}/`, "");
+          return ok(text);
+        }
+        // Always run from the worktree root and pass the scope as a target.
+        // With cwd=scope, rg prints paths relative to that directory, which
+        // the state ingester then stores as bogus root-relative files.
+        if (scopeIsFile || scope !== ctx.root) args.push(toRelative(ctx.root, scope));
+        const scoped = await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
+        if (scoped.isError) return scoped;
+        return ok(
+          scoped.content
+            .map((item) => (item.type === "text" ? item.text : ""))
+            .join("\n"),
+        );
+      };
+      const runText = async (): Promise<AgentToolResult<undefined>> => {
+        const found = await execTextSearch();
+        if (found.isError) return found;
+        return ok(
+          withLargeFileHint(
+            ctx.root,
+            found.content
+              .map((item) => (item.type === "text" ? item.text : ""))
+              .join("\n"),
+          ),
+        );
+      };
       try {
         switch (mode) {
           case "files": {
@@ -826,48 +945,97 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             return ok(capText(listed.join("\n"), SEARCH_CAP_BYTES).text || "no matches");
           }
           case "text": {
-            if (!params.pattern) return fail("text mode requires a pattern");
-            if (params.path && params.paths && params.paths.length > 0) {
-              return fail("text mode accepts path or paths, not both");
-            }
-            // rg needs a directory as cwd. When the caller scopes to one file,
-            // run from the worktree root and pass the file explicitly.
-            const scopeIsFile = (() => {
+            return runText();
+          }
+          case "locate": {
+            // One call answering "where is this defined and used": symbol
+            // definitions plus every text reference with enclosing code and
+            // the read call that resolves each file. No follow-up needed.
+            if (!params.pattern) return fail("locate mode requires an identifier pattern");
+            const query = params.pattern.trim();
+            const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+            const defs: string[] = [];
+            if (scope && params.path) {
               try {
-                return statSync(scope).isFile();
+                if (statSync(scope).isFile()) {
+                  const rel = toRelative(ctx.root, scope);
+                  const file = built.map.files.find((entry) => entry.path === rel) ??
+                    (await outlineFile(ctx.root, rel));
+                  for (const symbol of file?.symbols ?? []) {
+                    if (symbol.name.toLowerCase().includes(query.toLowerCase())) {
+                      defs.push(`${rel}:${symbol.line} ${symbol.kind} ${symbol.name}`);
+                    }
+                    if (defs.length >= 10) break;
+                  }
+                } else {
+                  defs.push(...findSymbols(built.map, query, 10));
+                }
               } catch {
-                return false;
+                defs.push(...findSymbols(built.map, query, 10));
               }
-            })();
-            if (scopeIsFile && isSecretPath(toRelative(ctx.root, scope))) return ok("no matches");
-            const args = [
-              "--line-number",
-              "--with-filename",
-              "--max-count",
-              String(limit),
-              ...excludeGlobs(),
-              "--",
-              params.pattern,
-            ];
-            if (params.paths && params.paths.length > 0) {
-              const targets = params.paths.map((path) => resolveWithin(ctx.root, path));
-              const visible = targets.filter((target) => !isSecretPath(toRelative(ctx.root, target)));
-              if (visible.length === 0) return ok("no matches");
-              args.push(...visible);
-              const result = await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
-              if (result.isError) return result;
-              // rg prints absolute targets; keep state and model paths repo-relative.
-              const text = result.content
-                .map((item) => (item.type === "text" ? item.text : ""))
-                .join("\n")
-                .replaceAll(`${ctx.root}/`, "");
-              return ok(text);
+            } else {
+              defs.push(...findSymbols(built.map, query, 10));
             }
-            // Always run from the worktree root and pass the scope as a target.
-            // With cwd=scope, rg prints paths relative to that directory, which
-            // the state ingester then stores as bogus root-relative files.
-            if (scopeIsFile || scope !== ctx.root) args.push(toRelative(ctx.root, scope));
-            return await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
+            const refs = await execTextSearch();
+            if (refs.isError) {
+              return refs;
+            }
+            const raw = refs.content
+              .map((item) => (item.type === "text" ? item.text : ""))
+              .join("\n");
+            if (!raw || raw === "no matches") {
+              return ok(
+                defs.length > 0
+                  ? `locate "${query}": ${defs.length} definition(s), no references\ndefinitions:\n${defs.join("\n")}`
+                  : `no matches for "${query}"`,
+              );
+            }
+            const outlines = new Map<string, Awaited<ReturnType<typeof outlineFile>>>();
+            const filesInOrder: string[] = [];
+            for (const line of raw.split("\n")) {
+              const match = /^(.+?):(\d+)[:-]/.exec(line);
+              if (match && !filesInOrder.includes(match[1]!)) filesInOrder.push(match[1]!);
+              if (filesInOrder.length >= 7) break;
+            }
+            const annotate = filesInOrder.length <= 6;
+            if (annotate) {
+              for (const rel of filesInOrder) {
+                try {
+                  outlines.set(rel, await outlineFile(ctx.root, rel));
+                } catch {
+                  outlines.set(rel, null);
+                }
+              }
+            }
+            let references = 0;
+            const anchors: Array<{ path: string; line: number }> = [];
+            const rendered = raw.split("\n").map((line) => {
+              const match = /^(.+?):(\d+):(.*)$/.exec(line);
+              if (!match) return line;
+              references += 1;
+              const rel = match[1]!;
+              const lineNo = match[2]!;
+              const code = match[3]!;
+              if (!anchors.some((anchor) => anchor.path === rel)) {
+                anchors.push({ path: rel, line: Number(lineNo) });
+              }
+              if (!annotate) return line;
+              const file = outlines.get(rel);
+              const container = file ? rangeAround(file, Number(lineNo)) : null;
+              return container && container.name ? `${rel}:${lineNo} [in ${container.name}]${code}` : line;
+            });
+            const next = anchors.slice(0, 3).map(
+              (anchor) => `read { "path": "${anchor.path}", "around": ${anchor.line} }`,
+            );
+            return ok(
+              [
+                `locate "${query}": ${defs.length} definition(s), ${references} reference(s)`,
+                ...(defs.length > 0 ? ["definitions:", ...defs] : []),
+                "references:",
+                ...rendered,
+                ...(next.length > 0 ? [`next: ${next.join(" · ")}`] : []),
+              ].join("\n"),
+            );
           }
           case "map": {
             const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
@@ -1024,6 +1192,12 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 scopedMap = { ...built.map, files: file ? [file] : [] };
               }
               const hits = findSymbols(scopedMap, params.pattern ?? "", limit);
+              if (hits.length === 0 && requestedMode === "auto" && params.pattern) {
+                // A bare identifier with no symbol match (a filter value, a
+                // flag, a string literal) still deserves an answer in one
+                // call; fall back to text rather than a dead end.
+                return runText();
+              }
               const note = language ? `\n[LSP ${language} unavailable or empty; used repo map]` : "";
               return ok((hits.join("\n") || "no symbols") + note);
             }
