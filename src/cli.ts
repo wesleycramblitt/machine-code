@@ -1538,6 +1538,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   const contextBundle = await assembleContext({
     layout: l,
     machine,
+    agent: agentNameParsed,
     provider: issueBundle.provider.kind === "none" ? undefined : issueBundle.provider,
     issue: issueRef,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
@@ -1933,7 +1934,7 @@ async function cmdQueue(argv: string[]): Promise<number> {
     // Queue context: the packet itself is the primary context source.
     const { assembleContext } = await import("./context/assemble.js");
     const { writeJsonAtomic } = await import("./state/run-schema.js");
-    const queueContext = await assembleContext({ layout: l, machine, packetId: packet.id });
+    const queueContext = await assembleContext({ layout: l, machine, agent: packet.agent, packetId: packet.id });
     if (queueContext.text) {
       writeJsonAtomic(join(recorder.dir, "context.json"), { chars: queueContext.chars, sources: queueContext.sources, warnings: queueContext.warnings });
       recorder.event("context_assembled", { chars: queueContext.chars, sources: queueContext.sources, warnings: queueContext.warnings });
@@ -4201,6 +4202,7 @@ async function cmdPack(argv: string[]): Promise<number> {
   const bundle = await assembleContext({
     layout: l,
     machine,
+    agent,
     ...(provider ? { provider } : {}),
     ...(issueRef ? { issue: issueRef } : {}),
     ...(include ? { include } : {}),

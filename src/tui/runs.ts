@@ -18,7 +18,7 @@ import { isDeliverable, rollupIssue, sortRuns, type IssueRollup } from "./status
 
 export type RunGroup = "packets" | "gh-issue" | "status" | "overall";
 
-export const RUN_GROUPS: readonly RunGroup[] = ["packets", "gh-issue", "status", "overall"];
+export const RUN_GROUPS: readonly RunGroup[] = ["packets", "status"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
   packets: "Packets",

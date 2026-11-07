@@ -78,6 +78,8 @@ export function issueChain(issues: readonly Issue[], ref?: IssueRef): Issue[] {
 }
 
 export interface PreviewContextOptions {
+  /** Role name; the plan map is inherited only by the planner. */
+  agent?: string;
   planFile?: string;
   knowledgeIndex?: string;
   /** Explicit repo-relative files selected in the composer. */
@@ -211,12 +213,17 @@ export function previewContext(
     if (!exists) warnings.push(`file ${path} is missing or outside the repo`);
   }
 
-  for (const planPath of discoverPlanFiles(layout, options.planFile)) {
-    // Report the real size. The run's global model budget decides what fits;
-    // preview must not hide a plan by pretending it is 2 KiB long.
-    const size = capFor(join(layout.repoRoot, planPath), Number.MAX_SAFE_INTEGER);
-    chars += size;
-    sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
+  if (options.agent === "planner") {
+    const planPath = options.planFile ?? "plans/index.md";
+    const planRoot = resolve(layout.repoRoot);
+    const abs = resolve(planRoot, planPath);
+    const inside = abs === planRoot || abs.startsWith(planRoot + sep);
+    const exists = inside && existsSync(abs);
+    if (exists) {
+      const size = capFor(abs, Number.MAX_SAFE_INTEGER);
+      chars += size;
+      sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
+    }
   }
   // Mode default skill bodies plus explicit composer includes (clean-code,
   // verified-testing). Declared issue skills win ties; missing ones are

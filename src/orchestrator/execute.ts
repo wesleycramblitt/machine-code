@@ -323,6 +323,7 @@ export async function executeFeature(input: ExecuteFeatureInput): Promise<Execut
   const context = await assembleContext({
     layout,
     machine: input.machine,
+    agent: "build",
     provider: input.provider,
     issue: issue.ref,
     defaultSkills: defaultSkillsFor({ agent: "build", verification: plan.verification }),

@@ -83,8 +83,8 @@ test("preview reports the real plan size instead of a fixed 2 KiB cap", () => {
   try {
     mkdirSync(join(root, "plans"), { recursive: true });
     const body = `# Plan\n\n${"line\n".repeat(1000)}END\n`;
-    writeFileSync(join(root, "plans", "next.md"), body, "utf8");
-    const preview = previewContext(fakeLayout(root), [], undefined, "", {});
+    writeFileSync(join(root, "plans", "index.md"), body, "utf8");
+    const preview = previewContext(fakeLayout(root), [], undefined, "", { agent: "planner" });
     const plan = preview.sources.find((source) => source.kind === "plan");
     assert.ok(plan);
     assert.equal(plan.chars, Buffer.byteLength(body, "utf8"));

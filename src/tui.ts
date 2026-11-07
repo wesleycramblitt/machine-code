@@ -164,7 +164,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
 }
 
 type Page = "runs" | "models" | "spend" | "settings" | "plans";
-type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline" | "delete";
+type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline" | "delete" | "packet";
 type PipelineScope = { kind: "epic" | "feature"; ref: IssueRef };
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
@@ -175,7 +175,6 @@ const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "models", label: "Models", key: "2" },
   { id: "spend", label: "Spend", key: "3" },
   { id: "settings", label: "Settings", key: "4" },
-  { id: "plans", label: "Plans", key: "5" },
 ];
 const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
 const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "related", "context"];
@@ -827,6 +826,8 @@ export async function runTui(): Promise<void> {
 
   let selectedIssueKey: string | null = null;
   let selectedRunId: string | null = null;
+  let selectedPacketSlug: string | null = null;
+  let packetScroll = 0;
   let deleteTarget: Issue | undefined;
   let deleteRunTarget: RunSummary | undefined;
   let deleteReturn: Screen = "list";
@@ -1364,6 +1365,7 @@ export async function runTui(): Promise<void> {
         key: previewKey,
         at: Date.now(),
         context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, "", {
+          agent: newrun.agent,
           planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
           files: [...newRunContextIncluded]
@@ -2063,7 +2065,6 @@ export async function runTui(): Promise<void> {
       actions = narrow
         ? joinCommands([
             command("n", "New", undefined, C),
-            command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
             ...answerAction,
             command("space", "Fold", undefined, Y),
@@ -2072,7 +2073,6 @@ export async function runTui(): Promise<void> {
           ])
         : joinCommands([
             command("n", "New run", undefined, C),
-            command("p", "Pipeline", undefined, Y),
             command("Enter", "Open", undefined, G),
             ...answerAction,
             command("space", "Fold", undefined, Y),
@@ -3407,6 +3407,43 @@ export async function runTui(): Promise<void> {
         ? `${D}${selItem.slug}${selItem.status ? ` · ${selItem.status}` : ""} · ${toast ? `${Y}${toast}${R} · ` : ""}packets/${selItem.slug}.md${R}`
         : `${D}plans/index.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
       }
+    }
+
+    /* ---------------------------------------------------------- packet */
+    else if (page === "runs" && screen === "packet") {
+      const slug = selectedPacketSlug;
+      const packet = slug ? readPacketFile(l, slug) : null;
+      const lines: string[] = [];
+      if (!packet || !slug) {
+        lines.push("", ` ${Y}packet not found${R}`);
+      } else {
+        lines.push(` ${B}${W}${slug}${R}  ${D}[${packet.status}]  gate ${packet.review ?? "gates"}${R}`);
+        lines.push(` ${W}${packet.deliverable || "(no deliverable)"}${R}`);
+        if (packet.deps.length > 0) lines.push(` ${D}deps: ${packet.deps.join(", ")}${R}`);
+        if (packet.files.length > 0) {
+          lines.push(` ${D}files:${R}`);
+          for (const file of packet.files) lines.push(`   ${C}${file}${R}`);
+        }
+        if (packet.acceptance.length > 0) lines.push(` ${D}acceptance: ${packet.acceptance.join("; ")}${R}`);
+        lines.push(` ${D}verify: ${packet.verify.length ? packet.verify.join(", ") : "(none)"}${R}`);
+        const runs = allRuns.filter((run) => run.packetId === slug);
+        lines.push("", ` ${B}runs${R} ${D}(${runs.length})${R}`);
+        for (const run of sortRuns(runs, "activity")) {
+          lines.push(`   ${W}${run.id.slice(-8)}${R} ${D}${run.agent}${R} ${run.status}${run.error ? ` ${Y}${trunc(run.error, 40)}${R}` : ""}`);
+        }
+      }
+      const w = selectableLines(lines, packetScroll, packetScroll, bodyH);
+      packetScroll = w.scroll;
+      body = clipBody(w.lines);
+      actions = joinCommands([
+        command("g", "Gate", packet?.review ?? "gates", packet?.review === "agent" ? C : packet?.review === "human" ? Y : D),
+        command("o", "Orchestrate", undefined, GR),
+        command("b", "Build", undefined, C),
+        command("a", "Approve", undefined, G),
+        command("d", "Delete", undefined, RED),
+        command("esc", "Back"),
+      ]);
+      secondary = slug ? `${D}packets/${slug}.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "";
     }
 
     /* ------------------------------------------------------------- run */
@@ -4833,15 +4870,9 @@ export async function runTui(): Promise<void> {
         if (row?.kind === "issue") { selectedIssueKey = refKey(row.issue.ref); issueRunSel = 0; issueScroll = 0; screen = "issue"; }
         else if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
         else if (row?.kind === "packet") {
-          const firstRun = index.rows.find((candidate) => candidate.kind === "run" && candidate.parent === row.id);
-          if (firstRun?.kind === "run") {
-            selectedRunId = firstRun.run.id;
-            runSection = "overview";
-            runScroll = 0;
-            screen = "run";
-          } else {
-            notify(`no run on ${row.slug} — run \`machine_code build ${row.slug}\``);
-          }
+          selectedPacketSlug = row.slug;
+          packetScroll = 0;
+          screen = "packet";
         }
         draw();
         return;
@@ -4866,9 +4897,9 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
-      if (data === "p" || data === "D") {
+      if (data === "D") {
         const row = index.selectable[runsSel];
-        if (data === "D" && row?.kind === "run") {
+        if (row?.kind === "run") {
           deleteRunTarget = row.run;
           deleteTarget = undefined;
           deleteReturn = "list";
@@ -4876,24 +4907,12 @@ export async function runTui(): Promise<void> {
           draw();
           return;
         }
-        const issue = row?.kind === "issue"
-          ? row.issue
-          : row?.kind === "run"
-            ? issueByRef(row.run.issue)
-            : undefined;
-        if (!issue) { notify("select an Epic or Feature first"); draw(); return; }
-        if (data === "D") {
-          deleteTarget = issue;
-          deleteRunTarget = undefined;
-          deleteReturn = "list";
-          screen = "delete";
-          draw();
-          return;
-        }
-        pipelineScope = { kind: issue.kind, ref: issue.ref };
-        pipelineSel = 0;
-        pipelineScroll = 0;
-        screen = "pipeline";
+        const issue = row?.kind === "issue" ? row.issue : undefined;
+        if (!issue) { notify("select a run to delete"); draw(); return; }
+        deleteTarget = issue;
+        deleteRunTarget = undefined;
+        deleteReturn = "list";
+        screen = "delete";
         draw();
         return;
       }
@@ -4915,6 +4934,39 @@ export async function runTui(): Promise<void> {
       }
       if (data === "/") { searchMode = true; searchText = searchSeed(); draw(); return; }
       if (data === "r") { void refreshIssues("all"); draw(); return; }
+      draw();
+      return;
+    }
+
+    /* ------------------------------------------------------ packet keys */
+    if (page === "runs" && screen === "packet") {
+      const slug = selectedPacketSlug;
+      const spawnCli = (args: string[], note: string): void => {
+        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+        spawn(process.execPath, [cliPath, ...args], { detached: true, stdio: "ignore" }).unref();
+        notify(note);
+        draw();
+      };
+      if (data === "\x1b" || data === "q") { screen = "list"; draw(); return; }
+      if (data === "\x1b[A" || data === "k") { packetScroll = Math.max(0, packetScroll - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { packetScroll += 1; draw(); return; }
+      if (data === "g" && slug) {
+        const packet = readPacketFile(l, slug);
+        if (packet) {
+          const order = ["gates", "agent", "human"] as const;
+          const idx = order.indexOf((packet.review ?? "gates") as (typeof order)[number]);
+          packet.review = order[(idx + 1) % order.length]!;
+          writePacketFile(l, packet);
+          void commitPlanningFiles(l, `plans: gate ${slug}`);
+          notify(`${slug} gate → ${packet.review}`);
+        }
+        draw();
+        return;
+      }
+      if (data === "o") { spawnCli(["batch"], "orchestration started (batch)"); return; }
+      if (data === "b" && slug) { spawnCli(["build", slug], `build ${slug} started`); return; }
+      if (data === "a" && slug) { spawnCli(["approve", slug], `approve ${slug} queued`); return; }
+      if (data === "d" && slug) { spawnCli(["delete", slug], `delete ${slug} queued`); return; }
       draw();
       return;
     }

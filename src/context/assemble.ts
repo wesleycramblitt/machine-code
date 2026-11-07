@@ -63,6 +63,8 @@ export interface AssembleInput {
   provider?: IssueProvider;
   issue?: IssueRef;
   packetId?: string;
+  /** Role name; the plan map is inherited only by the planner. */
+  agent?: string;
   /** Parent run and its ancestors, nearest first, for selected context inheritance. */
   parentRuns?: Array<{
     id: string;
@@ -495,13 +497,15 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // Plan files + knowledge index. These are inherited overview material, but
-  // they are not second-class files: let the model budget decide how much fits.
-  // A fixed 2 KiB cap silently cut a plan in half before the model ever saw it.
-  for (const planPath of discoverPlanFiles(layout, machine.context.planFile)) {
-    const abs = withinRepo(layout.repoRoot, planPath)!;
-    const read = readFileText(abs);
-    if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, body: read.text, band: 7 });
+  // The plan map is context only for the planner: include plans/index.md (or
+  // the configured plan file), never the topic files, and never for other roles.
+  if (input.agent === "planner") {
+    const planPath = machine.context.planFile ?? "plans/index.md";
+    const abs = withinRepo(layout.repoRoot, planPath);
+    if (abs && existsSync(abs)) {
+      const read = readFileText(abs);
+      if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, body: read.text, band: 7 });
+    }
   }
   if (machine.context.knowledgeIndex) {
     const abs = withinRepo(layout.repoRoot, machine.context.knowledgeIndex);

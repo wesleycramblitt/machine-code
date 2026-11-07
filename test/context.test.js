@@ -104,9 +104,10 @@ test("plans are included up to the model budget, not a fixed 2 KiB cap", async (
   try {
     mkdirSync(join(root, "plans"), { recursive: true });
     const long = `# Long plan\n\n${"detail line\n".repeat(400)}END OF PLAN\n`;
-    writeFileSync(join(root, "plans", "next.md"), long, "utf8");
+    writeFileSync(join(root, "plans", "index.md"), long, "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
+      agent: "planner",
       machine: machine({ context: { maxChars: 24_000, planFile: undefined, knowledgeIndex: undefined } }),
     });
     const source = bundle.sources.find((item) => item.kind === "plan");
@@ -122,9 +123,10 @@ test("context over budget is reported instead of silently truncated", async () =
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-over-"));
   try {
     mkdirSync(join(root, "plans"), { recursive: true });
-    writeFileSync(join(root, "plans", "next.md"), `# Plan\n\n${"line\n".repeat(300)}END OF PLAN\n`, "utf8");
+    writeFileSync(join(root, "plans", "index.md"), `# Plan\n\n${"line\n".repeat(300)}END OF PLAN\n`, "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
+      agent: "planner",
       machine: machine({ context: { maxChars: 1_000, planFile: undefined, knowledgeIndex: undefined } }),
     });
     assert.match(bundle.text, /END OF PLAN/);
@@ -315,28 +317,21 @@ test("over-budget context is preserved and warned, not silently clipped", async 
   }
 });
 
-test("plan files and skill descriptions are included last", async () => {
+test("the plan index is inherited only by the planner", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx5-"));
   try {
-    writeFileSync(join(root, "plan.md"), "# Legacy plan\nDo not include me.", "utf8");
     mkdirSync(join(root, "plans"), { recursive: true });
-    writeFileSync(join(root, "plans", "next.md"), "# Next plan\nShip it.", "utf8");
-    mkdirSync(join(root, ".machine_code", "plans"), { recursive: true });
-    writeFileSync(join(root, ".machine_code", "plans", "internal.md"), "# Internal plan\nKeep it local.", "utf8");
-    mkdirSync(join(root, ".machine_code", "skills", "reference"), { recursive: true });
-    writeFileSync(
-      join(root, ".machine_code", "skills", "reference", "SKILL.md"),
-      "---\nname: reference\ndescription: research and curation\n---\n# Reference\n",
-      "utf8",
-    );
-    const bundle = await assembleContext({ layout: fakeLayout(root), machine: machine() });
-    const kinds = bundle.sources.map((s) => s.kind);
-    assert.ok(kinds.includes("plan"));
-    assert.ok(kinds.includes("skill"));
-    assert.match(bundle.text, /Next plan/);
-    assert.match(bundle.text, /Internal plan/);
-    assert.doesNotMatch(bundle.text, /Legacy plan/);
-    assert.match(bundle.text, /reference: research and curation/);
+    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nShip it.", "utf8");
+    writeFileSync(join(root, "plans", "topic.md"), "# Topic note\nDo not auto-include.", "utf8");
+
+    const planner = await assembleContext({ layout: fakeLayout(root), agent: "planner", machine: machine() });
+    assert.ok(planner.sources.some((s) => s.kind === "plan"));
+    assert.match(planner.text, /Plan index/);
+    assert.doesNotMatch(planner.text, /Do not auto-include/);
+
+    const build = await assembleContext({ layout: fakeLayout(root), agent: "build", machine: machine() });
+    assert.ok(!build.sources.some((s) => s.kind === "plan"));
+    assert.doesNotMatch(build.text, /Plan index/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -346,29 +341,26 @@ test("context exclusions drop whole sections and individual sources", async () =
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-exclude-"));
   try {
     mkdirSync(join(root, "plans"), { recursive: true });
-    writeFileSync(join(root, "plans", "next.md"), "# Next plan\nShip it.", "utf8");
-    mkdirSync(join(root, ".machine_code", "plans"), { recursive: true });
-    writeFileSync(join(root, ".machine_code", "plans", "internal.md"), "# Internal plan\nKeep it local.", "utf8");
+    writeFileSync(join(root, "plans", "index.md"), "# Next plan\nShip it.", "utf8");
 
-    const all = await assembleContext({ layout: fakeLayout(root), machine: machine() });
+    const all = await assembleContext({ layout: fakeLayout(root), agent: "planner", machine: machine() });
     assert.match(all.text, /Next plan/);
-    assert.match(all.text, /Internal plan/);
 
     const noPlans = await assembleContext({
       layout: fakeLayout(root),
+      agent: "planner",
       machine: machine(),
       exclude: { sections: ["plans"] },
     });
     assert.doesNotMatch(noPlans.text, /Next plan/);
-    assert.doesNotMatch(noPlans.text, /Internal plan/);
 
     const onePlan = await assembleContext({
       layout: fakeLayout(root),
+      agent: "planner",
       machine: machine(),
-      exclude: { items: ["plan:plans/next.md"] },
+      exclude: { items: ["plan:plans/index.md"] },
     });
     assert.doesNotMatch(onePlan.text, /Next plan/);
-    assert.match(onePlan.text, /Internal plan/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
