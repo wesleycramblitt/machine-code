@@ -44,6 +44,8 @@ import { handlePacketKeys } from "./tui/screens/packet-keys.js";
 import { handleSettingsKeys } from "./tui/screens/settings-keys.js";
 import { handleSpendKeys } from "./tui/screens/spend-keys.js";
 import type { KeyServices } from "./tui/screens/keys.js";
+import { handleModelKeys, handleModelsListKeys } from "./tui/screens/models-keys.js";
+import { handleRunsListKeys } from "./tui/screens/runs-list-keys.js";
 import { renderCorrect } from "./tui/screens/correct.js";
 import { renderRunDetail } from "./tui/screens/run-detail/run-detail.js";
 import { RUN_SECTIONS, RUN_SECTION_LABEL, type RunSection } from "./tui/screens/run-detail/types.js";
@@ -1547,113 +1549,7 @@ export async function runTui(): Promise<void> {
     }
 
     /* --------------------------------------------------------- runs keys */
-    if (s.page === "runs" && s.screen === "list") {
-      const allRuns = listAllRuns(l.home).filter((run) => !s.deletingRuns.has(run.id));
-      const scopeFiltered = s.runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
-      const index = buildRunIndex({
-        runs: scopeFiltered,
-        group: s.runsGroup,
-        collapsed: s.collapsed,
-        text: s.runsText,
-        attentionOnly: s.runsAttention,
-        preferredRepo: l.repoRoot,
-        ...(s.runsGroup === "packets"
-          ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
-          : {}),
-      });
-      const repoForRow = (row: RunRow | undefined): string => {
-        if (!row) return l.repoRoot;
-        if (row.kind === "repo") return row.repoRoot;
-        if (row.kind === "run") return repoOf(row.run);
-        for (let i = index.rows.indexOf(row); i >= 0; i--) {
-          const candidate = index.rows[i]!;
-          if (candidate.kind === "repo") return candidate.repoRoot;
-        }
-        return l.repoRoot;
-      };
-      if (data === "\x1b[A" || data === "k") { s.runsSel = Math.max(0, s.runsSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { s.runsSel = Math.min(Math.max(0, index.selectable.length - 1), s.runsSel + 1); draw(); return; }
-      if (data === "G") { s.runsSel = Math.max(0, index.selectable.length - 1); draw(); return; }
-      const toggleFold = (row: RunRow | undefined): boolean => {
-        // A run is a leaf; space on it folds the parent packet/section/repo.
-        const target = row?.kind === "run" && row.parent
-          ? index.rows.find((candidate) => candidate.id === row.parent)
-          : row;
-        if (
-          target?.kind !== "section" &&
-          target?.kind !== "repo" &&
-          target?.kind !== "packet"
-        ) return false;
-        if (!target.collapsible) return false;
-        if (s.collapsed.has(target.id)) s.collapsed.delete(target.id);
-        else s.collapsed.add(target.id);
-        const targetIndex = index.rows.findIndex((candidate) => candidate.id === target.id);
-        if (targetIndex >= 0) s.runsSel = targetIndex;
-        return true;
-      };
-      if (data === "\r" || data === "\n") {
-        const row = index.selectable[s.runsSel];
-        if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); draw(); return; }
-        if (row?.kind === "run") { s.selectedRunId = row.run.id; s.runSection = "overview"; s.runScroll = 0; s.screen = "run"; }
-        else if (row?.kind === "packet") {
-          s.selectedPacketSlug = row.slug;
-          s.packetScroll = 0;
-          s.screen = "packet";
-        }
-        draw();
-        return;
-      }
-      if (data === "a") {
-        const row = index.selectable[s.runsSel];
-        if (row?.kind !== "run") { notify("select a run to answer"); draw(); return; }
-        answerRun(row.run);
-        draw();
-        return;
-      }
-      if (data === " ") {
-        toggleFold(index.selectable[s.runsSel]);
-        draw();
-        return;
-      }
-      if (data === "n") {
-        const row = index.selectable[s.runsSel];
-        const packet = row?.kind === "packet" ? row.slug : row?.kind === "run" ? row.run.packetId : undefined;
-        startNewRun(packet, repoForRow(row));
-        draw();
-        return;
-      }
-      if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
-      if (data === "D") {
-        const row = index.selectable[s.runsSel];
-        if (row?.kind !== "run") { notify("select a run to delete"); draw(); return; }
-        s.deleteRunTarget = row.run;
-        s.deleteReturn = "list";
-        s.screen = "delete";
-        draw();
-        return;
-      }
-      if (data === "!") { s.runsAttention = !s.runsAttention; s.runsSel = 0; draw(); return; }
-      if (data === "g") {
-        s.runsGroup = RUN_GROUPS[(RUN_GROUPS.indexOf(s.runsGroup) + 1) % RUN_GROUPS.length]!;
-        s.runsSel = 0;
-        s.runsScroll = 0;
-        draw();
-        return;
-      }
-      if (data === "f") {
-        s.runsRepoScope = s.runsRepoScope === "all" ? "cwd" : "all";
-        s.runsSel = 0;
-        s.runsScroll = 0;
-        notify(s.runsRepoScope === "cwd" ? "showing cwd runs only" : "showing runs from all repos");
-        draw();
-        return;
-      }
-      if (data === "/") { s.searchMode = true; s.searchText = searchSeed(); draw(); return; }
-      if (data === "r") { draw(); return; }
-      draw();
-      return;
-    }
-
+    if (s.page === "runs" && s.screen === "list") return handleRunsListKeys(s, keyCtx, data);
     /* ------------------------------------------------------ packet keys */
     if (s.page === "runs" && s.screen === "packet") return handlePacketKeys(s, keyCtx, data);
     /* --------------------------------------------------------- run keys */
@@ -1852,110 +1748,9 @@ export async function runTui(): Promise<void> {
     }
 
     /* ------------------------------------------------------- model keys */
-    if (s.page === "models" && s.screen === "model") {
-      if (data === "\x1b[A" || data === "k") { s.modelScroll = Math.max(0, s.modelScroll - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { s.modelScroll++; draw(); return; }
-      if (data === CTRL_U) { s.modelScroll = Math.max(0, s.modelScroll - HALF_PAGE); draw(); return; }
-      if (data === CTRL_D) { s.modelScroll += HALF_PAGE; draw(); return; }
-      if (data === "t") {
-        const row = loadCatalogue(l.catalogueFile)?.models.find((entry) => entry.key === s.selectedModelKey);
-        if (row) {
-          s.probingModels.add(row.key);
-          void (async () => {
-            try {
-              const machine = loadMachineConfig(l);
-              const state = loadAvailability(l.home);
-              const result = await probeTarget(targetFor(row), machine.availability, state);
-              applyProbeResult(state, result);
-              saveAvailability(l.home, state);
-              notify(`${row.key}: ${result.status}${result.message ? ` (${result.message})` : ""}`);
-            } finally {
-              s.probingModels.delete(row.key);
-              draw();
-            }
-          })();
-        }
-        draw();
-        return;
-      }
-      if (data === "p") { notify(s.selectedModelKey ?? ""); draw(); return; }
-      if (data === "o") { notify(s.selectedModelKey ?? ""); draw(); return; }
-      draw();
-      return;
-    }
-
+    if (s.page === "models" && s.screen === "model") return handleModelKeys(s, keyCtx, data);
     /* ------------------------------------------------------- models list */
-    if (s.page === "models") {
-      if (data === "\x1b[A" || data === "k") { s.modelSel = Math.max(0, s.modelSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") {
-        s.modelSel = Math.min(Math.max(0, s.modelDisplay.length - 1), s.modelSel + 1);
-        draw();
-        return;
-      }
-      if (data === CTRL_U) { s.modelSel = Math.max(0, s.modelSel - HALF_PAGE); draw(); return; }
-      if (data === CTRL_D) {
-        s.modelSel = Math.min(Math.max(0, s.modelDisplay.length - 1), s.modelSel + HALF_PAGE);
-        draw();
-        return;
-      }
-      if (data === " ") {
-        const stop = s.modelDisplay[s.modelSel];
-        if (stop) {
-          const key = stop.key;
-          if (s.modelCollapsed.has(key)) s.modelCollapsed.delete(key);
-          else {
-            s.modelCollapsed.add(key);
-            // Collapsing from a row would strand the cursor; land on the header.
-            if (stop.kind === "row") {
-              const headerIndex = s.modelDisplay.findIndex((candidate) => candidate.kind === "header" && candidate.key === key);
-              if (headerIndex >= 0) s.modelSel = headerIndex;
-            }
-          }
-        }
-        draw();
-        return;
-      }
-      if (data === "\r" || data === "\n") {
-        const stop = s.modelDisplay[s.modelSel];
-        if (stop?.kind === "header") {
-          if (s.modelCollapsed.has(stop.key)) s.modelCollapsed.delete(stop.key);
-          else s.modelCollapsed.add(stop.key);
-        } else if (stop) { s.selectedModelKey = stop.row.key; s.modelScroll = 0; s.screen = "model"; }
-        draw();
-        return;
-      }
-      if (data === "a") { s.modelsAll = !s.modelsAll; s.modelSel = 0; draw(); return; }
-      if (data === "f") {
-        s.modelsFree = !s.modelsFree;
-        // Free offers usually live on providers without paid credentials. Show
-        // the whole catalogue while filtering by price, then the user can
-        // press a to narrow back to configured providers.
-        if (s.modelsFree) s.modelsAll = true;
-        s.modelSel = 0;
-        draw();
-        return;
-      }
-      if (data === "c") { s.modelsCoding = !s.modelsCoding; s.modelSel = 0; draw(); return; }
-      if (data === "g") {
-        const values: Array<"provider" | "family" | "none"> = ["provider", "family", "none"];
-        s.modelGroup = values[(values.indexOf(s.modelGroup) + 1) % values.length]!;
-        s.modelSel = 0;
-        s.modelCollapsed.clear();
-        draw();
-        return;
-      }
-      if (data === "s") {
-        const values: ModelSort[] = ["capability", "fit", "reasoning", "code", "agentic", "general", "context", "price-in", "price-out", "name"];
-        s.modelSort = values[(values.indexOf(s.modelSort) + 1) % values.length]!;
-        s.modelSel = 0;
-        draw();
-        return;
-      }
-      if (data === "/") { s.searchMode = true; s.searchText = searchSeed(); draw(); return; }
-      draw();
-      return;
-    }
-
+    if (s.page === "models") return handleModelsListKeys(s, keyCtx, data);
     /* ------------------------------------------------------- spend keys */
     if (s.page === "spend") return handleSpendKeys(s, keyCtx, data);
     /* ---------------------------------------------------- settings keys */
