@@ -82,6 +82,34 @@ function capStepText(step: MessageLike[]): MessageLike[] {
   });
 }
 
+/** Cap on replayed assistant reasoning. Runs are isolated, so the model's own
+ * words ride along in full; the cap only stops pathological growth, keeping
+ * the newest reasoning. Whitespace-only blocks (a model that thinks without
+ * writing) are skipped. Read-only over the transcript. */
+const MAX_REASONING_CHARS = 32_000;
+
+/** Every word the model has said to itself this run, oldest first. Tool
+ * results stay capped in the replayed steps and full in the ledger; this is
+ * the reasoning continuity weak models need to avoid re-deriving — and
+ * drifting from — their own conclusions. */
+function collectReasoning(messages: readonly MessageLike[]): string {
+  const texts: string[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content as unknown[]) {
+      if (!block || typeof block !== "object") continue;
+      const b = block as Record<string, unknown>;
+      if (b.type === "text" && typeof b.text === "string" && b.text.trim().length > 0) {
+        texts.push(b.text);
+      }
+    }
+  }
+  const full = texts.join("\n");
+  if (full.length <= MAX_REASONING_CHARS) return full;
+  const kept = full.slice(-MAX_REASONING_CHARS).replace(/^\S*\n/, "");
+  return `…[${full.length - kept.length} earlier reasoning chars omitted]\n${kept}`;
+}
+
 /** Keep the last few complete assistant/tool steps, never an orphan call. */
 function recentSteps(messages: readonly MessageLike[], count = 2): MessageLike[] {
   const assistants: number[] = [];
@@ -131,7 +159,11 @@ export function renderPromptMessages(
   const details = state.renderWorkingContext();
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
-  const block = [startup, mapIndex, guide, details, ledgerText, state.renderBlock()]
+  const reasoning = collectReasoning(source);
+  const reasoningBlock = reasoning
+    ? `<reasoning>\nYour own thinking so far this run, oldest first. Trust conclusions you already reached; do not re-derive them.\n\n${reasoning}\n</reasoning>`
+    : "";
+  const block = [startup, mapIndex, guide, reasoningBlock, details, ledgerText, state.renderBlock()]
     .filter(Boolean)
     .join("\n\n");
   const user: MessageLike = {

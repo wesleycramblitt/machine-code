@@ -615,6 +615,34 @@ test("replayed steps cap tool-result text without mutating history", () => {
   }
 });
 
+test("rendered prompt replays all assistant reasoning, newest-capped", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-reason", goal: "goal" });
+    const first = assistant({ id: "a1", text: "hypothesis: the filter ignores scope" });
+    const res1 = result({ id: "a1", text: "ok" });
+    const second = assistant({ id: "a2", text: "confirmed at line 1899; editing next" });
+    const res2 = result({ id: "a2", text: "ok" });
+    const rendered = renderPromptMessages([system, user, first, res1, second, res2], store);
+    const text = JSON.stringify(rendered.messages);
+    const firstPos = text.indexOf("hypothesis: the filter ignores scope");
+    const secondPos = text.indexOf("confirmed at line 1899");
+    assert.ok(firstPos >= 0 && secondPos > firstPos, "older reasoning survives alongside recent steps");
+    assert.match(text, /Trust conclusions you already reached/);
+
+    const huge = assistant({ id: "a3", text: `x\n`.repeat(20000) });
+    const capped = renderPromptMessages([system, user, huge, result({ id: "a3", text: "ok" })], store);
+    const cappedText = JSON.stringify(capped.messages);
+    assert.match(cappedText, /earlier reasoning chars omitted/);
+    const block = /<reasoning>[\s\S]*<\/reasoning>/.exec(cappedText)?.[0] ?? "";
+    // Raw block is capped at 32k chars; JSON escaping doubles embedded
+    // newlines, so the encoded bound is roughly twice that plus framing.
+    assert.ok(block.length > 0 && block.length <= 66000, `reasoning block stays bounded (got ${block.length})`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("render never sends an orphan tool call", () => {
   const dir = tempDir();
   try {
