@@ -25,12 +25,13 @@ import { coreTools } from "./tools/index.js";
 import { toolDefinitionChars, toolSchemaChars } from "./tools/schema.js";
 import type { AgentConfig } from "./agents/config.js";
 import { createHash } from "node:crypto";
+import { addCurationVeto } from "./catalogue/overlay.js";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
-import { buildRepoMap, mapBytes, renderMapIndex, renderRepoMap, symbolCount } from "./map/deterministic.js";
+import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { ensureSemanticMap } from "./map/ensure.js";
 import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
@@ -398,6 +399,16 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
     const state = loadAvailability(input.home);
     applyClassification(state, provider, modelKey, classified);
+    // Gone models veto themselves out of the catalogue: a 410/404/EOL means
+    // the row is wrong, not the account. Only catalogue rows qualify (never
+    // vendor typos or ad-hoc ids), and the stanza carries the run as evidence.
+    // Free-tier paths keep cooldown-only behavior; their limits masquerade.
+    if (classified.permanent === true && input.catalogue.some((row) => row.key === modelKey)) {
+      const reason = `auto-vetoed: gone at runtime (${classified.message.slice(0, 140)})`;
+      if (addCurationVeto(input.home, modelKey, `${reason} (run ${input.recorder.current.id})`)) {
+        recorder.event("model_vetoed", { key: modelKey, reason });
+      }
+    }
     saveAvailability(input.home, state);
     Object.assign(availability, state);
   };
@@ -478,16 +489,16 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   });
   const wantMap = input.skipMap !== true;
   const wantSemantic = input.skipSemantic !== true;
-  // The per-file symbol map rides up front for every agent: stable content
-  // the provider cache absorbs once, instead of dozens of locate-me searches
-  // and paged re-reads. renderRepoMap caps itself; packet/diff agents keep
-  // the summary line as well so small-context budgets still see the shape.
+  // Up-front context stays small and stable so the provider cache absorbs
+  // it once: the one-line map index, the query-biased semantic slice, and
+  // full file/symbol detail on demand (search outline, read symbol, core:map
+  // slice). The full per-file map is never re-sent; it costs ~26k chars a
+  // turn and the same bytes are one pull call away.
   let mapIndex = "";
   let semanticMap: SemanticMap | null = null;
   const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"], semantic: SemanticMap | null): string =>
     [
       wantMap ? renderMapIndex(map) : "",
-      wantMap ? renderRepoMap(map) : "",
       wantSemantic ? renderSemanticIndex(semantic, 3_072, input.request) : "",
     ].filter(Boolean).join("\n");
   if (wantMap || wantSemantic) try {
@@ -1406,8 +1417,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const ledgerBudget = budget
             ? Math.max(0, budget.inputChars - baseOverhead - overviewEstimate)
             : 200_000;
+          // Raw ledger bytes are the fastest-growing part of the prompt and
+          // the first thing to trim: conclusions already live in run state,
+          // and the ledger's own omitted-note points at recall for the rest.
           const ledgerText = ledgerBudget > 0
-            ? memory.renderLedger({ maxChars: Math.min(ledgerBudget, 200_000) })
+            ? memory.renderLedger({ maxChars: Math.min(ledgerBudget, 24_000) })
             : undefined;
           lastLedgerChars = ledgerText?.length ?? 0;
           return renderPromptMessages(

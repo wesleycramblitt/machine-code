@@ -21,7 +21,9 @@ export type ContextKind =
   | "skill"
   | "tool"
   | "script"
-  | "parent-run";
+  | "parent-run"
+  /** Recent git history for startup context. */
+  | "history";
 
 export type ContextOrigin = "inherited" | "explicit" | "discovered";
 

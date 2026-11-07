@@ -574,6 +574,28 @@ test("working context seeds task files and follows edits", () => {
   }
 });
 
+test("working context stays within its budget on large files", () => {
+  const dir = tempDir();
+  const root = tempDir("mc-state-working-big-");
+  try {
+    const lines = Array.from(
+      { length: 500 },
+      (_, i) => `const pad${i} = "padding line number ${i} to pass sixty bytes easily";`,
+    );
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "big.ts"), lines.join("\n") + "\n", "utf8");
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    const store = new RunStateStore({ runDir: dir, runId: "r-working-big", goal: "goal", repoRoot: root });
+    store.seedWorkingFiles(["src/big.ts"], 0);
+    const working = store.renderWorkingContext();
+    assert.match(working, /<working-context>/);
+    assert.ok(working.length <= 8200, `working context is capped near 8k chars (got ${working.length})`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("render never sends an orphan tool call", () => {
   const dir = tempDir();
   try {

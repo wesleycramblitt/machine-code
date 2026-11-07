@@ -23,6 +23,7 @@ import { parseArtifactReferences, resolveSkillMode, skillMetas, type SkillMode }
 import { readReference } from "../references/store.js";
 import { discoverPlanFiles } from "./plans.js";
 import { isSecretPath } from "../tools/safety.js";
+import { readRecentHistory } from "./git-status.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
   type ContextBundle,
@@ -111,6 +112,7 @@ const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
   tools: ["tool"],
   scripts: ["script"],
   plans: ["plan", "project"],
+  history: ["history"],
 };
 
 function sha1(text: string): string {
@@ -517,6 +519,14 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         });
       }
     }
+  }
+
+  // Recent history. Bug reports usually follow recent changes, so the log
+  // points the first search at the right files without a history dig.
+  // Skipped silently outside git; capped near one kilobyte either way.
+  const history = readRecentHistory(layout.repoRoot);
+  if (history) {
+    pending.push({ kind: "history", origin: "inherited", ref: "git log", body: history, band: 7 });
   }
 
   // Skills (descriptions only) + tool/command names. Individual skill

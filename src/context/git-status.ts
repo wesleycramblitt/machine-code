@@ -67,3 +67,26 @@ export function readGitStatus(
   }
   return entries;
 }
+
+/**
+ * Recent commit subjects for startup context. Bug reports usually follow
+ * recent changes, and a one-line log points the first search at the right
+ * files without a history dig. Null outside git or on any failure; callers
+ * skip silently. Bounded to roughly one kilobyte.
+ */
+export function readRecentHistory(root: string, maxCommits = 12, maxChars = 1024): string | null {
+  if (!existsSync(join(root, ".git"))) return null;
+  let output: string;
+  try {
+    output = execFileSync(
+      "git",
+      ["-C", root, "log", `--max-count=${Math.max(1, maxCommits)}`, "--format=%h %ad %s", "--date=short"],
+      { encoding: "utf8", timeout: 5_000, maxBuffer: 64 * 1024 },
+    );
+  } catch {
+    return null;
+  }
+  const text = output.trim();
+  if (!text) return null;
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars).replace(/\s+$/, "")}\n…[truncated]`;
+}

@@ -565,7 +565,7 @@ export class RunStateStore {
    */
   renderWorkingContext(options: { maxChars?: number; perFileChars?: number; maxFiles?: number } = {}): string {
     if (!this.repoRoot || this.workingFiles.size === 0) return "";
-    const maxChars = options.maxChars ?? 16_000;
+    const maxChars = options.maxChars ?? 8_000;
     const perFileChars = options.perFileChars ?? 6_000;
     const maxFiles = options.maxFiles ?? 6;
     const nextText = [
