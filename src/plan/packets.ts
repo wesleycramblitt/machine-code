@@ -476,8 +476,63 @@ export function renderPlan(layout: Layout): PlanView {
   return { items, text: rendered.join("\n") };
 }
 
-/* ------------------------------------------------------- packet → Task */
+/* ------------------------------------------------------ plan categories */
 
+/** One plan heading and the packet slugs linked beneath it. */
+export interface PlanCategory {
+  heading: string;
+  slugs: string[];
+}
+
+export interface PlanCategories {
+  /** Category headings in `plans/index.md` order, each holding ≥1 packet. */
+  categories: PlanCategory[];
+  /** Packet slugs present in `packets/` but not linked from any category. */
+  orphanSlugs: string[];
+}
+
+/**
+ * Map every packet to its category heading. A packet links to a heading via a
+ * `→ packets/<slug>.md` line; packets with no matching line are orphans (they
+ * exist in `packets/` but are not yet placed on the hand-written map).
+ */
+export function planCategories(layout: Layout): PlanCategories {
+  const file = indexPath(layout);
+  const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : [];
+  const known = listPacketFiles(layout).map((packet) => packet.slug);
+  const categories: PlanCategory[] = [];
+  const placed = new Set<string>();
+  const byHeading = new Map<string, PlanCategory>();
+  const headingText = (line: string): string => line.replace(/^\s*#{1,6}\s*/, "").trim();
+  let current: PlanCategory | undefined;
+  const LINK = new RegExp(`→\\s*${PACKETS_DIR}/([a-z0-9-]+)\\.md`);
+
+  for (const line of lines) {
+    if (isHeadingLine(line)) {
+      const heading = headingText(line);
+      current = byHeading.get(heading);
+      if (!current) {
+        current = { heading, slugs: [] };
+        byHeading.set(heading, current);
+        categories.push(current);
+      }
+      continue;
+    }
+    if (!current) continue;
+    const link = line.match(LINK);
+    if (link?.[1] && known.includes(link[1])) {
+      current.slugs.push(link[1]);
+      placed.add(link[1]);
+    }
+  }
+
+  return {
+    categories: categories.filter((category) => category.slugs.length > 0),
+    orphanSlugs: known.filter((slug) => !placed.has(slug)).sort(),
+  };
+}
+
+/* ------------------------------------------------------- packet → Task */
 /** Convert a packet file into the canonical `TaskPacket` the loop executes. */
 export function toTaskPacket(packet: PacketFile): TaskPacket {
   const constraints: string[] = [];

@@ -64,6 +64,7 @@ import {
   isValidSlug,
   listPacketFiles,
   PACKET_STATUSES,
+  planCategories,
   readPacketFile,
   renderPacketFile,
   renderPlan,
@@ -164,16 +165,18 @@ const VERSION = "0.0.0";
 const HELP = `machine_code ${VERSION}
 
 Usage:
-  machine_code run --agent general [--provider <id>] [--model <key>] "<question>"
+  machine_code run --agent research [--provider <id>] [--model <key>] "<question>"
   machine_code run --agent planner "<plan a project>" [--issue <n>]
-  machine_code run --agent planner|build|review|general|sudo "<feature>" [--issue <n> [--auto-issue]]
+  machine_code run --agent planner|build|review|research "<feature>" [--issue <n> [--auto-issue]]
   machine_code run --agent build --issue <n>
                                     Run the feature attached to issue <n> without a prompt.
                                     The issue title and Deliverable become the objective.
-  machine_code run --agent sudo "<rare feature>" [--worktree true|false]
-                                    Sudo edits the main tree by default; --worktree true isolates it.
-                                    Build and orchestrated runs use an isolated worktree (default on):
-                                    [--issue <n>] [--auto-issue] [--base <ref>]
+  machine_code run --agent <role> --packet <slug> ["<prompt>"]
+                                    Attach the run to a packet; its deliverable feeds the objective
+                                    when the prompt is empty. Use "build <slug>" for the structured
+                                    build on that packet.
+                                    Build runs use an isolated worktree (default on):
+                                    [--issue <n>] [--packet <slug>] [--auto-issue] [--base <ref>]
                                     Agent config overrides:
                                     [--verify direct|verified]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
@@ -1009,13 +1012,14 @@ async function cmdRun(argv: string[]): Promise<number> {
   let requireProvider = flags.get("provider");
   let requireModel = flags.get("model");
   const issueFlag = flags.get("issue");
+  const packetFlag = flags.get("packet");
   const baseFlag = flags.get("base");
   let request = positional.join(" ").trim();
 
-  // A feature-attached run can derive its objective from the issue. Only an
-  // untracked run needs the human to type one.
-  if (request.length === 0 && issueFlag === undefined) {
-    fail(`run needs a question, or pass --issue N to run a feature`);
+  // A feature/packet-attached run can derive its objective from the issue or
+  // packet. Only an untracked run needs the human to type one.
+  if (request.length === 0 && issueFlag === undefined && packetFlag === undefined) {
+    fail(`run needs a question, --issue N, or --packet <slug>`);
   }
 
   let issueNumber: number | undefined;
@@ -1057,6 +1061,14 @@ async function cmdRun(argv: string[]): Promise<number> {
   const directExec = flags.has("direct-exec");
 
   const l = layout();
+  let packetSlug: string | undefined;
+  if (packetFlag !== undefined) {
+    const slug = slugify(packetFlag);
+    const packetFile = readPacketFile(l, slug);
+    if (!packetFile) fail(`no packet ${slug} — create one with \`packet create ${slug} "...\"\``);
+    packetSlug = slug;
+    if (request.length === 0) request = packetFile.deliverable || slug;
+  }
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const tier = flags.get("tier");
   if (tier !== undefined) {
@@ -1348,6 +1360,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     request,
     repoRoot: l.repoRoot,
     settings: runSettings,
+    ...(packetSlug ? { packetId: packetSlug } : {}),
     ...(parentRun
       ? {
           parentRunId: parentRun.id,
@@ -1357,6 +1370,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       : {}),
   });
   registerProject(l.home, l.repoRoot);
+  if (packetSlug) recorder.event("packet_linked", { slug: packetSlug });
   for (const result of probeResults) {
     recorder.event("availability_probe", {
       key: result.key,
@@ -3171,6 +3185,19 @@ function modeSuffix(mode: string | undefined): string {
   return mode ? `/${mode}` : "";
 }
 
+function packetGlyph(status: string): string {
+  switch (status) {
+    case "in-progress":
+      return "●";
+    case "blocked":
+      return "⏸";
+    case "done":
+      return "✓";
+    default:
+      return "○";
+  }
+}
+
 function rowText(row: RunRow, width: number, group: RunGroup): string {
   const indent = "  ".repeat(row.depth);
   if (row.kind === "repo") {
@@ -3194,6 +3221,14 @@ function rowText(row: RunRow, width: number, group: RunGroup): string {
     if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
     return cell(head, width - visibleWidth(tail)) + tail;
   }
+  if (row.kind === "packet") {
+    const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
+    const runs = row.directRuns > 0 ? `runs ${row.directRuns}` : "";
+    const head = `${indent}${fold} ${packetGlyph(row.packet.status)} ${row.slug} [${row.packet.status}]`;
+    const tail = `  ${row.packet.deliverable.replace(/\s+/g, " ").slice(0, width < 100 ? 24 : 48)}${runs ? `  ${runs}` : ""}`;
+    if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
+    return cell(head, width - visibleWidth(tail)) + tail;
+  }
   const run = row.run;
   const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
   const ask = run.status === "awaiting_input" ? " ASK" : "";
@@ -3205,6 +3240,11 @@ function rowText(row: RunRow, width: number, group: RunGroup): string {
 
 function parseRunGroup(value: string): RunGroup | null {
   switch (value.toLowerCase()) {
+    case "packet":
+    case "packets":
+    case "plan":
+    case "plans":
+      return "packets";
     case "gh":
     case "gh-issue":
     case "issue":
@@ -3250,8 +3290,8 @@ async function cmdRuns(argv: string[]): Promise<number> {
   }
   const { flags } = parseFlags(argv);
   const l = layout();
-  const group = parseRunGroup(flags.get("group") ?? "gh-issue");
-  if (!group) fail("--group must be gh-issue|status|overall");
+  const group = parseRunGroup(flags.get("group") ?? "packets");
+  if (!group) fail("--group must be packets|gh-issue|status|overall");
   const filter = (flags.get("filter") ?? "all") as RunFilter;
   if (!["all", "active", "awaiting", "paused", "completed"].includes(filter)) {
     fail("--filter must be all|active|awaiting|paused|completed");
@@ -3277,6 +3317,9 @@ async function cmdRuns(argv: string[]): Promise<number> {
     text,
     attentionOnly: attention,
     preferredRepo: l.repoRoot,
+    ...(group === "packets"
+      ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
+      : {}),
   });
 
   if (flags.has("json")) {
@@ -3289,6 +3332,9 @@ async function cmdRuns(argv: string[]): Promise<number> {
       }
       if (row.kind === "issue") {
         return { kind: row.kind, depth: row.depth, issue: row.issue, rollup: row.rollup };
+      }
+      if (row.kind === "packet") {
+        return { kind: row.kind, slug: row.slug, status: row.packet.status, depth: row.depth, directRuns: row.directRuns, deliverable: row.packet.deliverable };
       }
       return { kind: row.kind, depth: row.depth, run: row.run };
     });

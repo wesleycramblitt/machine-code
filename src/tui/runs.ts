@@ -13,13 +13,15 @@
 import { basename } from "node:path";
 import type { Issue, IssueRef } from "../issues/provider.js";
 import type { RunSummary } from "../state/runs.js";
+import type { PacketFile, PlanCategories } from "../plan/packets.js";
 import { isDeliverable, rollupIssue, sortRuns, type IssueRollup } from "./status.js";
 
-export type RunGroup = "gh-issue" | "status" | "overall";
+export type RunGroup = "packets" | "gh-issue" | "status" | "overall";
 
-export const RUN_GROUPS: readonly RunGroup[] = ["gh-issue", "status", "overall"];
+export const RUN_GROUPS: readonly RunGroup[] = ["packets", "gh-issue", "status", "overall"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
+  packets: "Packets",
   "gh-issue": "GH issue",
   status: "Status",
   overall: "Overall status",
@@ -64,6 +66,17 @@ export type RunRow =
       run: RunSummary;
       depth: number;
       parent?: string;
+    }
+  | {
+      kind: "packet";
+      id: string;
+      slug: string;
+      packet: PacketFile;
+      depth: number;
+      parent?: string;
+      directRuns: number;
+      collapsible: boolean;
+      collapsed: boolean;
     };
 
 export interface RunOptions {
@@ -72,6 +85,12 @@ export interface RunOptions {
   issues?: readonly Issue[];
   /** Cached issues keyed by run repository root. */
   issuesByRepo?: ReadonlyMap<string, readonly Issue[]>;
+  /** Repo root the packet catalog belongs to (the cwd/preferred repo). */
+  packetRepo?: string;
+  /** Packet files for the `packets` group (one repo). */
+  packets?: readonly PacketFile[];
+  /** Plan category headings + orphan slugs for the `packets` group. */
+  planCategories?: PlanCategories;
   group?: RunGroup;
   collapsed?: ReadonlySet<string>;
   /** Case-insensitive substring over issue/run fields and repository paths. */
@@ -222,6 +241,8 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const now = options.now ?? Date.now();
   const collapsed = options.collapsed ?? new Set<string>();
   const text = options.text?.trim().toLowerCase() ?? "";
+  // The TUI and CLI default to the `packets` group explicitly; the library
+  // default stays `gh-issue` so existing callers/tests are unchanged.
   const group = options.group ?? "gh-issue";
   const rows: RunRow[] = [];
   const byRunId = new Map<string, RunRow & { kind: "run" }>();
@@ -410,15 +431,69 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     for (const root of roots) walk(root, depth + 1, sectionId);
   };
 
+  const pushPacketTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
+    const packets = options.packets ?? [];
+    if (packets.length === 0) return;
+    const bySlug = new Map(packets.map((packet) => [packet.slug, packet] as const));
+    const runsBySlug = new Map<string, RunSummary[]>();
+    for (const run of repoRuns) {
+      if (!run.packetId) continue;
+      const list = runsBySlug.get(run.packetId) ?? [];
+      list.push(run);
+      runsBySlug.set(run.packetId, list);
+    }
+    const pushPacketRow = (slug: string, packetDepth: number, parentId?: string): void => {
+      const packet = bySlug.get(slug);
+      if (!packet) return;
+      const id = `packet:${slug}`;
+      const directRuns = runsBySlug.get(slug) ?? [];
+      const isCollapsed = collapsed.has(id);
+      rows.push({
+        kind: "packet",
+        id,
+        slug,
+        packet,
+        depth: packetDepth,
+        parent: parentId,
+        directRuns: directRuns.length,
+        collapsible: directRuns.length > 0,
+        collapsed: isCollapsed,
+      });
+      if (isCollapsed) return;
+      pushRuns(sortRuns(directRuns, "activity"), packetDepth + 1, id);
+    };
+    const categories = options.planCategories?.categories ?? [];
+    for (const category of categories) {
+      const slugs = category.slugs.filter((slug) => bySlug.has(slug));
+      if (slugs.length === 0) continue;
+      const sectionId = `plan:${repoRoot}:${category.heading}`;
+      if (!pushSection(sectionId, category.heading, slugs.length, depth, "issues")) continue;
+      for (const slug of slugs) pushPacketRow(slug, depth + 1, sectionId);
+    }
+    const orphanSlugs = (options.planCategories?.orphanSlugs ?? []).filter((slug) => bySlug.has(slug));
+    if (orphanSlugs.length > 0) {
+      const sectionId = `plan:${repoRoot}:orphan`;
+      if (pushSection(sectionId, "No plan", orphanSlugs.length, depth, "orphaned")) {
+        for (const slug of orphanSlugs) pushPacketRow(slug, depth + 1, sectionId);
+      }
+    }
+  };
+
   const issueOnlyRepos =
     group === "gh-issue" && !options.attentionOnly && options.issuesByRepo
       ? [...options.issuesByRepo.entries()]
           .filter(([, issues]) => issues.length > 0)
           .map(([repoRoot]) => repoRoot)
       : [];
-  // Repos with cached issues but no runs still show their issue tree;
-  // otherwise deleting the last run hides the whole repo and its issues.
-  const repoNames = [...new Set([...baseRuns.map(repoOf), ...issueOnlyRepos])];
+  // A repo with packets but no runs still shows its packet tree in the
+  // `packets` group, mirroring the issue-only repo behavior.
+  const repoNames = [
+    ...new Set([
+      ...baseRuns.map(repoOf),
+      ...issueOnlyRepos,
+      ...(group === "packets" && options.packetRepo ? [options.packetRepo] : []),
+    ]),
+  ];
   const preferred = options.preferredRepo;
   repoNames.sort((a, b) => {
     if (preferred) {
@@ -433,7 +508,8 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   } else {
     for (const repoRoot of repoNames) {
       const repoRuns = baseRuns.filter((run) => repoOf(run) === repoRoot && visibleRun(run));
-      if (repoRuns.length === 0) {
+      const packetRepo = group === "packets" && options.packetRepo === repoRoot;
+      if (repoRuns.length === 0 && !packetRepo) {
         if (group !== "gh-issue" || options.attentionOnly) continue;
         // Issue-only repo (no runs at all): keep the tree so cached issues
         // stay visible. During text search only repos with a matching issue
@@ -446,6 +522,17 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       if (!pushRepo(repoRoot, repoRuns.length)) continue;
       if (group === "status") {
         pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
+        continue;
+      }
+      if (group === "packets") {
+        // Only the repo that owns the packet catalog gets its packet tree;
+        // other repos list their (packet-less) runs under Untracked.
+        if (packetRepo) pushPacketTree(repoRoot, repoRuns, 1);
+        const free = repoRuns.filter((run) => !run.packetId);
+        const untrackedId = `untracked:${repoRoot}`;
+        if (pushSection(untrackedId, "Untracked", free.length, 1, "untracked")) {
+          pushRuns(free, 2, untrackedId);
+        }
         continue;
       }
 

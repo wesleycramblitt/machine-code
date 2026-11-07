@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { renderPlan, readPacketFile, writePacketFile, type PlanItem } from "./plan/packets.js";
+import { renderPlan, readPacketFile, writePacketFile, listPacketFiles, planCategories, type PlanItem } from "./plan/packets.js";
 import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -786,7 +786,7 @@ export async function runTui(): Promise<void> {
   /** Repo scope for the runs list. `f` toggles all repos vs the TUI cwd. */
   let runsRepoScope: RunsRepoScope = "cwd";
   let runsText = "";
-  let runsGroup: RunGroup = "gh-issue";
+  let runsGroup: RunGroup = "packets";
   let runsSel = 0;
   let runsScroll = 0;
   let runsAttention = false;
@@ -1919,6 +1919,9 @@ export async function runTui(): Promise<void> {
       text: runsText,
       attentionOnly: runsAttention,
       preferredRepo: l.repoRoot,
+      ...(runsGroup === "packets"
+        ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
+        : {}),
     });
     if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
     const selectedRow = runIndex.selectable[runsSel];
@@ -2001,6 +2004,15 @@ export async function runTui(): Promise<void> {
           const text = right
             ? ` ${pad(left, Math.max(20, cols - visible(right) - 2))}${right}`
             : ` ${trunc(left, Math.max(12, cols - 1))}`;
+          rendered.push(selected(text, isSelected));
+        } else if (row.kind === "packet") {
+          const status = row.packet.status;
+          const tone = status === "in-progress" ? C : status === "blocked" ? Y : status === "done" ? G : D;
+          const glyph = status === "in-progress" ? "●" : status === "blocked" ? "⏸" : status === "done" ? "✓" : "○";
+          const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${glyph} ${tone}${row.slug}${R} ${D}[${status}]${R}`;
+          const runs = row.directRuns > 0 ? `${D}${row.directRuns} run${row.directRuns === 1 ? "" : "s"}${R}` : "";
+          const detail = `${D}${trunc(row.packet.deliverable, Math.max(12, cols - indent.length - 34))}${R}`;
+          const text = ` ${pad(left, Math.max(20, cols - visible(`${runs}  ${detail}`) - 2))}${runs}  ${detail}`;
           rendered.push(selected(text, isSelected));
         } else {
           const run = row.run;
@@ -4745,6 +4757,9 @@ export async function runTui(): Promise<void> {
         text: runsText,
         attentionOnly: runsAttention,
         preferredRepo: l.repoRoot,
+        ...(runsGroup === "packets"
+          ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
+          : {}),
       });
       const repoForRow = (row: RunRow | undefined): string => {
         if (!row) return l.repoRoot;
@@ -4761,11 +4776,16 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[B" || data === "j") { runsSel = Math.min(Math.max(0, index.selectable.length - 1), runsSel + 1); draw(); return; }
       if (data === "G") { runsSel = Math.max(0, index.selectable.length - 1); draw(); return; }
       const toggleFold = (row: RunRow | undefined): boolean => {
-        // A run is a leaf; space on it folds the parent issue/section/repo.
+        // A run is a leaf; space on it folds the parent packet/issue/section/repo.
         const target = row?.kind === "run" && row.parent
           ? index.rows.find((candidate) => candidate.id === row.parent)
           : row;
-        if (target?.kind !== "issue" && target?.kind !== "section" && target?.kind !== "repo") return false;
+        if (
+          target?.kind !== "issue" &&
+          target?.kind !== "section" &&
+          target?.kind !== "repo" &&
+          target?.kind !== "packet"
+        ) return false;
         if (!target.collapsible) return false;
         if (collapsed.has(target.id)) collapsed.delete(target.id);
         else collapsed.add(target.id);
@@ -4778,6 +4798,17 @@ export async function runTui(): Promise<void> {
         if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); draw(); return; }
         if (row?.kind === "issue") { selectedIssueKey = refKey(row.issue.ref); issueRunSel = 0; issueScroll = 0; screen = "issue"; }
         else if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
+        else if (row?.kind === "packet") {
+          const firstRun = index.rows.find((candidate) => candidate.kind === "run" && candidate.parent === row.id);
+          if (firstRun?.kind === "run") {
+            selectedRunId = firstRun.run.id;
+            runSection = "overview";
+            runScroll = 0;
+            screen = "run";
+          } else {
+            notify(`no run on ${row.slug} — run \`machine_code build ${row.slug}\``);
+          }
+        }
         draw();
         return;
       }

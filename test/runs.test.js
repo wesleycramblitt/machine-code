@@ -34,6 +34,50 @@ function run(overrides = {}) {
   };
 }
 
+function packetFile(slug, overrides = {}) {
+  return { slug, status: "todo", deps: [], blocked: "", deliverable: `Do ${slug}`, files: [], acceptance: [], verify: [], ...overrides };
+}
+
+test("packets group by repository, category, packet, then runs", () => {
+  const runs = [
+    run({ id: "r1", packetId: "fix-login", status: "completed" }),
+    run({ id: "r2", packetId: "fix-login", status: "running" }),
+    run({ id: "free", agent: "research", mode: "", status: "completed" }),
+  ];
+  const index = buildRunIndex({
+    runs,
+    group: "packets",
+    packetRepo: repoA,
+    packets: [packetFile("fix-login", { status: "in-progress" }), packetFile("rate-limiter"), packetFile("orphan-task")],
+    planCategories: {
+      categories: [
+        { heading: "Bugs", slugs: ["fix-login"] },
+        { heading: "Features", slugs: ["rate-limiter"] },
+      ],
+      orphanSlugs: ["orphan-task"],
+    },
+    preferredRepo: repoA,
+  });
+
+  assert.equal(index.group, "packets");
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "section").map((row) => row.label),
+    ["Bugs", "Features", "No plan", "Untracked"],
+  );
+
+  const packets = index.rows.filter((row) => row.kind === "packet");
+  assert.deepEqual(packets.map((row) => row.slug), ["fix-login", "rate-limiter", "orphan-task"]);
+
+  const fixLogin = packets.find((row) => row.slug === "fix-login");
+  assert.equal(fixLogin.directRuns, 2);
+  const underFixLogin = index.rows.filter((row) => row.kind === "run" && row.parent === fixLogin.id);
+  assert.deepEqual(underFixLogin.map((row) => row.run.id).sort(), ["r1", "r2"]);
+
+  const untrackedRuns = index.rows.filter((row) => row.kind === "run" && row.parent?.includes("untracked"));
+  assert.equal(untrackedRuns.length, 1);
+  assert.equal(untrackedRuns[0].run.id, "free");
+});
+
 test("gh issue groups by repository, then full issue hierarchy and untracked", () => {
   const epic = issue(10, "epic", "Epic");
   const feature = issue(20, "feature", "Feature", { parent: epic.ref });
