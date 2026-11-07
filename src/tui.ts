@@ -6,7 +6,7 @@
  * lines, two header lines, two footer lines, content clipped to the middle.
  *
  * The TUI wraps the CLI's file/CLI primitives rather than inventing a second
- * source of truth. Every screen is derived from run summaries, the packet
+ * source of truth. Every s.screen is derived from run summaries, the packet
  * catalog, the catalogue, config, and the spend ledger on each refresh.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -30,6 +30,7 @@ import {
   type RunRow,
 } from "./tui/runs.js";
 import { scrollLines, selectableLines } from "./tui/scroll.js";
+import { createTuiState, type NewRunState, type Page, type RunDetail, type RunsRepoScope, type Screen, type TuiState } from "./tui/state.js";
 import { renderDeleteConfirm } from "./tui/screens/delete.js";
 import { renderPacket } from "./tui/screens/packet.js";
 import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
@@ -90,27 +91,14 @@ import { commitPlanningFiles } from "./tasks/packet.js";
 /* Terminal primitives live in ./tui/format.js; imported above. */
 
 
-type Page = "runs" | "models" | "spend" | "settings";
-type Screen = "list" | "run" | "newrun" | "answer" | "correct" | "model" | "delete" | "packet";
-/** Runs list repo scope: every known repo, or the TUI cwd only. */
-type RunsRepoScope = "all" | "cwd";
+
 
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
 const NEW_RUN_CONTEXT_TABS = ["Packets", "Plans", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;
 
-type NewRunState = ForkedRunSettings & {
-  /** Isolation worktree. Shown only for build; other agents ignore it. */
-  worktree: boolean;
-};
 
 
-interface RunDetail {
-  layout: Layout;
-  summary: RunSummary;
-  events: RunEvent[];
-  dir: string;
-}
 
 interface ChangesCache {
   runId: string;
@@ -160,142 +148,7 @@ export async function runTui(): Promise<void> {
     // discovery/reconcile failures leave the cached catalogue in place
   }
 
-  let page: Page = "runs";
-  let screen: Screen = "list";
-  /** Repo scope for the runs list. `f` toggles all repos vs the TUI cwd. */
-  let runsRepoScope: RunsRepoScope = "cwd";
-  let runsText = "";
-  let runsGroup: RunGroup = "packets";
-  let runsSel = 0;
-  let runsScroll = 0;
-  let runsAttention = false;
-  const collapsed = new Set<string>();
-
-  let modelText = "";
-  let modelGroup: "provider" | "family" | "none" = "provider";
-  let modelSort: ModelSort = "capability";
-  let modelsAll = false;
-  let modelsFree = false;
-  let modelsCoding = true;
-  let modelSel = 0;
-  let modelScroll = 0;
-  const probingModels = new Set<string>();
-  /** Collapsed model groups (provider/family key). Headers are cursor stops, so space reopens them. */
-  const modelCollapsed = new Set<string>();
-  /** Cursor stops in render order: group headers plus visible model rows. */
-  let modelDisplay: Array<{ kind: "header"; key: string } | { kind: "row"; key: string; row: CatalogueRow }> = [];
-  /** Index of the last row Enter opened, so the list can restore it exactly. */
-  let lastOpenedModelKey: string | null = null;
-  let selectedModelKey: string | null = null;
-  /** Catalogue + provider cache: the 1MB models.json stays parsed across frames. */
-  let catalogueCache: { mtime: number; doc: CatalogueDocument | null } | null = null;
-  let statusesCache: { at: number; statuses: ReturnType<typeof providerStatuses> } | null = null;
-
-  let spendDaysWindow = 30;
-  let spendBy: "provider" | "model" | "day" | "agent" = "provider";
-  let spendScroll = 0;
-
-  let settingsSel = 0;
-  let settingsScroll = 0;
-
-  let selectedRunId: string | null = null;
-  let selectedPacketSlug: string | null = null;
-  let packetScroll = 0;
-  let deleteRunTarget: RunSummary | undefined;
-  let deleteReturn: Screen = "list";
-  const deletingRuns = new Set<string>();
-  let runSection: RunSection = "overview";
-  let runScroll = 0;
-  let processSel = 0;
-  let processFollow = false;
-  let eventSel = 0;
-  let eventScroll = 0;
-  /** Line offset inside a selected timeline block (expanded inputs/outputs). */
-  let eventBodyScroll = 0;
-  /** Follow the newest timeline event; j/k or ^D/^U turns it off. */
-  let timelineFollow = true;
-  /** Show routine internals in the timeline. */
-  let timelineVerbose = false;
-  let thinkingScroll = 0;
-  let thinkingFollow = true;
-  let childSel = 0;
-  const expanded = new Set<string>();
-  let changesCache: ChangesCache | null = null;
-
-  let newrun: NewRunState = {
-    agent: "research",
-    preset: "unrestricted",
-    verification: "verified",
-    ask: true,
-    approval: "human",
-    ambiguity: "precise",
-    tier: "free",
-    minFit: undefined,
-    floors: "role",
-    worktree: true,
-    prompt: "",
-  };
-  let newRunRepo = l.repoRoot;
-  /** Parent run id when the composer was opened with fork[f]. */
-  let newRunParentId: string | null = null;
-  let packetPick: "newrun" | null = null;
-  let packetPickSel = 0;
-  let packetPickText = "";
-  let modelPick: "newrun" | null = null;
-  let modelPickSel = 0;
-  let modelPickText = "";
-  /** Picker sort: role fit (default) or estimated per-call price. Eligible rows always first. */
-  let modelPickSort: "fit" | "price" = "fit";
-  let modelPickEntries: ModelPickerEntry[] = [];
-  /** New-run prompt is modal: navigation keys are disabled while true. */
-  let newRunInsert = false;
-  /** Cursor column (code units) inside the new-run prompt for insert mode. */
-  let newRunCursor = 0;
-  /** `:` starts the two-key `:!` start command. */
-  let newRunColon = false;
-  let newRunContextTab = 0;
-  let newRunContextItem = 0;
-  let newRunContextItemKeys: string[] = [];
-  let newRunContextItemAvailable: boolean[] = [];
-  let newRunContextSectionKey = "";
-  /** `/` filters the active context tab's rows by substring. */
-  let newRunContextFilter = "";
-  let newRunContextFiltering = false;
-  const newRunContextExcluded = new Set<string>();
-  const newRunContextIncluded = new Set<string>();
-  /** Explicit per-skill mode choices (include | on-demand | exclude). */
-  const newRunSkillModes = new Map<string, SkillMode>();
-  /** Modes as rendered this frame (single source for space-cycling). */
-  const newRunSkillShown = new Map<string, SkillMode>();
-  /**
-   * Static inputs to the new-run preview (policy, catalogue, provider status,
-   * context files) are expensive to reload on every keystroke, so they are
-   * cached and only the prompt length is applied per frame.
-   */
-  let newRunPreviewCache: {
-    key: string;
-    at: number;
-    context: ContextPreview;
-    policy?: Policy;
-    machine?: MachineConfig;
-    catalogue: CatalogueDocument | null;
-    configured: Set<string>;
-    availability: AvailabilityState;
-  } | null = null;
-  let answerText = "";
-  let answerQuestionId = "";
-  let answerOptions: string[] = [];
-  let answerScroll = 0;
-  let answerPage = 10;
-  let answerOverflow = false;
-  let correctText = "";
-  let searchMode = false;
-  let searchText = "";
-  let toast = "";
-  let toastAt = 0;
-  let pendingRunAt = 0;
-  /** Fast repaints while waiting for a fresh run record, so new runs open in ~250ms not ~1s. */
-  let pendingFastTimer: ReturnType<typeof setInterval> | null = null;
+  const s = createTuiState(l.repoRoot);
 
   const stdin = process.stdin;
   stdin.setRawMode?.(true);
@@ -311,8 +164,8 @@ export async function runTui(): Promise<void> {
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
   const notify = (message: string) => {
-    toast = message;
-    toastAt = Date.now();
+    s.toast = message;
+    s.toastAt = Date.now();
   };
 
   const findRunDetail = (id: string): RunDetail | null => {
@@ -356,7 +209,7 @@ export async function runTui(): Promise<void> {
         env: process.env,
       });
       child.unref();
-      pendingRunAt = Date.now();
+      s.pendingRunAt = Date.now();
       return true;
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error));
@@ -366,7 +219,7 @@ export async function runTui(): Promise<void> {
 
   const defaultNewRun = (): NewRunState => {
     const agent = "research";
-    const repoLayout = layout(newRunRepo);
+    const repoLayout = layout(s.newRunRepo);
     // A new run starts from the machine selection tier, not a hard-coded free
     // default. The per-run toggle can still override it.
     let tier: "free" | "paid" = "free";
@@ -390,41 +243,41 @@ export async function runTui(): Promise<void> {
     };
   };
 
-  newrun = defaultNewRun();
+  s.newrun = defaultNewRun();
 
   /** Roles that isolate in a worktree and expose the verify switch. */
   const agentIsolates = (agent: string): boolean => agent === "build";
 
   const resetNewRunUi = () => {
-    newRunInsert = false;
-    newRunCursor = 0;
-    newRunColon = false;
-    newRunContextTab = 0;
-    newRunContextItem = 0;
-    newRunContextFilter = "";
-    newRunContextFiltering = false;
-    newRunSkillModes.clear();
-    newRunContextExcluded.clear();
-    newRunContextIncluded.clear();
-    newRunPreviewCache = null;
-    newRunParentId = null;
-    modelPick = null;
-    modelPickSel = 0;
-    modelPickText = "";
-    modelPickEntries = [];
-    packetPick = null;
-    packetPickSel = 0;
-    packetPickText = "";
+    s.newRunInsert = false;
+    s.newRunCursor = 0;
+    s.newRunColon = false;
+    s.newRunContextTab = 0;
+    s.newRunContextItem = 0;
+    s.newRunContextFilter = "";
+    s.newRunContextFiltering = false;
+    s.newRunSkillModes.clear();
+    s.newRunContextExcluded.clear();
+    s.newRunContextIncluded.clear();
+    s.newRunPreviewCache = null;
+    s.newRunParentId = null;
+    s.modelPick = null;
+    s.modelPickSel = 0;
+    s.modelPickText = "";
+    s.modelPickEntries = [];
+    s.packetPick = null;
+    s.packetPickSel = 0;
+    s.packetPickText = "";
   };
 
   const startNewRun = (packetSlug?: string, repoRoot = l.repoRoot) => {
-    const previous = newrun;
-    newRunRepo = repoRoot;
+    const previous = s.newrun;
+    s.newRunRepo = repoRoot;
     const packetFile = packetSlug ? readPacketFile(layout(repoRoot), packetSlug) : null;
     // A packet is implementation work: start with Build. Untracked runs keep
     // the last agent.
     const preferredAgent = packetSlug ? "build" : previous.agent;
-    newrun = {
+    s.newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
@@ -432,14 +285,14 @@ export async function runTui(): Promise<void> {
     };
     // Verification and isolation are role-shaped: only build verifies, and a
     // fresh build isolates in a worktree.
-    newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
-    newrun.worktree = true;
+    s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
+    s.newrun.worktree = true;
     enforceLockedSkills(true);
     // A packet-attached run starts with a concrete objective. The prompt stays
     // editable, but the human no longer has to type one.
-    if (packetFile) newrun.prompt = packetFile.deliverable || packetSlug || "";
+    if (packetFile) s.newrun.prompt = packetFile.deliverable || packetSlug || "";
     resetNewRunUi();
-    screen = "newrun";
+    s.screen = "newrun";
   };
 
   const forkRun = (detail: RunDetail) => {
@@ -464,8 +317,8 @@ export async function runTui(): Promise<void> {
         .filter((status) => status.configured)
         .map((status) => status.id),
     );
-    newRunRepo = summary.repoRoot;
-    newrun = {
+    s.newRunRepo = summary.repoRoot;
+    s.newrun = {
       ...forkSettingsFromRun({
         summary,
         events: detail.events,
@@ -473,35 +326,35 @@ export async function runTui(): Promise<void> {
         defaults,
         configuredProviders: configured,
       }),
-      worktree: newrun.worktree,
+      worktree: s.newrun.worktree,
     };
     // A generic inherited request ("Build the task.") hides the real objective.
     // When the run is attached to a packet, derive the request from it.
-    const forkPacket = newrun.packet ? readPacketFile(repoLayout, newrun.packet) : null;
-    if (forkPacket && (!newrun.prompt.trim() || isGenericTaskRequest(newrun.prompt))) {
-      newrun.prompt = forkPacket.deliverable || newrun.packet || "";
+    const forkPacket = s.newrun.packet ? readPacketFile(repoLayout, s.newrun.packet) : null;
+    if (forkPacket && (!s.newrun.prompt.trim() || isGenericTaskRequest(s.newrun.prompt))) {
+      s.newrun.prompt = forkPacket.deliverable || s.newrun.packet || "";
     }
     resetNewRunUi();
-    newRunParentId = summary.id;
-    screen = "newrun";
+    s.newRunParentId = summary.id;
+    s.screen = "newrun";
     notify(`forked settings from ${summary.id.slice(-8)}; edit the request and start`);
   };
 
   const cycleAgent = () => {
-    const previousAgent = newrun.agent;
+    const previousAgent = s.newrun.agent;
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
-    newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
+    s.newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
     // Verification and isolation follow the role: only build verifies and
     // isolates in a worktree.
-    newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
-    newrun.worktree = true;
+    s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
+    s.newrun.worktree = true;
     enforceLockedSkills(true);
   };
 
   /** Build verification mode, shown as verify[v] beside the agent row. */
   const cycleVerify = () => {
     const values: NewRunState["verification"][] = ["direct", "verified"];
-    newrun.verification = values[(values.indexOf(newrun.verification) + 1) % values.length]!;
+    s.newrun.verification = values[(values.indexOf(s.newrun.verification) + 1) % values.length]!;
     enforceLockedSkills(true);
   };
 
@@ -511,34 +364,34 @@ export async function runTui(): Promise<void> {
    * the mode, so the composer refuses and submit re-admits it.
    */
   const lockedSkills = (): string[] =>
-    newrun.verification === "verified" ? ["verified-testing"] : [];
+    s.newrun.verification === "verified" ? ["verified-testing"] : [];
 
   /** Re-admit mode-locked skills excluded under a previous mode. */
   const enforceLockedSkills = (announce: boolean): void => {
     let fixed = false;
     for (const name of lockedSkills()) {
-      if (newRunSkillModes.get(name) === "exclude") {
-        newRunSkillModes.delete(name);
+      if (s.newRunSkillModes.get(name) === "exclude") {
+        s.newRunSkillModes.delete(name);
         fixed = true;
       }
-      if (newRunContextExcluded.delete(`skill:${name}`)) fixed = true;
+      if (s.newRunContextExcluded.delete(`skill:${name}`)) fixed = true;
     }
     if (fixed && announce) notify("verified-testing is required by Verify; switch to Direct to exclude it");
   };
 
   const cycleAmbiguity = () => {
     const values: NewRunState["ambiguity"][] = ["strict", "precise", "adaptive", "autonomous"];
-    newrun.ambiguity = values[(values.indexOf(newrun.ambiguity) + 1) % values.length]!;
+    s.newrun.ambiguity = values[(values.indexOf(s.newrun.ambiguity) + 1) % values.length]!;
   };
 
   const cycleMinFit = () => {
     const values: Array<number | null | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 8.5, 0];
-    newrun.minFit = values[(values.findIndex((value) => value === newrun.minFit) + 1) % values.length];
+    s.newrun.minFit = values[(values.findIndex((value) => value === s.newrun.minFit) + 1) % values.length];
   };
 
   const cycleFloors = () => {
     const floors: NewRunState["floors"][] = ["role", "strict", "off"];
-    newrun.floors = floors[(floors.indexOf(newrun.floors) + 1) % floors.length]!;
+    s.newrun.floors = floors[(floors.indexOf(s.newrun.floors) + 1) % floors.length]!;
   };
 
   const effectivePolicy = (repoRoot = l.repoRoot): Policy | undefined => {
@@ -554,81 +407,81 @@ export async function runTui(): Promise<void> {
     policy?: Policy;
     machine?: MachineConfig;
   } => {
-    const newRunLayout = layout(newRunRepo);
+    const newRunLayout = layout(s.newRunRepo);
     // Everything below depends on the repo/packet, not on the text being typed.
     // Cache it for the duration of an insert session so keystrokes stay cheap.
-    const skillModesKey = [...newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
-    const includedFilesKey = [...newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
-    const previewKey = `${newRunRepo}\0${newrun.packet ?? ""}\0${newrun.agent}\0${newrun.verification}\0${newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
-    const previewTtl = newRunInsert ? 60_000 : 5_000;
+    const skillModesKey = [...s.newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
+    const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
+    const previewKey = `${s.newRunRepo}\0${s.newrun.packet ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
+    const previewTtl = s.newRunInsert ? 60_000 : 5_000;
     if (
-      !newRunPreviewCache ||
-      newRunPreviewCache.key !== previewKey ||
-      Date.now() - newRunPreviewCache.at > previewTtl
+      !s.newRunPreviewCache ||
+      s.newRunPreviewCache.key !== previewKey ||
+      Date.now() - s.newRunPreviewCache.at > previewTtl
     ) {
       const statuses = providerStatuses(createModelsCollection());
       const machine = (() => { try { return loadMachineConfig(newRunLayout); } catch { return undefined; } })();
-      newRunPreviewCache = {
+      s.newRunPreviewCache = {
         key: previewKey,
         at: Date.now(),
         context: previewContext(newRunLayout, "", {
-          agent: newrun.agent,
-          ...(newrun.packet ? { packet: newrun.packet } : {}),
+          agent: s.newrun.agent,
+          ...(s.newrun.packet ? { packet: s.newrun.packet } : {}),
           planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
-          files: [...newRunContextIncluded]
+          files: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("file:"))
             .map((key) => key.slice("file:".length)),
-          defaultSkills: defaultSkillsFor({ agent: newrun.agent, verification: newrun.verification }),
-          skillPresets: roleSkillPresets(newrun.agent),
-          skillOverrides: Object.fromEntries(newRunSkillModes),
+          defaultSkills: defaultSkillsFor({ agent: s.newrun.agent, verification: s.newrun.verification }),
+          skillPresets: roleSkillPresets(s.newrun.agent),
+          skillOverrides: Object.fromEntries(s.newRunSkillModes),
         }),
-        policy: effectivePolicy(newRunRepo),
+        policy: effectivePolicy(s.newRunRepo),
         machine,
         catalogue: loadCatalogue(newRunLayout.catalogueFile),
         configured: new Set(statuses.filter((status) => status.configured).map((status) => status.id)),
         availability: loadAvailability(l.home),
       };
     }
-    const base = newRunPreviewCache;
-    const previewPacket = newrun.packet ? readPacketFile(newRunLayout, newrun.packet) : null;
+    const base = s.newRunPreviewCache;
+    const previewPacket = s.newrun.packet ? readPacketFile(newRunLayout, s.newrun.packet) : null;
     const previewPrompt =
-      newrun.prompt.trim() ||
+      s.newrun.prompt.trim() ||
       (previewPacket ? previewPacket.deliverable : "");
     const context: ContextPreview = { ...base.context, promptChars: previewPrompt.length };
     const policy = base.policy;
     const machine = base.machine;
     const catalogue = base.catalogue;
     if (!policy || !machine || !catalogue) return { context, error: "configuration/catalogue unavailable", machine };
-    const ap = policy.agents[newrun.agent];
-    if (!ap) return { context, error: `unknown agent ${newrun.agent}`, machine };
-    const resolved = resolveAgent(newRunLayout, newrun.agent, {
+    const ap = policy.agents[s.newrun.agent];
+    if (!ap) return { context, error: `unknown agent ${s.newrun.agent}`, machine };
+    const resolved = resolveAgent(newRunLayout, s.newrun.agent, {
       agentPolicy: ap,
-      machineOverrides: machine.agents[newrun.agent],
+      machineOverrides: machine.agents[s.newrun.agent],
       runOverrides: {
-        preset: newrun.preset,
-        verification: newrun.verification === "redundant" ? "verified" : newrun.verification,
-        worktree: newrun.worktree,
-        ask: newrun.ask,
-        approval: newrun.approval,
-        ambiguity: newrun.ambiguity,
+        preset: s.newrun.preset,
+        verification: s.newrun.verification === "redundant" ? "verified" : s.newrun.verification,
+        worktree: s.newrun.worktree,
+        ask: s.newrun.ask,
+        approval: s.newrun.approval,
+        ambiguity: s.newrun.ambiguity,
       },
     });
     const toolChars = toolSchemaChars(resolved.def.tools);
     const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
-    if (newrun.minFit !== undefined) effective.minFit = newrun.minFit ?? 0;
-    if (newrun.floors === "off") {
+    if (s.newrun.minFit !== undefined) effective.minFit = s.newrun.minFit ?? 0;
+    if (s.newrun.floors === "off") {
       effective.minFit = 0;
       for (const axis of CAPABILITY_AXES) effective.minAxes[axis] = 0;
     }
-    if (newrun.floors === "strict") {
+    if (s.newrun.floors === "strict") {
       for (const axis of CAPABILITY_AXES) {
         const current = effective.minAxes[axis] ?? ap.minFit;
         effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
       }
     }
     const select = (requireModel?: string) => pick({
-      agent: newrun.agent,
+      agent: s.newrun.agent,
       policy: effective,
       machine,
       catalogue: catalogue.models,
@@ -636,18 +489,18 @@ export async function runTui(): Promise<void> {
       availability: base.availability,
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars: context.chars + context.promptChars + toolChars,
-      tier: newrun.tier,
+      tier: s.newrun.tier,
       requireModel,
     });
-    let result = select(newrun.model);
-    if ("error" in result && newrun.model) {
+    let result = select(s.newrun.model);
+    if ("error" in result && s.newrun.model) {
       // A fork or an earlier pick can leave a pin that is now cooling,
       // unfunded, or below this agent's floors. Prefer auto-selection over a
       // dead end, and say what happened.
-      const pinned = newrun.model;
+      const pinned = s.newrun.model;
       const fallback = select(undefined);
       if (!("error" in fallback)) {
-        newrun.model = undefined;
+        s.newrun.model = undefined;
         notify(`pinned model ${pinned} is not eligible; using auto-selection`);
         result = fallback;
       }
@@ -658,7 +511,7 @@ export async function runTui(): Promise<void> {
         .slice(0, 3)
         .map(([reason, count]) => `${modelReasonLabel(reason)} ${count}`)
         .join(", ");
-      const pin = newrun.model ? ` · pinned ${newrun.model}` : "";
+      const pin = s.newrun.model ? ` · pinned ${s.newrun.model}` : "";
       return {
         context,
         error: reasons ? `${result.error} (${reasons})${pin}` : `${result.error}${pin}`,
@@ -677,7 +530,7 @@ export async function runTui(): Promise<void> {
   };
 
   const buildNewRunArgs = (): string[] | null => {
-    if (newrun.prompt.trim().length === 0 && !newrun.packet) {
+    if (s.newrun.prompt.trim().length === 0 && !s.newrun.packet) {
       notify("type a task before starting");
       return null;
     }
@@ -686,54 +539,54 @@ export async function runTui(): Promise<void> {
       notify(`no model is ready: ${modelState.error}`);
       return null;
     }
-    const policy = effectivePolicy(newRunRepo);
+    const policy = effectivePolicy(s.newRunRepo);
     const args = [
       "run",
-      "--agent", newrun.agent,
-      ...(newrun.model ? ["--model", newrun.model] : []),
-      "--tier", newrun.tier,
-      "--preset", newrun.preset,
-      "--verify", newrun.verification,
-      "--ask", String(newrun.ask),
-      "--worktree", newrun.worktree ? "true" : "false",
-      "--approval", newrun.approval,
-      "--ambiguity", newrun.ambiguity,
-      ...(newRunParentId ? ["--parent", newRunParentId] : []),
+      "--agent", s.newrun.agent,
+      ...(s.newrun.model ? ["--model", s.newrun.model] : []),
+      "--tier", s.newrun.tier,
+      "--preset", s.newrun.preset,
+      "--verify", s.newrun.verification,
+      "--ask", String(s.newrun.ask),
+      "--worktree", s.newrun.worktree ? "true" : "false",
+      "--approval", s.newrun.approval,
+      "--ambiguity", s.newrun.ambiguity,
+      ...(s.newRunParentId ? ["--parent", s.newRunParentId] : []),
     ];
-    const previewPolicy = policy?.agents[newrun.agent];
+    const previewPolicy = policy?.agents[s.newrun.agent];
     if (modelState.model && previewPolicy) {
       const budget = contextBudget(modelState.model.context, previewPolicy.expectedOutputTokens);
       args.push("--context-budget", String(budget.inputChars));
     }
-    if (newrun.floors === "off") {
+    if (s.newrun.floors === "off") {
       args.push("--min-fit", "0");
-    } else if (newrun.minFit !== undefined) {
-      args.push("--min-fit", String(newrun.minFit ?? 0));
+    } else if (s.newrun.minFit !== undefined) {
+      args.push("--min-fit", String(s.newrun.minFit ?? 0));
     }
-    if (newrun.floors === "off") {
+    if (s.newrun.floors === "off") {
       args.push("--min-axes", "reasoning=0,code=0,agentic=0,general=0");
-    } else if (newrun.floors === "strict") {
-      const ap = policy?.agents[newrun.agent];
+    } else if (s.newrun.floors === "strict") {
+      const ap = policy?.agents[s.newrun.agent];
       const floors = CAPABILITY_AXES.map((axis) => {
         const current = ap?.minAxes?.[axis] ?? ap?.minFit ?? 6;
         return `${axis}=${Math.min(10, Math.round((current + 0.5) * 10) / 10)}`;
       });
       args.push("--min-axes", floors.join(","));
     }
-    if (newrun.packet) {
-      args.push("--packet", newrun.packet);
+    if (s.newrun.packet) {
+      args.push("--packet", s.newrun.packet);
     }
-    const excludedSections = [...newRunContextExcluded]
+    const excludedSections = [...s.newRunContextExcluded]
       .filter((key) => key.startsWith("section:"))
       .map((key) => key.slice("section:".length));
-    const excludedItems = [...newRunContextExcluded].filter((key) => !key.startsWith("section:"));
+    const excludedItems = [...s.newRunContextExcluded].filter((key) => !key.startsWith("section:"));
     if (excludedSections.length > 0 || excludedItems.length > 0) {
       args.push("--context-exclude", JSON.stringify({ sections: excludedSections, items: excludedItems }));
     }
-    const includedKnowledge = [...newRunContextIncluded]
+    const includedKnowledge = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("knowledge:"))
       .map((key) => key.slice("knowledge:".length));
-    const includedReferences = [...newRunContextIncluded]
+    const includedReferences = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("reference:"))
       .map((key) => key.slice("reference:".length));
     if (includedKnowledge.length > 0 || includedReferences.length > 0) {
@@ -742,36 +595,36 @@ export async function runTui(): Promise<void> {
         ...(includedReferences.length > 0 ? { references: includedReferences } : {}),
       }));
     }
-    if (newRunSkillModes.size > 0) {
-      args.push("--skill-modes", JSON.stringify(Object.fromEntries(newRunSkillModes)));
+    if (s.newRunSkillModes.size > 0) {
+      args.push("--skill-modes", JSON.stringify(Object.fromEntries(s.newRunSkillModes)));
     }
-    if (newrun.prompt.trim().length > 0) args.push(newrun.prompt);
+    if (s.newrun.prompt.trim().length > 0) args.push(s.newrun.prompt);
     return args;
   };
 
   const submitNewRun = () => {
-    newRunColon = false;
+    s.newRunColon = false;
     // Authoritative guard: locked skills survive any path that excluded them.
     enforceLockedSkills(false);
     const args = buildNewRunArgs();
     if (!args) return;
-    if (launch(args, newRunRepo)) {
+    if (launch(args, s.newRunRepo)) {
       notify("run started; opening it when the record appears");
-      screen = "list";
-      page = "runs";
-      selectedRunId = null;
+      s.screen = "list";
+      s.page = "runs";
+      s.selectedRunId = null;
       // The 1s background tick is too coarse for run handoff. Repaint fast
-      // until the record resolves so the run-details screen opens promptly.
-      if (pendingFastTimer) clearInterval(pendingFastTimer);
-      pendingFastTimer = setInterval(() => {
-        if (pendingRunAt === 0) {
-          if (pendingFastTimer) clearInterval(pendingFastTimer);
-          pendingFastTimer = null;
+      // until the record resolves so the run-details s.screen opens promptly.
+      if (s.pendingFastTimer) clearInterval(s.pendingFastTimer);
+      s.pendingFastTimer = setInterval(() => {
+        if (s.pendingRunAt === 0) {
+          if (s.pendingFastTimer) clearInterval(s.pendingFastTimer);
+          s.pendingFastTimer = null;
           return;
         }
-        if (Date.now() - pendingRunAt > 15_000) {
-          if (pendingFastTimer) clearInterval(pendingFastTimer);
-          pendingFastTimer = null;
+        if (Date.now() - s.pendingRunAt > 15_000) {
+          if (s.pendingFastTimer) clearInterval(s.pendingFastTimer);
+          s.pendingFastTimer = null;
           return;
         }
         draw();
@@ -800,12 +653,12 @@ export async function runTui(): Promise<void> {
     if (!detail) { notify("run record not found"); return; }
     const pending = pendingForRun(summary);
     if (!pending?.questionId) { notify("no pending question"); return; }
-    selectedRunId = detail.summary.id;
-    answerQuestionId = pending.questionId;
-    answerOptions = pending.options ?? [];
-    answerText = "";
-    answerScroll = 0;
-    screen = "answer";
+    s.selectedRunId = detail.summary.id;
+    s.answerQuestionId = pending.questionId;
+    s.answerOptions = pending.options ?? [];
+    s.answerText = "";
+    s.answerScroll = 0;
+    s.screen = "answer";
   };
 
   const interrupt = (summary: RunSummary | undefined) => {
@@ -828,42 +681,42 @@ export async function runTui(): Promise<void> {
 
   const startCorrect = (summary: RunSummary | undefined) => {
     if (!summary) return;
-    selectedRunId = summary.id;
-    correctText = "";
-    screen = "correct";
+    s.selectedRunId = summary.id;
+    s.correctText = "";
+    s.screen = "correct";
   };
 
   const submitCorrection = () => {
-    if (!selectedRunId || correctText.trim().length === 0) { notify("type a correction"); return; }
-    const args = ["correct", selectedRunId, correctText];
+    if (!s.selectedRunId || s.correctText.trim().length === 0) { notify("type a correction"); return; }
+    const args = ["correct", s.selectedRunId, s.correctText];
     if (launch(args)) {
       notify("correction queued; opening the child run when it appears");
-      screen = "list";
-      page = "runs";
+      s.screen = "list";
+      s.page = "runs";
     }
   };
 
-  const runDetailData = (): RunDetail | null => (selectedRunId ? findRunDetail(selectedRunId) : null);
+  const runDetailData = (): RunDetail | null => (s.selectedRunId ? findRunDetail(s.selectedRunId) : null);
 
   const currentChanges = (detail: RunDetail): ChangeSummary => {
-    if (changesCache && changesCache.runId === detail.summary.id && Date.now() - changesCache.at < 4_000) {
-      return changesCache.data;
+    if (s.changesCache && s.changesCache.runId === detail.summary.id && Date.now() - s.changesCache.at < 4_000) {
+      return s.changesCache.data;
     }
     const data = changesFor(detail.summary.worktree);
-    changesCache = { runId: detail.summary.id, at: Date.now(), data };
+    s.changesCache = { runId: detail.summary.id, at: Date.now(), data };
     return data;
   };
 
   const searchSeed = (): string => {
-    if (page === "runs") return runsText;
-    if (page === "models") return modelText;
-    return searchText;
+    if (s.page === "runs") return s.runsText;
+    if (s.page === "models") return s.modelText;
+    return s.searchText;
   };
 
   const applySearch = () => {
-    if (page === "runs") runsText = searchText;
-    else if (page === "models") modelText = searchText;
-    searchMode = false;
+    if (s.page === "runs") s.runsText = s.searchText;
+    else if (s.page === "models") s.modelText = s.searchText;
+    s.searchMode = false;
   };
 
   /* --------------------------------------------------------------- render */
@@ -879,33 +732,33 @@ export async function runTui(): Promise<void> {
     // The composer and models pages never need the run list; skipping the
     // filesystem walk there keeps prompt typing responsive.
     const needRunData =
-      pendingRunAt > 0 ||
-      (page === "runs" && (screen === "list" || screen === "run"));
-    const allRuns = needRunData ? listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id)) : [];
+      s.pendingRunAt > 0 ||
+      (s.page === "runs" && (s.screen === "list" || s.screen === "run"));
+    const allRuns = needRunData ? listAllRuns(l.home).filter((run) => !s.deletingRuns.has(run.id)) : [];
     const counts = needRunData ? headerCounts(allRuns) : headerCounts([]);
     const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
     const theme = resolveTheme(settingsMachine?.theme);
-    if (toast && Date.now() - toastAt > 8_000) toast = "";
+    if (s.toast && Date.now() - s.toastAt > 8_000) s.toast = "";
 
     // Resolve a newly launched run before the header is built, so the first
     // frame already shows the run-detail chrome.
-    if (pendingRunAt > 0) {
+    if (s.pendingRunAt > 0) {
       const fresh = allRuns
-        .filter((run) => new Date(run.startedAt).getTime() >= pendingRunAt - 1_500)
+        .filter((run) => new Date(run.startedAt).getTime() >= s.pendingRunAt - 1_500)
         .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))[0];
       if (fresh) {
-        selectedRunId = fresh.id;
-        runSection = "overview";
-        screen = "run";
-        page = "runs";
-        pendingRunAt = 0;
+        s.selectedRunId = fresh.id;
+        s.runSection = "overview";
+        s.screen = "run";
+        s.page = "runs";
+        s.pendingRunAt = 0;
         notify(`opened new run ${fresh.id.slice(-8)}`);
-      } else if (Date.now() - pendingRunAt > 15_000) {
-        pendingRunAt = 0;
+      } else if (Date.now() - s.pendingRunAt > 15_000) {
+        s.pendingRunAt = 0;
       }
     }
 
-    const runsListScreen = page === "runs" && screen === "list";
+    const runsListScreen = s.page === "runs" && s.screen === "list";
     const runIndicators = [
       `${C}●${R} ${counts.active} running`,
       `${Y}?${R} ${counts.awaiting} awaiting`,
@@ -915,49 +768,49 @@ export async function runTui(): Promise<void> {
 
     let catalogue: CatalogueDocument | null = null;
     let statuses: ReturnType<typeof providerStatuses> = [];
-    if (page === "models") {
+    if (s.page === "models") {
       try {
         const mtime = statSync(l.catalogueFile).mtimeMs;
-        if (!catalogueCache || catalogueCache.mtime !== mtime) {
-          catalogueCache = { mtime, doc: loadCatalogue(l.catalogueFile) };
+        if (!s.catalogueCache || s.catalogueCache.mtime !== mtime) {
+          s.catalogueCache = { mtime, doc: loadCatalogue(l.catalogueFile) };
         }
-        catalogue = catalogueCache.doc;
+        catalogue = s.catalogueCache.doc;
       } catch {
         catalogue = loadCatalogue(l.catalogueFile);
       }
-      if (!statusesCache || Date.now() - statusesCache.at > 5_000) {
-        statusesCache = { at: Date.now(), statuses: providerStatuses(createModelsCollection()) };
+      if (!s.statusesCache || Date.now() - s.statusesCache.at > 5_000) {
+        s.statusesCache = { at: Date.now(), statuses: providerStatuses(createModelsCollection()) };
       }
-      statuses = statusesCache.statuses;
+      statuses = s.statusesCache.statuses;
     }
     const activeProviders = new Set(statuses.map((status) => status.id));
     // Hide stale rows for providers that are disabled or no longer registered.
     const catalogueRows = (catalogue?.models ?? []).filter((row) => activeProviders.has(row.providerID));
     const configured = new Set(statuses.filter((status) => status.configured).map((status) => status.id));
-    const modelRows = page === "models"
+    const modelRows = s.page === "models"
       ? filterModels(catalogueRows, {
-          text: modelText,
-          providers: modelsAll ? undefined : configured,
-          freeOnly: modelsFree,
-          codingOnly: modelsCoding,
-          sort: modelSort,
-          weights: policyWeightsFor(newrun.agent),
+          text: s.modelText,
+          providers: s.modelsAll ? undefined : configured,
+          freeOnly: s.modelsFree,
+          codingOnly: s.modelsCoding,
+          sort: s.modelSort,
+          weights: policyWeightsFor(s.newrun.agent),
         })
       : [];
-    if (modelSel >= modelRows.length) modelSel = Math.max(0, modelRows.length - 1);
-    const selectedModel = modelRows[modelSel];
+    if (s.modelSel >= modelRows.length) s.modelSel = Math.max(0, modelRows.length - 1);
+    const selectedModel = modelRows[s.modelSel];
 
-    const settingsPolicy = page === "settings" ? effectivePolicy() : undefined;
-    const settingsRows = page === "settings" ? buildSettings(l, settingsMachine, settingsPolicy) : [];
-    if (settingsSel >= settingsRows.length) settingsSel = Math.max(0, settingsRows.length - 1);
+    const settingsPolicy = s.page === "settings" ? effectivePolicy() : undefined;
+    const settingsRows = s.page === "settings" ? buildSettings(l, settingsMachine, settingsPolicy) : [];
+    if (s.settingsSel >= settingsRows.length) s.settingsSel = Math.max(0, settingsRows.length - 1);
 
     const chrome = renderHeader({
-      cols, theme, page, screen, toast,
+      cols, theme, page: s.page, screen: s.screen, toast: s.toast,
       runIndicators,
       statusTokens,
       modelCount: modelRows.length,
-      modelFilter: modelText,
-      newRunRepo,
+      modelFilter: s.modelText,
+      newRunRepo: s.newRunRepo,
       runsList: runsListScreen,
     });
     const header = chrome.header;
@@ -965,24 +818,24 @@ export async function runTui(): Promise<void> {
     const backHeader = chrome.backHeader;
     const runDetailHeader = chrome.runDetailHeader;
     // Prompt editing moves its controls into the body but keeps the model line.
-    const hideFooter = screen === "newrun" && newRunInsert;
+    const hideFooter = s.screen === "newrun" && s.newRunInsert;
     const bodyH = Math.max(1, rows - header.length - footerReserve);
 
-    const scopedRuns = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
+    const scopedRuns = s.runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
     const filteredRuns = runsListScreen ? scopedRuns : [];
     const runIndex = buildRunIndex({
       runs: filteredRuns,
-      group: runsGroup,
-      collapsed,
-      text: runsText,
-      attentionOnly: runsAttention,
+      group: s.runsGroup,
+      collapsed: s.collapsed,
+      text: s.runsText,
+      attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
-      ...(runsGroup === "packets"
+      ...(s.runsGroup === "packets"
         ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
         : {}),
     });
-    if (runsSel >= runIndex.selectable.length) runsSel = Math.max(0, runIndex.selectable.length - 1);
-    const selectedRow = runIndex.selectable[runsSel];
+    if (s.runsSel >= runIndex.selectable.length) s.runsSel = Math.max(0, runIndex.selectable.length - 1);
+    const selectedRow = runIndex.selectable[s.runsSel];
     const focus = focusRowIds(runIndex.rows, selectedRow);
 
     let body: string[] = [];
@@ -1010,18 +863,18 @@ export async function runTui(): Promise<void> {
     };
 
     /* ------------------------------------------------------------- runs */
-    if (page === "runs" && screen === "list") {
+    if (s.page === "runs" && s.screen === "list") {
       const frame = renderRunsList({
-        cols, narrow, runNarrow, bodyH, theme, toast,
+        cols, narrow, runNarrow, bodyH, theme, toast: s.toast,
         index: runIndex,
         selectedRow,
         focus,
-        group: runsGroup,
-        reposScope: runsRepoScope,
+        group: s.runsGroup,
+        reposScope: s.runsRepoScope,
         pendingFor: pendingForRun,
-        scroll: runsScroll,
+        scroll: s.runsScroll,
       });
-      runsScroll = frame.scroll;
+      s.runsScroll = frame.scroll;
       body = frame.body;
       actions = frame.actions;
       extraActions = frame.extraActions;
@@ -1029,10 +882,10 @@ export async function runTui(): Promise<void> {
     }
 
     /* ----------------------------------------------------------- delete */
-    else if (screen === "delete") {
-      const frame = renderDeleteConfirm(deleteRunTarget, bodyH);
+    else if (s.screen === "delete") {
+      const frame = renderDeleteConfirm(s.deleteRunTarget, bodyH);
       if (!frame) {
-        screen = deleteReturn;
+        s.screen = s.deleteReturn;
         return draw();
       }
       body = frame.body;
@@ -1041,34 +894,34 @@ export async function runTui(): Promise<void> {
     }
 
     /* ---------------------------------------------------------- new run */
-    else if (screen === "newrun") {
+    else if (s.screen === "newrun") {
       const frame = renderComposer({
-        cols, narrow, bodyH, theme, toast,
-        run: newrun,
-        repoRoot: newRunRepo,
+        cols, narrow, bodyH, theme, toast: s.toast,
+        run: s.newrun,
+        repoRoot: s.newRunRepo,
         home: l.home,
-        insert: newRunInsert,
-        cursor: newRunCursor,
-        colon: newRunColon,
-        contextTab: newRunContextTab,
-        contextItem: newRunContextItem,
-        contextFilter: newRunContextFilter,
-        contextFiltering: newRunContextFiltering,
-        excluded: newRunContextExcluded,
-        included: newRunContextIncluded,
-        skillModes: newRunSkillModes,
-        skillShown: newRunSkillShown,
+        insert: s.newRunInsert,
+        cursor: s.newRunCursor,
+        colon: s.newRunColon,
+        contextTab: s.newRunContextTab,
+        contextItem: s.newRunContextItem,
+        contextFilter: s.newRunContextFilter,
+        contextFiltering: s.newRunContextFiltering,
+        excluded: s.newRunContextExcluded,
+        included: s.newRunContextIncluded,
+        skillModes: s.newRunSkillModes,
+        skillShown: s.newRunSkillShown,
         preview: modelPreview(),
         pickers: {
-          model: modelPick === null ? null : {
-            entries: modelPickEntries,
-            sel: modelPickSel,
-            text: modelPickText,
-            sort: modelPickSort,
+          model: s.modelPick === null ? null : {
+            entries: s.modelPickEntries,
+            sel: s.modelPickSel,
+            text: s.modelPickText,
+            sort: s.modelPickSort,
           },
-          packet: packetPick === null ? null : {
-            text: packetPickText,
-            sel: packetPickSel,
+          packet: s.packetPick === null ? null : {
+            text: s.packetPickText,
+            sel: s.packetPickSel,
             list: pickerPackets(),
           },
         },
@@ -1084,132 +937,132 @@ export async function runTui(): Promise<void> {
       footerMapTokens = frame.footerMapTokens;
       footerBandTone = frame.footerBandTone;
       footerCtx = frame.footerCtx;
-      newRunContextTab = frame.contextTab;
-      newRunContextSectionKey = frame.contextSectionKey;
-      newRunContextItemKeys = frame.contextItemKeys;
-      newRunContextItemAvailable = frame.contextItemAvailable;
-      newRunContextItem = frame.contextItem;
-      modelPickSel = frame.modelPickSel;
-      packetPickSel = frame.packetPickSel;
+      s.newRunContextTab = frame.contextTab;
+      s.newRunContextSectionKey = frame.contextSectionKey;
+      s.newRunContextItemKeys = frame.contextItemKeys;
+      s.newRunContextItemAvailable = frame.contextItemAvailable;
+      s.newRunContextItem = frame.contextItem;
+      s.modelPickSel = frame.modelPickSel;
+      s.packetPickSel = frame.packetPickSel;
     }
 
     /* ------------------------------------------------------------ model */
-    else if (page === "models" && screen === "model" && selectedModelKey) {
+    else if (s.page === "models" && s.screen === "model" && s.selectedModelKey) {
       const frame = renderModelDetail({
-        cols, narrow, bodyH, theme, toast,
+        cols, narrow, bodyH, theme, toast: s.toast,
         home: l.home,
-        row: catalogueRows.find((row) => row.key === selectedModelKey),
+        row: catalogueRows.find((row) => row.key === s.selectedModelKey),
         rows: catalogueRows,
-        agent: newrun.agent,
-        weights: policyWeightsFor(newrun.agent),
-        probing: probingModels.has(selectedModelKey),
-        scroll: modelScroll,
+        agent: s.newrun.agent,
+        weights: policyWeightsFor(s.newrun.agent),
+        probing: s.probingModels.has(s.selectedModelKey),
+        scroll: s.modelScroll,
       });
       if (!frame) {
-        screen = "list";
+        s.screen = "list";
         return draw();
       }
-      modelScroll = frame.scroll;
+      s.modelScroll = frame.scroll;
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
     }
 
     /* ----------------------------------------------------------- models */
-    else if (page === "models" && screen === "list") {
+    else if (s.page === "models" && s.screen === "list") {
       const frame = renderModelsList({
-        cols, narrow, bodyH, theme, toast,
+        cols, narrow, bodyH, theme, toast: s.toast,
         home: l.home,
         repoRoot: l.repoRoot,
         rows: modelRows,
-        group: modelGroup,
-        collapsed: modelCollapsed,
-        selected: modelSel,
-        scroll: modelScroll,
-        filterText: modelText,
-        showAllProviders: modelsAll,
-        freeOnly: modelsFree,
-        codingOnly: modelsCoding,
-        sort: modelSort,
-        probing: probingModels,
+        group: s.modelGroup,
+        collapsed: s.modelCollapsed,
+        selected: s.modelSel,
+        scroll: s.modelScroll,
+        filterText: s.modelText,
+        showAllProviders: s.modelsAll,
+        freeOnly: s.modelsFree,
+        codingOnly: s.modelsCoding,
+        sort: s.modelSort,
+        probing: s.probingModels,
       });
-      modelDisplay = frame.display;
-      modelSel = frame.selected;
-      modelScroll = frame.scroll;
+      s.modelDisplay = frame.display;
+      s.modelSel = frame.selected;
+      s.modelScroll = frame.scroll;
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
     }
 
     /* ------------------------------------------------------------ spend */
-    else if (page === "spend") {
+    else if (s.page === "spend") {
       const frame = renderSpend({
-        cols, narrow, bodyH, theme, toast,
+        cols, narrow, bodyH, theme, toast: s.toast,
         home: l.home,
-        daysWindow: spendDaysWindow,
-        groupBy: spendBy,
-        scroll: spendScroll,
+        daysWindow: s.spendDaysWindow,
+        groupBy: s.spendBy,
+        scroll: s.spendScroll,
       });
-      spendScroll = frame.scroll;
+      s.spendScroll = frame.scroll;
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
     }
 
     /* --------------------------------------------------------- settings */
-    else if (page === "settings") {
+    else if (s.page === "settings") {
       const frame = renderSettings({
-        cols, narrow, bodyH, theme, toast,
+        cols, narrow, bodyH, theme, toast: s.toast,
         layout: l,
         rows: settingsRows,
-        selectedIndex: settingsSel,
-        scroll: settingsScroll,
+        selectedIndex: s.settingsSel,
+        scroll: s.settingsScroll,
       });
-      settingsScroll = frame.scroll;
+      s.settingsScroll = frame.scroll;
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
     }
 
     /* ---------------------------------------------------------- packet */
-    else if (page === "runs" && screen === "packet") {
+    else if (s.page === "runs" && s.screen === "packet") {
       const frame = renderPacket({
-        cols, narrow, bodyH, theme, toast,
-        slug: selectedPacketSlug,
-        packet: selectedPacketSlug ? readPacketFile(l, selectedPacketSlug) : null,
+        cols, narrow, bodyH, theme, toast: s.toast,
+        slug: s.selectedPacketSlug,
+        packet: s.selectedPacketSlug ? readPacketFile(l, s.selectedPacketSlug) : null,
         runs: allRuns,
-        scroll: packetScroll,
+        scroll: s.packetScroll,
       });
-      packetScroll = frame.scroll;
+      s.packetScroll = frame.scroll;
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
     }
 
     /* ------------------------------------------------------------- run */
-    else if (page === "runs" && screen === "run") {
+    else if (s.page === "runs" && s.screen === "run") {
       const detail = runDetailData();
       if (!detail) {
-        body = [` ${RED}Run ${selectedRunId ?? "?"} no longer exists.${R}`];
+        body = [` ${RED}Run ${s.selectedRunId ?? "?"} no longer exists.${R}`];
         actions = command("Esc", "Back", undefined, GR);
       } else {
         const frame = renderRunDetail({
           cols, short, bodyH, theme,
           detail,
           scopedRuns,
-          section: runSection,
-          runScroll,
-          processSel,
-          processFollow,
-          eventSel,
-          eventScroll,
-          eventBodyScroll,
-          timelineFollow,
-          timelineVerbose,
-          thinkingScroll,
-          thinkingFollow,
-          childSel,
-          expanded,
+          section: s.runSection,
+          runScroll: s.runScroll,
+          processSel: s.processSel,
+          processFollow: s.processFollow,
+          eventSel: s.eventSel,
+          eventScroll: s.eventScroll,
+          eventBodyScroll: s.eventBodyScroll,
+          timelineFollow: s.timelineFollow,
+          timelineVerbose: s.timelineVerbose,
+          thinkingScroll: s.thinkingScroll,
+          thinkingFollow: s.thinkingFollow,
+          childSel: s.childSel,
+          expanded: s.expanded,
           changes: currentChanges(detail),
           mapTokens: mapStatusTokens,
         });
@@ -1218,18 +1071,18 @@ export async function runTui(): Promise<void> {
         runHints = frame.runHints;
         footerMapTokens = frame.footerMapTokens;
         footerCtx = frame.footerCtx;
-        runScroll = frame.runScroll;
-        processSel = frame.processSel;
-        eventSel = frame.eventSel;
-        eventScroll = frame.eventScroll;
-        eventBodyScroll = frame.eventBodyScroll;
-        thinkingScroll = frame.thinkingScroll;
-        childSel = frame.childSel;
+        s.runScroll = frame.runScroll;
+        s.processSel = frame.processSel;
+        s.eventSel = frame.eventSel;
+        s.eventScroll = frame.eventScroll;
+        s.eventBodyScroll = frame.eventBodyScroll;
+        s.thinkingScroll = frame.thinkingScroll;
+        s.childSel = frame.childSel;
       }
     }
 
     /* ----------------------------------------------------------- answer */
-    else if (screen === "answer") {
+    else if (s.screen === "answer") {
       const detail = runDetailData();
       const pending = detail
         ? latestUnansweredQuestion(
@@ -1245,25 +1098,25 @@ export async function runTui(): Promise<void> {
         cols,
         bodyH,
         question: pending?.text ?? "(question text not recorded)",
-        options: answerOptions.length > 0 ? answerOptions : pending?.options ?? [],
-        answerText,
-        scroll: answerScroll,
+        options: s.answerOptions.length > 0 ? s.answerOptions : pending?.options ?? [],
+        answerText: s.answerText,
+        scroll: s.answerScroll,
       });
-      answerScroll = frame.scroll;
-      answerPage = frame.page;
-      answerOverflow = frame.overflow;
+      s.answerScroll = frame.scroll;
+      s.answerPage = frame.page;
+      s.answerOverflow = frame.overflow;
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
     }
 
     /* ---------------------------------------------------------- correct */
-    else if (screen === "correct") {
+    else if (s.screen === "correct") {
       const detail = runDetailData();
       const frame = renderCorrect({
         cols,
         bodyH,
-        correctText,
+        correctText: s.correctText,
         parentId: detail ? detail.summary.id : null,
         parentWorktree: Boolean(detail?.summary.worktree),
       });
@@ -1275,16 +1128,16 @@ export async function runTui(): Promise<void> {
     if (runDetailHeader && runCwd) header[1] = rightHeaderPath(cols, runCwd);
 
     /* ------------------------------------------------------------ compose */
-    if (searchMode) {
+    if (s.searchMode) {
       actions = joinCommands([
-        command("/", "Search", searchText || "…", C),
+        command("/", "Search", s.searchText || "…", C),
         command("Enter", "Apply", undefined, G),
         command("Esc", "Cancel", undefined, GR),
       ]);
-      secondary = `${D}filters ${page} · type to edit${R}`;
+      secondary = `${D}filters ${s.page} · type to edit${R}`;
     }
     const footerRows = renderFooterRows({
-      cols, narrow, theme, screen, hideFooter, runDetailHeader,
+      cols, narrow, theme, screen: s.screen, hideFooter, runDetailHeader,
       runHints, extraActions, actions, secondary, secondaryStyled,
       footerCtx, footerMapTokens,
     });
@@ -1315,7 +1168,7 @@ export async function runTui(): Promise<void> {
         const footerIndex = index - footerStart;
         return background(fitted, footerIndex < legendRows ? theme.bodyBg : footerBandTone || theme.footerBg);
       }
-      // Every page body uses the theme body color, so the surface is controllable.
+      // Every s.page body uses the theme body color, so the surface is controllable.
       return background(fitted, theme.bodyBg);
     });
     process.stdout.write(SYNC_ON + WRAP_OFF + HOME + output.join("\n") + CLEAR_BELOW + WRAP_ON + SYNC_OFF);
@@ -1326,14 +1179,14 @@ export async function runTui(): Promise<void> {
   /* ------------------------------------------------------------ packet modal helpers */
 
   const startPacketPicker = () => {
-    packetPick = "newrun";
-    packetPickSel = 0;
-    packetPickText = "";
+    s.packetPick = "newrun";
+    s.packetPickSel = 0;
+    s.packetPickText = "";
   };
 
   const pickerPackets = () => {
-    const needle = packetPickText.trim().toLowerCase();
-    const packets = listPacketFiles(layout(newRunRepo));
+    const needle = s.packetPickText.trim().toLowerCase();
+    const packets = listPacketFiles(layout(s.newRunRepo));
     if (!needle) return packets;
     return packets.filter((packet) =>
       `${packet.slug} ${packet.deliverable} ${packet.status}`.toLowerCase().includes(needle),
@@ -1341,44 +1194,44 @@ export async function runTui(): Promise<void> {
   };
 
   const choosePacket = (packet: PacketFile) => {
-    const previousPacket = newrun.packet ? readPacketFile(layout(newRunRepo), newrun.packet) : null;
+    const previousPacket = s.newrun.packet ? readPacketFile(layout(s.newRunRepo), s.newrun.packet) : null;
     const previousPrompt = previousPacket?.deliverable ?? "";
-    const hadPacket = Boolean(newrun.packet);
-    newrun.packet = packet.slug;
+    const hadPacket = Boolean(s.newrun.packet);
+    s.newrun.packet = packet.slug;
     // A blank composer that was opened with `N` still starts as research. Once
     // a packet is attached, default to the agent that does the work.
-    if (!hadPacket && newrun.agent === "research") {
-      newrun.agent = "build";
-      newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
-      newrun.worktree = true;
+    if (!hadPacket && s.newrun.agent === "research") {
+      s.newrun.agent = "build";
+      s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
+      s.newrun.worktree = true;
       enforceLockedSkills(true);
     }
-    if (!newrun.prompt.trim() || (previousPrompt && newrun.prompt === previousPrompt)) {
-      newrun.prompt = packet.deliverable || packet.slug;
+    if (!s.newrun.prompt.trim() || (previousPrompt && s.newrun.prompt === previousPrompt)) {
+      s.newrun.prompt = packet.deliverable || packet.slug;
     }
-    packetPick = null;
+    s.packetPick = null;
     notify(`linked ${packet.slug}; ready · ${packet.status} · gate ${packet.review ?? "gates"}`);
   };
 
   const newRunWeights = () => {
-    const policy = effectivePolicy(newRunRepo);
-    const ap = policy?.agents[newrun.agent];
-    return ap ? axisWeights(newrun.agent, ap) : undefined;
+    const policy = effectivePolicy(s.newRunRepo);
+    const ap = policy?.agents[s.newrun.agent];
+    return ap ? axisWeights(s.newrun.agent, ap) : undefined;
   };
 
   const pickerModels = (): ModelPickerEntry[] => {
-    const catalogue = loadCatalogue(layout(newRunRepo).catalogueFile);
+    const catalogue = loadCatalogue(layout(s.newRunRepo).catalogueFile);
     if (!catalogue) return [];
     const configured = new Set(
       providerStatuses(createModelsCollection())
         .filter((status) => status.configured)
         .map((status) => status.id),
     );
-    const policy = effectivePolicy(newRunRepo);
-    const ap = policy?.agents[newrun.agent];
+    const policy = effectivePolicy(s.newRunRepo);
+    const ap = policy?.agents[s.newrun.agent];
     const machine = (() => {
       try {
-        return loadMachineConfig(layout(newRunRepo));
+        return loadMachineConfig(layout(s.newRunRepo));
       } catch {
         return undefined;
       }
@@ -1390,26 +1243,26 @@ export async function runTui(): Promise<void> {
     const rows = filterModels(catalogue.models, {
       providers: configured,
       codingOnly: true,
-      text: modelPickText,
+      text: s.modelPickText,
       weights,
       sort: "fit",
     });
-    const contextChars = (newRunPreviewCache?.context.chars ?? 0) + newrun.prompt.length + 2_000;
+    const contextChars = (s.newRunPreviewCache?.context.chars ?? 0) + s.newrun.prompt.length + 2_000;
     const input = {
-      agent: newrun.agent,
+      agent: s.newrun.agent,
       policy: ap,
       machine,
       catalogue: rows,
       configuredProviders: configured,
       fundedProviders: funded,
       contextChars,
-      tier: newrun.tier,
+      tier: s.newrun.tier,
       availability,
     };
     const estimate = estimateTokens(contextChars, ap.expectedOutputTokens);
     const priceOf = (row: CatalogueRow): number =>
       effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, machine);
-    const sortMode = modelPickSort;
+    const sortMode = s.modelPickSort;
     return rows
       .map((row): ModelPickerEntry => {
         const status = modelStatus(row, input);
@@ -1434,13 +1287,13 @@ export async function runTui(): Promise<void> {
   };
 
   const startModelPicker = () => {
-    modelPick = "newrun";
-    modelPickText = "";
-    modelPickEntries = pickerModels();
-    const index = newrun.model
-      ? modelPickEntries.findIndex((entry) => entry.row.key === newrun.model)
+    s.modelPick = "newrun";
+    s.modelPickText = "";
+    s.modelPickEntries = pickerModels();
+    const index = s.newrun.model
+      ? s.modelPickEntries.findIndex((entry) => entry.row.key === s.newrun.model)
       : -1;
-    modelPickSel = index >= 0 ? index + 1 : 0;
+    s.modelPickSel = index >= 0 ? index + 1 : 0;
   };
 
   /* ------------------------------------------------------------- input */
@@ -1452,11 +1305,11 @@ export async function runTui(): Promise<void> {
     }
 
     // Text-entry modes take precedence over global navigation.
-    if (screen === "delete") {
-      if (data === "\x1b") { deleteRunTarget = undefined; screen = deleteReturn; draw(); return; }
-      if (data === "D" && deleteRunTarget) {
-        const run = deleteRunTarget;
-        deletingRuns.add(run.id);
+    if (s.screen === "delete") {
+      if (data === "\x1b") { s.deleteRunTarget = undefined; s.screen = s.deleteReturn; draw(); return; }
+      if (data === "D" && s.deleteRunTarget) {
+        const run = s.deleteRunTarget;
+        s.deletingRuns.add(run.id);
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         const child = spawn(
           process.execPath,
@@ -1481,86 +1334,86 @@ export async function runTui(): Promise<void> {
           if (code === 0) {
             notify(`deleted run ${run.id}`);
           } else {
-            deletingRuns.delete(run.id);
+            s.deletingRuns.delete(run.id);
             const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
             notify(`delete failed for run ${run.id}: ${trunc(last, 80)}`);
           }
           draw();
         });
         notify(`deleting run ${run.id}`);
-        deleteRunTarget = undefined;
-        selectedRunId = null;
-        screen = "list";
-        page = "runs";
+        s.deleteRunTarget = undefined;
+        s.selectedRunId = null;
+        s.screen = "list";
+        s.page = "runs";
         draw();
         return;
       }
       draw();
       return;
     }
-    if (screen === "answer") {
-      if (data === "\x1b") { screen = "run"; answerText = ""; answerOptions = []; answerScroll = 0; draw(); return; }
-      if (data === CTRL_U) { answerScroll = Math.max(0, answerScroll - Math.max(1, Math.floor(answerPage / 2))); draw(); return; }
-      if (data === CTRL_D) { answerScroll += Math.max(1, Math.floor(answerPage / 2)); draw(); return; }
-      if (/^[1-9]$/.test(data) && answerOptions.length > 0 && answerText.length === 0) {
-        const option = answerOptions[Number(data) - 1];
-        if (option) { answerText = option; draw(); return; }
+    if (s.screen === "answer") {
+      if (data === "\x1b") { s.screen = "run"; s.answerText = ""; s.answerOptions = []; s.answerScroll = 0; draw(); return; }
+      if (data === CTRL_U) { s.answerScroll = Math.max(0, s.answerScroll - Math.max(1, Math.floor(s.answerPage / 2))); draw(); return; }
+      if (data === CTRL_D) { s.answerScroll += Math.max(1, Math.floor(s.answerPage / 2)); draw(); return; }
+      if (/^[1-9]$/.test(data) && s.answerOptions.length > 0 && s.answerText.length === 0) {
+        const option = s.answerOptions[Number(data) - 1];
+        if (option) { s.answerText = option; draw(); return; }
       }
       if (data === "\r" || data === "\n") {
-        if (answerText.trim() && selectedRunId) {
+        if (s.answerText.trim() && s.selectedRunId) {
           const detail = runDetailData();
           if (detail) {
             try {
-              appendInbox(detail.dir, { questionId: answerQuestionId, kind: "answer", text: answerText, source: "tui" });
+              appendInbox(detail.dir, { questionId: s.answerQuestionId, kind: "answer", text: s.answerText, source: "tui" });
               notify("answer recorded");
             } catch { notify("could not record answer"); }
           }
         }
-        screen = "run";
-        answerText = "";
-        answerOptions = [];
-        answerScroll = 0;
+        s.screen = "run";
+        s.answerText = "";
+        s.answerOptions = [];
+        s.answerScroll = 0;
         draw();
         return;
       }
-      if (data === "\x7f" || data === "\b") { answerText = answerText.slice(0, -1); draw(); return; }
-      if (!data.startsWith("\x1b")) { answerText += printable(data); draw(); return; }
+      if (data === "\x7f" || data === "\b") { s.answerText = s.answerText.slice(0, -1); draw(); return; }
+      if (!data.startsWith("\x1b")) { s.answerText += printable(data); draw(); return; }
       draw();
       return;
     }
 
-    if (screen === "correct") {
-      if (data === "\x1b") { screen = "run"; correctText = ""; draw(); return; }
-      if (data === "i") { interrupt(runDetailData()?.summary); screen = "run"; draw(); return; }
+    if (s.screen === "correct") {
+      if (data === "\x1b") { s.screen = "run"; s.correctText = ""; draw(); return; }
+      if (data === "i") { interrupt(runDetailData()?.summary); s.screen = "run"; draw(); return; }
       if (data === "\r" || data === "\n") { submitCorrection(); draw(); return; }
-      if (data === "\x7f" || data === "\b") { correctText = correctText.slice(0, -1); draw(); return; }
-      if (!data.startsWith("\x1b")) { correctText += printable(data); draw(); return; }
+      if (data === "\x7f" || data === "\b") { s.correctText = s.correctText.slice(0, -1); draw(); return; }
+      if (!data.startsWith("\x1b")) { s.correctText += printable(data); draw(); return; }
       draw();
       return;
     }
 
-    if (screen === "newrun") {
-      if (modelPick === "newrun") {
-        const list = modelPickEntries;
-        if (data === "\x1b") { modelPick = null; draw(); return; }
+    if (s.screen === "newrun") {
+      if (s.modelPick === "newrun") {
+        const list = s.modelPickEntries;
+        if (data === "\x1b") { s.modelPick = null; draw(); return; }
         if (data === "\t") {
-          modelPickSort = modelPickSort === "price" ? "fit" : "price";
-          modelPickEntries = pickerModels();
-          modelPickSel = 0;
+          s.modelPickSort = s.modelPickSort === "price" ? "fit" : "price";
+          s.modelPickEntries = pickerModels();
+          s.modelPickSel = 0;
           draw();
           return;
         }
-        if (data === "\x1b[A" || data === "k") { modelPickSel = Math.max(0, modelPickSel - 1); draw(); return; }
+        if (data === "\x1b[A" || data === "k") { s.modelPickSel = Math.max(0, s.modelPickSel - 1); draw(); return; }
         if (data === "\x1b[B" || data === "j") {
-          modelPickSel = Math.min(list.length, modelPickSel + 1);
+          s.modelPickSel = Math.min(list.length, s.modelPickSel + 1);
           draw();
           return;
         }
         if (data === "\r" || data === "\n") {
-          if (modelPickSel === 0) {
-            newrun.model = undefined;
+          if (s.modelPickSel === 0) {
+            s.newrun.model = undefined;
           } else {
-            const entry = list[modelPickSel - 1];
+            const entry = list[s.modelPickSel - 1];
             if (!entry) {
               draw();
               return;
@@ -1570,92 +1423,92 @@ export async function runTui(): Promise<void> {
               draw();
               return;
             }
-            newrun.model = entry.row.key;
+            s.newrun.model = entry.row.key;
           }
-          modelPick = null;
-          notify(newrun.model ? `model ${newrun.model}` : "model auto");
+          s.modelPick = null;
+          notify(s.newrun.model ? `model ${s.newrun.model}` : "model auto");
           draw();
           return;
         }
         if (data === "\x7f" || data === "\b") {
-          modelPickText = modelPickText.slice(0, -1);
-          modelPickEntries = pickerModels();
-          modelPickSel = 0;
+          s.modelPickText = s.modelPickText.slice(0, -1);
+          s.modelPickEntries = pickerModels();
+          s.modelPickSel = 0;
           draw();
           return;
         }
         if (!data.startsWith("\x1b")) {
-          modelPickText += printable(data);
-          modelPickEntries = pickerModels();
-          modelPickSel = 0;
+          s.modelPickText += printable(data);
+          s.modelPickEntries = pickerModels();
+          s.modelPickSel = 0;
           draw();
           return;
         }
         draw();
         return;
       }
-      if (packetPick === "newrun") {
-        if (data === "\x1b") { packetPick = null; draw(); return; }
-        if (data === "\x1b[A" || data === "k") { packetPickSel = Math.max(0, packetPickSel - 1); draw(); return; }
-        if (data === "\x1b[B" || data === "j") { const list = pickerPackets(); packetPickSel = Math.min(Math.max(0, list.length - 1), packetPickSel + 1); draw(); return; }
-        if (data === "\r" || data === "\n") { const list = pickerPackets(); const picked = list[packetPickSel]; if (picked) choosePacket(picked); draw(); return; }
-        if (data === "\x7f" || data === "\b") { packetPickText = packetPickText.slice(0, -1); packetPickSel = 0; draw(); return; }
-        if (!data.startsWith("\x1b")) { packetPickText += printable(data); packetPickSel = 0; draw(); return; }
+      if (s.packetPick === "newrun") {
+        if (data === "\x1b") { s.packetPick = null; draw(); return; }
+        if (data === "\x1b[A" || data === "k") { s.packetPickSel = Math.max(0, s.packetPickSel - 1); draw(); return; }
+        if (data === "\x1b[B" || data === "j") { const list = pickerPackets(); s.packetPickSel = Math.min(Math.max(0, list.length - 1), s.packetPickSel + 1); draw(); return; }
+        if (data === "\r" || data === "\n") { const list = pickerPackets(); const picked = list[s.packetPickSel]; if (picked) choosePacket(picked); draw(); return; }
+        if (data === "\x7f" || data === "\b") { s.packetPickText = s.packetPickText.slice(0, -1); s.packetPickSel = 0; draw(); return; }
+        if (!data.startsWith("\x1b")) { s.packetPickText += printable(data); s.packetPickSel = 0; draw(); return; }
         draw();
         return;
       }
-      if (newRunInsert) {
-        if (data === "\x1b") { newRunInsert = false; draw(); return; }
+      if (s.newRunInsert) {
+        if (data === "\x1b") { s.newRunInsert = false; draw(); return; }
         if (data === "\r" || data === "\n") {
-          newrun.prompt += "\n";
+          s.newrun.prompt += "\n";
         } else if (data === "\x7f" || data === "\b") {
-          newrun.prompt = newrun.prompt.slice(0, -1);
+          s.newrun.prompt = s.newrun.prompt.slice(0, -1);
         } else if (!data.startsWith("\x1b")) {
-          newrun.prompt += printable(data);
-          if (newrun.prompt.length > 12_000) newrun.prompt = newrun.prompt.slice(0, 12_000);
+          s.newrun.prompt += printable(data);
+          if (s.newrun.prompt.length > 12_000) s.newrun.prompt = s.newrun.prompt.slice(0, 12_000);
         }
         draw();
         return;
       }
-      if (newRunColon) {
-        newRunColon = false;
+      if (s.newRunColon) {
+        s.newRunColon = false;
         if (data === "!") submitNewRun();
         draw();
         return;
       }
-      if (data === ":") { newRunColon = true; draw(); return; }
-      if (newRunContextFiltering) {
-        if (data === "\x1b") { newRunContextFiltering = false; newRunContextFilter = ""; newRunContextItem = 0; draw(); return; }
-        if (data === "\r" || data === "\n") { newRunContextFiltering = false; newRunContextItem = 0; draw(); return; }
-        if (data === "\x7f" || data === "\b") { newRunContextFilter = newRunContextFilter.slice(0, -1); newRunContextItem = 0; draw(); return; }
-        if (!data.startsWith("\x1b")) { newRunContextFilter += printable(data); newRunContextItem = 0; draw(); return; }
+      if (data === ":") { s.newRunColon = true; draw(); return; }
+      if (s.newRunContextFiltering) {
+        if (data === "\x1b") { s.newRunContextFiltering = false; s.newRunContextFilter = ""; s.newRunContextItem = 0; draw(); return; }
+        if (data === "\r" || data === "\n") { s.newRunContextFiltering = false; s.newRunContextItem = 0; draw(); return; }
+        if (data === "\x7f" || data === "\b") { s.newRunContextFilter = s.newRunContextFilter.slice(0, -1); s.newRunContextItem = 0; draw(); return; }
+        if (!data.startsWith("\x1b")) { s.newRunContextFilter += printable(data); s.newRunContextItem = 0; draw(); return; }
         draw();
         return;
       }
-      if (data === "/") { newRunContextFiltering = true; draw(); return; }
-      if (data === "\x1b") { screen = "list"; draw(); return; }
+      if (data === "/") { s.newRunContextFiltering = true; draw(); return; }
+      if (data === "\x1b") { s.screen = "list"; draw(); return; }
       if (data === "h" || data === "\x1b[D") {
-        newRunContextTab = Math.max(0, newRunContextTab - 1);
-        newRunContextItem = 0;
+        s.newRunContextTab = Math.max(0, s.newRunContextTab - 1);
+        s.newRunContextItem = 0;
         draw();
         return;
       }
       if (data === "l" || data === "\x1b[C") {
-        newRunContextTab = Math.min(NEW_RUN_CONTEXT_TABS.length - 1, newRunContextTab + 1);
-        newRunContextItem = 0;
+        s.newRunContextTab = Math.min(NEW_RUN_CONTEXT_TABS.length - 1, s.newRunContextTab + 1);
+        s.newRunContextItem = 0;
         draw();
         return;
       }
-      if (data === "j") { newRunContextItem += 1; draw(); return; }
-      if (data === "k") { newRunContextItem = Math.max(0, newRunContextItem - 1); draw(); return; }
-      if (data === CTRL_U) { newRunContextItem = Math.max(0, newRunContextItem - 5); draw(); return; }
-      if (data === CTRL_D) { newRunContextItem += 5; draw(); return; }
+      if (data === "j") { s.newRunContextItem += 1; draw(); return; }
+      if (data === "k") { s.newRunContextItem = Math.max(0, s.newRunContextItem - 1); draw(); return; }
+      if (data === CTRL_U) { s.newRunContextItem = Math.max(0, s.newRunContextItem - 5); draw(); return; }
+      if (data === CTRL_D) { s.newRunContextItem += 5; draw(); return; }
       if (data === " ") {
-        const key = newRunContextItemKeys[newRunContextItem];
-        const available = newRunContextItemAvailable[newRunContextItem] === true;
+        const key = s.newRunContextItemKeys[s.newRunContextItem];
+        const available = s.newRunContextItemAvailable[s.newRunContextItem] === true;
         if (key && key.startsWith("packet:")) {
           const slug = key.slice("packet:".length);
-          const packet = readPacketFile(layout(newRunRepo), slug);
+          const packet = readPacketFile(layout(s.newRunRepo), slug);
           if (packet) choosePacket(packet);
           else notify(`packet ${slug} is missing`);
           draw();
@@ -1665,68 +1518,68 @@ export async function runTui(): Promise<void> {
           // Three modes cycle: include (body inlined) → on-demand
           // (description only, pulled with the skill tool) → exclude.
           const name = key.slice("skill:".length);
-          const current = newRunSkillShown.get(name) ?? "on-demand";
+          const current = s.newRunSkillShown.get(name) ?? "on-demand";
           const next: SkillMode = current === "include" ? "on-demand" : current === "on-demand" ? "exclude" : "include";
           if (next === "exclude" && lockedSkills().includes(name)) {
             notify("verified-testing is required by Verify; switch to Direct to exclude it");
             draw();
             return;
           }
-          newRunSkillModes.set(name, next);
-          if (next === "exclude") newRunContextExcluded.add(key);
-          else newRunContextExcluded.delete(key);
+          s.newRunSkillModes.set(name, next);
+          if (next === "exclude") s.newRunContextExcluded.add(key);
+          else s.newRunContextExcluded.delete(key);
         } else if (key && available) {
           if (key.startsWith("file:") || key.startsWith("knowledge:") || key.startsWith("reference:")) {
-            if (newRunContextIncluded.has(key)) newRunContextIncluded.delete(key);
+            if (s.newRunContextIncluded.has(key)) s.newRunContextIncluded.delete(key);
             else {
-              newRunContextIncluded.add(key);
-              newRunContextExcluded.delete(key);
+              s.newRunContextIncluded.add(key);
+              s.newRunContextExcluded.delete(key);
             }
           }
         } else if (key && !key.startsWith("core-tool:") && !key.startsWith("prompt:")) {
-          if (newRunContextExcluded.has(key)) newRunContextExcluded.delete(key);
+          if (s.newRunContextExcluded.has(key)) s.newRunContextExcluded.delete(key);
           else {
-            newRunContextExcluded.add(key);
-            newRunContextIncluded.delete(key);
+            s.newRunContextExcluded.add(key);
+            s.newRunContextIncluded.delete(key);
           }
         }
         draw();
         return;
       }
       if (data === "x") {
-        if (newRunContextSectionKey) {
-          if (newRunContextExcluded.has(newRunContextSectionKey)) newRunContextExcluded.delete(newRunContextSectionKey);
-          else newRunContextExcluded.add(newRunContextSectionKey);
+        if (s.newRunContextSectionKey) {
+          if (s.newRunContextExcluded.has(s.newRunContextSectionKey)) s.newRunContextExcluded.delete(s.newRunContextSectionKey);
+          else s.newRunContextExcluded.add(s.newRunContextSectionKey);
         }
         draw();
         return;
       }
       if (data === "a") { cycleAgent(); draw(); return; }
-      if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
+      if (data === "t") { s.newrun.tier = s.newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
       if (data === "v") {
-        if (!agentIsolates(newrun.agent)) { notify("verify is build-only"); draw(); return; }
+        if (!agentIsolates(s.newrun.agent)) { notify("verify is build-only"); draw(); return; }
         cycleVerify(); draw(); return;
       }
       if (data === "w") {
-        if (!agentIsolates(newrun.agent)) { notify("worktree is build-only"); draw(); return; }
-        newrun.worktree = !newrun.worktree; draw(); return;
+        if (!agentIsolates(s.newrun.agent)) { notify("worktree is build-only"); draw(); return; }
+        s.newrun.worktree = !s.newrun.worktree; draw(); return;
       }
       if (data === "g") { cycleAmbiguity(); draw(); return; }
       if (data === "f") { cycleMinFit(); draw(); return; }
       if (data === "F") { cycleFloors(); draw(); return; }
-      if (data === "i" && newRunContextSectionKey === "section:packets") { startPacketPicker(); draw(); return; }
+      if (data === "i" && s.newRunContextSectionKey === "section:packets") { startPacketPicker(); draw(); return; }
       if (data === "m") { startModelPicker(); draw(); return; }
-      if (data === "e" || data === "p") { newRunInsert = true; draw(); return; }
-      if (data === "X" && newrun.packet) { newrun.packet = undefined; draw(); return; }
+      if (data === "e" || data === "p") { s.newRunInsert = true; draw(); return; }
+      if (data === "X" && s.newrun.packet) { s.newrun.packet = undefined; draw(); return; }
       draw();
       return;
     }
 
-    if (searchMode) {
-      if (data === "\x1b") { searchMode = false; searchText = ""; draw(); return; }
+    if (s.searchMode) {
+      if (data === "\x1b") { s.searchMode = false; s.searchText = ""; draw(); return; }
       if (data === "\r" || data === "\n") { applySearch(); draw(); return; }
-      if (data === "\x7f" || data === "\b") { searchText = searchText.slice(0, -1); draw(); return; }
-      if (!data.startsWith("\x1b")) { searchText += printable(data); draw(); return; }
+      if (data === "\x7f" || data === "\b") { s.searchText = s.searchText.slice(0, -1); draw(); return; }
+      if (!data.startsWith("\x1b")) { s.searchText += printable(data); draw(); return; }
       draw();
       return;
     }
@@ -1734,45 +1587,45 @@ export async function runTui(): Promise<void> {
     // Page switching.
     const tabIndex = Number(data);
     if (data.length === 1 && tabIndex >= 1 && tabIndex <= TABS.length) {
-      page = TABS[tabIndex - 1]!.id as Page;
-      screen = "list";
-      searchText = "";
+      s.page = TABS[tabIndex - 1]!.id as Page;
+      s.screen = "list";
+      s.searchText = "";
       draw();
       return;
     }
     if (data === "\t") {
-      const index = TABS.findIndex((tab) => tab.id === page);
-      page = TABS[(index + 1) % TABS.length]!.id as Page;
-      screen = "list";
-      searchText = "";
+      const index = TABS.findIndex((tab) => tab.id === s.page);
+      s.page = TABS[(index + 1) % TABS.length]!.id as Page;
+      s.screen = "list";
+      s.searchText = "";
       draw();
       return;
     }
     if (data === "q") {
-      if (screen !== "list") { screen = "list"; draw(); return; }
-      if (page !== "runs") { page = "runs"; draw(); return; }
+      if (s.screen !== "list") { s.screen = "list"; draw(); return; }
+      if (s.page !== "runs") { s.page = "runs"; draw(); return; }
       cleanup();
       process.exit(0);
     }
     if (data === "\x1b") {
-      if (screen !== "list") { screen = "list"; draw(); return; }
-      if (page !== "runs") { page = "runs"; draw(); return; }
+      if (s.screen !== "list") { s.screen = "list"; draw(); return; }
+      if (s.page !== "runs") { s.page = "runs"; draw(); return; }
       cleanup();
       process.exit(0);
     }
 
     /* --------------------------------------------------------- runs keys */
-    if (page === "runs" && screen === "list") {
-      const allRuns = listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id));
-      const scopeFiltered = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
+    if (s.page === "runs" && s.screen === "list") {
+      const allRuns = listAllRuns(l.home).filter((run) => !s.deletingRuns.has(run.id));
+      const scopeFiltered = s.runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
       const index = buildRunIndex({
         runs: scopeFiltered,
-        group: runsGroup,
-        collapsed,
-        text: runsText,
-        attentionOnly: runsAttention,
+        group: s.runsGroup,
+        collapsed: s.collapsed,
+        text: s.runsText,
+        attentionOnly: s.runsAttention,
         preferredRepo: l.repoRoot,
-        ...(runsGroup === "packets"
+        ...(s.runsGroup === "packets"
           ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
           : {}),
       });
@@ -1786,9 +1639,9 @@ export async function runTui(): Promise<void> {
         }
         return l.repoRoot;
       };
-      if (data === "\x1b[A" || data === "k") { runsSel = Math.max(0, runsSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { runsSel = Math.min(Math.max(0, index.selectable.length - 1), runsSel + 1); draw(); return; }
-      if (data === "G") { runsSel = Math.max(0, index.selectable.length - 1); draw(); return; }
+      if (data === "\x1b[A" || data === "k") { s.runsSel = Math.max(0, s.runsSel - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { s.runsSel = Math.min(Math.max(0, index.selectable.length - 1), s.runsSel + 1); draw(); return; }
+      if (data === "G") { s.runsSel = Math.max(0, index.selectable.length - 1); draw(); return; }
       const toggleFold = (row: RunRow | undefined): boolean => {
         // A run is a leaf; space on it folds the parent packet/section/repo.
         const target = row?.kind === "run" && row.parent
@@ -1800,38 +1653,38 @@ export async function runTui(): Promise<void> {
           target?.kind !== "packet"
         ) return false;
         if (!target.collapsible) return false;
-        if (collapsed.has(target.id)) collapsed.delete(target.id);
-        else collapsed.add(target.id);
+        if (s.collapsed.has(target.id)) s.collapsed.delete(target.id);
+        else s.collapsed.add(target.id);
         const targetIndex = index.rows.findIndex((candidate) => candidate.id === target.id);
-        if (targetIndex >= 0) runsSel = targetIndex;
+        if (targetIndex >= 0) s.runsSel = targetIndex;
         return true;
       };
       if (data === "\r" || data === "\n") {
-        const row = index.selectable[runsSel];
+        const row = index.selectable[s.runsSel];
         if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); draw(); return; }
-        if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
+        if (row?.kind === "run") { s.selectedRunId = row.run.id; s.runSection = "overview"; s.runScroll = 0; s.screen = "run"; }
         else if (row?.kind === "packet") {
-          selectedPacketSlug = row.slug;
-          packetScroll = 0;
-          screen = "packet";
+          s.selectedPacketSlug = row.slug;
+          s.packetScroll = 0;
+          s.screen = "packet";
         }
         draw();
         return;
       }
       if (data === "a") {
-        const row = index.selectable[runsSel];
+        const row = index.selectable[s.runsSel];
         if (row?.kind !== "run") { notify("select a run to answer"); draw(); return; }
         answerRun(row.run);
         draw();
         return;
       }
       if (data === " ") {
-        toggleFold(index.selectable[runsSel]);
+        toggleFold(index.selectable[s.runsSel]);
         draw();
         return;
       }
       if (data === "n") {
-        const row = index.selectable[runsSel];
+        const row = index.selectable[s.runsSel];
         const packet = row?.kind === "packet" ? row.slug : row?.kind === "run" ? row.run.packetId : undefined;
         startNewRun(packet, repoForRow(row));
         draw();
@@ -1839,48 +1692,48 @@ export async function runTui(): Promise<void> {
       }
       if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
       if (data === "D") {
-        const row = index.selectable[runsSel];
+        const row = index.selectable[s.runsSel];
         if (row?.kind !== "run") { notify("select a run to delete"); draw(); return; }
-        deleteRunTarget = row.run;
-        deleteReturn = "list";
-        screen = "delete";
+        s.deleteRunTarget = row.run;
+        s.deleteReturn = "list";
+        s.screen = "delete";
         draw();
         return;
       }
-      if (data === "!") { runsAttention = !runsAttention; runsSel = 0; draw(); return; }
+      if (data === "!") { s.runsAttention = !s.runsAttention; s.runsSel = 0; draw(); return; }
       if (data === "g") {
-        runsGroup = RUN_GROUPS[(RUN_GROUPS.indexOf(runsGroup) + 1) % RUN_GROUPS.length]!;
-        runsSel = 0;
-        runsScroll = 0;
+        s.runsGroup = RUN_GROUPS[(RUN_GROUPS.indexOf(s.runsGroup) + 1) % RUN_GROUPS.length]!;
+        s.runsSel = 0;
+        s.runsScroll = 0;
         draw();
         return;
       }
       if (data === "f") {
-        runsRepoScope = runsRepoScope === "all" ? "cwd" : "all";
-        runsSel = 0;
-        runsScroll = 0;
-        notify(runsRepoScope === "cwd" ? "showing cwd runs only" : "showing runs from all repos");
+        s.runsRepoScope = s.runsRepoScope === "all" ? "cwd" : "all";
+        s.runsSel = 0;
+        s.runsScroll = 0;
+        notify(s.runsRepoScope === "cwd" ? "showing cwd runs only" : "showing runs from all repos");
         draw();
         return;
       }
-      if (data === "/") { searchMode = true; searchText = searchSeed(); draw(); return; }
+      if (data === "/") { s.searchMode = true; s.searchText = searchSeed(); draw(); return; }
       if (data === "r") { draw(); return; }
       draw();
       return;
     }
 
     /* ------------------------------------------------------ packet keys */
-    if (page === "runs" && screen === "packet") {
-      const slug = selectedPacketSlug;
+    if (s.page === "runs" && s.screen === "packet") {
+      const slug = s.selectedPacketSlug;
       const spawnCli = (args: string[], note: string): void => {
         const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
         spawn(process.execPath, [cliPath, ...args], { detached: true, stdio: "ignore" }).unref();
         notify(note);
         draw();
       };
-      if (data === "\x1b" || data === "q") { screen = "list"; draw(); return; }
-      if (data === "\x1b[A" || data === "k") { packetScroll = Math.max(0, packetScroll - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { packetScroll += 1; draw(); return; }
+      if (data === "\x1b" || data === "q") { s.screen = "list"; draw(); return; }
+      if (data === "\x1b[A" || data === "k") { s.packetScroll = Math.max(0, s.packetScroll - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { s.packetScroll += 1; draw(); return; }
       if (data === "g" && slug) {
         const packet = readPacketFile(l, slug);
         if (packet) {
@@ -1903,121 +1756,121 @@ export async function runTui(): Promise<void> {
     }
 
     /* --------------------------------------------------------- run keys */
-    if (page === "runs" && screen === "run") {
+    if (s.page === "runs" && s.screen === "run") {
       const detail = runDetailData();
-      if (!detail) { screen = "list"; draw(); return; }
+      if (!detail) { s.screen = "list"; draw(); return; }
       const n = detail.events.length;
       const stepTimeline = (direction: -1 | 1): void => {
-        timelineFollow = false;
-        const next = stepTimelineSelection(detail.events, eventSel, direction, timelineVerbose);
-        if (next !== eventSel) {
-          eventSel = next;
-          eventBodyScroll = 0;
+        s.timelineFollow = false;
+        const next = stepTimelineSelection(detail.events, s.eventSel, direction, s.timelineVerbose);
+        if (next !== s.eventSel) {
+          s.eventSel = next;
+          s.eventBodyScroll = 0;
         }
       };
       if (data === "j" || data === "\x1b[B") {
-        if (runSection === "timeline") stepTimeline(1);
-        else if (runSection === "processes") { processFollow = false; processSel++; }
-        else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll++; }
-        else if (runSection === "related") childSel++;
-        else runScroll++;
+        if (s.runSection === "timeline") stepTimeline(1);
+        else if (s.runSection === "processes") { s.processFollow = false; s.processSel++; }
+        else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll++; }
+        else if (s.runSection === "related") s.childSel++;
+        else s.runScroll++;
         draw();
         return;
       }
       if (data === "k" || data === "\x1b[A") {
-        if (runSection === "timeline") stepTimeline(-1);
-        else if (runSection === "processes") { processFollow = false; processSel = Math.max(0, processSel - 1); }
-        else if (runSection === "thinking") { thinkingFollow = false; thinkingScroll = Math.max(0, thinkingScroll - 1); }
-        else if (runSection === "related") childSel = Math.max(0, childSel - 1);
-        else runScroll = Math.max(0, runScroll - 1);
+        if (s.runSection === "timeline") stepTimeline(-1);
+        else if (s.runSection === "processes") { s.processFollow = false; s.processSel = Math.max(0, s.processSel - 1); }
+        else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll = Math.max(0, s.thinkingScroll - 1); }
+        else if (s.runSection === "related") s.childSel = Math.max(0, s.childSel - 1);
+        else s.runScroll = Math.max(0, s.runScroll - 1);
         draw();
         return;
       }
       const moveSection = (delta: number) => {
-        const index = RUN_SECTIONS.indexOf(runSection);
-        runSection = RUN_SECTIONS[(index + delta + RUN_SECTIONS.length) % RUN_SECTIONS.length]!;
-        runScroll = 0;
-        processSel = 0;
-        processFollow = false;
-        eventScroll = 0;
-        eventBodyScroll = 0;
-        if (runSection === "timeline") {
-          timelineFollow = true;
-          const last = lastTimelineIndex(detail.events, timelineVerbose);
-          if (last >= 0) eventSel = last;
+        const index = RUN_SECTIONS.indexOf(s.runSection);
+        s.runSection = RUN_SECTIONS[(index + delta + RUN_SECTIONS.length) % RUN_SECTIONS.length]!;
+        s.runScroll = 0;
+        s.processSel = 0;
+        s.processFollow = false;
+        s.eventScroll = 0;
+        s.eventBodyScroll = 0;
+        if (s.runSection === "timeline") {
+          s.timelineFollow = true;
+          const last = lastTimelineIndex(detail.events, s.timelineVerbose);
+          if (last >= 0) s.eventSel = last;
         }
-        thinkingFollow = true;
+        s.thinkingFollow = true;
         draw();
       };
       if (data === "h" || data === "\x1b[D") { moveSection(-1); return; }
       if (data === "l" || data === "\x1b[C") { moveSection(1); return; }
       if (data === "]" || data === "[") { moveSection(data === "]" ? 1 : -1); return; }
       const toggleEvent = () => {
-        if (runSection !== "timeline") return;
-        timelineFollow = false;
-        while (eventSel < n && !isTimelineEvent(detail.events[eventSel], timelineVerbose)) eventSel += 1;
-        if (eventSel >= n) return;
-        eventBodyScroll = 0;
-        const key = `${detail.summary.id}:${eventSel}`;
-        if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
+        if (s.runSection !== "timeline") return;
+        s.timelineFollow = false;
+        while (s.eventSel < n && !isTimelineEvent(detail.events[s.eventSel], s.timelineVerbose)) s.eventSel += 1;
+        if (s.eventSel >= n) return;
+        s.eventBodyScroll = 0;
+        const key = `${detail.summary.id}:${s.eventSel}`;
+        if (s.expanded.has(key)) s.expanded.delete(key); else s.expanded.add(key);
       };
       if (data === " ") { toggleEvent(); draw(); return; }
       if (data === "f") { forkRun(detail); draw(); return; }
-      if (runSection === "timeline" && data === "F") {
-        timelineFollow = !timelineFollow;
-        if (timelineFollow) {
-          const last = lastTimelineIndex(detail.events, timelineVerbose);
-          if (last >= 0) eventSel = last;
-          eventBodyScroll = 0;
+      if (s.runSection === "timeline" && data === "F") {
+        s.timelineFollow = !s.timelineFollow;
+        if (s.timelineFollow) {
+          const last = lastTimelineIndex(detail.events, s.timelineVerbose);
+          if (last >= 0) s.eventSel = last;
+          s.eventBodyScroll = 0;
         }
-        notify(timelineFollow ? "following latest event" : "follow off");
+        notify(s.timelineFollow ? "following latest event" : "follow off");
         draw();
         return;
       }
-      if (runSection === "timeline" && data === "v") {
-        timelineVerbose = !timelineVerbose;
-        const last = lastTimelineIndex(detail.events, timelineVerbose);
-        if (last >= 0) eventSel = last;
-        eventBodyScroll = 0;
-        notify(timelineVerbose ? "showing all events" : "showing key events");
+      if (s.runSection === "timeline" && data === "v") {
+        s.timelineVerbose = !s.timelineVerbose;
+        const last = lastTimelineIndex(detail.events, s.timelineVerbose);
+        if (last >= 0) s.eventSel = last;
+        s.eventBodyScroll = 0;
+        notify(s.timelineVerbose ? "showing all events" : "showing key events");
         draw();
         return;
       }
       if (data === CTRL_D || data === CTRL_U) {
         const direction = data === CTRL_D ? 1 : -1;
-        if (runSection === "timeline") {
-          timelineFollow = false;
-          eventBodyScroll = Math.max(0, eventBodyScroll + direction * HALF_PAGE);
-        } else if (runSection === "thinking") {
-          thinkingFollow = false;
-          thinkingScroll = Math.max(0, thinkingScroll + direction * HALF_PAGE);
-        } else if (runSection === "processes") {
-          processFollow = false;
-          processSel = Math.max(0, processSel + direction * 5);
-        } else if (runSection === "related") {
-          childSel = Math.max(0, childSel + direction * 5);
+        if (s.runSection === "timeline") {
+          s.timelineFollow = false;
+          s.eventBodyScroll = Math.max(0, s.eventBodyScroll + direction * HALF_PAGE);
+        } else if (s.runSection === "thinking") {
+          s.thinkingFollow = false;
+          s.thinkingScroll = Math.max(0, s.thinkingScroll + direction * HALF_PAGE);
+        } else if (s.runSection === "processes") {
+          s.processFollow = false;
+          s.processSel = Math.max(0, s.processSel + direction * 5);
+        } else if (s.runSection === "related") {
+          s.childSel = Math.max(0, s.childSel + direction * 5);
         } else {
-          runScroll = Math.max(0, runScroll + direction * HALF_PAGE);
+          s.runScroll = Math.max(0, s.runScroll + direction * HALF_PAGE);
         }
         draw();
         return;
       }
-      if (runSection === "processes" && data === "F") {
-        processFollow = !processFollow;
-        if (processFollow) processSel = Math.max(0, reconcileProcessRecords(detail.dir).length - 1);
-        notify(processFollow ? "following latest process" : "follow off");
+      if (s.runSection === "processes" && data === "F") {
+        s.processFollow = !s.processFollow;
+        if (s.processFollow) s.processSel = Math.max(0, reconcileProcessRecords(detail.dir).length - 1);
+        notify(s.processFollow ? "following latest process" : "follow off");
         draw();
         return;
       }
-      if (runSection === "processes" && data === "o") {
-        const record = reconcileProcessRecords(detail.dir)[processSel];
+      if (s.runSection === "processes" && data === "o") {
+        const record = reconcileProcessRecords(detail.dir)[s.processSel];
         if (!record) notify("no process selected");
         else openEditor(record.stdoutLog);
         draw();
         return;
       }
-      if (runSection === "processes" && data === "x") {
-        const record = reconcileProcessRecords(detail.dir)[processSel];
+      if (s.runSection === "processes" && data === "x") {
+        const record = reconcileProcessRecords(detail.dir)[s.processSel];
         if (!record) notify("no process selected");
         else {
           void (async () => {
@@ -2033,7 +1886,7 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (runSection === "processes" && data === "X") {
+      if (s.runSection === "processes" && data === "X") {
         void (async () => {
           const outcome = await terminateAllProcesses(reconcileProcessRecords(detail.dir));
           notify(
@@ -2059,36 +1912,36 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "D") {
-        deleteRunTarget = detail.summary;
-        deleteReturn = "run";
-        screen = "delete";
+        s.deleteRunTarget = detail.summary;
+        s.deleteReturn = "run";
+        s.screen = "delete";
         draw();
         return;
       }
       if (data === "\r" || data === "\n") {
-        if (runSection === "timeline") toggleEvent();
-        else if (runSection === "processes") {
-          const record = reconcileProcessRecords(detail.dir)[processSel];
+        if (s.runSection === "timeline") toggleEvent();
+        else if (s.runSection === "processes") {
+          const record = reconcileProcessRecords(detail.dir)[s.processSel];
           if (!record) notify("no process selected");
           else openEditor(record.stdoutLog);
         }
-        else if (runSection === "related") {
-          const scopeRuns = runsRepoScope === "cwd"
-            ? listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot && !deletingRuns.has(run.id))
-            : listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id));
-          const child = relatedRuns(scopeRuns, detail.summary)[childSel];
-          if (child) { selectedRunId = child.id; runSection = "overview"; screen = "run"; }
+        else if (s.runSection === "related") {
+          const scopeRuns = s.runsRepoScope === "cwd"
+            ? listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot && !s.deletingRuns.has(run.id))
+            : listAllRuns(l.home).filter((run) => !s.deletingRuns.has(run.id));
+          const child = relatedRuns(scopeRuns, detail.summary)[s.childSel];
+          if (child) { s.selectedRunId = child.id; s.runSection = "overview"; s.screen = "run"; }
         }
         draw();
         return;
       }
       if (data === "g") {
-        thinkingFollow = true;
-        if (runSection === "timeline") {
-          timelineFollow = true;
-          const last = lastTimelineIndex(detail.events, timelineVerbose);
-          if (last >= 0) eventSel = last;
-          eventBodyScroll = 0;
+        s.thinkingFollow = true;
+        if (s.runSection === "timeline") {
+          s.timelineFollow = true;
+          const last = lastTimelineIndex(detail.events, s.timelineVerbose);
+          if (last >= 0) s.eventSel = last;
+          s.eventBodyScroll = 0;
         }
         draw();
         return;
@@ -2098,15 +1951,15 @@ export async function runTui(): Promise<void> {
     }
 
     /* ------------------------------------------------------- model keys */
-    if (page === "models" && screen === "model") {
-      if (data === "\x1b[A" || data === "k") { modelScroll = Math.max(0, modelScroll - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { modelScroll++; draw(); return; }
-      if (data === CTRL_U) { modelScroll = Math.max(0, modelScroll - HALF_PAGE); draw(); return; }
-      if (data === CTRL_D) { modelScroll += HALF_PAGE; draw(); return; }
+    if (s.page === "models" && s.screen === "model") {
+      if (data === "\x1b[A" || data === "k") { s.modelScroll = Math.max(0, s.modelScroll - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { s.modelScroll++; draw(); return; }
+      if (data === CTRL_U) { s.modelScroll = Math.max(0, s.modelScroll - HALF_PAGE); draw(); return; }
+      if (data === CTRL_D) { s.modelScroll += HALF_PAGE; draw(); return; }
       if (data === "t") {
-        const row = loadCatalogue(l.catalogueFile)?.models.find((entry) => entry.key === selectedModelKey);
+        const row = loadCatalogue(l.catalogueFile)?.models.find((entry) => entry.key === s.selectedModelKey);
         if (row) {
-          probingModels.add(row.key);
+          s.probingModels.add(row.key);
           void (async () => {
             try {
               const machine = loadMachineConfig(l);
@@ -2116,7 +1969,7 @@ export async function runTui(): Promise<void> {
               saveAvailability(l.home, state);
               notify(`${row.key}: ${result.status}${result.message ? ` (${result.message})` : ""}`);
             } finally {
-              probingModels.delete(row.key);
+              s.probingModels.delete(row.key);
               draw();
             }
           })();
@@ -2124,37 +1977,37 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "p") { notify(selectedModelKey ?? ""); draw(); return; }
-      if (data === "o") { notify(selectedModelKey ?? ""); draw(); return; }
+      if (data === "p") { notify(s.selectedModelKey ?? ""); draw(); return; }
+      if (data === "o") { notify(s.selectedModelKey ?? ""); draw(); return; }
       draw();
       return;
     }
 
     /* ------------------------------------------------------- models list */
-    if (page === "models") {
-      if (data === "\x1b[A" || data === "k") { modelSel = Math.max(0, modelSel - 1); draw(); return; }
+    if (s.page === "models") {
+      if (data === "\x1b[A" || data === "k") { s.modelSel = Math.max(0, s.modelSel - 1); draw(); return; }
       if (data === "\x1b[B" || data === "j") {
-        modelSel = Math.min(Math.max(0, modelDisplay.length - 1), modelSel + 1);
+        s.modelSel = Math.min(Math.max(0, s.modelDisplay.length - 1), s.modelSel + 1);
         draw();
         return;
       }
-      if (data === CTRL_U) { modelSel = Math.max(0, modelSel - HALF_PAGE); draw(); return; }
+      if (data === CTRL_U) { s.modelSel = Math.max(0, s.modelSel - HALF_PAGE); draw(); return; }
       if (data === CTRL_D) {
-        modelSel = Math.min(Math.max(0, modelDisplay.length - 1), modelSel + HALF_PAGE);
+        s.modelSel = Math.min(Math.max(0, s.modelDisplay.length - 1), s.modelSel + HALF_PAGE);
         draw();
         return;
       }
       if (data === " ") {
-        const stop = modelDisplay[modelSel];
+        const stop = s.modelDisplay[s.modelSel];
         if (stop) {
           const key = stop.key;
-          if (modelCollapsed.has(key)) modelCollapsed.delete(key);
+          if (s.modelCollapsed.has(key)) s.modelCollapsed.delete(key);
           else {
-            modelCollapsed.add(key);
+            s.modelCollapsed.add(key);
             // Collapsing from a row would strand the cursor; land on the header.
             if (stop.kind === "row") {
-              const headerIndex = modelDisplay.findIndex((candidate) => candidate.kind === "header" && candidate.key === key);
-              if (headerIndex >= 0) modelSel = headerIndex;
+              const headerIndex = s.modelDisplay.findIndex((candidate) => candidate.kind === "header" && candidate.key === key);
+              if (headerIndex >= 0) s.modelSel = headerIndex;
             }
           }
         }
@@ -2162,63 +2015,63 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "\r" || data === "\n") {
-        const stop = modelDisplay[modelSel];
+        const stop = s.modelDisplay[s.modelSel];
         if (stop?.kind === "header") {
-          if (modelCollapsed.has(stop.key)) modelCollapsed.delete(stop.key);
-          else modelCollapsed.add(stop.key);
-        } else if (stop) { selectedModelKey = stop.row.key; modelScroll = 0; screen = "model"; }
+          if (s.modelCollapsed.has(stop.key)) s.modelCollapsed.delete(stop.key);
+          else s.modelCollapsed.add(stop.key);
+        } else if (stop) { s.selectedModelKey = stop.row.key; s.modelScroll = 0; s.screen = "model"; }
         draw();
         return;
       }
-      if (data === "a") { modelsAll = !modelsAll; modelSel = 0; draw(); return; }
+      if (data === "a") { s.modelsAll = !s.modelsAll; s.modelSel = 0; draw(); return; }
       if (data === "f") {
-        modelsFree = !modelsFree;
+        s.modelsFree = !s.modelsFree;
         // Free offers usually live on providers without paid credentials. Show
         // the whole catalogue while filtering by price, then the user can
         // press a to narrow back to configured providers.
-        if (modelsFree) modelsAll = true;
-        modelSel = 0;
+        if (s.modelsFree) s.modelsAll = true;
+        s.modelSel = 0;
         draw();
         return;
       }
-      if (data === "c") { modelsCoding = !modelsCoding; modelSel = 0; draw(); return; }
+      if (data === "c") { s.modelsCoding = !s.modelsCoding; s.modelSel = 0; draw(); return; }
       if (data === "g") {
         const values: Array<"provider" | "family" | "none"> = ["provider", "family", "none"];
-        modelGroup = values[(values.indexOf(modelGroup) + 1) % values.length]!;
-        modelSel = 0;
-        modelCollapsed.clear();
+        s.modelGroup = values[(values.indexOf(s.modelGroup) + 1) % values.length]!;
+        s.modelSel = 0;
+        s.modelCollapsed.clear();
         draw();
         return;
       }
       if (data === "s") {
         const values: ModelSort[] = ["capability", "fit", "reasoning", "code", "agentic", "general", "context", "price-in", "price-out", "name"];
-        modelSort = values[(values.indexOf(modelSort) + 1) % values.length]!;
-        modelSel = 0;
+        s.modelSort = values[(values.indexOf(s.modelSort) + 1) % values.length]!;
+        s.modelSel = 0;
         draw();
         return;
       }
-      if (data === "/") { searchMode = true; searchText = searchSeed(); draw(); return; }
+      if (data === "/") { s.searchMode = true; s.searchText = searchSeed(); draw(); return; }
       draw();
       return;
     }
 
     /* ------------------------------------------------------- spend keys */
-    if (page === "spend") {
-      if (data === "\x1b[A" || data === "k") { spendScroll = Math.max(0, spendScroll - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { spendScroll++; draw(); return; }
-      if (data === CTRL_U) { spendScroll = Math.max(0, spendScroll - HALF_PAGE); draw(); return; }
-      if (data === CTRL_D) { spendScroll += HALF_PAGE; draw(); return; }
+    if (s.page === "spend") {
+      if (data === "\x1b[A" || data === "k") { s.spendScroll = Math.max(0, s.spendScroll - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { s.spendScroll++; draw(); return; }
+      if (data === CTRL_U) { s.spendScroll = Math.max(0, s.spendScroll - HALF_PAGE); draw(); return; }
+      if (data === CTRL_D) { s.spendScroll += HALF_PAGE; draw(); return; }
       if (data === "g") {
         const values: Array<"provider" | "model" | "day" | "agent"> = ["provider", "model", "day", "agent"];
-        spendBy = values[(values.indexOf(spendBy) + 1) % values.length]!;
-        spendScroll = 0;
+        s.spendBy = values[(values.indexOf(s.spendBy) + 1) % values.length]!;
+        s.spendScroll = 0;
         draw();
         return;
       }
       if (data === "d") {
         const values = [7, 30, 90, 0];
-        spendDaysWindow = values[(values.indexOf(spendDaysWindow) + 1) % values.length]!;
-        spendScroll = 0;
+        s.spendDaysWindow = values[(values.indexOf(s.spendDaysWindow) + 1) % values.length]!;
+        s.spendScroll = 0;
         draw();
         return;
       }
@@ -2228,11 +2081,11 @@ export async function runTui(): Promise<void> {
     }
 
     /* ---------------------------------------------------- settings keys */
-    if (page === "settings") {
-      if (data === "\x1b[A" || data === "k") { settingsSel = Math.max(0, settingsSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { settingsSel++; draw(); return; }
-      if (data === CTRL_U) { settingsSel = Math.max(0, settingsSel - HALF_PAGE); draw(); return; }
-      if (data === CTRL_D) { settingsSel += HALF_PAGE; draw(); return; }
+    if (s.page === "settings") {
+      if (data === "\x1b[A" || data === "k") { s.settingsSel = Math.max(0, s.settingsSel - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { s.settingsSel++; draw(); return; }
+      if (data === CTRL_U) { s.settingsSel = Math.max(0, s.settingsSel - HALF_PAGE); draw(); return; }
+      if (data === CTRL_D) { s.settingsSel += HALF_PAGE; draw(); return; }
       draw();
       return;
     }
@@ -2245,15 +2098,15 @@ export async function runTui(): Promise<void> {
     // accepts the whole chunk (so pastes stay intact); navigation replays each
     // key so held j/k never get dropped.
     const textEntry =
-      screen === "answer" ||
-      screen === "correct" ||
-      searchMode ||
-      (screen === "newrun" && newRunInsert);
+      s.screen === "answer" ||
+      s.screen === "correct" ||
+      s.searchMode ||
+      (s.screen === "newrun" && s.newRunInsert);
     if (textEntry && !chunk.includes("\x1b")) handleKey(chunk);
     else for (const key of splitKeys(chunk)) handleKey(key);
   });
 
-  // Packet picker overlay is drawn after the page body by replacing the body
+  // Packet picker overlay is drawn after the s.page body by replacing the body
   // bottom; keeping it in the draw path above avoids another navigation mode.
   const drawWithPicker = () => {
     const original = draw;
@@ -2285,7 +2138,7 @@ export async function runTui(): Promise<void> {
           });
           if (results.length > 0) {
             saveAvailability(l.home, state);
-            if (!newRunInsert) draw();
+            if (!s.newRunInsert) draw();
           }
         } catch {
           // background availability refresh must never break the TUI
@@ -2294,7 +2147,7 @@ export async function runTui(): Promise<void> {
     }
     // The composer repaints on input; background refreshes would only steal
     // frames from typing.
-    if (!newRunInsert) draw();
+    if (!s.newRunInsert) draw();
   }, 1_000);
   process.stdout.on("resize", draw);
   draw();
