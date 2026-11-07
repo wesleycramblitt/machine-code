@@ -127,6 +127,35 @@ test("composer renders prompt box pinned to the body bottom", () => {
   assert.match(frame.footerCtx, /ctx/);
 });
 
+test("composer plans tab lists plan files for any agent", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const root = mkdtempSync(join(tmpdir(), "mc-tui-plans-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), "# Plan index\n", "utf8");
+    writeFileSync(join(root, "plans", "topic.md"), "# Topic note\n", "utf8");
+    const frame = renderComposer({
+      ...vp,
+      run: { agent: "research", preset: "unrestricted", verification: "verified", worktree: true, ask: true, approval: "human", ambiguity: "precise", tier: "free", floors: "role", prompt: "hello" },
+      repoRoot: root, home: root, insert: false, cursor: 0, colon: false,
+      contextTab: 1, contextItem: 0, contextFilter: "", contextFiltering: false,
+      excluded: new Set(), included: new Set(["plan:plans/topic.md"]), skillModes: new Map(), skillShown: new Map(),
+      preview: { context: { chars: 0, promptChars: 0, sources: [{ kind: "plan", ref: "plans/topic.md", origin: "explicit", depth: 0, chars: 10, exists: true }], issueChain: [], artifacts: { files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] }, warnings: [] } },
+      pickers: { model: null, packet: null },
+      agentIsolates: (agent) => agent === "build",
+      mapTokens: () => [],
+      lockedSkills: () => [],
+    });
+    const text = [...frame.bottomAlign.above, ...frame.bottomAlign.block].join("\n");
+    assert.match(text, /plans\/index\.md/);
+    assert.match(text, /plans\/topic\.md/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("models list renders rows and detail falls back on missing row", () => {
   const frame = renderModelsList({
     ...vp, home: "/tmp", repoRoot: "/tmp", rows: [], group: "provider", collapsed: new Set(),

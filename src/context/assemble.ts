@@ -51,6 +51,8 @@ export interface ContextInclude {
   files?: string[];
   /** Repo-relative knowledge files to add explicitly from the composer. */
   knowledge?: string[];
+  /** Repo-relative plan files to add explicitly from the composer. */
+  plans?: string[];
   /** Reference citations to add explicitly from the composer. */
   references?: string[];
 }
@@ -210,6 +212,24 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     const read = readFileText(abs);
     if (read) {
       pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, band: 1 });
+    }
+  }
+  for (const path of input.include?.plans ?? []) {
+    const abs = withinRepo(layout.repoRoot, path);
+    if (!abs || !existsSync(abs)) {
+      pending.push({
+        kind: "plan",
+        origin: "explicit",
+        ref: path,
+        body: "",
+        band: 1,
+        warning: "included plan is missing or outside the repo",
+      });
+      continue;
+    }
+    const read = readFileText(abs);
+    if (read) {
+      pending.push({ kind: "plan", origin: "explicit", ref: path, body: read.text, band: 1 });
     }
   }
   for (const citation of input.include?.references ?? []) {

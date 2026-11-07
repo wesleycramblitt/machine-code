@@ -153,7 +153,7 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
       if (next === "exclude") s.newRunContextExcluded.add(key);
       else s.newRunContextExcluded.delete(key);
     } else if (key && available) {
-      if (key.startsWith("file:") || key.startsWith("knowledge:") || key.startsWith("reference:")) {
+      if (key.startsWith("file:") || key.startsWith("knowledge:") || key.startsWith("reference:") || key.startsWith("plan:")) {
         if (s.newRunContextIncluded.has(key)) s.newRunContextIncluded.delete(key);
         else {
           s.newRunContextIncluded.add(key);

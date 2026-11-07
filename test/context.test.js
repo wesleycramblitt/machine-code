@@ -296,6 +296,40 @@ test("the plan index is inherited only by the planner", async () => {
   }
 });
 
+test("explicit plan includes load for any agent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-plans-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nShip it.", "utf8");
+    writeFileSync(join(root, "plans", "topic.md"), "# Topic note\nExplicitly included.", "utf8");
+
+    const build = await assembleContext({
+      layout: fakeLayout(root),
+      agent: "build",
+      machine: machine(),
+      include: { plans: ["plans/topic.md", "plans/missing.md"] },
+    });
+    const plans = build.sources.filter((s) => s.kind === "plan");
+    assert.equal(plans.length, 2, "one loaded + one missing warning");
+    assert.ok(plans.some((s) => s.ref === "plans/topic.md" && s.origin === "explicit"));
+    assert.ok(plans.some((s) => s.warning?.includes("missing")));
+    assert.match(build.text, /Explicitly included/);
+
+    // section:plans exclusion drops explicit plans too
+    const excluded = await assembleContext({
+      layout: fakeLayout(root),
+      agent: "build",
+      machine: machine(),
+      include: { plans: ["plans/topic.md"] },
+      exclude: { sections: ["plans"] },
+    });
+    assert.ok(!excluded.sources.some((s) => s.kind === "plan"));
+    assert.doesNotMatch(excluded.text, /Explicitly included/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("context exclusions drop whole sections and individual sources", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-exclude-"));
   try {

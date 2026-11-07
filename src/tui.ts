@@ -421,7 +421,8 @@ export async function runTui(): Promise<void> {
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...s.newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
-    const previewKey = `${s.newRunRepo}\0${s.newrun.packet ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
+    const includedPlansKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("plan:")).sort().join(",");
+    const previewKey = `${s.newRunRepo}\0${s.newrun.packet ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}`;
     const previewTtl = s.newRunInsert ? 60_000 : 5_000;
     if (
       !s.newRunPreviewCache ||
@@ -441,6 +442,9 @@ export async function runTui(): Promise<void> {
           files: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("file:"))
             .map((key) => key.slice("file:".length)),
+          plans: [...s.newRunContextIncluded]
+            .filter((key) => key.startsWith("plan:"))
+            .map((key) => key.slice("plan:".length)),
           defaultSkills: defaultSkillsFor({ agent: s.newrun.agent, verification: s.newrun.verification }),
           skillPresets: roleSkillPresets(s.newrun.agent),
           skillOverrides: Object.fromEntries(s.newRunSkillModes),
@@ -595,12 +599,16 @@ export async function runTui(): Promise<void> {
     const includedKnowledge = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("knowledge:"))
       .map((key) => key.slice("knowledge:".length));
+    const includedPlans = [...s.newRunContextIncluded]
+      .filter((key) => key.startsWith("plan:"))
+      .map((key) => key.slice("plan:".length));
     const includedReferences = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("reference:"))
       .map((key) => key.slice("reference:".length));
-    if (includedKnowledge.length > 0 || includedReferences.length > 0) {
+    if (includedKnowledge.length > 0 || includedPlans.length > 0 || includedReferences.length > 0) {
       args.push("--context-include", JSON.stringify({
         ...(includedKnowledge.length > 0 ? { knowledge: includedKnowledge } : {}),
+        ...(includedPlans.length > 0 ? { plans: includedPlans } : {}),
         ...(includedReferences.length > 0 ? { references: includedReferences } : {}),
       }));
     }

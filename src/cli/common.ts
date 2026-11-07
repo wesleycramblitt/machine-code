@@ -166,7 +166,7 @@ Usage:
                                     takes over if the pinned model fails (same for --provider)
                                     [--context-exclude '<json>'] omit selected context
                                     sections or sources from a run
-                                    [--context-include '<json>'] add knowledge files
+                                    [--context-include '<json>'] add knowledge/plan files
                                     selected in the composer
                                     [--skill-modes '<json>'] per-skill include|on-demand|exclude
   machine_code init                 Check CLIs, config, and repo layout

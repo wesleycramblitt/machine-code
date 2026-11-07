@@ -536,12 +536,12 @@ export async function cmdPack(argv: string[]): Promise<number> {
   const includeFlag = flags.get("context-include");
   if (includeFlag !== undefined) {
     try {
-      const raw = JSON.parse(includeFlag) as { files?: unknown; knowledge?: unknown; references?: unknown };
+      const raw = JSON.parse(includeFlag) as { files?: unknown; knowledge?: unknown; plans?: unknown; references?: unknown };
       const strings = (value: unknown): string[] | undefined =>
         Array.isArray(value)
           ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
           : undefined;
-      include = { files: strings(raw.files), knowledge: strings(raw.knowledge), references: strings(raw.references) };
+      include = { files: strings(raw.files), knowledge: strings(raw.knowledge), plans: strings(raw.plans), references: strings(raw.references) };
     } catch {
       fail("--context-include must be a JSON object");
     }

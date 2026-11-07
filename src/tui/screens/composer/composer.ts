@@ -24,6 +24,7 @@ import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
 import { defaultSkillsFor, resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
 import { discoverKnowledgeFiles } from "../../../context/preview.js";
+import { discoverPlanFiles } from "../../../context/plans.js";
 import { contextBudget } from "../../../context/budget.js";
 import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
 import { listReferenceEntries } from "../../../references/store.js";
@@ -113,6 +114,29 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     referencedToolChars,
   );
   const cachedMap = readCachedMap(repoRoot);
+  const planItems: ContextPanelItem[] = itemsFor(["plan", "project"]);
+  // Every plan file as an available row the user can search and opt into
+  // with space — like knowledge files. Without this the Plans tab only
+  // shows the planner-inherited index and sits empty for other agents.
+  const knownPlans = new Set(planItems.map((item) => item.key));
+  for (const path of discoverPlanFiles(newRunLayout)) {
+    const key = `plan:${path}`;
+    if (knownPlans.has(key)) continue;
+    let size = 0;
+    try {
+      size = statSync(join(newRunLayout.repoRoot, path)).size;
+    } catch {
+      // keep the row visible with an unknown size
+    }
+    planItems.push({
+      text: `${path} · available`,
+      chars: size,
+      exists: true,
+      key,
+      available: true,
+      counted: false,
+    });
+  }
   const fileItems: ContextPanelItem[] = itemsFor(["file"]);
   const knownFiles = new Set(fileItems.map((item) => item.key));
   for (const file of cachedMap?.files ?? []) {
@@ -381,7 +405,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     }));
   const sections = [
     { label: "Packets", tone: Y, sectionKey: "section:packets", items: packetItems },
-    { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: itemsFor(["plan", "project"]) },
+    { label: "Plans", tone: contextTone("plan"), sectionKey: "section:plans", items: planItems },
     { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
     { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
     { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
@@ -396,7 +420,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const row = item as ContextPanelItem;
     return (
       row.available === true &&
-      (row.key.startsWith("file:") || row.key.startsWith("knowledge:") || row.key.startsWith("reference:")) &&
+      (row.key.startsWith("file:") || row.key.startsWith("knowledge:") || row.key.startsWith("reference:") || row.key.startsWith("plan:")) &&
       included.has(row.key)
     );
   };

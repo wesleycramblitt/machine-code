@@ -63,6 +63,8 @@ export interface PreviewContextOptions {
   knowledgeIndex?: string;
   /** Explicit repo-relative files selected in the composer. */
   files?: string[];
+  /** Explicit repo-relative plan files selected in the composer. */
+  plans?: string[];
   /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
   defaultSkills?: string[];
   /** Role `[skills]` preset table (from the agent's role TOML). */
@@ -95,6 +97,17 @@ export function previewContext(
     chars += size;
     sources.push({ kind: "file", ref: path, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`file ${path} is missing or outside the repo`);
+  }
+
+  for (const path of options.plans ?? []) {
+    const root = resolve(layout.repoRoot);
+    const abs = resolve(root, path);
+    const inside = abs === root || abs.startsWith(root + sep);
+    const exists = inside && existsSync(abs);
+    const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
+    chars += size;
+    sources.push({ kind: "plan", ref: path, origin: "explicit", depth: 0, chars: size, exists });
+    if (!exists) warnings.push(`plan ${path} is missing or outside the repo`);
   }
 
   if (options.packet) {
