@@ -1895,8 +1895,8 @@ export async function runTui(): Promise<void> {
     const hideFooter = screen === "newrun" && newRunInsert;
     const bodyH = Math.max(1, rows - header.length - footerReserve);
 
-    const scopeRuns = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
-    const filteredRuns = runsListScreen ? scopeRuns : [];
+    const scopedRuns = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
+    const filteredRuns = runsListScreen ? scopedRuns : [];
     const runIndex = buildRunIndex({
       runs: filteredRuns,
       issuesByRepo: runsListScreen ? issueCachesByRepo : new Map(),
@@ -3311,7 +3311,11 @@ export async function runTui(): Promise<void> {
           readInbox(detail.dir),
         );
         const context = readContextManifest(detail.dir);
-        const relatedList = relatedRuns(allRuns, s);
+        // Related runs honor the repo scope: the panel must not resurrect
+        // rows the list hides when the human filtered to the cwd. The Enter
+        // handler below selects from the same scoped list, so navigation and
+        // rendering agree.
+        const relatedList = relatedRuns(scopedRuns, s);
         const thinking = thinkingChunks(ev);
         const outcomeText =
           s.summary ??
@@ -4899,7 +4903,10 @@ export async function runTui(): Promise<void> {
           else openEditor(record.stdoutLog);
         }
         else if (runSection === "related") {
-          const child = relatedRuns(listAllRuns(l.home), detail.summary)[childSel];
+          const scopeRuns = runsRepoScope === "cwd"
+            ? listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot && !deletingRuns.has(run.id))
+            : listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id));
+          const child = relatedRuns(scopeRuns, detail.summary)[childSel];
           if (child) { selectedRunId = child.id; runSection = "overview"; screen = "run"; }
         }
         draw();
