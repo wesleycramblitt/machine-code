@@ -37,6 +37,13 @@ import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList
 import { renderAnswer } from "./tui/screens/answer.js";
 import { TABS, renderFooterRows, renderHeader, rightHeaderPath } from "./tui/screens/chrome.js";
 import { renderComposer } from "./tui/screens/composer/composer.js";
+import { handleAnswerKeys } from "./tui/screens/answer-keys.js";
+import { handleCorrectKeys } from "./tui/screens/correct-keys.js";
+import { handleDeleteKeys } from "./tui/screens/delete-keys.js";
+import { handlePacketKeys } from "./tui/screens/packet-keys.js";
+import { handleSettingsKeys } from "./tui/screens/settings-keys.js";
+import { handleSpendKeys } from "./tui/screens/spend-keys.js";
+import type { KeyServices } from "./tui/screens/keys.js";
 import { renderCorrect } from "./tui/screens/correct.js";
 import { renderRunDetail } from "./tui/screens/run-detail/run-detail.js";
 import { RUN_SECTIONS, RUN_SECTION_LABEL, type RunSection } from "./tui/screens/run-detail/types.js";
@@ -1298,6 +1305,15 @@ export async function runTui(): Promise<void> {
 
   /* ------------------------------------------------------------- input */
 
+  const keyCtx: KeyServices = {
+    draw, notify, launch, openEditor, startNewRun, forkRun, answerRun,
+    interrupt, startCorrect, submitCorrection, runDetailData, pendingForRun,
+    cycleAgent, cycleVerify, cycleAmbiguity, cycleMinFit, cycleFloors,
+    enforceLockedSkills, startPacketPicker, pickerPackets, choosePacket,
+    pickerModels, startModelPicker, buildNewRunArgs, submitNewRun, searchSeed,
+    repoRoot: l.repoRoot,
+  };
+
   const handleKey = (data: string) => {
     if (data === "\x03") {
       cleanup();
@@ -1305,93 +1321,9 @@ export async function runTui(): Promise<void> {
     }
 
     // Text-entry modes take precedence over global navigation.
-    if (s.screen === "delete") {
-      if (data === "\x1b") { s.deleteRunTarget = undefined; s.screen = s.deleteReturn; draw(); return; }
-      if (data === "D" && s.deleteRunTarget) {
-        const run = s.deleteRunTarget;
-        s.deletingRuns.add(run.id);
-        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-        const child = spawn(
-          process.execPath,
-          [cliPath, "runs", "delete", run.id, "--yes"],
-          {
-            cwd: l.repoRoot,
-            stdio: ["ignore", "pipe", "pipe"],
-            env: process.env,
-          },
-        );
-        let stdout = "";
-        let stderr = "";
-        child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-        child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-        child.on("close", (code) => {
-          const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
-          try {
-            writeFileSync(join(l.localDir, "delete.log"), `${new Date().toISOString()} run ${run.id}\n${output}\n`, "utf8");
-          } catch {
-            // best-effort diagnostics
-          }
-          if (code === 0) {
-            notify(`deleted run ${run.id}`);
-          } else {
-            s.deletingRuns.delete(run.id);
-            const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
-            notify(`delete failed for run ${run.id}: ${trunc(last, 80)}`);
-          }
-          draw();
-        });
-        notify(`deleting run ${run.id}`);
-        s.deleteRunTarget = undefined;
-        s.selectedRunId = null;
-        s.screen = "list";
-        s.page = "runs";
-        draw();
-        return;
-      }
-      draw();
-      return;
-    }
-    if (s.screen === "answer") {
-      if (data === "\x1b") { s.screen = "run"; s.answerText = ""; s.answerOptions = []; s.answerScroll = 0; draw(); return; }
-      if (data === CTRL_U) { s.answerScroll = Math.max(0, s.answerScroll - Math.max(1, Math.floor(s.answerPage / 2))); draw(); return; }
-      if (data === CTRL_D) { s.answerScroll += Math.max(1, Math.floor(s.answerPage / 2)); draw(); return; }
-      if (/^[1-9]$/.test(data) && s.answerOptions.length > 0 && s.answerText.length === 0) {
-        const option = s.answerOptions[Number(data) - 1];
-        if (option) { s.answerText = option; draw(); return; }
-      }
-      if (data === "\r" || data === "\n") {
-        if (s.answerText.trim() && s.selectedRunId) {
-          const detail = runDetailData();
-          if (detail) {
-            try {
-              appendInbox(detail.dir, { questionId: s.answerQuestionId, kind: "answer", text: s.answerText, source: "tui" });
-              notify("answer recorded");
-            } catch { notify("could not record answer"); }
-          }
-        }
-        s.screen = "run";
-        s.answerText = "";
-        s.answerOptions = [];
-        s.answerScroll = 0;
-        draw();
-        return;
-      }
-      if (data === "\x7f" || data === "\b") { s.answerText = s.answerText.slice(0, -1); draw(); return; }
-      if (!data.startsWith("\x1b")) { s.answerText += printable(data); draw(); return; }
-      draw();
-      return;
-    }
-
-    if (s.screen === "correct") {
-      if (data === "\x1b") { s.screen = "run"; s.correctText = ""; draw(); return; }
-      if (data === "i") { interrupt(runDetailData()?.summary); s.screen = "run"; draw(); return; }
-      if (data === "\r" || data === "\n") { submitCorrection(); draw(); return; }
-      if (data === "\x7f" || data === "\b") { s.correctText = s.correctText.slice(0, -1); draw(); return; }
-      if (!data.startsWith("\x1b")) { s.correctText += printable(data); draw(); return; }
-      draw();
-      return;
-    }
-
+    if (s.screen === "delete") return handleDeleteKeys(s, keyCtx, data);
+    if (s.screen === "answer") return handleAnswerKeys(s, keyCtx, data);
+    if (s.screen === "correct") return handleCorrectKeys(s, keyCtx, data);
     if (s.screen === "newrun") {
       if (s.modelPick === "newrun") {
         const list = s.modelPickEntries;
@@ -1723,38 +1655,7 @@ export async function runTui(): Promise<void> {
     }
 
     /* ------------------------------------------------------ packet keys */
-    if (s.page === "runs" && s.screen === "packet") {
-      const slug = s.selectedPacketSlug;
-      const spawnCli = (args: string[], note: string): void => {
-        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-        spawn(process.execPath, [cliPath, ...args], { detached: true, stdio: "ignore" }).unref();
-        notify(note);
-        draw();
-      };
-      if (data === "\x1b" || data === "q") { s.screen = "list"; draw(); return; }
-      if (data === "\x1b[A" || data === "k") { s.packetScroll = Math.max(0, s.packetScroll - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { s.packetScroll += 1; draw(); return; }
-      if (data === "g" && slug) {
-        const packet = readPacketFile(l, slug);
-        if (packet) {
-          const order = ["gates", "agent", "human"] as const;
-          const idx = order.indexOf((packet.review ?? "gates") as (typeof order)[number]);
-          packet.review = order[(idx + 1) % order.length]!;
-          writePacketFile(l, packet);
-          void commitPlanningFiles(l, `plans: gate ${slug}`);
-          notify(`${slug} gate → ${packet.review}`);
-        }
-        draw();
-        return;
-      }
-      if (data === "o") { spawnCli(["batch"], "orchestration started (batch)"); return; }
-      if (data === "b" && slug) { spawnCli(["build", slug], `build ${slug} started`); return; }
-      if (data === "a" && slug) { spawnCli(["approve", slug], `approve ${slug} queued`); return; }
-      if (data === "d" && slug) { spawnCli(["delete", slug], `delete ${slug} queued`); return; }
-      draw();
-      return;
-    }
-
+    if (s.page === "runs" && s.screen === "packet") return handlePacketKeys(s, keyCtx, data);
     /* --------------------------------------------------------- run keys */
     if (s.page === "runs" && s.screen === "run") {
       const detail = runDetailData();
@@ -2056,39 +1957,9 @@ export async function runTui(): Promise<void> {
     }
 
     /* ------------------------------------------------------- spend keys */
-    if (s.page === "spend") {
-      if (data === "\x1b[A" || data === "k") { s.spendScroll = Math.max(0, s.spendScroll - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { s.spendScroll++; draw(); return; }
-      if (data === CTRL_U) { s.spendScroll = Math.max(0, s.spendScroll - HALF_PAGE); draw(); return; }
-      if (data === CTRL_D) { s.spendScroll += HALF_PAGE; draw(); return; }
-      if (data === "g") {
-        const values: Array<"provider" | "model" | "day" | "agent"> = ["provider", "model", "day", "agent"];
-        s.spendBy = values[(values.indexOf(s.spendBy) + 1) % values.length]!;
-        s.spendScroll = 0;
-        draw();
-        return;
-      }
-      if (data === "d") {
-        const values = [7, 30, 90, 0];
-        s.spendDaysWindow = values[(values.indexOf(s.spendDaysWindow) + 1) % values.length]!;
-        s.spendScroll = 0;
-        draw();
-        return;
-      }
-      if (data === "r") { draw(); return; }
-      draw();
-      return;
-    }
-
+    if (s.page === "spend") return handleSpendKeys(s, keyCtx, data);
     /* ---------------------------------------------------- settings keys */
-    if (s.page === "settings") {
-      if (data === "\x1b[A" || data === "k") { s.settingsSel = Math.max(0, s.settingsSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { s.settingsSel++; draw(); return; }
-      if (data === CTRL_U) { s.settingsSel = Math.max(0, s.settingsSel - HALF_PAGE); draw(); return; }
-      if (data === CTRL_D) { s.settingsSel += HALF_PAGE; draw(); return; }
-      draw();
-      return;
-    }
+    if (s.page === "settings") return handleSettingsKeys(s, keyCtx, data);
 
     draw();
   };
