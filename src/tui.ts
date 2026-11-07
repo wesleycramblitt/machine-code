@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
+import { renderPlan, readPacketFile, writePacketFile, type PlanItem } from "./plan/packets.js";
 import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -161,7 +162,7 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
   };
 }
 
-type Page = "runs" | "models" | "spend" | "settings";
+type Page = "runs" | "models" | "spend" | "settings" | "plans";
 type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline" | "delete";
 type PipelineScope = { kind: "epic" | "feature"; ref: IssueRef };
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
@@ -173,6 +174,7 @@ const TABS: Array<{ id: Page; label: string; key: string }> = [
   { id: "models", label: "Models", key: "2" },
   { id: "spend", label: "Spend", key: "3" },
   { id: "settings", label: "Settings", key: "4" },
+  { id: "plans", label: "Plans", key: "5" },
 ];
 const PAGE_IDS = new Set<Page>(TABS.map((tab) => tab.id));
 const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "related", "context"];
@@ -804,6 +806,8 @@ export async function runTui(): Promise<void> {
   const modelCollapsed = new Set<string>();
   /** Cursor stops in render order: group headers plus visible model rows. */
   let modelDisplay: Array<{ kind: "header"; key: string } | { kind: "row"; key: string; row: CatalogueRow }> = [];
+  /** Index of the last row Enter opened, so the list can restore it exactly. */
+  let lastOpenedModelKey: string | null = null;
   let selectedModelKey: string | null = null;
   /** Catalogue + provider cache: the 1MB models.json stays parsed across frames. */
   let catalogueCache: { mtime: number; doc: CatalogueDocument | null } | null = null;
@@ -815,6 +819,9 @@ export async function runTui(): Promise<void> {
 
   let settingsSel = 0;
   let settingsScroll = 0;
+
+  let planSel = 0;
+  let planScroll = 0;
 
   let selectedIssueKey: string | null = null;
   let selectedRunId: string | null = null;
@@ -3321,6 +3328,59 @@ export async function runTui(): Promise<void> {
       secondary = row ? `${D}${row.label} · ${settingsFileFor(l, row) ?? "(no file)"}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "";
     }
 
+    /* ------------------------------------------------------------ plans */
+    else if (page === "plans") {
+      const rows: PlanItem[] = [];
+      try {
+        rows.push(...renderPlan(l).items);
+      } catch {
+        // Fall through to the empty plan message.
+      }
+      let lastHeading = "";
+      let selectedLine = 0;
+      const lines: string[] = [];
+      const statusTone = (status: string | undefined): string =>
+        status === "in-progress" ? C : status === "blocked" ? Y : status === "done" ? G : D;
+      for (let i = 0; i < rows.length; i++) {
+        const it = rows[i]!;
+        if (it.heading !== lastHeading) {
+          lastHeading = it.heading;
+          lines.push(background(fit(` ${B}${theme.sectionFg}${(it.heading || "Plan").toUpperCase()}${R}`, cols), theme.sectionBg));
+        }
+        if (i === planSel) selectedLine = lines.length;
+        const sel = i === planSel;
+        const slug = it.slug ?? "";
+        const label = slug || it.title || it.slug || "(item)";
+        const title = slug && it.title ? ` — ${trunc(it.title, Math.max(8, cols - (narrow ? 28 : 46)))}` : "";
+        const statusTag = it.done
+          ? `  ${G}✓ done${R}`
+          : it.hasPacket
+            ? `  ${statusTone(it.status)}${it.status ?? "todo"}${R}`
+            : "  ·";
+        const branchTag = slug && !it.done && it.hasPacket ? `  ${D}⤳ mc/${slug}${R}` : "";
+        lines.push(`${sel ? C + "▸" : " "} ${trunc(label, narrow ? 26 : 40)}${title}${statusTag}${branchTag}`);
+        if (it.blocked && !it.done) lines.push(`       ${Y}blocked: ${trunc(it.blocked, cols - 10)}${R}`);
+      }
+      if (rows.length === 0) {
+        lines.push(` ${D}no plan yet — capture work with ${W}\`machine_code packet create <slug> "…"\`${R}`);
+      }
+      const w = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), planScroll, bodyH);
+      planScroll = w.scroll;
+      body = clipBody(w.lines);
+      const selItem = rows[Math.min(planSel, Math.max(0, rows.length - 1))];
+      actions = joinCommands([
+        command("j/k", "Select"),
+        command("e", "Detail", selItem?.slug ?? undefined, selItem?.slug ? C : D),
+        command("b", "Build", selItem?.hasPacket ? undefined : "none", selItem?.hasPacket ? GR : D),
+        command("s", "Status", undefined, Y),
+        command("a", "Approve", undefined, G),
+        command("d", "Delete", undefined, RED),
+      ]);
+      secondary = selItem?.slug
+        ? `${D}${selItem.slug}${selItem.status ? ` · ${selItem.status}` : ""} · ${toast ? `${Y}${toast}${R} · ` : ""}plans/${selItem.slug}.md${R}`
+        : `${D}plans/plan.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+    }
+
     /* ------------------------------------------------------------- run */
     else if (page === "runs" && screen === "run") {
       const detail = runDetailData();
@@ -4609,6 +4669,68 @@ export async function runTui(): Promise<void> {
       if (page !== "runs") { page = "runs"; draw(); return; }
       cleanup();
       process.exit(0);
+    }
+
+    /* -------------------------------------------------------- plans keys */
+    if (page === "plans") {
+      let items: PlanItem[] = [];
+      try {
+        items = renderPlan(l).items;
+      } catch {
+        // Fall through with the empty selection.
+      }
+      if (data === "\x1b[A" || data === "k") { planSel = Math.max(0, planSel - 1); draw(); return; }
+      if (data === "\x1b[B" || data === "j") { planSel = Math.min(Math.max(0, items.length - 1), planSel + 1); draw(); return; }
+      if (data === "r") { draw(); return; }
+      const current = items[Math.min(planSel, Math.max(0, items.length - 1))];
+      const slug = current?.slug;
+      if (data === "e" || data === "\r" || data === "\n") {
+        if (!slug) { notify("no packet — create with `packet create <slug>`"); draw(); return; }
+        const packet = readPacketFile(l, slug);
+        notify(
+          packet
+            ? `${packet.deliverable || slug}${packet.verify.length ? ` · verify: ${packet.verify.join(", ")}` : ""}${packet.files.length ? ` · files: ${packet.files.join(", ")}` : ""}`
+            : `${slug} (no packet file)`,
+        );
+        draw();
+        return;
+      }
+      if (data === "s") {
+        if (!slug) { notify("select a packet"); draw(); return; }
+        const packet = readPacketFile(l, slug);
+        if (!packet) { notify("no packet"); draw(); return; }
+        const order = ["todo", "in-progress", "blocked"] as const;
+        const idx = order.indexOf(packet.status as (typeof order)[number]);
+        packet.status = idx < 0 ? "todo" : order[(idx + 1) % order.length]!;
+        writePacketFile(l, packet);
+        notify(`${slug} → ${packet.status}`);
+        draw();
+        return;
+      }
+      const spawnCli = (args: string[], note: string): void => {
+        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+        const child = spawn(process.execPath, [cliPath, ...args], { detached: true, stdio: "ignore" });
+        child.unref();
+        notify(note);
+        draw();
+      };
+      if (data === "b") {
+        if (!slug || !current?.hasPacket) { notify("select a packet to build"); draw(); return; }
+        spawnCli(["build", slug], `build ${slug} started (background)`);
+        return;
+      }
+      if (data === "a") {
+        if (!slug) { notify("select a packet to approve"); draw(); return; }
+        spawnCli(["approve", slug], `approve ${slug} queued`);
+        return;
+      }
+      if (data === "d") {
+        if (!slug) { notify("select a packet to delete"); draw(); return; }
+        spawnCli(["delete", slug], `delete ${slug} queued`);
+        return;
+      }
+      draw();
+      return;
     }
 
     /* --------------------------------------------------------- runs keys */

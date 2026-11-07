@@ -228,7 +228,7 @@ export function reusableWorktreeOwner(
 
 /* ------------------------------------------------------------- creation */
 
-export type WorktreeKind = "feature" | "run";
+export type WorktreeKind = "feature" | "run" | "packet";
 
 export interface WorktreeRequest {
   layout: Layout;
@@ -238,6 +238,8 @@ export interface WorktreeRequest {
   issueNumber?: number;
   /** Feature title: the branch slug comes from here when creating. */
   issueTitle?: string;
+  /** Packet slug for `kind === "packet"`; branch is `mc/<slug>`. */
+  slug?: string;
   /** Explicit base branch/ref override. */
   base?: string;
   /** Queue packets: materialize the packet snapshot into the worktree. */
@@ -294,10 +296,14 @@ export async function findFeatureBranch(mainRoot: string, number: number): Promi
   return slugged[0];
 }
 
-function branchFor(kind: WorktreeKind, runId: string, issueNumber?: number, issueTitle?: string): string {
+function branchFor(kind: WorktreeKind, runId: string, issueNumber?: number, issueTitle?: string, slug?: string): string {
   if (kind === "feature") {
     if (!issueNumber) throw new WorktreeError("issue_required", "a feature worktree needs --issue <n>");
     return featureBranchFor(issueNumber, issueTitle);
+  }
+  if (kind === "packet") {
+    if (!slug) throw new WorktreeError("slug_required", "a packet worktree needs --slug");
+    return `mc/${slug}`;
   }
   return `mc/run/${runId}`;
 }
@@ -371,7 +377,7 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   // never strand work on a second branch.
   const existingBranch =
     req.kind === "feature" && req.issueNumber ? await findFeatureBranch(mainRoot, req.issueNumber) : undefined;
-  const branch = existingBranch ?? branchFor(req.kind, req.runId, req.issueNumber, req.issueTitle);
+  const branch = existingBranch ?? branchFor(req.kind, req.runId, req.issueNumber, req.issueTitle, req.slug);
   const createdBranches: string[] = [];
 
   // Clean preflight always applies to the MAIN worktree.
