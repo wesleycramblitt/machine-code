@@ -43,7 +43,7 @@ function tempDir(prefix) {
 test("role presets resolve to the documented defaults", () => {
   const planner = resolveAgentConfig({ role: "planner" });
   assert.equal(planner.preset, "plan");
-  assert.equal(planner.issueAccess, "create");
+  assert.equal(planner.issueAccess, "none");
 
   const review = resolveAgentConfig({ role: "review" });
   assert.equal(review.preset, "review");
@@ -153,9 +153,9 @@ test("capability matrix: build, review, research, planner", () => {
   assert.ok(!hasCapability(general, "issue:read"));
 
   const planner = capabilitiesFor("planner", { ...PRESETS.plan });
-  assert.ok(hasCapability(planner, "issue:create"));
-  assert.ok(hasCapability(planner, "issue:plan"));
-  assert.ok(hasCapability(planner, "issue:read"));
+  assert.ok(hasCapability(planner, "code:read"));
+  assert.ok(hasCapability(planner, "knowledge:write"));
+  assert.ok(!hasCapability(planner, "issue:read"));
   assert.ok(!hasCapability(planner, "code:write"));
 });
 
@@ -164,10 +164,10 @@ test("issue_access is one resolved level and derives capabilities", () => {
   try {
     const layout = fakeLayout(root);
     const planner = resolveAgent(layout, "planner");
-    assert.equal(planner.config.issueAccess, "create");
-    assert.ok(hasCapability(planner.capabilities, "issue:create"));
-    assert.ok(hasCapability(planner.capabilities, "issue:plan"));
-    assert.ok(planner.def.tools.includes("issue"));
+    assert.equal(planner.config.issueAccess, "none");
+    assert.ok(!hasCapability(planner.capabilities, "issue:create"));
+    assert.ok(!hasCapability(planner.capabilities, "issue:plan"));
+    assert.ok(!planner.def.tools.includes("issue"));
 
     const build = resolveAgent(layout, "build");
     assert.equal(build.config.issueAccess, "read");
@@ -185,7 +185,7 @@ test("issue_access is one resolved level and derives capabilities", () => {
     assert.ok(hasCapability(planOnly.capabilities, "issue:plan"));
     assert.ok(!hasCapability(planOnly.capabilities, "issue:create"));
 
-    assert.equal(issueAccessFromCapabilities(planner.capabilities), "create");
+    assert.equal(issueAccessFromCapabilities(planner.capabilities), "none");
     assert.equal(issueAccessFromCapabilities(["issue:read", "issue:write"]), "plan");
     assert.equal(issueAccessFromCapabilities(build.capabilities), "read");
     assert.equal(issueAccessFromCapabilities(planOnly.capabilities), "plan");
@@ -204,7 +204,7 @@ test("tools are capability-gated and no role has the task tool", () => {
     const plan = resolveAgent(layout, "planner");
     assert.ok(!plan.def.tools.includes("task"));
     assert.ok(plan.def.tools.includes("ask"));
-    assert.ok(!plan.def.tools.includes("write"), "read-only roles never hold write");
+    assert.ok(plan.def.tools.includes("write"), "planner writes packet files");
 
     const build = resolveAgent(layout, "build");
     assert.ok(!build.def.tools.includes("task"));

@@ -50,23 +50,21 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     }
 
     const planner = resolveAgent(l, "planner");
-    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "issue", "issue_graph", "artifact", "skill"]);
+    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "skill", "write"]);
     assert.ok(!planner.def.tools.includes("command"), "planner must not hold command");
     assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
-    assert.match(planner.prompt, /Inspect tree/);
-    assert.match(planner.prompt, /Reuse an Epic\/Feature; else create the chain/);
-    assert.match(planner.prompt, /Epic→Features only/);
-    assert.match(planner.prompt, /One Feature = one worktree\/branch unit/);
-    assert.match(planner.prompt, /do not write files/);
-    assert.match(planner.prompt, /Read the named plan/);
-    assert.match(planner.prompt, /context_files/);
-    assert.match(planner.prompt, /## Context/);
-    assert.match(planner.prompt, /repair legacy context/);
-    assert.match(planner.prompt, /<=3 acceptance criteria/);
-    assert.match(planner.prompt, /as Features/);
-    assert.match(planner.prompt, /Create named issues/);
-    assert.match(planner.prompt, /Verify plan ready/);
-    assert.match(planner.prompt, /blocked_by between deliverables/);
+    assert.match(planner.prompt, /Read the plan map/);
+    assert.match(planner.prompt, /plans\/index\.md/);
+    assert.match(planner.prompt, /packets\/<slug>\.md/);
+    assert.match(planner.prompt, /## Deliverable/);
+    assert.match(planner.prompt, /## Files/);
+    assert.match(planner.prompt, /## Acceptance/);
+    assert.match(planner.prompt, /## Verify/);
+    assert.match(planner.prompt, /<=3/);
+    assert.match(planner.prompt, /one file-level change/);
+    assert.match(planner.prompt, /Do not edit source code/);
+    assert.match(planner.prompt, /→ packets\//);
+    assert.match(planner.prompt, /the slugs you created/);
 
     const build = resolveAgent(l, "build");
     assert.match(build.prompt, /Feature Deliverable/);
