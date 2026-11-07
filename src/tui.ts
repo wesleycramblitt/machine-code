@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { renderPlan, readPacketFile, writePacketFile, listPacketFiles, planCategories, type PlanItem } from "./plan/packets.js";
+import { renderPlan, readPacketFile, writePacketFile, renderPacketFile, listPacketFiles, planCategories, type PlanItem } from "./plan/packets.js";
 import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -71,6 +71,7 @@ import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } f
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
 import type { FeatureStatus } from "./tasks/lifecycle.js";
+import { commitPlanningFiles } from "./tasks/packet.js";
 
 /* --------------------------------------------------------------- terminal */
 
@@ -821,6 +822,8 @@ export async function runTui(): Promise<void> {
 
   let planSel = 0;
   let planScroll = 0;
+  let planDetail: string | null = null;
+  let planDetailScroll = 0;
 
   let selectedIssueKey: string | null = null;
   let selectedRunId: string | null = null;
@@ -3341,6 +3344,19 @@ export async function runTui(): Promise<void> {
 
     /* ------------------------------------------------------------ plans */
     else if (page === "plans") {
+      if (planDetail) {
+        const packet = readPacketFile(l, planDetail);
+        const detailLines = packet ? renderPacketFile(packet).split("\n") : [` ${Y}no packet ${planDetail}${R}`];
+        const w = selectableLines(detailLines, planDetailScroll, planDetailScroll, bodyH);
+        planDetailScroll = w.scroll;
+        body = clipBody(w.lines);
+        actions = joinCommands([
+          command("g", "Gate", packet?.review ?? "gates", packet?.review === "agent" ? C : packet?.review === "human" ? Y : D),
+          command("j/k", "Scroll"),
+          command("esc", "Back"),
+        ]);
+        secondary = `${D}packets/${planDetail}.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+      } else {
       const rows: PlanItem[] = [];
       try {
         rows.push(...renderPlan(l).items);
@@ -3388,8 +3404,9 @@ export async function runTui(): Promise<void> {
         command("d", "Delete", undefined, RED),
       ]);
       secondary = selItem?.slug
-        ? `${D}${selItem.slug}${selItem.status ? ` · ${selItem.status}` : ""} · ${toast ? `${Y}${toast}${R} · ` : ""}plans/${selItem.slug}.md${R}`
-        : `${D}plans/plan.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+        ? `${D}${selItem.slug}${selItem.status ? ` · ${selItem.status}` : ""} · ${toast ? `${Y}${toast}${R} · ` : ""}packets/${selItem.slug}.md${R}`
+        : `${D}plans/index.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
+      }
     }
 
     /* ------------------------------------------------------------- run */
@@ -4684,6 +4701,26 @@ export async function runTui(): Promise<void> {
 
     /* -------------------------------------------------------- plans keys */
     if (page === "plans") {
+      if (planDetail) {
+        if (data === "\x1b" || data === "q") { planDetail = null; planDetailScroll = 0; draw(); return; }
+        if (data === "\x1b[A" || data === "k") { planDetailScroll = Math.max(0, planDetailScroll - 1); draw(); return; }
+        if (data === "\x1b[B" || data === "j") { planDetailScroll += 1; draw(); return; }
+        if (data === "g") {
+          const packet = readPacketFile(l, planDetail);
+          if (packet) {
+            const order = ["gates", "agent", "human"] as const;
+            const idx = order.indexOf((packet.review ?? "gates") as (typeof order)[number]);
+            packet.review = order[(idx + 1) % order.length]!;
+            writePacketFile(l, packet);
+            void commitPlanningFiles(l, `plans: gate ${planDetail}`);
+            notify(`${planDetail} gate → ${packet.review}`);
+          }
+          draw();
+          return;
+        }
+        draw();
+        return;
+      }
       let items: PlanItem[] = [];
       try {
         items = renderPlan(l).items;
@@ -4697,12 +4734,8 @@ export async function runTui(): Promise<void> {
       const slug = current?.slug;
       if (data === "e" || data === "\r" || data === "\n") {
         if (!slug) { notify("no packet — create with `packet create <slug>`"); draw(); return; }
-        const packet = readPacketFile(l, slug);
-        notify(
-          packet
-            ? `${packet.deliverable || slug}${packet.verify.length ? ` · verify: ${packet.verify.join(", ")}` : ""}${packet.files.length ? ` · files: ${packet.files.join(", ")}` : ""}`
-            : `${slug} (no packet file)`,
-        );
+        planDetail = slug;
+        planDetailScroll = 0;
         draw();
         return;
       }
@@ -4714,6 +4747,7 @@ export async function runTui(): Promise<void> {
         const idx = order.indexOf(packet.status as (typeof order)[number]);
         packet.status = idx < 0 ? "todo" : order[(idx + 1) % order.length]!;
         writePacketFile(l, packet);
+        void commitPlanningFiles(l, `plans: status ${slug}`);
         notify(`${slug} → ${packet.status}`);
         draw();
         return;

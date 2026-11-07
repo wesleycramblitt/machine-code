@@ -229,6 +229,19 @@ test("renderPlan annotates item status, deps, and blockers", () => {
   }
 });
 
+test("packet review gate parses, defaults to gates, and round-trips", () => {
+  const agent = parsePacketDoc("x", '---\nreview = "agent"\n---\n# x\n\n## Deliverable\nD\n\n## Verify\ntypescript:test\n').packet;
+  assert.equal(agent.review, "agent");
+  assert.match(renderPacketFile(agent), /review = "agent"/);
+  assert.equal(parsePacketDoc("x", renderPacketFile(agent)).packet.review, "agent");
+
+  assert.equal(parsePacketDoc("y", "# y\n\n## Deliverable\nY\n").packet.review, "gates");
+  assert.equal(parsePacketDoc("z", '---\nreview = "human"\n---\n# z\n\n## Deliverable\nZ\n').packet.review, "human");
+
+  // Unknown values degrade to the safe default.
+  assert.equal(parsePacketDoc("b", '---\nreview = "nope"\n---\n# b\n\n## Deliverable\nB\n').packet.review, "gates");
+});
+
 test("readPacketFile and writePacketFile are symmetric", () => {
   const root = temp("roundtrip");
   const layout = fakeLayout(root);

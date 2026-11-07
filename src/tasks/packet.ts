@@ -7,6 +7,7 @@
  * `tasks/lifecycle.ts` approveFeature, without any GitHub issue step.
  */
 import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import { listRuns, RunRecorder, type RunSummary } from "../state/runs.js";
 import { runProc } from "../proc.js";
@@ -80,19 +81,30 @@ async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<{ c
   return runProc("git", args, { cwd, timeoutMs });
 }
 
-/** Stage and commit both `plans/` (map) and `packets/` (contracts). */
-async function commitPlans(root: string, message: string): Promise<void> {
-  await git(root, ["add", "-A", "--", "plans", "packets"]);
-  const status = await git(root, ["status", "--porcelain", "--", "plans", "packets"]);
-  if (status.stdout.trim() === "") return;
-  let commit = await git(root, ["commit", "-m", message], 60_000);
-  if (commit.code !== 0) {
-    commit = await git(
-      root,
-      ["-c", "user.name=machine_code", "-c", "user.email=machine_code@localhost", "commit", "-m", message],
-      60_000,
-    );
-    if (commit.code !== 0) throw new Error(`git commit failed: ${commit.stderr.trim()}`);
+/**
+ * Stage and commit the planning trees (`plans/`, `packets/`, `knowledge/`) on
+ * main. Best-effort: returns false when there is nothing to commit or git is
+ * unavailable, and never throws.
+ */
+export async function commitPlanningFiles(layout: Layout, message: string): Promise<boolean> {
+  try {
+    const root = await mainRoot(layout);
+    const dirs = ["plans", "packets", "knowledge"].filter((dir) => existsSync(join(root, dir)));
+    if (dirs.length === 0) return false;
+    await git(root, ["add", "-A", "--", ...dirs]);
+    const status = await git(root, ["status", "--porcelain", "--", ...dirs]);
+    if (status.stdout.trim() === "") return false;
+    let commit = await git(root, ["commit", "-m", message], 60_000);
+    if (commit.code !== 0) {
+      commit = await git(
+        root,
+        ["-c", "user.name=machine_code", "-c", "user.email=machine_code@localhost", "commit", "-m", message],
+        60_000,
+      );
+    }
+    return commit.code === 0;
+  } catch {
+    return false;
   }
 }
 
@@ -148,7 +160,7 @@ export async function approvePacket(layout: Layout, slug: string, opts: ApproveP
   const file = packetFilePath(layout, slug);
   if (existsSync(file)) rmSync(file, { force: true });
   markIndexDone(layout, slug, packet.deliverable || slug);
-  await commitPlans(root, `plans: complete ${slug}`);
+  await commitPlanningFiles(layout, `plans: complete ${slug}`);
 
   if (opts.clean !== false && run.worktree && existsSync(run.worktree)) {
     const owner = run.worktreeOwnerRunId ?? run.id;
@@ -191,5 +203,5 @@ export async function deletePacket(layout: Layout, slug: string, opts: DeletePac
     await git(root, ["branch", "-D", branch]);
   }
 
-  await commitPlans(root, `plans: delete ${slug}`);
+  await commitPlanningFiles(layout, `plans: delete ${slug}`);
 }

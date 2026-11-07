@@ -48,11 +48,22 @@ export const PACKETS_DIR = "packets";
 export const PACKET_STATUSES = ["todo", "in-progress", "blocked", "done"] as const;
 export type PacketStatus = (typeof PACKET_STATUSES)[number];
 
+/**
+ * How a packet is gated before it can be merged.
+ * - `gates`  deterministic `## Verify` commands only (default; small work)
+ * - `agent`  gates + an independent Review agent verdict (consequential work)
+ * - `human`  gates only, but never auto-merged by `batch --auto-approve`
+ */
+export const PACKET_REVIEWS = ["gates", "agent", "human"] as const;
+export type PacketReview = (typeof PACKET_REVIEWS)[number];
+
 export interface PacketFile {
   slug: string;
   status: PacketStatus;
   deps: string[];
   blocked: string;
+  /** Merge gate. Absent means `gates`. */
+  review?: PacketReview;
   deliverable: string;
   files: string[];
   acceptance: string[];
@@ -174,6 +185,7 @@ export function parsePacketDoc(slug: string, text: string): ParsePacketResult {
   }
 
   const status = oneOf(front.status, PACKET_STATUSES) ?? "todo";
+  const review = oneOf(front.review, PACKET_REVIEWS) ?? "gates";
   const sec = sections(body);
   const deliverable = firstNonEmpty(sec.get("deliverable") ?? []);
   const files = itemLines(sec.get("files") ?? []);
@@ -186,6 +198,7 @@ export function parsePacketDoc(slug: string, text: string): ParsePacketResult {
       status,
       deps: stringList(front.deps).filter(isValidSlug),
       blocked: typeof front.blocked === "string" ? front.blocked.trim() : "",
+      review,
       deliverable,
       files,
       acceptance,
@@ -237,7 +250,7 @@ export function listPacketFiles(layout: Layout): PacketFile[] {
 
 /** Canonical packet-file body from a PacketFile. */
 export function renderPacketFile(packet: PacketFile): string {
-  const front: Record<string, unknown> = { status: packet.status, deps: packet.deps };
+  const front: Record<string, unknown> = { status: packet.status, deps: packet.deps, review: packet.review ?? "gates" };
   if (packet.blocked) front.blocked = packet.blocked;
   const sectionsText: string[] = [
     `# ${packet.slug}`,

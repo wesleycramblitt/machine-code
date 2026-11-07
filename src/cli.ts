@@ -55,7 +55,7 @@ import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.
 import { executeFeature, findRetryWorktree, selectRetrySeed } from "./orchestrator/execute.js";
 import { featureStatus, approveFeature, cleanupFeature, runFeatureChecks, suggestedReviewChecks, featureRuns } from "./tasks/lifecycle.js";
 import { deleteIssue } from "./tasks/delete.js";
-import { approvePacket, deletePacket, planBatchWaves } from "./tasks/packet.js";
+import { approvePacket, commitPlanningFiles, deletePacket, planBatchWaves } from "./tasks/packet.js";
 import { deleteRun } from "./state/run-delete.js";
 import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import {
@@ -64,6 +64,7 @@ import {
   isValidSlug,
   listPacketFiles,
   PACKET_STATUSES,
+  PACKET_REVIEWS,
   planCategories,
   readPacketFile,
   renderPacketFile,
@@ -72,6 +73,7 @@ import {
   toTaskPacket,
   writePacketFile,
   type PacketFile,
+  type PacketReview,
   type PacketStatus,
 } from "./plan/packets.js";
 import { isRetryableFailure } from "./orchestrator/outcome.js";
@@ -295,9 +297,11 @@ Usage:
                                      packet status, branch, deps, blockers (--json)
   machine_code packet list          List packet files (slug, status, deliverable) [--json]
   machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas]
-                                     [--verify a,b] Scaffold plans/<slug>.md and index it
+                                     [--verify a,b] [--review gates|agent|human]
+                                     Scaffold packets/<slug>.md and index it
   machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."]
-                                     [deps=a,b] [verify=a,b]  Update status, blocker, deps, or gates
+                                     [deps=a,b] [verify=a,b] [review=gates|agent|human]
+                                     Update status, blocker, deps, gates, or merge gate
   machine_code packet <slug>        Show a packet file
   machine_code build <slug>         Build a packet: gates + commit in an mc/<slug> branch
                                      [--review] add an independent review step [--model <key>]
@@ -1659,6 +1663,11 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   recorder.finalize(result.status, result.error, result.finalText);
+  if (agentNameParsed === "planner" || agentNameParsed === "research") {
+    // Planning agents write plans//packets//knowledge in the main tree; commit
+    // them so the map stays the committed source of truth.
+    await commitPlanningFiles(l, `plans: ${agentNameParsed} run ${recorder.id.slice(-8)}`);
+  }
   printRunOutcome(result, recorder);
   // One-way notification on terminal state (M4).
   if (machine.notify.webhookUrl || machine.notify.command) {
@@ -4689,7 +4698,7 @@ function cmdPlan(argv: string[]): number {
 /* -------------------------------------------------------------- packet */
 
 /** Inspect and edit packet files: list, create, set, show. */
-function cmdPacket(argv: string[]): number {
+async function cmdPacket(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const l = layout();
   const sub = positional[0];
@@ -4702,11 +4711,14 @@ function cmdPacket(argv: string[]): number {
     if (readPacketFile(l, slug)) fail(`packet ${slug} already exists`);
     const deliverable = flags.get("deliverable") ?? positional.slice(2).join(" ");
     const heading = flags.get("heading") ?? "Ideas";
+    const reviewFlag = flags.get("review") ?? "gates";
+    if (!PACKET_REVIEWS.includes(reviewFlag as PacketReview)) fail(`--review must be ${PACKET_REVIEWS.join("|")}`);
     const packet: PacketFile = {
       slug,
       status: "todo",
       deps: [],
       blocked: "",
+      review: reviewFlag as PacketReview,
       deliverable: deliverable ?? "",
       files: [],
       acceptance: [],
@@ -4717,13 +4729,14 @@ function cmdPacket(argv: string[]): number {
     };
     writePacketFile(l, packet);
     addIndexEntry(l, heading, slug, deliverable ?? slug);
-    process.stdout.write(`created plans/${slug}.md\n`);
+    await commitPlanningFiles(l, `plans: add ${slug}`);
+    process.stdout.write(`created packets/${slug}.md\n`);
     return 0;
   }
 
   if (sub === "set") {
     const slug = positional[1];
-    if (!slug) fail('usage: machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."] [deps=a,b] [verify=a,b]');
+    if (!slug) fail('usage: machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."] [deps=a,b] [verify=a,b] [review=gates|agent|human]');
     const packet = readPacketFile(l, slug);
     if (!packet) fail(`no packet ${slug}`);
     let changed = false;
@@ -4752,12 +4765,19 @@ function cmdPacket(argv: string[]): number {
           .map((entry) => entry.trim())
           .filter(Boolean);
         changed = true;
+      } else if (key === "review") {
+        if (!PACKET_REVIEWS.includes(value as PacketReview)) {
+          fail(`invalid review ${JSON.stringify(value)}; use one of ${PACKET_REVIEWS.join(", ")}`);
+        }
+        packet.review = value as PacketReview;
+        changed = true;
       } else {
-        fail(`unknown packet field ${JSON.stringify(key)}; use status, blocked, deps, or verify`);
+        fail(`unknown packet field ${JSON.stringify(key)}; use status, blocked, deps, verify, or review`);
       }
     }
-    if (!changed) fail("nothing to set; pass status=..., blocked=..., or deps=...");
+    if (!changed) fail("nothing to set; pass status=..., blocked=..., deps=..., verify=..., or review=...");
     writePacketFile(l, packet);
+    await commitPlanningFiles(l, `plans: update ${slug}`);
     process.stdout.write(renderPacketFile(packet));
     return 0;
   }
@@ -4775,7 +4795,8 @@ function cmdPacket(argv: string[]): number {
     for (const packet of packets) {
       const deps = packet.deps.length > 0 ? `  deps: ${packet.deps.join(", ")}` : "";
       const blocked = packet.blocked ? `  blocked: ${packet.blocked}` : "";
-      process.stdout.write(`${packet.slug}  [${packet.status}]${deps}${blocked}\n  ${packet.deliverable || "(no deliverable)"}\n`);
+      const review = packet.review && packet.review !== "gates" ? `  review: ${packet.review}` : "";
+      process.stdout.write(`${packet.slug}  [${packet.status}]${review}${deps}${blocked}\n  ${packet.deliverable || "(no deliverable)"}\n`);
     }
     return 0;
   }
@@ -4840,7 +4861,7 @@ async function runPacketBuild(l: ReturnType<typeof layout>, packetFile: PacketFi
     policy: runtime.policy,
     packet,
     verification: "verified",
-    review: flags.has("review"),
+    review: flags.has("no-review") ? false : packetFile.review === "agent" || flags.has("review"),
     request: packet.goal,
     root: l.repoRoot,
     toolRoot,
@@ -4940,6 +4961,11 @@ async function cmdBatch(argv: string[]): Promise<number> {
     process.stdout.write(`wave ${guard}: ${wave.join(", ")}\n`);
     const results = await Promise.all(wave.map(runBuildChild));
     for (const slug of wave) {
+      const packet = readPacketFile(l, slug);
+      if (packet?.review === "human") {
+        process.stderr.write(`leaving ${slug} for a human merge (review=human)\n`);
+        continue;
+      }
       try {
         await approvePacket(l, slug);
       } catch {
@@ -5105,7 +5131,7 @@ async function main(): Promise<void> {
       code = cmdPlan(rest);
       break;
     case "packet":
-      code = cmdPacket(rest);
+      code = await cmdPacket(rest);
       break;
     case "build":
       code = await cmdBuild(rest);
