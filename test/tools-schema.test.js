@@ -31,5 +31,7 @@ test("core tools prefer strict JSON-schema constrained sampling", () => {
   const context = tools.find((tool) => tool.name === "context");
   assert.deepEqual(context.parameters.properties.kind.enum, ["finding", "decision", "open", "next"]);
   const search = tools.find((tool) => tool.name === "search");
-  assert.ok(search.parameters.properties.mode.enum.includes("text"));
+  assert.equal(search.parameters.properties.mode, undefined, "search has one verb; the harness routes");
+  assert.ok(search.parameters.properties.pattern, "search takes a query");
+  assert.ok(search.parameters.properties.path, "search takes a scope");
 });

@@ -596,6 +596,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         let startChar = 0;
         let endChar = raw.length;
         let scopeLabel = "";
+        let scopeStart = 1;
+        let scopeEnd = lines.length;
         if (params.symbol) {
           const file = await outlineFile(ctx.root, params.path);
           const range = file ? symbolRange(file, params.symbol) : null;
@@ -603,6 +605,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           startChar = lineOffsets[range.start - 1] ?? 0;
           endChar = Math.min(raw.length, lineOffsets[range.end] ?? raw.length);
           scopeLabel = `symbol ${params.symbol}`;
+          scopeStart = range.start;
+          scopeEnd = Math.max(range.start, range.end);
         } else if (params.section) {
           const headings = documentSections(raw, params.path);
           const needle = params.section.trim().toLowerCase();
@@ -618,6 +622,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           startChar = lineOffsets[startLine - 1] ?? 0;
           endChar = Math.min(raw.length, lineOffsets[endLine] ?? raw.length);
           scopeLabel = `section ${sectionTitle(heading.text) || heading.text}`;
+          scopeStart = startLine;
+          scopeEnd = Math.max(startLine, endLine);
         }
 
         const scoped = raw.slice(startChar, endChar);
@@ -628,7 +634,14 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           if (edit.oldString === edit.newString) return fail("oldString and newString must differ");
           const count = working.split(edit.oldString).length - 1;
           if (count === 0) {
-            return fail(`no match in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}`);
+            const miss = `no match in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}`;
+            if (!scopeLabel) return fail(miss);
+            // Re-anchor in the same turn: the scope moved under the model
+            // (usually its own batched edit landing first). Return the
+            // current scope body so the next oldString is written against
+            // fresh text instead of costing a re-read.
+            const page = numberLinesCapped(lines, scopeStart, scopeEnd - scopeStart + 1, 4096);
+            return fail(`${miss}\nCurrent ${scopeLabel} text:\n${page.text}`);
           }
           if (!edit.replaceAll && count > 1) {
             return fail(
@@ -663,27 +676,16 @@ const SEARCH_MODES: readonly string[] = [
 ];
 
 const SearchParams = Type.Object({
-  mode: Type.Optional(
-    Type.String({
-      enum: ["auto", "map", "files", "outline", "sections", "text", "structure", "json", "yaml", "definition", "references", "symbols", "info", "semantic", "graph", "locate"],
-      description:
-        "Search mode: auto | map | files | outline | sections | text | structure | json | yaml | " +
-        "definition | references | symbols | info | semantic | graph | locate (default auto). " +
-        "Use auto to pick locate for a bare identifier, text for a pattern plus a file path, " +
-        "outline for a bare file path, or text otherwise. locate answers " +
-        "definition + references with read anchors in one call.",
-    }),
-  ),
-  pattern: Type.Optional(Type.String({ description: "Pattern: regex for text, glob for files, query for json/yaml/structure/semantic/graph, symbol filter for LSP modes. outline/sections use path." })),
-  path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root)." })),
+  pattern: Type.Optional(Type.String({ description: "What to find: an identifier, a path, or a regex. The harness routes automatically: identifier → definitions + references with read anchors; file path → outline; anything else → text search with context." })),
+  path: Type.Optional(Type.String({ description: "Directory or file to scope the search (default: worktree root). A bare file path returns its outline." })),
   paths: Type.Optional(
     Type.Array(Type.String(), {
-      description: "Specific files or directories for text mode. Use instead of path.",
+      description: "Specific files or directories to search. Use instead of path.",
     }),
   ),
-  line: Type.Optional(Type.Number({ description: "1-based line (LSP position modes)." })),
-  column: Type.Optional(Type.Number({ description: "1-based column (LSP position modes)." })),
-  language: Type.Optional(Type.String({ description: "LSP language id, e.g. typescript, python, rust. Default: infer from path." })),
+  line: Type.Optional(Type.Number({ description: "1-based line. With column + path, answers definition + references + hover at that position." })),
+  column: Type.Optional(Type.Number({ description: "1-based column. With line + path, answers definition + references + hover at that position." })),
+  language: Type.Optional(Type.String({ description: "Language id, e.g. typescript, python, rust. Default: infer from path." })),
   limit: Type.Optional(Type.Number({ description: "Max results (default 200)." })),
 });
 
@@ -795,20 +797,20 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     name: "search",
     label: "search",
     description:
-      "Read-only bounded search. Modes: map (filtered repo map with symbols), files (file listing, globs support {a,b}), outline (one file's symbols; path or pattern), " +
-      "sections (comment headings inside one file, e.g. `/* ---- run keys ---- */`; path required), text (regex, 2 context lines; " +
-      "large-file hits name a read-around line), " +
-      "structure (ast-grep pattern), json/yaml (jq/yq query, e.g. `.scripts`), semantic (rank modules/key files by concept or filename), " +
-      "graph (module import overview; optional pattern query), " +
-      "symbols (LSP document/workspace symbols when a server is available, else repo map), locate (identifier: definitions + " +
-      "references with enclosing code and read anchors, one call), and LSP definition/references/info (needs path+line+column). " +
-      "text accepts paths to search a specific file list. Examples: {\"mode\":\"sections\",\"path\":\"src/tui.ts\"}; {\"mode\":\"outline\",\"path\":\"src/tui.ts\"}; {\"mode\":\"graph\",\"pattern\":\"context\"}. " +
+      "Read-only bounded search. One verb: pass an identifier, a file path, or a " +
+      "regex, optionally scoped by path/paths. The harness routes automatically: identifier → definitions + " +
+      "references with enclosing code and read anchors; file path → outline; path + line + column → definition + " +
+      "references + hover at that position; anything else → text search with 2 context lines. " +
+      "Large-file hits name a read-around line; empty results name the call to try next. " +
       "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
     parameters: SearchParams,
     prepareArguments: (args) => cleanSearchArgs(args) as Static<typeof SearchParams>,
     async execute(_id, params: Static<typeof SearchParams>) {
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
-      const requestedMode = params.mode ?? "auto";
+      // `mode` is intentionally absent from the model-visible schema: the
+      // harness routes every query itself. It is still honored when present
+      // (tests, internal callers), with auto as the default.
+      const requestedMode = (params as unknown as { mode?: string }).mode ?? "auto";
       let mode = requestedMode;
       if (mode === "auto") {
         if (params.path) {
@@ -829,9 +831,9 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
         return fail(`unknown search mode "${mode}". Use one of: ${SEARCH_MODES.join(", ")}.`);
       }
       const limit = Math.max(1, Math.floor(params.limit ?? 200));
-      // Text search as a callable unit: `auto` falls back to it when a bare
-      // identifier matches no symbol, and `locate` composes it with symbol
-      // lookup. Returns raw matches; callers add presentation.
+      // Text search as a callable unit: `locate` composes it with symbol
+      // lookup, and the no-match pointer needs the raw result. Returns raw
+      // matches; callers add presentation.
       const execTextSearch = async (): Promise<AgentToolResult<undefined>> => {
         if (!params.pattern) return fail("text mode requires a pattern");
         if (params.path && params.paths && params.paths.length > 0) {
@@ -896,6 +898,76 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           ),
         );
       };
+      // Position query: path + line + column answers definition, references,
+      // and hover in one call instead of three LSP round trips. Like the
+      // outline path below, the server only starts when the run supplies a
+      // process supervisor: a library call or a test must never spawn a
+      // detached LSP server that outlives its caller. The fallback still
+      // answers the position with the file's outline.
+      const runAtPosition = async (
+        outlinePath: string,
+        line: number,
+        column: number,
+      ): Promise<AgentToolResult<undefined>> => {
+        const header = `${outlinePath}:${line}:${column}`;
+        const language = ctx.processes ? params.language ?? languageForPath(outlinePath) : null;
+        const abs = resolveWithin(ctx.root, outlinePath);
+        const pos = { line: line - 1, character: column - 1 };
+        if (language) {
+          const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
+          if (serverAvailable(language)) {
+            const client = lspClientFor(ctx.root, language, ctx.processes);
+            if (client) {
+              const [defs, refs, hover] = await Promise.all([
+                client.definition(abs, pos),
+                client.references(abs, pos),
+                client.hover(abs, pos),
+              ]);
+              if (defs !== null || refs !== null || hover !== null) {
+                const parts: string[] = [];
+                if (defs && defs.length > 0) {
+                  parts.push(
+                    `definition:\n${defs.map((loc) => `${loc.uri.replace("file://", "")}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`).join("\n")}`,
+                  );
+                }
+                if (refs && refs.length > 0) {
+                  parts.push(
+                    `references (${refs.length}):\n${refs.slice(0, limit).map((loc) => `${loc.uri.replace("file://", "")}:${loc.range.start.line + 1}:${loc.range.start.character + 1}`).join("\n")}`,
+                  );
+                }
+                if (hover) {
+                  const info =
+                    typeof hover.contents === "string"
+                      ? hover.contents
+                      : ((hover.contents as { value?: string }).value ?? JSON.stringify(hover.contents));
+                  if (info) parts.push(`info:\n${info}`);
+                }
+                if (parts.length > 0) {
+                  return ok([header, ...parts, `next: read { "path": "${outlinePath}", "around": ${line} }`].join("\n"));
+                }
+              }
+            }
+          }
+        }
+        const file = await outlineFile(ctx.root, outlinePath);
+        if (!file) return fail(`no outline for ${outlinePath} (binary or unreadable)`);
+        return ok(
+          [
+            header,
+            `${file.path} (${file.lines} lines${language ? `; LSP ${language} unavailable` : "; outline only — no LSP in this context"})`,
+            renderOutline(file) || "(no symbols)",
+            `next: read { "path": "${outlinePath}", "around": ${line} }`,
+          ].join("\n"),
+        );
+      };
+      if (
+        requestedMode === "auto" &&
+        params.line != null &&
+        params.column != null &&
+        typeof params.path === "string"
+      ) {
+        return runAtPosition(params.path, params.line, params.column);
+      }
       try {
         switch (mode) {
           case "files": {
@@ -945,7 +1017,22 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             return ok(capText(listed.join("\n"), SEARCH_CAP_BYTES).text || "no matches");
           }
           case "text": {
-            return runText();
+            const found = await runText();
+            if (found.isError) return found;
+            const text = found.content
+              .map((item) => (item.type === "text" ? item.text : ""))
+              .join("\n");
+            if (text === "no matches" && params.pattern) {
+              // A bare "no matches" costs a turn and teaches nothing. The
+              // usual causes are a case-mismatched identifier or a symbol
+              // the model has not named exactly; point at the call that
+              // answers either way.
+              return ok(
+                `no matches for "${params.pattern}"\n` +
+                  `[try search { "pattern": "${params.pattern}" } for identifier forms, or check case and scope]`,
+              );
+            }
+            return found;
           }
           case "locate": {
             // One call answering "where is this defined and used": symbol
@@ -1192,14 +1279,17 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 scopedMap = { ...built.map, files: file ? [file] : [] };
               }
               const hits = findSymbols(scopedMap, params.pattern ?? "", limit);
-              if (hits.length === 0 && requestedMode === "auto" && params.pattern) {
-                // A bare identifier with no symbol match (a filter value, a
-                // flag, a string literal) still deserves an answer in one
-                // call; fall back to text rather than a dead end.
-                return runText();
-              }
               const note = language ? `\n[LSP ${language} unavailable or empty; used repo map]` : "";
-              return ok((hits.join("\n") || "no symbols") + note);
+              if (hits.length === 0) {
+                // An explicit symbols query with no hits is a dead end that
+                // costs a turn and teaches nothing. Point at the call that
+                // answers instead of leaving the model to guess it.
+                return ok(
+                  `no symbols matching "${params.pattern ?? ""}"${note}\n` +
+                    `[try search { "pattern": "${params.pattern ?? ""}" } for definitions + references, or text for strings]`,
+                );
+              }
+              return ok(hits.join("\n") + note);
             }
             if (POSITION_MODES.has(mode)) {
               if (!params.path || params.line == null || params.column == null) {

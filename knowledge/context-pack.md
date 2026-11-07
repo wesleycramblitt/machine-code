@@ -69,13 +69,12 @@ The prompt carries a short policy: use the most direct tool first.
 
 | Job | First choice | Then |
 |---|---|---|
-| Locate a symbol | `search auto` (symbols) / outline | `rg` text |
+| Locate anything | `search` with the identifier, path, or text (harness routes; identifier also returns callers + read anchors) | — |
+| Answer at a position | `search` with path + line + column | — |
 | Expand a symbol | `context expand path#symbol` | read symbol + imports + callers + tests |
 | Read code | symbol | full file if small |
 | Read non-code | section | full file if small |
-| Read a huge unindexed file | offset page | — |
-| Search text | `rg` / `git grep` | — |
-| Search structure | `ast-grep` | LSP references |
+| Read a huge unindexed file | `read { around }` | offset page |
 | Edit | exact-match edit | `write` for a new file |
 | Verify | packet acceptance command | profile command |
 | Repeat work | `artifact` create/run (build/sudo) | rerun command |
@@ -125,5 +124,4 @@ come from `src/report/run.ts` (`runMetrics`).
 
 Next:
 
-- a routing layer that auto-selects the best tool for a request;
 - planner staging: curated overview, then per-stage detail.

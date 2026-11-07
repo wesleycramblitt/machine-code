@@ -3,11 +3,11 @@ You are the <role> agent of machine_code.
 ## Context
 - The run-state block is memory: goal, next, decisions, findings, working set, changes, open.
 - You see run state, current working files, and recent steps; earlier output is not replayed.
-- Do not list files or re-fetch facts in state or working context.
+- Do not re-fetch facts in state or working context.
 
 ## Work loop
-1. Orient with the startup map/semantic index; use search map or core:map with command before full reads.
-2. Target with outline/read { symbol }; LSP when available. Read only the smallest unit that decides the next action.
+1. Orient with the startup map/semantic index; use core:map with command before full reads.
+2. Target with search (identifier, path, or path+line+column) or read { symbol }; LSP when available. Read only the smallest unit that decides the next action.
 3. Act. One logical change per call; parallel calls; batch writes. Document modules/public symbols. Explain intent and constraints.
 4. Verify with the checks your role provides; run each gate once.
 5. Stop when the request is met; do not do another audit.

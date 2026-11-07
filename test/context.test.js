@@ -4,7 +4,6 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -151,29 +150,6 @@ test("composer can include explicit files without a heuristic", async () => {
     const source = bundle.sources.find((item) => item.kind === "file" && item.ref === "src/a.ts");
     assert.ok(source, "explicit file is a context source");
     assert.match(bundle.text, /export const included = true/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("recent git history is inherited into context", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-ctx-history-"));
-  try {
-    execFileSync("git", ["init", "-q"], { cwd: root });
-    execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: root });
-    execFileSync("git", ["config", "user.name", "T"], { cwd: root });
-    writeFileSync(join(root, "a.txt"), "one\n", "utf8");
-    execFileSync("git", ["add", "-A"], { cwd: root });
-    execFileSync("git", ["commit", "-qm", "first change"], { cwd: root });
-    writeFileSync(join(root, "b.txt"), "two\n", "utf8");
-    execFileSync("git", ["add", "-A"], { cwd: root });
-    execFileSync("git", ["commit", "-qm", "second change"], { cwd: root });
-    const bundle = await assembleContext({ layout: fakeLayout(root), machine: machine() });
-    const source = bundle.sources.find((item) => item.kind === "history");
-    assert.ok(source, "recent history is a context source");
-    assert.match(bundle.text, /first change/);
-    assert.match(bundle.text, /second change/);
-    assert.ok(source.bytes <= 1100, "history block stays near one kilobyte");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -60,6 +60,28 @@ export function trimContextText(text: string | undefined, maxChars?: number): st
   return out.length <= maxChars ? out : `${out.slice(0, Math.max(0, maxChars - 24)).replace(/\s+$/, "")}\n…[context truncated]`;
 }
 
+/** Cap on one replayed tool-result text block. The ledger keeps the full
+ * bytes (with a recall pointer) and working context re-sends current file
+ * content, so the replayed steps stay small without losing anything
+ * recoverable. Copies blocks; never mutates the stored transcript. */
+const STEP_TEXT_CAP = 6_000;
+
+function capStepText(step: MessageLike[]): MessageLike[] {
+  return step.map((message) => {
+    if (message.role !== "toolResult" || !Array.isArray(message.content)) return message;
+    const content = (message.content as unknown[]).map((block) => {
+      if (!block || typeof block !== "object") return block;
+      const b = block as Record<string, unknown>;
+      if (b.type !== "text" || typeof b.text !== "string" || b.text.length <= STEP_TEXT_CAP) return block;
+      return {
+        ...b,
+        text: `${b.text.slice(0, STEP_TEXT_CAP).replace(/\s+$/, "")}\n…[step output truncated to ${STEP_TEXT_CAP} chars; full bytes are in the run ledger — use context recall]`,
+      };
+    });
+    return { ...message, content };
+  });
+}
+
 /** Keep the last few complete assistant/tool steps, never an orphan call. */
 function recentSteps(messages: readonly MessageLike[], count = 2): MessageLike[] {
   const assistants: number[] = [];
@@ -117,7 +139,7 @@ export function renderPromptMessages(
     content: block,
     timestamp: Date.now(),
   };
-  const step = recentSteps(source, 2);
+  const step = capStepText(recentSteps(source, 2));
   const out = [
     ...(system ? [system] : []),
     user,

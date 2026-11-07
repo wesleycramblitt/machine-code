@@ -596,6 +596,25 @@ test("working context stays within its budget on large files", () => {
   }
 });
 
+test("replayed steps cap tool-result text without mutating history", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-steps", goal: "goal" });
+    const big = `line\n`.repeat(4000);
+    const call = assistant({ id: "big1", text: "" });
+    const res = result({ id: "big1", text: big });
+    const rendered = renderPromptMessages([system, user, call, res], store);
+    const text = JSON.stringify(rendered.messages);
+    assert.ok(text.length < big.length, "replayed step is capped");
+    assert.match(text, /step output truncated/);
+    assert.equal(res.content[0].text, big, "stored transcript keeps full bytes");
+    const small = renderPromptMessages([system, user, assistant(), result()], store);
+    assert.match(JSON.stringify(small.messages), /1: one/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("render never sends an orphan tool call", () => {
   const dir = tempDir();
   try {

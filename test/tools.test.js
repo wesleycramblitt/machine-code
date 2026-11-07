@@ -191,7 +191,81 @@ test("locate mode annotates references with the enclosing symbol", async () => {
   }
 });
 
-test("auto falls back to references when no symbol matches", async () => {
+test("explicit symbols with no hits points at locate", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-symempty-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "src.ts"), "export function alpha() { return 1; }\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "symbols", pattern: "zzz-no-such-symbol" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /no symbols matching "zzz-no-such-symbol"/);
+    assert.match(text, /try search \{ "pattern": "zzz-no-such-symbol" \}/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("text with no matches points at locate", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-nomatch-"));
+  try {
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { mode: "text", pattern: "zzz-no-such-string" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /no matches for "zzz-no-such-string"/);
+    assert.match(text, /try search \{ "pattern": "zzz-no-such-string" \}/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("scoped edit miss returns the current scope text", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-edit-miss-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(
+      join(root, "a.ts"),
+      "export function foo() {\n  return 1;\n}\n\nexport function bar() {\n  return 2;\n}\n",
+      "utf8",
+    );
+    const tool = editTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", {
+      path: "a.ts",
+      symbol: "foo",
+      oldString: "  return 999;",
+      newString: "  return 3;",
+    });
+    assert.equal(result.isError, true);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /no match in a\.ts \(symbol foo\)/);
+    assert.match(text, /Current symbol foo text:/);
+    assert.match(text, /return 1;/);
+    assert.doesNotMatch(text, /return 2;/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("path with line and column answers at that position", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-search-pos-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "src.ts"), "export function alpha() { return 1; }\n", "utf8");
+    const tool = searchTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "src.ts", line: 1, column: 16 });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /src\.ts:1:16/);
+    assert.match(text, /alpha/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("locate answers references when no symbol matches", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-search-fallback-"));
   try {
     execFileSync("git", ["init", "-q"], { cwd: root });
