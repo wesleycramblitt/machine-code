@@ -55,10 +55,14 @@ const PLAN_BLOCK_LIMIT = 3;
 /** Successes that show a run did real work, not just memory bookkeeping. */
 const SUBSTANTIVE_TOOLS = new Set(["read", "search", "command", "edit", "write", "issue", "pr"]);
 
-/** Requests that name a code change. A writable role that answers one of
- * these with prose and no tool call has stalled, not finished. */
-const CHANGE_INTENT =
-  /\b(?:fix|add|remove|update|change|implement|refactor|rename|move|wire|replace|delete|make|adjust|correct|repair|support|resolve|address)\b/i;
+/** A request that is a question, not a change. A writable role answering a
+ * question is not expected to edit; everything else (imperatives, bug
+ * reports, symptom descriptions) is a change request. */
+export function isQuestionRequest(text: string): boolean {
+  const trimmed = text.trim();
+  if (!/\?\s*$/.test(trimmed)) return false;
+  return /^(?:what|why|how|which|when|where|who|explain|describe|list|show|tell|is|are|does|do|can|could|would|should)\b/i.test(trimmed);
+}
 
 /** Extra turns allowed when a writable role stops mid-investigation. This is
  * a malformed-termination retry, not a work quota. */
@@ -755,11 +759,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let pendingMessages: AgentMessage[] | null = null;
 
   /** Does this run owe the user a code change? Read-only roles and pure
-   * questions are exempt; a writable role answering a change request is not. */
+   * questions are exempt; a writable role answering anything else — an
+   * imperative, a bug report, a symptom description — is not. */
   const wantsChange =
     input.agent.readonly !== true &&
     input.agentCapabilities?.includes("code:write") !== false &&
-    (CHANGE_INTENT.test(input.request) || /#\d+|\bissue\b|Deliverable/i.test(input.request));
+    !isQuestionRequest(input.request);
   const hasActiveChange = (): boolean =>
     memory.getState().facts.some((fact) => fact.kind === "change" && fact.status === "active");
   /** Set when a stalled turn was asked to continue; consumed by prepareNextTurn. */

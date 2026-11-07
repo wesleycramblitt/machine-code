@@ -6,6 +6,7 @@ import {
   hasPlanDecision,
   hasTerminalLine,
   isGateCommand,
+  isQuestionRequest,
   needsBuildPlan,
   readBucket,
   shouldNudgeStall,
@@ -89,6 +90,14 @@ test("compile gate prefers the fastest available check", () => {
   assert.equal(compileGateName(new Map([["typescript:build", {}]])), "typescript:build");
   assert.equal(compileGateName(new Map([["core:status", {}]])), undefined);
   assert.equal(compileGateName(new Map([["go:build", {}]])), "go:build");
+});
+
+test("a bug report is a change request, not a question", () => {
+  assert.equal(isQuestionRequest("the cursor doesn't work when hovering providers"), false);
+  assert.equal(isQuestionRequest("after collapsing rows you can't scroll to the last model"), false);
+  assert.equal(isQuestionRequest("fix the login bug"), false);
+  assert.equal(isQuestionRequest("what does this function do?"), true);
+  assert.equal(isQuestionRequest("how is the cache key computed?"), true);
 });
 
 test("the read-repeat bucket ignores limit changes at the same start line", () => {
