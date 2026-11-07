@@ -180,6 +180,36 @@ test("repository, section, and issue headings fold their contents", () => {
   assert.ok(!collapsedIssue.rows.some((row) => row.kind === "run" && row.run.id === "a"));
 });
 
+test("a scope-filtered issues map hides other repos issue trees", () => {
+  // Contract the Runs page relies on under f=cwd: the caller scopes both
+  // runs and issuesByRepo to the cwd repo (see scopedIssueCaches in tui.ts).
+  // An unscoped map still shows every repo with cached issues — that is the
+  // c2d0192 behavior the scope must mask, not remove.
+  const epicA = issue(10, "epic", "Epic A");
+  const epicB = issue(11, "epic", "Epic B");
+  const scoped = buildRunIndex({
+    runs: [],
+    issuesByRepo: new Map([[repoA, [epicA]]]),
+  });
+  assert.deepEqual(
+    scoped.rows.filter((row) => row.kind === "repo").map((row) => row.repoRoot),
+    [repoA],
+  );
+  assert.ok(!scoped.rows.some((row) => row.kind === "issue" && row.issue.ref.number === 11));
+
+  const unscoped = buildRunIndex({
+    runs: [],
+    issuesByRepo: new Map([
+      [repoA, [epicA]],
+      [repoB, [epicB]],
+    ]),
+  });
+  assert.deepEqual(
+    unscoped.rows.filter((row) => row.kind === "repo").map((row) => row.repoRoot),
+    [repoA, repoB],
+  );
+});
+
 test("attention-only keeps blocked/running work and drops completed rows", () => {
   const runs = [
     run({ id: "blocked", status: "blocked" }),

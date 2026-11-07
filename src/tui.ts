@@ -1671,6 +1671,13 @@ export async function runTui(): Promise<void> {
 
   const runDetailData = (): RunDetail | null => (selectedRunId ? findRunDetail(selectedRunId) : null);
 
+  /** Issue caches honoring the runs repo scope: with f=cwd, issue-only repos
+   * must not resurrect rows the run filter hides. */
+  const scopedIssueCaches = (): Map<string, readonly Issue[]> =>
+    runsRepoScope === "cwd"
+      ? new Map([...issueCachesByRepo].filter(([repoRoot]) => repoRoot === l.repoRoot))
+      : issueCachesByRepo;
+
   const currentChanges = (detail: RunDetail): ChangeSummary => {
     if (changesCache && changesCache.runId === detail.summary.id && Date.now() - changesCache.at < 4_000) {
       return changesCache.data;
@@ -1899,7 +1906,7 @@ export async function runTui(): Promise<void> {
     const filteredRuns = runsListScreen ? scopedRuns : [];
     const runIndex = buildRunIndex({
       runs: filteredRuns,
-      issuesByRepo: runsListScreen ? issueCachesByRepo : new Map(),
+      issuesByRepo: runsListScreen ? scopedIssueCaches() : new Map(),
       group: runsGroup,
       collapsed,
       text: runsText,
@@ -4594,7 +4601,7 @@ export async function runTui(): Promise<void> {
       const scopeFiltered = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
       const index = buildRunIndex({
         runs: scopeFiltered,
-        issuesByRepo: issueCachesByRepo,
+        issuesByRepo: scopedIssueCaches(),
         group: runsGroup,
         collapsed,
         text: runsText,
