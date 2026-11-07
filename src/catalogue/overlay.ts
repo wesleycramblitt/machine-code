@@ -4,7 +4,8 @@
  * "actual" capability ratings and prices when generated metadata is wrong,
  * incomplete, or estimated.
  */
-import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dataPath, loadTomlData } from "../data.js";
 import { capabilityFrom } from "./scoring.js";
 import type { CatalogueRow } from "./types.js";
@@ -127,4 +128,34 @@ export function loadModelOverrides(): Map<string, ModelOverride> {
   if (!existsSync(file)) return new Map();
   const raw = loadTomlData<{ models?: Record<string, ModelOverride> }>("model-overrides.toml");
   return new Map(Object.entries(raw.models ?? {}));
+}
+
+/**
+ * Record an automatically detected dead model as a curation veto so refresh
+ * drops the row instead of cooling it forever. Appends a dated, sourced
+ * stanza; never rewrites the file (user comments and ordering survive), and
+ * never duplicates a key that already has a stanza. Returns true when a
+ * stanza was added. Never throws.
+ */
+export function addCurationVeto(home: string, key: string, source: string): boolean {
+  const file = join(home, "curation.toml");
+  let current = "";
+  try {
+    current = readFileSync(file, "utf8");
+  } catch {
+    // Missing file: created below.
+  }
+  const header = `[models."${key}"]`;
+  if (current.includes(header)) return false;
+  const date = new Date().toISOString().slice(0, 10);
+  const stanza =
+    `\n# Auto-vetoed: the model errored as gone at runtime; remove this stanza to restore it.\n` +
+    `${header}\nveto = true\ndate = "${date}"\nsource = ${JSON.stringify(source)}\n`;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${current.length > 0 && !current.endsWith("\n") ? `${current}\n` : current}${stanza}`, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
 }

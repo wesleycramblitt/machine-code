@@ -1,16 +1,21 @@
 # machine_code provider: nvidia
 # Machine override: ~/.machine_code/data/providers/nvidia.toml
 #
-# Disabled by default. NVIDIA serves this provider through NVCF async jobs
+# NOTE 2026-11-01: NVIDIA serves through NVCF async jobs
 # (`NVCF-POLL-SECONDS: 3600`): the request holds the connection for minutes and
-# the completion arrives in one batch at the end, so it is unusable for an
-# interactive agent loop. Re-enable with `disabled = false` if that changes.
+# the completion arrives in one batch at the end, so calls were unusable for an
+# interactive agent loop. Re-enabled 2026-11-06 on request; the call loop's
+# first-token timeout plus cooling contains a recurrence — re-add
+# `disabled = true` below if batched responses return.
+# Live /models listing keeps the catalogue honest about retired models.
 
 id = "nvidia"
 name = "NVIDIA"
 env_keys = ["NVIDIA_API_KEY"]
 modes = ["free"]
-disabled = true
+# Live /models listing: unknown ids are reported, never added (see groq).
+live_listings = true
+base_url = "https://integrate.api.nvidia.com/v1"
 
 [billing]
 kind = "free_tier"

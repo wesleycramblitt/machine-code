@@ -937,7 +937,8 @@ async function cmdCatalogueRefresh(snapshot = false): Promise<number> {
     process.stdout.write(`model snapshot written to ${written.modelsDir} + ${written.offersDir}\n`);
   }
   if (result.curatedVetoes > 0) {
-    process.stdout.write(`  ${result.curatedVetoes} row(s) removed by curation vetoes\n`);
+    process.stdout.write(`  ${result.curatedVetoes} row(s) removed by curation vetoes: ${result.curatedVetoKeys.join(", ")}\n`);
+    process.stdout.write(`  (vetoes live in ~/.machine_code/curation.toml; remove a stanza to restore the model)\n`);
   }
   for (const source of result.document.sources) {
     process.stdout.write(`  ${source.id}: ${source.models} models\n`);

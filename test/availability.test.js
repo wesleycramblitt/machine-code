@@ -107,6 +107,7 @@ test("410 Gone is an EOL model: cooled for a week, retryable once", () => {
   assert.equal(eol.kind, "missing-model");
   assert.equal(eol.retryable, true);
   assert.equal(eol.target, "model");
+  assert.equal(eol.permanent, true);
   assert.ok(eol.cooldownMs >= 7 * 24 * 60 * 60_000 - 1000);
   const state = empty();
   applyClassification(state, "nvidia", "nvidia/z-ai/glm-5.3", eol);
@@ -120,6 +121,7 @@ test("an upstream unavailable model is cooled for an hour, not one minute", () =
   assert.equal(unavailable.kind, "missing-model");
   assert.equal(unavailable.retryable, true);
   assert.equal(unavailable.target, "model");
+  assert.equal(unavailable.permanent, undefined);
   assert.ok(unavailable.cooldownMs >= 60 * 60_000 - 1000);
   const state = empty();
   applyClassification(state, "opencode-go", "opencode-go/minimax", unavailable);
@@ -129,14 +131,24 @@ test("an upstream unavailable model is cooled for an hour, not one minute", () =
 test("funds errors disable the provider; auth marks needs-auth", () => {
   const funds = classifyError(new Error("insufficient funds"), 402);
   assert.equal(funds.disableProvider, true);
+  assert.equal(funds.permanent, undefined);
   const state = empty();
   applyClassification(state, "p", "p/m", funds);
   assert.equal(isProviderDisabled(state, "p"), true);
 
   const auth = classifyError(new Error("invalid api key"), 401);
+  assert.equal(auth.permanent, undefined);
   const state2 = empty();
   applyClassification(state2, "q", "q/m", auth);
   assert.equal(state2.providers.q.needsAuth, true);
+});
+
+test("404 and deprecated models are permanent; quota is not", () => {
+  const gone = classifyError(new Error("model not found: ghost-7b"), 404);
+  assert.equal(gone.kind, "missing-model");
+  assert.equal(gone.permanent, true);
+  const eol = classifyError(new Error("this model has been deprecated, use new-model instead"));
+  assert.equal(eol.permanent, true);
 });
 
 test("free provider cooldowns reset at run start", () => {

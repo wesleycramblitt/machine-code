@@ -4,7 +4,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyModelOverrides, loadModelOverrides } from "../dist/catalogue/overlay.js";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { addCurationVeto, applyModelOverrides, loadModelOverrides } from "../dist/catalogue/overlay.js";
 
 function row() {
   return {
@@ -93,4 +96,27 @@ test("shipped model-overrides.toml vetoes gemma4 tool calls", () => {
   assert.ok(entry, "gemma4 override ships");
   const raw = entry;
   assert.equal(raw.tool_call ?? raw.toolCall, false);
+});
+
+test("addCurationVeto appends dated stanzas without touching the rest", () => {
+  const home = mkdtempSync(join(tmpdir(), "mc-veto-"));
+  try {
+    writeFileSync(join(home, "curation.toml"), "# hand notes\n\n[models.\"p/keep\"]\nveto = true\n", "utf8");
+    assert.equal(addCurationVeto(home, "p/gone", "auto-veto: gone at runtime (run abc)"), true);
+    const body = readFileSync(join(home, "curation.toml"), "utf8");
+    assert.match(body, /# hand notes/);
+    assert.match(body, /\[\s*models\."p\/gone"\s*\]/);
+    assert.match(body, /veto = true/);
+    assert.match(body, /auto-veto: gone at runtime \(run abc\)/);
+    assert.equal(addCurationVeto(home, "p/gone", "again"), false, "no duplicate stanza");
+    const missing = mkdtempSync(join(tmpdir(), "mc-veto-missing-"));
+    try {
+      assert.equal(addCurationVeto(missing, "p/new", "auto-veto: x (run y)"), true, "creates the file");
+      assert.match(readFileSync(join(missing, "curation.toml"), "utf8"), /p\/new/);
+    } finally {
+      rmSync(missing, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

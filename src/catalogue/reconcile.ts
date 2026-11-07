@@ -21,6 +21,7 @@ import { loadCatalogue } from "./load.js";
 import {
   assembleDocument,
   buildCatalogueRow,
+  hasListingMetadata,
   isMetaModel,
   loadCuration,
   type RowBuildContext,
@@ -29,6 +30,7 @@ import { loadModelOverrides } from "./overlay.js";
 import { BENCHMARKS, type Benchmarks } from "./benchmarks.js";
 import { buildCanonicalIndex, normalizeModelSlug } from "./canonical.js";
 import { fetchOpenRouterModels, type OpenRouterModelMeta } from "./openrouter.js";
+import { fetchLiveListing } from "./discovery.js";
 import { loadProviderDefinitions } from "../data.js";
 import type { Layout } from "../paths.js";
 import type { CatalogueRow } from "./types.js";
@@ -78,7 +80,7 @@ export async function reconcileCatalogue(
   layout: Layout,
   models: MutableModels,
   isFresh: (providerId: string) => boolean | undefined,
-  opts: { openRouterModels?: Map<string, OpenRouterModelMeta> | null } = {},
+  opts: { openRouterModels?: Map<string, OpenRouterModelMeta> | null; liveListings?: Map<string, Set<string> | null> } = {},
 ): Promise<ReconcileResult> {
   const warnings: string[] = [];
   const added: string[] = [];
@@ -163,6 +165,33 @@ export async function reconcileCatalogue(
     const live = liveByProvider.get(id) ?? [];
     trusted.set(id, new Set(live.filter((m) => !isMetaModel(String(m.provider), m.id)).map((m) => `${id}/${m.id}`)));
   }
+  // Live listings (providers marked live_listings): membership is verified
+  // against a fresh /models fetch instead of pi-ai's static baseline, so
+  // retired models are pruned even though their static rows carry metadata.
+  // Unknown live ids are only reported — never built without metadata.
+  // Pass opts.liveListings in tests; production fetches (failures keep rows).
+  for (const [id, def] of Object.entries(definitions)) {
+    if (!def.liveListings || !def.baseUrl || !active.has(id)) continue;
+    const override = opts.liveListings?.get(id);
+    if (override !== undefined) {
+      trusted.set(id, override);
+      continue;
+    }
+    try {
+      const fetched = await fetchLiveListing({ baseUrl: def.baseUrl, envKeys: def.envKeys }, id);
+      if (!fetched.ok) {
+        if (fetched.reason === "failed") {
+          warnings.push(`live listing unavailable for ${id} (${fetched.error}); rows left alone`);
+        }
+        trusted.set(id, null);
+      } else {
+        trusted.set(id, new Set([...fetched.ids].filter((mid) => !isMetaModel(id, mid)).map((modelId) => `${id}/${modelId}`)));
+      }
+    } catch (error) {
+      warnings.push(`live listing failed for ${id} (${error instanceof Error ? error.message : String(error)}); rows left alone`);
+      trusted.set(id, null);
+    }
+  }
   if (orModels && active.has("openrouter")) {
     // A fetched public catalog is authoritative for removals.
     trusted.set("openrouter", new Set([...orModels.keys()].filter((id) => !isMetaModel("openrouter", id)).map((id) => `openrouter/${id}`)));
@@ -197,15 +226,20 @@ export async function reconcileCatalogue(
 
   // New rows: dynamic live listings plus fresh OpenRouter catalog entries.
   // Meta models (routers, batch endpoints) are never rows, same as refresh.
+  // Bare live listings (ids without pricing or context metadata) are skipped
+  // with a warning instead of entering the catalogue as false-free rows.
   const candidates: Array<{ provider: string; model: Model<Api> }> = [];
   for (const id of dynamicIds) {
     const scope = trusted.get(id);
     if (scope === null || scope === undefined) continue;
     for (const model of liveByProvider.get(id) ?? []) {
       const key = `${id}/${model.id}`;
-      if (!existing.has(key) && !isMetaModel(String(model.provider), model.id)) {
-        candidates.push({ provider: id, model });
+      if (existing.has(key) || isMetaModel(String(model.provider), model.id)) continue;
+      if (!hasListingMetadata(model)) {
+        warnings.push(`${key} listed live without pricing or context metadata; skipped (needs pi-ai update)`);
+        continue;
       }
+      candidates.push({ provider: id, model });
     }
   }
   if (orModels && active.has("openrouter")) {
@@ -225,6 +259,23 @@ export async function reconcileCatalogue(
       }
     } catch (error) {
       warnings.push(`could not build row for ${model.provider}/${model.id}: ${(error as Error).message}`);
+    }
+  }
+
+  // Live-listed ids with no row anywhere have no metadata to build from:
+  // report them instead of guessing rows.
+  {
+    const known = new Set([...existing.keys(), ...added]);
+    for (const [id, def] of Object.entries(definitions)) {
+      if (!def.liveListings) continue;
+      const scope = trusted.get(id);
+      if (scope === null || scope === undefined) continue;
+      for (const key of scope) {
+        if (!known.has(key)) {
+          known.add(key);
+          warnings.push(`${key} listed live without catalogue metadata; skipped (needs pi-ai update)`);
+        }
+      }
     }
   }
 

@@ -85,8 +85,17 @@ export interface ProviderDefinition {
   /** Billing/access modes: usage, subscription, free. */
   modes?: string[];
   billing?: ProviderBilling;
+  /** Treat every row from this provider as free (zero pricing + free flag).
+   * Machine-local escape hatch for accounts that only ever use a provider's
+   * free tier (e.g. quota access with no funds): list prices are fiction
+   * there, so selection and cost math use zero instead. */
+  assumeFree?: boolean;
   /** Default effective-cost multiplier (machine config overrides). */
   costMultiplier?: number;
+  /** Verify membership against the provider's live /models listing and prune
+   * rows that vanished upstream. New live ids are reported, never guessed
+   * into rows (no metadata to build from). Requires baseUrl. */
+  liveListings?: boolean;
 }
 
 interface RawProvider {
@@ -100,6 +109,8 @@ interface RawProvider {
   funded?: unknown;
   modes?: unknown;
   cost_multiplier?: unknown;
+  live_listings?: unknown;
+  assume_free?: unknown;
   billing?: unknown;
 }
 
@@ -123,6 +134,8 @@ function providerDefinition(value: RawProvider): ProviderDefinition {
     ...(typeof value.base_url === "string" ? { baseUrl: value.base_url } : {}),
     ...(typeof value.keyless === "boolean" ? { keyless: value.keyless } : {}),
     ...(typeof value.disabled === "boolean" ? { disabled: value.disabled } : {}),
+    ...(value.assume_free === true ? { assumeFree: true as const } : {}),
+    ...(value.live_listings === true ? { liveListings: true as const } : {}),
     ...(typeof value.funded === "boolean" ? { funded: value.funded } : {}),
     ...(Array.isArray(value.modes)
       ? { modes: value.modes.filter((v): v is string => typeof v === "string") }

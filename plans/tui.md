@@ -15,8 +15,8 @@ This file details upgrades or issues to be planned for the TUI
 
 # Models page
 - Can't see the selected item (hover color or indicator) when hovering a major category (like a provider)
+- [ ] Feature #166: Models page: visible selection indicator on provider/family group headers
 
 # Spend Page
 
 
-- [ ] Feature #166: Models page: visible selection indicator on provider/family group headers

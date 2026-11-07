@@ -19,7 +19,11 @@ test("provider data defines funding, extras, and endpoints", () => {
   assert.equal(defs.deepinfra.baseUrl, "https://api.deepinfra.com/v1/openai");
   assert.deepEqual(defs.deepinfra.envKeys, ["DEEPINFRA_API_KEY"]);
   assert.equal(defs.nvidia.funded, undefined);
-  assert.equal(defs.nvidia.disabled, true);
+  assert.equal(defs.nvidia.disabled, undefined);
+  assert.equal(defs.nvidia.liveListings, true);
+  assert.equal(defs.nvidia.baseUrl, "https://integrate.api.nvidia.com/v1");
+  assert.equal(defs.groq.liveListings, true);
+  assert.equal(defs.groq.baseUrl, "https://api.groq.com/openai/v1");
   assert.deepEqual(defs.anthropic.envKeys, ["ANTHROPIC_API_KEY"]);
 });
 

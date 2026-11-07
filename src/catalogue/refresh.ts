@@ -13,6 +13,8 @@ import type { Model, Api } from "@earendil-works/pi-ai";
 import { benchmarksFor, BENCHMARKS, type Benchmarks } from "./benchmarks.js";
 import { buildCanonicalIndex, normalizeModelSlug, resolveCanonical } from "./canonical.js";
 import { loadProviderDefinitions } from "../data.js";
+import { loadCatalogue } from "./load.js";
+import { fetchLiveListing } from "./discovery.js";
 import { classifyModel } from "./kind.js";
 import { applyModelOverrides, loadModelOverrides, type ModelOverride } from "./overlay.js";
 import {
@@ -248,6 +250,45 @@ export function assembleDocument(rows: CatalogueRow[]): CatalogueDocument {
 }
 
 /**
+ * A live listing without model metadata cannot produce a catalogue row:
+ * unknown context breaks budgeting and unknown pricing would false-flag the
+ * row as free. Only fully described entries (static baselines and
+ * metadata-rich listings like DeepInfra's) pass; bare OpenAI id listings
+ * are skipped with a warning naming them.
+ */
+export function hasListingMetadata(model: { contextWindow?: unknown; maxTokens?: unknown }): boolean {
+  return (
+    typeof model.contextWindow === "number" &&
+    model.contextWindow > 0 &&
+    typeof model.maxTokens === "number" &&
+    model.maxTokens > 0
+  );
+}
+
+/**
+ * Zero out pricing for providers the machine uses only on free tier
+ * ([provider] assume_free in the machine override). Runs at refresh time so
+ * quota-only accounts see those rows as free instead of list-priced.
+ * Returns the touched row keys.
+ */
+export function applyAssumedFree(
+  rows: CatalogueRow[],
+  defs: Record<string, { assumeFree?: boolean }>,
+): string[] {
+  const free = new Set(Object.entries(defs).filter(([, d]) => d.assumeFree === true).map(([id]) => id));
+  if (free.size === 0) return [];
+  const touched: string[] = [];
+  for (const row of rows) {
+    if (!free.has(row.providerID)) continue;
+    row.pricing = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    row.free = true;
+    row.provenance.curated.push("assume_free");
+    touched.push(row.key);
+  }
+  return touched;
+}
+
+/**
  * Build one catalogue row from a live model, applying the same enrichment
  * as a full refresh: benchmark overlay, canonical resolution, metadata
  * scores, curation, and committed overrides. Returns null when a curation
@@ -421,12 +462,14 @@ export interface RefreshResult {
   warnings: string[];
   /** Rows removed by curation vetoes. */
   curatedVetoes: number;
+  /** Keys removed by curation vetoes, so silent exclusions stay visible. */
+  curatedVetoKeys: string[];
 }
 
 export async function refreshCatalogue(
   layout: Layout,
   models: ReadonlyArray<Model<Api>>,
-  options: { openRouterKey?: string | undefined } = {},
+  options: { openRouterKey?: string | undefined; liveListings?: Map<string, Set<string> | null> } = {},
 ): Promise<RefreshResult> {
   const warnings: string[] = [];
 
@@ -484,9 +527,16 @@ export async function refreshCatalogue(
   const modelOverrides = loadModelOverrides();
   const rows: CatalogueRow[] = [];
   let curatedVetoes = 0;
+  const curatedVetoKeys: string[] = [];
 
   for (const model of models) {
     if (isMetaModel(String(model.provider), model.id)) continue;
+    if (!hasListingMetadata(model)) {
+      warnings.push(
+        `${model.provider}/${model.id} listed without pricing or context metadata; skipped (needs pi-ai update)`,
+      );
+      continue;
+    }
     const row = buildCatalogueRow(model, {
       orModels,
       orBenchmarks,
@@ -497,13 +547,98 @@ export async function refreshCatalogue(
     });
     if (!row) {
       curatedVetoes += 1;
+      curatedVetoKeys.push(`${model.provider}/${model.id}`);
       continue;
     }
     rows.push(row);
+  }
+  await applyLiveListings(rows, layout, warnings, options.liveListings);
+  const assumedFree = applyAssumedFree(rows, loadProviderDefinitions());
+  if (assumedFree.length > 0) {
+    warnings.push(`${assumedFree.length} row(s) treated as free by provider assume_free`);
   }
 
   const document = assembleDocument(rows);
   mkdirSync(dirname(layout.catalogueFile), { recursive: true });
   writeFileSync(layout.catalogueFile, JSON.stringify(document, null, 2) + "\n", "utf8");
-  return { document, file: layout.catalogueFile, warnings, curatedVetoes };
+  return { document, file: layout.catalogueFile, warnings, curatedVetoes, curatedVetoKeys };
+}
+
+/**
+ * Membership check against live listings for providers marked `live_listings`.
+ * Static rows for ids that vanished upstream are dropped; existing rows for
+ * live ids the fresh build missed are carried over so working models keep
+ * their static metadata and pricing. Live ids with no row anywhere are only
+ * reported, never guessed into rows. Providers whose listing cannot be
+ * verified keep today's behavior. `overrides` is a test seam (explicit sets
+ * win; absent providers behave as unverifiable); production callers omit it
+ * and the listings are fetched.
+ */
+export async function applyLiveListings(
+  rows: CatalogueRow[],
+  layout: Layout,
+  warnings: string[],
+  overrides?: Map<string, Set<string> | null>,
+): Promise<void> {
+  const defs = loadProviderDefinitions();
+  const tracked = Object.entries(defs).filter(([, d]) => d.liveListings === true && d.baseUrl);
+  if (tracked.length === 0) return;
+  const live = new Map<string, Set<string> | null>();
+  for (const [id, def] of tracked) {
+    if (overrides !== undefined) {
+      live.set(id, overrides.get(id) ?? null);
+      continue;
+    }
+    const fetched = await fetchLiveListing({ baseUrl: def.baseUrl, envKeys: def.envKeys }, id);
+    if (!fetched.ok) {
+      // Unconfigured providers stay silent (nothing to verify against);
+      // only real fetch failures are worth a warning.
+      if (fetched.reason === "failed") {
+        warnings.push(`live listing unavailable for ${id} (${fetched.error}); rows left alone`);
+      }
+      live.set(id, null);
+      continue;
+    }
+    live.set(id, new Set([...fetched.ids].filter((mid) => !isMetaModel(id, mid)).map((modelId) => `${id}/${modelId}`)));
+  }
+  // Prune built rows the provider no longer lists.
+  const dropped: string[] = [];
+  const kept: CatalogueRow[] = [];
+  for (const row of rows) {
+    const scope = live.get(row.providerID);
+    if (scope !== undefined && scope !== null && !scope.has(row.key)) {
+      dropped.push(row.key);
+      continue;
+    }
+    kept.push(row);
+  }
+  rows.length = 0;
+  rows.push(...kept);
+  const freshKeys = new Set(rows.map((row) => row.key));
+  // Carry over existing rows for live ids the fresh build missed.
+  const prior = loadCatalogue(layout.catalogueFile);
+  if (prior) {
+    for (const row of prior.models) {
+      const scope = live.get(row.providerID);
+      if (scope === undefined || scope === null || freshKeys.has(row.key)) continue;
+      if (!scope.has(row.key)) {
+        dropped.push(row.key);
+        continue;
+      }
+      rows.push(row);
+      freshKeys.add(row.key);
+    }
+  }
+  // Unknown live ids have no metadata to build from: report, don't guess.
+  if (dropped.length > 0) {
+    warnings.push(`dropped ${[...new Set(dropped)].join(", ")} (no longer listed upstream)`);
+  }
+  const known = new Set(freshKeys);
+  if (prior) for (const row of prior.models) known.add(row.key);
+  for (const [id, scope] of live) {
+    if (scope === null) continue;
+    for (const key of scope) {
+      if (!known.has(key)) warnings.push(`${key} listed live without catalogue metadata; skipped (needs pi-ai update)`);
+    }
+  }
 }

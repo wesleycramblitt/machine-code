@@ -5,3 +5,9 @@ id = "groq"
 name = "Groq"
 env_keys = ["GROQ_API_KEY"]
 modes = ["usage"]
+# Live /models listing: Groq rotates models often (and retires old ones), so
+# the catalogue prunes rows the listing no longer contains. New ids are only
+# reported, never guessed into rows: without pi-ai metadata there is no
+# context window or pricing to build from.
+live_listings = true
+base_url = "https://api.groq.com/openai/v1"

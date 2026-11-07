@@ -56,6 +56,7 @@ import { isGenericTaskRequest, issueRequestVerb, issueRunRequest } from "./issue
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
 import { loadCatalogue } from "./catalogue/load.js";
+import { loadCuration } from "./catalogue/refresh.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
@@ -782,7 +783,7 @@ export async function runTui(): Promise<void> {
   let page: Page = "runs";
   let screen: Screen = "list";
   /** Repo scope for the runs list. `f` toggles all repos vs the TUI cwd. */
-  let runsRepoScope: RunsRepoScope = "all";
+  let runsRepoScope: RunsRepoScope = "cwd";
   let runsText = "";
   let runsGroup: RunGroup = "gh-issue";
   let runsSel = 0;
@@ -2999,6 +3000,18 @@ export async function runTui(): Promise<void> {
         }
       }
       if (lines.length === 0) lines.push(` ${D}No matching models.${R}`);
+      // Vetoed rows never enter the catalogue; list them dimmed with their
+      // reason so a missing model is explainable in place (curation.toml).
+      const vetoed = [...loadCuration(l).models.entries()].filter(([, entry]) => entry.veto === true);
+      const vetoQuery = modelText.trim().toLowerCase();
+      const shownVetoed = vetoed.filter(([key]) => vetoQuery.length === 0 || key.toLowerCase().includes(vetoQuery));
+      if (shownVetoed.length > 0) {
+        lines.push("", ` ${D}Vetoed (${shownVetoed.length}) — excluded by ~/.machine_code/curation.toml; remove the stanza to restore${R}`);
+        for (const [key, entry] of shownVetoed) {
+          const why = [entry.source ?? entry.note, entry.date].filter((part) => part && part.length > 0).join(" · ");
+          lines.push(`  ${GR}✕ ${key}${R}${why ? ` ${D}${trunc(why, Math.max(10, cols - key.length - 8))}${R}` : ""}`);
+        }
+      }
       const w = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), modelScroll, bodyH);
       modelScroll = w.scroll;
       body = clipBody(w.lines);

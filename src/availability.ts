@@ -36,6 +36,13 @@ export interface ClassifiedError {
   disableProvider: boolean;
   /** Whether to mark the provider needs-auth. */
   needsAuth: boolean;
+  /**
+   * The model itself is gone (410 Gone, EOL, 404, deprecated) as opposed to
+   * temporarily unavailable. Callers may persist this as a catalogue veto so
+   * the row disappears instead of burning a call every cooldown cycle.
+   * Auth/quota failures never set this: a broken credential is not a dead model.
+   */
+  permanent?: boolean;
 }
 
 const COOLDOWN_TIERS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000, 24 * 60 * 60_000, 7 * 24 * 60 * 60_000, 30 * 24 * 60 * 60_000];
@@ -286,7 +293,7 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     };
   }
   // End-of-life / gone model: cool it for a week and let the one bounded
-  // retry pick another model.
+  // retry pick another model. Permanent: the listing should drop the row.
   if (code === 410 || /\b410\b/.test(msg) || msg.includes("end of life") || msg.includes("no longer available")) {
     return {
       kind: "missing-model",
@@ -296,6 +303,7 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
       target: "model",
       disableProvider: false,
       needsAuth: false,
+      permanent: true,
     };
   }
   // Upstream says the model is unavailable (OpenRouter 400 server_error). It is
@@ -312,9 +320,10 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
       needsAuth: false,
     };
   }
-  // Missing/deprecated model
+  // Missing/deprecated model. Permanent: the row should not come back on the
+  // next refresh — record a veto instead of cooling forever.
   if (code === 404 || msg.includes("model not found") || msg.includes("does not exist") || msg.includes("deprecated")) {
-    return { kind: "missing-model", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
+    return { kind: "missing-model", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false, permanent: true };
   }
   // Provider stall: no headers/first token in time. Retry elsewhere and let the
   // model's cooldown tier escalate on repeated stalls.

@@ -196,6 +196,35 @@ test("curation vetoes block re-adding removed models", async () => {
   }
 });
 
+test("bare live listings are skipped, never added as free rows", async () => {
+  const { layout } = setup();
+  try {
+    seedDoc(layout, [fakeModel("groq", "keep"), fakeModel("groq", "dead")]);
+    const models = fakeModels({
+      groq: {
+        models: [
+          fakeModel("groq", "keep"),
+          { ...fakeModel("groq", "bare-new"), contextWindow: 0, maxTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        ],
+      },
+    });
+    const result = await reconcileCatalogue(layout, models, () => true, {
+      openRouterModels: null,
+      liveListings: new Map([["groq", new Set(["groq/keep", "groq/bare-new"])]]),
+    });
+    assert.deepEqual(result.removed, ["groq/dead"]);
+    assert.ok(!result.added.includes("groq/bare-new"));
+    const doc = loadCatalogue(layout.catalogueFile);
+    const keys = doc.models.map((r) => r.key);
+    assert.ok(!keys.includes("groq/bare-new"), "bare live ids must not become rows");
+    assert.ok(keys.includes("groq/keep"));
+    assert.ok(result.warnings.some((w) => w.includes("groq/bare-new") && w.includes("skipped")));
+  } finally {
+    rmSync(layout.repoRoot, { recursive: true, force: true });
+    rmSync(layout.home, { recursive: true, force: true });
+  }
+});
+
 test("router and batch variants never become rows", async () => {
   const { layout } = setup();
   try {
