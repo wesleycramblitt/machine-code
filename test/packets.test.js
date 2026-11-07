@@ -1,6 +1,6 @@
 /**
  * Packet-file work model: slugs, front-matter parsing, canonical render,
- * TaskPacket mapping, and the plans/plan.md index + annotation.
+ * TaskPacket mapping, and the plans/index.md + packets/ index + annotation.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -109,7 +109,7 @@ test("renderPacketFile round-trips and is canonical", () => {
   try {
     const source = parsePacketDoc("rt", DOC).packet;
     const file = writePacketFile(layout, source);
-    assert.equal(file, join(root, "plans", "rt.md"));
+    assert.equal(file, join(root, "packets", "rt.md"));
     const text = renderPacketFile(source);
     assert.match(text, /^---\n/);
     assert.match(text, /rate-limiter/);
@@ -127,12 +127,12 @@ test("listPacketFiles lists only valid slug packets, sorted", () => {
   try {
     writePacketFile(layout, parsePacketDoc("a", "# a\n\n## Deliverable\nA\n").packet);
     writePacketFile(layout, parsePacketDoc("b", "# b\n\n## Deliverable\nB\n").packet);
-    writeFileSync(join(root, "plans", "notes.txt"), "not a packet", "utf8");
-    writeFileSync(join(root, "plans", "UPPER.md"), "# not a slug\n", "utf8");
+    writeFileSync(join(root, "packets", "notes.txt"), "not a packet", "utf8");
+    writeFileSync(join(root, "packets", "UPPER.md"), "# not a slug\n", "utf8");
     // The index and a topic note are not packets, even though their names
     // would be valid slugs.
     ensureIndex(layout);
-    writeFileSync(join(root, "plans", "tui.md"), "# TUI\n\n## Later\n- polish\n", "utf8");
+    writeFileSync(join(root, "packets", "tui.md"), "# TUI\n\n## Later\n- polish\n", "utf8");
     assert.deepEqual(listPacketFiles(layout).map((p) => p.slug), ["a", "b"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -170,13 +170,13 @@ test("addIndexEntry inserts under a heading and replaces by slug", () => {
   try {
     addIndexEntry(layout, "Bugs", "login-token-refresh", "auth flaky");
     addIndexEntry(layout, "Bugs", "rate-limiter", "API limits");
-    const body = readFileSync(join(root, "plans", "plan.md"), "utf8");
-    assert.match(body, /- \[ \] login-token-refresh — auth flaky → plans\/login-token-refresh\.md/);
+    const body = readFileSync(join(root, "plans", "index.md"), "utf8");
+    assert.match(body, /- \[ \] login-token-refresh — auth flaky → packets\/login-token-refresh\.md/);
     assert.match(body, /- \[ \] rate-limiter — API limits/);
     // Replace renames the title in place: exactly one live bullet remains.
     addIndexEntry(layout, "Bugs", "login-token-refresh", "auth flaky, renamed");
     assert.doesNotMatch(body, /auth flaky, renamed/); // body is stale; re-read
-    const after = readFileSync(join(root, "plans", "plan.md"), "utf8");
+    const after = readFileSync(join(root, "plans", "index.md"), "utf8");
     assert.equal(after.split("\n").filter((line) => line.includes("- [ ] login-token-refresh")).length, 1);
     assert.match(after, /auth flaky, renamed/);
     assert.doesNotMatch(after, /auth flaky —/);
@@ -191,14 +191,14 @@ test("markIndexDone moves the line to Done and removeIndexEntry clears it", () =
   try {
     addIndexEntry(layout, "Features", "thermal-model", "the model");
     markIndexDone(layout, "thermal-model", "the model");
-    let body = readFileSync(join(root, "plans", "plan.md"), "utf8");
+    let body = readFileSync(join(root, "plans", "index.md"), "utf8");
     assert.match(body, /## Done/);
     // Done lines carry no dead packet link: exactly one bullet, checked.
     assert.match(body, /- \[x\] thermal-model — the model\n/);
     assert.doesNotMatch(body, /\[x\] thermal-model.*plans\/thermal-model/);
     assert.equal(body.split("\n").filter((line) => line.includes("thermal-model")).length, 1);
     removeIndexEntry(layout, "thermal-model");
-    body = readFileSync(join(root, "plans", "plan.md"), "utf8");
+    body = readFileSync(join(root, "plans", "index.md"), "utf8");
     assert.doesNotMatch(body, /thermal-model/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -223,7 +223,7 @@ test("renderPlan annotates item status, deps, and blockers", () => {
     assert.equal(item.status, "blocked");
     assert.equal(item.hasPacket, true);
     // The index line itself is untouched; annotation is additive.
-    assert.equal(indexLine("payments", "vendor payouts"), "- [ ] payments — vendor payouts → plans/payments.md");
+    assert.equal(indexLine("payments", "vendor payouts"), "- [ ] payments — vendor payouts → packets/payments.md");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

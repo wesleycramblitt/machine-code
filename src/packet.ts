@@ -26,7 +26,7 @@ export interface TaskPacket {
   id: string;
   /** Omitted for a single-agent packet. */
   mode?: PacketMode;
-  agent?: "general" | "sudo" | "build" | "review";
+  agent?: "research" | "build" | "review";
   budget_tokens?: number;
   goal: string;
   context: string[];

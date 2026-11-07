@@ -93,7 +93,7 @@ export function forkSettingsFromRun(input: {
   const floors = allZero && settings?.minFit === 0 ? "off" : hasAxes ? "strict" : "role";
 
   return {
-    agent: oneOf(summary.agent, AGENT_NAMES, "general"),
+    agent: oneOf(summary.agent, AGENT_NAMES, "research"),
     ...(model ? { model } : {}),
     preset: oneOf(summary.preset ?? cfg.preset, PRESETS, defaults.preset),
     verification: oneOf(

@@ -80,10 +80,10 @@ async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<{ c
   return runProc("git", args, { cwd, timeoutMs });
 }
 
-/** Stage and commit everything under `plans/` (packet deletion + index edit). */
+/** Stage and commit both `plans/` (map) and `packets/` (contracts). */
 async function commitPlans(root: string, message: string): Promise<void> {
-  await git(root, ["add", "-A", "--", "plans"]);
-  const status = await git(root, ["status", "--porcelain", "--", "plans"]);
+  await git(root, ["add", "-A", "--", "plans", "packets"]);
+  const status = await git(root, ["status", "--porcelain", "--", "plans", "packets"]);
   if (status.stdout.trim() === "") return;
   let commit = await git(root, ["commit", "-m", message], 60_000);
   if (commit.code !== 0) {

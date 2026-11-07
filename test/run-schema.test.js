@@ -160,7 +160,7 @@ test("RunRecorder writes v2 summary atomically and tracks lifecycle state", () =
   const root = tempDir("recorder");
   const layout = fakeLayout(root);
   const recorder = new RunRecorder(layout, {
-    agent: "general",
+    agent: "research",
     mode: "",
     request: "test request",
     repoRoot: root,
@@ -248,7 +248,7 @@ test("finalize refuses non-terminal statuses and defers to setStatus", () => {
   const root = tempDir("finalize");
   const layout = fakeLayout(root);
   const recorder = new RunRecorder(layout, {
-    agent: "general",
+    agent: "research",
     mode: "",
     request: "r",
     repoRoot: root,
@@ -272,7 +272,7 @@ test("readRun/listRuns migrate legacy v1 run.json files on read", () => {
     JSON.stringify({
       id: "20261030-120000-aaaa",
       repoRoot: root,
-      agent: "general",
+      agent: "research",
       mode: "",
       request: "old run",
       status: "done",
@@ -304,7 +304,7 @@ test("reconcileRun marks dead-owner running/created runs interrupted, keeps paus
   const base = {
     id: "r1",
     repoRoot: "/repo",
-    agent: "general",
+    agent: "research",
     mode: "",
     request: "r",
     pid: 999999999, // not alive
@@ -328,13 +328,13 @@ test("prune skips active runs and removes old terminal ones", async () => {
   const layout = fakeLayout(root);
   registerProject(layout.home, root);
   const active = new RunRecorder(layout, {
-    agent: "general",
+    agent: "research",
     mode: "",
     request: "keep me",
     repoRoot: root,
   });
   const old = new RunRecorder(layout, {
-    agent: "general",
+    agent: "research",
     mode: "",
     request: "remove me",
     repoRoot: root,
@@ -390,7 +390,7 @@ test("RunRecorder tracks current and peak context", () => {
   const root = tempDir("context");
   const layout = fakeLayout(root);
   const recorder = new RunRecorder(layout, {
-    agent: "general",
+    agent: "research",
     mode: "",
     request: "context test",
     repoRoot: root,

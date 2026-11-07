@@ -152,7 +152,7 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
  * Review is harness-owned (independent Review run), not a skill.
  */
 export function defaultSkillsFor(args: { agent: string; verification?: string }): string[] {
-  if (!["build", "planner", "general", "sudo"].includes(args.agent)) return [];
+  if (!["build", "planner", "research"].includes(args.agent)) return [];
   const skills = ["clean-code"];
   if (args.verification === "verified" || args.verification === "redundant") {
     skills.push("verified-testing");

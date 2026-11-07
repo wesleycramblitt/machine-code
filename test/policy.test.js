@@ -57,17 +57,17 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
     assert.equal(machine.providers["opencode-go"].costMultiplier, 0.5);
 
     const policy = loadPolicy(layout);
-    assert.equal(policy.agents.general.minCapability, 7.2);
-    assert.equal(policy.agents.general.minContext, 30_000);
-    assert.deepEqual(policy.agents.general.minAxes, { reasoning: 7 });
-    assert.deepEqual(policy.agents.general.axisWeights, { reasoning: 0.4 });
+    assert.equal(policy.agents.research.minCapability, 7.2);
+    assert.equal(policy.agents.research.minContext, 30_000);
+    assert.deepEqual(policy.agents.research.minAxes, { reasoning: 7 });
+    assert.deepEqual(policy.agents.research.axisWeights, { reasoning: 0.4 });
 
     assert.equal(policy.agents.build.minCapability, 7.6, "repo wins on the composite");
     assert.equal(policy.agents.build.minFit, 7.2, "repo wins on the role-weighted floor");
     assert.equal(policy.agents.build.maxTurns, 12, "max_turns parses as a per-run cap");
     assert.deepEqual(policy.agents.build.minAxes, { reasoning: 7, code: 6.3 }, "axes merge per axis");
     assert.equal(policy.agents.review.minCapability, 7.2, "global default applies to unnamed roles");
-    assert.equal(policy.agents.general.minFit, 6, "min_fit falls back to the built-in default");
+    assert.equal(policy.agents.research.minFit, 6, "min_fit falls back to the built-in default");
     assert.equal(DEFAULT_AGENT_POLICY.minCapability, 0);
     assert.equal(DEFAULT_AGENT_POLICY.minFit, 6);
   } finally {
@@ -102,7 +102,7 @@ test("free floors parse and merge per axis across policy layers", () => {
       { reasoning: 4.5, code: 5, agentic: 5, general: 2.5 },
       "free axes merge with the defaults per axis",
     );
-    assert.equal(policy.agents.general.freeMinFit, 5.5, "built-in free floor applies to unnamed roles");
+    assert.equal(policy.agents.research.freeMinFit, 5.5, "built-in free floor applies to unnamed roles");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

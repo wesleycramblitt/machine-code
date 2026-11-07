@@ -42,7 +42,7 @@ test("machine funding overrides data in both directions", () => {
 });
 
 test("roles, prompts, tools, and presets come from data", () => {
-  assert.deepEqual([...AGENT_NAMES], ["general", "planner", "build", "review", "sudo"]);
+  assert.deepEqual([...AGENT_NAMES], ["research", "planner", "build", "review"]);
   assert.equal(rolePreset("planner"), "plan");
   assert.equal(ROLE_PRESET.build, "implement");
   assert.equal(PRESETS.orchestrate.delegate, true);

@@ -60,10 +60,10 @@ test("transcript save/load round-trips atomically", () => {
   const dir = tempDir("tr");
   try {
     const messages = [{ role: "system", content: "sys" }, user("hello"), assistant("hi")];
-    saveTranscript(dir, { agent: "general", request: "hello", messages });
+    saveTranscript(dir, { agent: "research", request: "hello", messages });
     const loaded = loadTranscript(dir);
     assert.ok(loaded);
-    assert.equal(loaded.agent, "general");
+    assert.equal(loaded.agent, "research");
     assert.equal(loaded.request, "hello");
     assert.equal(loaded.messages.length, 3);
     assert.ok(!readdirHasTmp(dir));
@@ -214,7 +214,7 @@ test("waitForAnswer resolves when the answer lands and rejects on abort", async 
 test("askTool suspends, records the question, and returns the inbox answer", async () => {
   const root = tempDir("ask");
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "general", mode: "", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "research", mode: "", request: "r", repoRoot: root });
   let questionId = null;
   try {
     // The loop provides the suspension hook; it checkpoints the transcript
@@ -223,7 +223,7 @@ test("askTool suspends, records the question, and returns the inbox answer", asy
     const tool = askTool({
       runDir: recorder.dir,
       recorder,
-      suspend: () => saveTranscript(recorder.dir, { agent: "general", request: "r", messages: pendingTail }),
+      suspend: () => saveTranscript(recorder.dir, { agent: "research", request: "r", messages: pendingTail }),
     });
     const execution = tool.execute("call-1", { question: "Which format?" });
 
@@ -258,7 +258,7 @@ test("askTool suspends, records the question, and returns the inbox answer", asy
 test("askTool returns an error result when the wait is aborted", async () => {
   const root = tempDir("ask-abort");
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "general", mode: "", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "research", mode: "", request: "r", repoRoot: root });
   try {
     const controller = new AbortController();
     const tool = askTool({ runDir: recorder.dir, recorder });
@@ -310,7 +310,7 @@ test("RunRecorder records fork lineage and can be reopened for resume", () => {
 test("sendControl writes a sequenced request and bumps from the ack", () => {
   const root = tempDir("control");
   const layout = fakeLayout(root);
-  const recorder = new RunRecorder(layout, { agent: "general", mode: "", request: "r", repoRoot: root });
+  const recorder = new RunRecorder(layout, { agent: "research", mode: "", request: "r", repoRoot: root });
   try {
     const seq1 = sendControl(root, recorder.id, "pause");
     assert.equal(seq1, 1);

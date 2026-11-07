@@ -16,9 +16,8 @@ const decision = (text) => [{ kind: "decision", status: "active", text }];
 
 test("only Build has the mandatory change-plan gate", () => {
   assert.equal(needsBuildPlan("build"), true);
-  assert.equal(needsBuildPlan("sudo"), false);
   assert.equal(needsBuildPlan("planner"), false);
-  assert.equal(needsBuildPlan("general"), false);
+  assert.equal(needsBuildPlan("research"), false);
 });
 
 test("a decision that merely mentions a plan is not a change plan", () => {

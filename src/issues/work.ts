@@ -109,7 +109,7 @@ export function issueRequestVerb(agent: string): IssueRequestVerb {
       return "Plan";
     case "review":
       return "Review";
-    case "general":
+    case "research":
       return "Investigate";
     default:
       return "Implement";

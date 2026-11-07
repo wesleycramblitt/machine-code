@@ -253,16 +253,4 @@ export function agentDef(layout: Layout, name: AgentName): AgentDef {
   };
 }
 
-/* Compatibility helpers for the built-in roles. */
-export function generalAgent(layout: Layout): AgentDef {
-  return agentDef(layout, "general");
-}
-export function buildAgent(layout: Layout): AgentDef {
-  return agentDef(layout, "build");
-}
-export function reviewAgent(layout: Layout): AgentDef {
-  return agentDef(layout, "review");
-}
-export function sudoAgent(layout: Layout): AgentDef {
-  return agentDef(layout, "sudo");
-}
+

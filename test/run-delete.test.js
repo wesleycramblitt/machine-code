@@ -29,7 +29,7 @@ test("a terminal run is removed from disk", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-run-del-"));
   try {
     const l = layout(root);
-    const recorder = new RunRecorder(l, { agent: "general", mode: "", request: "test", repoRoot: root });
+    const recorder = new RunRecorder(l, { agent: "research", mode: "", request: "test", repoRoot: root });
     recorder.finalize("completed", undefined, "done");
     const run = recorder.current;
     assert.ok(readRun(l, run.id));
@@ -45,7 +45,7 @@ test("active deletion can be refused explicitly", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-run-del-active-"));
   try {
     const l = layout(root);
-    const recorder = new RunRecorder(l, { agent: "general", mode: "", request: "test", repoRoot: root });
+    const recorder = new RunRecorder(l, { agent: "research", mode: "", request: "test", repoRoot: root });
     await assert.rejects(
       deleteRun({ layout: l, run: recorder.current, terminate: false }),
       /cancel or finish/,
@@ -60,7 +60,7 @@ test("an active run with no live owner is deleted", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-run-del-dead-owner-"));
   try {
     const l = layout(root);
-    const recorder = new RunRecorder(l, { agent: "general", mode: "", request: "test", repoRoot: root });
+    const recorder = new RunRecorder(l, { agent: "research", mode: "", request: "test", repoRoot: root });
     recorder.setStatus("awaiting_input", "ask");
     const run = { ...recorder.current, pid: 999_999 };
     const result = await deleteRun({ layout: l, run });
@@ -76,7 +76,7 @@ test("deleting a live awaiting run cancels the owner and waits for exit", async 
   let child;
   try {
     const l = layout(root);
-    const recorder = new RunRecorder(l, { agent: "general", mode: "", request: "test", repoRoot: root });
+    const recorder = new RunRecorder(l, { agent: "research", mode: "", request: "test", repoRoot: root });
     recorder.setStatus("awaiting_input", "ask");
     const runDir = join(l.runsDir, recorder.current.id);
     const script = `

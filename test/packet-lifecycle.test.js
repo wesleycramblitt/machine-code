@@ -76,8 +76,8 @@ test("deletePacket removes the file, index line, and branch, and commits", async
 
     await deletePacket(l, "login-token-refresh");
 
-    assert.equal(existsSync(join(root, "plans", "login-token-refresh.md")), false);
-    assert.doesNotMatch(readFileSync(join(root, "plans", "plan.md"), "utf8"), /login-token-refresh/);
+    assert.equal(existsSync(join(root, "packets", "login-token-refresh.md")), false);
+    assert.doesNotMatch(readFileSync(join(root, "plans", "index.md"), "utf8"), /login-token-refresh/);
     assert.equal(git(root, ["branch", "--list", "mc/login-token-refresh"]), "");
     assert.match(git(root, ["log", "--oneline", "-1"]), /delete login-token-refresh/);
   } finally {
@@ -99,8 +99,8 @@ test("approvePacket merges the branch, marks Done, and deletes the packet", asyn
     await approvePacket(l, "login-token-refresh");
 
     // Packet file gone; index line moved to Done (no dead link).
-    assert.equal(existsSync(join(root, "plans", "login-token-refresh.md")), false);
-    const index = readFileSync(join(root, "plans", "plan.md"), "utf8");
+    assert.equal(existsSync(join(root, "packets", "login-token-refresh.md")), false);
+    const index = readFileSync(join(root, "plans", "index.md"), "utf8");
     assert.match(index, /## Done/);
     assert.match(index, /- \[x\] login-token-refresh/);
     assert.doesNotMatch(index, /plans\/login-token-refresh\.md/);

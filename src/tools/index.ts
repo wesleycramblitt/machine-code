@@ -513,6 +513,21 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
     prepareArguments: (args) => cleanWritePath(args) as Static<typeof WriteParams>,
     async execute(_id, params: Static<typeof WriteParams>) {
       try {
+        // A role that can write but not edit (research) persists only under
+        // the project's knowledge/, plans/, and .machine_code/ runner dirs.
+        if (ctx.tools && !ctx.tools.includes("edit")) {
+          const p = params.path.replace(/\\/g, "/").replace(/^\.\//, "");
+          const allowed =
+            p === "knowledge" ||
+            p.startsWith("knowledge/") ||
+            p === "plans" ||
+            p.startsWith("plans/") ||
+            p === ".machine_code" ||
+            p.startsWith(".machine_code/");
+          if (!allowed) {
+            return fail(`write is limited to knowledge/ or plans/ for this role: ${params.path}`);
+          }
+        }
         const abs = resolveWithin(ctx.root, params.path);
         mkdirSync(dirname(abs), { recursive: true });
         writeFileSync(abs, params.content, "utf8");

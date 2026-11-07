@@ -1,0 +1,24 @@
+# machine_code agent role: research
+# Machine override: ~/.machine_code/data/agents/research.toml
+# Repo prompt override: .machine_code/agents/research.md
+
+name = "research"
+order = 1
+prompt = '''Research agent. Investigate the repository with the map, read, and search; when findings are worth keeping, persist them — write plain-English notes under knowledge/, sketches or plans under plans/, or plan-file entries. Never edit source code. Cite exact paths. Store anything durable before you stop; if nothing is worth saving, answer directly and say so. Stop.'''
+tools = ["context", "read", "search", "ask", "skill", "write"]
+readonly = false
+issue_access = "none"
+modes = []
+blurb = "investigates and persists findings to knowledge/ and plans/"
+preset = "assistant"
+worktree = false
+capabilities = ["code:read", "context:inherit", "knowledge:write"]
+
+[weights]
+reasoning = 0.4
+general = 0.25
+agentic = 0.25
+code = 0.1
+
+[skills]
+clean-code = "include"

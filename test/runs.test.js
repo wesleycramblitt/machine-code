@@ -42,7 +42,7 @@ test("gh issue groups by repository, then full issue hierarchy and untracked", (
   const otherEpic = issue(5, "epic", "Other Epic", { ref: ref(5, "o/other") });
   const runs = [
     run({ id: "a", issue: task.ref, status: "awaiting_input" }),
-    run({ id: "free", agent: "general", mode: "", status: "completed", startedAt: "2026-01-01T00:00:01.000Z", lastActivityAt: "2026-01-01T00:00:01.000Z" }),
+    run({ id: "free", agent: "research", mode: "", status: "completed", startedAt: "2026-01-01T00:00:01.000Z", lastActivityAt: "2026-01-01T00:00:01.000Z" }),
     run({ id: "plan", agent: "build", mode: "", status: "completed", startedAt: "2026-01-01T00:00:00.000Z", lastActivityAt: "2026-01-01T00:00:00.000Z" }),
     run({ id: "b", repoRoot: repoB, issue: otherEpic.ref, status: "blocked" }),
   ];
@@ -148,7 +148,7 @@ test("repository, section, and issue headings fold their contents", () => {
   const task = issue(31, "task", "Task", { parent: feature.ref });
   const runs = [
     run({ id: "a", issue: task.ref }),
-    run({ id: "free", agent: "general", mode: "", status: "completed" }),
+    run({ id: "free", agent: "research", mode: "", status: "completed" }),
   ];
   const base = buildRunIndex({ runs, issuesByRepo: new Map([[repoA, [epic, feature, task]]]) });
   const repoId = base.rows[0].id;
@@ -223,7 +223,7 @@ test("runs with an unknown issue fall under orphaned, not untracked", () => {
   const missing = ref(99);
   const runs = [
     run({ id: "orphan", issue: missing }),
-    run({ id: "free", agent: "general", mode: "", status: "completed" }),
+    run({ id: "free", agent: "research", mode: "", status: "completed" }),
   ];
   const index = buildRunIndex({ runs, issuesByRepo: new Map([[repoA, []]]) });
   assert.deepEqual(index.orphaned.map((entry) => entry.id), ["orphan"]);
@@ -241,7 +241,7 @@ test("gh issue grouping shows the plan even when no run is linked", () => {
     reserved: { for: feature.ref, kind: "feature-pr" },
     labels: ["mc:reserved"],
   });
-  const runs = [run({ id: "free", agent: "general", mode: "", status: "completed" })];
+  const runs = [run({ id: "free", agent: "research", mode: "", status: "completed" })];
   const index = buildRunIndex({
     runs,
     issuesByRepo: new Map([[repoA, [task37, task36, task0, feature, epic]]]),
@@ -420,7 +420,7 @@ test("planning anchors are always visible, even idle", () => {
   });
   const task = issue(31, "task", "Task", { parent: feature.ref });
   const index = buildRunIndex({
-    runs: [run({ id: "x", agent: "general", mode: "", status: "completed" })],
+    runs: [run({ id: "x", agent: "research", mode: "", status: "completed" })],
     issuesByRepo: new Map([[repoA, [epic, feature, task, task0]]]),
   });
   assert.deepEqual(

@@ -139,7 +139,7 @@ export async function singleAgentRun(input: {
 }
 
 export function policyFor(layout: Layout, name: AgentName, policy: Policy): AgentPolicy {
-  return policy.agents[name] ?? { ...DEFAULT_AGENT_POLICY, toolCall: name !== "general" };
+  return policy.agents[name] ?? { ...DEFAULT_AGENT_POLICY, toolCall: name !== "research" };
 }
 
 export interface ExecutePacketInput {
@@ -434,7 +434,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     });
   }
 
-  const selectedName = input.agentName ?? "general";
+  const selectedName = input.agentName ?? "research";
   const resolved = resolveAgent(layout, selectedName, {
     agentPolicy: policy.agents[selectedName],
     machineOverrides: machine.agents[selectedName],

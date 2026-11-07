@@ -57,17 +57,11 @@ test("role presets resolve to the documented defaults", () => {
   assert.equal(build.issueAccess, "read");
   assert.equal(build.artifactScripts, true);
 
-  const general = resolveAgentConfig({ role: "general" });
+  const general = resolveAgentConfig({ role: "research" });
   assert.equal(general.preset, "assistant");
   assert.equal(general.issues, "disabled");
   assert.equal(general.ask, true);
   assert.equal(general.issueAccess, "none");
-
-  const sudo = resolveAgentConfig({ role: "sudo" });
-  assert.equal(sudo.preset, "unrestricted");
-  assert.equal(sudo.delegate, true);
-  assert.equal(sudo.issues, "optional");
-  assert.equal(sudo.issueAccess, "read");
 });
 
 test("override precedence: run flag > repo policy > machine; presets no longer steer", () => {
@@ -119,7 +113,7 @@ test("roles no longer declare orchestration modes", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-modes-"));
   try {
     const layout = fakeLayout(root);
-    for (const role of ["general", "planner", "build", "review", "sudo"]) {
+    for (const role of ["research", "planner", "build", "review"]) {
       assert.deepEqual(agentDef(layout, role).modes, []);
     }
   } finally {
@@ -128,9 +122,9 @@ test("roles no longer declare orchestration modes", () => {
 });
 
 test("ask is disabled in autonomous mode regardless of the ask flag", () => {
-  const base = resolveAgentConfig({ role: "general" });
+  const base = resolveAgentConfig({ role: "research" });
   assert.equal(askEnabled(base), true);
-  const autonomous = resolveAgentConfig({ role: "general", runOverrides: { ambiguity: "autonomous" } });
+  const autonomous = resolveAgentConfig({ role: "research", runOverrides: { ambiguity: "autonomous" } });
   assert.equal(autonomous.ask, true);
   assert.equal(askEnabled(autonomous), false);
   assert.match(ambiguityPrompt("strict"), /STRICT/);
@@ -139,7 +133,7 @@ test("ask is disabled in autonomous mode regardless of the ask flag", () => {
 
 /* --------------------------------------------------------- capabilities */
 
-test("capability matrix: build, review, general, sudo", () => {
+test("capability matrix: build, review, research, planner", () => {
   const build = capabilitiesFor("build", { ...PRESETS.implement });
   assert.ok(hasCapability(build, "code:write"));
   assert.ok(hasCapability(build, "artifact:provision"));
@@ -154,7 +148,7 @@ test("capability matrix: build, review, general, sudo", () => {
   assert.ok(!hasCapability(review, "code:write"));
   assert.ok(!hasCapability(review, "issue:close"));
 
-  const general = capabilitiesFor("general", { ...PRESETS.assistant });
+  const general = capabilitiesFor("research", { ...PRESETS.assistant });
   assert.ok(hasCapability(general, "code:read"));
   assert.ok(!hasCapability(general, "issue:read"));
 
@@ -163,12 +157,6 @@ test("capability matrix: build, review, general, sudo", () => {
   assert.ok(hasCapability(planner, "issue:plan"));
   assert.ok(hasCapability(planner, "issue:read"));
   assert.ok(!hasCapability(planner, "code:write"));
-
-  const sudo = capabilitiesFor("sudo", { ...PRESETS.unrestricted });
-  assert.ok(hasCapability(sudo, "code:write"));
-  assert.ok(hasCapability(sudo, "artifact:provision"));
-  assert.ok(hasCapability(sudo, "issue:close"));
-  assert.ok(hasCapability(sudo, "pr:merge"));
 });
 
 test("issue_access is one resolved level and derives capabilities", () => {
@@ -187,7 +175,7 @@ test("issue_access is one resolved level and derives capabilities", () => {
     assert.ok(!hasCapability(build.capabilities, "issue:create"));
     assert.ok(!hasCapability(build.capabilities, "issue:plan"));
 
-    const general = resolveAgent(layout, "general");
+    const general = resolveAgent(layout, "research");
     assert.equal(general.config.issueAccess, "none");
     assert.ok(!general.def.tools.includes("issue"));
     assert.ok(!hasCapability(general.capabilities, "issue:read"));
@@ -230,7 +218,7 @@ test("tools are capability-gated and no role has the task tool", () => {
     const buildAuto = resolveAgent(layout, "build", { runOverrides: { ambiguity: "autonomous" } });
     assert.ok(!buildAuto.def.tools.includes("ask"), "autonomous runs never get ask");
 
-    const generalAuto = resolveAgent(layout, "general", { runOverrides: { ambiguity: "autonomous" } });
+    const generalAuto = resolveAgent(layout, "research", { runOverrides: { ambiguity: "autonomous" } });
     assert.ok(!generalAuto.def.tools.includes("ask"), "autonomous runs never get ask");
   } finally {
     rmSync(root, { recursive: true, force: true });

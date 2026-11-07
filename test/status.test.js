@@ -182,7 +182,7 @@ test("buildIssueTree nests epics→features and separates categories", () => {
     run({ id: "f1run", status: "running", issue: f1.ref }),
     run({ id: "epicrun", status: "completed", issue: epic.ref }),
     run({ id: "plan", agent: "build" }),
-    run({ id: "gen", agent: "general" }),
+    run({ id: "gen", agent: "research" }),
     run({ id: "orphan", issue: ref(999) }),
   ];
   const tree = buildIssueTree([epic, f1, f2], runs, now);

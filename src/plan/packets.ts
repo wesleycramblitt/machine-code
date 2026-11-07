@@ -1,10 +1,12 @@
 /**
  * machine_code — packet-file work model.
  *
- * Ground truth for "what needs doing" lives as files under `plans/`:
+ * Two file trees: the hand-written plan map under `plans/`, and the
+ * machine-built contracts under `packets/`.
  *
- *   plans/plan.md    the index — headings are categories, lines are work items
- *   plans/<slug>.md  one packet — the bounded contract for ONE buildable unit
+ *   plans/index.md   the index — headings are categories, lines are work items
+ *   plans/<topic>.md optional per-category handwritten plans
+ *   packets/<slug>.md  one packet — the bounded contract for ONE buildable unit
  *
  * Slugs are human-readable (`login-token-refresh`, not `#42`) and derive the
  * branch (`mc/<slug>`) and worktree name, so nothing is stored in two places.
@@ -40,7 +42,8 @@ import type { Layout } from "../paths.js";
 import { parseVerificationCommands, type TaskPacket } from "../packet.js";
 
 export const PLANS_DIR = "plans";
-export const INDEX_FILE = "plan.md";
+export const INDEX_FILE = "index.md";
+export const PACKETS_DIR = "packets";
 
 export const PACKET_STATUSES = ["todo", "in-progress", "blocked", "done"] as const;
 export type PacketStatus = (typeof PACKET_STATUSES)[number];
@@ -85,12 +88,16 @@ export function plansDir(layout: Layout): string {
   return join(layout.repoRoot, PLANS_DIR);
 }
 
+export function packetsDir(layout: Layout): string {
+  return join(layout.repoRoot, PACKETS_DIR);
+}
+
 export function indexPath(layout: Layout): string {
   return join(plansDir(layout), INDEX_FILE);
 }
 
 export function packetFilePath(layout: Layout, slug: string): string {
-  return join(plansDir(layout), `${slug}.md`);
+  return join(packetsDir(layout), `${slug}.md`);
 }
 
 /* ---------------------------------------------------------------- parsing */
@@ -149,7 +156,7 @@ export interface ParsePacketResult {
 }
 
 /**
- * Parse a packet document (`plans/<slug>.md`). A missing front-matter block is
+ * Parse a packet document (`packets/<slug>.md`). A missing front-matter block is
  * treated as all defaults; invalid TOML is a hard parse error.
  */
 export function parsePacketDoc(slug: string, text: string): ParsePacketResult {
@@ -201,7 +208,7 @@ export function readPacketFile(layout: Layout, slug: string): PacketFile | null 
 }
 
 export function listPacketFiles(layout: Layout): PacketFile[] {
-  const dir = plansDir(layout);
+  const dir = packetsDir(layout);
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
@@ -211,7 +218,7 @@ export function listPacketFiles(layout: Layout): PacketFile[] {
   }
   const out: PacketFile[] = [];
   for (const name of names) {
-    if (!name.endsWith(".md") || name === INDEX_FILE) continue;
+    if (!name.endsWith(".md")) continue;
     const slug = name.slice(0, -".md".length);
     if (!isValidSlug(slug)) continue;
     const file = join(dir, name);
@@ -254,7 +261,7 @@ export function writePacketFile(layout: Layout, packet: PacketFile): string {
   if (packet.slug !== packet.slug.trim() || !isValidSlug(packet.slug)) {
     throw new Error(`invalid packet slug: ${JSON.stringify(packet.slug)}`);
   }
-  mkdirSync(plansDir(layout), { recursive: true });
+  mkdirSync(packetsDir(layout), { recursive: true });
   writeFileSync(file, renderPacketFile(packet), "utf8");
   return file;
 }
@@ -276,15 +283,15 @@ function isHeadingLine(line: string): boolean {
   return /^\s*#{1,6}(\s|$)/.test(line);
 }
 
-/** `- [ ] slug — title` / `- [x] slug — title` / optional `→ plans/<slug>.md` link. */
+/** `- [ ] slug — title` / `- [x] slug — title` / optional `→ packets/<slug>.md` link. */
 export function indexLine(slug: string, title: string, opts: { done?: boolean; link?: boolean } = {}): string {
   const box = opts.done ? "[x]" : "[ ]";
   const label = title.trim() ? ` — ${title.trim()}` : "";
-  const link = opts.link === false ? "" : ` → ${PLANS_DIR}/${slug}.md`;
+  const link = opts.link === false ? "" : ` → ${PACKETS_DIR}/${slug}.md`;
   return `- ${box} ${slug}${label}${link}`;
 }
 
-/** Ensure `plans/plan.md` exists with the standard category headings. */
+/** Ensure `plans/index.md` exists with the standard category headings. */
 export function ensureIndex(layout: Layout): string {
   const file = indexPath(layout);
   if (!existsSync(file)) {
@@ -295,7 +302,7 @@ export function ensureIndex(layout: Layout): string {
 }
 
 function slugReference(line: string, slug: string): boolean {
-  return line.includes(`${PLANS_DIR}/${slug}.md`) || new RegExp(`(^|\\W)${escapeRegExp(slug)}(\\.|\\s|$)`).test(line);
+  return line.includes(`${PACKETS_DIR}/${slug}.md`) || new RegExp(`(^|\\W)${escapeRegExp(slug)}(\\.|\\s|$)`).test(line);
 }
 
 /**
@@ -425,7 +432,7 @@ export function renderPlan(layout: Layout): PlanView {
     }
 
     let slug: string | undefined;
-    const link = rest.match(new RegExp(`^(.*?)\\s*→\\s*${PLANS_DIR}/([^)]+\\.md)\\s*$`));
+    const link = rest.match(new RegExp(`^(.*?)\\s*→\\s*${PACKETS_DIR}/([^)]+\\.md)\\s*$`));
     if (link) rest = (link[1] ?? "").trim();
     const split = rest.split("—").map((part) => part.trim());
     const firstToken = split[0] ?? "";

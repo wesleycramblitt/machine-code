@@ -285,6 +285,10 @@ export function resolveAgent(
   let tools = def.tools.filter((t) => {
     if (t === "ask") return askEnabled(config);
     if (t === "issue" && (config.issueAccess ?? roleIssueAccess(role)) === "none") return false;
+    // `write` is shared: build writes code (code:write), research persists
+    // findings to knowledge/plans (knowledge:write). The write tool itself
+    // restricts non-edit roles to those paths.
+    if (t === "write") return capSet.has("code:write") || capSet.has("knowledge:write");
     const needed = TOOL_CAPABILITY[t];
     if (needed && !capSet.has(needed)) return false;
     return true;

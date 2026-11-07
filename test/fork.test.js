@@ -65,7 +65,7 @@ test("fork settings preserve a new run's saved selection and agent config", () =
 
 test("fork settings keep auto-selection when the snapshot has no model pin", () => {
   const summary = {
-    agent: "general",
+    agent: "research",
     settings: {
       tier: "free",
       minFit: 0,
@@ -88,7 +88,7 @@ test("fork settings keep auto-selection when the snapshot has no model pin", () 
 
 test("old runs fall back to the first successful model and free tier", () => {
   const summary = {
-    agent: "general",
+    agent: "research",
     request: "old run",
   };
   const result = forkSettingsFromRun({
@@ -109,7 +109,7 @@ test("old runs fall back to the first successful model and free tier", () => {
 });
 
 test("fork settings skip a model whose provider is not configured", () => {
-  const summary = { agent: "general", request: "old run" };
+  const summary = { agent: "research", request: "old run" };
   const result = forkSettingsFromRun({
     summary,
     events: [
@@ -145,7 +145,7 @@ test("fork settings drop an unavailable model and validate bad values", () => {
     configuredProviders: new Set(["p"]),
   });
 
-  assert.equal(result.agent, "general");
+  assert.equal(result.agent, "research");
   assert.equal(result.model, undefined);
   assert.equal(result.preset, "assistant");
   assert.equal(result.verification, "verified");

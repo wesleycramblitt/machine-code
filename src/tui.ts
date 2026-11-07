@@ -541,8 +541,7 @@ function commandBadge(label: string, key: string, background: string, foreground
 /** Stable role colors used wherever an agent name is shown. */
 function agentTone(agent: string): string {
   switch (agent) {
-    case "sudo": return RED;
-    case "general": return G;
+    case "research": return G;
     case "planner": return BL;
     case "build": return C;
     case "review": return M;
@@ -885,7 +884,7 @@ export async function runTui(): Promise<void> {
   let featureCache: { key: string; at: number; data: FeaturePanel | null } | null = null;
 
   let newrun: NewRunState = {
-    agent: "general",
+    agent: "research",
     preset: "unrestricted",
     verification: "verified",
     issues: "optional",
@@ -1140,7 +1139,7 @@ export async function runTui(): Promise<void> {
   };
 
   const defaultNewRun = (): NewRunState => {
-    const agent = "general";
+    const agent = "research";
     const repoLayout = layout(newRunRepo);
     // A new run starts from the machine selection tier, not a hard-coded free
     // default. The per-run toggle can still override it.
@@ -1169,7 +1168,7 @@ export async function runTui(): Promise<void> {
   newrun = defaultNewRun();
 
   /** Roles that isolate in a worktree and expose the verify switch. */
-  const agentIsolates = (agent: string): boolean => agent === "build" || agent === "sudo";
+  const agentIsolates = (agent: string): boolean => agent === "build";
 
   const resetNewRunUi = () => {
     newRunInsert = false;
@@ -1215,7 +1214,7 @@ export async function runTui(): Promise<void> {
     // Verification and isolation are role-shaped: build/sudo verify, and a
     // fresh build isolates while sudo starts on the main tree.
     newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
-    newrun.worktree = newrun.agent !== "sudo";
+    newrun.worktree = true;
     enforceLockedSkills(true);
     // A task-attached run starts with a concrete objective. The prompt stays
     // editable, but the human no longer has to type one.
@@ -1231,7 +1230,7 @@ export async function runTui(): Promise<void> {
       return;
     }
     const repoLayout = layout(summary.repoRoot);
-    const agent = AGENT_NAMES.includes(summary.agent) ? summary.agent : "general";
+    const agent = AGENT_NAMES.includes(summary.agent) ? summary.agent : "research";
     const policy = effectivePolicy(summary.repoRoot);
     const machine = (() => {
       try { return loadMachineConfig(repoLayout); } catch { return undefined; }
@@ -1278,7 +1277,7 @@ export async function runTui(): Promise<void> {
     // Verification and isolation follow the role: only build/sudo verify, and
     // sudo starts on the main tree until its worktree toggle is flipped.
     newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
-    newrun.worktree = newrun.agent !== "sudo";
+    newrun.worktree = true;
     enforceLockedSkills(true);
     // Keep an auto-derived objective in sync with the agent verb. A prompt the
     // human edited stays untouched.
@@ -1491,7 +1490,7 @@ export async function runTui(): Promise<void> {
     const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
     if (
       !planningAgent &&
-      newrun.agent !== "general" &&
+      newrun.agent !== "research" &&
       selectedIssue &&
       selectedIssue.kind !== "feature" &&
       issueAccess !== "create"
@@ -4133,10 +4132,10 @@ export async function runTui(): Promise<void> {
     newrun.issue = issue.ref;
     // A blank composer that was opened with `N` still starts as general. Once
     // a Feature is attached, default to the agent that does the work.
-    if (!hadIssue && newrun.agent === "general") {
+    if (!hadIssue && newrun.agent === "research") {
       newrun.agent = issue.kind === "feature" ? "build" : "planner";
       newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
-      newrun.worktree = newrun.agent !== "sudo";
+      newrun.worktree = true;
       enforceLockedSkills(true);
     }
     if (!newrun.prompt.trim() || newrun.prompt === previousPrompt) {

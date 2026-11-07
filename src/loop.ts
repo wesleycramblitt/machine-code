@@ -745,7 +745,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   /** Run-level loop detector; a model rotation does not erase evidence. */
   // Read-only roles (review/general/planner) cannot make progress by editing,
   // so an identical-repeat streak is a loop much sooner than for build/sudo.
-  const evidence = new EvidenceTracker(input.agent.name === "build" || input.agent.name === "sudo" ? 20 : 8);
+  const evidence = new EvidenceTracker(input.agent.name === "build" ? 20 : 8);
   let turns = 0;
   /** Cumulative turns across resumes, for the run summary. */
   let reportedTurns = recorder.current.turns;

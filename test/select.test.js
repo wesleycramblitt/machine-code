@@ -67,7 +67,7 @@ const basePolicy = {
 
 function pickOne(rows, policy = basePolicy, extra = {}) {
   return pick({
-    agent: "general",
+    agent: "research",
     policy,
     machine,
     catalogue: rows,
@@ -178,7 +178,7 @@ test("capability is a gradient above the floor: equal price prefers the better m
   assert.equal(result.selected.key, "p/strong");
 
   const input = {
-    agent: "general",
+    agent: "research",
     policy: basePolicy,
     machine,
     catalogue: [weak, strong],
@@ -272,7 +272,7 @@ test("modelStatus reports eligibility and the exact rejection reason", () => {
   const good = row("p/good");
   const low = row("p/low", { scores: axes(5, 5, 5, 5) });
   const input = {
-    agent: "general",
+    agent: "research",
     policy: basePolicy,
     machine,
     catalogue: [good, low],
@@ -339,8 +339,8 @@ test("policy.toml parses axis floors and weights, and rejects out-of-range value
     assert.equal(policy.agents.build.minCapability, 7.3);
     assert.deepEqual(policy.agents.build.minAxes, { code: 6, agentic: 5.5 });
     assert.deepEqual(policy.agents.build.axisWeights, { code: 0.6, reasoning: 0.4 });
-    assert.equal(policy.agents.general.minCapability, 0, "neutral floor defaults to off");
-    assert.equal(policy.agents.general.minFit, 6, "role-weighted floor uses the default");
+    assert.equal(policy.agents.research.minCapability, 0, "neutral floor defaults to off");
+    assert.equal(policy.agents.research.minFit, 6, "role-weighted floor uses the default");
 
     writeFileSync(file, "[agents.build.axes]\ncode = 11\n");
     assert.throws(() => loadPolicy({ policyFile: file }), ConfigError);

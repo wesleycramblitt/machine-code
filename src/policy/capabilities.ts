@@ -86,19 +86,6 @@ export function capabilitiesFor(role: AgentName, config: AgentConfig): Capabilit
   if (access === "create") caps.add("issue:create");
   if (access === "none") caps.delete("issue:close");
 
-  if (
-    access !== "none" &&
-    config.issues !== "disabled" &&
-    role === "sudo"
-  ) {
-    caps.add("issue:close");
-  }
-
-  if (role === "sudo") {
-    caps.add("pr:create");
-    caps.add("pr:merge");
-  }
-
   return [...caps].sort();
 }
 

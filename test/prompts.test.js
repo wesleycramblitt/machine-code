@@ -80,13 +80,10 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     assert.match(review.prompt, /Feature build/);
     assert.match(review.prompt, /Verdict:/);
 
-    const sudo = resolveAgent(l, "sudo");
-    assert.match(sudo.prompt, /use its Deliverable and Acceptance/);
-
-    const general = resolveAgent(l, "general");
-    assert.deepEqual(general.def.tools, ["context", "read", "search", "ask", "skill"]);
-    assert.ok(!general.def.tools.includes("command"), "general must not hold command");
-    assert.match(general.prompt, /core:map with command/);
+    const research = resolveAgent(l, "research");
+    assert.deepEqual(research.def.tools, ["context", "read", "search", "ask", "skill", "write"]);
+    assert.ok(!research.def.tools.includes("command"), "research must not hold command");
+    assert.match(research.prompt, /core:map with command/);
 
     for (const role of ["build", "review"]) {
       const resolved = resolveAgent(l, role);

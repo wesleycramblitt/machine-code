@@ -1164,7 +1164,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (modeFlag !== undefined) {
     fail("--mode was removed; use machine_code orchestrate to schedule Build and Review");
   }
-  const agentNameParsed = (agentName as AgentName | undefined) ?? "general";
+  const agentNameParsed = (agentName as AgentName | undefined) ?? "research";
 
   const runIssueAccess =
     resolveAgentConfig({
@@ -1228,7 +1228,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
   if (
     linkedIssue?.kind === "feature" &&
-    (agentNameParsed === "build" || agentNameParsed === "sudo")
+    agentNameParsed === "build"
   ) {
     const errors = featureSizeErrors({ acceptance: linkedIssue.acceptance, body: linkedIssue.body ?? "" });
     if (errors.length > 0) {
@@ -1398,7 +1398,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   const worktreeOn = worktreeFlag !== "false";
   const forceWorktree = worktreeOn && flags.has("worktree");
   const mutating =
-    agentNameParsed === "general" || agentNameParsed === "review"
+    agentNameParsed === "research" || agentNameParsed === "review"
       ? false
       : agentNameParsed === "build"
         ? worktreeOn
@@ -1562,9 +1562,9 @@ async function cmdRun(argv: string[]): Promise<number> {
   if (directExec) {
     // Detached delegated child: one agent, directly. Its prompt is its spec.
     const role = (agentNameParsed ?? "build") as AgentName;
-    if (role !== "build" && role !== "review" && role !== "sudo") {
-      recorder.finalize("failed", "--direct-exec requires --agent build|review|sudo");
-      process.stderr.write("machine_code: --direct-exec requires --agent build|review|sudo\n");
+    if (role !== "build" && role !== "review") {
+      recorder.finalize("failed", "--direct-exec requires --agent build|review");
+      process.stderr.write("machine_code: --direct-exec requires --agent build|review\n");
       return EXIT.failed;
     }
     const resolved = resolveAgent(l, role, {
@@ -1654,7 +1654,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       status: result.status,
       runId: recorder.id,
       repoRoot: l.repoRoot,
-      agent: agentNameParsed ?? "general",
+      agent: agentNameParsed ?? "research",
       request,
       tokens: recorder.current.usage.totalTokens,
       cost: recorder.current.cost.actual,
@@ -1858,7 +1858,7 @@ async function cmdQueue(argv: string[]): Promise<number> {
   }
   process.stdout.write(`queue: ${packets.length} packet(s)\n`);
   const progress = await runQueue(l, async (packet) => {
-    const packetAgent = packet.agent ?? (packet.mode ? "build" : "general");
+    const packetAgent = packet.agent ?? (packet.mode ? "build" : "research");
     const recorder = new RunRecorder(l, { agent: packetAgent, mode: packet.mode ?? "", request: packet.goal, repoRoot: l.repoRoot, packetId: packet.id });
     registerProject(l.home, l.repoRoot);
     const abort = new AbortController();
@@ -1867,7 +1867,7 @@ async function cmdQueue(argv: string[]): Promise<number> {
     // tree unless they carry an orchestration mode; General/Review never
     // create one.
     const mutating =
-      packet.agent === "general" || packet.agent === "review"
+      packet.agent === "research" || packet.agent === "review"
         ? false
         : packet.mode !== undefined || packet.agent === "build";
     let toolRoot = l.repoRoot;
@@ -1923,7 +1923,7 @@ async function cmdQueue(argv: string[]): Promise<number> {
       layout: l,
       machine,
       policy,
-      agentName: packet.agent ?? (packet.mode ? undefined : "general"),
+      agentName: packet.agent ?? (packet.mode ? undefined : "research"),
       request: packet.goal,
       root: l.repoRoot,
       toolRoot,
@@ -2910,7 +2910,7 @@ async function cmdResume(id: string | undefined, argv: string[]): Promise<number
   const inbox = readInbox(runDir);
   let startMode: "prompt" | "continue" = "prompt";
   let initialMessages: import("@earendil-works/pi-agent-core").AgentMessage[] | undefined;
-  let resumeAgent: AgentName = (s.agent as AgentName) ?? "general";
+  let resumeAgent: AgentName = (s.agent as AgentName) ?? "research";
   let resumeRequest = s.request;
 
   if (transcript && transcript.messages.length > 0) {
@@ -4312,7 +4312,7 @@ async function cmdMap(argv: string[]): Promise<number> {
       catalogue: runtime.catalogue.models,
       configuredProviders: runtime.configuredProviders,
       fundedProviders: fundedProviderIds(runtime.machine.providers),
-      policy: policyFor(l, "general", runtime.policy),
+      policy: policyFor(l, "research", runtime.policy),
       machine: runtime.machine,
       availability: loadAvailability(l.home),
       home: l.home,
