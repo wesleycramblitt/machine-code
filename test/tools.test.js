@@ -69,6 +69,23 @@ test("command describe reports a tool the role does not have", async () => {
   assert.match(text, /read, search/);
 });
 
+test("unknown command suggests the closest name", async () => {
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  const result = await tool.execute("id", { action: "run", name: "core:statu", args: {} });
+  assert.equal(result.isError, true);
+  const text = result.content.map((c) => c.text ?? "").join("\n");
+  assert.match(text, /unknown command: core:statu/);
+  assert.match(text, /Did you mean core:status\?/);
+});
+
+test("command accepts the {command, args} spelling", async () => {
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
+  const prepared = tool.prepareArguments({ command: "core:status", args: {} });
+  assert.equal(prepared.name, "core:status");
+  assert.equal(prepared.action, "run");
+  assert.equal(prepared.command, undefined);
+});
+
 test("search graph renders module import edges", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-search-graph-"));
   try {
@@ -241,9 +258,48 @@ test("scoped edit miss returns the current scope text", async () => {
     assert.equal(result.isError, true);
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /no match in a\.ts \(symbol foo\)/);
-    assert.match(text, /Current symbol foo text:/);
+    assert.match(text, /Closest current text:/);
     assert.match(text, /return 1;/);
     assert.doesNotMatch(text, /return 2;/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("unscoped edit miss re-anchors at the closest current text", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-edit-unscoped-miss-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "a.ts"), "export function foo() {\n  return 1;\n}\n", "utf8");
+    const tool = editTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", {
+      path: "a.ts",
+      oldString: "  return 999;",
+      newString: "  return 2;",
+    });
+    assert.equal(result.isError, true);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /no match in a\.ts/);
+    assert.match(text, /Closest current text:/);
+    assert.match(text, /return 1;/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("edit ignores copied line numbers and indentation drift", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-edit-fuzzy-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "a.ts"), "export function foo() {\n  return 1;\n}\n", "utf8");
+    const tool = editTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", {
+      path: "a.ts",
+      oldString: "1: export function foo() {\n2:     return 1;\n3: }",
+      newString: "export function foo() {\n  return 2;\n}",
+    });
+    assert.notEqual(result.isError, true);
+    assert.match(readFileSync(join(root, "a.ts"), "utf8"), /return 2;/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

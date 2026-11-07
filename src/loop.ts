@@ -54,6 +54,15 @@ const PLAN_BLOCK_LIMIT = 3;
 /** Successes that show a run did real work, not just memory bookkeeping. */
 const SUBSTANTIVE_TOOLS = new Set(["read", "search", "command", "edit", "write", "issue", "pr"]);
 
+/** Requests that name a code change. A writable role that answers one of
+ * these with prose and no tool call has stalled, not finished. */
+const CHANGE_INTENT =
+  /\b(?:fix|add|remove|update|change|implement|refactor|rename|move|wire|replace|delete|make|adjust|correct|repair|support|resolve|address)\b/i;
+
+/** Extra turns allowed when a writable role stops mid-investigation. This is
+ * a malformed-termination retry, not a work quota. */
+const STALL_NUDGE_LIMIT = 2;
+
 /** A plan is a recorded decision that names concrete file changes. */
 export function hasPlanDecision(facts: ReadonlyArray<{ text: string; status: string; kind: string }>): boolean {
   const file = /[\w./-]+\.(?:ts|tsx|js|jsx|py|rs|go|java|kt|swift|md|toml|yaml|yml)/gi;
@@ -73,6 +82,22 @@ export function hasPlanDecision(facts: ReadonlyArray<{ text: string; status: str
 /** Only the Build role is a code-change run with a mandatory plan gate. */
 export function needsBuildPlan(agentName: string): boolean {
   return agentName === "build";
+}
+
+/** A line the role contract requires on a real finish. */
+export function hasTerminalLine(text: string): boolean {
+  return /(?:^|\n)\s*(?:Result|Outcome|Changes|Verdict):/i.test(text);
+}
+
+/** A writable role that emits prose and no tool call mid-investigation has
+ * stalled; the harness should ask it to continue, not call the run complete. */
+export function shouldNudgeStall(input: {
+  wantsChange: boolean;
+  hasToolCall: boolean;
+  hasChange: boolean;
+  text: string;
+}): boolean {
+  return input.wantsChange && !input.hasToolCall && !input.hasChange && !hasTerminalLine(input.text);
 }
 
 function issueRefKey(value: string): string {
@@ -495,6 +520,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // slice). The full per-file map is never re-sent; it costs ~26k chars a
   // turn and the same bytes are one pull call away.
   let mapIndex = "";
+  // Names only. The model must know a command exists before it can ask for
+  // its schema; guessing core:run/typescript:check was a wasted call in every
+  // observed run. The full schemas stay behind command action "describe".
+  const commandIndex =
+    input.agent.tools.includes("command") && input.commands.size > 0
+      ? [
+          "<commands>",
+          'Typed commands. Call the command tool: {"action":"run","name":"...","args":{}}; {"action":"describe","name":"..."} for one schema.',
+          [...input.commands.keys()].sort().join(" · "),
+          "</commands>",
+        ].join("\n")
+      : "";
   let semanticMap: SemanticMap | null = null;
   const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"], semantic: SemanticMap | null): string =>
     [
@@ -690,6 +727,19 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastPromptChars = 0;
   /** Rendered prompt for the request being prepared, consumed by transformContext. */
   let pendingMessages: AgentMessage[] | null = null;
+
+  /** Does this run owe the user a code change? Read-only roles and pure
+   * questions are exempt; a writable role answering a change request is not. */
+  const wantsChange =
+    input.agent.readonly !== true &&
+    input.agentCapabilities?.includes("code:write") !== false &&
+    (CHANGE_INTENT.test(input.request) || /#\d+|\bissue\b|Deliverable/i.test(input.request));
+  const hasActiveChange = (): boolean =>
+    memory.getState().facts.some((fact) => fact.kind === "change" && fact.status === "active");
+  /** Set when a stalled turn was asked to continue; consumed by prepareNextTurn. */
+  let stallNudge: string | null = null;
+  let stallNudges = 0;
+  let stalledOut = false;
 
   /**
    * When the run hits a cap or loop guard, make one tool-free call so the user
@@ -1380,7 +1430,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           pendingMessages = null;
           return rendered;
         }
-        return renderPromptMessages(messages, memory, mapIndex, input.contextText).messages;
+        return renderPromptMessages(
+          messages,
+          memory,
+          mapIndex,
+          input.contextText,
+          undefined,
+          undefined,
+          commandIndex,
+        ).messages;
       },
       prepareRequest: async ({ context }) => {
         const renderFor = (row: CatalogueRow | null) => {
@@ -1420,10 +1478,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // Raw ledger bytes are the fastest-growing part of the prompt and
           // the first thing to trim: conclusions already live in run state,
           // and the ledger's own omitted-note points at recall for the rest.
+          // The replayed transcript now carries the recent bytes; the ledger
+          // is the fallback for evidence that fell out of that window.
           const ledgerText = ledgerBudget > 0
-            ? memory.renderLedger({ maxChars: Math.min(ledgerBudget, 24_000) })
+            ? memory.renderLedger({ maxChars: Math.min(ledgerBudget, 12_000) })
             : undefined;
           lastLedgerChars = ledgerText?.length ?? 0;
+          // The transcript window is the largest block, so it takes whatever
+          // the model budget has left after the fixed overhead. Small-context
+          // models get fewer steps instead of an oversized request.
+          const transcriptBudget = budget
+            ? Math.max(
+                12_000,
+                Math.min(
+                  48_000,
+                  budget.inputChars - baseOverhead - overviewEstimate - (ledgerText?.length ?? 0),
+                ),
+              )
+            : 48_000;
           return renderPromptMessages(
             context.messages,
             memory,
@@ -1431,6 +1503,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             input.contextText,
             ledgerText,
             overviewMaxChars,
+            commandIndex,
+            transcriptBudget,
           );
         };
 
@@ -1519,7 +1593,43 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             return { action: "end" as const };
           }
         }
+        // A writable role that emits prose and no tool call mid-investigation
+        // has not finished; the transcript is full of "let me check" but no
+        // work. Nothing else in the loop asks it to continue, so a weak model
+        // stops here and the run is reported as completed with no change.
+        const hasToolCall = message.content.some((block) => block.type === "toolCall");
+        if (
+          shouldNudgeStall({
+            wantsChange,
+            hasToolCall,
+            hasChange: hasActiveChange(),
+            text: assistantText(message),
+          })
+        ) {
+          if (stallNudges < STALL_NUDGE_LIMIT) {
+            stallNudges += 1;
+            stallNudge = [
+              `You have not made the requested change yet (turn ${turns}).`,
+              "Continue now. Do not summarize; take the smallest concrete step.",
+              "Call a tool: edit or write to make the change, or read/search only the one fact that decides it.",
+              `Request: ${input.request}`,
+            ].join(" ");
+            recorder.event("stall_nudge", { turn: turns, attempt: stallNudges });
+            return { action: "continue" as const };
+          }
+          stalledOut = true;
+          recorder.event("stall_exhausted", { turn: turns });
+        }
         return undefined;
+      },
+      prepareNextTurn: () => {
+        if (!stallNudge) return undefined;
+        const text = stallNudge;
+        stallNudge = null;
+        memory.note("next", "Make the smallest concrete edit that advances the request.", [], turns + 1);
+        return {
+          messages: [{ role: "user", content: text, timestamp: Date.now() } as AgentMessage],
+        };
       },
     });
 
@@ -1881,6 +1991,19 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       // completed outcome when every substantive call was rejected.
       status = "blocked";
       error = "tool calls were rejected; no work completed";
+    } else if (
+      status === "completed" &&
+      wantsChange &&
+      !hasActiveChange() &&
+      !hasTerminalLine(finalText)
+    ) {
+      // Prose is not a deliverable. A writable role that stopped
+      // mid-investigation without touching a file is blocked, not done. A
+      // clear terminal answer (Result:/Outcome:) is left alone.
+      status = "blocked";
+      error = stalledOut
+        ? "model produced no tool calls and no change after continuation prompts"
+        : "completed without making the requested change";
     }
 
     // Retry decision: rotate to the next eligible model on a retryable error.

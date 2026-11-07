@@ -90,7 +90,8 @@ Implemented:
   no task pack, no automatic file assignment.
 - `src/context/budget.ts` — model-derived input budget.
 - `src/context/preview.ts` — TUI preview of curated sources and real file sizes.
-- `src/context/render.ts` — context + ledger + state + recent steps.
+- `src/context/render.ts` — context + ledger + state + a budgeted window of
+  the real transcript (assistant turns and their tool results).
 - `src/loop.ts` — records the actual prompt size, model budget, ledger size,
   and `context_warning` when curated context does not fit.
 - `machine_code context <run-id>` prints the assembled context and ledger.

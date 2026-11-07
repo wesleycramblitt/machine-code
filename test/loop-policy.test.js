@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { hasPlanDecision, needsBuildPlan, readBucket } from "../dist/loop.js";
+import {
+  hasPlanDecision,
+  hasTerminalLine,
+  needsBuildPlan,
+  readBucket,
+  shouldNudgeStall,
+} from "../dist/loop.js";
 
 const decision = (text) => [{ kind: "decision", status: "active", text }];
 
@@ -29,6 +35,41 @@ test("a decision naming files and change verbs is a change plan", () => {
     ),
     true,
   );
+});
+
+test("a writable role that stops mid-investigation gets a continuation nudge", () => {
+  const midThought = "I have the render path. Now I need to check the selected helper.";
+  assert.equal(
+    shouldNudgeStall({ wantsChange: true, hasToolCall: false, hasChange: false, text: midThought }),
+    true,
+  );
+  // A tool call is progress.
+  assert.equal(
+    shouldNudgeStall({ wantsChange: true, hasToolCall: true, hasChange: false, text: midThought }),
+    false,
+  );
+  // A change already exists.
+  assert.equal(
+    shouldNudgeStall({ wantsChange: true, hasToolCall: false, hasChange: true, text: midThought }),
+    false,
+  );
+  // A read-only role or a pure question is not a stalled change.
+  assert.equal(
+    shouldNudgeStall({ wantsChange: false, hasToolCall: false, hasChange: false, text: midThought }),
+    false,
+  );
+  // A clear terminal answer is a real finish, even without an edit.
+  const answer = "Result: the bug is in the cache key.\nEvidence: src/cache.ts:41.";
+  assert.equal(
+    shouldNudgeStall({ wantsChange: true, hasToolCall: false, hasChange: false, text: answer }),
+    false,
+  );
+});
+
+test("terminal lines are recognized where the role contract puts them", () => {
+  assert.equal(hasTerminalLine("Result: done"), true);
+  assert.equal(hasTerminalLine("blah\nOutcome: blocked"), true);
+  assert.equal(hasTerminalLine("Let me check one more thing."), false);
 });
 
 test("the read-repeat bucket ignores limit changes at the same start line", () => {

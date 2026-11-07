@@ -352,7 +352,7 @@ test("explicit context focus survives automatic ingestion", () => {
   }
 });
 
-test("render keeps state and the last two complete steps", () => {
+test("render replays the recent transcript, not a fixed step count", () => {
   const dir = tempDir();
   try {
     const store = new RunStateStore({ runDir: dir, runId: "r4", goal: "the goal" });
@@ -376,11 +376,37 @@ test("render keeps state and the last two complete steps", () => {
     assert.match(serialized, /MAP-INDEX/);
     assert.match(serialized, /OLD-TOOL-BODY/);
     assert.match(serialized, /NEW-TOOL-BODY/);
-    assert.doesNotMatch(serialized, /OLDER-TOOL-BODY/);
+    assert.match(serialized, /OLDER-TOOL-BODY/, "evidence older than two turns still rides along");
     assert.equal(rendered.messages[0].role, "system");
     assert.equal(rendered.messages[1].role, "user");
     assert.equal(rendered.messages[2].role, "assistant");
     assert.equal(rendered.messages[3].role, "toolResult");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("render keeps newest transcript steps when the window overflows", () => {
+  const dir = tempDir();
+  try {
+    const store = new RunStateStore({ runDir: dir, runId: "r-window", goal: "goal" });
+    // Older than the replay budget: 60k of tool output must fall out.
+    const huge = `x`.repeat(60_000);
+    const rendered = renderPromptMessages(
+      [
+        system,
+        user,
+        assistant({ id: "ancient", text: "" }),
+        result({ id: "ancient", text: huge }),
+        assistant({ id: "recent", text: "keep this reasoning" }),
+        result({ id: "recent", text: "RECENT-BODY" }),
+      ],
+      store,
+    );
+    const text = JSON.stringify(rendered.messages);
+    assert.match(text, /keep this reasoning/);
+    assert.match(text, /RECENT-BODY/);
+    assert.doesNotMatch(text, /x{1000}/, "the oversized older step is outside the window");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -615,29 +641,22 @@ test("replayed steps cap tool-result text without mutating history", () => {
   }
 });
 
-test("rendered prompt replays all assistant reasoning, newest-capped", () => {
+test("rendered prompt carries reasoning and tool results in one transcript window", () => {
   const dir = tempDir();
   try {
     const store = new RunStateStore({ runDir: dir, runId: "r-reason", goal: "goal" });
     const first = assistant({ id: "a1", text: "hypothesis: the filter ignores scope" });
-    const res1 = result({ id: "a1", text: "ok" });
+    const res1 = result({ id: "a1", text: "FILE-ONE" });
     const second = assistant({ id: "a2", text: "confirmed at line 1899; editing next" });
-    const res2 = result({ id: "a2", text: "ok" });
+    const res2 = result({ id: "a2", text: "FILE-TWO" });
     const rendered = renderPromptMessages([system, user, first, res1, second, res2], store);
     const text = JSON.stringify(rendered.messages);
     const firstPos = text.indexOf("hypothesis: the filter ignores scope");
     const secondPos = text.indexOf("confirmed at line 1899");
-    assert.ok(firstPos >= 0 && secondPos > firstPos, "older reasoning survives alongside recent steps");
-    assert.match(text, /Trust conclusions you already reached/);
-
-    const huge = assistant({ id: "a3", text: `x\n`.repeat(20000) });
-    const capped = renderPromptMessages([system, user, huge, result({ id: "a3", text: "ok" })], store);
-    const cappedText = JSON.stringify(capped.messages);
-    assert.match(cappedText, /earlier reasoning chars omitted/);
-    const block = /<reasoning>[\s\S]*<\/reasoning>/.exec(cappedText)?.[0] ?? "";
-    // Raw block is capped at 32k chars; JSON escaping doubles embedded
-    // newlines, so the encoded bound is roughly twice that plus framing.
-    assert.ok(block.length > 0 && block.length <= 66000, `reasoning block stays bounded (got ${block.length})`);
+    assert.ok(firstPos >= 0 && secondPos > firstPos, "older reasoning survives in the transcript window");
+    assert.match(text, /FILE-ONE/, "the tool result that grounds that reasoning survives too");
+    assert.match(text, /FILE-TWO/);
+    assert.doesNotMatch(text, /<reasoning>/, "reasoning is not duplicated outside the transcript");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

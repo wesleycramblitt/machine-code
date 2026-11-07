@@ -554,6 +554,102 @@ const EditParams = Type.Object({  path: Type.String({ description: "File path, r
   ),
 });
 
+/** Whitespace-collapsed view plus a map back to original offsets. Models copy
+ * read output with different indentation, so an exact miss can still be a
+ * correct edit. Mirrors the fallback the other CLI harnesses use. */
+function collapseWhitespace(text: string): { text: string; map: number[] } {
+  let out = "";
+  const map: number[] = [];
+  let space = false;
+  let spaceAt = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (/\s/.test(char)) {
+      if (out.length > 0) {
+        space = true;
+        spaceAt = index;
+      }
+      continue;
+    }
+    if (space) {
+      out += " ";
+      map.push(spaceAt);
+      space = false;
+    }
+    out += char;
+    map.push(index);
+  }
+  return { text: out, map };
+}
+
+/** Remove `1: `-style line-number prefixes a model copied from read output. */
+function stripLineNumbers(text: string): string {
+  if (!/(?:^|\n)\s*\d+:\s?/.test(text)) return text;
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^\s*\d+:\s?/, ""))
+    .join("\n");
+}
+
+function exactCount(text: string, needle: string): number {
+  let count = 0;
+  let at = text.indexOf(needle);
+  while (at >= 0) {
+    count += 1;
+    at = text.indexOf(needle, at + 1);
+  }
+  return count;
+}
+
+function findCollapsed(
+  text: string,
+  needle: string,
+): { start: number; end: number; count: number } | null {
+  const hay = collapseWhitespace(text);
+  const pin = collapseWhitespace(needle);
+  if (!pin.text) return null;
+  let count = 0;
+  let first = -1;
+  let at = hay.text.indexOf(pin.text);
+  while (at >= 0) {
+    count += 1;
+    if (first < 0) first = at;
+    at = hay.text.indexOf(pin.text, at + 1);
+  }
+  if (first < 0) return null;
+  const start = hay.map[first]!;
+  const end = hay.map[first + pin.text.length - 1]! + 1;
+  return { start, end, count };
+}
+
+/** A numbered window around the closest line, so a miss re-anchors in place. */
+function nearestRegionText(
+  lines: readonly string[],
+  needle: string,
+  scopeStart: number,
+  scopeEnd: number,
+): string {
+  const first = needle
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? "";
+  const start = Math.max(1, scopeStart);
+  const end = Math.min(lines.length, scopeEnd);
+  let hit = -1;
+  if (first) {
+    for (let index = start - 1; index < end; index += 1) {
+      if (lines[index]!.includes(first)) {
+        hit = index;
+        break;
+      }
+    }
+  }
+  const center = hit >= 0 ? hit : start - 1;
+  const from = Math.max(start, center - 15);
+  const to = Math.min(end, from + 40);
+  return numberLinesCapped(lines, from, to - from + 1, 4_000).text;
+}
+
 export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
   return {
     name: "edit",
@@ -632,27 +728,50 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         for (const edit of edits) {
           if (edit.oldString.length === 0) return fail("oldString must not be empty");
           if (edit.oldString === edit.newString) return fail("oldString and newString must differ");
-          const count = working.split(edit.oldString).length - 1;
-          if (count === 0) {
-            const miss = `no match in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}`;
-            if (!scopeLabel) return fail(miss);
-            // Re-anchor in the same turn: the scope moved under the model
-            // (usually its own batched edit landing first). Return the
-            // current scope body so the next oldString is written against
-            // fresh text instead of costing a re-read.
-            const page = numberLinesCapped(lines, scopeStart, scopeEnd - scopeStart + 1, 4096);
-            return fail(`${miss}\nCurrent ${scopeLabel} text:\n${page.text}`);
+          // Try the exact hunk, then the same hunk without copied line numbers.
+          const stripped = stripLineNumbers(edit.oldString);
+          const needles = stripped === edit.oldString ? [edit.oldString] : [edit.oldString, stripped];
+          let applied = false;
+          for (const needle of needles) {
+            const count = exactCount(working, needle);
+            if (count === 0) continue;
+            if (!edit.replaceAll && count > 1) {
+              return fail(
+                `${count} matches in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}; ` +
+                  "add context to make the match unique or set replaceAll",
+              );
+            }
+            working = edit.replaceAll
+              ? working.split(needle).join(edit.newString)
+              : working.replace(needle, edit.newString);
+            replacements += count;
+            applied = true;
+            break;
           }
-          if (!edit.replaceAll && count > 1) {
-            return fail(
-              `${count} matches in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}; ` +
-                "add context to make the match unique or set replaceAll",
-            );
+          if (applied) continue;
+          // Whitespace-insensitive fallback: the hunk is the same code with
+          // different indentation or blank-line spacing.
+          const fuzzy = findCollapsed(working, stripped);
+          if (fuzzy) {
+            // Ignoring whitespace can merge distinct hunks. Only apply when
+            // exactly one region matches; otherwise make the model narrow it.
+            if (fuzzy.count > 1) {
+              return fail(
+                `${fuzzy.count} matches in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""} ` +
+                  "after ignoring whitespace; add context to make the match unique",
+              );
+            }
+            working = working.slice(0, fuzzy.start) + edit.newString + working.slice(fuzzy.end);
+            replacements += 1;
+            continue;
           }
-          working = edit.replaceAll
-            ? working.split(edit.oldString).join(edit.newString)
-            : working.replace(edit.oldString, edit.newString);
-          replacements += count;
+          // Re-anchor every miss, scoped or not, with the closest current
+          // text. The model usually has the right idea against stale bytes;
+          // returning the fresh region costs one cheap call instead of a
+          // blind re-read and a second failed edit.
+          const miss = `no match in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}`;
+          const page = nearestRegionText(lines, stripped, scopeStart, scopeEnd);
+          return fail(`${miss}\nClosest current text:\n${page}`);
         }
 
         const next = raw.slice(0, startChar) + working + raw.slice(endChar);
@@ -1373,11 +1492,22 @@ const CORE_TOOL_NAMES = new Set([
 function cleanCommandArgs(args: unknown): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const out = { ...(args as Record<string, unknown>) };
+  // Accept the common {command, args} spelling as {action:"run", name, args}.
+  // Models guess this shape; one shape miss should not cost a turn.
+  if (
+    out.name === undefined &&
+    typeof out.command === "string" &&
+    out.command.trim() !== "" &&
+    out.command.trim() !== "null"
+  ) {
+    out.name = out.command;
+    out.action = out.action ?? "run";
+    delete out.command;
+  }
   if (typeof out.name === "string" && (out.name.trim() === "" || out.name.trim() === "null" || out.name.trim() === "undefined")) {
     delete out.name;
-    return out;
   }
-  return args;
+  return out;
 }
 
 export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {

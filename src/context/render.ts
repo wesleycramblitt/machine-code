@@ -1,10 +1,12 @@
 /**
  * machine_code — render the model prompt from run state + the current step.
  *
- * The prompt is not a transcript replay. It is the system prompt, the assembled
- * task context, a compact state block, current working-file content, and the
- * last two complete assistant/tool steps. Older evidence lives in state and
- * artifacts.
+ * The prompt is the system prompt, the assembled task context, a compact state
+ * block, current working-file content, and a budgeted window of the real
+ * transcript (assistant turns plus their tool results). The window is what
+ * keeps the model oriented; dropping old tool results after two turns makes it
+ * re-read the same evidence in waves. Older bytes stay in the ledger and can
+ * be pulled back with context recall.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
@@ -64,7 +66,13 @@ export function trimContextText(text: string | undefined, maxChars?: number): st
  * bytes (with a recall pointer) and working context re-sends current file
  * content, so the replayed steps stay small without losing anything
  * recoverable. Copies blocks; never mutates the stored transcript. */
-const STEP_TEXT_CAP = 6_000;
+const STEP_TEXT_CAP = 8_000;
+
+/** Replay a window of the real transcript, not a fixed number of steps.
+ * A run's own tool results are its working memory: dropping them after two
+ * turns is why weak models re-read the same file in waves. The window is
+ * bounded so a long run cannot grow without limit; newest steps win. */
+const TRANSCRIPT_BUDGET_CHARS = 48_000;
 
 function capStepText(step: MessageLike[]): MessageLike[] {
   return step.map((message) => {
@@ -82,61 +90,64 @@ function capStepText(step: MessageLike[]): MessageLike[] {
   });
 }
 
-/** Cap on replayed assistant reasoning. Runs are isolated, so the model's own
- * words ride along in full; the cap only stops pathological growth, keeping
- * the newest reasoning. Whitespace-only blocks (a model that thinks without
- * writing) are skipped. Read-only over the transcript. */
-const MAX_REASONING_CHARS = 32_000;
-
-/** Every word the model has said to itself this run, oldest first. Tool
- * results stay capped in the replayed steps and full in the ledger; this is
- * the reasoning continuity weak models need to avoid re-deriving — and
- * drifting from — their own conclusions. */
-function collectReasoning(messages: readonly MessageLike[]): string {
-  const texts: string[] = [];
-  for (const message of messages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const block of message.content as unknown[]) {
-      if (!block || typeof block !== "object") continue;
-      const b = block as Record<string, unknown>;
-      if (b.type === "text" && typeof b.text === "string" && b.text.trim().length > 0) {
-        texts.push(b.text);
-      }
-    }
+/** Rough size of a message's payload; JSON escaping adds a little, which the
+ * budget absorbs. */
+function messageChars(message: MessageLike): number {
+  if (typeof message.content === "string") return message.content.length;
+  if (!Array.isArray(message.content)) return 0;
+  let total = 0;
+  for (const block of message.content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (typeof b.text === "string") total += b.text.length;
+    if (b.type === "toolCall") total += JSON.stringify(b.arguments ?? {}).length;
   }
-  const full = texts.join("\n");
-  if (full.length <= MAX_REASONING_CHARS) return full;
-  const kept = full.slice(-MAX_REASONING_CHARS).replace(/^\S*\n/, "");
-  return `…[${full.length - kept.length} earlier reasoning chars omitted]\n${kept}`;
+  return total;
 }
 
-/** Keep the last few complete assistant/tool steps, never an orphan call. */
-function recentSteps(messages: readonly MessageLike[], count = 2): MessageLike[] {
-  const assistants: number[] = [];
-  for (let i = messages.length - 1; i >= 0 && assistants.length < count; i -= 1) {
-    if (messages[i]?.role === "assistant") assistants.push(i);
+/** A complete step: the assistant's calls all have results in the same step. */
+function completeStep(messages: readonly MessageLike[], start: number, end: number): boolean {
+  const calls = toolCalls(messages[start]!);
+  if (calls.length === 0) return true;
+  const step = messages.slice(start, end);
+  const results = new Set(
+    step
+      .filter((message) => message.role === "toolResult" && typeof message.toolCallId === "string")
+      .map((message) => message.toolCallId as string),
+  );
+  return calls.every((id) => results.has(id));
+}
+
+/** The most recent complete assistant/tool steps that fit the replay budget.
+ * Newest wins; the oldest kept step is allowed to overflow so the model
+ * always sees the turn it is answering. */
+function transcriptTail(
+  messages: readonly MessageLike[],
+  budgetChars = TRANSCRIPT_BUDGET_CHARS,
+): MessageLike[] {
+  const starts: number[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role === "assistant") starts.push(i);
   }
-  if (assistants.length > 0) {
-    for (const start of assistants.reverse()) {
-      const step = messages.slice(start);
-      const calls = toolCalls(messages[start]!);
-      if (calls.length === 0) return step;
-      const results = new Set(
-        step
-          .filter((message) => message.role === "toolResult" && typeof message.toolCallId === "string")
-          .map((message) => message.toolCallId as string),
-      );
-      if (calls.every((id) => results.has(id))) return step;
+  if (starts.length === 0) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === "user") return [messages[i]!];
     }
+    return [];
   }
-  // A user answer (ask) or follow-up is its own step.
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "user") {
-      const userMessages = messages.filter((message) => message.role === "user");
-      return userMessages.length > 1 ? [messages[i]!] : [];
-    }
+  const picked: MessageLike[] = [];
+  let used = 0;
+  for (let k = starts.length - 1; k >= 0; k -= 1) {
+    const start = starts[k]!;
+    const end = k + 1 < starts.length ? starts[k + 1]! : messages.length;
+    if (!completeStep(messages, start, end)) continue;
+    const step = messages.slice(start, end);
+    const size = step.reduce((total, message) => total + messageChars(message), 0);
+    if (picked.length > 0 && used + size > budgetChars) break;
+    picked.unshift(...step);
+    used += size;
   }
-  return [];
+  return picked;
 }
 
 export interface RenderedPrompt {
@@ -151,6 +162,8 @@ export function renderPromptMessages(
   startupContext?: string,
   ledgerText?: string,
   overviewMaxChars?: number,
+  commandIndex?: string,
+  transcriptBudget?: number,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
@@ -159,11 +172,7 @@ export function renderPromptMessages(
   const details = state.renderWorkingContext();
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
-  const reasoning = collectReasoning(source);
-  const reasoningBlock = reasoning
-    ? `<reasoning>\nYour own thinking so far this run, oldest first. Trust conclusions you already reached; do not re-derive them.\n\n${reasoning}\n</reasoning>`
-    : "";
-  const block = [startup, mapIndex, guide, reasoningBlock, details, ledgerText, state.renderBlock()]
+  const block = [startup, mapIndex, guide, commandIndex, details, ledgerText, state.renderBlock()]
     .filter(Boolean)
     .join("\n\n");
   const user: MessageLike = {
@@ -171,7 +180,7 @@ export function renderPromptMessages(
     content: block,
     timestamp: Date.now(),
   };
-  const step = capStepText(recentSteps(source, 2));
+  const step = capStepText(transcriptTail(source, transcriptBudget));
   const out = [
     ...(system ? [system] : []),
     user,

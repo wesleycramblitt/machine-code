@@ -113,7 +113,9 @@ const SPECS: CommandSpec[] = [
     name: "core:show",
     description: "Show one commit: message, stat, and patch.",
     binary: "git",
-    args: (a) => ["show", "--no-color", asGitRef(a.ref) ?? "HEAD"],
+    // Models commonly spell the commit-ish as path/range; accept both rather
+    // than silently showing HEAD, which looks like success but answers wrong.
+    args: (a) => ["show", "--no-color", asGitRef(a.ref ?? a.path ?? a.range) ?? "HEAD"],
     schema: {
       ref: { type: "string", description: "Commit-ish (default HEAD). No '..' ranges." },
     },
@@ -276,12 +278,50 @@ export interface CommandContext {
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
 }
 
+/** Levenshtein distance, capped by the caller. Command names are short, so the
+ * quadratic table is cheap and keeps "did you mean" honest. */
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      current[j] = Math.min(current[j - 1]! + 1, previous[j]! + 1, previous[j - 1]! + cost);
+    }
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
+/** Closest available command name, if it is close enough to be a useful hint. */
+export function suggestCommand(name: string, available: Iterable<string>): string | undefined {
+  const target = name.trim().toLowerCase();
+  if (!target) return undefined;
+  let best: { name: string; distance: number } | undefined;
+  for (const candidate of available) {
+    const lower = candidate.toLowerCase();
+    if (lower.endsWith(`:${target}`) || lower === target) return candidate;
+    const distance = editDistance(target, lower);
+    if (!best || distance < best.distance) best = { name: candidate, distance };
+  }
+  if (!best) return undefined;
+  // One typo in a short name, or a small fraction of a long one.
+  const limit = Math.max(2, Math.floor(target.length / 3));
+  return best.distance <= limit ? best.name : undefined;
+}
+
 export function describeCommand(name: string, commands?: ReadonlyMap<string, CommandSpec>): string {
   const map = commands ?? CORE_COMMANDS;
   const spec = map.get(name);
   if (!spec) {
+    const suggestion = suggestCommand(name, map.keys());
     const known = [...map.keys()].join(", ");
-    throw new Error(`unknown command: ${name}. Available: ${known}`);
+    throw new Error(
+      `unknown command: ${name}.${suggestion ? ` Did you mean ${suggestion}?` : ""} Available: ${known}`,
+    );
   }
   return JSON.stringify(
     {
@@ -304,8 +344,9 @@ export async function runCommand(
   const map = ctx.commands ?? CORE_COMMANDS;
   const spec = map.get(name);
   if (!spec) {
+    const suggestion = suggestCommand(name, map.keys());
     return {
-      text: `unknown command: ${name}. Available: ${[...map.keys()].join(", ")}`,
+      text: `unknown command: ${name}.${suggestion ? ` Did you mean ${suggestion}?` : ""} Available: ${[...map.keys()].join(", ")}`,
       isError: true,
     };
   }
