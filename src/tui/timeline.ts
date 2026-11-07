@@ -117,8 +117,6 @@ export function describeToolArgs(tool: string, args: Record<string, unknown> | n
       return [str(args.action) ?? "", str(args.text) ?? str(args.target) ?? str(args.id) ?? ""].filter(Boolean).join(" ");
     case "ask":
       return str(args.question) ?? "";
-    case "issue":
-      return [str(args.action) ?? "", str(args.issue) ?? str(args.kind) ?? ""].filter(Boolean).join(" ");
     case "artifact":
       return [str(args.action) ?? "", str(args.name) ?? str(args.kind) ?? ""].filter(Boolean).join(" ");
     case "skill":
@@ -127,7 +125,7 @@ export function describeToolArgs(tool: string, args: Record<string, unknown> | n
       return [str(args.action) ?? "", num(args.number) !== undefined ? `#${num(args.number)}` : str(args.title) ?? ""].filter(Boolean).join(" ");
     default: {
       const bits: string[] = [];
-      for (const key of ["path", "name", "pattern", "query", "question", "command", "action", "target", "ref", "anchor", "file", "issue"]) {
+      for (const key of ["path", "name", "pattern", "query", "question", "command", "action", "target", "ref", "anchor", "file"]) {
         const value = args[key];
         if (typeof value === "string" && value.trim()) bits.push(value.trim());
         else if (typeof value === "number" && Number.isFinite(value)) bits.push(String(value));
@@ -162,12 +160,6 @@ export function describeTimelineEvent(event: TimelineEventLike): string {
     }
     case "tool_call":
       return `${text(event.tool)} ${event.isError ? "ERROR" : "ok"}`;
-    case "issue_created":
-      return `+ issue #${num(event.number)} ${text(event.kind)} ${text(event.title)}`.trim();
-    case "issue_linked":
-      return `link #${num(event.issue)} under #${num(event.parent)}`;
-    case "plan_updated":
-      return `plan #${num(event.issue)} ${text(event.status)}`;
     case "gates":
       return `gates ${event.passed ? "PASS" : "FAIL"}`;
     case "error_classified":

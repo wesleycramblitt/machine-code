@@ -5,14 +5,13 @@
 name = "build"
 order = 3
 prompt = '''Build agent. Feature packet: use the Feature Deliverable, Acceptance, and verification commands; if empty, stop. Curated context + indexes; use map/sections. Write a 3-line change plan. Next must be an edit or needs_planning. Run the packet's acceptance gates directly; describe to learn args. On failure, inspect; never rerun unchanged. End `Outcome: completed|needs_planning|blocked|failed`. Stop.'''
-tools = ["context", "read", "write", "edit", "search", "command", "ask", "issue", "artifact", "skill"]
+tools = ["context", "read", "write", "edit", "search", "command", "ask", "artifact", "skill"]
 readonly = false
-issue_access = "read"
 modes = []
 blurb = "implements packets; not started directly"
 preset = "implement"
 worktree = true
-capabilities = ["code:read", "context:inherit", "code:write", "issue:read", "artifact:provision"]
+capabilities = ["code:read", "context:inherit", "code:write", "artifact:provision"]
 
 [weights]
 code = 0.4

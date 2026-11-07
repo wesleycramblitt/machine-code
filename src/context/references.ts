@@ -1,7 +1,7 @@
 /**
- * machine_code — issue artifact references (`mc:context`) + skill front matter.
+ * machine_code — artifact references (`mc:context`) + skill front matter.
  *
- * Issues stay concise and point at repository artifacts:
+ * Blocks stay concise and point at repository artifacts:
  *
  *   <!-- mc:context
  *   {"packets":["20261031-thermal"],"files":["src/parser.ts"],
@@ -11,7 +11,7 @@
  *   -->
  *
  * `knowledge` remains an alias for repository reference material; `files`
- * names source files that matter to the issue; `references` names exact
+ * names source files that matter; `references` names exact
  * citations in the central `~/.machine_code/references/` store. Unknown keys
  * are ignored; missing paths become manifest warnings.
  */
@@ -122,7 +122,7 @@ export interface SkillModeInput {
   presets?: Record<string, string>;
   /** Agent mode defaults that inline bodies (from `defaultSkillsFor`). */
   defaults?: string[];
-  /** Issue-declared skills (from `mc:context`). */
+  /** Declared skills (from `mc:context`). */
   declared?: string[];
   /** Composer/explicit per-skill overrides (highest precedence). */
   overrides?: Record<string, SkillMode>;
@@ -130,7 +130,7 @@ export interface SkillModeInput {
 
 /**
  * Single precedence chain shared by assembly, preview, and the composer:
- * explicit overrides > role presets > issue-declared (include) >
+ * explicit overrides > role presets > declared (include) >
  * agent defaults (include) > on-demand.
  */
 export function resolveSkillMode(name: string, input: SkillModeInput = {}): SkillMode {
@@ -144,11 +144,11 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
 }
 
 /**
- * Mode default skills for a run, before issue-declared skills.
+ * Mode default skills for a run.
  *
- * `clean-code` rides every coding/planning run (build, planner, general,
- * sudo); `verified-testing` joins it when verification is verified or
- * higher. `safe-refactor` stays opt-in via `mc:context` on refactor issues.
+ * `clean-code` rides every coding/planning run (build, planner);
+ * `verified-testing` joins it when verification is verified or
+ * higher. `safe-refactor` stays opt-in via `mc:context`.
  * Review is harness-owned (independent Review run), not a skill.
  */
 export function defaultSkillsFor(args: { agent: string; verification?: string }): string[] {

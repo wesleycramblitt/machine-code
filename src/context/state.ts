@@ -27,7 +27,7 @@ const MAX_STATE_CHARS = 10_000;
 const PLAN_NEXT = /^(?:execute the plan|make the first edit)\b/i;
 const VERIFY_NEXT = "Verify the change: run the task's tests and typecheck.";
 
-export type FactKind = "finding" | "decision" | "change" | "issue";
+export type FactKind = "finding" | "decision" | "change";
 export type RefKind = "read" | "search" | "edit" | "focus";
 
 export interface Ref {
@@ -819,50 +819,6 @@ export class RunStateStore {
     });
   }
 
-  /** Remember an issue by number so the next prompt still has the graph. */
-  addIssueFact(number: number | string, text: string, turn?: number): void {
-    const at = turn ?? this.currentTurn();
-    const clean = text.replace(/\s+/g, " ").trim();
-    if (!clean) return;
-    this.append({
-      type: "fact",
-      fact: {
-        id: this.id(),
-        kind: "issue",
-        text: clean.slice(0, 240),
-        refs: [],
-        turn: at,
-        status: "active",
-        key: `issue:${number}`,
-      },
-    });
-    this.saveMarkdown();
-  }
-
-  /**
-   * Remember a short body excerpt only when the model explicitly views an
-   * issue. Create/edit/plan already return the compact issue fact; storing the
-   * authored body again makes every later prompt larger.
-   */
-  addIssueBodyFact(number: number | string, body: string, turn?: number): void {
-    const at = turn ?? this.currentTurn();
-    const clean = body.replace(/\s+/g, " ").trim();
-    if (!clean) return;
-    this.append({
-      type: "fact",
-      fact: {
-        id: this.id(),
-        kind: "finding",
-        text: `#${number} body: ${clean.slice(0, 300)}`,
-        refs: [],
-        turn: at,
-        status: "active",
-        key: `issue-body:${number}`,
-      },
-    });
-    this.saveMarkdown();
-  }
-
   private ignoredStatusPath(path: string): boolean {
     if (path === ".machine_code" || path.startsWith(".machine_code/")) return true;
     if (!this.repoRoot) return false;
@@ -1153,7 +1109,6 @@ export class RunStateStore {
     let active = this.state.facts.filter((fact) => fact.status === "active");
     const build = (): string => {
       const decisions = active.filter((fact) => fact.kind === "decision");
-      const issues = active.filter((fact) => fact.kind === "issue");
       const findings = active.filter((fact) => fact.kind === "finding");
       const readFacts = findings.filter((fact) => fact.key.startsWith("read:") && fact.refs.length > 0);
       const otherFindings = findings.filter((fact) => !fact.key.startsWith("read:"));
@@ -1216,14 +1171,6 @@ export class RunStateStore {
           lines.push(`- ${path}: ${parts.join(", ") || "seen"}${older}${recall}`);
         }
       }
-      if (issues.length > 0) {
-        lines.push("Issues:");
-        const shown = issues.slice(-40);
-        for (const fact of shown) lines.push(`- ${fact.text}`);
-        if (issues.length > shown.length) {
-          lines.push(`- … ${issues.length - shown.length} older issue(s) omitted; use issue list or tree to inspect`);
-        }
-      }
       if (otherFindings.length > 0) {
         lines.push("Findings:");
         for (const fact of otherFindings) lines.push(`- t${fact.turn}: ${fact.text}`);
@@ -1251,14 +1198,6 @@ export class RunStateStore {
     };
 
     let block = build();
-    if (block.length <= MAX_STATE_CHARS) return block;
-    const bodyKeys = new Set(
-      active.filter((fact) => fact.key.startsWith("issue-body:")).map((fact) => fact.key),
-    );
-    if (bodyKeys.size > 0) {
-      active = active.filter((fact) => !bodyKeys.has(fact.key));
-      block = build();
-    }
     if (block.length > MAX_STATE_CHARS) {
       for (const fact of active.filter((item) => item.kind === "finding")) {
         active = active.filter((item) => item !== fact);

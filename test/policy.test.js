@@ -123,11 +123,12 @@ test("invalid tier and negative multiplier are rejected", () => {
   }
 });
 
-test("issue access is a policy override layer", () => {
-  const { root, layout } = setup('', '[agents.build]\nissue_access = "plan"\n');
+test("agent overrides accept verification and worktree layers", () => {
+  const { root, layout } = setup('', '[agents.build]\nverification = "verified"\nworktree = false\n');
   try {
     const policy = loadPolicy(layout);
-    assert.equal(policy.agents.build.issueAccess, "plan");
+    assert.equal(policy.agents.build.verification, "verified");
+    assert.equal(policy.agents.build.worktree, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -2,10 +2,9 @@
  * machine_code — agent configuration: presets, explicit overrides, ambiguity.
  *
  * Four separate axes (never conflated):
- *   role        — identity: general | planner | build | review | sudo
- *   config      — behavior: delegate / verification / worktree / issues / ask / approval
- *   mode        — legacy orchestration mode declared by a role; the
- *                 Orchestrator now schedules Build and Review directly
+ *   role        — identity: research | planner | build | review
+ *   config      — behavior: delegate / verification / worktree / ask / approval
+ *   mode        — legacy orchestration mode declared by a role
  *   ambiguity   — clarification policy; independent of everything above
  *
  * Enforcement lives in the harness (capability filtering, tool gating), not in
@@ -15,20 +14,16 @@ import type { AgentConfigOverrides, AgentPolicy, MachineConfig, Policy } from ".
 import {
   AGENT_NAMES,
   agentDef,
-  isIssueAccess,
   presetData,
-  roleIssueAccess,
   rolePreset,
   type AgentDef,
   type AgentName,
-  type IssueAccess,
 } from "../agents.js";
 import type { Layout } from "../paths.js";
 import type { CoreToolName } from "../tools/index.js";
 import { capabilitiesFor, type Capability } from "../policy/capabilities.js";
 
 export type Verification = "direct" | "verified";
-export type IssueTracking = "required" | "optional" | "disabled";
 export type ApprovalMode = "human" | "agent";
 export type AmbiguityMode = "strict" | "precise" | "adaptive" | "autonomous";
 export type PresetName = string;
@@ -38,9 +33,6 @@ export interface AgentConfig {
   delegate: boolean;
   verification: Verification;
   worktree: boolean;
-  issues: IssueTracking;
-  /** Resolved by resolveAgentConfig; absent on raw presets. */
-  issueAccess?: IssueAccess;
   artifactScripts: boolean;
   ask: boolean;
   approval: ApprovalMode;
@@ -48,7 +40,6 @@ export interface AgentConfig {
 }
 
 const VERIFICATIONS: readonly Verification[] = ["direct", "verified"];
-const ISSUE_TRACKINGS: readonly IssueTracking[] = ["required", "optional", "disabled"];
 const AMBIGUITIES: readonly AmbiguityMode[] = ["strict", "precise", "adaptive", "autonomous"];
 
 function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig {
@@ -57,10 +48,6 @@ function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig
     delegate: raw.delegate === true,
     verification: pick(raw.verification, VERIFICATIONS) ?? "direct",
     worktree: raw.worktree !== false,
-    issues: (ISSUE_TRACKINGS as readonly string[]).includes(String(raw.issues))
-      ? (raw.issues as IssueTracking)
-      : "optional",
-    ...(isIssueAccess(raw.issue_access) ? { issueAccess: raw.issue_access } : {}),
     artifactScripts: raw.artifact_scripts === true,
     ask: raw.ask !== false,
     approval: raw.approval === "agent" ? "agent" : "human",
@@ -111,15 +98,12 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     delegate: false,
     verification: "direct",
     worktree: true,
-    issues: "disabled",
-    issueAccess: "none",
     artifactScripts: false,
     ask: true,
     approval: "human",
     ambiguity: "precise",
   };
-  // The role file is the base for issue access. Behavior presets do not own it.
-  const config: AgentConfig = { ...base, issueAccess: roleIssueAccess(input.role) };
+  const config: AgentConfig = { ...base };
 
   const layers: Array<AgentConfigOverrides | undefined> = [
     machineOverridesToConfig(input.machineOverrides),
@@ -131,9 +115,6 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     const v = pick(layer.verification, VERIFICATIONS);
     if (v) config.verification = v;
     if (layer.worktree !== undefined) config.worktree = layer.worktree;
-    const it = pick(layer.issues, ISSUE_TRACKINGS);
-    if (it) config.issues = it;
-    if (isIssueAccess(layer.issueAccess)) config.issueAccess = layer.issueAccess;
     if (layer.artifactScripts !== undefined) config.artifactScripts = layer.artifactScripts;
     if (layer.ask !== undefined) config.ask = layer.ask;
     if (layer.approval === "human" || layer.approval === "agent") config.approval = layer.approval;
@@ -147,8 +128,6 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     const rv = pick(input.runOverrides.verification, VERIFICATIONS);
     if (rv) config.verification = rv;
     if (input.runOverrides.worktree !== undefined) config.worktree = input.runOverrides.worktree;
-    if (input.runOverrides.issues !== undefined) config.issues = input.runOverrides.issues;
-    if (isIssueAccess(input.runOverrides.issueAccess)) config.issueAccess = input.runOverrides.issueAccess;
     if (input.runOverrides.artifactScripts !== undefined) config.artifactScripts = input.runOverrides.artifactScripts;
     if (input.runOverrides.ask !== undefined) config.ask = input.runOverrides.ask;
     if (input.runOverrides.approval !== undefined) config.approval = input.runOverrides.approval;
@@ -168,8 +147,6 @@ function agentPolicyToConfig(policy: AgentPolicy | undefined): AgentConfigOverri
   if (policy.preset !== undefined) out.preset = policy.preset;
   if (policy.delegate !== undefined) out.delegate = policy.delegate;
   if (policy.verification !== undefined) out.verification = policy.verification;
-  if (policy.issues !== undefined) out.issues = policy.issues;
-  if (policy.issueAccess !== undefined) out.issueAccess = policy.issueAccess;
   if (policy.artifactScripts !== undefined) out.artifactScripts = policy.artifactScripts;
   if (policy.ask !== undefined) out.ask = policy.ask;
   if (policy.approval !== undefined) out.approval = policy.approval;
@@ -252,8 +229,6 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   command: null,
   context: null,
   ask: null, // gated by askEnabled(config)
-  issue: "issue:read", // per-action capabilities are checked inside the tool
-  issue_graph: "issue:create",
   artifact: "artifact:provision",
   skill: null, // read-only skill bodies; exclusions are enforced inside the tool
   pr: "pr:read", // per-action capabilities are checked inside the tool
@@ -284,7 +259,6 @@ export function resolveAgent(
   const capSet = new Set<string>(capabilities);
   let tools = def.tools.filter((t) => {
     if (t === "ask") return askEnabled(config);
-    if (t === "issue" && (config.issueAccess ?? roleIssueAccess(role)) === "none") return false;
     // `write` is shared: build writes code (code:write), research persists
     // findings to knowledge/plans (knowledge:write). The write tool itself
     // restricts non-edit roles to those paths.

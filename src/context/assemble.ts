@@ -15,13 +15,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import type { MachineConfig } from "../config.js";
-import type { Issue, IssueProvider, IssueRef } from "../issues/provider.js";
 import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
-import { parseArtifactReferences, resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
+import { resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
 import { readReference } from "../references/store.js";
-import { discoverPlanFiles } from "./plans.js";
 import { isSecretPath } from "../tools/safety.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
@@ -42,9 +40,9 @@ interface Pending {
 }
 
 export interface ContextExclusion {
-  /** Whole composer sections: issues, files, knowledge, skills, tools, scripts, plans. */
+  /** Whole composer sections: files, knowledge, skills, tools, scripts, plans. */
   sections?: string[];
-  /** Per-source keys shaped as `kind:ref` (for issues, `task:repo#n`). */
+  /** Per-source keys shaped as `kind:ref`. */
   items?: string[];
 }
 
@@ -60,8 +58,6 @@ export interface ContextInclude {
 export interface AssembleInput {
   layout: Layout;
   machine: MachineConfig;
-  provider?: IssueProvider;
-  issue?: IssueRef;
   packetId?: string;
   /** Role name; the plan map is inherited only by the planner. */
   agent?: string;
@@ -88,14 +84,14 @@ export interface AssembleInput {
   budgetChars?: number;
   /** Drop whole sections or individual sources selected in the composer. */
   exclude?: ContextExclusion;
-  /** Add files selected in the composer that no issue references. */
+  /** Add files selected in the composer. */
   include?: ContextInclude;
   /**
-   * Mode default skills (e.g. from `defaultSkillsFor`): bodies load like
-   * issue-declared skills, lose ties to them, and honor the same
-   * `section:skills` / `skill:name` exclusions. Missing defaults are
-   * skipped silently. A per-skill mode of on-demand (role preset or
-   * composer override) keeps the description but skips the body.
+   * Mode default skills (e.g. from `defaultSkillsFor`): bodies load at the
+   * same priority and honor the `section:skills` / `skill:name` exclusions.
+   * Missing defaults are skipped silently. A per-skill mode of on-demand
+   * (role preset or composer override) keeps the description but skips the
+   * body.
    */
   defaultSkills?: string[];
   /** Role `[skills]` preset table (from the agent's role TOML). */
@@ -105,7 +101,6 @@ export interface AssembleInput {
 }
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
-  issues: ["feature", "epic"],
   packets: ["packet"],
   files: ["file"],
   knowledge: ["knowledge"],
@@ -126,17 +121,6 @@ function withinRepo(root: string, path: string): string | null {
   const base = resolve(root);
   if (abs !== base && !abs.startsWith(base + sep)) return null;
   return abs;
-}
-
-function renderIssue(issue: Issue): string {
-  const lines = [
-    `title: ${issue.title}`,
-    `state: ${issue.state}  kind: ${issue.kind}  ref: ${issue.ref.repo}#${issue.ref.number}`,
-  ];
-  if (issue.labels.length > 0) lines.push(`labels: ${issue.labels.join(", ")}`);
-  if (issue.acceptance.length > 0) lines.push("acceptance:", ...issue.acceptance.map((a) => `- ${a}`));
-  if (issue.body.trim()) lines.push("", issue.body.trim());
-  return lines.join("\n");
 }
 
 function readFileText(file: string): { text: string; warning?: string } | null {
@@ -162,7 +146,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const budget = Math.max(1024, input.budgetChars ?? machine.context.maxChars ?? DEFAULT_CONTEXT_BUDGET);
   const pending: Pending[] = [];
 
-  // Explicit packet (runner-provided or issue-referenced).
+  // Explicit packet (runner-provided).
   const packetIds = new Set<string>();
   if (input.packetId) packetIds.add(input.packetId);
 
@@ -171,175 +155,18 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const excludedSections = new Set(input.exclude?.sections ?? []);
   const excludedItems = new Set(input.exclude?.items ?? []);
 
-  // Issue hierarchy + explicit references. Artifacts cascade Task → Feature →
-  // Epic; nearest declarations win, and every block keeps its true origin.
-  let current: Issue | undefined;
-  const ancestors: Issue[] = [];
-  if (input.provider && input.issue) {
-    current = (await input.provider.get(input.issue)) ?? undefined;
-    if (current) {
-      ancestors.push(...(await input.provider.hierarchy(current.ref)));
-
-      const chain = [current, ...ancestors].slice(0, 3);
-      const seenRefs = new Set<string>();
-      for (let depth = 0; depth < chain.length; depth++) {
-        const issue = chain[depth]!;
-        const origin: ContextOrigin = depth === 0 ? "explicit" : "inherited";
-        const band = 2 + depth;
-        const refs = parseArtifactReferences(issue.body);
-        for (const id of refs.packets) {
-          const key = `packet:${id}`;
-          if (!seenRefs.has(key)) {
-            seenRefs.add(key);
-            packetIds.add(id);
-          }
-        }
-
-        const addFile = (path: string, kind: "file" | "knowledge"): void => {
-          const key = `${kind}:${path}`;
-          if (seenRefs.has(key)) return;
-          seenRefs.add(key);
-          const abs = withinRepo(layout.repoRoot, path);
-          if (!abs || !existsSync(abs)) {
-            pending.push({
-              kind,
-              origin,
-              ref: path,
-              depth,
-              body: "",
-              band,
-              warning: `referenced ${kind} is missing or outside the repo`,
-            });
-            return;
-          }
-          const read = readFileText(abs);
-          if (read) pending.push({ kind, origin, ref: path, depth, body: read.text, band });
-        };
-
-        for (const path of refs.files) addFile(path, "file");
-        for (const path of refs.knowledge) addFile(path, "knowledge");
-
-        for (const citation of refs.references) {
-          const key = `reference:${citation}`;
-          if (seenRefs.has(key)) continue;
-          seenRefs.add(key);
-          const read = readReference(layout, citation, Number.MAX_SAFE_INTEGER);
-          if (!read.ok) {
-            pending.push({
-              kind: "reference",
-              origin,
-              ref: citation,
-              depth,
-              body: "",
-              band,
-              warning: `referenced reference ${citation} is missing or outside the store`,
-            });
-            continue;
-          }
-          const label = `${read.path}${read.anchor ? `#${read.anchor}` : ""}`;
-          pending.push({
-            kind: "reference",
-            origin,
-            ref: label,
-            depth,
-            body: `${label}\n\n${read.text}`,
-            band,
-          });
-        }
-
-        for (const name of refs.skills) {
-          const key = `skill:${name}`;
-          if (seenRefs.has(key)) continue;
-          seenRefs.add(key);
-          const mode = resolveSkillMode(name, {
-            presets: input.skillPresets,
-            defaults: input.defaultSkills,
-            declared: refs.skills,
-            overrides: input.skillOverrides,
-          });
-          if (mode === "exclude") continue;
-          const skill = skillBody(layout, name);
-          if (!skill) {
-            pending.push({
-              kind: "skill",
-              origin,
-              ref: name,
-              depth,
-              body: "",
-              band,
-              warning: `referenced skill "${name}" was not found`,
-            });
-            continue;
-          }
-          // On-demand keeps the description only; the agent pulls the body
-          // with the skill tool when it needs it.
-          if (mode === "on-demand") continue;
-          pending.push({
-            kind: "skill",
-            origin,
-            ref: name,
-            depth,
-            body: skill.text,
-            band,
-          });
-        }
-
-        for (const [list, kind] of [
-          [refs.tools, "tool"],
-          [refs.scripts, "script"],
-        ] as const) {
-          for (const ref of list) {
-            const key = `${kind}:${ref}`;
-            if (seenRefs.has(key)) continue;
-            seenRefs.add(key);
-            const artifact = resolveArtifact(layout, ref);
-            if (!artifact || !artifactExists(layout, artifact)) {
-              pending.push({
-                kind,
-                origin,
-                ref,
-                depth,
-                body: "",
-                band,
-                warning: `referenced ${kind} "${ref}" was not found`,
-              });
-              continue;
-            }
-            const path = artifactPath(layout, artifact);
-            const content = path ? readFileText(path) : null;
-            const body = [
-              artifactSummary(artifact),
-              path ? `path: ${path}` : "",
-              content?.text ? `\n${content.text}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n");
-            pending.push({ kind, origin, ref: artifact.name, depth, body, band });
-          }
-        }
-      }
-    }
-  }
-
   // Mode default skills (clean-code on coding/planning runs, verified-testing
-  // on verified+). They load like issue-declared skill bodies at the same
-  // priority, lose ties to declared skills via later dedupe, and honor the
-  // same composer exclusions. Missing defaults are skipped silently.
-  const declaredSkillRefs = new Set(
-    pending.filter((item) => item.kind === "skill").map((item) => item.ref),
-  );
+  // on verified+). Missing defaults are skipped silently.
   // Defaults plus explicit composer includes. Overrides alone do not
   // enumerate skills, so include-overrides join the candidate list here.
   const includeOverrides = Object.entries(input.skillOverrides ?? {})
     .filter(([, mode]) => mode === "include")
     .map(([name]) => name);
   for (const name of [...(input.defaultSkills ?? []), ...includeOverrides]) {
-    if (declaredSkillRefs.has(name)) continue;
-    declaredSkillRefs.add(name);
     const mode = resolveSkillMode(name, {
       presets: input.skillPresets,
       defaults: input.defaultSkills,
-      declared: [...declaredSkillRefs],
+      declared: [],
       overrides: input.skillOverrides,
     });
     if (mode !== "include") continue;
@@ -349,7 +176,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   }
 
   // Explicit composer includes. These are user-selected knowledge files that
-  // no issue or configured index references; they are still ordinary
+  // no composer file or configured index references; they are still ordinary
   // provenance-tracked context blocks.
   for (const path of input.include?.files ?? []) {
     const abs = withinRepo(layout.repoRoot, path);
@@ -406,32 +233,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       body: `${label}\n\n${read.text}`,
       band: 1,
     });
-  }
-
-  // Current issue block, then nearest ancestor.
-  if (current) {
-    pending.push({
-      kind: current.kind,
-      origin: "explicit",
-      ref: `${current.ref.repo}#${current.ref.number}`,
-      depth: 0,
-      body: renderIssue(current),
-      band: 2,
-    });
-    let depth = 1;
-    for (const ancestor of ancestors) {
-      const kind: ContextKind = depth === 1 ? "feature" : "epic";
-      pending.push({
-        kind,
-        origin: "inherited",
-        ref: `${ancestor.ref.repo}#${ancestor.ref.number}`,
-        depth,
-        body: renderIssue(ancestor),
-        band: kind === "feature" ? 3 : 4,
-      });
-      depth += 1;
-      if (depth > 2) break;
-    }
   }
 
   // Packets.

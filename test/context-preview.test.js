@@ -29,7 +29,7 @@ test("preview includes always-visible skill descriptions", () => {
       "---\nname: reference\ndescription: research and curation\n---\n# Reference\n",
       "utf8",
     );
-    const preview = previewContext(fakeLayout(root), [], undefined, "", {});
+    const preview = previewContext(fakeLayout(root), "", {});
     const skill = preview.sources.find((source) => source.kind === "skill");
     assert.ok(skill, "skill descriptions are part of the assembled context");
     assert.equal(skill.ref, "1 skills");
@@ -40,39 +40,19 @@ test("preview includes always-visible skill descriptions", () => {
   }
 });
 
-test("preview groups issue context files by hierarchy depth", () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-preview-files-"));
+test("preview surfaces an attached packet contract", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-preview-packet-"));
   try {
-    mkdirSync(join(root, "src"), { recursive: true });
-    writeFileSync(join(root, "src", "task.ts"), "export const task = 1;\n", "utf8");
-    writeFileSync(join(root, "src", "feature.ts"), "export const feature = 1;\n", "utf8");
-    const ref = (n) => ({ provider: "github", repo: "o/r", number: n });
-    const issue = (n, kind, parent, files) => ({
-      ref: ref(n),
-      title: `${kind} ${n}`,
-      body: `<!-- mc:context {"files":${JSON.stringify(files)}} -->\n`,
-      state: "open",
-      kind,
-      labels: [],
-      children: [],
-      blockedBy: [],
-      blocking: [],
-      acceptance: [],
-      ...(parent ? { parent: parent.ref } : {}),
-    });
-    const epic = issue(1, "epic", undefined, []);
-    const feature = issue(2, "feature", epic, ["src/feature.ts"]);
-    const task = issue(3, "task", feature, ["src/task.ts"]);
-    const preview = previewContext(fakeLayout(root), [task, feature, epic], task.ref);
-    assert.deepEqual(
-      preview.sources
-        .filter((source) => source.kind === "file")
-        .map((source) => [source.ref, source.depth, source.origin]),
-      [
-        ["src/task.ts", 0, "explicit"],
-        ["src/feature.ts", 1, "inherited"],
-      ],
-    );
+    mkdirSync(join(root, "packets"), { recursive: true });
+    const body = `---\nstatus = "todo"\n---\n# demo\n\n## Deliverable\n\nDo the thing.\n`;
+    writeFileSync(join(root, "packets", "demo.md"), body, "utf8");
+    const preview = previewContext(fakeLayout(root), "", { packet: "demo" });
+    const packet = preview.sources.find((source) => source.kind === "packet");
+    assert.ok(packet, "packet contract is part of the assembled context");
+    assert.equal(packet.ref, "demo");
+    assert.ok(packet.chars > 0);
+    const missing = previewContext(fakeLayout(root), "", { packet: "nope" });
+    assert.ok(missing.warnings.some((w) => /packet nope is missing/.test(w)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -84,7 +64,7 @@ test("preview reports the real plan size instead of a fixed 2 KiB cap", () => {
     mkdirSync(join(root, "plans"), { recursive: true });
     const body = `# Plan\n\n${"line\n".repeat(1000)}END\n`;
     writeFileSync(join(root, "plans", "index.md"), body, "utf8");
-    const preview = previewContext(fakeLayout(root), [], undefined, "", { agent: "planner" });
+    const preview = previewContext(fakeLayout(root), "", { agent: "planner" });
     const plan = preview.sources.find((source) => source.kind === "plan");
     assert.ok(plan);
     assert.equal(plan.chars, Buffer.byteLength(body, "utf8"));

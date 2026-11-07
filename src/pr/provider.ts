@@ -1,9 +1,9 @@
 /**
  * machine_code — pull-request provider abstraction.
  *
- * Branches belong to issues, PRs carry the review/merge lifecycle, and the
- * runner owns creation/merge. The harness talks to GitHub through this
- * interface so nothing outside src/pr depends on gh shapes.
+ * PRs carry the review/merge lifecycle, and the runner owns creation/merge.
+ * The harness talks to GitHub through this interface so nothing outside
+ * src/pr depends on gh shapes.
  */
 export interface PullRequest {
   number: number;

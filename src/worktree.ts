@@ -228,16 +228,12 @@ export function reusableWorktreeOwner(
 
 /* ------------------------------------------------------------- creation */
 
-export type WorktreeKind = "feature" | "run" | "packet";
+export type WorktreeKind = "run" | "packet";
 
 export interface WorktreeRequest {
   layout: Layout;
   runId: string;
   kind: WorktreeKind;
-  /** Feature number for feature worktrees (--issue <n>). */
-  issueNumber?: number;
-  /** Feature title: the branch slug comes from here when creating. */
-  issueTitle?: string;
   /** Packet slug for `kind === "packet"`; branch is `mc/<slug>`. */
   slug?: string;
   /** Explicit base branch/ref override. */
@@ -259,48 +255,7 @@ export interface WorktreeSpec {
   materialized: string[];
 }
 
-/** Slug for a feature branch: lowercase, hyphen-separated, max 40 chars. */
-export function slugifyTitle(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40)
-    .replace(/-+$/g, "");
-  return slug;
-}
-
-/** Canonical branch for a feature: `mc/feature/<n>-<slug>`, or bare when titleless. */
-export function featureBranchFor(number: number, title?: string): string {
-  const slug = title ? slugifyTitle(title) : "";
-  return slug ? `mc/feature/${number}-${slug}` : `mc/feature/${number}`;
-}
-
-/** List local branches matching a `git branch --list` pattern. */
-export async function listBranches(mainRoot: string, pattern: string): Promise<string[]> {
-  const result = await git(mainRoot, ["branch", "--list", "--format=%(refname:short)", pattern]);
-  if (result.code !== 0) return [];
-  return result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
-}
-
-/**
- * The existing branch for a feature, if any: exact `mc/feature/<n>` wins,
- * otherwise the first slugged `mc/feature/<n>-*` match. Title renames never
- * orphan a branch because creation checks this first.
- */
-export async function findFeatureBranch(mainRoot: string, number: number): Promise<string | undefined> {
-  const exact = `mc/feature/${number}`;
-  if (await branchExists(mainRoot, exact)) return exact;
-  const slugged = await listBranches(mainRoot, `mc/feature/${number}-*`);
-  slugged.sort();
-  return slugged[0];
-}
-
-function branchFor(kind: WorktreeKind, runId: string, issueNumber?: number, issueTitle?: string, slug?: string): string {
-  if (kind === "feature") {
-    if (!issueNumber) throw new WorktreeError("issue_required", "a feature worktree needs --issue <n>");
-    return featureBranchFor(issueNumber, issueTitle);
-  }
+function branchFor(kind: WorktreeKind, runId: string, slug?: string): string {
   if (kind === "packet") {
     if (!slug) throw new WorktreeError("slug_required", "a packet worktree needs --slug");
     return `mc/${slug}`;
@@ -373,18 +328,12 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   const layout = req.layout;
   const mainRoot = await mainWorktreeRoot(layout.repoRoot);
   const path = join(layout.localDir, "worktrees", req.runId);
-  // Reuse the feature's existing branch (exact or slugged) so title edits
-  // never strand work on a second branch.
-  const existingBranch =
-    req.kind === "feature" && req.issueNumber ? await findFeatureBranch(mainRoot, req.issueNumber) : undefined;
-  const branch = existingBranch ?? branchFor(req.kind, req.runId, req.issueNumber, req.issueTitle, req.slug);
+  const branch = branchFor(req.kind, req.runId, req.slug);
   const createdBranches: string[] = [];
 
   // Clean preflight always applies to the MAIN worktree.
   await ensureCleanMainTree(mainRoot);
 
-  // Feature branches base on the default base (or --base). No parent-branch
-  // wiring: features are leaves under epics, which have no branch.
   // Base resolution: explicit --base wins; otherwise the default base branch.
   let configuredBase: string | undefined;
   try {
@@ -417,7 +366,7 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   }
 
   if (await branchExists(mainRoot, branch)) {
-    // Reuse the issue branch across runs (fresh worktree, same branch).
+    // Reuse the branch across runs (fresh worktree, same branch).
     await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
   } else {
     await gitOrThrow(mainRoot, ["worktree", "add", "-b", branch, path, baseRef], `worktree add ${branch}`);

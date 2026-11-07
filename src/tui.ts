@@ -6,21 +6,19 @@
  * lines, two header lines, two footer lines, content clipped to the middle.
  *
  * The TUI wraps the CLI's file/CLI primitives rather than inventing a second
- * source of truth. Every screen is derived from run summaries, the issue
- * cache, the catalogue, config, and the spend ledger on each refresh.
+ * source of truth. Every screen is derived from run summaries, the packet
+ * catalog, the catalogue, config, and the spend ledger on each refresh.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { renderPlan, readPacketFile, writePacketFile, renderPacketFile, listPacketFiles, planCategories, type PacketFile, type PlanItem } from "./plan/packets.js";
+import { readPacketFile, writePacketFile, listPacketFiles, planCategories, type PacketFile } from "./plan/packets.js";
 import { isActiveStatus, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
-import { addTombstones, readIssueCache, reconcileTombstones, removeTombstones, writeIssueCache } from "./issues/cache.js";
-import type { Issue, IssueRef } from "./issues/provider.js";
-import { headerCounts, issueGlyphKind, issueRowDetail, sortRuns } from "./tui/status.js";
+import { headerCounts, sortRuns } from "./tui/status.js";
 import {
   RUN_GROUPS,
   RUN_GROUP_LABELS,
@@ -41,18 +39,13 @@ import { readSpendSummary, spendBar, spendDays } from "./spend.js";
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
-import { planSchedule, type ScheduledTask } from "./orchestrator/scheduler.js";
-import { featureBranchFor } from "./worktree.js";
-import { listOrchestrations, orchestrationStopRequested, readLease, requestOrchestrationStop } from "./orchestrator/state.js";
 import { skillListItems, toolListItems, tokensForChars } from "./tui/tools.js";
 import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
-import { AGENT_META, AGENT_NAMES, agentDef, roleSkillPresets, type IssueAccess } from "./agents.js";
+import { AGENT_META, AGENT_NAMES, agentDef, roleSkillPresets } from "./agents.js";
 import { resolveAgent, resolveAgentConfig } from "./agents/config.js";
-import { issueAccessFromCapabilities } from "./policy/capabilities.js";
-import { isGenericTaskRequest, issueRequestVerb, issueRunRequest } from "./issues/work.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
 import { loadCatalogue } from "./catalogue/load.js";
@@ -64,12 +57,10 @@ import { contextBudget } from "./context/budget.js";
 import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "./context/references.js";
 import { listReferenceEntries } from "./references/store.js";
 import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
-import { featurePanel, featureStageLite, type FeaturePanel } from "./tui/feature-status.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
-import type { FeatureStatus } from "./tasks/lifecycle.js";
 import { commitPlanningFiles } from "./tasks/packet.js";
 
 /* --------------------------------------------------------------- terminal */
@@ -162,9 +153,8 @@ function resolveTheme(config?: ThemeConfig): UiTheme {
   };
 }
 
-type Page = "runs" | "models" | "spend" | "settings" | "plans";
-type Screen = "list" | "issue" | "run" | "newrun" | "answer" | "correct" | "model" | "pipeline" | "delete" | "packet";
-type PipelineScope = { kind: "epic" | "feature"; ref: IssueRef };
+type Page = "runs" | "models" | "spend" | "settings";
+type Screen = "list" | "run" | "newrun" | "answer" | "correct" | "model" | "delete" | "packet";
 type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
 type RunsRepoScope = "all" | "cwd";
@@ -200,7 +190,7 @@ interface ContextPanelItem {
 const NEW_RUN_CONTEXT_TABS = ["Packets", "Plans", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;
 
 type NewRunState = ForkedRunSettings & {
-  /** Isolation worktree. Shown only for build/sudo; other agents ignore it. */
+  /** Isolation worktree. Shown only for build; other agents ignore it. */
   worktree: boolean;
 };
 
@@ -428,16 +418,6 @@ function icon(status: string): string {
   }
 }
 
-function issueIcon(issue: Issue): string {
-  switch (issueGlyphKind(issue)) {
-    case "closed": return `${G}✓${R}`;
-    case "blocked": return `${Y}⊘${R}`;
-    case "ready": return `${G}●${R}`;
-    case "draft": return `${Y}◐${R}`;
-    case "open": return issue.kind === "epic" ? `${C}○${R}` : `${GR}○${R}`;
-  }
-}
-
 function statusColor(status: string): string {
   if (status === "running") return C;
   if (status === "completed" || status === "done") return G;
@@ -463,8 +443,6 @@ function eventTone(type: string, isError = false): string {
     case "tool_call": return G;
     case "gates":
     case "agent_config": return B;
-    case "issue_created":
-    case "issue_linked": return G;
     case "retry":
     case "control":
     case "turn_cap":
@@ -493,10 +471,6 @@ function mapStatusTokens(root: string): string[] {
 /** Shared semantic tones for context provenance across previews and run details. */
 function contextTone(kind: string): string {
   switch (kind) {
-    case "issue":
-    case "epic":
-    case "feature":
-    case "task": return Y;
     case "packet": return M;
     case "knowledge": return C;
     case "reference": return M;
@@ -551,10 +525,6 @@ function agentTone(agent: string): string {
 /** Free is the safe default; paid is the yellow caution path. */
 function tierTone(tier: string): string {
   return tier === "free" ? G : Y;
-}
-
-function issueAccessTone(access: IssueAccess): string {
-  return access === "create" ? G : access === "plan" ? C : access === "read" ? D : GR;
 }
 
 function joinCommands(items: Array<string | false | undefined | null>): string {
@@ -663,8 +633,9 @@ function runIdFromEvent(run: RunSummary): string {
   return run.id.slice(-8);
 }
 
-function refKey(ref: IssueRef | undefined): string {
-  return ref ? `${ref.repo}#${ref.number}` : "";
+/** Generic inherited request ("Build the task.") hides the real objective. */
+function isGenericTaskRequest(request: string): boolean {
+  return /^(?:build|do|run|implement|work on)\s+(?:the\s+)?(?:task|issue)\.?$/i.test(request.trim());
 }
 
 /** Subtle zebra stripe for timeline rows (slightly lighter than body #0a0a0a). */
@@ -818,25 +789,12 @@ export async function runTui(): Promise<void> {
   let settingsSel = 0;
   let settingsScroll = 0;
 
-  let planSel = 0;
-  let planScroll = 0;
-  let planDetail: string | null = null;
-  let planDetailScroll = 0;
-
-  let selectedIssueKey: string | null = null;
   let selectedRunId: string | null = null;
   let selectedPacketSlug: string | null = null;
   let packetScroll = 0;
-  let deleteTarget: Issue | undefined;
   let deleteRunTarget: RunSummary | undefined;
   let deleteReturn: Screen = "list";
-  let deleteInFlight = false;
-  const deletingIssues = new Set<string>();
   const deletingRuns = new Set<string>();
-  let issueRefreshQueued = false;
-  let issueCachesByRepo = new Map<string, readonly Issue[]>();
-  let issueRunSel = 0;
-  let issueScroll = 0;
   let runSection: RunSection = "overview";
   let runScroll = 0;
   let processSel = 0;
@@ -852,45 +810,13 @@ export async function runTui(): Promise<void> {
   let thinkingScroll = 0;
   let thinkingFollow = true;
   let childSel = 0;
-  let pipelineScope: PipelineScope | undefined;
-  let pipelineSel = 0;
-  let pipelineScroll = 0;
-  /** `:` starts the two-key `:!` tick command on the pipeline screen. */
-  let pipelineColon = false;
-  /** Cached featureStatus per feature ref; refreshed async, rendered sync. */
-  const pipelineFeatureStates = new Map<string, FeatureStatus>();
-  let pipelineFeatureStatesAt = 0;
-  /** Tasks in the exact order rendered on the orchestration screen (group order). */
-  let pipelineTasks: ScheduledTask[] = [];
-  /** Orchestration settings, edited on the orchestration screen like new-run settings. */
-  let orchTier: "free" | "paid" = "paid";
-  let orchMinFit: number | undefined = undefined;
-  let orchFloors: "role" | "strict" | "off" = "role";
-  let orchMaxParallel = 2;
-  let orchMaxMinutes: number | undefined = undefined;
-  let orchMaxSpend: number | undefined = undefined;
-  let orchCheckpoint = false;
-  let orchModel: string | undefined = undefined;
-  /** Catalogue/policy cache for the per-task model preview. */
-  let orchPreviewCache: {
-    key: string;
-    at: number;
-    catalogue: CatalogueDocument | null;
-    policy: Policy | undefined;
-    machine: MachineConfig | undefined;
-    configured: Set<string>;
-    availability: AvailabilityState;
-  } | null = null;
   const expanded = new Set<string>();
   let changesCache: ChangesCache | null = null;
-  /** Feature merge/issue panel for the run detail; git-backed, so keep a TTL like changesCache. */
-  let featureCache: { key: string; at: number; data: FeaturePanel | null } | null = null;
 
   let newrun: NewRunState = {
     agent: "research",
     preset: "unrestricted",
     verification: "verified",
-    issues: "optional",
     ask: true,
     approval: "human",
     ambiguity: "precise",
@@ -961,9 +887,6 @@ export async function runTui(): Promise<void> {
   let pendingRunAt = 0;
   /** Fast repaints while waiting for a fresh run record, so new runs open in ~250ms not ~1s. */
   let pendingFastTimer: ReturnType<typeof setInterval> | null = null;
-  let issueRefreshAt = 0;
-  let issueRefreshing = false;
-  let issueStatus = "no cache";
 
   const stdin = process.stdin;
   stdin.setRawMode?.(true);
@@ -993,115 +916,6 @@ export async function runTui(): Promise<void> {
       if (found) return { layout: rl, summary: found.summary, events: found.events, dir: join(rl.runsDir, id) };
     }
     return null;
-  };
-
-  const collectIssueCaches = (runs: readonly RunSummary[]): Map<string, readonly Issue[]> => {
-    const repos = new Set<string>([l.repoRoot, ...listProjects(l.home), ...runs.map(repoOf)]);
-    const caches = new Map<string, readonly Issue[]>();
-    for (const repoRoot of repos) {
-      if (!repoRoot) continue;
-      const cache = readIssueCache(layout(repoRoot));
-      // In-flight deletes hide here (in memory); the cache file itself is
-      // never hand-edited, only written from provider data on refresh.
-      if (cache) caches.set(repoRoot, cache.issues.filter((issue) => !deletingIssues.has(refKey(issue.ref))));
-    }
-    return caches;
-  };
-
-  const issueRepoOf = (ref: IssueRef | undefined): string | undefined => {
-    if (!ref) return undefined;
-    const key = refKey(ref);
-    for (const [repoRoot, issues] of issueCachesByRepo) {
-      if (issues.some((issue) => refKey(issue.ref) === key)) return repoRoot;
-    }
-    return undefined;
-  };
-
-  const selectedIssue = (): Issue | undefined => {
-    if (!selectedIssueKey) return undefined;
-    for (const issues of issueCachesByRepo.values()) {
-      const issue = issues.find((candidate) => refKey(candidate.ref) === selectedIssueKey);
-      if (issue) return issue;
-    }
-    return undefined;
-  };
-
-  const issueByRef = (ref: IssueRef | undefined): Issue | undefined => {
-    if (!ref) return undefined;
-    for (const issues of issueCachesByRepo.values()) {
-      const issue = issues.find((candidate) => refKey(candidate.ref) === refKey(ref));
-      if (issue) return issue;
-    }
-    return undefined;
-  };
-
-  const descendantRefs = (issue: Issue): IssueRef[] => {
-    const out: IssueRef[] = [];
-    const walk = (parent: Issue): void => {
-      for (const ref of parent.children) {
-        const child = issueByRef(ref);
-        if (!child) continue;
-        out.push(child.ref);
-        walk(child);
-      }
-    };
-    walk(issue);
-    return out;
-  };
-
-  const descendantCount = (issue: Issue): number => descendantRefs(issue).length;
-
-  /** Objective text for an issue, using the verb for the current agent. */
-  const issuePrompt = (issue: Issue | undefined, agent: string): string =>
-    issue ? issueRunRequest(issue, issueRequestVerb(agent)) : "";
-
-  const refreshIssues = async (scope: "current" | "all" = "current") => {
-    if (issueRefreshing) {
-      issueRefreshQueued = true;
-      return;
-    }
-    issueRefreshing = true;
-    issueRefreshAt = Date.now();
-    const repoRoots = scope === "all" ? [...new Set([l.repoRoot, ...listProjects(l.home)])] : [l.repoRoot];
-    let refreshed = 0;
-    let unavailable = 0;
-    try {
-      const { createIssueProvider } = await import("./issues/index.js");
-      for (const repoRoot of repoRoots) {
-        const repoLayout = layout(repoRoot);
-        try {
-          const bundle = await createIssueProvider(repoLayout, loadMachineConfig(repoLayout));
-          if (bundle.provider.kind === "none") {
-            unavailable += 1;
-            continue;
-          }
-          const issues = (await bundle.provider.list({ state: "all", limit: 300 }))
-            .filter((issue) => !deletingIssues.has(refKey(issue.ref)));
-          // Self-healing tombstones: the provider still lists these and no
-          // delete is in flight, so a previous delete never landed — unhide
-          // them instead of hiding live issues forever.
-          reconcileTombstones(
-            repoLayout,
-            issues.map((issue) => issue.ref),
-            (key) => deletingIssues.has(key),
-          );
-          writeIssueCache(repoLayout, bundle.repo ?? "", issues);
-          refreshed += 1;
-        } catch {
-          unavailable += 1;
-        }
-      }
-      issueStatus = unavailable > 0
-        ? `fresh ${refreshed} repo(s), ${unavailable} unavailable`
-        : `fresh ${refreshed} repo(s)`;
-      if (scope === "all") notify(issueStatus);
-    } finally {
-      issueRefreshing = false;
-      if (issueRefreshQueued) {
-        issueRefreshQueued = false;
-        void refreshIssues(scope);
-      }
-    }
   };
 
   const openEditor = (file: string | null | undefined) => {
@@ -1156,7 +970,6 @@ export async function runTui(): Promise<void> {
       agent,
       preset: "unrestricted",
       verification: "verified",
-      issues: "optional",
       ask: true,
       approval: "human",
       ambiguity: "precise",
@@ -1195,38 +1008,27 @@ export async function runTui(): Promise<void> {
     packetPickText = "";
   };
 
-  const startNewRun = (packetSlug?: string, repoRoot = l.repoRoot, issue?: IssueRef, issueObj?: Issue) => {
+  const startNewRun = (packetSlug?: string, repoRoot = l.repoRoot) => {
     const previous = newrun;
     newRunRepo = repoRoot;
     const packetFile = packetSlug ? readPacketFile(layout(repoRoot), packetSlug) : null;
-    const knownIssue = issueObj ?? issueByRef(issue);
-    // A packet is implementation work: start with Build. A legacy Epic is
-    // planning work: start with Planner. Untracked runs keep the last agent.
-    const preferredAgent = packetSlug
-      ? "build"
-      : knownIssue
-        ? knownIssue.kind === "feature"
-          ? "build"
-          : "planner"
-        : issue
-          ? "build"
-          : previous.agent;
+    // A packet is implementation work: start with Build. Untracked runs keep
+    // the last agent.
+    const preferredAgent = packetSlug ? "build" : previous.agent;
     newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
       ...(packetSlug ? { packet: packetSlug } : {}),
-      ...(issue && !packetSlug ? { issue } : {}),
     };
-    // Verification and isolation are role-shaped: build/sudo verify, and a
-    // fresh build isolates while sudo starts on the main tree.
+    // Verification and isolation are role-shaped: only build verifies, and a
+    // fresh build isolates in a worktree.
     newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
     newrun.worktree = true;
     enforceLockedSkills(true);
     // A packet-attached run starts with a concrete objective. The prompt stays
     // editable, but the human no longer has to type one.
-    if (packetFile) newrun.prompt = packetFile.deliverable || packetSlug ?? "";
-    else if (knownIssue) newrun.prompt = issuePrompt(knownIssue, newrun.agent);
+    if (packetFile) newrun.prompt = packetFile.deliverable || packetSlug || "";
     resetNewRunUi();
     screen = "newrun";
   };
@@ -1265,14 +1067,10 @@ export async function runTui(): Promise<void> {
       worktree: newrun.worktree,
     };
     // A generic inherited request ("Build the task.") hides the real objective.
-    // When the run is attached to a packet or issue, derive the request from it.
+    // When the run is attached to a packet, derive the request from it.
     const forkPacket = newrun.packet ? readPacketFile(repoLayout, newrun.packet) : null;
     if (forkPacket && (!newrun.prompt.trim() || isGenericTaskRequest(newrun.prompt))) {
-      newrun.prompt = forkPacket.deliverable || newrun.packet ?? "";
-    }
-    const forkIssue = !forkPacket && newrun.issue ? issueByRef(newrun.issue) : undefined;
-    if (forkIssue && (!newrun.prompt.trim() || isGenericTaskRequest(newrun.prompt))) {
-      newrun.prompt = issuePrompt(forkIssue, agent);
+      newrun.prompt = forkPacket.deliverable || newrun.packet || "";
     }
     resetNewRunUi();
     newRunParentId = summary.id;
@@ -1282,23 +1080,16 @@ export async function runTui(): Promise<void> {
 
   const cycleAgent = () => {
     const previousAgent = newrun.agent;
-    const issue = issueByRef(newrun.issue);
-    const previousPrompt = issuePrompt(issue, previousAgent);
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
     newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
-    // Verification and isolation follow the role: only build/sudo verify, and
-    // sudo starts on the main tree until its worktree toggle is flipped.
+    // Verification and isolation follow the role: only build verifies and
+    // isolates in a worktree.
     newrun.verification = agentIsolates(newrun.agent) ? "verified" : "direct";
     newrun.worktree = true;
     enforceLockedSkills(true);
-    // Keep an auto-derived objective in sync with the agent verb. A prompt the
-    // human edited stays untouched.
-    if (issue && (!newrun.prompt.trim() || newrun.prompt === previousPrompt)) {
-      newrun.prompt = issuePrompt(issue, newrun.agent);
-    }
   };
 
-  /** Build/sudo verification mode, shown as verify[v] beside the agent row. */
+  /** Build verification mode, shown as verify[v] beside the agent row. */
   const cycleVerify = () => {
     const values: NewRunState["verification"][] = ["direct", "verified"];
     newrun.verification = values[(values.indexOf(newrun.verification) + 1) % values.length]!;
@@ -1359,20 +1150,19 @@ export async function runTui(): Promise<void> {
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
-    const previewKey = `${newRunRepo}\0${newrun.packet ?? ""}\0${refKey(newrun.issue)}\0${newrun.agent}\0${newrun.verification}\0${newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
+    const previewKey = `${newRunRepo}\0${newrun.packet ?? ""}\0${newrun.agent}\0${newrun.verification}\0${newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}`;
     const previewTtl = newRunInsert ? 60_000 : 5_000;
     if (
       !newRunPreviewCache ||
       newRunPreviewCache.key !== previewKey ||
       Date.now() - newRunPreviewCache.at > previewTtl
     ) {
-      const cache = readIssueCache(newRunLayout);
       const statuses = providerStatuses(createModelsCollection());
       const machine = (() => { try { return loadMachineConfig(newRunLayout); } catch { return undefined; } })();
       newRunPreviewCache = {
         key: previewKey,
         at: Date.now(),
-        context: previewContext(newRunLayout, cache?.issues ?? [], newrun.issue, "", {
+        context: previewContext(newRunLayout, "", {
           agent: newrun.agent,
           ...(newrun.packet ? { packet: newrun.packet } : {}),
           planFile: machine?.context.planFile,
@@ -1392,12 +1182,10 @@ export async function runTui(): Promise<void> {
       };
     }
     const base = newRunPreviewCache;
-    const previewIssue = issueByRef(newrun.issue);
     const previewPacket = newrun.packet ? readPacketFile(newRunLayout, newrun.packet) : null;
     const previewPrompt =
       newrun.prompt.trim() ||
-      (previewPacket ? previewPacket.deliverable : "") ||
-      (previewIssue ? issuePrompt(previewIssue, newrun.agent) : "");
+      (previewPacket ? previewPacket.deliverable : "");
     const context: ContextPreview = { ...base.context, promptChars: previewPrompt.length };
     const policy = base.policy;
     const machine = base.machine;
@@ -1412,15 +1200,12 @@ export async function runTui(): Promise<void> {
         preset: newrun.preset,
         verification: newrun.verification === "redundant" ? "verified" : newrun.verification,
         worktree: newrun.worktree,
-        issues: newrun.issues,
         ask: newrun.ask,
         approval: newrun.approval,
         ambiguity: newrun.ambiguity,
       },
     });
-    const toolChars = toolSchemaChars(
-      resolved.def.tools.filter((tool) => tool !== "issue" || newrun.issues !== "disabled"),
-    );
+    const toolChars = toolSchemaChars(resolved.def.tools);
     const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
     if (newrun.minFit !== undefined) effective.minFit = newrun.minFit ?? 0;
     if (newrun.floors === "off") {
@@ -1483,7 +1268,7 @@ export async function runTui(): Promise<void> {
   };
 
   const buildNewRunArgs = (): string[] | null => {
-    if (newrun.prompt.trim().length === 0 && !newrun.issue && !newrun.packet) {
+    if (newrun.prompt.trim().length === 0 && !newrun.packet) {
       notify("type a task before starting");
       return null;
     }
@@ -1493,28 +1278,6 @@ export async function runTui(): Promise<void> {
       return null;
     }
     const policy = effectivePolicy(newRunRepo);
-    const newRunLayout = layout(newRunRepo);
-    const machine = newRunPreviewCache?.machine ?? (() => {
-      try { return loadMachineConfig(newRunLayout); } catch { return undefined; }
-    })();
-    const issueAccess = resolveAgentConfig({
-      role: newrun.agent,
-      agentPolicy: policy?.agents[newrun.agent],
-      machineOverrides: machine?.agents[newrun.agent],
-    }).issueAccess ?? agentDef(newRunLayout, newrun.agent).issueAccess;
-    const selectedIssue = newrun.issue ? issueByRef(newrun.issue) : undefined;
-    const planningAgent = newrun.agent === "planner" || newrun.agent === "review";
-    if (
-      !newrun.packet &&
-      !planningAgent &&
-      newrun.agent !== "research" &&
-      selectedIssue &&
-      selectedIssue.kind !== "feature" &&
-      issueAccess !== "create"
-    ) {
-      notify(`${newrun.agent} attaches to a Feature. Choose a Feature or an agent with issue creation access.`);
-      return null;
-    }
     const args = [
       "run",
       "--agent", newrun.agent,
@@ -1522,7 +1285,6 @@ export async function runTui(): Promise<void> {
       "--tier", newrun.tier,
       "--preset", newrun.preset,
       "--verify", newrun.verification,
-      "--issues", newrun.issues,
       "--ask", String(newrun.ask),
       "--worktree", newrun.worktree ? "true" : "false",
       "--approval", newrun.approval,
@@ -1551,10 +1313,6 @@ export async function runTui(): Promise<void> {
     }
     if (newrun.packet) {
       args.push("--packet", newrun.packet);
-    }
-    if (newrun.issue) {
-      args.push("--issue", String(newrun.issue.number));
-      if (!planningAgent && issueAccess === "create" && selectedIssue && selectedIssue.kind !== "feature") args.push("--auto-issue");
     }
     const excludedSections = [...newRunContextExcluded]
       .filter((key) => key.startsWith("section:"))
@@ -1676,34 +1434,7 @@ export async function runTui(): Promise<void> {
     }
   };
 
-  const approveSelected = (issue: Issue | undefined, run: RunSummary | undefined, repoRoot = l.repoRoot) => {
-    const feature = issue?.kind === "feature"
-      ? issue
-      : issueByRef(run?.issue);
-    if (feature && !run) { notify(`no run to approve for #${feature.ref.number}`); return; }
-    const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-    const args = feature
-      ? ["feature", "approve", String(feature.ref.number)]
-      : ["approve", String(run?.prNumber && run.prState === "open" ? run.prNumber : issue?.ref.number ?? "")];
-    if (args[1] === "approve" && !args[2]) { notify("nothing to approve"); return; }
-    const child = spawn(process.execPath, [cliPath, ...args], {
-      cwd: feature ? (issueRepoOf(feature.ref) ?? repoRoot) : repoRoot,
-      detached: true,
-      stdio: "ignore",
-      env: process.env,
-    });
-    child.unref();
-    notify(feature ? `feature approval queued for #${feature.ref.number}` : `approval requested for ${args[2]}`);
-  };
-
   const runDetailData = (): RunDetail | null => (selectedRunId ? findRunDetail(selectedRunId) : null);
-
-  /** Issue caches honoring the runs repo scope: with f=cwd, issue-only repos
-   * must not resurrect rows the run filter hides. */
-  const scopedIssueCaches = (): Map<string, readonly Issue[]> =>
-    runsRepoScope === "cwd"
-      ? new Map([...issueCachesByRepo].filter(([repoRoot]) => repoRoot === l.repoRoot))
-      : issueCachesByRepo;
 
   const currentChanges = (detail: RunDetail): ChangeSummary => {
     if (changesCache && changesCache.runId === detail.summary.id && Date.now() - changesCache.at < 4_000) {
@@ -1712,65 +1443,6 @@ export async function runTui(): Promise<void> {
     const data = changesFor(detail.summary.worktree);
     changesCache = { runId: detail.summary.id, at: Date.now(), data };
     return data;
-  };
-
-  const currentFeatureForIssue = (issue: Issue, repoRoot: string): FeaturePanel | null => {
-    const key = `issue:${refKey(issue.ref)}`;
-    if (featureCache && featureCache.key === key && Date.now() - featureCache.at < 5_000) {
-      return featureCache.data;
-    }
-    const data = featurePanel(layout(repoRoot), issue, issue.ref);
-    featureCache = { key, at: Date.now(), data };
-    return data;
-  };
-
-  const stageTone = (stage: string): string =>
-    stage === "closed" ? G
-    : stage === "blocked" ? RED
-    : stage === "needs-human-review" ? Y
-    : stage === "building" || stage === "reviewing" ? C
-    : D;
-
-  /** Feature status block for the issue screen (the feature's home). */
-  const renderFeaturePanel = (panel: FeaturePanel, cols: number): string[] => {
-    const stateTone = panel.issueState === "closed" ? G : panel.issueState === "open" ? Y : D;
-    const lines = [
-      "",
-      ` ${B}${M}Feature${R} ${W}#${panel.number}${R} ${stateTone}${panel.issueState.toUpperCase()}${R} ${D}·${R} ${stageTone(panel.stage)}${panel.stage}${R}`,
-    ];
-    const mergeBit = !panel.branchExists
-      ? `${RED}branch gone${R}`
-      : panel.merged === true
-        ? `${G}merged into ${panel.baseBranch ?? "base"}${R}`
-        : panel.merged === false
-          ? `${Y}not merged${R}` +
-            (panel.ahead !== undefined ? ` ${D}ahead ${panel.ahead} behind ${panel.behind ?? 0}${R}` : "")
-          : `${D}merge state unknown${R}`;
-    const wtBit = !panel.worktree
-      ? `${D}no worktree${R}`
-      : !panel.worktreeExists
-        ? `${D}worktree removed${R}`
-        : panel.dirtyCount > 0
-          ? `${Y}${panel.dirtyCount} uncommitted${R}`
-          : `${G}clean${R}`;
-    lines.push(
-      `  ${D}${trunc(panel.branch, Math.max(16, cols - 52))}${R}` +
-      (panel.baseBranch ? ` ${D}→ ${panel.baseBranch}${R}` : "") +
-      `  ${mergeBit}  ${D}wt ${panel.worktree ? basename(panel.worktree) : "—"}${R} ${wtBit}` +
-      (panel.commit ? `  ${D}${panel.commit}${R}` : ""),
-    );
-    const runBits: string[] = [];
-    if (panel.build) runBits.push(`${D}build${R} ${panel.build.id.slice(-8)} ${panel.build.status}`);
-    if (panel.review) {
-      runBits.push(
-        `${D}review${R} ${panel.review.id.slice(-8)} ${panel.review.status}` +
-        (panel.review.verdict
-          ? ` ${panel.review.verdict === "approved" ? G : Y}${panel.review.verdict}${R}`
-          : ""),
-      );
-    }
-    if (runBits.length > 0) lines.push(`  ${runBits.join(`  ${D}·${R}  `)}`);
-    return lines;
   };
 
   const searchSeed = (): string => {
@@ -1799,11 +1471,8 @@ export async function runTui(): Promise<void> {
     // filesystem walk there keeps prompt typing responsive.
     const needRunData =
       pendingRunAt > 0 ||
-      (page === "runs" && (screen === "list" || screen === "issue" || screen === "run" || screen === "pipeline"));
+      (page === "runs" && (screen === "list" || screen === "run"));
     const allRuns = needRunData ? listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id)) : [];
-    const cache = needRunData ? readIssueCache(l) : undefined;
-    if (needRunData) issueCachesByRepo = collectIssueCaches(allRuns);
-    const issues = needRunData ? issueCachesByRepo.get(l.repoRoot) ?? cache?.issues ?? [] : [];
     const counts = needRunData ? headerCounts(allRuns) : headerCounts([]);
     const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
     const theme = resolveTheme(settingsMachine?.theme);
@@ -1828,23 +1497,10 @@ export async function runTui(): Promise<void> {
     }
 
     const runsListScreen = page === "runs" && screen === "list";
-    const orchStates = needRunData ? listOrchestrations(l) : [];
-    const activeOrchestrations = orchStates.filter((state) => {
-      const lease = readLease(l, state.id);
-      return Boolean(lease && lease.until > Date.now());
-    }).length;
-    // Orchestration in-progress by scope: active means no stopReason. Rebuilt
-    // once per frame so issue rows stay cheap.
-    const orchActiveRefs = new Set<string>();
-    for (const state of orchStates) {
-      if (state.stopReason || !state.scopeRef) continue;
-      orchActiveRefs.add(refKey(state.scopeRef));
-    };
     const runIndicators = [
       `${C}●${R} ${counts.active} running`,
       `${Y}?${R} ${counts.awaiting} awaiting`,
       `${Y}⏸${R} ${counts.paused} paused`,
-      ...(activeOrchestrations > 0 ? [`${G}●${R} ${activeOrchestrations} orchestration`] : []),
     ];
     const statusTokens = [`${Y}PR${R} ${counts.openPrs} open`];
 
@@ -1895,7 +1551,7 @@ export async function runTui(): Promise<void> {
     const runDetailHeader = page === "runs" && screen === "run";
     const backHeader =
       runDetailHeader ||
-      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct" || screen === "pipeline")) ||
+      (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct")) ||
       (page === "models" && screen === "model");
     // Tabs stay visible on every other screen. Runs and models replace the
     // blank separator with a live summary line; other pages keep the blank.
@@ -1904,11 +1560,9 @@ export async function runTui(): Promise<void> {
         ? `  ${B}${theme.headerFg}New Run${R}`
         : runDetailHeader
           ? `  ${B}${theme.headerFg}Run Details${R}`
-          : page === "runs" && screen === "pipeline"
-            ? `  ${B}${theme.headerFg}Orchestration${R}`
-            : page === "models" && screen === "model"
-              ? `  ${B}${theme.headerFg}Model Details${R}`
-              : "";
+          : page === "models" && screen === "model"
+            ? `  ${B}${theme.headerFg}Model Details${R}`
+            : "";
     const backLine = `${theme.backBg}${theme.backFg}${B} Back[Esc] ${R}${backTitle}`;
     const headerSubLines = runsListScreen
       ? wrapTokenList([...runIndicators, ...statusTokens], cols, "  ").map((line) => ` ${line}`)
@@ -1933,7 +1587,6 @@ export async function runTui(): Promise<void> {
     const filteredRuns = runsListScreen ? scopedRuns : [];
     const runIndex = buildRunIndex({
       runs: filteredRuns,
-      issuesByRepo: runsListScreen ? scopedIssueCaches() : new Map(),
       group: runsGroup,
       collapsed,
       text: runsText,
@@ -1974,10 +1627,6 @@ export async function runTui(): Promise<void> {
     /* ------------------------------------------------------------- runs */
     if (page === "runs" && screen === "list") {
       const lines: string[] = [];
-      if (runsGroup === "gh-issue" && issueCachesByRepo.size === 0) {
-        lines.push(` ${Y}No issue cache yet.${R} ${D}Runs without issues are listed under Untracked; press r to refresh when gh is available.${R}`);
-        lines.push("");
-      }
       const selectedId = selectedRow?.id;
       let selectedEndLine = lines.length;
       for (const row of runIndex.rows) {
@@ -1988,43 +1637,9 @@ export async function runTui(): Promise<void> {
           const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
           rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
         } else if (row.kind === "section") {
-          const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : row.tone === "issues" ? C : GR;
+          const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : GR;
           const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
           rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
-        } else if (row.kind === "issue") {
-          const roll = row.rollup;
-          const detail = issueRowDetail(cols);
-          const orchMark = orchActiveRefs.has(refKey(row.issue.ref)) ? `${C}◌${R} ` : "";
-          const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${orchMark}${issueIcon(row.issue)} ${BL}#${row.issue.ref.number}${R} ${D}${row.issue.kind}${R} ${B}${W}${row.issue.title}${R}`;
-          const parts: string[] = [];
-          if (detail !== "identity") {
-            if (roll.pct !== undefined) {
-              const width = detail === "full" ? 6 : 4;
-              parts.push(`${progress(roll.pct, width)} ${String(roll.pct).padStart(3)}%`);
-            }
-            if ((detail === "full" || detail === "medium") && roll.tasksTotal > 0) {
-              parts.push(`${D}${roll.tasksClosed}/${roll.tasksTotal} features${R}`);
-            }
-            parts.push(detail === "compact"
-              ? `${roll.runsTotal}r`
-              : `${roll.runsTotal} run${roll.runsTotal === 1 ? "" : "s"}${roll.runsActive ? ` ${C}${roll.runsActive}●${R}` : ""}`);
-            if ((detail === "full" || detail === "medium") && row.issue.kind === "feature") {
-              const fstage = featureStageLite(
-                row.issue,
-                allRuns.filter((run) => refKey(run.issue) === refKey(row.issue.ref)),
-              );
-              parts.push(`${stageTone(fstage)}${fstage}${R}`);
-            }
-            if (detail === "full") {
-              if (roll.prState) parts.push(`${Y}PR ${roll.prState}${R}`);
-              parts.push(`${D}${fmtMoney(roll.cost)} · ${ago(roll.lastActivity)}${R}`);
-            }
-          }
-          const right = parts.join("  ");
-          const text = right
-            ? ` ${pad(left, Math.max(20, cols - visible(right) - 2))}${right}`
-            : ` ${trunc(left, Math.max(12, cols - 1))}`;
-          rendered.push(selected(text, isSelected));
         } else if (row.kind === "packet") {
           const status = row.packet.status;
           const tone = status === "in-progress" ? C : status === "blocked" ? Y : status === "done" ? G : D;
@@ -2056,7 +1671,7 @@ export async function runTui(): Promise<void> {
             rendered.push(selected(` ${pad(left, Math.max(30, cols - visible(right) - visible(context) - 2))}${context}${right}`, isSelected));
           }
         }
-        if (focus && !focus.has(row.id) && (row.kind === "issue" || row.kind === "run")) {
+        if (focus && !focus.has(row.id) && row.kind === "run") {
           for (let i = 0; i < rendered.length; i++) rendered[i] = dim(rendered[i]!);
         }
         if (isSelected) {
@@ -2100,99 +1715,15 @@ export async function runTui(): Promise<void> {
         command("D", "Delete", undefined, RED),
       ]);
       if (toast) secondary = `${Y}${toast}${R}`;
-      else if (issueRefreshing) secondary = `${D}syncing issues…${R}`;
-      else if (issueRefreshAt > 0) secondary = `${D}issues synced ${ago(new Date(issueRefreshAt).toISOString())} ago${R}`;
-    }
-
-    /* ------------------------------------------------------------ issue */
-    else if (page === "runs" && screen === "issue") {
-      const issue = selectedIssue();
-      if (!issue) {
-        screen = "list";
-        return draw();
-      }
-      const issueRoot = issueRepoOf(issue.ref) ?? l.repoRoot;
-      const repoIssues = issueCachesByRepo.get(issueRoot) ?? issues;
-      const preview = previewContext(layout(issueRoot), repoIssues, issue.ref);
-      const issueRuns = sortRuns(allRuns.filter((run) => refKey(run.issue) === refKey(issue.ref)), "activity");
-      const ancestors: Issue[] = [];
-      let parentRef = issue.parent;
-      while (parentRef) {
-        const parent = issueByRef(parentRef);
-        if (!parent) break;
-        ancestors.push(parent);
-        parentRef = parent.parent;
-      }
-      const lines: string[] = [];
-      lines.push(` ${issueIcon(issue)} ${BL}#${issue.ref.number}${R} ${B}${W}${issue.title}${R} ${D}${issue.kind} · ${issue.state}${R}`);
-      if (ancestors.length) lines.push(` ${D}${ancestors.reverse().map((parent) => `#${parent.ref.number} ${parent.title}`).join("  ←  ")}${R}`);
-      lines.push(` ${D}${issue.labels.join(" · ") || "no labels"}${R}`);
-      if (issue.blockedBy.length) lines.push(` ${Y}blocked by ${issue.blockedBy.map((ref) => `#${ref.number}`).join(", ")}${R}`);
-      if (issue.kind === "feature") {
-        const panel = currentFeatureForIssue(issue, issueRoot);
-        if (panel) {
-          lines.push(...renderFeaturePanel(panel, cols));
-          if (panel.stage === "needs-human-review") {
-            lines.push(` ${D}press ${Y}p${D} to approve & merge (Finish #${issue.ref.number})${R}`);
-          }
-        }
-      }
-      lines.push("");
-      for (const line of wrapText(issue.body || "(no body)", Math.max(20, cols - 4)).slice(0, short ? 4 : 10)) lines.push(` ${W}${line}${R}`);
-      if (issue.acceptance.length) {
-        lines.push("", ` ${B}${C}Acceptance${R}`);
-        for (const item of issue.acceptance.slice(0, 8)) lines.push(`   ${G}✓${R} ${W}${item}${R}`);
-      }
-      lines.push("", ` ${B}${C}Context cascade${R} ${D}${preview.chars.toLocaleString()} chars · ${preview.sources.length} source(s)${R}`);
-      const ctxBits = [
-        preview.artifacts.files.length ? `files ${preview.artifacts.files.length}` : "",
-        preview.artifacts.knowledge.length ? `knowledge ${preview.artifacts.knowledge.length}` : "",
-        preview.artifacts.references.length ? `references ${preview.artifacts.references.length}` : "",
-        preview.artifacts.tools.length ? `tools ${preview.artifacts.tools.length}` : "",
-        preview.artifacts.scripts.length ? `scripts ${preview.artifacts.scripts.length}` : "",
-      ].filter(Boolean).join(" · ");
-      lines.push(`   ${ctxBits || `${D}(none declared; hierarchy only)${R}`}`);
-      for (const artifact of [...preview.artifacts.tools, ...preview.artifacts.scripts].slice(0, 6)) {
-        lines.push(`   ${M}${artifact.kind}${R} ${W}${artifact.name}${R} ${D}${artifact.description}${R}`);
-      }
-      if (preview.warnings.length) lines.push(`   ${Y}${preview.warnings.slice(0, 3).join("; ")}${R}`);
-      lines.push("", ` ${B}${C}Runs${R} ${D}${issueRuns.length}${R}`);
-      if (issueRuns.length === 0) lines.push(`   ${D}none — press n to start one under this issue${R}`);
-      const runStart = lines.length;
-      for (let i = 0; i < issueRuns.length; i++) {
-        const run = issueRuns[i]!;
-        const isSelected = i === Math.min(issueRunSel, issueRuns.length - 1);
-        const line = `   ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}  ${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
-        lines.push(selected(line, isSelected));
-      }
-      const w = selectableLines(lines, Math.max(0, runStart + issueRunSel), issueScroll, bodyH);
-      issueScroll = w.scroll;
-      body = clipBody(w.lines);
-      // Approve does real work: task approve merges the PR, records
-      // acceptance, and closes/cleans up; otherwise it approves the open PR.
-      const approveRun = issueRuns[Math.min(issueRunSel, Math.max(0, issueRuns.length - 1))];
-      const approveFeature = issue.kind === "feature" ? issue : issueByRef(approveRun?.issue);
-      const approveLabel =
-        approveFeature && approveRun
-          ? `Finish #${approveFeature.ref.number}`
-          : approveRun?.prNumber && approveRun.prState === "open"
-            ? `Merge PR#${approveRun.prNumber}`
-            : "Approve";
-      actions = joinCommands([
-        command("n", "New run", undefined, C),
-        command("Enter", "Open", undefined, G),
-        command("j/k", "Select", undefined, M),
-        command("p", approveLabel, undefined, Y),
-        command("P", "Pipeline", undefined, C),
-        command("D", "Delete", undefined, RED),
-        command("Esc", "Back", undefined, GR),
-      ]);
-      secondary = `${D}${issue.kind} #${issue.ref.number} · ${issueRuns.length} run(s) · ${preview.chars.toLocaleString()} context chars${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
     }
 
     /* ----------------------------------------------------------- delete */
     else if (screen === "delete") {
-      if (deleteRunTarget) {
+      if (!deleteRunTarget) {
+        screen = deleteReturn;
+        return draw();
+      }
+      {
         const run = deleteRunTarget;
         const lines = [
           "",
@@ -2217,36 +1748,6 @@ export async function runTui(): Promise<void> {
           command("Esc", "Cancel", undefined, GR),
         ]);
         secondary = `${D}run ${run.id}${R}`;
-      } else {
-        const target = deleteTarget;
-        if (!target) {
-          screen = deleteReturn;
-          return draw();
-        }
-        const descendants = descendantCount(target);
-        const targetRuns = allRuns.filter((run) => refKey(run.taskIssue ?? run.issue) === refKey(target.ref));
-        const worktrees = new Set(targetRuns.map((run) => run.worktree).filter(Boolean));
-        const lines = [
-          "",
-          ` ${RED}${B}Delete #${target.ref.number}${R} ${W}${target.title}${R}`,
-          "",
-          ` ${D}This permanently deletes the issue and its associated resources:${R}`,
-          `   ${Y}•${R} close open PR(s)`,
-          `   ${Y}•${R} remove ${worktrees.size} worktree(s)`,
-          `   ${Y}•${R} delete local and remote ${target.kind === "feature" ? "Feature" : "scope"} branches`,
-          `   ${Y}•${R} delete ${targetRuns.length} associated run record(s)`,
-          `   ${Y}•${R} delete the issue${descendants > 0 ? ` and ${descendants} descendant issue(s)` : ""}`,
-          "",
-          ` ${D}${targetRuns.length} associated run(s) · ${descendants} descendant issue(s)${R}`,
-          "",
-          ` ${RED}This cannot be undone.${R}`,
-        ];
-        body = clipBody(lines);
-        actions = joinCommands([
-          command("D", "Confirm delete", undefined, RED),
-          command("Esc", "Cancel", undefined, GR),
-        ]);
-        secondary = `${D}#${target.ref.number} ${target.kind}${R}`;
       }
     }
 
@@ -2257,8 +1758,6 @@ export async function runTui(): Promise<void> {
       const preview = modelPreview();
       const ctx = preview.context;
       const ap = preview.policy?.agents[newrun.agent];
-      const def = agentDef(layout(newRunRepo), newrun.agent);
-      const issueObj = newrun.issue ? issueByRef(newrun.issue) : undefined;
       const newRunPacketFile = newrun.packet ? readPacketFile(layout(newRunRepo), newrun.packet) : null;
       const packetValue = newrun.packet ?? "NA";
       const displayAgent = newrun.agent ? `${newrun.agent[0]!.toUpperCase()}${newrun.agent.slice(1)}` : newrun.agent;
@@ -2269,21 +1768,17 @@ export async function runTui(): Promise<void> {
           preset: newrun.preset,
           verification: newrun.verification === "redundant" ? "verified" : newrun.verification,
           worktree: newrun.worktree,
-          issues: newrun.issues,
           ask: newrun.ask,
           approval: newrun.approval,
           ambiguity: newrun.ambiguity,
         },
       });
-      const issueAccess = resolvedAgent.config.issueAccess ?? def.issueAccess;
       const packetOutcome = (() => {
         if (newrun.packet) {
           if (!newRunPacketFile) return "packet file is missing";
           return `ready · ${newRunPacketFile.status} · gate ${newRunPacketFile.review ?? "gates"}`;
         }
-        if (!newrun.issue) return "no packet · run is untracked";
-        if (!issueObj) return "legacy issue is not in the cache";
-        return "legacy issue link (prefer a packet)";
+        return "no packet · run is untracked";
       })();
       const displayTier = newrun.tier === "free" ? "Free" : "Paid";
       const itemsFor = (kinds: readonly string[]) =>
@@ -2301,8 +1796,7 @@ export async function runTui(): Promise<void> {
       const newRunLayout = layout(newRunRepo);
       const artifacts = listArtifacts(newRunLayout);
       const toolItems = toolListItems(
-        resolvedAgent.def.tools.filter((tool) => tool !== "issue" || newrun.issues !== "disabled"),
-        issueAccess,
+        resolvedAgent.def.tools,
         artifacts
           .filter((artifact) => artifact.kind === "tool")
           .map((artifact) => ({ name: artifact.name, description: artifact.description })),
@@ -2324,7 +1818,7 @@ export async function runTui(): Promise<void> {
         });
       }
       const knowledgeItems: ContextPanelItem[] = itemsFor(["knowledge"]);
-      // Attached references first (issue-cited), then every store bundle as
+      // Attached references first, then every store bundle as
       // an available row the user can search and opt into with space.
       const referenceItems: ContextPanelItem[] = itemsFor(["reference"]);
       const attachedCitations = new Set(ctx.artifacts.references);
@@ -2742,7 +2236,7 @@ export async function runTui(): Promise<void> {
 
       const boxWidth = panelWidth;
       const inner = Math.max(12, boxWidth - 2);
-      const promptText = newrun.prompt || (newRunInsert ? "" : newrun.packet ? "Press :! to run the packet" : newrun.issue ? "Press :! to run the selected task" : "Press p to type the task");
+      const promptText = newrun.prompt || (newRunInsert ? "" : newrun.packet ? "Press :! to run the packet" : "Press p to type the task");
       // Include the cursor before wrapping so a freshly typed trailing space is
       // not trimmed away until the next keystroke.
       const promptLines = wrapText(newRunInsert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
@@ -2754,7 +2248,7 @@ export async function runTui(): Promise<void> {
           ])
         : joinCommands([
             command("p", "Prompt", undefined, M),
-            newrun.prompt.trim() || newrun.packet || newrun.issue ? commandBadge("Start", ":!", START_BG, WHITE) : "",
+            newrun.prompt.trim() || newrun.packet ? commandBadge("Start", ":!", START_BG, WHITE) : "",
           ]);
       const agentControls = newRunInsert
         ? ""
@@ -3044,219 +2538,6 @@ export async function runTui(): Promise<void> {
       secondary = `${D}space folds groups · Enter opens details${R}`;
     }
 
-    /* ---------------------------------------------------------- pipeline */
-    else if (page === "runs" && screen === "pipeline") {
-      const scope = pipelineScope;
-      const lines: string[] = [];
-      if (!scope) {
-        lines.push("", ` ${Y}Select an Epic or Feature in the Runs list, then press o.${R}`);
-        body = clipBody(lines);
-        actions = joinCommands([
-          command("Esc", "Back", undefined, GR),
-        ]);
-        secondary = "no orchestration scope";
-      } else {
-        const scopedIssue = issueByRef(scope.ref);
-        const scopeTitle = scopedIssue ? `#${scope.ref.number} ${scopedIssue.title}` : `#${scope.ref.number}`;
-        // The scope can come from any repo in an all-repos view; schedule
-        // from the scope's own issues and runs, not the TUI cwd.
-        const scopeRepo = issueRepoOf(scope.ref) ?? l.repoRoot;
-        const scopeLayout = scopeRepo === l.repoRoot ? l : layout(scopeRepo);
-        const scopeIssues = issueCachesByRepo.get(scopeRepo) ?? [];
-        const runs = allRuns.filter((run) => run.repoRoot === scopeRepo);
-        const schedule = planSchedule({ issues: scopeIssues, scope: scope.kind, scopeRef: scope.ref, runs, maxParallel: orchMaxParallel });
-        const tasks = schedule.tasks;
-        const ready = tasks.filter((task) => task.ready).length;
-        const blocked = tasks.length - ready;
-        const minFitLabel = orchMinFit === undefined ? "auto" : String(orchMinFit);
-        lines.push(
-          ` ${B}${W}Orchestration${R} ${D}${scope.kind} ${scopeTitle}${R}  ` +
-            `${G}${ready} ready${R}  ${Y}${blocked} blocked${R}`,
-        );
-        lines.push(` ${D}${scopeRepo}${R}`);
-        lines.push(
-          ` ${D}tier${R} ${tierTone(orchTier)}${orchTier}${R}` +
-            ` ${D}minFit${R} ${W}${minFitLabel}${R}` +
-            ` ${D}floors${R} ${W}${orchFloors}${R}` +
-            ` ${D}processes${R} ${W}${orchMaxParallel}${R}` +
-            ` ${D}checkpoint${R} ${W}${orchCheckpoint ? "after-task" : "off"}${R}` +
-            ` ${D}model${R} ${C}${orchModel ?? "auto"}${R}` +
-            `${orchMaxMinutes !== undefined ? ` ${D}maxMin${R} ${W}${orchMaxMinutes}${R}` : ""}` +
-            `${orchMaxSpend !== undefined ? ` ${D}maxSpend${R} ${W}$${orchMaxSpend}${R}` : ""}`,
-        );
-        const states = listOrchestrations(scopeLayout);
-        const ledger =
-          states.find(
-            (candidate) =>
-              candidate.scopeRef &&
-              (refKey(candidate.scopeRef) === refKey(scope.ref) ||
-                (scopedIssue?.parent && refKey(candidate.scopeRef) === refKey(scopedIssue.parent))),
-          ) ??
-          states.find((candidate) => candidate.scope === "project");
-        if (ledger) {
-          const lease = readLease(scopeLayout, ledger.id);
-          const running = Boolean(lease && lease.until > Date.now());
-          const stopFile = orchestrationStopRequested(scopeLayout, ledger.id);
-          lines.push(
-            ` ${C}${ledger.id}${R}  ${D}${ledger.checkpoint ?? "preflight"}${R}  ` +
-              `${running ? `${G}● RUNNING${R} ${D}${lease!.owner}${R}` : `${D}idle${R}`}  ` +
-              `${D}packets ${ledger.approvedPackets?.length ?? 0} · results ${ledger.approvedResults?.length ?? 0}${R}` +
-              `${stopFile ? `  ${Y}stop requested${R}` : ""}` +
-              `${ledger.stopReason ? `  ${RED}${ledger.stopReason}${R}` : ""}`,
-          );
-        }
-        if (scopeIssues.length === 0) {
-          lines.push("", ` ${Y}No cached issues for ${scopeRepo}.${R} ${D}Press r to refresh.${R}`);
-        } else if (tasks.length === 0) {
-          lines.push("", ` ${D}No ready or blocked Features found under this ${scope.kind}.${R}`);
-          lines.push(` ${D}The schedule ran over ${scopeIssues.length} cached issue(s) in ${scopeRepo}.${R}`);
-          if (schedule.errors.length === 0) {
-            lines.push(` ${D}Features appear once they have a ready plan and open blockers. Press r to refresh the cache.${R}`);
-          }
-        } else {
-          // Rows are Features. featureStatus is async, so refresh it in the
-          // background (throttled) and render from the cache with a
-          // latest-run fallback in the meantime.
-          const ordered = tasks;
-          if (Date.now() - pipelineFeatureStatesAt > 5_000) {
-            pipelineFeatureStatesAt = Date.now();
-            const refreshLayout = scopeLayout;
-            const refreshFeatures = ordered.map((task) => task.issue);
-            void (async () => {
-              try {
-                const { featureStatus } = await import("./tasks/lifecycle.js");
-                for (const feature of refreshFeatures) {
-                  try {
-                    pipelineFeatureStates.set(refKey(feature.ref), await featureStatus(refreshLayout, feature));
-                  } catch {
-                    // keep the cached or fallback status
-                  }
-                }
-                draw();
-              } catch {
-                // lifecycle unavailable; the fallback below still renders
-              }
-            })();
-          }
-          const featureRunsOf = (ref: IssueRef): RunSummary[] =>
-            allRuns
-              .filter((run) => refKey(run.issue ?? run.taskIssue) === refKey(ref))
-              .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
-          const featureWord = (
-            feature: Issue,
-            runsDesc: readonly RunSummary[],
-          ): { text: string; tone: string; dim: boolean } => {
-            const cached = pipelineFeatureStates.get(refKey(feature.ref));
-            const latest = runsDesc[0];
-            const active =
-              latest !== undefined &&
-              (latest.status === "running" || latest.status === "awaiting_input" || latest.status === "created");
-            const stage = cached?.stage;
-            if (stage === "needs-human-review") return { text: "Needs Human Review", tone: Y, dim: false };
-            if (active && (latest.agent === "review" || latest.phase === "review")) {
-              return { text: "Reviewing", tone: M, dim: false };
-            }
-            if (active) return { text: "Building", tone: C, dim: false };
-            if (stage === "reviewing") return { text: "Reviewing", tone: M, dim: false };
-            if (stage === "building") return { text: "Building", tone: C, dim: false };
-            if (stage === "blocked") return { text: "Blocked", tone: Y, dim: false };
-            if (stage === "closed" || feature.state === "closed") return { text: "Closed", tone: D, dim: true };
-            if (stage === "ready") return { text: "Ready", tone: D, dim: true };
-            return { text: "Planning", tone: D, dim: true };
-          };
-          pipelineSel = Math.max(0, Math.min(pipelineSel, ordered.length - 1));
-          pipelineTasks = ordered;
-          // Full detail for the selected feature only; rows stay scannable.
-          const sel = ordered[pipelineSel];
-          if (sel) {
-            const feature = sel.issue;
-            const runsDesc = featureRunsOf(feature.ref);
-            const word = featureWord(feature, runsDesc);
-            const selLatest = runsDesc[0];
-            const selBuild = runsDesc.find((run) => run.agent === "build" || run.phase === "build") ?? selLatest;
-            const selPlan = sel.plan ? `${sel.plan.status}/${sel.plan.verification}` : "missing plan";
-            const selModel = sel.ready ? orchModelForTask(feature.title.length, sel.plan?.verification) : "—";
-            const branch = selBuild?.branch ?? selLatest?.branch ?? featureBranchFor(feature.ref.number, feature.title);
-            const worktree = selBuild?.worktree ?? selLatest?.worktree ?? "none";
-            lines.push("", ` ${B}${word.dim ? D : word.tone}${word.text}${R} ${D}#${feature.ref.number}${R} ${W}${trunc(feature.title, Math.max(16, cols - 24))}${R}`);
-            lines.push(`   ${D}plan${R}  ${C}${selPlan}${R}`);
-            lines.push(`   ${D}model${R} ${C}${trunc(selModel, 40)}${R}`);
-            if (sel.reason) {
-              for (const reasonLine of wrapText(sel.reason, Math.max(20, cols - 14)).slice(0, 3)) {
-                lines.push(`   ${D}wait${R}  ${Y}${reasonLine}${R}`);
-              }
-            }
-            lines.push(
-              `   ${D}run${R}   ${selLatest ? `${icon(selLatest.status)} ${selLatest.id.slice(-8)} · ${selLatest.status} · ${selLatest.agent}` : "none"}` +
-                `${selLatest?.prNumber ? `  ${D}PR${R} #${selLatest.prNumber} ${selLatest.prState ?? ""}` : ""}`,
-            );
-            lines.push(`   ${D}worktree${R} ${W}${trunc(worktree, Math.max(16, cols - 16))}${R}`);
-            lines.push(`   ${D}branch${R}   ${W}${branch}${R}  ${D}approval${R} ${W}${feature.approval ?? "human"}${R}`);
-            lines.push(`   ${D}review${R}    ${W}machine_code feature checkout ${feature.ref.number}${R}`);
-            const next = selLatest?.status === "completed"
-              ? `machine_code feature approve ${feature.ref.number}`
-              : sel.plan?.status === "ready"
-                ? `machine_code feature start ${feature.ref.number}`
-                : `machine_code run --agent planner --issue ${feature.ref.number}`;
-            lines.push(`   ${D}next${R}    ${next}`);
-          }
-          const rows: Array<{ line: string; task?: number }> = [];
-          for (let taskIndex = 0; taskIndex < ordered.length; taskIndex++) {
-            const task = ordered[taskIndex]!;
-            const feature = task.issue;
-            const runsDesc = featureRunsOf(feature.ref);
-            const word = featureWord(feature, runsDesc);
-            const wordText = `${word.dim ? D : word.tone}${word.text}${R}`;
-            const latest = runsDesc[0];
-            const build = runsDesc.find((run) => run.agent === "build" || run.phase === "build") ?? latest;
-            const worktree = build?.worktree ?? latest?.worktree ?? "—";
-            const branch = build?.branch ?? latest?.branch ?? featureBranchFor(feature.ref.number, feature.title);
-            const approval = feature.approval ?? "human";
-            rows.push({
-              line: selected(
-                `  ${pad(wordText, 18)} ${D}#${feature.ref.number}${R} ${W}${trunc(feature.title, Math.max(12, cols - 78))}${R}  ${D}${trunc(worktree, 28)}${R}  ${D}${branch}${R}  ${D}${approval}${R}`,
-                taskIndex === pipelineSel,
-              ),
-              task: taskIndex,
-            });
-          }
-          const selectedRow = rows.findIndex((row) => row.task === pipelineSel);
-          const available = Math.max(1, bodyH - lines.length - 1);
-          if (selectedRow < pipelineScroll) pipelineScroll = selectedRow;
-          if (selectedRow >= pipelineScroll + available) pipelineScroll = selectedRow - available + 1;
-          pipelineScroll = Math.max(0, Math.min(pipelineScroll, Math.max(0, rows.length - available)));
-          lines.push(...rows.slice(pipelineScroll, pipelineScroll + available).map((row) => row.line));
-        }
-        {
-          const dispatch = tasks.filter((task) => task.ready).map((task) => `#${task.issue.ref.number}`);
-          if (dispatch.length > 0) lines.push("", ` ${D}dispatch ${R}${dispatch.join(", ")}`);
-        }
-        for (const error of schedule.errors) lines.push(` ${RED}${error}${R}`);
-        body = clipBody(lines);
-        actions = joinCommands([
-          command(":!", "Tick", undefined, G),
-          command("i", "Stop", undefined, RED),
-          command("x", "Resume", undefined, G),
-          command("w", "Worktree", undefined, C),
-          command("Enter", "Open feature", undefined, G),
-          command("Esc", "Back", undefined, GR),
-        ]);
-        extraActions = joinCommands([
-          command("t", "Tier", orchTier, orchTier === "paid" ? Y : G),
-          command("m", "MinFit", orchMinFit === undefined ? "auto" : String(orchMinFit), C),
-          command("f", "Floors", orchFloors, M),
-          command("P", "Processes", String(orchMaxParallel), C),
-          command("c", "Checkpoint", orchCheckpoint ? "after-task" : "off", orchCheckpoint ? Y : GR),
-          command("M", "Model", orchModel ?? "auto", BL),
-          command("a", "Approve packet", undefined, Y),
-          command("A", "Finish feature", undefined, Y),
-          command("j/k", "Move", undefined, M),
-          command("r", "Refresh", undefined, C),
-        ]);
-        secondary = `${D}${scope.kind} #${scope.ref.number}${R}`;
-      }
-    }
-
     /* ------------------------------------------------------------ spend */
     else if (page === "spend") {
       const query = { days: spendDaysWindow === 0 ? undefined : spendDaysWindow };
@@ -3329,73 +2610,6 @@ export async function runTui(): Promise<void> {
       const row = visibleRows[Math.min(settingsSel, visibleRows.length - 1)];
       actions = command("j/k", "Select", undefined, M);
       secondary = row ? `${D}${row.label} · ${settingsFileFor(l, row) ?? "(no file)"}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "";
-    }
-
-    /* ------------------------------------------------------------ plans */
-    else if (page === "plans") {
-      if (planDetail) {
-        const packet = readPacketFile(l, planDetail);
-        const detailLines = packet ? renderPacketFile(packet).split("\n") : [` ${Y}no packet ${planDetail}${R}`];
-        const w = selectableLines(detailLines, planDetailScroll, planDetailScroll, bodyH);
-        planDetailScroll = w.scroll;
-        body = clipBody(w.lines);
-        actions = joinCommands([
-          command("g", "Gate", packet?.review ?? "gates", packet?.review === "agent" ? C : packet?.review === "human" ? Y : D),
-          command("j/k", "Scroll"),
-          command("esc", "Back"),
-        ]);
-        secondary = `${D}packets/${planDetail}.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
-      } else {
-      const rows: PlanItem[] = [];
-      try {
-        rows.push(...renderPlan(l).items);
-      } catch {
-        // Fall through to the empty plan message.
-      }
-      let lastHeading = "";
-      let selectedLine = 0;
-      const lines: string[] = [];
-      const statusTone = (status: string | undefined): string =>
-        status === "in-progress" ? C : status === "blocked" ? Y : status === "done" ? G : D;
-      for (let i = 0; i < rows.length; i++) {
-        const it = rows[i]!;
-        if (it.heading !== lastHeading) {
-          lastHeading = it.heading;
-          lines.push(background(fit(` ${B}${theme.sectionFg}${(it.heading || "Plan").toUpperCase()}${R}`, cols), theme.sectionBg));
-        }
-        if (i === planSel) selectedLine = lines.length;
-        const sel = i === planSel;
-        const slug = it.slug ?? "";
-        const label = slug || it.title || it.slug || "(item)";
-        const title = slug && it.title ? ` — ${trunc(it.title, Math.max(8, cols - (narrow ? 28 : 46)))}` : "";
-        const statusTag = it.done
-          ? `  ${G}✓ done${R}`
-          : it.hasPacket
-            ? `  ${statusTone(it.status)}${it.status ?? "todo"}${R}`
-            : "  ·";
-        const branchTag = slug && !it.done && it.hasPacket ? `  ${D}⤳ mc/${slug}${R}` : "";
-        lines.push(`${sel ? C + "▸" : " "} ${trunc(label, narrow ? 26 : 40)}${title}${statusTag}${branchTag}`);
-        if (it.blocked && !it.done) lines.push(`       ${Y}blocked: ${trunc(it.blocked, cols - 10)}${R}`);
-      }
-      if (rows.length === 0) {
-        lines.push(` ${D}no plan yet — capture work with ${W}\`machine_code packet create <slug> "…"\`${R}`);
-      }
-      const w = selectableLines(lines, Math.min(selectedLine, Math.max(0, lines.length - 1)), planScroll, bodyH);
-      planScroll = w.scroll;
-      body = clipBody(w.lines);
-      const selItem = rows[Math.min(planSel, Math.max(0, rows.length - 1))];
-      actions = joinCommands([
-        command("j/k", "Select"),
-        command("e", "Detail", selItem?.slug ?? undefined, selItem?.slug ? C : D),
-        command("b", "Build", selItem?.hasPacket ? undefined : "none", selItem?.hasPacket ? GR : D),
-        command("s", "Status", undefined, Y),
-        command("a", "Approve", undefined, G),
-        command("d", "Delete", undefined, RED),
-      ]);
-      secondary = selItem?.slug
-        ? `${D}${selItem.slug}${selItem.status ? ` · ${selItem.status}` : ""} · ${toast ? `${Y}${toast}${R} · ` : ""}packets/${selItem.slug}.md${R}`
-        : `${D}plans/index.md${toast ? ` · ${Y}${toast}${R}` : ""}${R}`;
-      }
     }
 
     /* ---------------------------------------------------------- packet */
@@ -3551,15 +2765,10 @@ export async function runTui(): Promise<void> {
           ` ${M}${fmtRunTokens(s.usage.totalTokens)}${R}${D} total${R}`,
         ];
         footerCtx = `${C}ctx${R} ${W}${fmtRunTokens(ctxUsage.tokens)}${R}`;
-        const runIssueAccess = s.capabilities
-          ? issueAccessFromCapabilities(s.capabilities)
-          : agentDef(l, s.agent).issueAccess;
-        const issueMeta = [s.issue ? `#${s.issue.number}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
+        const prMeta = [s.packetId ? `${s.packetId}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
           .filter(Boolean)
           .join("  ");
-        const accessMeta = `${D}issues${R} ${issueAccessTone(runIssueAccess)}${runIssueAccess}${R}`;
-        if (issueMeta) lines.push(` ${D}${issueMeta}${R}  ${accessMeta}`);
-        else lines.push(` ${accessMeta}`);
+        if (prMeta) lines.push(` ${D}${prMeta}${R}`);
         const wl = waitingLine();
         if (wl) lines.push(wl);
         lines.push("", ...sectionBar, "");
@@ -3781,9 +2990,6 @@ export async function runTui(): Promise<void> {
             else if (type === "run_end") eventLines.push(`${prefix} ${GR}${time}${R} ${statusColor(String(event.status))}■ ${String(event.status).toUpperCase()}${R}`);
             else if (type === "child_spawned") eventLines.push(`${prefix} ${GR}${time}${R} ${M}↳ child${R} ${C}${String(event.childRunId ?? "").slice(-8)}${R} ${agentTone(String(event.role ?? ""))}${String(event.role ?? "")}${R}`);
             else if (type === "child_completed") eventLines.push(`${prefix} ${GR}${time}${R} ${M}↲ child done${R} ${C}${String(event.childRunId ?? "").slice(-8)}${R} ${String(event.status ?? "")}`);
-            else if (type === "issue_created") eventLines.push(`${prefix} ${GR}${time}${R} ${G}+ issue${R} #${String(event.number ?? event.issue ?? "")} ${D}${String(event.kind ?? "")}${event.title ? ` ${String(event.title)}` : ""}${R}`);
-            else if (type === "issue_linked") eventLines.push(`${prefix} ${GR}${time}${R} ${G}link${R} #${String(event.issue ?? "")} under #${String(event.parent ?? "")}`);
-            else if (type === "plan_updated") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}plan${R} #${String(event.issue ?? "")} ${D}${String(event.status ?? "")}${R}`);
             else if (type === "run_summary") eventLines.push(`${prefix} ${GR}${time}${R} ${B}${G}summary${R} ${D}${String(event.headline ?? event.stopReason ?? "")}${R}`);
             else if (type === "turn_cap") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}turn cap${R} ${D}${String(event.turns ?? "")} turns${R}`);
             else if (type === "budget_exhausted") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}budget exhausted${R} ${D}${String(event.totalTokens ?? "")} tok${R}`);
@@ -3949,7 +3155,6 @@ export async function runTui(): Promise<void> {
                 `${s.orchestrationScope ? ` ${D}${s.orchestrationScope}${R}` : ""}`,
             );
           }
-          if (s.taskIssue) lines.push(`  ${D}task${R}        ${W}#${s.taskIssue.number}${R}`);
           if (s.attempt !== undefined) lines.push(`  ${D}attempt${R}     ${W}${s.attempt}${R}`);
           if (s.phase) lines.push(`  ${D}phase${R}       ${W}${s.phase}${R}`);
           if (s.planReview) lines.push(`  ${D}plan review${R} ${W}${s.planReview}${R}`);
@@ -4057,7 +3262,7 @@ export async function runTui(): Promise<void> {
       const width = Math.max(20, cols - 8);
       const lines = [
         "",
-        ` ${D}This interrupts the current run and starts a fresh child with the parent's issue,${R}`,
+        ` ${D}This interrupts the current run and starts a fresh child with the parent's${R}`,
         ` ${D}context, and worktree changes. The new run sees only the correction, not the old transcript.${R}`,
         "",
         ` ${B}${C}Correction${R}`,
@@ -4151,7 +3356,7 @@ export async function runTui(): Promise<void> {
     process.stdout.write(SYNC_ON + WRAP_OFF + HOME + output.join("\n") + CLEAR_BELOW + WRAP_ON + SYNC_OFF);
   };
 
-  /* ------------------------------------------------------------ issue modal helpers */
+  /* ------------------------------------------------------------ packet modal helpers */
 
   /* ------------------------------------------------------------ packet modal helpers */
 
@@ -4175,7 +3380,6 @@ export async function runTui(): Promise<void> {
     const previousPrompt = previousPacket?.deliverable ?? "";
     const hadPacket = Boolean(newrun.packet);
     newrun.packet = packet.slug;
-    newrun.issue = undefined;
     // A blank composer that was opened with `N` still starts as research. Once
     // a packet is attached, default to the agent that does the work.
     if (!hadPacket && newrun.agent === "research") {
@@ -4274,71 +3478,6 @@ export async function runTui(): Promise<void> {
     modelPickSel = index >= 0 ? index + 1 : 0;
   };
 
-  /* --------------------------------------- orchestration screen helpers */
-
-  /** Cached catalogue/policy/machine for the per-task model preview. */
-  const orchPreviewBase = (): {
-    catalogue: CatalogueDocument | null;
-    policy: Policy | undefined;
-    machine: MachineConfig | undefined;
-    configured: Set<string>;
-    availability: AvailabilityState;
-  } => {
-    const key = `${orchTier}\0${orchMinFit ?? ""}\0${orchFloors}\0${orchModel ?? ""}`;
-    if (!orchPreviewCache || orchPreviewCache.key !== key || Date.now() - orchPreviewCache.at > 5_000) {
-      const repoLayout = layout(l.repoRoot);
-      const statuses = providerStatuses(createModelsCollection());
-      const machine = (() => {
-        try { return loadMachineConfig(repoLayout); } catch { return undefined; }
-      })();
-      orchPreviewCache = {
-        key,
-        at: Date.now(),
-        catalogue: loadCatalogue(repoLayout.catalogueFile),
-        policy: effectivePolicy(l.repoRoot),
-        machine,
-        configured: new Set(statuses.filter((status) => status.configured).map((status) => status.id)),
-        availability: loadAvailability(l.home),
-      };
-    }
-    return orchPreviewCache;
-  };
-
-  /** Model the build agent would select for a task under current orch settings. */
-  const orchModelForTask = (titleChars: number, planVerification?: string): string => {
-    const base = orchPreviewBase();
-    if (!base.policy || !base.machine || !base.catalogue) return "—";
-    const ap = base.policy.agents.build;
-    if (!ap) return "—";
-    const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
-    if (orchMinFit !== undefined) effective.minFit = orchMinFit;
-    if (orchFloors === "off") {
-      effective.minFit = 0;
-      for (const axis of CAPABILITY_AXES) effective.minAxes[axis] = 0;
-    }
-    if (orchFloors === "strict") {
-      for (const axis of CAPABILITY_AXES) {
-        const current = effective.minAxes[axis] ?? ap.minFit;
-        effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
-      }
-    }
-    const machine = { ...base.machine, selection: { ...base.machine.selection, tier: orchTier } };
-    const result = pick({
-      agent: "build",
-      policy: effective,
-      machine,
-      catalogue: base.catalogue.models,
-      configuredProviders: base.configured,
-      availability: base.availability,
-      fundedProviders: fundedProviderIds(machine.providers),
-      contextChars: 16_000 + titleChars * 4,
-      tier: orchTier,
-      ...(orchModel ? { requireModel: orchModel } : {}),
-    });
-    if ("error" in result) return "—";
-    return result.selected.key;
-  };
-
   /* ------------------------------------------------------------- input */
 
   const handleKey = (data: string) => {
@@ -4349,7 +3488,7 @@ export async function runTui(): Promise<void> {
 
     // Text-entry modes take precedence over global navigation.
     if (screen === "delete") {
-      if (data === "\x1b") { deleteTarget = undefined; deleteRunTarget = undefined; screen = deleteReturn; draw(); return; }
+      if (data === "\x1b") { deleteRunTarget = undefined; screen = deleteReturn; draw(); return; }
       if (data === "D" && deleteRunTarget) {
         const run = deleteRunTarget;
         deletingRuns.add(run.id);
@@ -4391,65 +3530,9 @@ export async function runTui(): Promise<void> {
         draw();
         return;
       }
-      if (data === "D") {
-        const target = deleteTarget;
-        if (!target) { screen = deleteReturn; draw(); return; }
-        deleteInFlight = true;
-        // Branches, worktrees, and runs live in the issue's repo, which may
-        // differ from the TUI cwd in multi-repo setups. Resolve it first so
-        // the CLI deletes the associated resources in the right place.
-        const deleteRepo = issueRepoOf(target.ref) ?? l.repoRoot;
-        const deleteLayout = deleteRepo === l.repoRoot ? l : layout(deleteRepo);
-        const deleteRefs = [target.ref, ...descendantRefs(target)];
-        addTombstones(deleteLayout, deleteRefs);
-        for (const ref of deleteRefs) deletingIssues.add(refKey(ref));
-        // Hiding is in-memory only (deletingIssues, consulted on every draw).
-        // The cache file stays a pure write-through of provider data; the
-        // post-close refresh rewrites it from the source of truth.
-        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-        const child = spawn(
-          process.execPath,
-          [cliPath, "issue", "delete", String(target.ref.number), "--cascade", "--yes"],
-          {
-            cwd: deleteRepo,
-            stdio: ["ignore", "pipe", "pipe"],
-            env: process.env,
-          },
-        );
-        let stdout = "";
-        let stderr = "";
-        child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-        child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-        child.on("close", (code) => {
-          const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
-          try {
-            writeFileSync(join(deleteLayout.localDir, "delete.log"), `${new Date().toISOString()} #${target.ref.number}\n${output}\n`, "utf8");
-          } catch {
-            // best-effort diagnostics
-          }
-          deleteInFlight = false;
-          if (code === 0) {
-            notify(`deleted #${target.ref.number}`);
-          } else {
-            deletingIssues.clear();
-            removeTombstones(deleteLayout, deleteRefs);
-            const last = stderr.trim().split("\n").filter(Boolean).at(-1) ?? `exit ${code}`;
-            notify(`delete failed for #${target.ref.number}: ${trunc(last, 80)}`);
-          }
-          void refreshIssues("current").then(() => draw());
-        });
-        notify(`deleting #${target.ref.number} and associated resources`);
-        deleteTarget = undefined;
-        selectedIssueKey = null;
-        screen = "list";
-        page = "runs";
-        draw();
-        return;
-      }
       draw();
       return;
     }
-
     if (screen === "answer") {
       if (data === "\x1b") { screen = "run"; answerText = ""; answerOptions = []; answerScroll = 0; draw(); return; }
       if (data === CTRL_U) { answerScroll = Math.max(0, answerScroll - Math.max(1, Math.floor(answerPage / 2))); draw(); return; }
@@ -4656,11 +3739,11 @@ export async function runTui(): Promise<void> {
       if (data === "a") { cycleAgent(); draw(); return; }
       if (data === "t") { newrun.tier = newrun.tier === "paid" ? "free" : "paid"; draw(); return; }
       if (data === "v") {
-        if (!agentIsolates(newrun.agent)) { notify("verify is build/sudo-only"); draw(); return; }
+        if (!agentIsolates(newrun.agent)) { notify("verify is build-only"); draw(); return; }
         cycleVerify(); draw(); return;
       }
       if (data === "w") {
-        if (!agentIsolates(newrun.agent)) { notify("worktree is build/sudo-only"); draw(); return; }
+        if (!agentIsolates(newrun.agent)) { notify("worktree is build-only"); draw(); return; }
         newrun.worktree = !newrun.worktree; draw(); return;
       }
       if (data === "g") { cycleAmbiguity(); draw(); return; }
@@ -4669,7 +3752,7 @@ export async function runTui(): Promise<void> {
       if (data === "i" && newRunContextSectionKey === "section:packets") { startPacketPicker(); draw(); return; }
       if (data === "m") { startModelPicker(); draw(); return; }
       if (data === "e" || data === "p") { newRunInsert = true; draw(); return; }
-      if (data === "X" && (newrun.packet || newrun.issue)) { newrun.packet = undefined; newrun.issue = undefined; draw(); return; }
+      if (data === "X" && newrun.packet) { newrun.packet = undefined; draw(); return; }
       draw();
       return;
     }
@@ -4713,93 +3796,12 @@ export async function runTui(): Promise<void> {
       process.exit(0);
     }
 
-    /* -------------------------------------------------------- plans keys */
-    if (page === "plans") {
-      if (planDetail) {
-        if (data === "\x1b" || data === "q") { planDetail = null; planDetailScroll = 0; draw(); return; }
-        if (data === "\x1b[A" || data === "k") { planDetailScroll = Math.max(0, planDetailScroll - 1); draw(); return; }
-        if (data === "\x1b[B" || data === "j") { planDetailScroll += 1; draw(); return; }
-        if (data === "g") {
-          const packet = readPacketFile(l, planDetail);
-          if (packet) {
-            const order = ["gates", "agent", "human"] as const;
-            const idx = order.indexOf((packet.review ?? "gates") as (typeof order)[number]);
-            packet.review = order[(idx + 1) % order.length]!;
-            writePacketFile(l, packet);
-            void commitPlanningFiles(l, `plans: gate ${planDetail}`);
-            notify(`${planDetail} gate → ${packet.review}`);
-          }
-          draw();
-          return;
-        }
-        draw();
-        return;
-      }
-      let items: PlanItem[] = [];
-      try {
-        items = renderPlan(l).items;
-      } catch {
-        // Fall through with the empty selection.
-      }
-      if (data === "\x1b[A" || data === "k") { planSel = Math.max(0, planSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { planSel = Math.min(Math.max(0, items.length - 1), planSel + 1); draw(); return; }
-      if (data === "r") { draw(); return; }
-      const current = items[Math.min(planSel, Math.max(0, items.length - 1))];
-      const slug = current?.slug;
-      if (data === "e" || data === "\r" || data === "\n") {
-        if (!slug) { notify("no packet — create with `packet create <slug>`"); draw(); return; }
-        planDetail = slug;
-        planDetailScroll = 0;
-        draw();
-        return;
-      }
-      if (data === "s") {
-        if (!slug) { notify("select a packet"); draw(); return; }
-        const packet = readPacketFile(l, slug);
-        if (!packet) { notify("no packet"); draw(); return; }
-        const order = ["todo", "in-progress", "blocked"] as const;
-        const idx = order.indexOf(packet.status as (typeof order)[number]);
-        packet.status = idx < 0 ? "todo" : order[(idx + 1) % order.length]!;
-        writePacketFile(l, packet);
-        void commitPlanningFiles(l, `plans: status ${slug}`);
-        notify(`${slug} → ${packet.status}`);
-        draw();
-        return;
-      }
-      const spawnCli = (args: string[], note: string): void => {
-        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-        const child = spawn(process.execPath, [cliPath, ...args], { detached: true, stdio: "ignore" });
-        child.unref();
-        notify(note);
-        draw();
-      };
-      if (data === "b") {
-        if (!slug || !current?.hasPacket) { notify("select a packet to build"); draw(); return; }
-        spawnCli(["build", slug], `build ${slug} started (background)`);
-        return;
-      }
-      if (data === "a") {
-        if (!slug) { notify("select a packet to approve"); draw(); return; }
-        spawnCli(["approve", slug], `approve ${slug} queued`);
-        return;
-      }
-      if (data === "d") {
-        if (!slug) { notify("select a packet to delete"); draw(); return; }
-        spawnCli(["delete", slug], `delete ${slug} queued`);
-        return;
-      }
-      draw();
-      return;
-    }
-
     /* --------------------------------------------------------- runs keys */
     if (page === "runs" && screen === "list") {
       const allRuns = listAllRuns(l.home).filter((run) => !deletingRuns.has(run.id));
-      issueCachesByRepo = collectIssueCaches(allRuns);
       const scopeFiltered = runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
       const index = buildRunIndex({
         runs: scopeFiltered,
-        issuesByRepo: scopedIssueCaches(),
         group: runsGroup,
         collapsed,
         text: runsText,
@@ -4813,7 +3815,6 @@ export async function runTui(): Promise<void> {
         if (!row) return l.repoRoot;
         if (row.kind === "repo") return row.repoRoot;
         if (row.kind === "run") return repoOf(row.run);
-        if (row.kind === "issue") return issueRepoOf(row.issue.ref) ?? l.repoRoot;
         for (let i = index.rows.indexOf(row); i >= 0; i--) {
           const candidate = index.rows[i]!;
           if (candidate.kind === "repo") return candidate.repoRoot;
@@ -4824,12 +3825,11 @@ export async function runTui(): Promise<void> {
       if (data === "\x1b[B" || data === "j") { runsSel = Math.min(Math.max(0, index.selectable.length - 1), runsSel + 1); draw(); return; }
       if (data === "G") { runsSel = Math.max(0, index.selectable.length - 1); draw(); return; }
       const toggleFold = (row: RunRow | undefined): boolean => {
-        // A run is a leaf; space on it folds the parent packet/issue/section/repo.
+        // A run is a leaf; space on it folds the parent packet/section/repo.
         const target = row?.kind === "run" && row.parent
           ? index.rows.find((candidate) => candidate.id === row.parent)
           : row;
         if (
-          target?.kind !== "issue" &&
           target?.kind !== "section" &&
           target?.kind !== "repo" &&
           target?.kind !== "packet"
@@ -4844,8 +3844,7 @@ export async function runTui(): Promise<void> {
       if (data === "\r" || data === "\n") {
         const row = index.selectable[runsSel];
         if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); draw(); return; }
-        if (row?.kind === "issue") { selectedIssueKey = refKey(row.issue.ref); issueRunSel = 0; issueScroll = 0; screen = "issue"; }
-        else if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
+        if (row?.kind === "run") { selectedRunId = row.run.id; runSection = "overview"; runScroll = 0; screen = "run"; }
         else if (row?.kind === "packet") {
           selectedPacketSlug = row.slug;
           packetScroll = 0;
@@ -4869,26 +3868,15 @@ export async function runTui(): Promise<void> {
       if (data === "n") {
         const row = index.selectable[runsSel];
         const packet = row?.kind === "packet" ? row.slug : row?.kind === "run" ? row.run.packetId : undefined;
-        const issue = row?.kind === "issue" ? row.issue.ref : row?.kind === "run" ? row.run.issue : undefined;
-        startNewRun(packet, repoForRow(row), issue, row?.kind === "issue" ? row.issue : undefined);
+        startNewRun(packet, repoForRow(row));
         draw();
         return;
       }
       if (data === "N") { startNewRun(undefined, l.repoRoot); draw(); return; }
       if (data === "D") {
         const row = index.selectable[runsSel];
-        if (row?.kind === "run") {
-          deleteRunTarget = row.run;
-          deleteTarget = undefined;
-          deleteReturn = "list";
-          screen = "delete";
-          draw();
-          return;
-        }
-        const issue = row?.kind === "issue" ? row.issue : undefined;
-        if (!issue) { notify("select a run to delete"); draw(); return; }
-        deleteTarget = issue;
-        deleteRunTarget = undefined;
+        if (row?.kind !== "run") { notify("select a run to delete"); draw(); return; }
+        deleteRunTarget = row.run;
         deleteReturn = "list";
         screen = "delete";
         draw();
@@ -4911,7 +3899,7 @@ export async function runTui(): Promise<void> {
         return;
       }
       if (data === "/") { searchMode = true; searchText = searchSeed(); draw(); return; }
-      if (data === "r") { void refreshIssues("all"); draw(); return; }
+      if (data === "r") { draw(); return; }
       draw();
       return;
     }
@@ -4945,36 +3933,6 @@ export async function runTui(): Promise<void> {
       if (data === "b" && slug) { spawnCli(["build", slug], `build ${slug} started`); return; }
       if (data === "a" && slug) { spawnCli(["approve", slug], `approve ${slug} queued`); return; }
       if (data === "d" && slug) { spawnCli(["delete", slug], `delete ${slug} queued`); return; }
-      draw();
-      return;
-    }
-
-    /* -------------------------------------------------------- issue keys */
-    if (page === "runs" && screen === "issue") {
-      const issue = selectedIssue();
-      if (!issue) { screen = "list"; draw(); return; }
-      const issueRoot = issueRepoOf(issue.ref) ?? l.repoRoot;
-      const issueRuns = sortRuns(listAllRuns(l.home).filter((run) => refKey(run.issue) === refKey(issue.ref)), "activity");
-      if (data === "\x1b[A" || data === "k") { issueRunSel = Math.max(0, issueRunSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { issueRunSel = Math.min(Math.max(0, issueRuns.length - 1), issueRunSel + 1); draw(); return; }
-      if (data === "\r" || data === "\n") { const run = issueRuns[issueRunSel]; if (run) { selectedRunId = run.id; runSection = "overview"; screen = "run"; } draw(); return; }
-      if (data === "n") { startNewRun(undefined, issueRoot, issue.ref, issue); draw(); return; }
-      if (data === "p") { approveSelected(issue, issueRuns[issueRunSel] ?? issueRuns[0], issueRoot); draw(); return; }
-      if (data === "P") {
-        pipelineScope = { kind: issue.kind, ref: issue.ref };
-        pipelineSel = 0;
-        pipelineScroll = 0;
-        screen = "pipeline";
-        draw();
-        return;
-      }
-      if (data === "D") {
-        deleteTarget = issue;
-        deleteReturn = "issue";
-        screen = "delete";
-        draw();
-        return;
-      }
       draw();
       return;
     }
@@ -5126,10 +4084,17 @@ export async function runTui(): Promise<void> {
       if (data === "a") { answerRun(detail.summary); draw(); return; }
       if (data === "i") { interrupt(detail.summary); draw(); return; }
       if (data === "c") { startCorrect(detail.summary); draw(); return; }
-      if (data === "p") { approveSelected(issueByRef(detail.summary.issue), detail.summary, detail.summary.repoRoot); draw(); return; }
+      if (data === "p") {
+        const packet = detail.summary.packetId;
+        if (!packet) { notify("run has no packet to approve"); draw(); return; }
+        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+        spawn(process.execPath, [cliPath, "approve", packet], { detached: true, stdio: "ignore" }).unref();
+        notify(`approve ${packet} queued`);
+        draw();
+        return;
+      }
       if (data === "D") {
         deleteRunTarget = detail.summary;
-        deleteTarget = undefined;
         deleteReturn = "run";
         screen = "delete";
         draw();
@@ -5297,224 +4262,6 @@ export async function runTui(): Promise<void> {
       return;
     }
 
-    /* ---------------------------------------------- orchestration keys */
-    if (page === "runs" && screen === "pipeline") {
-      if (data === "\x1b[A" || data === "k") { pipelineSel = Math.max(0, pipelineSel - 1); draw(); return; }
-      if (data === "\x1b[B" || data === "j") { pipelineSel++; draw(); return; }
-      if (data === ":") { pipelineColon = true; draw(); return; }
-      if (pipelineColon && data !== "!") pipelineColon = false;
-      if (data === "r") { void refreshIssues("all"); draw(); return; }
-      if (data === "t") { orchTier = orchTier === "paid" ? "free" : "paid"; orchPreviewCache = null; draw(); return; }
-      if (data === "m") {
-        const values: Array<number | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 0];
-        orchMinFit = values[(values.findIndex((value) => value === orchMinFit) + 1) % values.length];
-        orchPreviewCache = null;
-        draw();
-        return;
-      }
-      if (data === "f") {
-        const values: Array<"role" | "strict" | "off"> = ["role", "strict", "off"];
-        orchFloors = values[(values.indexOf(orchFloors) + 1) % values.length]!;
-        orchPreviewCache = null;
-        draw();
-        return;
-      }
-      if (data === "P") {
-        const values = [1, 2, 4, 8];
-        orchMaxParallel = values[(values.indexOf(orchMaxParallel) + 1) % values.length] ?? 2;
-        draw();
-        return;
-      }
-      if (data === "c") { orchCheckpoint = !orchCheckpoint; draw(); return; }
-      if (data === "M") {
-        // Pin the model previewed for the selected feature, or release the pin.
-        const task = pipelineTasks[pipelineSel];
-        if (task) {
-          const model = orchModelForTask(task.issue.title.length, task.plan?.verification);
-          orchModel = orchModel && model === orchModel ? undefined : (model === "—" ? orchModel : model);
-          orchPreviewCache = null;
-          notify(orchModel ? `model pinned ${orchModel}` : "model auto");
-        }
-        draw();
-        return;
-      }
-      // The scope may live in another repo; resolve its layout and issues.
-      const scopeCtx = (): { repo: string; layout: Layout } => {
-        const repo = (pipelineScope && issueRepoOf(pipelineScope.ref)) ?? l.repoRoot;
-        return { repo, layout: repo === l.repoRoot ? l : layout(repo) };
-      };
-      const selected = () => {
-        const task = pipelineTasks[pipelineSel];
-        return task ? { issue: task.issue, plan: task.plan } : undefined;
-      };
-      const scopeLedger = () => {
-        const scope = pipelineScope;
-        if (!scope) return undefined;
-        const states = listOrchestrations(scopeCtx().layout);
-        return states.find(
-          (candidate) =>
-            candidate.scope === scope.kind &&
-            candidate.scopeRef &&
-            refKey(candidate.scopeRef) === refKey(scope.ref),
-        );
-      };
-      if (data === "s") {
-        const state = scopeLedger();
-        if (!state) { notify("no orchestration to stop"); draw(); return; }
-        const ctx = scopeCtx();
-        const lease = readLease(ctx.layout, state.id);
-        if (!lease || lease.until <= Date.now()) { notify(`${state.id} is not running`); draw(); return; }
-        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-        const child = spawn(process.execPath, [cliPath, "orchestrate", "stop", "--orchestration", state.id], {
-          cwd: ctx.repo,
-          detached: true,
-          stdio: "ignore",
-          env: process.env,
-        });
-        child.unref();
-        notify(`stop requested for ${state.id}`);
-        draw();
-        return;
-      }
-      if (data === "i") {
-        const state = scopeLedger();
-        if (!state) { notify("no orchestration to stop"); draw(); return; }
-        const ctx = scopeCtx();
-        requestOrchestrationStop(ctx.layout, state.id);
-        notify(`stop requested for ${state.id}`);
-        draw();
-        return;
-      }
-      if (data === "x" || (data === "!" && pipelineColon)) {
-        const tick = data === "!";
-        pipelineColon = false;
-        const scope = pipelineScope;
-        if (!scope) { notify("no orchestration scope"); draw(); return; }
-        const ctx = scopeCtx();
-        let stoppedReason: string | undefined;
-        {
-          const state = listOrchestrations(ctx.layout).find(
-            (candidate) =>
-              candidate.scope === scope.kind &&
-              candidate.scopeRef &&
-              refKey(candidate.scopeRef) === refKey(scope.ref),
-          );
-          const lease = state ? readLease(ctx.layout, state.id) : undefined;
-          if (state && lease && lease.until > Date.now() && !tick) {
-            notify(`already running ${state.id} (${lease.owner}, pid ${lease.pid})`);
-            draw();
-            return;
-          }
-          // A stopped orchestration refuses to tick until resumed. x means go,
-          // so resume it in place and keep its approvals and checkpoints.
-          stoppedReason = state && (!lease || lease.until <= Date.now()) ? state.stopReason : undefined;
-        }
-        const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-        const args = [
-          "orchestrate",
-          tick ? "tick" : "start",
-          "--scope",
-          scope.kind,
-          scope.kind === "epic" ? "--epic" : "--feature",
-          String(scope.ref.number),
-          ...(stoppedReason ? ["--resume"] : []),
-          "--tier", orchTier,
-          ...(orchMinFit !== undefined ? ["--min-fit", String(orchMinFit)] : []),
-          ...(orchFloors === "off"
-            ? ["--min-axes", "reasoning=0,code=0,agentic=0,general=0"]
-            : orchFloors === "strict"
-              ? ["--min-axes", "strict"]
-              : []),
-          "--max-parallel", String(orchMaxParallel),
-          ...(orchMaxMinutes !== undefined ? ["--max-minutes", String(orchMaxMinutes)] : []),
-          ...(orchMaxSpend !== undefined ? ["--max-spend-usd", String(orchMaxSpend)] : []),
-          ...(orchCheckpoint ? ["--checkpoint", "after-task"] : []),
-          ...(orchModel ? ["--model", orchModel] : []),
-        ];
-        const child = spawn(process.execPath, [cliPath, ...args], {
-          cwd: scopeCtx().repo,
-          detached: true,
-          stdio: "ignore",
-          env: process.env,
-        });
-        child.unref();
-        notify(
-          stoppedReason
-            ? `resumed ${scope.kind} #${scope.ref.number} (was stopped: ${stoppedReason.slice(0, 100)})`
-            : tick
-              ? `ticked ${scope.kind} #${scope.ref.number}`
-              : `started ${scope.kind} #${scope.ref.number}`,
-        );
-        draw();
-        return;
-      }
-      if (data === "a" || data === "A") {
-        const task = selected();
-        const scope = pipelineScope;
-        const ctx = scopeCtx();
-        const states = listOrchestrations(ctx.layout);
-        const state = states.find(
-          (candidate) =>
-            scope &&
-            candidate.scopeRef &&
-            (refKey(candidate.scopeRef) === refKey(scope.ref) ||
-              (task?.issue.parent && refKey(candidate.scopeRef) === refKey(task.issue.parent))),
-        ) ?? states.find((candidate) => candidate.scope === "project");
-        if (!task) notify("no feature selected");
-        else if (data === "A") {
-          const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-          const child = spawn(process.execPath, [cliPath, "feature", "approve", String(task.issue.ref.number)], {
-            cwd: scopeCtx().repo,
-            detached: true,
-            stdio: "ignore",
-            env: process.env,
-          });
-          child.unref();
-          notify(`feature approval queued for #${task.issue.ref.number} (merge, close, cleanup)`);
-        } else if (!state) notify("no orchestration state");
-        else {
-          const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-          const args = ["orchestrate", "approve", "--orchestration", state.id, "--feature", String(task.issue.ref.number)];
-          const child = spawn(process.execPath, [cliPath, ...args], {
-            cwd: scopeCtx().repo,
-            detached: true,
-            stdio: "ignore",
-            env: process.env,
-          });
-          child.unref();
-          notify(`packet approval for #${task.issue.ref.number}`);
-        }
-        draw();
-        return;
-      }
-      if (data === "w") {
-        const checkoutTask = selected();
-        if (!checkoutTask) { notify("no feature selected"); draw(); return; }
-        const checkoutCli = fileURLToPath(new URL("./cli.js", import.meta.url));
-        const checkoutOut = spawnSync(
-          process.execPath,
-          [checkoutCli, "feature", "checkout", String(checkoutTask.issue.ref.number)],
-          { cwd: scopeCtx().repo, encoding: "utf8", timeout: 60_000 },
-        );
-        const checkoutText = `${checkoutOut.stdout ?? ""}${checkoutOut.stderr ?? ""}`.trim();
-        notify(checkoutOut.status === 0 ? checkoutText.split("\n").slice(0, 3).join(" · ") : `checkout failed: ${checkoutText.slice(0, 200)}`);
-        draw();
-        return;
-      }
-      if (data === "\r" || data === "\n") {
-        const task = selected()?.issue ?? (pipelineScope ? issueByRef(pipelineScope.ref) : undefined);
-        if (task) {
-          selectedIssueKey = refKey(task.ref);
-          page = "runs";
-          screen = "issue";
-        }
-        draw();
-        return;
-      }
-      draw();
-      return;
-    }
-
     /* ---------------------------------------------------- settings keys */
     if (page === "settings") {
       if (data === "\x1b[A" || data === "k") { settingsSel = Math.max(0, settingsSel - 1); draw(); return; }
@@ -5541,7 +4288,7 @@ export async function runTui(): Promise<void> {
     else for (const key of splitKeys(chunk)) handleKey(key);
   });
 
-  // Issue picker overlay is drawn after the page body by replacing the body
+  // Packet picker overlay is drawn after the page body by replacing the body
   // bottom; keeping it in the draw path above avoids another navigation mode.
   const drawWithPicker = () => {
     const original = draw;
@@ -5550,10 +4297,8 @@ export async function runTui(): Promise<void> {
   };
   void drawWithPicker;
 
-  void refreshIssues();
   let availabilityProbeAt = Date.now();
   setInterval(() => {
-    if (!deleteInFlight && Date.now() - issueRefreshAt > 30_000) void refreshIssues();
     if (Date.now() - availabilityProbeAt > 60_000) {
       availabilityProbeAt = Date.now();
       void (async () => {

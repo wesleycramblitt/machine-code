@@ -3,7 +3,7 @@
  *
  * The Runs page has three grouping modes:
  *
- *   gh-issue  repository → git issue tree / untracked / orphaned runs
+ *   packets   repository → plan category → packet → runs
  *   status    repository → run status
  *   overall   run status across every repository
  *
@@ -11,18 +11,16 @@
  * hierarchy and `parent` identifies fold groups.
  */
 import { basename } from "node:path";
-import type { Issue, IssueRef } from "../issues/provider.js";
 import type { RunSummary } from "../state/runs.js";
 import type { PacketFile, PlanCategories } from "../plan/packets.js";
-import { isDeliverable, rollupIssue, sortRuns, type IssueRollup } from "./status.js";
+import { sortRuns } from "./status.js";
 
-export type RunGroup = "packets" | "gh-issue" | "status" | "overall";
+export type RunGroup = "packets" | "status" | "overall";
 
 export const RUN_GROUPS: readonly RunGroup[] = ["packets", "status"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
   packets: "Packets",
-  "gh-issue": "GH issue",
   status: "Status",
   overall: "Overall status",
 };
@@ -46,19 +44,7 @@ export type RunRow =
       depth: number;
       collapsible: boolean;
       collapsed: boolean;
-      tone: "issues" | "untracked" | "orphaned" | "status";
-    }
-  | {
-      kind: "issue";
-      id: string;
-      issue: Issue;
-      depth: number;
-      rollup: IssueRollup;
-      parent?: string;
-      collapsible: boolean;
-      collapsed: boolean;
-      childCount: number;
-      directRuns: number;
+      tone: "untracked" | "orphaned" | "status";
     }
   | {
       kind: "run";
@@ -81,10 +67,6 @@ export type RunRow =
 
 export interface RunOptions {
   runs: readonly RunSummary[];
-  /** Backwards-compatible single-repo issue list. */
-  issues?: readonly Issue[];
-  /** Cached issues keyed by run repository root. */
-  issuesByRepo?: ReadonlyMap<string, readonly Issue[]>;
   /** Repo root the packet catalog belongs to (the cwd/preferred repo). */
   packetRepo?: string;
   /** Packet files for the `packets` group (one repo). */
@@ -93,7 +75,7 @@ export interface RunOptions {
   planCategories?: PlanCategories;
   group?: RunGroup;
   collapsed?: ReadonlySet<string>;
-  /** Case-insensitive substring over issue/run fields and repository paths. */
+  /** Case-insensitive substring over run fields and repository paths. */
   text?: string;
   /** Only keep work that needs a human or is in flight. */
   attentionOnly?: boolean;
@@ -108,16 +90,11 @@ export interface RunIndex {
   /** Rows a cursor can land on, including headings. */
   selectable: RunRow[];
   byRunId: Map<string, RunRow & { kind: "run" }>;
-  byIssueKey: Map<string, RunRow & { kind: "issue" }>;
   runs: RunSummary[];
   untracked: RunSummary[];
   planning: RunSummary[];
   orphaned: RunSummary[];
   attention: number;
-}
-
-function keyOf(ref: IssueRef): string {
-  return `${ref.repo}#${ref.number}`;
 }
 
 export function repoOf(run: RunSummary): string {
@@ -126,10 +103,6 @@ export function repoOf(run: RunSummary): string {
 
 export function repoLabel(repoRoot: string): string {
   return basename(repoRoot) || repoRoot;
-}
-
-function issueText(issue: Issue): string {
-  return `#${issue.ref.number} ${issue.title} ${issue.kind} ${issue.labels.join(" ")}`;
 }
 
 function runText(run: RunSummary): string {
@@ -141,7 +114,7 @@ function runText(run: RunSummary): string {
     run.status,
     run.repoRoot,
     run.prNumber ? `pr #${run.prNumber}` : "",
-    run.issue ? `#${run.issue.number}` : "",
+    run.packetId ?? "",
   ].join(" ");
 }
 
@@ -169,114 +142,25 @@ const STATUS_ORDER: Array<{ status: RunSummary["status"]; label: string }> = [
   { status: "cancelled", label: "Cancelled" },
 ];
 
-const KIND_RANK: Record<string, number> = { epic: 0, feature: 1 };
-
-function issueRoots(issues: readonly Issue[]): Issue[] {
-  const known = new Set(issues.map((issue) => keyOf(issue.ref)));
-  return issues.filter((issue) => !issue.parent || !known.has(keyOf(issue.parent)));
-}
-
-function sortIssues(issues: readonly Issue[]): Issue[] {
-  return [...issues].sort((a, b) => {
-    const ak = KIND_RANK[a.kind] ?? 3;
-    const bk = KIND_RANK[b.kind] ?? 3;
-    return ak - bk || a.ref.number - b.ref.number;
-  });
-}
-
-export interface PickerIssueRow {
-  issue: Issue;
-  /** Real parent depth, not a kind-based indent. */
-  depth: number;
-}
-
-/**
- * Parent-first issue order for the new-run picker. The cache is written in
- * provider order (often newest first); this restores the tree and keeps
- * ancestors visible when the filter matches a child.
- */
-export function orderIssueTree(issues: readonly Issue[], text = ""): PickerIssueRow[] {
-  const byKey = new Map(issues.map((issue) => [keyOf(issue.ref), issue]));
-  const children = new Map<string, Issue[]>();
-  const roots: Issue[] = [];
-  for (const issue of issues) {
-    const parentKey = issue.parent ? keyOf(issue.parent) : "";
-    if (parentKey && byKey.has(parentKey)) {
-      const list = children.get(parentKey) ?? [];
-      list.push(issue);
-      children.set(parentKey, list);
-    } else {
-      roots.push(issue);
-    }
-  }
-  const query = text.trim().toLowerCase();
-  const matches = (issue: Issue): boolean =>
-    !query || `#${issue.ref.number} ${issue.title} ${issue.kind}`.toLowerCase().includes(query);
-  const relevance = new Map<string, boolean>();
-  const mark = (issue: Issue): boolean => {
-    const key = keyOf(issue.ref);
-    const cached = relevance.get(key);
-    if (cached !== undefined) return cached;
-    let childKept = false;
-    for (const child of children.get(key) ?? []) {
-      if (mark(child)) childKept = true;
-    }
-    const keep = matches(issue) || childKept;
-    relevance.set(key, keep);
-    return keep;
-  };
-  for (const root of roots) mark(root);
-
-  const out: PickerIssueRow[] = [];
-  const walk = (issue: Issue, depth: number): void => {
-    if (!relevance.get(keyOf(issue.ref))) return;
-    out.push({ issue, depth });
-    for (const child of sortIssues(children.get(keyOf(issue.ref)) ?? [])) walk(child, depth + 1);
-  };
-  for (const root of sortIssues(roots)) walk(root, 0);
-  return out;
-}
-
 export function buildRunIndex(options: RunOptions): RunIndex {
-  const now = options.now ?? Date.now();
   const collapsed = options.collapsed ?? new Set<string>();
   const text = options.text?.trim().toLowerCase() ?? "";
   // The TUI and CLI default to the `packets` group explicitly; the library
-  // default stays `gh-issue` so existing callers/tests are unchanged.
-  const group = options.group ?? "gh-issue";
+  // default stays `packets` as well now that issues are gone.
+  const group = options.group ?? "packets";
   const rows: RunRow[] = [];
   const byRunId = new Map<string, RunRow & { kind: "run" }>();
-  const byIssueKey = new Map<string, RunRow & { kind: "issue" }>();
 
   const attentionRuns = options.runs.filter(statusNeedsAttention);
   const baseRuns = options.attentionOnly ? attentionRuns : [...options.runs];
-
-  const issuesFor = (repoRoot: string): readonly Issue[] => {
-    if (options.issuesByRepo) return options.issuesByRepo.get(repoRoot) ?? [];
-    return options.issues ?? [];
-  };
-
-  const issueKeysByRepo = new Map<string, Set<string>>();
-  if (options.issuesByRepo) {
-    for (const [repoRoot, issues] of options.issuesByRepo) {
-      issueKeysByRepo.set(repoRoot, new Set(issues.map((issue) => keyOf(issue.ref))));
-    }
-  }
-  const legacyKnown = new Set((options.issues ?? []).map((issue) => keyOf(issue.ref)));
-  const knownIssues = (repoRoot: string): Set<string> =>
-    options.issuesByRepo ? issueKeysByRepo.get(repoRoot) ?? new Set<string>() : legacyKnown;
 
   const planning: RunSummary[] = [];
   const untracked: RunSummary[] = [];
   const orphaned: RunSummary[] = [];
   for (const run of baseRuns) {
-    if (!run.issue) {
+    if (!run.packetId) {
       untracked.push(run);
-      continue;
     }
-    const repoRoot = repoOf(run);
-    const known = knownIssues(repoRoot);
-    if (!known.has(keyOf(run.issue))) orphaned.push(run);
   }
 
   const runMatches = (run: RunSummary): boolean => {
@@ -302,7 +186,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     label: string,
     count: number,
     depth: number,
-    tone: "issues" | "untracked" | "orphaned" | "status",
+    tone: "untracked" | "orphaned" | "status",
   ): boolean => {
     if (count === 0) return false;
     rows.push({ kind: "section", id, label, count, depth, collapsible: true, collapsed: collapsed.has(id), tone });
@@ -337,98 +221,6 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       if (!pushSection(id, label, groupRuns.length, depth, "status")) continue;
       pushRuns(groupRuns, depth + 1, id);
     }
-  };
-
-  const pushIssueTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
-    const issues = issuesFor(repoRoot);
-    if (issues.length === 0) return;
-    const byIssue = new Map<string, RunSummary[]>();
-    for (const run of repoRuns) {
-      if (!run.issue) continue;
-      const key = keyOf(run.issue);
-      const list = byIssue.get(key) ?? [];
-      list.push(run);
-      byIssue.set(key, list);
-    }
-    const childrenOf = (issue: Issue): Issue[] =>
-      sortIssues(
-        issues.filter(
-          (candidate) =>
-            candidate.parent &&
-            candidate.parent.repo === issue.ref.repo &&
-            candidate.parent.number === issue.ref.number,
-        ),
-      );
-    const ownMatch = (issue: Issue): boolean => text.length > 0 && issueText(issue).toLowerCase().includes(text);
-    const issueRuns = (issue: Issue): RunSummary[] => byIssue.get(keyOf(issue.ref)) ?? [];
-    const relevantCache = new Map<string, boolean>();
-    const issueRelevant = (issue: Issue): boolean => {
-      const key = keyOf(issue.ref);
-      const cached = relevantCache.get(key);
-      if (cached !== undefined) return cached;
-      const hasRun = issueRuns(issue).length > 0;
-      const childRelevant = childrenOf(issue).some((child) => issueRelevant(child));
-      // Planning anchors are always shown: runs attach to them for planning
-      // work, and hiding a gate makes a stalled plan unreadable.
-      const relevant =
-        text.length === 0 || ownMatch(issue) || hasRun || childRelevant;
-      relevantCache.set(key, relevant);
-      return relevant;
-    };
-
-    const roots = sortIssues(issueRoots(issues));
-    const issueCount = issues.filter((issue) => issueRelevant(issue)).length;
-    const sectionId = `issues:${repoRoot}`;
-    if (!pushSection(sectionId, "Git issues", issueCount, depth, "issues")) return;
-
-    const descendantsCache = new Map<string, { tasks: Issue[]; runs: RunSummary[] }>();
-    const descendantsOf = (issue: Issue): { tasks: Issue[]; runs: RunSummary[] } => {
-      const key = keyOf(issue.ref);
-      const cached = descendantsCache.get(key);
-      if (cached) return cached;
-      const tasks: Issue[] = [];
-      const runs: RunSummary[] = [];
-      for (const child of childrenOf(issue)) {
-        if (child.kind === "feature" && isDeliverable(child)) tasks.push(child);
-        runs.push(...issueRuns(child));
-        const nested = descendantsOf(child);
-        tasks.push(...nested.tasks);
-        runs.push(...nested.runs);
-      }
-      const result = { tasks, runs };
-      descendantsCache.set(key, result);
-      return result;
-    };
-
-    const walk = (issue: Issue, issueDepth: number, parent?: string): void => {
-      if (!issueRelevant(issue)) return;
-      const children = childrenOf(issue).filter(issueRelevant);
-      const directRuns = issueRuns(issue);
-      const descendants = descendantsOf(issue);
-      const rollup = rollupIssue(issue, directRuns, descendants.tasks, descendants.runs, now);
-      const id = `issue:${keyOf(issue.ref)}`;
-      const collapsible = children.length > 0 || directRuns.length > 0;
-      const isCollapsed = collapsed.has(id);
-      const row: RunRow = {
-        kind: "issue",
-        id,
-        issue,
-        depth: issueDepth,
-        rollup,
-        parent,
-        collapsible,
-        collapsed: isCollapsed,
-        childCount: children.length,
-        directRuns: directRuns.length,
-      };
-      rows.push(row);
-      byIssueKey.set(keyOf(issue.ref), row as RunRow & { kind: "issue" });
-      if (isCollapsed) return;
-      for (const child of children) walk(child, issueDepth + 1, id);
-      pushRuns(directRuns, issueDepth + 1, id);
-    };
-
-    for (const root of roots) walk(root, depth + 1, sectionId);
   };
 
   const pushPacketTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
@@ -467,7 +259,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       const slugs = category.slugs.filter((slug) => bySlug.has(slug));
       if (slugs.length === 0) continue;
       const sectionId = `plan:${repoRoot}:${category.heading}`;
-      if (!pushSection(sectionId, category.heading, slugs.length, depth, "issues")) continue;
+      if (!pushSection(sectionId, category.heading, slugs.length, depth, "status")) continue;
       for (const slug of slugs) pushPacketRow(slug, depth + 1, sectionId);
     }
     const orphanSlugs = (options.planCategories?.orphanSlugs ?? []).filter((slug) => bySlug.has(slug));
@@ -479,18 +271,11 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     }
   };
 
-  const issueOnlyRepos =
-    group === "gh-issue" && !options.attentionOnly && options.issuesByRepo
-      ? [...options.issuesByRepo.entries()]
-          .filter(([, issues]) => issues.length > 0)
-          .map(([repoRoot]) => repoRoot)
-      : [];
   // A repo with packets but no runs still shows its packet tree in the
-  // `packets` group, mirroring the issue-only repo behavior.
+  // `packets` group.
   const repoNames = [
     ...new Set([
       ...baseRuns.map(repoOf),
-      ...issueOnlyRepos,
       ...(group === "packets" && options.packetRepo ? [options.packetRepo] : []),
     ]),
   ];
@@ -509,16 +294,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     for (const repoRoot of repoNames) {
       const repoRuns = baseRuns.filter((run) => repoOf(run) === repoRoot && visibleRun(run));
       const packetRepo = group === "packets" && options.packetRepo === repoRoot;
-      if (repoRuns.length === 0 && !packetRepo) {
-        if (group !== "gh-issue" || options.attentionOnly) continue;
-        // Issue-only repo (no runs at all): keep the tree so cached issues
-        // stay visible. During text search only repos with a matching issue
-        // stay; repos that merely have non-matching runs keep prior behavior.
-        if (baseRuns.some((run) => repoOf(run) === repoRoot)) continue;
-        const repoIssues = issuesFor(repoRoot);
-        if (repoIssues.length === 0) continue;
-        if (text && !repoIssues.some((issue) => issueText(issue).toLowerCase().includes(text))) continue;
-      }
+      if (repoRuns.length === 0 && !packetRepo) continue;
       if (!pushRepo(repoRoot, repoRuns.length)) continue;
       if (group === "status") {
         pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
@@ -536,20 +312,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         continue;
       }
 
-      pushIssueTree(repoRoot, repoRuns, 1);
-
-      const free = repoRuns.filter((run) => !run.issue);
-      const untrackedId = `untracked:${repoRoot}`;
-      if (pushSection(untrackedId, "Untracked", free.length, 1, "untracked")) {
-        pushRuns(free, 2, untrackedId);
-      }
-
-      const known = knownIssues(repoRoot);
-      const missing = repoRuns.filter((run) => run.issue && !known.has(keyOf(run.issue)));
-      const orphanedId = `orphaned:${repoRoot}`;
-      if (pushSection(orphanedId, "Orphaned issue", missing.length, 1, "orphaned")) {
-        pushRuns(missing, 2, orphanedId);
-      }
+      pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
     }
   }
 
@@ -558,7 +321,6 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     rows,
     selectable: rows,
     byRunId,
-    byIssueKey,
     runs: visibleRuns,
     untracked: sortRuns(untracked, "activity"),
     planning: sortRuns(planning, "activity"),
@@ -568,18 +330,17 @@ export function buildRunIndex(options: RunOptions): RunIndex {
 }
 
 /**
- * Rows that stay bright while the cursor sits on an issue or run.
+ * Rows that stay bright while the cursor sits on a packet or run.
  *
- * A focus keeps the selected row, its issue ancestors, its peers at the same
- * level, and its immediate children bright: features under an epic and runs
- * under a feature. Repo and section headings always
- * stay bright; selecting one disables dimming.
+ * A focus keeps the selected row, its ancestors, its peers at the same
+ * level, and its immediate children bright: runs under a packet. Repo and
+ * section headings always stay bright; selecting one disables dimming.
  */
 export function focusRowIds(
   rows: readonly RunRow[],
   selected: RunRow | undefined,
 ): Set<string> | null {
-  if (!selected || (selected.kind !== "issue" && selected.kind !== "run")) return null;
+  if (!selected || (selected.kind !== "packet" && selected.kind !== "run")) return null;
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   const focus = new Set<string>([selected.id]);
 
@@ -597,36 +358,17 @@ export function focusRowIds(
     return out;
   };
 
+  const selectedParent = "parent" in selected ? selected.parent : undefined;
   for (const ancestor of ancestorsOf(selected)) focus.add(ancestor.id);
-
-  if (selected.kind === "issue") {
-    for (const row of rows) {
-      if (
-        row.kind === "issue" &&
-        row.parent === selected.parent &&
-        row.issue.kind === selected.issue.kind
-      ) {
-        focus.add(row.id);
-      }
-    }
-  } else {
-    for (const row of rows) {
-      if (row.kind === "run" && row.parent === selected.parent) focus.add(row.id);
-    }
+  for (const row of rows) {
+    if (row.kind !== "run" && row.kind !== "packet") continue;
+    if (row.parent === selectedParent) focus.add(row.id);
   }
 
-  const childKind =
-    selected.kind === "issue"
-      ? selected.issue.kind === "epic"
-        ? "feature"
-        : "run"
-      : undefined;
   for (const row of rows) {
-    if (row.kind !== "issue" && row.kind !== "run") continue;
+    if (row.kind !== "run" && row.kind !== "packet") continue;
     if (row.parent !== selected.id) continue;
-    if (childKind === "run" ? row.kind === "run" : row.kind === "issue" && row.issue.kind === childKind) {
-      focus.add(row.id);
-    }
+    if (row.kind === "run") focus.add(row.id);
   }
   return focus;
 }
@@ -639,8 +381,4 @@ export function moveSelection(index: number, delta: number, selectable: readonly
 
 export function runOf(row: RunRow | undefined): RunSummary | undefined {
   return row?.kind === "run" ? row.run : undefined;
-}
-
-export function issueOf(row: RunRow | undefined): Issue | undefined {
-  return row?.kind === "issue" ? row.issue : undefined;
 }

@@ -5,7 +5,12 @@
  * script belongs at Task, Feature, or Epic scope. Records are JSON objects in
  * run event logs; unknown fields are ignored.
  */
-import type { IssueRef } from "../issues/provider.js";
+/** Minimal repo/number reference kept for old artifact-usage records. */
+export interface IssueRef {
+  provider: string;
+  repo: string;
+  number: number;
+}
 
 export type ArtifactKind = "tool" | "script" | "command" | "skill" | "knowledge" | "file";
 export type ArtifactScope = "task" | "feature" | "epic";

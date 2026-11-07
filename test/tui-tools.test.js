@@ -2,22 +2,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { skillListItems, toolListItems, tokensForChars } from "../dist/tui/tools.js";
 
-test("tool subtab lists core tools, issue access, and custom tools", () => {
+test("tool subtab lists core tools and custom tools", () => {
   const items = toolListItems(
-    ["read", "search", "issue", "artifact"],
-    "create",
+    ["read", "search", "artifact"],
     [{ name: "bench", description: "Run benchmarks" }, { name: "lint", description: "Lint the tree" }],
     new Map([["bench", 512]]),
   );
   assert.deepEqual(items.map((item) => item.key), [
     "core-tool:read",
     "core-tool:search",
-    "core-tool:issue",
     "core-tool:artifact",
     "tool:bench",
     "tool:lint",
   ]);
-  assert.equal(items.find((item) => item.key === "core-tool:issue").text, "issue · GitHub issues · issues:create");
   assert.match(items.find((item) => item.key === "core-tool:search").text, /map, outline, search/);
   assert.match(items.find((item) => item.key === "tool:bench").text, /Run benchmarks/);
   const core = items.filter((item) => item.key.startsWith("core-tool:"));

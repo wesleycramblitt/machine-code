@@ -5,7 +5,6 @@
 [plan]
 delegate = false
 verification = "direct"
-issues = "optional"
 ask = true
 approval = "human"
 ambiguity = "precise"
@@ -13,7 +12,6 @@ ambiguity = "precise"
 [orchestrate]
 delegate = true
 verification = "verified"
-issues = "optional"
 ask = true
 approval = "human"
 ambiguity = "precise"
@@ -21,7 +19,6 @@ ambiguity = "precise"
 [implement]
 delegate = false
 verification = "verified"
-issues = "optional"
 ask = false
 approval = "human"
 ambiguity = "precise"
@@ -30,7 +27,6 @@ artifact_scripts = true
 [review]
 delegate = false
 verification = "direct"
-issues = "optional"
 ask = false
 approval = "human"
 ambiguity = "precise"
@@ -38,7 +34,6 @@ ambiguity = "precise"
 [assistant]
 delegate = false
 verification = "direct"
-issues = "disabled"
 ask = true
 approval = "human"
 ambiguity = "precise"
@@ -46,7 +41,6 @@ ambiguity = "precise"
 [unrestricted]
 delegate = true
 verification = "verified"
-issues = "optional"
 ask = true
 approval = "human"
 ambiguity = "precise"

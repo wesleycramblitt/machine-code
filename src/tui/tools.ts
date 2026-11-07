@@ -2,7 +2,6 @@
  * New-run Tools subtab: every tool available to the selected agent, plus
  * repository/machine custom tool manifests.
  */
-import type { IssueAccess } from "../agents.js";
 import type { CoreToolName } from "../tools/index.js";
 import { toolSchemaCharsByName } from "../tools/schema.js";
 
@@ -27,7 +26,6 @@ const DESCRIPTIONS: Record<string, string> = {
   command: "typed commands",
   context: "run memory",
   ask: "ask the human",
-  issue_graph: "create issue graph",
   artifact: "tools and scripts",
   skill: "skill bodies on demand",
   pr: "pull requests",
@@ -35,20 +33,13 @@ const DESCRIPTIONS: Record<string, string> = {
 
 export function toolListItems(
   tools: readonly string[],
-  issueAccess: IssueAccess,
   customTools: ReadonlyArray<{ name: string; description?: string }>,
   customChars?: ReadonlyMap<string, number>,
 ): ToolListItem[] {
   const names = tools as readonly CoreToolName[];
   const schemaChars = toolSchemaCharsByName(names);
   const core = tools.map((tool) => ({
-    text: `${tool} · ${
-      tool === "issue"
-        ? `GitHub issues · issues:${issueAccess}`
-        : tool === "issue_graph"
-          ? `GitHub issue graphs · issues:${issueAccess}`
-          : (DESCRIPTIONS[tool] ?? "tool")
-    }`,
+    text: `${tool} · ${(DESCRIPTIONS[tool] ?? "tool")}`,
     chars: schemaChars.get(tool) ?? 0,
     exists: true,
     key: `core-tool:${tool}`,

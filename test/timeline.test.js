@@ -53,7 +53,6 @@ test("routine internals are hidden unless verbose is requested", () => {
 
 test("event descriptions are one-line and ANSI-free", () => {
   assert.equal(describeTimelineEvent({ type: "tool_call", tool: "read", isError: false }), "read ok");
-  assert.match(describeTimelineEvent({ type: "issue_created", number: 12, kind: "epic", title: "Plan" }), /#12 epic Plan/);
   assert.match(describeTimelineEvent({ type: "turn_cap", turns: 25 }), /25/);
   assert.doesNotMatch(describeTimelineEvent({ type: "error_classified", kind: "rate-limit" }), /\x1b/);
 });
@@ -66,7 +65,6 @@ test("tool args render as human one-liners, not JSON", async () => {
   assert.equal(describeToolArgs("search", { pattern: "foo", mode: "text" }), '"foo" text');
   assert.equal(describeToolArgs("search", { pattern: "foo" }), '"foo"');
   assert.equal(describeToolArgs("command", { action: "run", name: "core:status" }), "run core:status");
-  assert.equal(describeToolArgs("issue", { action: "view", issue: "123" }), "view 123");
   assert.equal(describeToolArgs("mystery", { path: "x", name: "y" }), "x y");
   assert.equal(describeToolArgs("read", null), "");
 });

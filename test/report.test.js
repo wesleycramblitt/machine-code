@@ -83,11 +83,11 @@ test("run metrics summarize calls, context, changes, gates, and limits", () => {
     assert.match(exceededLimits(metrics, { maxCalls: 1, maxTokens: 100 })[0], /model calls 4 > 1/);
 });
 
-test("related runs include lineage and same-orchestration task siblings", () => {
+test("related runs include lineage and same-packet siblings", () => {
   const summary = {
     id: "build",
     orchestrationId: "orch-1",
-    taskIssue: { repo: "o/r", number: 5 },
+    packetId: "demo",
     rootRunId: "build",
     parentRunId: "parent",
     startedAt: "2026-01-01T00:00:00Z",
@@ -95,9 +95,9 @@ test("related runs include lineage and same-orchestration task siblings", () => 
   const runs = [
     summary,
     { id: "parent", startedAt: "2025-12-31T00:00:00Z" },
-    { id: "review", orchestrationId: "orch-1", taskIssue: { repo: "o/r", number: 5 }, startedAt: "2026-01-01T00:00:01Z" },
+    { id: "review", orchestrationId: "orch-1", packetId: "demo", startedAt: "2026-01-01T00:00:01Z" },
     { id: "fork", rootRunId: "build", startedAt: "2026-01-01T00:00:02Z" },
-    { id: "other", orchestrationId: "orch-2", taskIssue: { repo: "o/r", number: 6 }, startedAt: "2026-01-01T00:00:03Z" },
+    { id: "other", orchestrationId: "orch-2", packetId: "other", startedAt: "2026-01-01T00:00:03Z" },
   ];
   assert.deepEqual(relatedRuns(runs, summary).map((run) => run.id), ["fork", "review", "parent"]);
 });

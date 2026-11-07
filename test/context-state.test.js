@@ -56,48 +56,15 @@ test("state records decisions, next, focus, and artifacts", () => {
   }
 });
 
-test("issue facts render in the state block and update by number", () => {
+test("findings render in the state block and stay capped", () => {
   const dir = tempDir();
   try {
-    const store = new RunStateStore({ runDir: dir, runId: "r-issue", goal: "plan" });
-    store.addIssueFact(12, '#12 epic "Plan"');
-    store.addIssueFact(13, '#13 feature "Gates" parent #12');
-    store.addIssueFact(13, '#13 feature "Gates" parent #12 plan ready');
-    const block = store.renderBlock();
-    assert.match(block, /Issues:/);
-    assert.match(block, /#12 epic "Plan"/);
-    assert.match(block, /#13 feature "Gates" parent #12 plan ready/);
-    assert.equal(block.match(/#13 feature/g)?.length, 1, "same issue updates in place");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("state block drops body findings before issue facts", () => {
-  const dir = tempDir();
-  try {
-    const store = new RunStateStore({ runDir: dir, runId: "r-cap", goal: "plan" });
-    store.addIssueFact(1, '#1 epic "Plan"');
-    for (let number = 2; number < 42; number++) {
-      store.addIssueBodyFact(number, "x".repeat(1_000));
+    const store = new RunStateStore({ runDir: dir, runId: "r-findings", goal: "plan" });
+    for (let i = 0; i < 60; i++) {
+      store.note("finding", `finding ${i} ${"x".repeat(500)}`);
     }
     const block = store.renderBlock();
     assert.ok(block.length <= 10_000, `state block is ${block.length} chars`);
-    assert.match(block, /#1 epic "Plan"/);
-    assert.doesNotMatch(block, /body:/, "body findings are dropped first");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("issue body facts stay compact in the run-state block", () => {
-  const dir = tempDir();
-  try {
-    const store = new RunStateStore({ runDir: dir, runId: "r-body", goal: "plan" });
-    store.addIssueBodyFact(7, "x".repeat(1_000));
-    const block = store.renderBlock();
-    assert.match(block, /#7 body: x/);
-    assert.ok(block.length < 500, "body excerpt is capped to 300 chars");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

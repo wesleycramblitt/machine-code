@@ -53,7 +53,7 @@ const BUILD_PLAN_POST_RESEARCH_LIMIT = 8;
 /** Plan-checkpoint blocked turns allowed before the run stops. */
 const PLAN_BLOCK_LIMIT = 3;
 /** Successes that show a run did real work, not just memory bookkeeping. */
-const SUBSTANTIVE_TOOLS = new Set(["read", "search", "command", "edit", "write", "issue", "pr"]);
+const SUBSTANTIVE_TOOLS = new Set(["read", "search", "command", "edit", "write", "pr"]);
 
 /** A request that is a question, not a change. A writable role answering a
  * question is not expected to edit; everything else (imperatives, bug
@@ -129,39 +129,6 @@ export function compileGateName(commands: ReadonlyMap<string, unknown>): string 
 const RESEARCH_NUDGE_AFTER = 15;
 /** Gate failures tolerated before the run is reported blocked. */
 const GATE_BLOCK_LIMIT = 3;
-
-function issueRefKey(value: string): string {
-  const url = /\/issues\/(\d+)(?:$|[?#])/.exec(value);
-  if (url) return `#${url[1]}`;
-  const hash = /#(\d+)\b/.exec(value);
-  if (hash) return `#${hash[1]}`;
-  const bare = value.trim();
-  return /^\d+$/.test(bare) ? `#${bare}` : bare;
-}
-
-/** Canonical issue arguments so `repo#42`, `#42`, `42`, and a URL compare equal. */
-function normalizedIssueKey(params: Record<string, unknown>): Record<string, unknown> {
-  const out = { ...params };
-  for (const key of ["issue", "parent"]) {
-    if (typeof out[key] === "string") out[key] = issueRefKey(out[key] as string);
-  }
-  for (const key of ["blocked_by", "depends_on"]) {
-    if (Array.isArray(out[key])) {
-      out[key] = (out[key] as unknown[]).map((value) =>
-        typeof value === "string" ? issueRefKey(value) : value,
-      );
-    }
-  }
-  if (out.action === "tree") {
-    if (out.state === undefined || out.state === "all") delete out.state;
-    if (out.depth === undefined || out.depth === 2) delete out.depth;
-  }
-  if (out.action === "list") {
-    if (out.state === undefined || out.state === "all") delete out.state;
-    if (out.limit === undefined || out.limit === 100) delete out.limit;
-  }
-  return out;
-}
 
 /**
  * Coarse read key: reads that begin in the same 100-line band are the same
@@ -329,53 +296,6 @@ function assistantText(message: AssistantMessage | undefined): string {
     .filter((c): c is { type: "text"; text: string } => c.type === "text")
     .map((c) => c.text)
     .join("\n");
-}
-
-interface IssueEventEvidence {
-  created: number[];
-  planned: number[];
-}
-
-function readIssueEvidence(dir: string): IssueEventEvidence {
-  const created = new Set<number>();
-  const planned = new Set<number>();
-  try {
-    for (const line of readFileSync(join(dir, "events.jsonl"), "utf8").split("\n")) {
-      if (!line.trim()) continue;
-      let event: { type?: string; number?: unknown; issue?: unknown; status?: unknown };
-      try {
-        event = JSON.parse(line) as { type?: string; number?: unknown; issue?: unknown; status?: unknown };
-      } catch {
-        continue;
-      }
-      if (event.type === "issue_created" && typeof event.number === "number") created.add(event.number);
-      if (event.type === "plan_updated" && typeof event.issue === "number" && event.status === "ready") {
-        planned.add(event.issue);
-      }
-    }
-  } catch {
-    // no event log yet
-  }
-  return {
-    created: [...created].sort((a, b) => a - b),
-    planned: [...planned].sort((a, b) => a - b),
-  };
-}
-
-function issueEvidenceText(evidence: IssueEventEvidence): string {
-  if (evidence.created.length === 0 && evidence.planned.length === 0) return "";
-  const list = (values: number[]): string => values.map((number) => `#${number}`).join(", ");
-  return `Issue evidence: created ${evidence.created.length > 0 ? list(evidence.created) : "none"}; plan-ready ${evidence.planned.length > 0 ? list(evidence.planned) : "none"}.`;
-}
-
-/** Keep a normal final answer honest when the model contradicts issue events. */
-function appendIssueEvidence(text: string, evidence: IssueEventEvidence): string {
-  if (!text.trim() || evidence.created.length === 0) return text;
-  const created = evidence.created.map((number) => `#${number}`);
-  const contradiction = /no (?:new )?issues? (?:were )?created/i.test(text);
-  const missing = evidence.created.filter((number) => !new RegExp(`#${number}\\b`).test(text));
-  if (!contradiction && missing.length === 0) return text;
-  return `${text.trimEnd()}\n\nIssues created: ${created.join(", ")}.`;
 }
 
 export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
@@ -743,8 +663,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastAssistant: AssistantMessage | undefined;
   let totalTokens = 0;
   /** Run-level loop detector; a model rotation does not erase evidence. */
-  // Read-only roles (review/general/planner) cannot make progress by editing,
-  // so an identical-repeat streak is a loop much sooner than for build/sudo.
+  // Read-only roles (review/research/planner) cannot make progress by editing,
+  // so an identical-repeat streak is a loop much sooner than for build.
   const evidence = new EvidenceTracker(input.agent.name === "build" ? 20 : 8);
   let turns = 0;
   /** Cumulative turns across resumes, for the run summary. */
@@ -792,10 +712,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   ): Promise<string> => {
     const prompt = [
       memory.renderBlock(),
-      issueEvidenceText(readIssueEvidence(recorder.dir)),
       reason,
       "Do not call tools. Answer the user's request from the evidence above. If the evidence is insufficient, say exactly what is missing.",
-      "Keep the answer under 20 lines. For a planning run, list the created issue numbers and the next concrete step; do not restate issue bodies.",
+      "Keep the answer under 20 lines. For a planning run, list the created packets and the next concrete step; do not restate bodies.",
       `Request: ${input.request}`,
     ].filter(Boolean).join("\n\n");
     try {
@@ -1000,22 +919,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       recorder,
       suspend: checkpoint,
     };
-    // Issue tool: constructed lazily per attempt (provider calls are cheap and
-    // cached by the factory's gh availability check).
-    let issueContext: import("./tools/issues.js").IssueToolContext | undefined;
-    if (input.layout && input.agent.tools.includes("issue")) {
-      const { createIssueProvider } = await import("./issues/index.js");
-      const bundle = await createIssueProvider(input.layout, input.machine);
-      issueContext = {
-        provider: bundle.provider,
-        repo: bundle.repo,
-        capabilities: input.agentCapabilities ?? [],
-        recorder,
-        layout: input.layout,
-        state: memory,
-        defaultApproval: input.agentConfig?.approval ?? "human",
-      };
-    }
 
     const artifactContext: import("./tools/artifact.js").ArtifactToolContext | undefined =
       input.layout && input.agent.tools.includes("artifact")
@@ -1062,7 +965,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         commands: input.commands,
         tools: input.agent.tools,
         ask: askContext,
-        issues: issueContext,
         artifacts: artifactContext,
         skills: skillContext,
         prs: prContext,
@@ -1140,8 +1042,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             };
           };
 
-          const issueAction =
-            tool.name === "issue" ? String((params as { action?: unknown }).action ?? "") : "";
           const contextAction =
             tool.name === "context" ? String((params as { action?: unknown }).action ?? "") : "";
           const contextKind =
@@ -1152,16 +1052,14 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // cheap rehydration exactly when the model needed it.
           const researchTool =
             tool.name === "read" ||
-            tool.name === "search" ||
-            (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
+            tool.name === "search";
           if (researchTool) researchCalls += 1;
           const needsPlan = needsBuildPlan(input.agent.name);
           const planReady = needsPlan && hasPlanDecision(memory.getState().facts);
           const readPath = tool.name === "read" ? String((params as { path?: unknown }).path ?? "") : "";
           const blocksAfterPlan =
             tool.name === "search" ||
-            tool.name === "read" ||
-            (tool.name === "issue" && ["list", "view", "tree"].includes(issueAction));
+            tool.name === "read";
           const postPlanResearchLimit = BUILD_PLAN_RESEARCH_LIMIT + BUILD_PLAN_POST_RESEARCH_LIMIT;
           const hasChanges = memory.getState().facts.some(
             (fact) => fact.kind === "change" && fact.status === "active",
@@ -1231,11 +1129,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
                 ? searchPaths.slice().sort().join(",")
                 : String((params as { path?: unknown }).path ?? ".")
               : "";
-          const keyParams =
-            tool.name === "issue"
-              ? normalizedIssueKey(params as Record<string, unknown>)
-              : params;
-          const key = `${tool.name}:${stableKey(keyParams)}`;
+          const key = `${tool.name}:${stableKey(params)}`;
           const commandAction =
             tool.name === "command" ? String((params as { action?: unknown }).action ?? "") : "";
           const commandName =
@@ -1336,8 +1230,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               evidenceKey = cacheableCommand
                 ? `command:${commandName}:cached`
                 : `command:${commandName}:${resultHash}`;
-            } else if (tool.name === "issue") {
-              evidenceKey = `issue:${issueAction}:${resultHash}`;
             } else if (tool.name === "context" && contextAction === "recall") {
               evidenceKey = `recall:${resultHash}`;
             }
@@ -2094,7 +1986,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           : "The token budget is exhausted.";
       finalText = await finalAnswer(currentModel, reason);
     }
-    finalText = appendIssueEvidence(finalText, readIssueEvidence(recorder.dir));
 
     // An empty stop is not a completed run. This happens when a provider
     // returns an empty assistant message after tool errors; the old loop

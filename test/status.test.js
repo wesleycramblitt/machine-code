@@ -1,26 +1,12 @@
-/**
- * Phase 7 tests: the pure TUI status model (grouping, rollups, health,
- * header counts, awaiting-human queue) and the issue cache.
- */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 import {
-  buildIssueTree,
   filterRuns,
   sortRuns,
-  healthOf,
-  issueGlyphKind,
-  issueRowDetail,
-  rollupIssue,
   headerCounts,
   awaitingHuman,
-  issueKey,
 } from "../dist/tui/status.js";
-import { readIssueCache, writeIssueCache, cacheFresh, issueCachePath } from "../dist/issues/cache.js";
 
 function run(overrides = {}) {
   const nowIso = new Date().toISOString();
@@ -43,28 +29,10 @@ function run(overrides = {}) {
   };
 }
 
-function issue(n, kind, title, extra = {}) {
-  return {
-    ref: { provider: "github", repo: "o/r", number: n },
-    title,
-    body: "",
-    state: "open",
-    kind,
-    labels: [],
-    children: [],
-    blockedBy: [],
-    blocking: [],
-    acceptance: [],
-    ...extra,
-  };
-}
-
-const ref = (n) => ({ provider: "github", repo: "o/r", number: n });
-
 test("filter buckets and sorting", () => {
   const runs = [
-    run({ id: "a", status: "running", issue: ref(31) }),
-    run({ id: "b", status: "awaiting_input", issue: ref(32) }),
+    run({ id: "a", status: "running" }),
+    run({ id: "b", status: "awaiting_input" }),
     run({ id: "c", status: "completed", cost: { actual: 0.5, estimated: 0 } }),
     run({ id: "d", status: "blocked" }),
     run({ id: "e", status: "failed" }),
@@ -75,138 +43,17 @@ test("filter buckets and sorting", () => {
   assert.deepEqual(filterRuns(runs, "completed").map((r) => r.id).sort(), ["c", "e"]);
   assert.equal(sortRuns(runs, "cost")[0].id, "c");
   assert.equal(sortRuns(runs, "severity")[0].id, "a");
-  assert.equal(sortRuns(runs, "number")[0].id, "a", "issues 31 before 32");
-});
-
-test("health classification covers the priority order", () => {
-  const now = Date.now();
-  const open = issue(31, "task", "Task");
-  assert.equal(healthOf({ ...open, state: "closed" }, [], now), "done");
-  assert.equal(healthOf(open, [run({ status: "failed" })], now), "attention");
-  assert.equal(healthOf({ ...open, blockedBy: [ref(9)] }, [run({ status: "running" })], now), "blocked");
-  assert.equal(healthOf(open, [run({ status: "awaiting_input" })], now), "awaiting-human");
-  assert.equal(healthOf(open, [run({ status: "paused" })], now), "paused");
-  assert.equal(healthOf(open, [run({ agent: "review", status: "running" })], now), "review");
-  const old = new Date(now - 48 * 3600 * 1000).toISOString();
-  assert.equal(healthOf(open, [run({ lastActivityAt: old })], now), "stalled");
-  assert.equal(healthOf(open, [run({ status: "running" })], now), "on-track");
-});
-
-test("issue glyphs show issue state and plan state, not run health", () => {
-  assert.equal(issueGlyphKind(issue(10, "epic", "Epic")), "open");
-  assert.equal(issueGlyphKind(issue(10, "epic", "Epic", { state: "closed" })), "closed");
-  assert.equal(issueGlyphKind(issue(10, "epic", "Epic", { blockedBy: [ref(9)] })), "open");
-  assert.equal(issueGlyphKind(issue(20, "feature", "Feature")), "open");
-  assert.equal(issueGlyphKind(issue(20, "feature", "Feature", { blockedBy: [ref(9)] })), "blocked");
-  assert.equal(issueGlyphKind(issue(20, "feature", "Feature", { state: "closed" })), "closed");
-  assert.equal(issueGlyphKind(issue(30, "task", "Task")), "open");
-  assert.equal(
-    issueGlyphKind(issue(30, "task", "Task", { plan: { status: "draft" } })),
-    "draft",
-  );
-  assert.equal(
-    issueGlyphKind(issue(30, "task", "Task", { plan: { status: "ready" } })),
-    "ready",
-  );
-  assert.equal(
-    issueGlyphKind(issue(30, "task", "Task", { plan: { status: "ready" }, blockedBy: [ref(9)] })),
-    "blocked",
-  );
-});
-
-test("issue rows progressively hide detail as width shrinks", () => {
-  assert.equal(issueRowDetail(160), "full");
-  assert.equal(issueRowDetail(120), "full");
-  assert.equal(issueRowDetail(119), "medium");
-  assert.equal(issueRowDetail(100), "medium");
-  assert.equal(issueRowDetail(99), "compact");
-  assert.equal(issueRowDetail(84), "compact");
-  assert.equal(issueRowDetail(83), "identity");
-  assert.equal(issueRowDetail(20), "identity");
-});
-
-test("rollups aggregate runs and cost; epic percent counts closed features", () => {
-  const now = Date.now();
-  const epic = issue(10, "epic", "Epic");
-  const f1 = issue(20, "feature", "Done", { parent: epic.ref, state: "closed" });
-  const f2 = issue(21, "feature", "Open", { parent: epic.ref });
-  const runs = [
-    run({ status: "running", cost: { actual: 0.2, estimated: 0 }, issue: f2.ref }),
-    run({ status: "completed", cost: { actual: 0.1, estimated: 0 }, issue: f1.ref }),
-    run({ status: "completed", cost: { actual: 0.05, estimated: 0 }, issue: epic.ref }),
-  ];
-  const featureRollup = rollupIssue(f2, [runs[0]], [], [], now);
-  assert.equal(featureRollup.tasksTotal, 0, "features have no sub-issues to count");
-  assert.equal(featureRollup.pct, undefined);
-  assert.equal(featureRollup.runsTotal, 1);
-  assert.equal(featureRollup.runsActive, 1);
-  const rollup = rollupIssue(epic, [runs[2]], [f1, f2], [runs[0], runs[1]], now);
-  assert.equal(rollup.tasksTotal, 2, "epic progress counts features, not tasks");
-  assert.equal(rollup.tasksClosed, 1);
-  assert.equal(rollup.pct, 50);
-  assert.equal(rollup.runsTotal, 3);
-  assert.equal(rollup.runsActive, 1);
-  assert.ok(Math.abs(rollup.cost - 0.35) < 1e-9);
-});
-
-test("epic rollups aggregate nested features and runs", () => {
-  const now = Date.now();
-  const epic = issue(10, "epic", "Epic");
-  const f1 = issue(20, "feature", "Done", { parent: epic.ref, state: "closed" });
-  const f2 = issue(21, "feature", "Open", { parent: epic.ref });
-  const runs = [
-    run({ id: "a", status: "completed", issue: f1.ref, cost: { actual: 0.1, estimated: 0 } }),
-    run({ id: "b", status: "running", issue: f2.ref, cost: { actual: 0.2, estimated: 0 } }),
-    run({ id: "c", status: "running", issue: epic.ref, cost: { actual: 0.05, estimated: 0 } }),
-  ];
-  const tree = buildIssueTree([epic, f1, f2], runs, now);
-  const rollup = tree.epics[0].rollup;
-  assert.equal(rollup.tasksClosed, 1);
-  assert.equal(rollup.tasksTotal, 2);
-  assert.equal(rollup.pct, 50);
-  assert.equal(rollup.runsTotal, 3);
-  assert.equal(rollup.runsActive, 2);
-  assert.ok(Math.abs(rollup.cost - 0.35) < 1e-9);
-  assert.equal(tree.epics[0].features.length, 2);
-  assert.deepEqual(tree.epics[0].features[0].tasks, [], "task level is dropped");
-  assert.equal(tree.epics[0].features[0].rollup.runsTotal, 1);
-  assert.equal(tree.epics[0].features[1].rollup.runsTotal, 1);
-});
-
-test("buildIssueTree nests epics→features and separates categories", () => {
-  const now = Date.now();
-  const epic = issue(10, "epic", "Epic");
-  const f1 = issue(20, "feature", "Feature One", { parent: epic.ref });
-  const f2 = issue(21, "feature", "Feature Two", { parent: epic.ref });
-  const runs = [
-    run({ id: "f1run", status: "running", issue: f1.ref }),
-    run({ id: "epicrun", status: "completed", issue: epic.ref }),
-    run({ id: "plan", agent: "build" }),
-    run({ id: "gen", agent: "research" }),
-    run({ id: "orphan", issue: ref(999) }),
-  ];
-  const tree = buildIssueTree([epic, f1, f2], runs, now);
-  assert.equal(tree.epics.length, 1);
-  assert.equal(tree.epics[0].features.length, 2);
-  assert.deepEqual(tree.epics[0].features[0].tasks, [], "task level is dropped");
-  assert.deepEqual(tree.epics[0].features[1].tasks, [], "task level is dropped");
-  assert.equal(tree.epics[0].rollup.tasksTotal, 2);
-  assert.equal(tree.epics[0].rollup.tasksClosed, 0);
-  assert.equal(tree.epics[0].rollup.pct, 0);
-  assert.equal(tree.epics[0].rollup.runsTotal, 2);
-  assert.deepEqual(tree.planning.map((r) => r.id), []);
-  assert.deepEqual(tree.untracked.map((r) => r.id), ["plan", "gen"]);
-  assert.deepEqual(tree.orphaned.map((r) => r.id), ["orphan"]);
+  assert.deepEqual(sortRuns(runs, "number").map((r) => r.id), ["a", "b", "c", "d", "e"]);
 });
 
 test("header counts and the awaiting-human queue", () => {
   const now = Date.now();
   const runs = [
     run({ id: "a", status: "running" }),
-    run({ id: "b", status: "awaiting_input", issue: ref(31) }),
+    run({ id: "b", status: "awaiting_input", packetId: "demo" }),
     run({ id: "c", status: "paused" }),
     run({ id: "d", status: "blocked" }),
-    run({ id: "e", status: "completed", prState: "open", prNumber: 91, issue: ref(32) }),
+    run({ id: "e", status: "completed", prState: "open", prNumber: 91 }),
   ];
   const counts = headerCounts(runs, now);
   assert.equal(counts.active, 1);
@@ -219,37 +66,6 @@ test("header counts and the awaiting-human queue", () => {
   const queue = awaitingHuman(runs, now);
   assert.equal(queue.length, 2);
   assert.equal(queue[0].kind, "question");
+  assert.equal(queue[0].packetId, "demo");
   assert.equal(queue[1].kind, "pr");
-});
-
-test("issue cache round-trips and reports freshness", () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-cache-"));
-  try {
-    const layout = {
-      home: join(root, "home"),
-      machineConfig: "",
-      curation: "",
-      catalogueFile: "",
-      repoRoot: root,
-      repoDir: join(root, ".machine_code"),
-      localDir: join(root, ".machine_code", "local"),
-      policyFile: "",
-      runsDir: join(root, ".machine_code", "local", "runs"),
-    };
-    assert.equal(readIssueCache(layout), null);
-    const cache = writeIssueCache(layout, "o/r", [issue(1, "epic", "E")]);
-    assert.ok(issueCachePath(layout).endsWith(join("cache", "issues.json")));
-    assert.equal(cache.issues.length, 1);
-    const loaded = readIssueCache(layout);
-    assert.equal(loaded.repo, "o/r");
-    assert.equal(cacheFresh(loaded, 60_000), true);
-    assert.equal(cacheFresh(loaded, 0, Date.now() + 60_000), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("issueKey helper", () => {
-  assert.equal(issueKey(ref(31)), "o/r#31");
-  assert.equal(issueKey(undefined), null);
 });

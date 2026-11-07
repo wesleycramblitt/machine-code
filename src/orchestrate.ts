@@ -25,7 +25,6 @@ import { commitWorktree } from "./worktree.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { inferReviewVerdict, parseBuildOutcome, parseReviewVerdict } from "./orchestrator/outcome.js";
 import type { Layout } from "./paths.js";
-import type { IssueRef } from "./issues/provider.js";
 
 export interface OrchestrateInput {
   models: MutableModels;
@@ -40,15 +39,6 @@ export interface OrchestrateInput {
   root: string;
   /** Worktree root for tools/commands/gates when the run mutates code. */
   toolRoot?: string;
-  /** Numeric issue the run is associated with (Phase 4 adds provider validation). */
-  issueNumber?: number;
-  issue?: IssueRef;
-  orchestrationId?: string;
-  orchestrationScope?: "project" | "epic" | "feature";
-  scopeRef?: IssueRef;
-  attempt?: number;
-  planReview?: "agent" | "human";
-  resultReview?: "agent" | "human";
   home: string;
   recorder: RunRecorder;
   packet?: TaskPacket;
@@ -156,14 +146,6 @@ export interface ExecutePacketInput {
   request: string;
   root: string;
   toolRoot?: string;
-  issueNumber?: number;
-  issue?: IssueRef;
-  orchestrationId?: string;
-  orchestrationScope?: "project" | "epic" | "feature";
-  scopeRef?: IssueRef;
-  attempt?: number;
-  planReview?: "agent" | "human";
-  resultReview?: "agent" | "human";
   home: string;
   recorder: RunRecorder;
   availability?: import("./availability.js").AvailabilityState;
@@ -273,8 +255,7 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
     const message =
       `mc(${packet.id}): ${packet.goal}\n\n` +
       `run: ${recorder.id}\n` +
-      `packet: ${packet.id}` +
-      (input.issueNumber ? `\nissue: ${input.issueNumber}` : "");
+      `packet: ${packet.id}`;
     const committed = await commitWorktree({ path: toolRoot, message, processes: gateProcesses });
     if (committed.sha) {
       commit = committed.sha;
@@ -307,15 +288,7 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
       mode: "",
       request: reviewRequest,
       repoRoot: layout.repoRoot,
-      ...(input.issue ? { issue: input.issue } : {}),
-      ...(input.orchestrationId ? { orchestrationId: input.orchestrationId } : {}),
-      ...(input.orchestrationScope ? { orchestrationScope: input.orchestrationScope } : {}),
-      ...(input.scopeRef ? { scopeRef: input.scopeRef } : {}),
-      ...(input.issue ? { taskIssue: input.issue } : {}),
-      ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
       phase: "review",
-      ...(input.planReview ? { planReview: input.planReview } : {}),
-      ...(input.resultReview ? { resultReview: input.resultReview } : {}),
     });
     reviewRecorder.patchSummary({
       worktree: toolRoot,
@@ -419,7 +392,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       request: input.packet.goal,
       root,
       toolRoot: input.toolRoot,
-      issueNumber: input.issueNumber,
       home: layout.home,
       recorder,
       availability: input.availability,
@@ -441,19 +413,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     runOverrides: input.agentOverrides,
   });
   recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
-
-  if (resolved.config.issues === "required") {
-    const { createIssueProvider } = await import("./issues/index.js");
-    const bundle = await createIssueProvider(layout, machine);
-    if (bundle.provider.kind === "none") {
-      return {
-        status: "blocked",
-        finalText: "",
-        error: `issue tracking is required but unavailable: ${bundle.reason ?? "unknown reason"}`,
-        runId: recorder.id,
-      };
-    }
-  }
 
   const result = await singleAgentRun({
     models: input.models,

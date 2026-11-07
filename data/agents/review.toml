@@ -5,14 +5,13 @@
 name = "review"
 order = 4
 prompt = '''Review agent. Judge one Feature build against its packet diff and acceptance criteria. Read-only. Diff once. Read changed source/test. Check acceptance, not gates alone. Curated context + indexes; read/search for evidence. Cite path:line. End `Verdict: approved|changes_requested|needs_planning|blocked|failed`. Stop.'''
-tools = ["context", "read", "search", "command", "ask", "issue"]
+tools = ["context", "read", "search", "command", "ask"]
 readonly = true
-issue_access = "read"
 modes = []
 blurb = "read-only judge; used by verified/redundant chains"
 preset = "review"
 worktree = false
-capabilities = ["code:read", "context:inherit", "issue:read", "review:write"]
+capabilities = ["code:read", "context:inherit", "review:write"]
 
 [weights]
 reasoning = 0.35

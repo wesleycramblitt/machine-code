@@ -189,30 +189,6 @@ test("configured knowledge index is inherited into context", async () => {
   }
 });
 
-test("task → feature → epic inheritance with provenance", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-ctx1-"));
-  try {
-    const provider = hierarchyProvider();
-    const bundle = await assembleContext({
-      layout: fakeLayout(root),
-      machine: machine(),
-      provider,
-      issue: { provider: "github", repo: "o/r", number: 31 },
-    });
-    const kinds = bundle.sources.map((s) => s.kind);
-    assert.deepEqual(kinds.slice(0, 3), ["task", "feature", "epic"]);
-    assert.equal(bundle.sources[0].origin, "explicit");
-    assert.equal(bundle.sources[1].origin, "inherited");
-    assert.equal(bundle.sources[2].depth, 2);
-    assert.match(bundle.text, /Thermal model/);
-    assert.match(bundle.text, /Combustion chamber/);
-    assert.match(bundle.text, /Propulsion system/);
-    assert.match(bundle.text, /origin="inherited"/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 test("explicit packet is the highest-priority source", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx2-"));
   try {
@@ -239,25 +215,18 @@ test("explicit packet is the highest-priority source", async () => {
   }
 });
 
-test("mc:context knowledge references load, missing ones warn, duplicates dedupe", async () => {
+test("included knowledge references load, missing ones warn", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx3-"));
   try {
     mkdirSync(join(root, "knowledge"), { recursive: true });
     writeFileSync(join(root, "knowledge", "thermal.md"), "# Thermal notes\nuse leapfrog", "utf8");
-    const body = [
-      '<!-- mc:context {"knowledge":["knowledge/thermal.md","knowledge/thermal.md","knowledge/missing.md"]} -->',
-      "Task body",
-    ].join("\n");
-    const provider = hierarchyProvider();
-    provider.map.get(31).body = body;
     const bundle = await assembleContext({
       layout: fakeLayout(root),
       machine: machine(),
-      provider,
-      issue: { provider: "github", repo: "o/r", number: 31 },
+      include: { knowledge: ["knowledge/thermal.md", "knowledge/missing.md"] },
     });
     const knowledge = bundle.sources.filter((s) => s.kind === "knowledge");
-    assert.equal(knowledge.length, 2, "one loaded + one missing warning (duplicate removed)");
+    assert.equal(knowledge.length, 2, "one loaded + one missing warning");
     assert.ok(knowledge.some((s) => s.warning?.includes("missing")));
     assert.match(bundle.text, /use leapfrog/);
   } finally {
@@ -265,23 +234,17 @@ test("mc:context knowledge references load, missing ones warn, duplicates dedupe
   }
 });
 
-test("mc:context reference citations load from the central store", async () => {
+test("included reference citations load from the central store", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-ref-"));
   try {
     const layout = fakeLayout(root);
     const dir = join(layout.home, "references", "demo", "1", "content");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "alpha.md"), "## Alpha {#alpha}\n\nAlpha reference body.\n", "utf8");
-    const provider = hierarchyProvider();
-    provider.map.get(31).body = [
-      '<!-- mc:context {"references":["demo/1/content/alpha.md#alpha","demo/1/content/missing.md"]} -->',
-      "Task body",
-    ].join("\n");
     const bundle = await assembleContext({
       layout,
       machine: machine(),
-      provider,
-      issue: { provider: "github", repo: "o/r", number: 31 },
+      include: { references: ["demo/1/content/alpha.md#alpha", "demo/1/content/missing.md"] },
     });
     const refs = bundle.sources.filter((s) => s.kind === "reference");
     assert.equal(refs.length, 2, "one loaded + one missing warning");
@@ -296,21 +259,17 @@ test("mc:context reference citations load from the central store", async () => {
 test("over-budget context is preserved and warned, not silently clipped", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx4-"));
   try {
-    const provider = hierarchyProvider();
-    provider.map.get(31).body = "T".repeat(20_000);
-    provider.map.get(20).body = "F".repeat(20_000);
-    provider.map.get(10).body = "E".repeat(20_000);
+    writeFileSync(join(root, "big-a.md"), "A".repeat(20_000), "utf8");
+    writeFileSync(join(root, "big-b.md"), "B".repeat(20_000), "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
       machine: machine(),
-      provider,
-      issue: { provider: "github", repo: "o/r", number: 31 },
+      include: { files: ["big-a.md", "big-b.md"] },
       budgetChars: 4000,
     });
     assert.ok(bundle.text.length > 20_000, "curated context is not silently truncated");
     assert.ok(bundle.warnings.some((warning) => /model input budget/.test(warning)));
-    assert.equal(bundle.sources[0].kind, "task");
-    assert.ok(bundle.text.includes("E".repeat(1_000)), "lowest priority source is still present");
+    assert.ok(bundle.text.includes("A".repeat(1_000)), "sources are still present");
     assert.ok(bundle.sources.every((source) => source.truncated === false));
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -366,38 +325,21 @@ test("context exclusions drop whole sections and individual sources", async () =
   }
 });
 
-test("artifact references cascade Task → Feature → Epic, including files/tools/scripts", async () => {
+test("composer file includes carry provenance", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-artifacts-"));
   try {
     mkdirSync(join(root, "src"), { recursive: true });
-    mkdirSync(join(root, ".machine_code", "tools"), { recursive: true });
-    mkdirSync(join(root, ".machine_code", "scripts"), { recursive: true });
     writeFileSync(join(root, "src", "thermal.ts"), "export const thermal = 1;\n", "utf8");
-    writeFileSync(
-      join(root, ".machine_code", "tools", "bench.toml"),
-      'name = "bench"\ndescription = "fast benchmark"\ncommand = ".machine_code/scripts/bench-run.sh"\n',
-      "utf8",
-    );
-    writeFileSync(join(root, ".machine_code", "scripts", "release-check.sh"), "#!/usr/bin/env bash\n# release guard\n", "utf8");
-    writeFileSync(join(root, ".machine_code", "scripts", "bench-run.sh"), "#!/usr/bin/env bash\n# bench runner\n", "utf8");
-    const provider = hierarchyProvider();
-    provider.map.get(20).body = '<!-- mc:context {"files":["src/thermal.ts"],"tools":["bench"],"scripts":["release-check"]} -->';
     const bundle = await assembleContext({
       layout: fakeLayout(root),
       machine: machine(),
-      provider,
-      issue: { provider: "github", repo: "o/r", number: 31 },
+      include: { files: ["src/thermal.ts"] },
     });
     const kinds = bundle.sources.map((source) => source.kind);
     assert.ok(kinds.includes("file"));
-    assert.ok(kinds.includes("tool"));
-    assert.ok(kinds.includes("script"));
     const file = bundle.sources.find((source) => source.kind === "file");
-    assert.equal(file.origin, "inherited");
-    assert.equal(file.depth, 1);
+    assert.equal(file.origin, "explicit");
     assert.match(bundle.text, /export const thermal/);
-    assert.match(bundle.text, /fast benchmark/);
-    assert.match(bundle.text, /release guard/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

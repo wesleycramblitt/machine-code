@@ -102,23 +102,19 @@ test("default skill bodies load without issue declarations", async () => {
   }
 });
 
-test("issue-declared skills win ties over defaults", async () => {
+test("composer include overrides win ties over defaults", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-defskill-tie-"));
   try {
     writeSkill(root, "clean-code", "# Clean Code\nBe clean.");
-    const provider = new FakeProvider([
-      issue(1, '<!-- mc:context {"skills":["clean-code"]} -->'),
-    ]);
     const bundle = await assembleContext({
       layout: fakeLayout(root),
       machine: machine(),
-      provider,
-      issue: { provider: "github", repo: "o/r", number: 1 },
       defaultSkills: ["clean-code"],
+      skillOverrides: { "clean-code": "include" },
     });
     const bodies = bundle.sources.filter((s) => s.kind === "skill" && s.ref === "clean-code");
     assert.equal(bodies.length, 1);
-    assert.equal(bodies[0].depth, 0);
+    assert.match(bundle.text, /Be clean/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -151,7 +147,7 @@ test("previewContext surfaces default skill bodies for the TUI", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-defskill-prev-"));
   try {
     writeSkill(root, "clean-code", "# Clean Code\nBe clean.");
-    const preview = previewContext(fakeLayout(root), [], undefined, "", {
+    const preview = previewContext(fakeLayout(root), "", {
       defaultSkills: ["clean-code", "verified-testing"],
     });
     assert.ok(preview.sources.some((s) => s.kind === "skill" && s.ref === "clean-code"));

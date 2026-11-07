@@ -229,18 +229,14 @@ export class RunRecorder {
       preset?: string;
       delegate?: boolean;
       verification?: string;
-      issues?: string;
-      ask?: boolean;
+          ask?: boolean;
       approval?: string;
       ambiguity?: string;
       capabilities?: string[];
       settings?: RunSettingsSnapshot;
-      issue?: import("../issues/provider.js").IssueRef;
-      orchestrationId?: string;
+            orchestrationId?: string;
       orchestrationScope?: "project" | "epic" | "feature";
-      scopeRef?: import("../issues/provider.js").IssueRef;
-      taskIssue?: import("../issues/provider.js").IssueRef;
-      attempt?: number;
+                  attempt?: number;
       phase?: "build" | "review";
       planSnapshotHash?: string;
       planReview?: "agent" | "human";
@@ -314,18 +310,14 @@ export class RunRecorder {
       ...(init.preset !== undefined ? { preset: init.preset } : {}),
       ...(init.delegate !== undefined ? { delegate: init.delegate } : {}),
       ...(init.verification !== undefined ? { verification: init.verification } : {}),
-      ...(init.issues !== undefined ? { issues: init.issues } : {}),
-      ...(init.ask !== undefined ? { ask: init.ask } : {}),
+        ...(init.ask !== undefined ? { ask: init.ask } : {}),
       ...(init.approval !== undefined ? { approval: init.approval } : {}),
       ...(init.ambiguity !== undefined ? { ambiguity: init.ambiguity } : {}),
       ...(init.capabilities !== undefined ? { capabilities: init.capabilities } : {}),
       ...(init.settings !== undefined ? { settings: init.settings } : {}),
-      ...(init.issue !== undefined ? { issue: init.issue } : {}),
-      ...(init.orchestrationId !== undefined ? { orchestrationId: init.orchestrationId } : {}),
+        ...(init.orchestrationId !== undefined ? { orchestrationId: init.orchestrationId } : {}),
       ...(init.orchestrationScope !== undefined ? { orchestrationScope: init.orchestrationScope } : {}),
-      ...(init.scopeRef !== undefined ? { scopeRef: init.scopeRef } : {}),
-      ...(init.taskIssue !== undefined ? { taskIssue: init.taskIssue } : {}),
-      ...(init.attempt !== undefined ? { attempt: init.attempt } : {}),
+        ...(init.attempt !== undefined ? { attempt: init.attempt } : {}),
       ...(init.phase !== undefined ? { phase: init.phase } : {}),
       ...(init.planSnapshotHash !== undefined ? { planSnapshotHash: init.planSnapshotHash } : {}),
       ...(init.planReview !== undefined ? { planReview: init.planReview } : {}),
@@ -474,8 +466,7 @@ export class RunRecorder {
     preset?: string;
     delegate?: boolean;
     verification?: string;
-    issues?: string;
-    ask?: boolean;
+      ask?: boolean;
     approval?: string;
     ambiguity?: string;
     capabilities?: string[];
@@ -484,12 +475,11 @@ export class RunRecorder {
     // must never clobber RunSummary.worktree (the worktree *path* string).
     // Whitelist fields instead of Object.assign so extra spread keys
     // (e.g. {...resolved.config}) cannot corrupt VCS metadata.
-    const { preset, delegate, verification, issues, ask, approval, ambiguity, capabilities } = config;
+    const { preset, delegate, verification, ask, approval, ambiguity, capabilities } = config;
     Object.assign(this.summary, {
       ...(preset !== undefined ? { preset } : {}),
       ...(delegate !== undefined ? { delegate } : {}),
       ...(verification !== undefined ? { verification } : {}),
-      ...(issues !== undefined ? { issues } : {}),
       ...(ask !== undefined ? { ask } : {}),
       ...(approval !== undefined ? { approval } : {}),
       ...(ambiguity !== undefined ? { ambiguity } : {}),
@@ -515,11 +505,8 @@ export class RunRecorder {
         | "baseRef"
         | "commit"
         | "pid"
-        | "issue"
         | "orchestrationId"
         | "orchestrationScope"
-        | "scopeRef"
-        | "taskIssue"
         | "attempt"
         | "phase"
         | "planSnapshotHash"

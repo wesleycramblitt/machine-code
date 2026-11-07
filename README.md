@@ -17,13 +17,16 @@ node dist/cli.js catalogue refresh
 ## Usage
 ```
 # read-only question
-node dist/cli.js run --agent general "summarize README.md"
+node dist/cli.js run --agent research "summarize README.md"
 
-# plan an Epic/Feature/Task graph
+# plan a project: planner materializes plan lines into packets
 node dist/cli.js run --agent planner "plan the thermal model work"
 
-# implementation run through the orchestrator (isolated Task worktree)
-node dist/cli.js orchestrate start --scope feature --feature 20
+# build one packet in an isolated mc/<slug> worktree
+node dist/cli.js build <slug>
+
+# build every ready packet in dependency order, then merge
+node dist/cli.js batch --auto-approve
 
 # agent configuration (preset + explicit overrides)
 node dist/cli.js run --agent planner --preset plan --ambiguity precise "plan the release"
@@ -34,29 +37,15 @@ node dist/cli.js pause <run-id>
 node dist/cli.js fork <run-id> "instead, use RK4"
 node dist/cli.js resume <run-id>
 
-# issues (reserved Feature 0 / Task 0 enforced by the harness)
-node dist/cli.js issue tree 10
-node dist/cli.js issue ensure 10
-node dist/cli.js issue delete 31 --yes
-node dist/cli.js issue delete 98 --cascade --yes
-node dist/cli.js accept 31
-node dist/cli.js approve 31
-
-# one task at a time, without the scheduler
-node dist/cli.js task status 31
-node dist/cli.js task start 31
-node dist/cli.js task start 31 --retry
-node dist/cli.js task review 31
-node dist/cli.js task approve 31
-
-# pull requests (runner-owned: Task→Feature, Feature→main)
-node dist/cli.js pr feature 20 --gates typescript:test,typescript:typecheck
-node dist/cli.js pr list
+# packets: the bounded contract for one buildable unit
+node dist/cli.js packet list
+node dist/cli.js packet create <slug> "deliverable" --verify typescript:test
+node dist/cli.js packet <slug>             # show the contract
+node dist/cli.js approve <slug>            # merge mc/<slug> into main
 
 # model selection: catalogue, hard floors, role weighting, dry-run
 node dist/cli.js models --min-cap 7.3 --axes
 node dist/cli.js models --agent build
-node dist/cli.js models --agent sudo --tier free
 node dist/cli.js policy                      # effective floors/weights + files
 node dist/cli.js policy edit                 # edit ~/.machine_code/config.toml
 node dist/cli.js policy edit --repo          # edit .machine_code/policy.toml
@@ -66,7 +55,7 @@ node dist/cli.js catalogue snapshot          # update committed data/models + da
 # worktrees, inspection, run cleanup
 node dist/cli.js worktree list
 node dist/cli.js runs delete <run-id> --yes
-node dist/cli.js runs                 # Epic → Feature → Task → runs + untracked
+node dist/cli.js runs                 # plan category → packet → runs, or by status
 node dist/cli.js show <run-id>        # summary/overview/context/changes/related/events
 node dist/cli.js spend --days 30
 node dist/cli.js tools
@@ -180,7 +169,7 @@ port, refresh once and the local chat models appear beside remote models:
 ```bash
 node dist/cli.js catalogue refresh
 node dist/cli.js models --provider ollama
-node dist/cli.js run --agent general --provider ollama \
+node dist/cli.js run --agent research --provider ollama \
   --model ollama/qwen3.5:9b "summarize the README"
 ```
 
@@ -210,43 +199,30 @@ candidates. Minimums are layered in `~/.machine_code/config.toml` and
 ### Runs pages and modes
 
 `machine_code runs` is the scriptable version of the TUI's Runs page. The
-default `--group gh-issue` groups by repository, then by the Epic → Feature →
-Task issue hierarchy, with runs that have no issue under Untracked and runs
-whose cached issue is missing under Orphaned issue. Select an Epic, Feature, or
-Task and press `p` to open an Orchestration view scoped to that issue.
-
-Runs attach to Tasks only. Selecting an Epic or Feature for a planner/review
-run resolves to that scope's reserved Planning & Review Task 0. Selecting a
-deliverable Task resolves a Planner run to its parent Feature's Planning &
-Review Task 0; a Task under reserved Feature 0 uses the Epic's Planning &
-Review Task 0. Review runs stay on the deliverable Task. A planner/review run
-derives its objective from the selected Epic, Feature, or Task, not from the
-anchor Task. A build or sudo run with issue-create access auto-creates the
-missing Task. A planner run that
-starts before the Epic or Feature exists links itself to the new scope's
-reserved Task 0 when it creates the first issue. A Task can own multiple runs;
-they appear as children of the Task row, while Epic and Feature rows show
-rollup counts. There are no direct Epic/Feature run rows.
+default `--group packets` groups by repository, then by plan category
+(`plans/index.md` headings), then packet, then runs. Runs with no packet sit
+under Untracked. Select a packet and press Enter to open the packet detail:
+deliverable, files, acceptance, gates, the review gate (`g` cycles
+`gates → agent → human`), and the runs attached to it.
 
 `--group status` keeps repository headings but groups each repository's runs by
-run status with no issue tree. `--group overall` drops repository headings
+run status with no packet tree. `--group overall` drops repository headings
 entirely and groups every run on the machine by status, so blocked, failed, and
 running work is visible at a glance. `machine_code status` is shorthand for the
-overall view. In the TUI, `g` cycles GH issue → Status → Overall status and
-`f` toggles all repos vs the TUI cwd; `!` limits the list to work needing a
-human or in flight. With the cwd scope, `n` opens the composer for the cwd.
+overall view. In the TUI, `g` cycles Packets → Status and `f` toggles all repos
+vs the TUI cwd; `!` limits the list to work needing a human or in flight. With
+the cwd scope, `n` opens the composer for the cwd.
 
-In the GH issue view, the highlighted row keeps its branch bright: the selected
-issue or run, its parent issues, its peers at the same level, and its immediate
-children (features under an epic, tasks under a feature, runs under a task).
-Unrelated rows dim to gray. Repository and section headings stay bright so the
-page structure remains readable.
+In the packets view, the highlighted row keeps its branch bright: the selected
+packet or run, its ancestors, its peers at the same level, and its immediate
+children (runs under a packet). Unrelated rows dim to gray. Repository and
+section headings stay bright so the page structure remains readable.
 
 `machine_code show <run-id>` exposes the same overview, summary, context,
 changes, related lineage, and event stream as the run detail screen.
 `machine_code context <run-id>` prints the assembled context and ledger that
 the model actually received. `machine_code pack` previews the curated run
-context before a run; add `--issue`, `--agent`, `--model`, `--context-include`,
+context before a run; add `--agent`, `--model`, `--context-include`,
 `--context`, or `--json` to tune the view. `machine_code eval
 <run-id>` scores a run's calls, tokens, cost, context, changes, and gates;
 compare with `--baseline <run-id>` and fail CI with `--max-calls`,
@@ -257,7 +233,7 @@ Every terminal run records a deterministic outcome summary in
 `run.json.summary` and a `run_summary` event. The summary is generated from the
 event stream and run state, so it exists even when the model produced no final
 message (turn cap, provider failure, interruption). It lists the stop reason,
-issues created, files changed, reads/searches/commands, retries, errors, and
+packets touched, files changed, reads/searches/commands, retries, errors, and
 the model's final response. `machine_code show`, the TUI Overview, and the
 `run` command print it. A run that hits the turn cap is recorded as `blocked`,
 not `completed`, and says so in the summary.
@@ -280,10 +256,10 @@ the outcome summary, a live activity tail, and the latest thinking text.
 
 Press `f` on any run detail section to fork the run settings into a new run.
 The New Run composer opens with the same agent, model setting, tier, preset,
-verification, issue tracking, ask, approval, ambiguity, min-fit, floors, issue,
-and request. An explicit parent model pin is copied; a parent that used
+verification, packet, ask, approval, ambiguity, min-fit, floors, and request. An
+explicit parent model pin is copied; a parent that used
 auto-selection stays on auto. A fork of a finished build run reuses the parent
-worktree on the same issue branch, so one branch is not checked out twice.
+worktree on the same branch, so one branch is not checked out twice.
 Edit the request, change any setting, and start the run. The fork keeps parent
 lineage. A blocked or failed parent contributes its objective, status, and
 error, but not its closing summary as authoritative context. Only a completed
@@ -303,8 +279,7 @@ set, a command is its output, and a failure is its message. Twenty stale
 actions, or the same tool error in three turns, with no edit, write, or
 mutating command kill the run with a `loop_blocked` event and a summary that
 says so. New evidence resets the stale streak; memory operations do not count
-as progress. `command describe issue` returns a direct hint that
-`issue` is a tool, not a command.
+as progress.
 
 Typed commands and runner gates run through the per-run process supervisor. A
 read-only command that already passed is cached until an edit, write, or
@@ -322,262 +297,124 @@ machine_code processes <run-id>
 machine_code processes logs <run-id> p-0001
 machine_code processes kill <run-id> p-0001   # or: all
 
-# readiness preview, then one sequential execution pass
-machine_code orchestrate status --scope project
-machine_code orchestrate status --all
-machine_code orchestrate start --scope epic --epic 42
-machine_code orchestrate approve --orchestration <id> --task 31
-machine_code orchestrate approve --orchestration <id> --task 31 --result
-# --result merges the Task PR, records human acceptance, and closes the Task.
-# Parent Features/Epics close when their policy is agent; otherwise the next
-# approval/acceptance command is printed.
-machine_code orchestrate tick --orchestration <id> --dry-run
-machine_code orchestrate start --scope epic --epic 42 --checkpoint after-task
-machine_code orchestrate stop --orchestration <id>
+# dependency-ordered waves, then parallel builds
+machine_code batch --dry-run
+machine_code batch --max-parallel 4
+machine_code batch --auto-approve   # merge only gates-gated packets; human-gated never auto-merge
 ```
 
-`start` and `tick` execute ready tasks up to `--max-parallel` at a time through
-Build, gates, commit, Review, and PR; tasks sharing a Feature are serialized.
-`--max-minutes` and `--max-spend-usd` stop new dispatch when the invocation
-budget is exhausted. `--tier`, `--min-fit`, `--min-capability`, `--min-axes`
-(`strict` bumps every axis floor +0.5), and `--model` override model selection
-for the invocation. Build ends with a typed `Outcome:` and Review with a
-typed `Verdict:`; both are recorded as events. Completion failures retry with
-evidence up to the task's `retries_before_replan`, then stop at
-`needs_planning`. `--dry-run` only prints the schedule. `orchestrate stop`
-requests a graceful stop: the worker loop stops after the current task.
+`batch` plans dependency-ordered waves over `packets/` and builds ready
+packets in parallel child processes. Each build runs in an isolated
+`mc/<slug>` worktree, executes the packet's `## Verify` gates, and — when the
+packet's `review` gate is `agent` — an independent Review run. `--dry-run`
+prints the waves without building. `batch --auto-approve` merges packets whose
+gate is `gates` right after their gates pass; packets gated `agent` need a
+passing Review verdict, and `human` packets are never auto-merged — approve
+them by hand.
 
-`orchestrate status` shows the selected scope's lease: `RUNNING` with owner and
-pid, or `idle`. `orchestrate status --all` lists every orchestration with its
-scope, checkpoint, lease, and stop reason. `start` reuses the existing ledger
-for a scope, and a lease plus scope-start lock prevents two processes from
-running the same scope. The lease renews every 30 seconds while execution is
-live.
+```bash
+machine_code approve <slug>   # merge mc/<slug> into main
+```
 
-The TUI Runs tab includes orchestration. Select an Epic, Feature, or Task in
-the Runs list and press `p` to open an Orchestration view scoped to that issue.
-`P` does the same from an issue or run detail screen. `r` refreshes the issue
-cache, `x` starts execution for the selected scope with the shown settings,
-`s` requests a graceful stop of the running orchestration, `t`/`m`/`f` edit
-tier/min-fit/floors, `P` cycles max-parallel, `c` toggles the after-task
-checkpoint, `M` pins the previewed model, `a` approves the selected packet,
-`A` finishes the selected task, and Enter opens the selected issue. The
-header shows the active orchestration id, checkpoint, and approval counts.
-Each ready task shows the model the build agent would select under the
-current settings.
-Agent result review closes the Task only after the Task PR is merged; human
-result review or a human merge gate waits for `task approve` or
-`orchestrate approve --result`. Parent closure cascades only where the parent's
-approval policy is `agent`.
-
-In the TUI, `p` on a Task or task run runs `task approve`: commit any remaining
-changes, open or merge the Task PR, record acceptance, close the Task, and
-remove the worktree. `A` in the Orchestration view does the same for the selected
-task and updates the orchestration ledger.
-
-Press `D` on a Runs-list issue or an issue detail to open the issue delete
-confirmation. Confirming deletes the issue, its terminal run records, open
-PRs, worktrees, and associated local and remote branches. Deleting a Feature
-or Epic requires the cascade confirmation and removes the whole subtree.
-Use `--keep-runs` on the CLI to preserve run evidence.
+`approve` merges the packet branch, marks `plans/index.md` done, and commits
+the planning write on main. From the TUI, open a packet and press `o` to turn
+orchestration on (runs `batch`), `b` to build just that packet, `a` to approve
+it, `g` to cycle its review gate.
 
 Press `D` on a run row or run detail to delete that run record, its worktree
 when unshared, and its branch when unshared. Open PR branches are kept unless
 `--force` is used.
 
 ```bash
-machine_code issue delete <issue> --yes
-machine_code issue delete <feature-or-epic> --cascade --yes
-machine_code issue delete <issue> --yes --keep-runs
 machine_code runs delete <run-id> --yes
+machine_code packet delete <slug>   # remove the contract (also via TUI `d`)
 ```
 
-After every Task PR is merged, `machine_code pr feature <n>` runs a final
-Feature Review over `main...mc/feature/<n>`, runs integration gates, and opens
-the Feature PR to main. The Feature's `mc:approval` decides whether that PR
-merges automatically or waits for a human. After the Feature PR merges, record
-Feature acceptance and close it with `machine_code accept <feature>` and
-`machine_code issue close <feature>`; the same applies to the Epic.
+Orphaned running records are marked failed when read and during prune. Map
+helper spawns are supervised, along with LSP servers, worktree
+creation/commit/remove/prune git helpers, and the synchronous git-status safety
+net. There is no MCP client in this build; any future MCP spawn must use the
+same supervisor.
 
-Orphaned running records are marked failed when read and during prune. Detached
-delegated runs are tracked as `orchestrator` processes. Map helper spawns are
-also supervised, along with LSP servers, worktree creation/commit/remove/prune
-git helpers, and the synchronous git-status safety net. There is no MCP client
-in this build; any future MCP spawn must use the same supervisor.
+Builds execute packet contracts directly: Build in an isolated worktree,
+gates, independent Review when the gate demands it, then commit. Roles declare
+no orchestration modes, and there is no delegation layer beyond `batch`
+spawning parallel `build` children.
 
-The Orchestrator schedules issue-backed work directly: it freezes a packet,
-runs Build in an isolated worktree, executes gates, runs an independent Review,
-then commits and publishes. Roles no longer declare orchestration modes, and
-there is no Architect delegation layer. `queue` remains a compatibility path
-for committed packets; new work should use `orchestrate` for a graph or
-`task start` for one Task.
+### Packet lifecycle
 
-### Manual Task lifecycle
-
-The Orchestrator is the right path for a ready graph. The `task` commands are
-the same lifecycle for one Task at a time, with a human decision between Build
-and closure. They work on both direct Build runs and Orchestrator runs.
+`batch` is the right path for a ready set of packets. The packet commands are
+the same lifecycle one packet at a time, with a human decision between Build
+and merge.
 
 ```bash
-machine_code task status 31
-machine_code task start 31
-machine_code task review 31
-machine_code task approve 31
-machine_code task cleanup 31
+machine_code packet list
+machine_code packet create <slug> "deliverable" --verify typescript:test
+machine_code build <slug> [--review]
+machine_code approve <slug>   # merge mc/<slug> into main
+machine_code packet delete <slug>
 ```
 
-- `task status` shows the plan, latest Build/Review run, worktree, branch,
-  commit, PR, acceptance evidence, review checks, the current stage, and the
-  exact next command. It never mutates state.
-- `task start` requires a ready `mc:plan`. It creates the isolated Task
-  worktree and `mc/task/<n>` branch, runs Build, gates, commit, and an
-  independent Review of that commit, then opens the Task PR. It honors
-  `result_review`: `agent` approves the result, but closure still waits for the
-  issue merge policy; `human` stops for review. `--review` overrides the plan
-  and `--no-review` skips the Review agent. `--retry` reuses the blocked/failed
-  worktree for another Build.
-- `task review` shows the same state, then runs the Task's `## Verification`
-  commands in the worktree. Use `--check <command>` or
-  `--checks a,b` to run exact commands. Named commands (`typescript:test`) go
-  through the command registry; other strings run in a shell inside the
-  worktree. Checks are recorded on the run. A failed check blocks
-  `task approve` unless `--force` is used.
-- `task approve` is the human finish step. If the worktree has uncommitted
-  changes it commits them, then opens the Task PR if needed, merges it, records
-  acceptance, closes the Task, and removes the worktree. Use `--no-commit`,
-  `--no-merge`, `--keep-worktree`, or `--keep-branch` to narrow it.
-- `task cleanup` removes a worktree without closing the Task. It refuses an
-  open Task unless `--force` is used.
+- `packet list` shows slugs, status, and deliverables.
+- `packet create` scaffolds `packets/<slug>.md` and links it from
+  `plans/index.md`. One packet = one file-level change; split anything bigger
+  into several packets joined by `deps`.
+- `build <slug>` marks the packet in-progress, creates the isolated
+  `mc/<slug>` worktree, runs Build, executes the `## Verify` gates, commits,
+  and runs an independent Review when the packet's `review` gate is `agent`.
+  `--no-review` skips the Review agent.
+- `approve <slug>` merges the branch, marks the plan line done, and commits
+  the planning write on main.
 
-A Task body can keep acceptance in prose. Runtime gates come from a
-`## Verification` section:
-
-````markdown
-## Verification
-
-```
-npm run typecheck
-npm test
-```
-````
-
-The runner maps common npm commands to the typed registry
-(`typescript:typecheck`, `typescript:test`, and so on). Acceptance lines that
-are named commands remain supported.
-
-### Issue context and reusable tools
-
-An issue can declare a compact context block; the harness merges Task →
-Feature → Epic, nearest first:
+A packet file is TOML front-matter plus markdown sections:
 
 ```markdown
-<!-- mc:context
-{"files":["src/parser.ts"],"knowledge":["knowledge/parser.md"],
- "references":["glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions"],
- "skills":["reference"],"tools":["bench"],"scripts":["release-check"]}
--->
+---
+status = "todo"   # todo | in-progress | blocked | done
+deps = []         # slugs this packet waits on
+review = "gates"  # gates | agent | human
+---
+
+# <slug>
+
+## Deliverable
+
+...
+
+## Files
+
+- src/...
+
+## Acceptance
+
+- ...
+
+## Verify
+
+typescript:test
 ```
 
-`references` cites exact files and anchors in the central
-`~/.machine_code/references/` store. The store keeps archival bundles and a
-generated index layer; use `reference:find`, `reference:read`,
-`reference:write`, and `reference:reindex` rather than reading bundle content
-or `raw/` directly. `reference:reindex` regenerates the catalog, topic map,
-and per-bundle symbol index from `manifest.yaml` and content front-matter.
+Verification commands must be named commands (or the small npm alias table in
+`packet.ts`), because acceptance gates dispatch through the command registry —
+never shell strings. The runner maps common npm commands to the typed registry
+(`typescript:typecheck`, `typescript:test`, and so on).
 
-Tools live in `.machine_code/tools/<name>.toml`, scripts under
-`.machine_code/scripts/`. `machine_code tools new <name>` scaffolds both.
-Planner can inspect them and provision tool manifests with the `artifact` tool
-(`list`, `show`, `usage`, `run`, `create`, `update`). Build and sudo can also
-create and execute scripts: the `implement` and `unrestricted` presets set
-`artifact_scripts = true`. Other roles need the explicit
-`--allow-artifact-scripts` run flag. Planner writes task policy with the issue
-`plan` action, which inserts or replaces the `mc:plan` marker. The new-run
-composer previews exactly which files, tools, scripts, and issues the selected
-run will inherit before it starts. The **Issues** subtab nests each issue's
-`mc:context` files under that issue. The **Files** subtab lists repo files;
-press `space` on a file to include it explicitly. An issue with no marker
-shows `no mc:context files`. The **Tools** subtab lists every tool
-available to the selected agent, including `issue` with its access level, plus
+### Composer context and reusable tools
+
+The new-run composer previews exactly which packet, files, tools, scripts,
+plans, and knowledge the selected run will inherit before it starts. The
+**Packets** subtab lists `packets/` contracts; `i` links one to the run
+(passing `--packet <slug>`) and `space` on a row does the same. The **Files**
+subtab lists repo files; press `space` on a file to include it explicitly.
+The **Tools** subtab lists every tool available to the selected agent, plus
 custom repository/machine tools. Core tool definitions are sent with every
 request, so their schema tokens are included in the estimate and cannot be
-excluded as context. The **Prompt** subtab lists every line of the resolved
-agent system prompt being previewed; like core tools it is fixed and cannot
-be switched off. Every subtab supports `/` filtering and `j/k` scrolling.
+excluded as context. The **Agent Prompt** subtab lists every line of the
+resolved agent system prompt being previewed; like core tools it is fixed and
+cannot be switched off. Every subtab supports `/` filtering and `j/k`
+scrolling.
 
-Skill descriptions are always visible and appear as one row per skill in the
-**Skills** subtab even when no issue references a skill body. **Knowledge** and
-**Scripts** also list available files and manifests, marked `·`. Their rows
-show the content-size estimate with an `avail` suffix, but available entries
-are not counted in the section or footer token totals until they are part of
-the assembled context. Press `space` on an available file or knowledge file to
-include it; the composer passes it through `--context-include`. Files also
-enter the prompt when an issue's `mc:context` block or the **Files** subtab
-selects them; the configured knowledge index is inherited by default.
-
-Each skill has three modes, cycled with `space` on its **Skills** row:
-`include` inlines the full body (marked `· body`, counted in tokens),
-`on-demand` sends only the description (marked `· on-demand`) and the agent
-pulls the body with the `skill` tool (`list`, `show`) when it needs it,
-`exclude` (marked `✕`) hides the skill completely — no description, no body,
-no pull. Excluding writes the `skill:<name>` exclusion, so a run started from
-the composer and the agent's `skill show` calls both honor it. Turning off the
-whole Skills section still works as before.
-
-Mode precedence is composer choice > role `[skills]` preset > issue-declared
-(include) > agent defaults (include) > on-demand. Agent defaults come from the
-role (`clean-code` on coding/planning runs, plus `verified-testing` on
-verified+ runs); role presets live in `data/agents/<role>.toml` under
-`[skills]` (`clean-code = "include"`) and a machine role file replaces the
-shipped one wholesale. The composer passes its choices through `--skill-modes`.
-
-Skills live in `.machine_code/skills/<name>/SKILL.md`. Descriptions are
-always visible; bodies load up front only in `include` mode, otherwise the
-agent reads them on demand with the `skill` tool (`list`, `show`), which the
-build, planner, general, and sudo roles hold. The curation policy and the kept
-set are in
-[knowledge/skills-curation.md](knowledge/skills-curation.md).
-
-### Issue access and model availability
-
-Each role declares one `issue_access` level: `none`, `read`, `plan`, or
-`create`. The harness derives `issue:read`, `issue:plan`, and `issue:create`
-from it and removes the `issue` tool when access is `none`. Planner has
-`create`; Build, Review, and Sudo have `read`; General has `none`.
-Sudo and other roles may opt in per run with `--allow-issue-create`. The
-new-run agent picker and run Overview show an `issues:*` badge, and
-`machine_code policy` prints the effective level. Create access is required for
-new Epic, Feature, or Task issues.
-
-```toml
-# data/agents/<role>.toml
-issue_access = "read"   # none | read | plan | create
-```
-
-Creating an Epic also creates reserved **Feature 0: Planning & Review** and
-**Task 0: Planning & Review** beneath it. Creating a Feature also creates a
-reserved **Task 0: Planning & Review**. These are coordination anchors, not
-deliverables. The Planner is told to ignore them; the issue tool marks them
-`[reserved]` in run state and rejects a Task created under reserved Feature 0.
-
-The Planner creates a small graph with `issue_graph`: pass `epic`, `features`,
-and `tasks` at the top level. Use `dry_run: true` to validate without creating
-anything. For more than three features or eight tasks, create the Epic and
-Features first, then Tasks per feature with `issue create`. The older nested
-`graph` action on `issue` is not part of the tool schema. Use `state` for the
-`tree`/`list` filter (`open|closed|all`) and `plan_status` for the `plan` action
-(`draft|ready`).
-
-Every issue body must carry its context when it is created or edited. All
-issues need `## Context`: why the issue exists, the parent scope, relevant
-files/symbols, and constraints. Epic and Feature bodies also need `## Goal` and
-`## Scope`; Features need `## Success measures`; Tasks need `## Deliverable` and
-acceptance criteria. The `issue` and `issue_graph` tools reject a create, graph,
-or body edit that misses these sections. This keeps context at creation time instead of requiring
-a later review. The Planner chooses context files after reading and passes them
-with `context_files`; the tool records that explicit list in `mc:context`.
-Nothing is inferred from prose. That list is what the context cascade shows and
-what Build receives. Legacy issues can be repaired with `issue action=edit`.
+### Model availability
 
 `machine_code availability` shows cooling models and provider health.
 `machine_code model probe <key>` checks one model. Metadata probes use free
@@ -664,9 +501,8 @@ map, semantic index), the last two complete tool steps, not the full tool
 history, and no hidden task pack. The prompt is exactly the context curated in
 the composer plus the always-on indexes. There is no automatic preload,
 dependency expansion, inferred test list, or knowledge-note scoring: the model
-reads, searches, or expands a symbol when it needs more. The Planner chooses
-specific issue context files after reading and passes them with
-`context_files`. Context is assembled in priority order. If it exceeds the
+reads, searches, or expands a symbol when it needs more. Context is assembled
+in priority order. If it exceeds the
 selected model's input budget, the run records a warning and names the omitted
 or truncated sources; the pre-run composer warns at 80% and over budget. A
 past-end read is an
@@ -684,27 +520,22 @@ of silently changing the context.
 `machine_code prompts [role]` prints the rendered agent prompt with its size.
 Prompts share `data/prompts/base.md`; role files carry only short deltas.
 Every rendered prompt ends with generated `Config:` and `Tools:` lines. The
-config line names the preset, issue tracking, issue access, verification, ask
+config line names the preset, verification, ask
 availability, and approval mode. The tools line is the exact post-filter list,
 so a role never sees a tool it cannot call. When `ask` is unavailable, the
 ambiguity policy says to stop and report the question instead of asking.
 
-The Planner holds only `context`, `read`, `search`, `ask`, and `issue`. It
-inspects the issue list/tree, reuses a suitable Epic or Feature, creates the
-missing level with body context, adds acceptance criteria and dependencies, and
-applies `mc:plan` to Tasks. It does not hold `command`, `artifact`, or `pr`, so the
-`command describe issue` detour is impossible. Build and Review say `ask off`
-and report blockers; their ambiguity policy matches.
+The Planner holds only `context`, `read`, `search`, `ask`, `skill`, and
+`write`. It reads the plan map and the source each line names, then writes one
+packet file per buildable unit and links it from `plans/index.md`. It never
+edits source; the build agent implements packets. Build and Review say
+`ask off` and report blockers; their ambiguity policy matches.
 
-A Task is one deliverable: one file-level change and at most **three**
-acceptance criteria, with a body under 4,000 chars. Its body carries
-`## Context`, `## Deliverable`, and acceptance criteria. The harness enforces
-size when a Task is created, edited, or planned as ready, including
-`issue_graph` creation. It enforces body context on create, graph, and body edit. An
-oversized Task fails before it exists. A build run refuses an existing
-oversized Task and tells the operator to run the Planner. The Planner splits
-an oversized Task by editing it to one slice and creating sibling Tasks under
-the same Feature.
+A packet is one deliverable: one file-level change and at most **three**
+acceptance criteria in a `packets/<slug>.md` contract. One packet = one
+file-level change; split anything bigger into several packets joined by
+`deps`. Set `review = "agent"` for consequential packets and `review = "human"`
+when it must not auto-merge; otherwise the `gates` default applies.
 
 LLM annotations are optional. An `edit`/`write` appends its path to
 `semantic.dirty` and a bounded entry to `changes.jsonl` with the turn, changing

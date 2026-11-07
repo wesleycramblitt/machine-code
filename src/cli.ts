@@ -31,33 +31,20 @@ import { packetPath, parseVerificationCommands, readPacket } from "./packet.js";
 import { runProc } from "./proc.js";
 import { agentDef, type AgentName } from "./agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "./agents/config.js";
-import { issueAccessFromCapabilities } from "./policy/capabilities.js";
 import { runLoop, type RunLoopResult } from "./loop.js";
 import { policyFor, type OrchestrateResult } from "./orchestrate.js";
 import { resolveGates, runGates } from "./verify.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { allCommands } from "./commands/profiles.js";
-import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, featureBranchFor, reusableWorktreeOwner, WorktreeError } from "./worktree.js";
-import { createIssueProvider } from "./issues/index.js";
-import { createPrProviderFor } from "./pr/factory.js";
-import { parseIssueRef, type Issue, type IssueRef } from "./issues/provider.js";
-import { isGenericTaskRequest, issueRequestVerb, issueRunRequest, resolveRunTarget } from "./issues/work.js";
-import { featureSizeErrors } from "./plan/validate.js";
-import { checkCompletion } from "./issues/completion.js";
-import { closeCompletedFeature } from "./orchestrator/closure.js";
+import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "./worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
 import { isFreeRow } from "./select.js";
 import { latestProcessRecords } from "./processes/registry.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
-import { planSchedule, type OrchestrationScope } from "./orchestrator/scheduler.js";
-import { executeFeature, findRetryWorktree, selectRetrySeed } from "./orchestrator/execute.js";
-import { featureStatus, approveFeature, cleanupFeature, runFeatureChecks, suggestedReviewChecks, featureRuns } from "./tasks/lifecycle.js";
-import { deleteIssue } from "./tasks/delete.js";
 import { approvePacket, commitPlanningFiles, deletePacket, planBatchWaves } from "./tasks/packet.js";
 import { deleteRun } from "./state/run-delete.js";
-import { isReadyPlan, parsePlanMarker, type PlanMarker } from "./plan/schema.js";
 import {
   addIndexEntry,
   isBuildable,
@@ -76,12 +63,8 @@ import {
   type PacketReview,
   type PacketStatus,
 } from "./plan/packets.js";
-import { isRetryableFailure } from "./orchestrator/outcome.js";
-import { budgetStop } from "./orchestrator/budget.js";
-import { acquireLease, clearOrchestrationStop, createOrchestration, listOrchestrations, orchestrationStopRequested, readLease, readOrchestration, releaseLease, renewLease, requestOrchestrationStop, resumeOrchestration, updateOrchestration, type OrchestrationState } from "./orchestrator/state.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
-import { filterRuns, issueGlyphKind, sortRuns, type RunFilter } from "./tui/status.js";
-import { readIssueCache } from "./issues/cache.js";
+import { filterRuns, sortRuns, type RunFilter } from "./tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "./spend.js";
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "./tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "./artifacts/registry.js";
@@ -104,7 +87,7 @@ interface Runtime {
   configuredProviders: Set<string>;
 }
 
-/** Shared setup for run/queue/resume: config, providers, catalogue. */
+/** Shared setup for run/resume: config, providers, catalogue. */
 async function loadRuntime(l: ReturnType<typeof layout>): Promise<Runtime> {
   let machine;
   let policy;
@@ -168,21 +151,15 @@ const HELP = `machine_code ${VERSION}
 
 Usage:
   machine_code run --agent research [--provider <id>] [--model <key>] "<question>"
-  machine_code run --agent planner "<plan a project>" [--issue <n>]
-  machine_code run --agent planner|build|review|research "<feature>" [--issue <n> [--auto-issue]]
-  machine_code run --agent build --issue <n>
-                                    Run the feature attached to issue <n> without a prompt.
-                                    The issue title and Deliverable become the objective.
   machine_code run --agent <role> --packet <slug> ["<prompt>"]
                                     Attach the run to a packet; its deliverable feeds the objective
                                     when the prompt is empty. Use "build <slug>" for the structured
                                     build on that packet.
                                     Build runs use an isolated worktree (default on):
-                                    [--issue <n>] [--packet <slug>] [--auto-issue] [--base <ref>]
+                                    [--packet <slug>] [--base <ref>]
                                     Agent config overrides:
                                     [--verify direct|verified]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
-                                    [--allow-issue-create] explicit issue:create override
                                     [--allow-artifact-scripts] permit executable artifact scripts
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
@@ -210,8 +187,8 @@ Usage:
                                     reconcile automatically; refresh re-scores everything)
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
-  machine_code runs [--group gh-issue|status|overall] [--filter ...] [--text Q]
-                                    Run hierarchy grouped by repo/issue or status
+  machine_code runs [--group packets|status|overall] [--filter ...] [--text Q]
+                                    Run hierarchy grouped by packet or status
   machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch]
                                     [--force] [--no-cancel]
                                     Delete a run and its resources; active runs
@@ -226,7 +203,7 @@ Usage:
   machine_code eval <run-id>        Score calls, tokens, cost, context, gates [--baseline <id>]
                                     [--max-calls N] [--max-cost N] [--max-tokens N]
                                     [--max-context N] [--json]
-  machine_code pack                 Preview the curated run context [--issue <ref>]
+  machine_code pack                 Preview the curated run context
                                     [--agent <role>] [--model <key>]
                                     [--context-include <json>] [--context] [--json]
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
@@ -251,25 +228,6 @@ Usage:
   machine_code prune [--days N]     Remove old run dirs and worktrees (default 7 days)
   machine_code worktree list        List run worktrees and branches
   machine_code worktree remove <run-id> [--delete-branch] [--force]
-  machine_code issue list|view|tree|create|edit|close|reopen|link|ensure
-                                    GitHub issue operations (hierarchy enforced)
-  machine_code issue delete <n>     Delete issue + PRs, branches, worktrees, runs
-                                    [--cascade] [--keep-runs] [--yes]
-  machine_code approve <issue|pr>   Approve a pending human close/merge request
-  machine_code accept <issue>       Record a human acceptance verdict (needed to close)
-  machine_code feature status <issue>  Show the feature lifecycle and the next action
-  machine_code feature start <issue>   Build, review, commit, and merge the Feature
-                                     [--review agent|human] [--no-review] [--base <ref>] [--retry] [--dry-run]
-  machine_code feature checkout <issue>  Check out the feature branch for human review
-                                     (reuses the run worktree or materializes human-<n>)
-  machine_code feature review <issue>  Review the worktree and run verification checks
-                                     [--check <cmd>|--checks a,b] [--no-checks]
-  machine_code feature approve <issue> Merge, accept, close, and clean up the Feature
-                                     [--run <id>] [--no-commit] [--no-merge]
-                                     [--keep-worktree] [--keep-branch] [--force]
-  machine_code feature cleanup <issue> Remove the Feature worktree after closure
-                                     [--force] [--keep-branch]
-  machine_code pr list|status <n>   Inspect pull requests
   machine_code provider disable|enable <name>
   machine_code provider cooldown <name> [minutes] | cooldown clear <name>
   machine_code model show <key|name>   Inspect axes, offers, providers for a model
@@ -277,22 +235,7 @@ Usage:
   machine_code model cooldown clear <id>
   machine_code availability [--probe] [--free-only] [--json]
                                     Show or probe cooling model availability
-  machine_code orchestrate status [--all] [--json]
-  machine_code orchestrate tick|start [--dry-run]
-                                    [--scope project|epic|feature] [--epic <n>|--feature <n>]
-                                    [--max-parallel 1|2|4|8] [--max-minutes N] [--max-spend-usd N]
-                                    [--checkpoint after-task] [--tier free|paid]
-                                    [--min-fit N] [--min-capability N] [--min-axes axes|strict]
-                                    [--model <key>] [--resume]
-                                    Compute or execute ready issue-graph features.
-                                    A stopped orchestration refuses to tick until
-                                    resumed with --resume.
-  machine_code orchestrate stop --orchestration <id>
-                                    Request a graceful stop after the current feature
-  machine_code orchestrate approve --orchestration <id> --feature <n> [--result]
-                                    Approve a packet or result checkpoint
   machine_code tui                 Launch the TUI (default when interactive)
-  machine_code queue               Process committed packets in .machine_code/tasks/
   machine_code plan                 Render the plan tree: index annotated with
                                      packet status, branch, deps, blockers (--json)
   machine_code packet list          List packet files (slug, status, deliverable) [--json]
@@ -323,7 +266,6 @@ const BOOLEAN_FLAGS = new Set([
   "all",
   "attention",
   "allow-artifact-scripts",
-  "allow-issue-create",
   "auto-issue",
   "axes",
   "changes",
@@ -438,9 +380,9 @@ function cmdInit(): number {
 
   process.stdout.write("\nOptional integrations:\n");
   if (findOnPath(["gh"])) {
-    process.stdout.write(`  ok       gh (GitHub issues/PRs — machine_code issue ...)\n`);
+    process.stdout.write(`  ok       gh (GitHub CLI — available)\n`);
   } else {
-    process.stdout.write(`  MISSING  gh (GitHub issues/PRs) — install: https://cli.github.com (issue tracking disabled without it)\n`);
+    process.stdout.write(`  MISSING  gh (GitHub CLI) — install: https://cli.github.com\n`);
   }
 
   mkdirSync(l.localDir, { recursive: true });
@@ -467,7 +409,7 @@ function cmdInit(): number {
         `# Excluded from every search, in addition to the built-in set:\n` +
         `#   ${SEARCH_EXCLUDES.join(", ")}\n` +
         `# search_exclude = ["fixtures/large"]\n` +
-        `\n[agents.general]\n` +
+        `\n[agents.research]\n` +
         `# min_context = 32000\n` +
         `# expected_output_tokens = 2000\n` +
         `# max_output_tokens = 8000\n` +
@@ -628,12 +570,6 @@ function cmdPolicy(argv: string[]): number {
 
   const machine = loadMachineConfig(l);
   const policy = loadPolicy(l);
-  const issueAccessFor = (name: string): string =>
-    resolveAgentConfig({
-      role: name,
-      agentPolicy: policy.agents[name],
-      machineOverrides: machine.agents[name],
-    }).issueAccess ?? agentDef(l, name).issueAccess;
 
   if (flags.has("json")) {
     process.stdout.write(
@@ -647,7 +583,6 @@ function cmdPolicy(argv: string[]): number {
             const def = agentDef(l, name);
             return [name, { modes: def.modes, default: def.defaultMode ?? null, config: def.modeConfig }];
           })),
-          issueAccess: Object.fromEntries(AGENT_NAMES.map((name) => [name, issueAccessFor(name)])),
           files: { machine: l.machineConfig, repo: l.policyFile },
         },
         null,
@@ -690,7 +625,6 @@ function cmdPolicy(argv: string[]): number {
     process.stdout.write(`  min_fit ${ap.minFit}   min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
     process.stdout.write(`  free     min_fit ${ap.freeMinFit ?? ap.minFit}   min_capability ${ap.freeMinCapability ?? ap.minCapability}   axes ${freeFloors || "(inherits paid)"}\n`);
     const def = agentDef(l, name);
-    process.stdout.write(`  issue_access ${issueAccessFor(name)}\n`);
     process.stdout.write(`  modes ${def.modes.length ? `${def.modes.join(", ")}${def.defaultMode ? ` (default ${def.defaultMode})` : ""}` : "single-agent"}\n`);
     process.stdout.write(`  axes ${floors || "(none)"}\n`);
     process.stdout.write(`  weights ${weights}${ap.axisWeights ? "" : " (role defaults)"}\n`);
@@ -1015,22 +949,17 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
   let requireProvider = flags.get("provider");
   let requireModel = flags.get("model");
-  const issueFlag = flags.get("issue");
   const packetFlag = flags.get("packet");
   const baseFlag = flags.get("base");
   let request = positional.join(" ").trim();
-
-  // A feature/packet-attached run can derive its objective from the issue or
-  // packet. Only an untracked run needs the human to type one.
-  if (request.length === 0 && issueFlag === undefined && packetFlag === undefined) {
-    fail(`run needs a question, --issue N, or --packet <slug>`);
+  if (flags.has("issue") || flags.has("auto-issue")) {
+    fail("issue tracking was removed; attach the run with --packet <slug> instead");
   }
 
-  let issueNumber: number | undefined;
-  if (issueFlag !== undefined) {
-    const n = Number(issueFlag);
-    if (!Number.isInteger(n) || n <= 0) fail(`--issue must be a positive issue number`);
-    issueNumber = n;
+  // A packet-attached run can derive its objective from the packet.
+  // Only an untracked run needs the human to type one.
+  if (request.length === 0 && packetFlag === undefined) {
+    fail(`run needs a question or --packet <slug>`);
   }
 
   // Run-level agent configuration overrides (Phase 3).
@@ -1059,7 +988,6 @@ async function cmdRun(argv: string[]): Promise<number> {
     if (!valid.includes(ambiguityFlag)) fail(`--ambiguity must be one of ${valid.join(", ")}`);
     agentOverrides.ambiguity = ambiguityFlag as AgentConfig["ambiguity"];
   }
-  if (flags.has("allow-issue-create")) agentOverrides.issueAccess = "create";
   if (flags.has("allow-artifact-scripts")) agentOverrides.artifactScripts = true;
   // A detached delegated child runs a single agent directly (task tool spawn).
   const directExec = flags.has("direct-exec");
@@ -1178,81 +1106,12 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   if (modeFlag !== undefined) {
-    fail("--mode was removed; use machine_code orchestrate to schedule Build and Review");
+    fail("--mode was removed; runs execute directly per their agent role");
   }
   const agentNameParsed = (agentName as AgentName | undefined) ?? "research";
 
-  const runIssueAccess =
-    resolveAgentConfig({
-      role: agentNameParsed,
-      agentPolicy: policy.agents[agentNameParsed],
-      machineOverrides: machine.agents[agentNameParsed],
-      runOverrides: agentOverrides,
-    }).issueAccess ?? agentDef(l, agentNameParsed).issueAccess;
-  if (flags.has("auto-issue") && runIssueAccess !== "create") {
-    fail(
-      `--auto-issue requires issue_access=create; ${agentNameParsed} has issue_access=${runIssueAccess}. ` +
-        "Select an existing Feature or use an agent with issue creation access.",
-    );
-  }
-
-  // Issue association: runs attach to Features. Resolve before the run
-  // record so a feature-attached run can derive its request from the issue
-  // instead of a typed prompt.
-  let issueRef: IssueRef | undefined;
-  let linkedIssue: Issue | undefined;
-  /** The human-selected issue, before resolving to a planning anchor. */
-  let requestIssue: Issue | undefined;
-  let createdIssues: Issue[] = [];
-  const issueBundle = await createIssueProvider(l, machine);
-  if (issueFlag !== undefined) {
-    if (issueBundle.provider.kind === "none") {
-      if (machine.issues.policy === "required") {
-        fail(`issue tracking is required but unavailable: ${issueBundle.reason ?? "unknown reason"}`);
-      }
-      process.stderr.write(`warning: issue tracking unavailable (${issueBundle.reason ?? "unknown"}); --issue ignored for association\n`);
-    } else {
-      const rawRef = parseIssueRef(issueFlag, issueBundle.repo, "github");
-      if (request.length === 0 && flags.has("auto-issue")) {
-        fail("--auto-issue needs a feature description");
-      }
-      let resolved;
-      try {
-        resolved = await resolveRunTarget({
-          provider: issueBundle.provider,
-          ref: rawRef,
-          request: request || "feature",
-          agent: agentNameParsed,
-          autoCreate: flags.has("auto-issue"),
-        });
-      } catch (error) {
-        if (error instanceof Error && "code" in error) fail((error as { message: string }).message);
-        throw error;
-      }
-      linkedIssue = resolved.issue;
-      requestIssue = resolved.scope ?? linkedIssue;
-      issueRef = linkedIssue.ref;
-      issueNumber = linkedIssue.ref.number;
-      createdIssues = resolved.created;
-    }
-  }
-  if (requestIssue && (request.length === 0 || isGenericTaskRequest(request))) {
-    request = issueRunRequest(requestIssue, issueRequestVerb(agentNameParsed));
-  }
   if (request.length === 0) {
     fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
-  }
-  if (
-    linkedIssue?.kind === "feature" &&
-    agentNameParsed === "build"
-  ) {
-    const errors = featureSizeErrors({ acceptance: linkedIssue.acceptance, body: linkedIssue.body ?? "" });
-    if (errors.length > 0) {
-      fail(
-        `Feature #${linkedIssue.ref.number} is not feature-sized: ${errors.join("; ")}. ` +
-          `Run the planner to split it into smaller Features, then build one Feature.`,
-      );
-    }
   }
 
   // Probe cooling models with free metadata before a run record exists. A
@@ -1391,24 +1250,9 @@ async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Record the resolved issue on the run after the recorder exists.
-  if (issueRef) {
-    recorder.patchSummary({ issue: issueRef });
-    recorder.event("issue_linked", { issue: issueRef.number, kind: linkedIssue?.kind ?? "feature", source: "cli" });
-    for (const created of createdIssues) {
-      recorder.event("issue_created", {
-        issue: created.ref.number,
-        kind: created.kind,
-        parent: created.parent?.number,
-        auto: true,
-      });
-    }
-  }
-
-  // Build and orchestrated runs work in an isolated worktree on an issue
-  // branch. Sudo edits the main tree by default; --worktree true|false opts
-  // in (default true). General and review never create one: General is
-  // read-only, and Review reads the worktree it inspects.
+  // Build runs work in an isolated worktree. Research and review never
+  // create one: research is read-only, and review reads the worktree it
+  // inspects.
   const worktreeFlag = flags.get("worktree");
   if (worktreeFlag !== undefined && worktreeFlag !== "true" && worktreeFlag !== "false") {
     fail("--worktree must be true|false");
@@ -1422,29 +1266,17 @@ async function cmdRun(argv: string[]): Promise<number> {
         ? worktreeOn
         : forceWorktree;
   let toolRoot = l.repoRoot;
-  // Standalone reviews are read-only, but an issue-attached review should
-  // still inspect the feature worktree instead of the main tree (whose diff
-  // is empty and loops the reviewer on cached no-output calls).
-  const reviewWithIssue = !mutating && agentNameParsed === "review" && issueRef !== undefined;
-  if (mutating || reviewWithIssue) {
-    // A slugged branch (`mc/feature/<n>-<slug>`) and its bare form are the
-    // same branch: match a prior run by number prefix so title edits reuse it.
-    const branchPrefix = issueRef ? `mc/feature/${issueRef.number}` : undefined;
-    const expectedBranch = branchPrefix
-      ? [...parentChainRuns, ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot)]
-          .map((run) => run.branch)
-          .find((branch) => branch === branchPrefix || branch?.startsWith(`${branchPrefix}-`))
-      : undefined;
+  if (mutating) {
     const reuse = reusableWorktreeOwner(
       [
         ...parentChainRuns,
         ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
       ],
-      expectedBranch,
+      undefined,
     );
     if (reuse) {
       // One branch cannot be checked out twice. A fork of a terminal or paused
-      // run continues in the worktree that already owns the issue branch.
+      // run continues in the worktree that already owns the branch.
       toolRoot = reuse.path;
       recorder.patchSummary({
         worktree: reuse.path,
@@ -1459,17 +1291,7 @@ async function cmdRun(argv: string[]): Promise<number> {
         branch: reuse.run.branch,
       });
       process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
-      if (reviewWithIssue && reuse.run.baseRef) {
-        // A standalone review has no orchestrated BASE/packet context. Point
-        // it at the feature base so core:diff has a non-empty target.
-        request = `${request}\n\nBASE: ${reuse.run.baseRef} (branch ${reuse.run.branch} → ${reuse.run.baseBranch ?? "unknown base"})`;
-        recorder.event("review_base", {
-          branch: reuse.run.branch,
-          baseBranch: reuse.run.baseBranch,
-          baseRef: reuse.run.baseRef,
-        });
-      }
-    } else if (mutating) {
+    } else {
       try {
         const worktreeProcesses = new ProcessSupervisor({
           runId: recorder.id,
@@ -1479,9 +1301,7 @@ async function cmdRun(argv: string[]): Promise<number> {
         const spec = await createWorktree({
           layout: l,
           runId: recorder.id,
-          kind: issueRef ? "feature" : "run",
-          issueNumber: issueRef?.number,
-          issueTitle: linkedIssue?.title,
+          kind: "run",
           base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
           processes: worktreeProcesses,
         });
@@ -1539,8 +1359,6 @@ async function cmdRun(argv: string[]): Promise<number> {
     layout: l,
     machine,
     agent: agentNameParsed,
-    provider: issueBundle.provider.kind === "none" ? undefined : issueBundle.provider,
-    issue: issueRef,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
     ...(contextBudgetChars !== undefined ? { budgetChars: contextBudgetChars } : {}),
     exclude: contextExclude,
@@ -1649,7 +1467,6 @@ async function cmdRun(argv: string[]): Promise<number> {
       request,
       root: l.repoRoot,
       toolRoot,
-      issueNumber,
       agentOverrides,
       home: l.home,
       recorder,
@@ -1866,111 +1683,6 @@ async function cmdModel(argv: string[]): Promise<number> {
   return 0;
 }
 
-/* -------------------------------------------------------------------- queue */
-
-async function cmdQueue(argv: string[]): Promise<number> {
-  const { flags } = parseFlags(argv);
-  const l = layout();
-  const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
-  const requireModel = flags.get("model");
-
-  const { listQueuedPackets, runQueue } = await import("./queue.js");
-  const packets = listQueuedPackets(l);
-  if (packets.length === 0) {
-    process.stdout.write("no queued packets in .machine_code/tasks/\n");
-    return 0;
-  }
-  process.stdout.write(`queue: ${packets.length} packet(s)\n`);
-  const progress = await runQueue(l, async (packet) => {
-    const packetAgent = packet.agent ?? (packet.mode ? "build" : "research");
-    const recorder = new RunRecorder(l, { agent: packetAgent, mode: packet.mode ?? "", request: packet.goal, repoRoot: l.repoRoot, packetId: packet.id });
-    registerProject(l.home, l.repoRoot);
-    const abort = new AbortController();
-    // Queued packets always carry their packet id, so the worktree gets the
-    // snapshot materialized for Build to read. Sudo packets run on the main
-    // tree unless they carry an orchestration mode; General/Review never
-    // create one.
-    const mutating =
-      packet.agent === "research" || packet.agent === "review"
-        ? false
-        : packet.mode !== undefined || packet.agent === "build";
-    let toolRoot = l.repoRoot;
-    if (mutating) {
-      try {
-        const worktreeProcesses = new ProcessSupervisor({
-          runId: recorder.id,
-          runDir: recorder.dir,
-          onEvent: (type, data) => recorder.event(type, data),
-        });
-        const spec = await createWorktree({
-          layout: l,
-          runId: recorder.id,
-          kind: "run",
-          packetId: packet.id,
-          processes: worktreeProcesses,
-        });
-        recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
-        for (const branch of spec.createdBranches) {
-          recorder.event("branch_created", { branch, base: spec.baseRef });
-        }
-        recorder.event("worktree_created", {
-          path: spec.path,
-          branch: spec.branch,
-          baseRef: spec.baseRef,
-          baseBranch: spec.baseBranch,
-          linkedDirs: spec.linkedDirs,
-          skippedLinks: spec.skippedLinks,
-          materialized: spec.materialized,
-        });
-        toolRoot = spec.path;
-      } catch (error) {
-        if (error instanceof WorktreeError) {
-          recorder.finalize("blocked", `${error.code}: ${error.message}`);
-          return { status: "blocked" as const, runId: recorder.id };
-        }
-        throw error;
-      }
-    }
-    // Queue context: the packet itself is the primary context source.
-    const { assembleContext } = await import("./context/assemble.js");
-    const { writeJsonAtomic } = await import("./state/run-schema.js");
-    const queueContext = await assembleContext({ layout: l, machine, agent: packet.agent, packetId: packet.id });
-    if (queueContext.text) {
-      writeJsonAtomic(join(recorder.dir, "context.json"), { chars: queueContext.chars, sources: queueContext.sources, warnings: queueContext.warnings });
-      recorder.event("context_assembled", { chars: queueContext.chars, sources: queueContext.sources, warnings: queueContext.warnings });
-    }
-    const result = await orchestrate({
-      models,
-      catalogue: catalogueDoc.models,
-      configuredProviders,
-      availability: loadAvailability(l.home),
-      layout: l,
-      machine,
-      policy,
-      agentName: packet.agent ?? (packet.mode ? undefined : "research"),
-      request: packet.goal,
-      root: l.repoRoot,
-      toolRoot,
-      home: l.home,
-      recorder,
-      packet,
-      requireModel,
-      contextText: queueContext.text || undefined,
-      signal: abort.signal,
-    });
-    recorder.finalize(result.status, result.error, result.finalText);
-    return { status: result.status, runId: recorder.id };
-  }, (p) => {
-    process.stdout.write(`  ${p.status.padEnd(12)} ${p.packet.id}\n`);
-  });
-  const done = progress.filter((p) => p.status === "completed").length;
-  const skipped = progress.filter((p) => p.status === "skipped").length;
-  process.stdout.write(`\nqueue finished: ${done} completed, ${skipped} skipped, ${progress.length - done - skipped} not done\n`);
-  return progress.some((p) => p.status !== "completed" && p.status !== "skipped") ? 1 : 0;
-}
-
-/* -------------------------------------------------------------------- log */
-
 function indentEventLines(text: string, prefix = "      "): string {
   return text
     .split("\n")
@@ -2041,6 +1753,29 @@ function toolResultText(result: unknown): string {
   return JSON.stringify(result, null, 2);
 }
 
+function cmdLog(id: string | undefined): number {
+  if (!id) fail("log needs a run id");
+  const run = readRun(layout(), id);
+  if (!run) fail(`no such run: ${id}`);
+  const s = run.summary;
+  process.stdout.write(
+    `run ${s.id}  ${s.status}\n  agent ${s.agent}  mode ${s.mode || "-"}\n  started ${s.startedAt}${s.endedAt ? `  ended ${s.endedAt}` : ""}\n  request: ${s.request}\n` +
+      `  calls ${s.modelCalls}  turns ${s.turns}  tokens ${s.usage.totalTokens}  cost $${s.cost.actual.toFixed(6)} actual / $${s.cost.estimated.toFixed(6)} estimated\n`,
+  );
+  if (s.error) process.stdout.write(`  error: ${s.error}\n`);
+  if (s.summary) process.stdout.write(`summary:\n${indentEventLines(s.summary)}\n`);
+  process.stdout.write("events:\n");
+  for (const event of run.events) {
+    const line = fmtEvent(event);
+    if (line) process.stdout.write(line + "\n");
+  }
+  return 0;
+}
+
+async function cmdStatus(): Promise<number> {
+  return cmdRuns(["--group", "overall"]);
+}
+
 function fmtEvent(event: Record<string, unknown>, verbose = false): string {
   const t = String(event.t ?? "").slice(11, 19);
   const type = String(event.type);
@@ -2108,28 +1843,6 @@ function fmtEvent(event: Record<string, unknown>, verbose = false): string {
   return head(type, detail.trim());
 }
 
-function cmdLog(id: string | undefined): number {
-  if (!id) fail("log needs a run id");
-  const run = readRun(layout(), id);
-  if (!run) fail(`no such run: ${id}`);
-  const s = run.summary;
-  process.stdout.write(
-    `run ${s.id}  ${s.status}\n  agent ${s.agent}  mode ${s.mode || "-"}\n  started ${s.startedAt}${s.endedAt ? `  ended ${s.endedAt}` : ""}\n  request: ${s.request}\n` +
-      `  calls ${s.modelCalls}  turns ${s.turns}  tokens ${s.usage.totalTokens}  cost $${s.cost.actual.toFixed(6)} actual / $${s.cost.estimated.toFixed(6)} estimated\n`,
-  );
-  if (s.error) process.stdout.write(`  error: ${s.error}\n`);
-  if (s.summary) process.stdout.write(`summary:\n${indentEventLines(s.summary)}\n`);
-  process.stdout.write("events:\n");
-  for (const event of run.events) {
-    const line = fmtEvent(event);
-    if (line) process.stdout.write(line + "\n");
-  }
-  return 0;
-}
-
-async function cmdStatus(): Promise<number> {
-  return cmdRuns(["--group", "overall"]);
-}
 
 /** Find a run by id in this repo first, then across registered projects. */
 function findRunAnywhere(home: string, id: string): { layout: ReturnType<typeof layout>; run: NonNullable<ReturnType<typeof readRun>> } | null {
@@ -2157,623 +1870,17 @@ function findRunAnywhere(home: string, id: string): { layout: ReturnType<typeof 
   return null;
 }
 
-/* ------------------------------------------------------------------- issues */
-
-async function cmdIssue(argv: string[]): Promise<number> {
-  const sub = argv[0];
-  const { flags, positional } = parseFlags(argv.slice(1));
-  const l = layout();
-  const machine = loadMachineConfig(l);
-  const bundle = await createIssueProvider(l, machine);
-  if (bundle.provider.kind === "none") {
-    fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
-  }
-  const provider = bundle.provider;
-  const refArg = positional[0];
-  const ref = (label: string) => {
-    if (!refArg) fail(`usage: machine_code issue ${sub} <${label}>`);
-    return parseIssueRef(refArg, bundle.repo, "github");
-  };
-
-  switch (sub) {
-    case "list": {
-      const state = (flags.get("state") ?? "all") as "open" | "closed" | "all";
-      const issues = await provider.list({ state, limit: Number(flags.get("limit") ?? 100) });
-      for (const issue of issues) {
-        process.stdout.write(
-          `#${issue.ref.number}  ${issue.kind.padEnd(7)} ${issue.state.padEnd(6)} ${issue.title}${issue.parent ? `  parent=#${issue.parent.number}` : ""}\n`,
-        );
-      }
-      if (issues.length === 0) process.stdout.write("no issues\n");
-      return 0;
-    }
-    case "view": {
-      const issue = await provider.get(ref("issue"));
-      if (!issue) fail(`issue not found: ${refArg}`);
-      process.stdout.write(
-        `#${issue.ref.number}  ${issue.kind}  ${issue.state}  ${issue.title}\n` +
-          `approval: ${issue.approval ?? "human (default)"}  parent: ${issue.parent ? `#${issue.parent.number}` : "-"}\n` +
-          `labels: ${issue.labels.join(", ") || "-"}\n\n${issue.body}\n`,
-      );
-      return 0;
-    }
-    case "tree": {
-      const root = await provider.get(ref("issue"));
-      if (!root) fail(`issue not found: ${refArg}`);
-      const depth = Math.max(0, Number(flags.get("depth") ?? 2));
-      const walk = async (issue: typeof root, level: number): Promise<void> => {
-        process.stdout.write(
-          `${"  ".repeat(level)}#${issue.ref.number} ${issue.kind} ${issue.state} ${issue.title}\n`,
-        );
-        if (level >= depth) return;
-        for (const child of await provider.children(issue.ref)) await walk(child, level + 1);
-      };
-      await walk(root, 0);
-      return 0;
-    }
-    case "create": {
-      const kind = flags.get("kind") as "epic" | "feature" | undefined;
-      const title = flags.get("title");
-      if (!kind || !title) fail("usage: machine_code issue create --kind epic|feature --title <t> [--parent <ref>] [--body <b>]");
-      const parent = flags.get("parent") ? parseIssueRef(flags.get("parent")!, bundle.repo, "github") : undefined;
-      if (kind === "feature" && !parent) fail("creating a Feature requires --parent <epic>");
-      if (parent) {
-        const parentIssue = await provider.get(parent);
-        if (!parentIssue) fail(`parent not found: ${flags.get("parent")}`);
-        if (kind === "feature" && parentIssue.kind !== "epic") fail("a Feature's parent must be an Epic");
-      }
-      const body = flags.get("body") ?? "";
-      const created = await provider.create({ title, body, kind, parent });
-      process.stdout.write(`created ${created.kind} #${created.ref.number}\n`);
-      return 0;
-    }
-    case "edit": {
-      const issue = await provider.get(ref("issue"));
-      if (!issue) fail(`issue not found: ${refArg}`);
-      const updated = await provider.update(issue.ref, {
-        ...(flags.get("title") !== undefined ? { title: flags.get("title") } : {}),
-        ...(flags.get("body") !== undefined ? { body: flags.get("body") } : {}),
-      });
-      process.stdout.write(`updated #${updated.ref.number}: ${updated.title}\n`);
-      return 0;
-    }
-    case "close": {
-      const issue = await provider.get(ref("issue"));
-      if (!issue) fail(`issue not found: ${refArg}`);
-      const completion = await checkCompletion(provider, l, issue);
-      if (!completion.ok) fail(`cannot close #${issue.ref.number}: ${completion.reason}`);
-      await provider.close(issue.ref, flags.get("reason") ?? "completed");
-      process.stdout.write(`closed #${issue.ref.number}\n`);
-      return 0;
-    }
-    case "reopen": {
-      const issue = await provider.get(ref("issue"));
-      if (!issue) fail(`issue not found: ${refArg}`);
-      await provider.reopen(issue.ref);
-      process.stdout.write(`reopened #${issue.ref.number}\n`);
-      return 0;
-    }
-    case "delete": {
-      if (!flags.has("yes")) fail("issue delete is destructive; rerun with --yes");
-      const issue = await provider.get(ref("issue"));
-      if (!issue) fail(`issue not found: ${refArg}`);
-      const result = await deleteIssue({
-        layout: l,
-        machine,
-        provider,
-        issue,
-        cascade: flags.has("cascade"),
-        keepRuns: flags.has("keep-runs"),
-      });
-      process.stdout.write(
-        `deleted ${result.deleted.map((n) => `#${n}`).join(", ")}` +
-          `${result.deletedRuns.length ? `; removed ${result.deletedRuns.length} run(s)` : ""}` +
-          `${result.closedPrs.length ? `; closed PR(s) ${result.closedPrs.map((n) => `#${n}`).join(", ")}` : ""}` +
-          `${result.removedWorktrees.length ? `; removed ${result.removedWorktrees.length} worktree(s)` : ""}` +
-          `${result.deletedBranches.length ? `; deleted ${result.deletedBranches.length} branch(es)` : ""}\n`,
-      );
-      for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
-      return 0;
-    }
-    case "link": {
-      const issue = await provider.get(ref("issue"));
-      if (!issue) fail(`issue not found: ${refArg}`);
-      const parentArg = flags.get("parent");
-      if (!parentArg) fail("usage: machine_code issue link <issue> --parent <ref>");
-      const parent = await provider.get(parseIssueRef(parentArg, bundle.repo, "github"));
-      if (!parent) fail(`parent not found: ${parentArg}`);
-      const valid = issue.kind === "feature" && parent.kind === "epic";
-      if (!valid) fail(`invalid hierarchy: ${issue.kind} cannot be a child of ${parent.kind} (Feature→Epic)`);
-      await provider.linkParent(issue.ref, parent.ref);
-      process.stdout.write(`linked #${issue.ref.number} under #${parent.ref.number}\n`);
-      return 0;
-    }
-    case "ensure": {
-      const issue = await provider.get(ref("issue"));
-      if (!issue) fail(`issue not found: ${refArg}`);
-      const children = await provider.children(issue.ref);
-      const kinds = children.map((c) => c.kind).join(", ");
-      process.stdout.write(
-        `${issue.kind} #${issue.ref.number}: ${children.length} child issue(s)${kinds ? ` (${kinds})` : ""}\n`,
-      );
-      return 0;
-    }
-    default:
-      fail("usage: machine_code issue list|view|tree|create|edit|close|reopen|delete|link|ensure");
-  }
-}
-
-/** Human approval for a pending close/merge request. */
+/** Human approval for a packet: merge `mc/<slug>` into main. */
 async function cmdApprove(argv: string[]): Promise<number> {
   const target = argv[0];
-  if (!target) fail("usage: machine_code approve <issue|pr|slug>");
+  if (!target) fail("usage: machine_code approve <slug>");
   const l = layout();
-  // Packet path: a non-numeric slug with a packet file merges `mc/<slug>`.
-  if (!/^\d+$/.test(target)) {
-    const slug = slugify(target);
-    if (readPacketFile(l, slug)) {
-      await approvePacket(l, slug);
-      process.stdout.write(`approved and merged ${slug}\n`);
-      return 0;
-    }
-  }
-  const machine = loadMachineConfig(l);
-  const ref = parseIssueRef(target, (await createIssueProvider(l, machine)).repo, "github");
-
-  // A PR number merges; otherwise treat it as an issue-close approval.
-  const { createPrProviderFor } = await import("./pr/factory.js");
-  const prs = await createPrProviderFor(l);
-  if (prs.provider.kind !== "none") {
-    const pr = await prs.provider.status(ref.number);
-    if (pr && pr.state === "open") {
-      await prs.provider.merge(pr.number, "squash");
-      const runs = listRuns(l).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
-      for (const run of runs) {
-        const detail = readRun(l, run.id);
-        if (!detail) continue;
-        const requested = detail.events.some(
-          (e) => e.type === "approval_requested" && (e as { action?: string; pr?: number }).action === "merge" && (e as { pr?: number }).pr === pr.number,
-        );
-        if (!requested && detail.summary.prNumber !== pr.number) continue;
-        const recorder = RunRecorder.reopen(l, detail.summary);
-        if (requested) {
-          recorder.event("approval_granted", { pr: pr.number, by: "human" });
-          recorder.event("pr_merged", { pr: pr.number, by: run.id, approval: "human" });
-        }
-        recorder.patchSummary({ prNumber: pr.number, prState: "merged", ...(pr.url ? { prUrl: pr.url } : {}) });
-        break;
-      }
-      process.stdout.write(`approved and merged PR #${pr.number} (squash)\n`);
-      return 0;
-    }
-  }
-
-  const bundle = await createIssueProvider(l, machine);
-  if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown"}`);
-  const issue = await bundle.provider.get(ref);
-  if (!issue) fail(`issue not found: ${target}`);
-
-  // Feature issues merge directly: route them through the feature lifecycle.
-  if (issue.kind === "feature") {
-    const approved = await approveFeature({
-      layout: l,
-      machine,
-      provider: bundle.provider,
-      issue,
-      ...(prs.provider.kind !== "none" ? { prs: prs.provider } : {}),
-      clean: true,
-    });
-    const featureRuns = listRuns(l).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
-    for (const run of featureRuns) {
-      const detail = readRun(l, run.id);
-      if (!detail) continue;
-      const requested = detail.events.some(
-        (e) => e.type === "approval_requested" && (e as { issue?: number }).issue === issue.ref.number,
-      );
-      if (!requested) continue;
-      const recorder = RunRecorder.reopen(l, detail.summary);
-      recorder.event("approval_granted", { issue: issue.ref.number, by: "human" });
-      recorder.event("issue_closed", { issue: issue.ref.number, by: run.id, approval: "human" });
-      break;
-    }
-    process.stdout.write(
-      `approved and merged feature #${issue.ref.number}` +
-        `${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
-        `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
-        `${approved.worktreeRemoved ? "; worktree removed" : ""}` +
-        `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
-    );
-    return 0;
-  }
-
-  // Find the newest run in this repo that requested approval for the issue.
-  const runs = listRuns(l).sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
-  let requestingRunId: string | undefined;
-  for (const run of runs) {
-    const detail = readRun(l, run.id);
-    if (!detail) continue;
-    const requested = detail.events.some(
-      (e) => e.type === "approval_requested" && (e as { issue?: number }).issue === issue.ref.number,
-    );
-    const granted = detail.events.some(
-      (e) => e.type === "approval_granted" && (e as { issue?: number }).issue === issue.ref.number,
-    );
-    if (requested && !granted) {
-      requestingRunId = run.id;
-      break;
-    }
-  }
-  if (!requestingRunId) {
-    process.stdout.write(`no pending approval for #${issue.ref.number}\n`);
-    return 0;
-  }
-  const completion = await checkCompletion(bundle.provider, l, issue);
-  if (!completion.ok) fail(`cannot close #${issue.ref.number}: ${completion.reason}`);
-  await bundle.provider.close(issue.ref, "completed");
-  const recorder = RunRecorder.reopen(l, readRun(l, requestingRunId)!.summary);
-  recorder.event("approval_granted", { issue: issue.ref.number, by: "human" });
-  recorder.event("issue_closed", { issue: issue.ref.number, by: requestingRunId, approval: "human" });
-  process.stdout.write(`approved and closed #${issue.ref.number} (requested by run ${requestingRunId})\n`);
+  const slug = slugify(target);
+  if (!readPacketFile(l, slug)) fail(`no packet ${slug}`);
+  await approvePacket(l, slug);
+  process.stdout.write(`approved and merged ${slug}\n`);
   return 0;
 }
-
-/* ---------------------------------------------------------------------- pr */
-
-async function cmdPr(argv: string[]): Promise<number> {
-  const sub = argv[0];
-  const { flags, positional } = parseFlags(argv.slice(1));
-  const l = layout();
-  const machine = loadMachineConfig(l);
-  if (sub === "feature") {
-    fail("pr feature was removed: features merge directly with \"machine_code feature approve <n>\"");
-  }
-  if (sub === "list" || sub === "status") {
-    const { createPrProviderFor } = await import("./pr/factory.js");
-    const bundle = await createPrProviderFor(l);
-    if (bundle.provider.kind === "none") fail(`pull requests unavailable: ${bundle.reason ?? "unknown"}`);
-    if (sub === "list") {
-      const prs = await bundle.provider.list({ state: (flags.get("state") as "open" | "closed" | "all") ?? "all" });
-      if (prs.length === 0) process.stdout.write("no pull requests\n");
-      for (const pr of prs) process.stdout.write(`#${pr.number} ${pr.state} ${pr.head} → ${pr.base}  ${pr.title}\n`);
-      return 0;
-    }
-    const n = Number(positional[0]);
-    if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code pr status <number>");
-    const pr = await bundle.provider.status(n);
-    if (!pr) fail(`pull request #${n} not found`);
-    process.stdout.write(`#${pr.number} ${pr.state}${pr.isDraft ? " draft" : ""} ${pr.head} → ${pr.base}\n${pr.title}\n${pr.url}\n`);
-    return 0;
-  }
-  fail("usage: machine_code pr list | status <n>");
-}
-
-/* ------------------------------------------------------------------ feature */
-
-function featureRefNumber(value: string | undefined): number {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) fail("usage: machine_code feature <status|start|review|approve|cleanup|checkout> <issue>");
-  return n;
-}
-
-function printFeatureStatus(status: Awaited<ReturnType<typeof featureStatus>>): void {
-  const issue = status.issue;
-  process.stdout.write(`#${issue.ref.number} ${issue.title}  [${issue.kind}, ${issue.state}]\n`);
-  process.stdout.write(`Stage: ${status.stage}\n`);
-  if (status.plan) {
-    process.stdout.write(
-      `Plan: ${status.plan.status}/${status.plan.verification} · review ${status.plan.planReview}/${status.plan.resultReview}\n`,
-    );
-  } else {
-    process.stdout.write("Plan: missing\n");
-  }
-  if (status.latest) {
-    process.stdout.write(
-      `Run: ${status.latest.id} · ${status.latest.status}${status.latest.phase ? `/${status.latest.phase}` : ""} · ${status.latest.agent}\n`,
-    );
-  } else {
-    process.stdout.write("Run: none\n");
-  }
-  if (status.worktree) {
-    const files = status.changedFiles.length;
-    process.stdout.write(
-      `Worktree: ${status.worktree}${status.worktreeExists ? (status.worktreeDirty ? ` · ${files} changed file(s)` : " · clean") : " · missing"}\n`,
-    );
-  }
-  if (status.branch) process.stdout.write(`Branch: ${status.branch}${status.baseBranch ? ` → ${status.baseBranch}` : ""}\n`);
-  if (status.commit) process.stdout.write(`Commit: ${status.commit.slice(0, 12)}\n`);
-  if (status.pr) process.stdout.write(`PR: #${status.pr.number} ${status.pr.state}${status.pr.url ? ` ${status.pr.url}` : ""}\n`);
-  else process.stdout.write("PR: none\n");
-  process.stdout.write(`Acceptance: ${status.acceptance ? "recorded" : "not recorded"}\n`);
-  if (status.checks.length > 0) {
-    process.stdout.write("Checks:\n");
-    for (const check of status.checks) {
-      process.stdout.write(`  ${check.passed ? "PASS" : "FAIL"}  ${check.command}  ${check.durationMs}ms\n`);
-    }
-  }
-  if (status.next.length > 0) {
-    process.stdout.write("Next:\n");
-    for (const next of status.next) process.stdout.write(`  ${next}\n`);
-  }
-}
-
-async function featureIssue(l: ReturnType<typeof layout>, number: number): Promise<{
-  machine: ReturnType<typeof loadMachineConfig>;
-  bundle: Awaited<ReturnType<typeof createIssueProvider>>;
-  issue: Issue;
-}> {
-  const machine = loadMachineConfig(l);
-  const bundle = await createIssueProvider(l, machine);
-  if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
-  const ref = parseIssueRef(String(number), bundle.repo, "github");
-  const issue = await bundle.provider.get(ref);
-  if (!issue) fail(`issue not found: #${number}`);
-  if (issue.kind !== "feature") fail(`#${number} is a ${issue.kind}; feature commands require a Feature`);
-  return { machine, bundle, issue };
-}
-
-async function prProviderForFeature(l: ReturnType<typeof layout>) {
-  const bundle = await createPrProviderFor(l);
-  return bundle.provider.kind === "none" ? undefined : bundle.provider;
-}
-
-async function cmdFeature(argv: string[]): Promise<number> {
-  const sub = argv[0];
-  if (!sub || !["status", "start", "review", "approve", "cleanup", "checkout"].includes(sub)) {
-    fail("usage: machine_code feature status|start|review|approve|cleanup|checkout <issue>");
-  }
-  const { flags, positional } = parseFlags(argv.slice(1));
-  const number = featureRefNumber(positional[0] ?? flags.get("issue"));
-  const l = layout();
-  const { machine, bundle, issue } = await featureIssue(l, number);
-  const prs = await prProviderForFeature(l);
-
-  if (sub === "status") {
-    const status = await featureStatus(l, issue, prs ? { prs } : {});
-    if (flags.has("json")) {
-      process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
-    } else {
-      printFeatureStatus(status);
-    }
-    return 0;
-  }
-
-  if (sub === "start") {
-    const parsed = parsePlanMarker(issue.body);
-    if (!parsed.plan || !isReadyPlan(parsed.plan)) fail(`feature #${number} does not have a ready plan`);
-    if (issue.state !== "open") fail(`feature #${number} is ${issue.state}`);
-    const runs = featureRuns(l, issue.ref);
-    const active = runs.find((run) => ["created", "running", "awaiting_input", "paused", "interrupted"].includes(run.status));
-    if (active) {
-      fail(
-        `feature #${number} already has an active run: ${active.id}` +
-          (active.status === "interrupted" ? `; resume it with "machine_code resume ${active.id}"` : ""),
-      );
-    }
-    const latest = runs[0];
-    const latestWorktree = latest?.worktree && existsSync(latest.worktree) ? latest.worktree : undefined;
-    const retryable = Boolean(
-      latestWorktree && latest && (latest.status === "blocked" || latest.status === "failed"),
-    );
-    if (latest && latest.status !== "failed" && latest.status !== "blocked" && latest.status !== "cancelled") {
-      fail(
-        `feature #${number} already has run ${latest.id} (${latest.status}); ` +
-          `use "machine_code feature status ${number}" and "machine_code feature review ${number}"`,
-      );
-    }
-    if (latestWorktree && !retryable) {
-      fail(
-        `feature #${number} already has a worktree at ${latestWorktree}; ` +
-          `use "machine_code feature cleanup ${number}" or finish the existing run`,
-      );
-    }
-    if (retryable && !flags.has("retry")) {
-      fail(`feature #${number} has a reviewable worktree; rerun with --retry to build on it`);
-    }
-    if (flags.has("retry") && !retryable) {
-      fail("--retry needs the latest run to be blocked or failed with an existing worktree");
-    }
-    const reviewFlag = flags.get("review");
-    if (reviewFlag !== undefined && reviewFlag !== "agent" && reviewFlag !== "human") {
-      fail("--review must be agent or human");
-    }
-    if (flags.has("no-review") && reviewFlag === "agent") {
-      fail("--no-review conflicts with --review agent");
-    }
-    const plan: PlanMarker = {
-      ...parsed.plan,
-      ...(reviewFlag === "agent" || reviewFlag === "human" ? { resultReview: reviewFlag } : {}),
-    };
-    const checks = suggestedReviewChecks(issue);
-    if (flags.has("dry-run")) {
-      process.stdout.write(`#${number} ${issue.title}\n`);
-      process.stdout.write(`Plan: ${plan.status}/${plan.verification} · review ${plan.planReview}/${plan.resultReview}\n`);
-      process.stdout.write(`Branch: mc/feature/${number}${issue.parent ? ` → mc/epic/${issue.parent.number}` : ""}\n`);
-      process.stdout.write(`Review agent: ${flags.has("no-review") ? "off" : "on"}\n`);
-      process.stdout.write(`Verification: ${checks.join(", ") || "(none; pass --check during feature review)"}\n`);
-      process.stdout.write(`Human approval: ${issue.approval ?? "human"}\n`);
-      return 0;
-    }
-    const runtime = await loadRuntime(l);
-    if (checks.length === 0) {
-      process.stderr.write(
-        `warning: feature #${number} has no ## Verification commands; feature review needs --check <command>\n`,
-      );
-    }
-    const result = await executeFeature({
-      layout: l,
-      machine: runtime.machine,
-      policy: runtime.policy,
-      models: runtime.models,
-      catalogue: runtime.catalogue.models,
-      configuredProviders: runtime.configuredProviders,
-      home: l.home,
-      provider: bundle.provider,
-      issue,
-      plan,
-      attempt: 1,
-      review: !flags.has("no-review"),
-      ...(flags.get("base") ? { base: flags.get("base") } : {}),
-      ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
-      ...(retryable && latest && latestWorktree
-        ? {
-            worktree: latestWorktree,
-            worktreeOwnerRunId: latest.worktreeOwnerRunId ?? latest.id,
-            ...(latest.branch ? { branch: latest.branch } : {}),
-            ...(latest.baseBranch ? { baseBranch: latest.baseBranch } : {}),
-            ...(latest.baseRef ? { baseRef: latest.baseRef } : {}),
-          }
-        : {}),
-    });
-    const detail = readRun(l, result.runId);
-    if (detail?.summary.finalText) process.stdout.write(`${detail.summary.finalText}\n`);
-    if (result.status !== "completed") {
-      process.stdout.write(`feature #${number} stopped: ${result.status}${result.error ? ` · ${result.error}` : ""}\n`);
-      return EXIT[result.status];
-    }
-    const status = await featureStatus(l, issue, prs ? { prs } : {});
-    printFeatureStatus(status);
-    if (plan.resultReview === "agent" && (issue.approval ?? "human") === "agent" && !flags.has("no-review")) {
-      const approved = await approveFeature({
-        layout: l,
-        machine: runtime.machine,
-        provider: bundle.provider,
-        issue,
-        runId: result.runId,
-        ...(prs ? { prs } : {}),
-        clean: true,
-      });
-      process.stdout.write(
-        `feature #${number} agent-approved and closed${approved.worktreeRemoved ? "; worktree removed" : ""}` +
-        `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
-      );
-    } else {
-      process.stdout.write(`feature #${number} is awaiting human review/merge.\n`);
-    }
-    return 0;
-  }
-
-  if (sub === "review") {
-    const status = await featureStatus(l, issue, prs ? { prs } : {});
-    printFeatureStatus(status);
-    const explicit = flags.get("checks") ?? flags.get("check");
-    const checks = flags.has("no-checks")
-      ? []
-      : explicit
-        ? explicit.split(",").map((value) => value.trim()).filter(Boolean)
-        : suggestedReviewChecks(issue);
-    if (checks.length === 0) {
-      process.stdout.write("No verification commands found. Pass --check <command> to run one.\n");
-      return 0;
-    }
-    process.stdout.write(`Running ${checks.length} review check(s) in ${status.worktree ?? "the worktree"}:\n`);
-    const results = await runFeatureChecks(l, issue, checks);
-    for (const result of results) {
-      process.stdout.write(`  ${result.passed ? "PASS" : "FAIL"}  ${result.command}  ${result.durationMs}ms\n`);
-      if (!result.passed && result.output.trim()) {
-        process.stdout.write(`${result.output.trim().split("\n").slice(-12).join("\n")}\n`);
-      }
-    }
-    const failed = results.filter((result) => !result.passed);
-    process.stdout.write(
-      failed.length === 0
-        ? `All review checks passed. Approve with: machine_code feature approve ${number}\n`
-        : `Review failed: ${failed.map((result) => result.command).join(", ")}\n`,
-    );
-    return failed.length === 0 ? 0 : 2;
-  }
-
-  if (sub === "approve") {
-    const approved = await approveFeature({
-      layout: l,
-      machine,
-      provider: bundle.provider,
-      issue,
-      ...(flags.get("run") ? { runId: flags.get("run")! } : {}),
-      ...(prs ? { prs } : {}),
-      commit: !flags.has("no-commit"),
-      merge: !flags.has("no-merge"),
-      clean: !flags.has("keep-worktree"),
-      deleteBranch: !flags.has("keep-branch"),
-      force: flags.has("force"),
-    });
-    process.stdout.write(
-      `feature #${number} closed${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
-        `${approved.closedParents.length > 0 ? `; closed parent(s) ${approved.closedParents.map((n) => `#${n}`).join(", ")}` : ""}` +
-        `${approved.worktreeRemoved ? "; worktree removed" : ""}` +
-        `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
-    );
-    return 0;
-  }
-
-  if (sub === "checkout") {
-    // Human review: make sure the feature branch is checked out in a worktree
-    // and print the `cd` path. Reuses the run worktree when it still exists;
-    // otherwise materializes a stable human-<n> worktree from the branch.
-    const checkoutStatus = await featureStatus(l, issue, prs ? { prs } : {});
-    const checkoutBranch = checkoutStatus.branch ?? featureBranchFor(issue.ref.number, issue.title);
-    const mainRoot = await mainWorktreeRoot(l.repoRoot);
-    if (!(await branchExists(mainRoot, checkoutBranch))) {
-      fail(`feature #${number} has no branch yet (${checkoutBranch} missing); start it with "machine_code feature start ${number}"`);
-    }
-    const checkedOut = await branchCheckedOutAt(mainRoot, checkoutBranch);
-    const checkoutPath = checkedOut ?? (await recreateWorktreeFromBranch(l, `human-${number}`, checkoutBranch));
-    const head = await runProc("git", ["log", "-1", "--format=%h %s"], { cwd: checkoutPath, timeoutMs: 30_000 });
-    process.stdout.write(`Branch: ${checkoutBranch}${checkoutStatus.baseBranch ? ` → ${checkoutStatus.baseBranch}` : ""}\n`);
-    process.stdout.write(`Worktree: ${checkoutPath}${checkedOut ? "" : " (materialized for review)"}\n`);
-    if (head.code === 0 && head.stdout.trim()) process.stdout.write(`HEAD: ${head.stdout.trim()}\n`);
-    process.stdout.write(`Review: cd ${checkoutPath}\n`);
-    return 0;
-  }
-
-  const status = await featureStatus(l, issue, prs ? { prs } : {});
-  const cleaned = await cleanupFeature({
-    layout: l,
-    issue,
-    ...(status.latest ? { run: status.latest } : {}),
-    force: flags.has("force"),
-    deleteBranch: !flags.has("keep-branch"),
-  });
-  if (!cleaned.removed) {
-    process.stdout.write(`cleanup skipped: ${cleaned.reason ?? "unknown reason"}\n`);
-    return 1;
-  }
-  process.stdout.write(`removed worktree for #${number}\n`);
-  return 0;
-}
-
-/* ------------------------------------------------------------------ accept */
-
-/** Record a human acceptance verdict for an issue (required before closure). */
-async function cmdAccept(argv: string[]): Promise<number> {
-  const target = argv[0];
-  if (!target) fail("usage: machine_code accept <issue>");
-  const l = layout();
-  const machine = loadMachineConfig(l);
-  const bundle = await createIssueProvider(l, machine);
-  if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown"}`);
-  const ref = parseIssueRef(target, bundle.repo, "github");
-  const issue = await bundle.provider.get(ref);
-  if (!issue) fail(`issue not found: ${target}`);
-
-  const runs = listRuns(l)
-    .filter((r) => r.issue && r.issue.number === ref.number && r.issue.repo === ref.repo)
-    .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
-  const latest = runs[0];
-  if (!latest) fail(`no run is associated with #${ref.number}; acceptance must be recorded by a run`);
-  const detail = readRun(l, latest.id);
-  if (!detail) fail(`run ${latest.id} is unreadable`);
-  const recorder = RunRecorder.reopen(l, detail.summary);
-  recorder.event("acceptance_verified", {
-    issue: ref.number,
-    by: "human",
-    criteria: issue.acceptance,
-    evidence: `accepted via CLI on run ${latest.id}`,
-  });
-  process.stdout.write(`acceptance recorded for #${ref.number} (run ${latest.id})\n`);
-  return 0;
-}
-
-/* ------------------------------------------------------------ pause/cancel */
 
 function controlCommand(action: "pause" | "cancel", argv: string[]): number {
   const id = argv[0];
@@ -2863,9 +1970,6 @@ async function cmdFork(argv: string[]): Promise<number> {
     parent.id,
     "--agent",
     parent.agent,
-    // Forward the parent's issue so the child resolves the same feature
-    // branch and hits the worktree-reuse path instead of branch_checked_out.
-    ...(parent.issue?.number ? ["--issue", String(parent.issue.number)] : []),
     ...(flags.has("inherit-worktree") && parentWorktreePath(parent, found.layout.localDir)
       ? ["--inherit-worktree"]
       : []),
@@ -3148,16 +2252,6 @@ function cell(value: string, width: number): string {
   return value + " ".repeat(width - v);
 }
 
-function issueGlyph(issue: Issue): string {
-  switch (issueGlyphKind(issue)) {
-    case "closed": return "✓";
-    case "blocked": return "⊘";
-    case "ready": return "●";
-    case "draft": return "◐";
-    case "open": return "○";
-  }
-}
-
 function runGlyph(status: string): string {
   switch (status) {
     case "running": return "●";
@@ -3219,18 +2313,6 @@ function rowText(row: RunRow, width: number, group: RunGroup): string {
   if (row.kind === "section") {
     return `${indent}${row.collapsed ? "▸" : "▾"} ${row.label} (${row.count})`;
   }
-  if (row.kind === "issue") {
-    const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
-    const pct = row.rollup.pct === undefined ? "" : `${row.rollup.pct}%`;
-    const runs = row.rollup.runsTotal > 0 ? `runs ${row.rollup.runsTotal}` : "runs 0";
-    const tasks = row.rollup.tasksTotal === 0
-      ? ""
-      : ` ${row.rollup.tasksClosed}/${row.rollup.tasksTotal} ·`;
-    const head = `${indent}${fold} ${issueGlyph(row.issue)} #${row.issue.ref.number} ${row.issue.kind} ${row.issue.title}`;
-    const tail = `  ${pct}${tasks} ${runs}${row.rollup.runsActive ? ` (${row.rollup.runsActive})` : ""} · ${fmtMoney(row.rollup.cost)}`;
-    if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
-    return cell(head, width - visibleWidth(tail)) + tail;
-  }
   if (row.kind === "packet") {
     const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
     const runs = row.directRuns > 0 ? `runs ${row.directRuns}` : "";
@@ -3255,12 +2337,6 @@ function parseRunGroup(value: string): RunGroup | null {
     case "plan":
     case "plans":
       return "packets";
-    case "gh":
-    case "gh-issue":
-    case "issue":
-    case "issues":
-    case "project":
-      return "gh-issue";
     case "status":
       return "status";
     case "overall":
@@ -3313,16 +2389,8 @@ async function cmdRuns(argv: string[]): Promise<number> {
   const selected = projectFilter ? allRuns.filter((run) => run.repoRoot === projectFilter) : allRuns;
   const runs = filterRuns(selected, filter);
 
-  const issuesByRepo = new Map<string, readonly Issue[]>();
-  for (const repoRoot of new Set([l.repoRoot, ...runs.map(repoOf)])) {
-    if (!repoRoot) continue;
-    const cache = readIssueCache(layout(repoRoot));
-    if (cache) issuesByRepo.set(repoRoot, cache.issues);
-  }
-
   const index = buildRunIndex({
     runs,
-    issuesByRepo,
     group,
     text,
     attentionOnly: attention,
@@ -3340,9 +2408,6 @@ async function cmdRuns(argv: string[]): Promise<number> {
       if (row.kind === "section") {
         return { kind: row.kind, depth: row.depth, id: row.id, label: row.label, count: row.count };
       }
-      if (row.kind === "issue") {
-        return { kind: row.kind, depth: row.depth, issue: row.issue, rollup: row.rollup };
-      }
       if (row.kind === "packet") {
         return { kind: row.kind, slug: row.slug, status: row.packet.status, depth: row.depth, directRuns: row.directRuns, deliverable: row.packet.deliverable };
       }
@@ -3353,7 +2418,7 @@ async function cmdRuns(argv: string[]): Promise<number> {
   }
 
   if (index.rows.length === 0) {
-    process.stdout.write("no runs or issues\n");
+    process.stdout.write("no runs\n");
     return 0;
   }
   const width = process.stdout.columns || 120;
@@ -3444,489 +2509,6 @@ async function cmdProcesses(argv: string[]): Promise<number> {
   return 0;
 }
 
-async function cmdOrchestrate(argv: string[]): Promise<number> {
-  const { flags, positional } = parseFlags(argv);
-  const sub = positional[0] ?? "status";
-  if (sub !== "status" && sub !== "tick" && sub !== "start" && sub !== "approve" && sub !== "stop") {
-    fail("usage: machine_code orchestrate status|tick|start|stop|approve [--all] [--dry-run] [--scope project|epic|feature]");
-  }
-  const dryRun = flags.has("dry-run") || flags.has("json") || sub === "status";
-  const l = layout();
-  const machine = loadMachineConfig(l);
-  const owner = `cli:${process.pid}`;
-  if (sub === "stop") {
-    const id = flags.get("orchestration");
-    if (!id) fail("usage: machine_code orchestrate stop --orchestration <id>");
-    const state = readOrchestration(l, id);
-    if (!state) fail(`no such orchestration: ${id}`);
-    requestOrchestrationStop(l, id, owner);
-    const lease = readLease(l, id);
-    const running = Boolean(lease && lease.until > Date.now());
-    if (!running) {
-      if (!state.stopReason) updateOrchestration(l, id, { stopReason: "stop requested" });
-      clearOrchestrationStop(l, id);
-      process.stdout.write(`orchestration ${id} is not running; marked stopped\n`);
-    } else {
-      process.stdout.write(`stop requested for orchestration ${id} (${lease!.owner}, pid ${lease!.pid}); it stops after the current feature\n`);
-    }
-    return 0;
-  }
-  if (sub === "status" && flags.has("all")) {
-    const now = Date.now();
-    const rows = listOrchestrations(l).map((state) => {
-      const lease = readLease(l, state.id);
-      return {
-        ...state,
-        lease,
-        running: Boolean(lease && lease.until > now),
-      };
-    });
-    if (flags.has("json")) {
-      process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
-      return 0;
-    }
-    if (rows.length === 0) {
-      process.stdout.write("no orchestrations\n");
-      return 0;
-    }
-    for (const row of rows) {
-      const scopeText = row.scopeRef ? `${row.scope} #${row.scopeRef.number}` : row.scope;
-      const lease = row.running
-        ? `RUNNING ${row.lease!.owner} pid ${row.lease!.pid} until ${new Date(row.lease!.until).toISOString()}`
-        : "idle";
-      process.stdout.write(
-        `${row.id}  ${scopeText.padEnd(18)}  ${(row.checkpoint ?? "preflight").padEnd(24)}  ${lease}` +
-          `${row.stopReason ? `  STOPPED ${row.stopReason}` : ""}\n`,
-      );
-    }
-    return 0;
-  }
-  if (sub === "approve") {
-    const id = flags.get("orchestration");
-    const task = Number(flags.get("feature"));
-    if (!id || !Number.isInteger(task) || task <= 0) {
-      fail("usage: machine_code orchestrate approve --orchestration <id> --feature <number>");
-    }
-    const state = readOrchestration(l, id);
-    if (!state) fail(`no such orchestration: ${id}`);
-    if (state.stopReason) fail(`orchestration ${id} is stopped: ${state.stopReason}`);
-    const resultApproval = flags.has("result");
-    if (resultApproval) {
-      const issueBundle = await createIssueProvider(l, machine);
-      if (issueBundle.provider.kind === "none") fail(`issue tracking unavailable: ${issueBundle.reason ?? "unknown reason"}`);
-      const repo = state.scopeRef?.repo ?? issueBundle.repo;
-      const ref = parseIssueRef(String(task), repo, "github");
-      const issue = await issueBundle.provider.get(ref);
-      if (!issue) fail(`feature #${task} not found`);
-      const prBundle = await createPrProviderFor(l);
-      const approved = await approveFeature({
-        layout: l,
-        machine,
-        provider: issueBundle.provider,
-        issue,
-        ...(prBundle.provider.kind !== "none" ? { prs: prBundle.provider } : {}),
-        clean: true,
-      });
-      process.stdout.write(
-        `closed feature #${task} after human result approval` +
-          `${approved.pr ? ` (PR #${approved.pr.number} ${approved.pr.state})` : ""}` +
-          `${approved.worktreeRemoved ? "; worktree removed" : ""}` +
-          `${approved.untrackedPlans.length > 0 ? `; untracked in ${approved.untrackedPlans.join(", ")}` : ""}\n`,
-      );
-    }
-    const current = resultApproval ? state.approvedResults ?? [] : state.approvedPackets ?? [];
-    const approved = [...new Set([...current, task])].sort((a, b) => a - b);
-    updateOrchestration(l, id, {
-      ...(resultApproval ? { approvedResults: approved } : { approvedPackets: approved }),
-      checkpoint: resultApproval ? "result_approved" : "packet_approved",
-    });
-    process.stdout.write(`approved ${resultApproval ? "result" : "packet"} for feature #${task} in orchestration ${id}\n`);
-    return 0;
-  }
-  const bundle = await createIssueProvider(l, machine);
-  if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
-
-  let scope: OrchestrationScope =
-    flags.get("scope") === "project" || flags.get("scope") === "feature" || flags.get("scope") === "epic"
-      ? (flags.get("scope") as OrchestrationScope)
-      : flags.has("feature")
-        ? "feature"
-        : "epic";
-  let scopeRef: IssueRef | undefined;
-  if (scope === "epic") {
-    const epic = flags.get("epic");
-    if (!epic) fail("epic scope needs --epic <number>");
-    scopeRef = parseIssueRef(epic, bundle.repo, "github");
-  } else if (scope === "feature") {
-    const feature = flags.get("feature");
-    if (!feature) fail("feature scope needs --feature <number>");
-    scopeRef = parseIssueRef(feature, bundle.repo, "github");
-  }
-
-  let orchestration: OrchestrationState | undefined;
-  const requestedId = flags.get("orchestration");
-  const scopeLockId = scope === "project" ? "scope-project" : `scope-${scope}-${scopeRef?.number ?? "none"}`;
-  const scopeLocked = !dryRun && !requestedId;
-  if (scopeLocked && !acquireLease(l, scopeLockId, owner, 30_000)) {
-    const current = readLease(l, scopeLockId);
-    fail(
-      `scope ${scope}${scopeRef ? ` #${scopeRef.number}` : ""} is already starting` +
-        (current ? ` (${current.owner}, pid ${current.pid})` : ""),
-    );
-  }
-  try {
-    if (requestedId) {
-      orchestration = readOrchestration(l, requestedId) ?? undefined;
-      if (!orchestration) fail(`no such orchestration: ${requestedId}`);
-      scope = orchestration.scope;
-      scopeRef = orchestration.scopeRef;
-    } else {
-      orchestration = listOrchestrations(l).find(
-        (state) =>
-          state.scope === scope &&
-          ((!scopeRef && !state.scopeRef) ||
-            (scopeRef && state.scopeRef && scopeRef.repo === state.scopeRef.repo && scopeRef.number === state.scopeRef.number)),
-      );
-      if (!dryRun && !orchestration) {
-        orchestration = createOrchestration(l, scope, scopeRef);
-      }
-    }
-  } finally {
-    if (scopeLocked) releaseLease(l, scopeLockId, owner);
-  }
-  if (orchestration?.stopReason && !dryRun) {
-    if (flags.has("resume")) {
-      const stopped = orchestration.stopReason;
-      orchestration = resumeOrchestration(l, orchestration.id) ?? orchestration;
-      clearOrchestrationStop(l, orchestration.id);
-      process.stdout.write(`resumed orchestration ${orchestration.id} (was stopped: ${stopped})\n`);
-    } else {
-      fail(
-        `orchestration ${orchestration.id} stopped: ${orchestration.stopReason}; ` +
-          "fix the cause, then resume with --resume",
-      );
-    }
-  }
-
-  const maxParallelRaw = flags.get("max-parallel");
-  let maxParallel = maxParallelRaw === undefined ? 2 : Number(maxParallelRaw);
-  if (!Number.isFinite(maxParallel)) fail("--max-parallel must be one of 1|2|4|8");
-  if (![1, 2, 4, 8].includes(maxParallel)) {
-    const nearest = [1, 2, 4, 8].reduce((a, b) => (Math.abs(b - maxParallel) < Math.abs(a - maxParallel) ? b : a));
-    process.stderr.write(`warning: --max-parallel ${maxParallelRaw} clamped to ${nearest}\n`);
-    maxParallel = nearest;
-  }
-  const maxMinutesRaw = flags.get("max-minutes");
-  const maxMinutes = maxMinutesRaw === undefined ? undefined : Number(maxMinutesRaw);
-  if (maxMinutes !== undefined && (!Number.isFinite(maxMinutes) || maxMinutes <= 0)) {
-    fail("--max-minutes must be a positive number");
-  }
-  const maxSpendRaw = flags.get("max-spend-usd");
-  const maxSpendUsd = maxSpendRaw === undefined ? undefined : Number(maxSpendRaw);
-  if (maxSpendUsd !== undefined && (!Number.isFinite(maxSpendUsd) || maxSpendUsd < 0)) {
-    fail("--max-spend-usd must be a non-negative number");
-  }
-  const checkpointFlag = flags.get("checkpoint");
-  if (checkpointFlag !== undefined && checkpointFlag !== "after-task") {
-    fail("--checkpoint must be after-task");
-  }
-  const tierFlag = flags.get("tier");
-  if (tierFlag !== undefined && tierFlag !== "free" && tierFlag !== "paid") {
-    fail("--tier must be free|paid");
-  }
-  const minFitRaw = flags.get("min-fit");
-  let minFit: number | undefined;
-  if (minFitRaw !== undefined) {
-    minFit = Number(minFitRaw);
-    if (!Number.isFinite(minFit) || minFit < 0 || minFit > 10) fail("--min-fit needs a number in 0-10");
-  }
-  const minCapRaw = flags.get("min-capability");
-  let minCapability: number | undefined;
-  if (minCapRaw !== undefined) {
-    minCapability = Number(minCapRaw);
-    if (!Number.isFinite(minCapability) || minCapability < 0 || minCapability > 10) {
-      fail("--min-capability needs a number in 0-10");
-    }
-  }
-  const minAxesRaw = flags.get("min-axes");
-  /** Literal "strict" bumps every axis floor +0.5, mirroring the TUI preview. */
-  let minAxesStrict = false;
-  let minAxesSnapshot: Partial<Record<import("./config.js").CapabilityAxis, number>> | undefined;
-  if (minAxesRaw !== undefined) {
-    if (minAxesRaw === "strict") minAxesStrict = true;
-    else minAxesSnapshot = parseAxisOverrides(minAxesRaw);
-  }
-
-  const issues = await bundle.provider.list({ state: "all", limit: 500 });
-  const runs = listRuns(l);
-  const result = planSchedule({ issues, scope, ...(scopeRef ? { scopeRef } : {}), runs, maxParallel });
-  const lease = orchestration ? readLease(l, orchestration.id) : undefined;
-  const running = Boolean(lease && lease.until > Date.now());
-  if (flags.has("json")) {
-    process.stdout.write(
-      `${JSON.stringify(
-        {
-          orchestration: orchestration?.id ?? null,
-          lease: lease ?? null,
-          running,
-          scope: result.scope,
-          scopeRef: result.scopeRef ?? null,
-          tasks: result.tasks.map((task) => ({
-            number: task.issue.ref.number,
-            title: task.issue.title,
-            ready: task.ready,
-            order: task.order,
-            ...(task.reason ? { reason: task.reason } : {}),
-            plan: task.plan ?? null,
-          })),
-          dispatch: result.dispatch.map((task) => task.issue.ref.number),
-          errors: result.errors,
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    return 0;
-  }
-
-  const scopeText = result.scopeRef ? `${result.scope} #${result.scopeRef.number}` : result.scope;
-  process.stdout.write(
-    `orchestration${orchestration ? ` ${orchestration.id}` : ""} ${scopeText}: ${result.tasks.length} feature(s), ` +
-      `${result.ready.length} ready, ${result.dispatch.length} dispatch` +
-      `${running ? ` · RUNNING ${lease!.owner} pid ${lease!.pid}` : " · idle"}` +
-      `${orchestration?.stopReason ? ` · STOPPED ${orchestration.stopReason}` : ""}\n`,
-  );
-  for (const task of result.tasks) {
-    const mark = task.ready ? "READY" : "BLOCK";
-    process.stdout.write(
-      `  ${mark.padEnd(5)} #${task.issue.ref.number}  ${task.plan ? `${task.plan.status}/${task.plan.verification}` : "no-plan"}  ${task.issue.title}` +
-        `${task.reason ? `\n         ${task.reason}` : ""}\n`,
-    );
-  }
-  for (const error of result.errors) process.stderr.write(`orchestrate: ${error}\n`);
-
-  if (dryRun) {
-    if (result.dispatch.length > 0) {
-      process.stdout.write(`dispatch: ${result.dispatch.map((task) => `#${task.issue.ref.number}`).join(", ")}\n`);
-    }
-    return 0;
-  }
-  if (!orchestration) fail("orchestration state missing");
-  const runtime = await loadRuntime(l);
-  if (tierFlag !== undefined) runtime.machine.selection.tier = tierFlag;
-  if (minFit !== undefined) {
-    for (const ap of Object.values(runtime.policy.agents)) ap.minFit = minFit;
-  }
-  if (minCapability !== undefined) {
-    for (const ap of Object.values(runtime.policy.agents)) ap.minCapability = minCapability;
-  }
-  if (minAxesSnapshot) {
-    for (const ap of Object.values(runtime.policy.agents)) ap.minAxes = { ...(ap.minAxes ?? {}), ...minAxesSnapshot };
-  }
-  if (minAxesStrict) {
-    for (const ap of Object.values(runtime.policy.agents)) {
-      const next = { ...(ap.minAxes ?? {}) };
-      for (const axis of CAPABILITY_AXES) {
-        const current = next[axis] ?? ap.minFit ?? 6;
-        next[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
-      }
-      ap.minAxes = next;
-    }
-  }
-  const orchestrationId = orchestration.id;
-  if (!acquireLease(l, orchestrationId, owner, 120_000)) {
-    const current = readLease(l, orchestrationId);
-    fail(
-      `orchestration ${orchestrationId} is already running` +
-        (current ? ` (${current.owner}, pid ${current.pid})` : " (lease held by another process)"),
-    );
-  }
-  const executed: Array<{ issue: number; runId: string; status: string; error?: string }> = [];
-  let stopReason: string | undefined;
-  let checkpoint: string | undefined;
-  const heartbeat = setInterval(() => {
-    if (!renewLease(l, orchestrationId, owner, 120_000)) {
-      stopReason ??= `orchestration ${orchestrationId} lost its lease`;
-    }
-  }, 30_000);
-  const runTask = async (
-    task: NonNullable<(typeof result.dispatch)[number]>,
-  ): Promise<{ stop?: string; checkpoint?: string }> => {
-    if (!task.plan) return {};
-    if (task.plan.role !== "build") {
-      const stop = `feature #${task.issue.ref.number} has role ${task.plan.role}; review dispatch is not implemented`;
-      process.stdout.write(`  HOLD  #${task.issue.ref.number}  ${stop}\n`);
-      return { stop };
-    }
-    if (task.plan.planReview === "human" && !(orchestration.approvedPackets ?? []).includes(task.issue.ref.number)) {
-      process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting packet approval\n`);
-      return { checkpoint: "awaiting_packet_approval" };
-    }
-    const priorAttempts = runs.filter((run) => {
-      const assigned = run.taskIssue ?? run.issue;
-      return assigned?.repo === task.issue.ref.repo && assigned.number === task.issue.ref.number;
-    }).length;
-    let retryEvidence: string | undefined = selectRetrySeed(runs, task.issue.ref);
-    // Retry on the previous attempt's worktree when it still exists: a fresh
-    // createWorktree would fail with branch_checked_out because the failed
-    // attempt still holds the branch.
-    let reuseTree = findRetryWorktree(l, task.issue.ref, runs, []);
-    if (reuseTree) {
-      process.stdout.write(`  REUSE #${task.issue.ref.number}  worktree ${reuseTree.path}\n`);
-    }
-    for (let retry = 0; retry <= task.plan.retriesBeforeReplan; retry++) {
-      const attempt = priorAttempts + retry + 1;
-      process.stdout.write(`  RUN   #${task.issue.ref.number}  attempt ${attempt}${retry > 0 ? ` (retry ${retry})` : ""}\n`);
-      let outcome;
-      try {
-        outcome = await executeFeature({
-          layout: l,
-          machine: runtime.machine,
-          policy: runtime.policy,
-          models: runtime.models,
-          catalogue: runtime.catalogue.models,
-          configuredProviders: runtime.configuredProviders,
-          home: l.home,
-          provider: bundle.provider,
-          issue: task.issue,
-          plan: task.plan,
-          orchestrationId: orchestration.id,
-          orchestrationScope: scope,
-          ...(scopeRef ? { scopeRef } : {}),
-          attempt,
-          requireModel: flags.get("model"),
-          ...(retryEvidence ? { retryEvidence } : {}),
-          ...(reuseTree
-            ? {
-                worktree: reuseTree.path,
-                ...(reuseTree.ownerRunId ? { worktreeOwnerRunId: reuseTree.ownerRunId } : {}),
-                ...(reuseTree.branch ? { branch: reuseTree.branch } : {}),
-                ...(reuseTree.baseBranch ? { baseBranch: reuseTree.baseBranch } : {}),
-                ...(reuseTree.baseRef ? { baseRef: reuseTree.baseRef } : {}),
-              }
-            : {}),
-        });
-      } catch (error) {
-        const stop = `feature #${task.issue.ref.number} crashed: ${(error as Error).message}`;
-        process.stdout.write(`  STOP  #${task.issue.ref.number}  ${stop}\n`);
-        return { stop };
-      }
-      executed.push({ issue: task.issue.ref.number, runId: outcome.runId, status: outcome.status, ...(outcome.error ? { error: outcome.error } : {}) });
-      process.stdout.write(`  ${outcome.status === "completed" ? "DONE" : "STOP"}  #${task.issue.ref.number}  ${outcome.runId}  ${outcome.status}${outcome.error ? `  ${outcome.error}` : ""}\n`);
-      if (outcome.status === "completed") {
-        if (task.plan.resultReview === "human" && !(orchestration.approvedResults ?? []).includes(task.issue.ref.number)) {
-          process.stdout.write(`  HOLD  #${task.issue.ref.number}  awaiting result approval\n`);
-          return { checkpoint: "awaiting_result_approval" };
-        }
-        if (task.plan.resultReview === "agent") {
-          const fresh = await bundle.provider.get(task.issue.ref);
-          if (fresh) {
-            try {
-              const closed = await closeCompletedFeature({
-                provider: bundle.provider,
-                layout: l,
-                issue: fresh,
-                runId: outcome.runId,
-                by: "agent",
-              });
-              if (closed.status !== "closed") {
-                return {
-                  stop: `feature #${task.issue.ref.number} ${closed.status}: ${closed.error ?? "closure failed"}`,
-                };
-              }
-              const parents = closed.closedParents.length > 0
-                ? `; closed parent(s) ${closed.closedParents.map((number) => `#${number}`).join(", ")}`
-                : "";
-              const untracked = closed.untrackedPlans.length > 0 ? `; untracked in ${closed.untrackedPlans.join(", ")}` : "";
-              process.stdout.write(`  CLOSE #${task.issue.ref.number}  agent-approved result${parents}${untracked}\n`);
-            } catch (error) {
-              return { stop: `feature #${task.issue.ref.number} closure failed: ${(error as Error).message}` };
-            }
-          }
-        }
-        if (checkpointFlag === "after-task") {
-          return { checkpoint: "after-task" };
-        }
-        return {};
-      }
-      retryEvidence = outcome.error ?? outcome.status;
-      if (!isRetryableFailure(retryEvidence)) {
-        return { stop: `feature #${task.issue.ref.number} ${outcome.status}: ${retryEvidence}` };
-      }
-      reuseTree = findRetryWorktree(
-        l,
-        task.issue.ref,
-        runs,
-        executed.filter((entry) => entry.issue === task.issue.ref.number).map((entry) => entry.runId),
-      );
-      if (reuseTree) {
-        process.stdout.write(`  REUSE #${task.issue.ref.number}  worktree ${reuseTree.path}\n`);
-      }      if (retry >= task.plan.retriesBeforeReplan) {
-        return { stop: `feature #${task.issue.ref.number} needs_planning after ${task.plan.retriesBeforeReplan + 1} attempt(s)` };
-      }
-      process.stdout.write(`  RETRY #${task.issue.ref.number}  evidence: ${retryEvidence.slice(0, 200)}\n`);
-    }
-    return { stop: `feature #${task.issue.ref.number} did not complete` };
-  };
-
-  const queue = [...result.dispatch];
-  const locks = new Map<number, Promise<unknown>>();
-  const withFeatureLock = <T>(feature: number, work: () => Promise<T>): Promise<T> => {
-    const previous = locks.get(feature) ?? Promise.resolve();
-    const next = previous.then(work, work);
-    locks.set(feature, next.catch(() => undefined));
-    return next;
-  };
-  const deadline = maxMinutes === undefined ? undefined : Date.now() + maxMinutes * 60_000;
-  const spentUsd = (): number =>
-    listRuns(l)
-      .filter((run) => run.orchestrationId === orchestration.id)
-      .reduce((sum, run) => sum + run.cost.actual, 0);
-  const invocationBudget = (): string | undefined =>
-    budgetStop({ ...(deadline !== undefined ? { deadline } : {}), ...(maxSpendUsd !== undefined ? { maxSpendUsd } : {}), spentUsd: spentUsd() });
-  const stopFileRequested = (): boolean => orchestrationStopRequested(l, orchestrationId) !== null;
-  const stopped = (): boolean => Boolean(stopReason || checkpoint?.startsWith("awaiting") || stopFileRequested());
-  const workerCount = Math.min(Math.max(1, maxParallel), Math.max(1, queue.length));
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (!stopped()) {
-      if (stopFileRequested()) {
-        stopReason ??= "stop requested";
-        return;
-      }
-      const budget = invocationBudget();
-      if (budget) {
-        stopReason = budget;
-        return;
-      }
-      const task = queue.shift();
-      if (!task) return;
-      const feature = task.issue.parent?.number ?? 0;
-      const outcome = await withFeatureLock(feature, () => runTask(task));
-      if (outcome.stop) {
-        stopReason = outcome.stop;
-        return;
-      }
-      if (outcome.checkpoint) {
-        checkpoint = outcome.checkpoint;
-        return;
-      }
-    }
-  });
-  try {
-    await Promise.all(workers);
-    updateOrchestration(l, orchestration.id, {
-      lastTickAt: new Date().toISOString(),
-      checkpoint: checkpoint ?? (executed.length > 0 ? "after-build" : "preflight"),
-      ...(stopReason ? { stopReason } : {}),
-    });
-  } finally {
-    clearInterval(heartbeat);
-    clearOrchestrationStop(l, orchestrationId);
-    releaseLease(l, orchestrationId, owner);
-  }
-  return stopReason ? 1 : 0;
-}
-
 function cmdShow(argv: string[]): number {
   const { flags, positional } = parseFlags(argv);
   const id = positional[0];
@@ -3987,11 +2569,7 @@ function cmdShow(argv: string[]): number {
     `  context  ${fmtRunTokens(ctx.tokens)} ctx  ${fmtRunTokens(s.usage.totalTokens)} total  ${fmtRunTokens(ctx.peakTokens)} peak\n`,
   );
   process.stdout.write(`  spend    ${s.modelCalls} calls  ${fmtTokens(s.usage.totalTokens)} tok  ${fmtMoney(s.cost.actual)} actual / ${fmtMoney(s.cost.estimated)} estimated\n`);
-  if (s.issue) process.stdout.write(`  issue    #${s.issue.number}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
-  const runAccess = s.capabilities
-    ? issueAccessFromCapabilities(s.capabilities)
-    : agentDef(found.layout, s.agent).issueAccess;
-  process.stdout.write(`  issues   ${runAccess}\n`);
+  if (s.packetId) process.stdout.write(`  packet   ${s.packetId}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
   if (s.parentRunId) process.stdout.write(`  parent   ${s.parentRunId}\n`);
   if (s.worktree) process.stdout.write(`  worktree ${s.worktree}\n`);
   if (s.error) process.stdout.write(`  error    ${s.error}\n`);
@@ -4037,14 +2615,13 @@ function cmdShow(argv: string[]): number {
     if (changes.recent) process.stdout.write(`  recent commits:\n${changes.recent.split("\n").map((line) => `    ${line}`).join("\n")}\n`);
   }
 
-  if (s.orchestrationId || s.taskIssue || related.length > 0) {
+  if (s.orchestrationId || related.length > 0) {
     process.stdout.write(`\nrelated\n`);
     if (s.orchestrationId) {
       process.stdout.write(
         `  orchestration ${s.orchestrationId}${s.orchestrationScope ? ` (${s.orchestrationScope})` : ""}\n`,
       );
     }
-    if (s.taskIssue) process.stdout.write(`  feature       #${s.taskIssue.number}\n`);
     if (s.attempt !== undefined) process.stdout.write(`  attempt       ${s.attempt}\n`);
     if (s.phase) process.stdout.write(`  phase         ${s.phase}\n`);
     if (s.planReview) process.stdout.write(`  plan review   ${s.planReview}\n`);
@@ -4166,20 +2743,11 @@ async function cmdPack(argv: string[]): Promise<number> {
       fail("--context-include must be a JSON object");
     }
   }
-  let issueRef: import("./issues/provider.js").IssueRef | undefined;
-  let provider: import("./issues/provider.js").IssueProvider | undefined;
-  if (flags.has("issue")) {
-    const bundle = await createIssueProvider(l, machine);
-    if (bundle.provider.kind === "none") fail(`issue tracking unavailable: ${bundle.reason ?? "unknown reason"}`);
-    provider = bundle.provider;
-    issueRef = parseIssueRef(flags.get("issue")!, bundle.repo, "github");
-  }
-
   let row = flags.get("model")
     ? catalogueDoc.models.find((entry) => entry.key === flags.get("model") || entry.id === flags.get("model") || `${entry.providerID}/${entry.id}` === flags.get("model"))
     : undefined;
   if (flags.get("model") && !row) fail(`no catalogue row for model "${flags.get("model")}"`);
-  const estimatedChars = issueRef ? 64_000 : 16_000;
+  const estimatedChars = 16_000;
   if (!row) {
     const result = pick({
       agent,
@@ -4203,8 +2771,6 @@ async function cmdPack(argv: string[]): Promise<number> {
     layout: l,
     machine,
     agent,
-    ...(provider ? { provider } : {}),
-    ...(issueRef ? { issue: issueRef } : {}),
     ...(include ? { include } : {}),
     budgetChars: budget.inputChars,
     defaultSkills: defaultSkillsFor({ agent, verification: "verified" }),
@@ -4667,7 +3233,6 @@ async function cmdCorrect(argv: string[]): Promise<number> {
   const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
   const args = ["run", "--parent", parent.id];
   if (parentWorktreePath(parent, found.layout.localDir)) args.push("--inherit-worktree");
-  if (parent.issue) args.push("--issue", String(parent.issue.number), "--auto-issue");
   args.push("--agent", parent.agent);
   if (flags.get("tier")) args.push("--tier", flags.get("tier")!);
   args.push(correction);
@@ -5099,20 +3664,8 @@ async function main(): Promise<void> {
     case "worktree":
       code = await cmdWorktree(rest);
       break;
-    case "issue":
-      code = await cmdIssue(rest);
-      break;
     case "approve":
       code = await cmdApprove(rest);
-      break;
-    case "accept":
-      code = await cmdAccept(rest);
-      break;
-    case "feature":
-      code = await cmdFeature(rest);
-      break;
-    case "pr":
-      code = await cmdPr(rest);
       break;
     case "provider":
       code = await cmdProvider(rest);
@@ -5122,12 +3675,6 @@ async function main(): Promise<void> {
       break;
     case "availability":
       code = await cmdAvailability(rest);
-      break;
-    case "orchestrate":
-      code = await cmdOrchestrate(rest);
-      break;
-    case "queue":
-      code = await cmdQueue(rest);
       break;
     case "plan":
       code = cmdPlan(rest);

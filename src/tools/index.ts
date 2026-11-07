@@ -1,7 +1,7 @@
 /**
  * machine_code — the core tools.
  *
- * Read, write, edit, search, command, context, ask, issue, artifact, and pr.
+ * Read, write, edit, search, command, context, ask, artifact, skill, and pr.
  * Everything else is a named typed command dispatched through `command`.
  * Tools never get a shell.
  */
@@ -37,7 +37,6 @@ import {
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
 import { documentSections, sectionTitle } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
-import { issueGraphTool, issueTool, type IssueToolContext } from "./issues.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
 import { prTool, type PrToolContext } from "./pr.js";
@@ -55,8 +54,6 @@ export interface ToolContext {
   tools?: readonly string[];
   /** When provided, the `ask` tool is live (suspends the run for input). */
   ask?: AskContext;
-  /** When provided, the `issue` tool is live (capability-gated issue access). */
-  issues?: IssueToolContext;
   /** When provided, the `artifact` tool is live (tools/scripts inventory). */
   artifacts?: ArtifactToolContext;
   /** When provided, the `skill` tool is live (on-demand skill bodies). */
@@ -1644,38 +1641,6 @@ function askUnavailable(): AgentTool<typeof AskUnavailableParams> {
   };
 }
 
-/* ------------------------------------------------------------------- issue */
-
-const IssueUnavailableParams = Type.Object({
-  action: Type.String({ description: "Issue operation." }),
-});
-
-function issueUnavailable(): AgentTool<typeof IssueUnavailableParams> {
-  return {
-    name: "issue",
-    label: "issue",
-    description: "Structured GitHub issue access.",
-    parameters: IssueUnavailableParams,
-    async execute() {
-      return fail("issue tracking is not available in this run (disabled, no GitHub remote, or gh unauthenticated)");
-    },
-  };
-}
-
-const IssueGraphUnavailableParams = Type.Object({});
-
-function issueGraphUnavailable(): AgentTool<typeof IssueGraphUnavailableParams> {
-  return {
-    name: "issue_graph",
-    label: "issue_graph",
-    description: "Create an Epic with Features and Tasks.",
-    parameters: IssueGraphUnavailableParams,
-    async execute() {
-      return fail("issue tracking is not available in this run (disabled, no GitHub remote, or gh unauthenticated)");
-    },
-  };
-}
-
 /* ----------------------------------------------------------------- artifact */
 
 const ArtifactUnavailableParams = Type.Object({
@@ -1740,8 +1705,6 @@ export type CoreToolName =
   | "command"
   | "context"
   | "ask"
-  | "issue"
-  | "issue_graph"
   | "artifact"
   | "skill"
   | "pr";
@@ -1755,8 +1718,6 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     command: commandTool(ctx),
     context: contextTool(ctx),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
-    issue: ctx.issues ? issueTool(ctx.issues) : issueUnavailable(),
-    issue_graph: ctx.issues ? issueGraphTool(ctx.issues) : issueGraphUnavailable(),
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),
     pr: ctx.prs ? prTool(ctx.prs) : prUnavailable(),

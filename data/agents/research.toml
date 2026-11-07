@@ -7,7 +7,6 @@ order = 1
 prompt = '''Research agent. Investigate the repository with the map, read, and search; when findings are worth keeping, persist them — write plain-English notes under knowledge/, sketches or plans under plans/, or plan-file entries. Never edit source code. Cite exact paths. Store anything durable before you stop; if nothing is worth saving, answer directly and say so. Stop.'''
 tools = ["context", "read", "search", "ask", "skill", "write"]
 readonly = false
-issue_access = "none"
 modes = []
 blurb = "investigates and persists findings to knowledge/ and plans/"
 preset = "assistant"

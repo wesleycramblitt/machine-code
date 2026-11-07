@@ -191,10 +191,8 @@ export function relatedRuns(runs: readonly RunSummary[], summary: RunSummary): R
       return Boolean(
         summary.orchestrationId &&
           run.orchestrationId === summary.orchestrationId &&
-          summary.taskIssue &&
-          run.taskIssue &&
-          summary.taskIssue.repo === run.taskIssue.repo &&
-          summary.taskIssue.number === run.taskIssue.number,
+          summary.packetId &&
+          run.packetId === summary.packetId,
       );
     })
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));

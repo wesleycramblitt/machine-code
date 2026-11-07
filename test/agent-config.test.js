@@ -16,7 +16,7 @@ import {
   ambiguityPrompt,
   PRESETS,
 } from "../dist/agents/config.js";
-import { capabilitiesFor, hasCapability, issueAccessFromCapabilities } from "../dist/policy/capabilities.js";
+import { capabilitiesFor, hasCapability } from "../dist/policy/capabilities.js";
 import { agentDef } from "../dist/agents.js";
 import { RunRecorder } from "../dist/state/runs.js";
 
@@ -43,25 +43,20 @@ function tempDir(prefix) {
 test("role presets resolve to the documented defaults", () => {
   const planner = resolveAgentConfig({ role: "planner" });
   assert.equal(planner.preset, "plan");
-  assert.equal(planner.issueAccess, "none");
 
   const review = resolveAgentConfig({ role: "review" });
   assert.equal(review.preset, "review");
-  assert.equal(review.issueAccess, "read");
   assert.equal(review.delegate, false);
   const build = resolveAgentConfig({ role: "build" });
   assert.equal(build.preset, "implement");
   assert.equal(build.delegate, false);
   assert.equal(build.ask, false);
   assert.equal(build.verification, "verified");
-  assert.equal(build.issueAccess, "read");
   assert.equal(build.artifactScripts, true);
 
   const general = resolveAgentConfig({ role: "research" });
   assert.equal(general.preset, "assistant");
-  assert.equal(general.issues, "disabled");
   assert.equal(general.ask, true);
-  assert.equal(general.issueAccess, "none");
 });
 
 test("override precedence: run flag > repo policy > machine; presets no longer steer", () => {
@@ -137,59 +132,32 @@ test("capability matrix: build, review, research, planner", () => {
   const build = capabilitiesFor("build", { ...PRESETS.implement });
   assert.ok(hasCapability(build, "code:write"));
   assert.ok(hasCapability(build, "artifact:provision"));
-  assert.ok(hasCapability(build, "issue:read"));
-  assert.ok(!hasCapability(build, "issue:write"));
-  assert.ok(!hasCapability(build, "issue:create"));
-  assert.ok(!hasCapability(build, "issue:close"));
 
   const review = capabilitiesFor("review", { ...PRESETS.review });
   assert.ok(hasCapability(review, "review:write"));
-  assert.ok(hasCapability(review, "issue:read"));
   assert.ok(!hasCapability(review, "code:write"));
-  assert.ok(!hasCapability(review, "issue:close"));
 
   const general = capabilitiesFor("research", { ...PRESETS.assistant });
   assert.ok(hasCapability(general, "code:read"));
-  assert.ok(!hasCapability(general, "issue:read"));
 
   const planner = capabilitiesFor("planner", { ...PRESETS.plan });
   assert.ok(hasCapability(planner, "code:read"));
   assert.ok(hasCapability(planner, "knowledge:write"));
-  assert.ok(!hasCapability(planner, "issue:read"));
   assert.ok(!hasCapability(planner, "code:write"));
 });
 
-test("issue_access is one resolved level and derives capabilities", () => {
+test("capabilities carry no issue grants", () => {
   const root = tempDir("access");
   try {
     const layout = fakeLayout(root);
-    const planner = resolveAgent(layout, "planner");
-    assert.equal(planner.config.issueAccess, "none");
-    assert.ok(!hasCapability(planner.capabilities, "issue:create"));
-    assert.ok(!hasCapability(planner.capabilities, "issue:plan"));
-    assert.ok(!planner.def.tools.includes("issue"));
-
-    const build = resolveAgent(layout, "build");
-    assert.equal(build.config.issueAccess, "read");
-    assert.ok(hasCapability(build.capabilities, "issue:read"));
-    assert.ok(!hasCapability(build.capabilities, "issue:create"));
-    assert.ok(!hasCapability(build.capabilities, "issue:plan"));
-
-    const general = resolveAgent(layout, "research");
-    assert.equal(general.config.issueAccess, "none");
-    assert.ok(!general.def.tools.includes("issue"));
-    assert.ok(!hasCapability(general.capabilities, "issue:read"));
-
-    const planOnly = resolveAgent(layout, "planner", { runOverrides: { issueAccess: "plan" } });
-    assert.equal(planOnly.config.issueAccess, "plan");
-    assert.ok(hasCapability(planOnly.capabilities, "issue:plan"));
-    assert.ok(!hasCapability(planOnly.capabilities, "issue:create"));
-
-    assert.equal(issueAccessFromCapabilities(planner.capabilities), "none");
-    assert.equal(issueAccessFromCapabilities(["issue:read", "issue:write"]), "plan");
-    assert.equal(issueAccessFromCapabilities(build.capabilities), "read");
-    assert.equal(issueAccessFromCapabilities(planOnly.capabilities), "plan");
-    assert.equal(issueAccessFromCapabilities(general.capabilities), "none");
+    for (const role of ["planner", "build", "research", "review"]) {
+      const resolved = resolveAgent(layout, role);
+      assert.ok(!resolved.def.tools.includes("issue"), `${role} has no issue tool`);
+      assert.ok(!resolved.def.tools.includes("issue_graph"), `${role} has no issue_graph tool`);
+      for (const cap of resolved.capabilities) {
+        assert.ok(!cap.startsWith("issue:"), `${role} capability ${cap} is not issue-scoped`);
+      }
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

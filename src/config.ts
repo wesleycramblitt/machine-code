@@ -118,12 +118,6 @@ export interface MachineConfig {
   git: { baseBranch?: string };
   /** Machine-level agent configuration overrides ([agents.<role>]). */
   agents: Record<string, AgentConfigOverrides>;
-  /** GitHub issue integration ([issues]). */
-  issues: {
-    provider: "github" | "none";
-    policy: "required" | "optional" | "disabled";
-    cacheTtlSeconds: number;
-  };
   /** Context assembly ([context]). */
   context: {
     maxChars: number;
@@ -147,8 +141,6 @@ export interface AgentConfigOverrides {
   preset?: string;
   delegate?: boolean;
   verification?: string;
-  issues?: string;
-  issueAccess?: string;
   artifactScripts?: boolean;
   ask?: boolean;
   approval?: string;
@@ -194,15 +186,11 @@ export interface AgentPolicy {
   delegate?: boolean;
   /** Verification level: direct | verified | redundant. */
   verification?: string;
-  /** Issue tracking: required | optional | disabled. */
-  issues?: string;
-  /** Issue access: none | read | plan | create. */
-  issueAccess?: string;
   /** May provisioning write executable scripts (human opt-in). */
   artifactScripts?: boolean;
   /** May the agent use the ask tool. */
   ask?: boolean;
-  /** Default approval mode for issues it plans/delegates: human | agent. */
+  /** Default approval mode for runs it plans/delegates: human | agent. */
   approval?: string;
   /** Ambiguity mode: strict | precise | adaptive | autonomous. */
   ambiguity?: string;
@@ -294,8 +282,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       preset: typeof r.preset === "string" ? r.preset : typeof r.config_mode === "string" ? r.config_mode : undefined,
       delegate: typeof r.delegate === "boolean" ? r.delegate : undefined,
       verification: typeof r.verification === "string" ? r.verification : undefined,
-      issues: typeof r.issues === "string" ? r.issues : typeof r.issue_tracking === "string" ? r.issue_tracking : undefined,
-      issueAccess: typeof r.issue_access === "string" ? r.issue_access : undefined,
       artifactScripts: typeof r.artifact_scripts === "boolean" ? r.artifact_scripts : undefined,
       ask: typeof r.ask === "boolean" ? r.ask : undefined,
       approval: typeof r.approval === "string" ? r.approval : undefined,
@@ -303,12 +289,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       worktree: typeof r.worktree === "boolean" ? r.worktree : undefined,
     };
   }
-  const issuesRaw = (raw.issues ?? {}) as Record<string, unknown>;
-  const issuePolicy =
-    issuesRaw.policy === "required" || issuesRaw.policy === "disabled" || issuesRaw.policy === "optional"
-      ? issuesRaw.policy
-      : "optional";
-  const issueTtl = asNumber(issuesRaw.cache_ttl_seconds);
   const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
   const availabilityRaw = (raw.availability ?? {}) as Record<string, unknown>;
   const probeMode: AvailabilityProbeMode =
@@ -354,11 +334,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       baseBranch: typeof gitRaw.base_branch === "string" ? gitRaw.base_branch : undefined,
     },
     agents,
-    issues: {
-      provider: issuesRaw.provider === "none" ? "none" : "github",
-      policy: issuePolicy,
-      cacheTtlSeconds: issueTtl ?? 30,
-    },
     context: {
       maxChars: asNumber(contextRaw.max_chars) ?? 64_000,
       planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
@@ -454,8 +429,6 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     preset: typeof raw.preset === "string" ? raw.preset : typeof raw.config_mode === "string" ? raw.config_mode : base.preset,
     delegate: typeof raw.delegate === "boolean" ? raw.delegate : base.delegate,
     verification: typeof raw.verification === "string" ? raw.verification : base.verification,
-    issues: typeof raw.issues === "string" ? raw.issues : typeof raw.issue_tracking === "string" ? raw.issue_tracking : base.issues,
-    issueAccess: typeof raw.issue_access === "string" ? raw.issue_access : base.issueAccess,
     artifactScripts: typeof raw.artifact_scripts === "boolean" ? raw.artifact_scripts : base.artifactScripts,
     ask: typeof raw.ask === "boolean" ? raw.ask : base.ask,
     approval: typeof raw.approval === "string" ? raw.approval : base.approval,

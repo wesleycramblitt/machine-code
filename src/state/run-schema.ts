@@ -10,7 +10,6 @@
  */
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type { IssueRef } from "../issues/provider.js";
 
 export const SCHEMA_VERSION = 2 as const;
 
@@ -121,7 +120,6 @@ export interface RunSummary {
   preset?: string;
   delegate?: boolean;
   verification?: string;
-  issues?: string;
   ask?: boolean;
   approval?: string;
   ambiguity?: string;
@@ -147,13 +145,9 @@ export interface RunSummary {
   baseRef?: string;
   /** Commit created by the runner after gates/review passed. */
   commit?: string;
-  /** Primary Task issue association (Tasks only, never Epic/Feature). */
-  issue?: IssueRef;
   /** Deterministic orchestration fields (optional until Phase 5). */
   orchestrationId?: string;
   orchestrationScope?: "project" | "epic" | "feature";
-  scopeRef?: IssueRef;
-  taskIssue?: IssueRef;
   attempt?: number;
   phase?: "build" | "review";
   planSnapshotHash?: string;
@@ -215,13 +209,6 @@ function migrateCost(value: unknown): RunCost {
   return { actual: num(raw.actual), estimated: num(raw.estimated) };
 }
 
-function migrateIssue(value: unknown): IssueRef | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const r = value as Record<string, unknown>;
-  if (typeof r.provider !== "string" || typeof r.repo !== "string" || typeof r.number !== "number") return undefined;
-  return { provider: r.provider, repo: r.repo, number: r.number };
-}
-
 function migrateRunSettings(value: unknown): RunSettingsSnapshot | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const r = value as Record<string, unknown>;
@@ -262,7 +249,6 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     preset: str(r.preset),
     delegate: typeof r.delegate === "boolean" ? r.delegate : undefined,
     verification: str(r.verification),
-    issues: str(r.issues),
     ask: typeof r.ask === "boolean" ? r.ask : undefined,
     approval: str(r.approval),
     ambiguity: str(r.ambiguity),
@@ -282,14 +268,11 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     baseBranch: str(r.baseBranch),
     baseRef: str(r.baseRef),
     commit: str(r.commit),
-    issue: migrateIssue(r.issue),
     orchestrationId: str(r.orchestrationId),
     orchestrationScope:
       r.orchestrationScope === "project" || r.orchestrationScope === "epic" || r.orchestrationScope === "feature"
         ? r.orchestrationScope
         : undefined,
-    scopeRef: migrateIssue(r.scopeRef),
-    taskIssue: migrateIssue(r.taskIssue),
     attempt: typeof r.attempt === "number" && Number.isFinite(r.attempt) ? r.attempt : undefined,
     phase: r.phase === "build" || r.phase === "review" ? r.phase : undefined,
     planSnapshotHash: str(r.planSnapshotHash),

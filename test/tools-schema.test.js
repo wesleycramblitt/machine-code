@@ -11,9 +11,11 @@ test("tool schema accounting counts every sent tool definition", () => {
   assert.ok(one > 0);
   assert.ok(two > one);
 
-  const map = toolSchemaCharsByName(["read", "issue"]);
+  const map = toolSchemaCharsByName(["read", "command", "search"]);
   assert.ok(map.get("read") > 0);
-  assert.ok(map.get("issue") > map.get("read"));
+  assert.ok(map.get("command") > 0);
+  assert.ok(map.get("search") > 0);
+  assert.equal(map.size, 3);
 });
 
 test("core tools prefer strict JSON-schema constrained sampling", () => {

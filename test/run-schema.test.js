@@ -94,8 +94,7 @@ test("orchestration and process fields migrate with validation", () => {
     startedAt: "2026-10-31T00:00:00.000Z",
     orchestrationId: "orch-1",
     orchestrationScope: "epic",
-    scopeRef: { provider: "github", repo: "o/r", number: 10 },
-    taskIssue: { provider: "github", repo: "o/r", number: 11 },
+    packetId: "demo",
     attempt: 2,
     phase: "review",
     planSnapshotHash: "abc",
@@ -107,8 +106,7 @@ test("orchestration and process fields migrate with validation", () => {
   assert.ok(migrated);
   assert.equal(migrated.orchestrationId, "orch-1");
   assert.equal(migrated.orchestrationScope, "epic");
-  assert.deepEqual(migrated.scopeRef, { provider: "github", repo: "o/r", number: 10 });
-  assert.deepEqual(migrated.taskIssue, { provider: "github", repo: "o/r", number: 11 });
+  assert.equal(migrated.packetId, "demo");
   assert.equal(migrated.attempt, 2);
   assert.equal(migrated.phase, "review");
   assert.equal(migrated.planSnapshotHash, "abc");

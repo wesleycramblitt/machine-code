@@ -7,7 +7,6 @@ const defaults = {
   preset: "assistant",
   delegate: false,
   verification: "verified",
-  issues: "optional",
   artifactScripts: false,
   ask: true,
   approval: "human",
@@ -27,7 +26,6 @@ test("fork settings preserve a new run's saved selection and agent config", () =
     agent: "build",
     preset: "implement",
     verification: "redundant",
-    issues: "required",
     ask: false,
     approval: "agent",
     ambiguity: "adaptive",
@@ -38,7 +36,7 @@ test("fork settings preserve a new run's saved selection and agent config", () =
       minAxes: { reasoning: 7, code: 7, agentic: 7, general: 7 },
     },
     request: "implement the task",
-    issue: { provider: "github", repo: "o/r", number: 4 },
+    packetId: "demo",
   };
   const result = forkSettingsFromRun({
     summary,
@@ -51,7 +49,6 @@ test("fork settings preserve a new run's saved selection and agent config", () =
   assert.equal(result.agent, "build");
   assert.equal(result.preset, "implement");
   assert.equal(result.verification, "redundant");
-  assert.equal(result.issues, "required");
   assert.equal(result.ask, false);
   assert.equal(result.approval, "agent");
   assert.equal(result.ambiguity, "adaptive");
@@ -60,7 +57,7 @@ test("fork settings preserve a new run's saved selection and agent config", () =
   assert.equal(result.minFit, 7.5);
   assert.equal(result.floors, "strict");
   assert.equal(result.prompt, "implement the task");
-  assert.deepEqual(result.issue, { provider: "github", repo: "o/r", number: 4 });
+  assert.equal(result.packet, "demo");
 });
 
 test("fork settings keep auto-selection when the snapshot has no model pin", () => {
@@ -131,7 +128,6 @@ test("fork settings drop an unavailable model and validate bad values", () => {
     agent: "not-an-agent",
     preset: "nope",
     verification: "nope",
-    issues: "nope",
     approval: "nope",
     ambiguity: "nope",
     settings: { tier: "paid", model: "p/gone" },
@@ -149,7 +145,6 @@ test("fork settings drop an unavailable model and validate bad values", () => {
   assert.equal(result.model, undefined);
   assert.equal(result.preset, "assistant");
   assert.equal(result.verification, "verified");
-  assert.equal(result.issues, "optional");
   assert.equal(result.approval, "human");
   assert.equal(result.ambiguity, "precise");
   assert.equal(result.tier, "paid");

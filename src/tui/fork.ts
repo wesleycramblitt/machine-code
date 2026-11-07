@@ -1,7 +1,6 @@
 import { AGENT_NAMES } from "../agents.js";
 import type { AgentConfig } from "../agents/config.js";
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
-import type { IssueRef } from "../issues/provider.js";
 import { isFreeRow } from "../select.js";
 import type { RunEvent, RunSummary } from "../state/runs.js";
 
@@ -11,7 +10,6 @@ export interface ForkedRunSettings {
   model?: string;
   preset: string;
   verification: "direct" | "verified" | "redundant";
-  issues: "required" | "optional" | "disabled";
   ask: boolean;
   approval: "human" | "agent";
   ambiguity: "strict" | "precise" | "adaptive" | "autonomous";
@@ -19,7 +17,6 @@ export interface ForkedRunSettings {
   /** undefined = role policy; null = explicit zero. */
   minFit: number | null | undefined;
   floors: "role" | "strict" | "off";
-  issue?: IssueRef;
   /** Packet slug attached in the composer; run with `--packet <slug>`. */
   packet?: string;
   prompt: string;
@@ -27,7 +24,6 @@ export interface ForkedRunSettings {
 
 const PRESETS = ["plan", "orchestrate", "implement", "review", "assistant", "unrestricted"] as const;
 const VERIFICATIONS = ["direct", "verified", "redundant"] as const;
-const ISSUE_TRACKINGS = ["required", "optional", "disabled"] as const;
 const APPROVALS = ["human", "agent"] as const;
 const AMBIGUITIES = ["strict", "precise", "adaptive", "autonomous"] as const;
 
@@ -103,7 +99,6 @@ export function forkSettingsFromRun(input: {
       VERIFICATIONS,
       defaults.verification,
     ),
-    issues: oneOf(summary.issues ?? cfg.issues, ISSUE_TRACKINGS, defaults.issues),
     ask:
       typeof summary.ask === "boolean"
         ? summary.ask
@@ -115,7 +110,6 @@ export function forkSettingsFromRun(input: {
     tier,
     minFit: settings?.minFit,
     floors,
-    ...(summary.issue ? { issue: summary.issue } : {}),
     ...(summary.packetId ? { packet: summary.packetId } : {}),
     prompt: summary.request,
   };

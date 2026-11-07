@@ -46,14 +46,12 @@ test("roles, prompts, tools, and presets come from data", () => {
   assert.equal(rolePreset("planner"), "plan");
   assert.equal(ROLE_PRESET.build, "implement");
   assert.equal(PRESETS.orchestrate.delegate, true);
-  assert.equal(PRESETS.assistant.issues, "disabled");
 
   assert.equal(AGENT_META.planner.modes.length, 0);
   assert.equal(AGENT_META.build.modes.length, 0);
 
   const planner = agentDef(layout, "planner");
   assert.match(planner.prompt, /Planner\./);
-  assert.equal(planner.issueAccess, "none");
   assert.ok(!planner.tools.includes("issue"));
   assert.ok(planner.tools.includes("write"));
 

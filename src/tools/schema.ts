@@ -19,7 +19,6 @@ const SCHEMA_CONTEXT = {
   commands: new Map(),
   ask: {},
   task: {},
-  issues: {},
   artifacts: {},
   prs: {},
 } as unknown as ToolContext;
