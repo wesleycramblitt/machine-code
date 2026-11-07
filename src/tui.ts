@@ -33,6 +33,9 @@ import { scrollLines, selectableLines } from "./tui/scroll.js";
 import { renderDeleteConfirm } from "./tui/screens/delete.js";
 import { renderPacket } from "./tui/screens/packet.js";
 import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
+import { renderAnswer } from "./tui/screens/answer.js";
+import { renderCorrect } from "./tui/screens/correct.js";
+import { renderRunsList } from "./tui/screens/runs-list.js";
 import { renderSettings } from "./tui/screens/settings.js";
 import { renderSpend } from "./tui/screens/spend.js";
 import {
@@ -1055,95 +1058,21 @@ export async function runTui(): Promise<void> {
 
     /* ------------------------------------------------------------- runs */
     if (page === "runs" && screen === "list") {
-      const lines: string[] = [];
-      const selectedId = selectedRow?.id;
-      let selectedEndLine = lines.length;
-      for (const row of runIndex.rows) {
-        const isSelected = row.id === selectedId;
-        const indent = "  ".repeat(row.depth);
-        const rendered: string[] = [];
-        if (row.kind === "repo") {
-          const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
-          rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
-        } else if (row.kind === "section") {
-          const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : GR;
-          const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
-          rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
-        } else if (row.kind === "packet") {
-          const status = row.packet.status;
-          const tone = status === "in-progress" ? C : status === "blocked" ? Y : status === "done" ? G : D;
-          const glyph = status === "in-progress" ? "●" : status === "blocked" ? "⏸" : status === "done" ? "✓" : "○";
-          const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${glyph} ${tone}${row.slug}${R} ${D}[${status}]${R}`;
-          const runs = row.directRuns > 0 ? `${D}${row.directRuns} run${row.directRuns === 1 ? "" : "s"}${R}` : "";
-          const detail = `${D}${trunc(row.packet.deliverable, Math.max(12, cols - indent.length - 34))}${R}`;
-          const text = ` ${pad(left, Math.max(20, cols - visible(`${runs}  ${detail}`) - 2))}${runs}  ${detail}`;
-          rendered.push(selected(text, isSelected));
-        } else {
-          const run = row.run;
-          const ask = run.status === "awaiting_input" ? ` ${Y}ASK${R}` : "";
-          const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
-          const reason = run.stopReason && run.stopReason !== "completed" ? ` ${D}${run.stopReason}${R}` : "";
-          const repoTag = runsGroup === "overall" ? ` ${D}[${repoLabel(run.repoRoot)}]${R}` : "";
-          const right = cols < 50
-            ? `${D}${fmtTokens(run.usage.totalTokens)} · ${ago(run.lastActivityAt)}${R}`
-            : `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;
-          if (runNarrow) {
-            const identity = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R}${ask}${pr}${reason}`;
-            rendered.push(selected(` ${trunc(identity, Math.max(12, cols - visible(right) - 2))} ${right}`, isSelected));
-            const agent = `${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}`;
-            const request = run.request.replace(/\s+/g, " ").slice(0, 60);
-            const detail = `${agent} ${D}${request}${R}`;
-            rendered.push(selected(` ${indent}      ${trunc(detail, Math.max(12, cols - indent.length - 8))}`, isSelected));
-          } else {
-            const left = `${indent}  ${icon(run.status)} ${D}${runIdFromEvent(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}${ask}${pr}${reason}`;
-            const context = `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}`;
-            rendered.push(selected(` ${pad(left, Math.max(30, cols - visible(right) - visible(context) - 2))}${context}${right}`, isSelected));
-          }
-        }
-        if (focus && !focus.has(row.id) && row.kind === "run") {
-          for (let i = 0; i < rendered.length; i++) rendered[i] = dim(rendered[i]!);
-        }
-        if (isSelected) {
-          selectedEndLine = lines.length + rendered.length - 1;
-        }
-        lines.push(...rendered);
-      }
-      if (runIndex.rows.length === 0) {
-        lines.push("");
-        lines.push(` ${D}No runs here yet. Press ${C}n${R}${D} to start one.${R}`);
-      }
-      const windowed = selectableLines(lines, Math.min(selectedEndLine, Math.max(0, lines.length - 1)), runsScroll, bodyH);
-      runsScroll = windowed.scroll;
-      body = clipBody(windowed.lines);
-      const selectedListRow = runIndex.selectable[runsSel];
-      const selectedPending =
-        selectedListRow?.kind === "run" && selectedListRow.run.status === "awaiting_input"
-          ? pendingForRun(selectedListRow.run)
-          : null;
-      const answerAction = selectedPending ? [command("a", "Answer", undefined, Y)] : [];
-      actions = narrow
-        ? joinCommands([
-            command("n", "New", undefined, C),
-            command("Enter", "Open", undefined, G),
-            ...answerAction,
-            command("space", "Fold", undefined, Y),
-            command("j/k", "Move", undefined, M),
-            command("/", "Search", undefined, BL),
-          ])
-        : joinCommands([
-            command("n", "New run", undefined, C),
-            command("Enter", "Open", undefined, G),
-            ...answerAction,
-            command("space", "Fold", undefined, Y),
-            command("j/k", "Move", undefined, M),
-            command("/", "Search", undefined, BL),
-          ]);
-      extraActions = joinCommands([
-        command("g", "Group", RUN_GROUP_LABELS[runsGroup], C),
-        command("f", "Repos", runsRepoScope === "all" ? "all" : "cwd", M),
-        command("D", "Delete", undefined, RED),
-      ]);
-      if (toast) secondary = `${Y}${toast}${R}`;
+      const frame = renderRunsList({
+        cols, narrow, runNarrow, bodyH, theme, toast,
+        index: runIndex,
+        selectedRow,
+        focus,
+        group: runsGroup,
+        reposScope: runsRepoScope,
+        pendingFor: pendingForRun,
+        scroll: runsScroll,
+      });
+      runsScroll = frame.scroll;
+      body = frame.body;
+      actions = frame.actions;
+      extraActions = frame.extraActions;
+      secondary = frame.secondary;
     }
 
     /* ----------------------------------------------------------- delete */
@@ -2443,83 +2372,35 @@ export async function runTui(): Promise<void> {
             readInbox(detail.dir),
           )
         : null;
-      const options = answerOptions.length > 0 ? answerOptions : pending?.options ?? [];
-      const width = Math.max(20, cols - 8);
-      const question = pending?.text ?? "(question text not recorded)";
-      const questionLines = wrapText(question, width);
-      const top: string[] = [];
-      questionLines.forEach((line, index) => {
-        top.push(index === 0 ? ` ${Y}?${R} ${W}${line}${R}` : `   ${W}${line}${R}`);
+      const frame = renderAnswer({
+        cols,
+        bodyH,
+        question: pending?.text ?? "(question text not recorded)",
+        options: answerOptions.length > 0 ? answerOptions : pending?.options ?? [],
+        answerText,
+        scroll: answerScroll,
       });
-      top.push("");
-      if (options.length > 0) {
-        top.push(` ${B}${C}Options${R}`);
-        for (let i = 0; i < options.length && i < 9; i++) {
-          const optionLines = wrapText(options[i]!, width - 4);
-          optionLines.forEach((line, index) => {
-            top.push(index === 0
-              ? ` ${B}${M}${i + 1}${R} ${W}${line}${R}`
-              : `   ${W}${line}${R}`);
-          });
-        }
-        top.push("");
-      }
-      // Give the question/options as much room as possible. Shrink the answer
-      // box before hiding question lines.
-      const inputLinesFor = (height: number) => 3 + height;
-      let boxHeight = Math.max(1, Math.min(8, bodyH - 6));
-      let availableTop = Math.max(1, bodyH - inputLinesFor(boxHeight));
-      if (top.length > availableTop) {
-        const needed = bodyH - top.length - 3;
-        boxHeight = Math.max(1, Math.min(boxHeight, needed));
-        availableTop = Math.max(1, bodyH - inputLinesFor(boxHeight));
-      }
-      const wrapped = wrapText(answerText || "(type the answer, then press Enter)", width - 2);
-      const inputLines = [
-        ` ${B}${C}Answer${R}`,
-        ` ${D}┌${"─".repeat(width)}┐${R}`,
-        ...Array.from({ length: boxHeight }, (_, i) =>
-          ` ${D}│${R} ${W}${fit(wrapped[i] ?? "", width - 2)}${R} ${D}│${R}`),
-        ` ${D}└${"─".repeat(width)}┘${R}`,
-      ];
-      const view = scrollLines(top, answerScroll, availableTop);
-      answerScroll = view.scroll;
-      answerPage = Math.max(1, availableTop - 1);
-      answerOverflow = top.length > availableTop;
-      body = clipBody([...view.lines, ...inputLines]);
-      actions = joinCommands([
-        ...(options.length > 0 ? [command("1-9", "Choose", undefined, M)] : []),
-        ...(answerOverflow ? [command("^D/^U", "Scroll", undefined, M)] : []),
-        command("Enter", "Send", undefined, G),
-        command("Esc", "Cancel", undefined, GR),
-      ]);
-      secondary = `${D}answers are appended to the run inbox and picked up without replaying the transcript${R}`;
+      answerScroll = frame.scroll;
+      answerPage = frame.page;
+      answerOverflow = frame.overflow;
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* ---------------------------------------------------------- correct */
     else if (screen === "correct") {
       const detail = runDetailData();
-      const width = Math.max(20, cols - 8);
-      const lines = [
-        "",
-        ` ${D}This interrupts the current run and starts a fresh child with the parent's${R}`,
-        ` ${D}context, and worktree changes. The new run sees only the correction, not the old transcript.${R}`,
-        "",
-        ` ${B}${C}Correction${R}`,
-        ` ${D}┌${"─".repeat(width)}┐${R}`,
-      ];
-      const wrapped = wrapText(correctText || "(describe the correction; Enter starts the child run)", width - 2);
-      const boxHeight = Math.max(1, Math.min(bodyH - 9, 7));
-      for (let i = 0; i < boxHeight; i++) lines.push(` ${D}│${R} ${W}${fit(wrapped[i] ?? "", width - 2)}${R} ${D}│${R}`);
-      lines.push(` ${D}└${"─".repeat(width)}┘${R}`);
-      if (detail) lines.push(` ${D}parent ${detail.summary.id} · ${detail.summary.worktree ? "inheriting worktree" : "no worktree"}${R}`);
-      body = clipBody(lines);
-      actions = joinCommands([
-        command("Enter", "Start run", undefined, G),
-        command("Esc", "Cancel", undefined, GR),
-        command("i", "Interrupt", undefined, RED),
-      ]);
-      secondary = `${D}Esc returns to the run; use i when you only want to stop it${R}`;
+      const frame = renderCorrect({
+        cols,
+        bodyH,
+        correctText,
+        parentId: detail ? detail.summary.id : null,
+        parentWorktree: Boolean(detail?.summary.worktree),
+      });
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     if (runDetailHeader && runCwd) header[1] = rightHeaderPath(runCwd);
