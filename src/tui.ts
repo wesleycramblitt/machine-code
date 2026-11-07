@@ -2978,8 +2978,12 @@ export async function runTui(): Promise<void> {
           const group = groups.find((candidate) => candidate.key === stop.key)!;
           const isCollapsed = modelCollapsed.has(group.key);
           const marker = isCollapsed ? "▸" : "▾";
+          const headerText = fit(` ${B}${theme.sectionFg}${marker} ${group.key}${R} ${D}(${group.rows.length})${R}`, cols);
+          // A focused header gets the same BG selection as model rows; the
+          // section background is reserved for the idle state so selection
+          // stays obvious instead of drowning in the panel color.
           lines.push(
-            selected(background(fit(` ${B}${theme.sectionFg}${marker} ${group.key}${R} ${D}(${group.rows.length})${R}`, cols), theme.sectionBg), isSelected),
+            isSelected ? selected(headerText, true) : background(headerText, theme.sectionBg),
           );
           continue;
         }
