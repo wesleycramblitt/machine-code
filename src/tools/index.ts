@@ -140,6 +140,10 @@ function readTargetLabel(path: string, params: { symbol?: string | null; symbols
  * for schema validation to judge. */
 const NULL_SELECTOR = new Set(["null", "undefined"]);
 
+/** Above this size, `read { around }` returns a page around the line instead
+ * of the whole enclosing symbol. */
+const AROUND_MAX_SYMBOL_LINES = 160;
+
 function cleanReadSelectors(args: unknown): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const out = { ...(args as Record<string, unknown>) };
@@ -151,9 +155,18 @@ function cleanReadSelectors(args: unknown): unknown {
       changed = true;
     }
   }
+  // Weak models send a scalar where the schema wants a list. Coerce it
+  // instead of spending a turn on a validation error.
   for (const key of ["symbols", "sections"] as const) {
     const value = out[key];
-    if (Array.isArray(value)) {
+    if (value === null || value === undefined) {
+      delete out[key];
+      changed = true;
+    } else if (typeof value === "string") {
+      if (NULL_SELECTOR.has(value.trim())) delete out[key];
+      else out[key] = [value];
+      changed = true;
+    } else if (Array.isArray(value)) {
       const kept = value.filter(
         (item) => !(typeof item === "string" && NULL_SELECTOR.has(item.trim())),
       );
@@ -162,7 +175,26 @@ function cleanReadSelectors(args: unknown): unknown {
         else delete out[key];
         changed = true;
       }
-    } else if (typeof value === "string" && NULL_SELECTOR.has(value.trim())) {
+    }
+  }
+  // A single selector and its list form are the same request. Merge so the
+  // read does not append the same symbol twice.
+  for (const [single, list] of [["symbol", "symbols"], ["section", "sections"]] as const) {
+    const value = out[single];
+    if (typeof value !== "string") continue;
+    const existing = Array.isArray(out[list]) ? (out[list] as unknown[]) : [];
+    out[list] = [...existing, value];
+    delete out[single];
+    changed = true;
+  }
+  // Numeric selectors sometimes arrive as null or the string "null".
+  for (const key of ["offset", "limit", "around"] as const) {
+    const value = out[key];
+    if (
+      value === null ||
+      value === undefined ||
+      (typeof value === "string" && (value.trim() === "" || NULL_SELECTOR.has(value.trim())))
+    ) {
       delete out[key];
       changed = true;
     }
@@ -357,6 +389,21 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
               header = `${params.path}:${offset}-${offset + 40} (around ${params.around})`;
               singleResolved = true;
             }
+          } else if (
+            params.around != null &&
+            range.end - range.start + 1 > AROUND_MAX_SYMBOL_LINES
+          ) {
+            // `around` means "the page at this line", not "everything the
+            // enclosing symbol spans." A 4,600-line function would otherwise
+            // flood the transcript and push the actual evidence out.
+            const start = Math.max(range.start, params.around - 20);
+            const end = Math.min(range.end, start + 40);
+            offset = start;
+            limit = Math.max(1, end - start + 1);
+            header =
+              `${params.path}:${offset}-${offset + limit - 1} (around ${params.around}; ` +
+              `${range.name} is ${range.end - range.start + 1} lines)`;
+            singleResolved = true;
           } else {
             offset = range.start;
             limit = Math.max(1, range.end - range.start + 1);
@@ -1531,6 +1578,15 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
           return ok(items.join("\n\n"));
         }
         if (!params.name) return fail(`${params.action} requires a name`);
+        if (params.name === "command") {
+          // The model is treating this as a shell. Name the actual surface
+          // once, instead of repeating "command is a tool" at itself.
+          return fail(
+            "There is no shell here. The command tool runs typed commands only: " +
+              `${[...ctx.commands.keys()].sort().join(", ")}. ` +
+              'Example: {"action":"run","name":"typescript:build","args":{}}.',
+          );
+        }
         if (CORE_TOOL_NAMES.has(params.name)) {
           const available = !ctx.tools || ctx.tools.includes(params.name);
           return fail(

@@ -305,6 +305,36 @@ test("edit ignores copied line numbers and indentation drift", async () => {
   }
 });
 
+test("read around a huge symbol returns a bounded page", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-around-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    const body = Array.from({ length: 300 }, (_, index) => `  const v${index} = ${index};`).join("\n");
+    writeFileSync(join(root, "a.ts"), `export function huge() {\n${body}\n}\n`, "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "a.ts", around: 150 });
+    assert.notEqual(result.isError, true);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /around 150/);
+    assert.match(text, /is 302 lines/);
+    const numbered = text.split("\n").filter((line) => /^\d+:/.test(line));
+    assert.ok(numbered.length <= 45, `window is bounded (got ${numbered.length} lines)`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a typed command rejects shell-shaped args", async () => {
+  const result = await runCommand(
+    "core:show",
+    { cmd: "git show 03ad06d" },
+    { root: process.cwd(), commands: CORE_COMMANDS },
+  );
+  assert.equal(result.isError, true);
+  assert.match(result.text, /unknown cmd/);
+  assert.match(result.text, /no shell/);
+});
+
 test("path with line and column answers at that position", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-search-pos-"));
   try {
@@ -837,9 +867,6 @@ test("read prepareArguments treats null strings as absent selectors", async () =
       path: "a.ts",
       offset: 1,
       limit: 100,
-      symbols: null,
-      around: null,
-      sections: null,
     });
     const result = await tool.execute("id", prepared);
     assert.equal(result.isError, undefined);

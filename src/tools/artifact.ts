@@ -203,6 +203,31 @@ function usageFor(ctx: ArtifactToolContext, name: string): string {
   return rows.length > 0 ? rows.join("\n") : `no recorded usage for ${name}`;
 }
 
+/** Drop the placeholder fields weak models fill for every schema slot. */
+function cleanArtifactArgs(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(out)) {
+    if (key === "action") continue;
+    if (value === null || value === undefined) {
+      delete out[key];
+      continue;
+    }
+    if (typeof value === "string" && /^(?:null|undefined|none|n\/a|<empty>)$/i.test(value.trim())) {
+      delete out[key];
+      continue;
+    }
+    if (key === "args" && typeof value === "string" && value.trim() !== "") {
+      out.args = [value];
+      continue;
+    }
+    if (key === "tags" && typeof value === "string" && value.trim() !== "") {
+      out.tags = [value];
+    }
+  }
+  return out;
+}
+
 export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof ArtifactParams> {
   return {
     name: "artifact",
@@ -212,6 +237,7 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
       "Provisioning needs artifact:provision; new executable scripts also need artifact_scripts. " +
       "run executes the artifact in the worktree and returns bounded output.",
     parameters: ArtifactParams,
+    prepareArguments: (args) => cleanArtifactArgs(args) as Static<typeof ArtifactParams>,
     async execute(_id, params: Static<typeof ArtifactParams>) {
       try {
         if (params.action === "list") {

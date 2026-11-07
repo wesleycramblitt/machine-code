@@ -350,6 +350,23 @@ export async function runCommand(
       isError: true,
     };
   }
+  // Unknown args used to be ignored, so a model that passed a shell string
+  // ({cmd:"git show ..."}) got a plausible but wrong answer (HEAD). Reject
+  // the call and name the schema instead.
+  const supplied = args && typeof args === "object" && !Array.isArray(args) ? args : {};
+  const allowed = new Set(Object.keys(spec.schema));
+  const unknown = Object.keys(supplied).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) {
+    const shellHint = unknown.some((key) => ["cmd", "command", "shell", "script"].includes(key))
+      ? " There is no shell: this command takes typed args, not a command string."
+      : "";
+    return {
+      text:
+        `bad arguments for ${name}: unknown ${unknown.join(", ")}.${shellHint} ` +
+        `Schema: ${JSON.stringify(spec.schema)}`,
+      isError: true,
+    };
+  }
   if (spec.handler) {
     try {
       return await spec.handler(args, ctx);
