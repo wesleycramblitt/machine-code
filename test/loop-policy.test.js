@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  compileGateName,
   hasPlanDecision,
   hasTerminalLine,
+  isGateCommand,
   needsBuildPlan,
   readBucket,
   shouldNudgeStall,
@@ -70,6 +72,23 @@ test("terminal lines are recognized where the role contract puts them", () => {
   assert.equal(hasTerminalLine("Result: done"), true);
   assert.equal(hasTerminalLine("blah\nOutcome: blocked"), true);
   assert.equal(hasTerminalLine("Let me check one more thing."), false);
+});
+
+test("gate commands are the compile/test/lint surface", () => {
+  assert.equal(isGateCommand("typescript:build"), true);
+  assert.equal(isGateCommand("typescript:test"), true);
+  assert.equal(isGateCommand("typescript:typecheck"), true);
+  assert.equal(isGateCommand("typescript:lint"), true);
+  assert.equal(isGateCommand("core:status"), false);
+  assert.equal(isGateCommand("core:map"), false);
+  assert.equal(isGateCommand("core:check"), false);
+});
+
+test("compile gate prefers the fastest available check", () => {
+  assert.equal(compileGateName(new Map([["typescript:typecheck", {}]])), "typescript:typecheck");
+  assert.equal(compileGateName(new Map([["typescript:build", {}]])), "typescript:build");
+  assert.equal(compileGateName(new Map([["core:status", {}]])), undefined);
+  assert.equal(compileGateName(new Map([["go:build", {}]])), "go:build");
 });
 
 test("the read-repeat bucket ignores limit changes at the same start line", () => {

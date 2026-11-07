@@ -41,6 +41,7 @@ import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
 import { EvidenceTracker } from "./state/progress.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
+import { runCommand } from "./commands/registry.js";
 
 /** Default turn cap. 0 means no cap; set max_turns per role or run. */
 export const MAX_TURNS = 0;
@@ -99,6 +100,31 @@ export function shouldNudgeStall(input: {
 }): boolean {
   return input.wantsChange && !input.hasToolCall && !input.hasChange && !hasTerminalLine(input.text);
 }
+
+/** A command that verifies the tree (compile/test/lint). These are the
+ * deterministic "definition of done" gates: a failure must be fixed, not
+ * researched around. */
+const GATE_NAME = /(?:^|:)(build|test|lint|typecheck)$/;
+export function isGateCommand(name: string): boolean {
+  return GATE_NAME.test(name);
+}
+
+/** The fastest compile gate available, for deterministic post-edit checks. */
+export function compileGateName(commands: ReadonlyMap<string, unknown>): string | undefined {
+  for (const candidate of ["typescript:typecheck", "typescript:lint", "typescript:build"]) {
+    if (commands.has(candidate)) return candidate;
+  }
+  for (const name of commands.keys()) {
+    if (/(?:^|:)(typecheck|lint|build)$/.test(name)) return name;
+  }
+  return undefined;
+}
+
+/** Research calls before a writable role is nudged to act. Steering, not a
+ * quota: the model has already read the target; the note just says so. */
+const RESEARCH_NUDGE_AFTER = 15;
+/** Gate failures tolerated before the run is reported blocked. */
+const GATE_BLOCK_LIMIT = 3;
 
 function issueRefKey(value: string): string {
   const url = /\/issues\/(\d+)(?:$|[?#])/.exec(value);
@@ -740,6 +766,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let stallNudge: string | null = null;
   let stallNudges = 0;
   let stalledOut = false;
+  /** Tree-state verification, per run (survives a model rotation). */
+  let lastEditTurn = -1;
+  let lastGatePassTurn = -1;
+  let pendingGateFailure: { name: string; text: string } | null = null;
+  let gateBlockCount = 0;
+  /** Read the gate failure without TS narrowing it to null across closures. */
+  const gateFailure = (): { name: string; text: string } | null => pendingGateFailure;
 
   /**
    * When the run hits a cap or loop guard, make one tool-free call so the user
@@ -898,6 +931,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     /** Successful read-only command results for the current file state. */
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
     let changeEpoch = 0;
+    /** Research calls at the last edit, and whether the act-now nudge fired. */
+    let researchAtLastEdit = 0;
+    let researchNudged = false;
+    /** Steering text set by finishTurn, delivered by prepareNextTurn. */
+    let researchNudge: string | null = null;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -1226,6 +1264,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
             changeEpoch += 1;
             commandCache.clear();
+            lastEditTurn = memory.currentTurn();
+            researchAtLastEdit = researchCalls;
+            // The model is addressing the failure; stop nagging until it
+            // re-runs the gate and it fails again.
+            pendingGateFailure = null;
           }
           if (!result.isError && tool.name === "command" && commandAction === "run" && !cacheableCommand) {
             // A mutating command can change files without an edit/write call.
@@ -1259,6 +1302,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             .map((item) => item.text)
             .join("\n");
           const resultHash = createHash("sha1").update(resultText).digest("hex").slice(0, 16);
+          // Gate tracking: a failing compile/test/lint is a definition-of-done
+          // failure, not a research signal. Remember it so the next turn is
+          // steered to fix it instead of drifting.
+          if (tool.name === "command" && commandAction === "run" && isGateCommand(commandName)) {
+            if (result.isError) {
+              pendingGateFailure = { name: commandName, text: resultText };
+            } else {
+              pendingGateFailure = null;
+              lastGatePassTurn = memory.currentTurn();
+            }
+          }
           if (result.isError) {
             const errorKey = `error:${tool.name}:${resultHash}`;
             const check = evidence.observeError(errorKey, memory.currentTurn());
@@ -1570,7 +1624,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         currentModel = model;
         return { model };
       },
-      finishTurn: ({ message }) => {
+      finishTurn: async ({ message }) => {
         turns += 1;
         reportedTurns += 1;
         recorder.recordTurn(reportedTurns);
@@ -1620,16 +1674,73 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           stalledOut = true;
           recorder.event("stall_exhausted", { turn: turns });
         }
+        // Research-to-act: a writable role that has read/searched a lot without
+        // editing is circling, not converging. One steering note, not a quota.
+        if (
+          wantsChange &&
+          !researchNudged &&
+          lastEditTurn < 0 &&
+          researchCalls - researchAtLastEdit >= RESEARCH_NUDGE_AFTER
+        ) {
+          researchNudged = true;
+          researchNudge =
+            `You have made ${researchCalls} research calls and no edit. ` +
+            "You have enough evidence. State the smallest change and make the edit now.";
+          recorder.event("research_nudge", { turn: turns, researchCalls });
+          return { action: "continue" as const };
+        }
+        // Deterministic verification: a writable role that stops with edits
+        // newer than the last passing gate must prove the tree still compiles.
+        if (
+          !hasToolCall &&
+          wantsChange &&
+          lastEditTurn >= 0 &&
+          lastEditTurn > lastGatePassTurn &&
+          gateBlockCount < GATE_BLOCK_LIMIT
+        ) {
+          const gateName = compileGateName(input.commands as ReadonlyMap<string, unknown>);
+          if (gateName) {
+            const gateResult = await runCommand(gateName, {}, {
+              root: input.toolRoot ?? input.root,
+              commands: input.commands,
+              processes,
+            });
+            if (gateResult.isError) {
+              gateBlockCount += 1;
+              pendingGateFailure = { name: gateName, text: gateResult.text };
+              recorder.event("gate_blocked", { turn: turns, command: gateName, attempt: gateBlockCount });
+              return { action: "continue" as const };
+            }
+            lastGatePassTurn = memory.currentTurn();
+          }
+        }
         return undefined;
       },
       prepareNextTurn: () => {
-        if (!stallNudge) return undefined;
-        const text = stallNudge;
-        stallNudge = null;
-        memory.note("next", "Make the smallest concrete edit that advances the request.", [], turns + 1);
-        return {
-          messages: [{ role: "user", content: text, timestamp: Date.now() } as AgentMessage],
-        };
+        const messages: AgentMessage[] = [];
+        if (stallNudge) {
+          messages.push({ role: "user", content: stallNudge, timestamp: Date.now() } as AgentMessage);
+          stallNudge = null;
+          memory.note("next", "Make the smallest concrete edit that advances the request.", [], turns + 1);
+        }
+        if (researchNudge) {
+          messages.push({ role: "user", content: researchNudge, timestamp: Date.now() } as AgentMessage);
+          researchNudge = null;
+        }
+        if (pendingGateFailure) {
+          const clipped =
+            pendingGateFailure.text.length > 800
+              ? pendingGateFailure.text.slice(0, 800) + "\n…[truncated]"
+              : pendingGateFailure.text;
+          messages.push({
+            role: "user",
+            content:
+              `The last check (${pendingGateFailure.name}) failed:\n${clipped}\n` +
+              "Fix or revert the edit that caused it, then re-run the check. Do not start new research.",
+            timestamp: Date.now(),
+          } as AgentMessage);
+        }
+        return messages.length > 0 ? { messages } : undefined;
       },
     });
 
@@ -2004,6 +2115,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       error = stalledOut
         ? "model produced no tool calls and no change after continuation prompts"
         : "completed without making the requested change";
+    } else if (status === "completed" && gateFailure()) {
+      // The last verification gate failed and the model stopped anyway. A
+      // broken tree is not a completed run.
+      status = "blocked";
+      error = `verification failed: ${gateFailure()!.name}`;
     }
 
     // Retry decision: rotate to the next eligible model on a retryable error.
