@@ -18,7 +18,7 @@ import type { MachineConfig } from "../config.js";
 import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
-import { resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
+import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
 import { readReference } from "../references/store.js";
 import { isSecretPath } from "../tools/safety.js";
 import {
@@ -429,10 +429,12 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     }
   }
 
-  // Skills (descriptions only) + tool/command names. Individual skill
-  // exclusions remove that skill's description; body items are filtered below.
-  // Excluded means excluded everywhere: composer items, composer mode
-  // overrides, and role presets all hide the description.
+  // Skills (descriptions only) + tool/command index (descriptions only).
+  // Individual skill exclusions remove that skill's description; body
+  // items are filtered below. Excluded means excluded everywhere: composer
+  // items, composer mode overrides, and role presets all hide the
+  // description. Bodies stay cold unless a skill mode resolves to include;
+  // the index names the on-demand pull path (skill tool show).
   const excludedSkillNames = new Set(
     [...excludedItems]
       .filter((key) => key.startsWith("skill:"))
@@ -447,18 +449,18 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   }
   const skills = skillMetas(layout).filter((skill) => !excludedSkillNames.has(skill.name));
   if (skills.length > 0) {
-    const text = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+    const text = skillIndexBody(skills);
     pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, depth: 0, body: text, band: 8 });
   }
   try {
-    const commands = [...allCommands(layout).keys()].sort();
-    if (commands.length > 0) {
+    const commands = allCommands(layout);
+    if (commands.size > 0) {
       pending.push({
         kind: "tool",
         origin: "explicit",
-        ref: `${commands.length} commands`,
+        ref: `${commands.size} commands`,
         depth: 0,
-        body: commands.join(", "),
+        body: toolIndexBody(commands),
         band: 8,
       });
     }

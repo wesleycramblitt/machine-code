@@ -159,3 +159,37 @@ export function defaultSkillsFor(args: { agent: string; verification?: string })
   }
   return skills;
 }
+
+/**
+ * Hot/cold tiering: description-only index blocks shared by assembly and
+ * preview so measured chars match assembled chars.
+ *
+ * Tools, skills, and references load description-only by default; bodies
+ * load only for explicit includes (composer `include.*`, or a skill mode of
+ * include via role presets, declarations, or composer overrides). Each index
+ * names its on-demand pull path: the `skill` tool (`show <name>`) for skill
+ * bodies, the `command` tool (`describe <name>`) for full command schemas,
+ * the `artifact` tool (`show <name>`) for tool/script detail, and the
+ * `reference:find` / `reference:read` commands for store citations.
+ */
+export const SKILL_FETCH_HINT = "On-demand: pull a body with the skill tool (show <name>).";
+
+export const TOOL_FETCH_HINT =
+  "On-demand: full schema via the command tool (describe <name>); tool/script detail via the artifact tool (show <name>).";
+
+function firstLine(text: string): string {
+  return text.split("\n")[0]?.trim() ?? "";
+}
+
+/** One-line `- name: description` skill index plus the on-demand pull hint. */
+export function skillIndexBody(skills: ReadonlyArray<{ name: string; description: string }>): string {
+  if (skills.length === 0) return "";
+  return [...skills.map((skill) => `- ${skill.name}: ${skill.description}`), SKILL_FETCH_HINT].join("\n");
+}
+
+/** One-line `- name: description` command index plus the on-demand pull hint. */
+export function toolIndexBody(commands: ReadonlyMap<string, { description: string }>): string {
+  const specs = [...commands.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+  if (specs.length === 0) return "";
+  return [...specs.map(([name, spec]) => `- ${name}: ${firstLine(spec.description)}`), TOOL_FETCH_HINT].join("\n");
+}
