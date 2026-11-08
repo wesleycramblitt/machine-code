@@ -19,9 +19,7 @@ import {
   parsePacketDoc,
   readPacketFile,
   renderPacketFile,
-  renderPlan,
   slugify,
-  toTaskPacket,
   writePacketFile,
 } from "../dist/plan/packets.js";
 
@@ -137,16 +135,6 @@ test("listPacketFiles lists only valid slug packets, sorted", () => {
   }
 });
 
-test("toTaskPacket maps deliverable/files/verify into the loop packet", () => {
-  const packet = parsePacketDoc("x", DOC).packet;
-  const task = toTaskPacket(packet);
-  assert.equal(task.id, "x");
-  assert.equal(task.goal, "Repair the token-refresh race.");
-  assert.deepEqual(task.context, ["src/auth/session.ts", "src/auth/token.ts"]);
-  assert.deepEqual(task.acceptance, [{ command: "typescript:typecheck" }]);
-  assert.match(task.constraints[0] ?? "", /no flake in 100 runs/);
-});
-
 test("ensureIndex writes the standard skeleton exactly once", () => {
   const root = temp("index");
   const layout = fakeLayout(root);
@@ -179,30 +167,6 @@ test("addIndexEntry inserts under a heading and replaces by slug", () => {
     assert.equal(after.split("\n").filter((line) => line.includes("- [ ] login-token-refresh")).length, 1);
     assert.match(after, /auth flaky, renamed/);
     assert.doesNotMatch(after, /auth flaky -/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("renderPlan annotates item status, deps, and blockers", () => {
-  const root = temp("view");
-  const layout = fakeLayout(root);
-  try {
-    addIndexEntry(layout, "Bugs", "payments", "vendor payouts");
-    const packet = parsePacketDoc("payments", DOC).packet;
-    packet.status = "blocked";
-    packet.blocked = "waiting on vendor API key";
-    writePacketFile(layout, packet);
-    const view = renderPlan(layout);
-    assert.match(view.text, /payments/);
-    assert.match(view.text, /blocked/);
-    assert.match(view.text, /waiting on vendor API key/);
-    assert.match(view.text, /deps: rate-limiter/);
-    const item = view.items.find((entry) => entry.slug === "payments");
-    assert.equal(item.status, "blocked");
-    assert.equal(item.hasPacket, true);
-    // The index line itself is untouched; annotation is additive.
-    assert.equal(indexLine("payments", "vendor payouts"), "- [ ] payments - vendor payouts → packets/payments.md");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

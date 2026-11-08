@@ -53,9 +53,7 @@ import {
   PACKET_REVIEWS,
   readPacketFile,
   renderPacketFile,
-  renderPlan,
   slugify,
-  toTaskPacket,
   writePacketFile,
   type PacketFile,
   type PacketReview,
@@ -416,7 +414,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const mutating =
     agentNameParsed === "research" || agentNameParsed === "review"
       ? false
-      : agentNameParsed === "build"
+      : agentNameParsed === "engineer"
         ? worktreeOn
         : forceWorktree;
   let toolRoot = l.repoRoot;
@@ -552,10 +550,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let result: RunLoopResult | OrchestrateResult;
   if (directExec) {
     // Detached delegated child: one agent, directly. Its prompt is its spec.
-    const role = (agentNameParsed ?? "build") as AgentName;
-    if (role !== "build" && role !== "review") {
-      recorder.finalize("failed", "--direct-exec requires --agent build|review");
-      process.stderr.write("machine_code: --direct-exec requires --agent build|review\n");
+    const role = (agentNameParsed ?? "engineer") as AgentName;
+    if (role !== "engineer" && role !== "review") {
+      recorder.finalize("failed", "--direct-exec requires --agent engineer|review");
+      process.stderr.write("machine_code: --direct-exec requires --agent engineer|review\n");
       return EXIT.failed;
     }
     const resolved = resolveAgent(l, role, {
@@ -635,7 +633,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
 
   recorder.finalize(result.status, result.error, result.finalText);
-  if (agentNameParsed === "planner" || agentNameParsed === "research") {
+  if (agentNameParsed === "research") {
     // Planning agents write plans//packets//knowledge in the main tree; commit
     // them so the map stays the committed source of truth.
     await commitPlanningFiles(l, `plans: ${agentNameParsed} run ${recorder.id.slice(-8)}`);
@@ -913,7 +911,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   });
 
   // A resumed Build phase still owes the runner its gates.
-  if (result.status === "completed" && resumeAgent === "build" && s.packetId) {
+  if (result.status === "completed" && resumeAgent === "engineer" && s.packetId) {
     const packet = readPacket(l2, s.packetId);
     if (packet) {
       const gateOutcome = await runGates(resolveGates(packet), { root: toolRoot, commands });

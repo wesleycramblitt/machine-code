@@ -239,7 +239,7 @@ export class RunRecorder {
             orchestrationId?: string;
       orchestrationScope?: "project" | "epic" | "feature";
                   attempt?: number;
-      phase?: "build" | "review";
+      phase?: string;
       planSnapshotHash?: string;
       planReview?: "agent" | "human";
       resultReview?: "agent" | "human";

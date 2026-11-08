@@ -53,7 +53,6 @@ import {
   PACKET_REVIEWS,
   readPacketFile,
   renderPacketFile,
-  renderPlan,
   slugify,
   toTaskPacket,
   writePacketFile,
@@ -185,10 +184,9 @@ Usage:
                                     reconcile automatically; refresh re-scores everything)
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
-  machine_code runs [--group all|plan|status|overall] [--filter ...] [--text Q]
-                                    Work tree: All (by item type) or By plan
-                                    (plan file → type), each item → packet → runs
-                                    Run hierarchy grouped by packet or status
+  machine_code runs [--group all|type|status|overall] [--filter ...] [--text Q]
+                                    Work tree: kind → issue → runs. Group by kind
+                                    (All), kind+status dir (By type), or run status.
   machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch]
                                     [--force] [--no-cancel]
                                     Delete a run and its resources; active runs
@@ -236,8 +234,12 @@ Usage:
   machine_code availability [--probe] [--free-only] [--json]
                                     Show or probe cooling model availability
   machine_code tui                 Launch the TUI (default when interactive)
-  machine_code plan                 Render the plan tree: index annotated with
-                                     packet status, branch, deps, blockers (--json)
+  machine_code plan                 Render the issues tree: kind → status dir → issue (--json)
+  machine_code issue list           List issue files under issues/<kind>/<status>/<slug>.md (--json)
+  machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority N] [--review none|agent|human]
+                                     Scaffold an issue file under issues/
+  machine_code issue move <slug> <todo|blocked|done|researched>  Move an issue
+  machine_code issue run <slug>     Start the research or engineer run for an issue
   machine_code packet list          List packet files (slug, status, deliverable) [--json]
   machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas] [--plan plans/tui.md]
                                      (default heading: Features; item line lands in --plan, else plans/index.md)

@@ -19,7 +19,7 @@ import {
   packetFilePath,
   readPacketFile,
 } from "../plan/packets.js";
-import { markItemDone, removeItemFromPlans } from "../plan/items.js";
+import { findIssue, moveIssue } from "../plan/issues.js";
 
 /** Latest build-phase run for a packet slug (newest first). */
 export function packetRuns(layout: Layout, slug: string): RunSummary[] {
@@ -159,7 +159,8 @@ export async function approvePacket(layout: Layout, slug: string, opts: ApproveP
   // Done is a status; there is no Done category to move the line into.
   const file = packetFilePath(layout, slug);
   if (existsSync(file)) rmSync(file, { force: true });
-  markItemDone(layout, slug);
+  const issue = findIssue(layout, slug);
+  if (issue) moveIssue(layout, slug, "done");
   await commitPlanningFiles(layout, `plans: complete ${slug}`);
 
   if (opts.clean !== false && run.worktree && existsSync(run.worktree)) {
@@ -185,7 +186,8 @@ export async function deletePacket(layout: Layout, slug: string, opts: DeletePac
 
   const file = packetFilePath(layout, slug);
   if (existsSync(file)) rmSync(file, { force: true });
-  removeItemFromPlans(layout, slug);
+  const issue = findIssue(layout, slug);
+  if (issue) rmSync(issue.path, { force: true });
 
   for (const run of packetRuns(layout, slug)) {
     const owner = run.worktreeOwnerRunId ?? run.id;

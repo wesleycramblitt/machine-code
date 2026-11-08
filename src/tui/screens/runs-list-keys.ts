@@ -4,13 +4,12 @@
  * Move/fold/open, `n`/`N` new runs, `D` delete, `!` attention filter, `g`
  * group cycle, `f` repo scope, `/` search, `a` answer. The index is rebuilt
  * per keypress like the draw path so navigation and rendering agree.
- * Returns true when the key was consumed.
  */
 import { layout } from "../../paths.js";
 import { listAllRuns } from "../../state/runs.js";
 import { buildRunIndex, repoOf, RUN_GROUPS, type RunRow } from "../runs.js";
-import { listPacketFiles } from "../../plan/packets.js";
-import { planItems } from "../../plan/items.js";
+import { listIssues } from "../../plan/issues.js";
+import { runItemId } from "../../plan/lifecycle.js";
 import type { TuiState } from "../state.js";
 import type { KeyServices } from "./keys.js";
 
@@ -25,12 +24,8 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     text: s.runsText,
     attentionOnly: s.runsAttention,
     preferredRepo: l.repoRoot,
-    ...(s.runsGroup === "all" || s.runsGroup === "plan"
-      ? {
-          packetRepo: l.repoRoot,
-          packets: listPacketFiles(l),
-          planItems: planItems(l),
-        }
+    ...(s.runsGroup === "all" || s.runsGroup === "type"
+      ? { packetRepo: l.repoRoot, issues: listIssues(l) }
       : {}),
   });
   const repoForRow = (row: RunRow | undefined): string => {
@@ -47,16 +42,11 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "\x1b[B" || data === "j") { s.runsSel = Math.min(Math.max(0, index.selectable.length - 1), s.runsSel + 1); ctx.draw(); return true; }
   if (data === "G") { s.runsSel = Math.max(0, index.selectable.length - 1); ctx.draw(); return true; }
   const toggleFold = (row: RunRow | undefined): boolean => {
-    // A run is a leaf; space on it folds the parent packet/section/repo.
+    // A run is a leaf; space on it folds the parent issue/section/repo.
     const target = row?.kind === "run" && row.parent
       ? index.rows.find((candidate) => candidate.id === row.parent)
       : row;
-    if (
-      target?.kind !== "section" &&
-      target?.kind !== "repo" &&
-      target?.kind !== "packet" &&
-      target?.kind !== "planline"
-    ) return false;
+    if (target?.kind !== "section" && target?.kind !== "repo" && target?.kind !== "issue") return false;
     if (!target.collapsible) return false;
     if (s.collapsed.has(target.id)) s.collapsed.delete(target.id);
     else s.collapsed.add(target.id);
@@ -64,39 +54,12 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     if (targetIndex >= 0) s.runsSel = targetIndex;
     return true;
   };
-  const startForLine = (row: Extract<RunRow, { kind: "planline" }>): void => {
-    const repo = repoForRow(row);
-    if (row.itemKind === "idea" || row.status === "done" || row.status === "archived") {
-      ctx.startNewRun(undefined, repo, {
-        agent: "research",
-        item: row.slug,
-        plan: row.plan,
-        prompt: `Research "${row.title}" in ${row.plan} and propose concrete features or bugs to add to that plan.`,
-        skills: ["plan-curation"],
-      });
-      return;
-    }
-    if (row.status === "needs-planning" || !row.contract) {
-      ctx.startNewRun(undefined, repo, {
-        agent: "planner",
-        item: row.slug,
-        plan: row.plan,
-        prompt: `Turn the ${row.itemKind} "${row.title}" in ${row.plan} into a build contract.`,
-      });
-      return;
-    }
-    ctx.startNewRun(row.contract, repo, { agent: "build", item: row.slug });
-  };
   if (data === "\r" || data === "\n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); ctx.draw(); return true; }
     if (row?.kind === "run") { s.selectedRunId = row.run.id; s.runSection = "overview"; s.runScroll = 0; s.screen = "run"; }
-    else if (row?.kind === "packet") {
-      s.selectedPacketSlug = row.slug;
-      s.packetScroll = 0;
-      s.screen = "packet";
-    } else if (row?.kind === "planline") {
-      // The item page is the hub: background, contract, runs, and actions.
+    else if (row?.kind === "issue") {
+      // The issue page is the hub: prompt, dependencies, runs, and actions.
       s.selectedPacketSlug = row.slug;
       s.packetScroll = 0;
       s.screen = "packet";
@@ -118,21 +81,24 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   }
   if (data === "n") {
     const row = index.selectable[s.runsSel];
-    if (row?.kind === "planline") {
-      startForLine(row);
+    if (row?.kind === "issue") {
+      const agent = row.itemKind === "ideas" ? "research" : "engineer";
+      ctx.startNewRun(undefined, repoForRow(row), { agent, item: row.slug });
       ctx.draw();
       return true;
     }
-    if (row?.kind === "section" && row.plan) {
+    if (row?.kind === "section" && row.issueKind) {
+      const agent = row.issueKind === "ideas" ? "research" : "engineer";
       ctx.startNewRun(undefined, repoForRow(row), {
-        agent: "planner",
-        plan: row.plan,
-        prompt: `Materialize the open items in ${row.plan} into packets under plans/index.md.`,
+        agent,
+        prompt: row.issueKind === "ideas"
+          ? "Pick an idea under issues/ideas/ and turn it into features and bugs."
+          : "Pick a feature or bug under issues/features/ or issues/bugs/ and implement it.",
       });
       ctx.draw();
       return true;
     }
-    const packet = row?.kind === "packet" ? row.slug : row?.kind === "run" ? row.run.packetId : undefined;
+    const packet = row?.kind === "run" ? row.run.packetId : undefined;
     ctx.startNewRun(packet, repoForRow(row));
     ctx.draw();
     return true;

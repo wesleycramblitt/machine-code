@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
+import { listIssues } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
@@ -163,6 +164,13 @@ export function previewContext(
     if (!exists) warnings.push(`packet ${options.packet} is missing`);
   }
 
+  if (options.agent === "research" || options.agent === "engineer" || options.agent === "review") {
+    const issues = listIssues(layout);
+    if (issues.length > 0) {
+      const body = issues.map((issue) => `- [${issue.status}] ${issue.slug} - ${issue.prompt.slice(0, 120)}`).join("\n");
+      sources.push({ kind: "plan", ref: "issues/", origin: "inherited", depth: 3, chars: body.length, exists: true });
+    }
+  }
   if (options.agent === "planner") {
     const planPath = options.planFile ?? "plans/index.md";
     const planRoot = resolve(layout.repoRoot);

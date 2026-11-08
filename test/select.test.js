@@ -104,7 +104,7 @@ test("meta routers are never selected", () => {
   assert.ok(result.rejected.some((r) => r.key === router.key && r.reason === "router-model"));
 });
 
-test("min_fit is role-weighted: build favors code/agentic over general/reasoning", () => {
+test("min_fit is role-weighted: engineer favors code/agentic over general/reasoning", () => {
   const policy = {
     ...basePolicy,
     minCapability: 0,
@@ -113,7 +113,7 @@ test("min_fit is role-weighted: build favors code/agentic over general/reasoning
   };
   const specialist = row("p/specialist", { scores: axes(5.5, 8.5, 8.5, 3.5) });
   const generalist = row("p/generalist", { scores: axes(8, 6.5, 6.5, 6) });
-  const result = pickOne([specialist, generalist], policy, { agent: "build" });
+  const result = pickOne([specialist, generalist], policy, { agent: "engineer" });
   assert.ok(!("error" in result));
   assert.equal(result.selected.key, "p/specialist");
   assert.ok(result.rejected.some((r) => r.key === "p/generalist" && r.reason === "below-min-fit"));
@@ -166,8 +166,8 @@ test("role weights change the winner between code-heavy and reasoning-heavy mode
   const thinker = row("p/thinker", { scores: axes(10, 6, 7, 10) });
   const buildPolicy = { ...basePolicy, axisWeights: { code: 0.5, agentic: 0.3, reasoning: 0.15, general: 0.05 } };
   const planningPolicy = { ...basePolicy, axisWeights: { reasoning: 0.5, agentic: 0.3, code: 0.15, general: 0.05 } };
-  assert.equal(pickOne([coder, thinker], buildPolicy, { agent: "build" }).selected.key, "p/coder");
-  assert.equal(pickOne([coder, thinker], planningPolicy, { agent: "planner" }).selected.key, "p/thinker");
+  assert.equal(pickOne([coder, thinker], buildPolicy, { agent: "engineer" }).selected.key, "p/coder");
+  assert.equal(pickOne([coder, thinker], planningPolicy, { agent: "research" }).selected.key, "p/thinker");
 });
 
 test("capability is a gradient above the floor: equal price prefers the better model", () => {
@@ -302,10 +302,10 @@ test("ties go to the lexicographically smaller key", () => {
 });
 
 test("axis weights default per role and normalize policy overrides", () => {
-  const build = axisWeights("build", basePolicy);
+  const build = axisWeights("engineer", basePolicy);
   assert.equal(build.code, 0.4);
   assert.equal(build.agentic, 0.35);
-  const custom = axisWeights("build", {
+  const custom = axisWeights("engineer", {
     ...basePolicy,
     axisWeights: { code: 3, reasoning: 1, agentic: 0, general: 0 },
   });
@@ -324,25 +324,25 @@ test("policy.toml parses axis floors and weights, and rejects out-of-range value
     writeFileSync(
       file,
       [
-        "[agents.build]",
+        "[agents.engineer]",
         "min_capability = 7.3",
-        "[agents.build.axes]",
+        "[agents.engineer.axes]",
         "code = 6",
         "agentic = 5.5",
-        "[agents.build.weights]",
+        "[agents.engineer.weights]",
         "code = 0.6",
         "reasoning = 0.4",
         "",
       ].join("\n"),
     );
     const policy = loadPolicy({ policyFile: file });
-    assert.equal(policy.agents.build.minCapability, 7.3);
-    assert.deepEqual(policy.agents.build.minAxes, { code: 6, agentic: 5.5 });
-    assert.deepEqual(policy.agents.build.axisWeights, { code: 0.6, reasoning: 0.4 });
+    assert.equal(policy.agents.engineer.minCapability, 7.3);
+    assert.deepEqual(policy.agents.engineer.minAxes, { code: 6, agentic: 5.5 });
+    assert.deepEqual(policy.agents.engineer.axisWeights, { code: 0.6, reasoning: 0.4 });
     assert.equal(policy.agents.research.minCapability, 0, "neutral floor defaults to off");
     assert.equal(policy.agents.research.minFit, 6, "role-weighted floor uses the default");
 
-    writeFileSync(file, "[agents.build.axes]\ncode = 11\n");
+    writeFileSync(file, "[agents.engineer.axes]\ncode = 11\n");
     assert.throws(() => loadPolicy({ policyFile: file }), ConfigError);
   } finally {
     rmSync(dir, { recursive: true, force: true });

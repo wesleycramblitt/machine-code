@@ -42,22 +42,22 @@ test("machine funding overrides data in both directions", () => {
 });
 
 test("roles, prompts, tools, and presets come from data", () => {
-  assert.deepEqual([...AGENT_NAMES], ["research", "planner", "build", "review"]);
-  assert.equal(rolePreset("planner"), "plan");
-  assert.equal(ROLE_PRESET.build, "implement");
+  assert.deepEqual([...AGENT_NAMES], ["research", "engineer", "review"]);
+  assert.equal(rolePreset("engineer"), "implement");
   assert.equal(PRESETS.orchestrate.delegate, true);
 
-  assert.equal(AGENT_META.planner.modes.length, 0);
-  assert.equal(AGENT_META.build.modes.length, 0);
+  assert.equal(AGENT_META.engineer.modes.length, 0);
+  assert.equal(AGENT_META.research.modes.length, 0);
 
-  const planner = agentDef(layout, "planner");
-  assert.match(planner.prompt, /Planner\./);
-  assert.ok(!planner.tools.includes("issue"));
-  assert.ok(planner.tools.includes("write"));
+  const research = agentDef(layout, "research");
+  assert.match(research.prompt, /Turn one idea into detailed features/);
+  assert.ok(!research.tools.includes("issue"));
+  assert.ok(research.tools.includes("write"));
 
-  const build = agentDef(layout, "build");
-  assert.match(build.prompt, /Build agent/);
-  assert.equal(build.readonly, false);
-  assert.ok(build.tools.includes("write"));
-  assert.ok(build.tools.includes("edit"));
+  const engineer = agentDef(layout, "engineer");
+  assert.match(engineer.prompt, /Engineer\./);
+  assert.equal(engineer.readonly, false);
+  assert.ok(engineer.tools.includes("write"));
+  assert.ok(engineer.tools.includes("edit"));
 });
+

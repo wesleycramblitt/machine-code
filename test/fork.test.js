@@ -23,7 +23,7 @@ const row = (key, providerID, free) => ({
 
 test("fork settings preserve a new run's saved selection and agent config", () => {
   const summary = {
-    agent: "build",
+    agent: "engineer",
     preset: "implement",
     verification: "redundant",
     ask: false,
@@ -46,7 +46,7 @@ test("fork settings preserve a new run's saved selection and agent config", () =
     configuredProviders: new Set(["p"]),
   });
 
-  assert.equal(result.agent, "build");
+  assert.equal(result.agent, "engineer");
   assert.equal(result.preset, "implement");
   assert.equal(result.verification, "redundant");
   assert.equal(result.ask, false);

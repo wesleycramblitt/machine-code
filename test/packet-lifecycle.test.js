@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { approvePacket, deletePacket } from "../dist/tasks/packet.js";
-import { addIndexEntry, writePacketFile, parsePacketDoc, readPacketFile } from "../dist/plan/packets.js";
+import { writePacketFile, parsePacketDoc, readPacketFile } from "../dist/plan/packets.js";
+import { writeIssue, findIssue } from "../dist/plan/issues.js";
 import { RunRecorder } from "../dist/state/runs.js";
 
 function git(dir, args) {
@@ -45,7 +46,7 @@ function seedPacket(root) {
   const l = layout(root);
   const packet = parsePacketDoc("login-token-refresh", "# login-token-refresh\n\n## Deliverable\nRepair token refresh\n\n## Verify\ntypescript:test\n").packet;
   writePacketFile(l, packet);
-  addIndexEntry(l, "Bugs", "login-token-refresh", "Repair token refresh");
+  writeIssue(l, { kind: "bugs", status: "todo", slug: "login-token-refresh", prompt: "Repair token refresh", review: "human" });
   git(root, ["add", "-A"]);
   git(root, ["commit", "-qm", "seed packet"]);
   return l;
@@ -77,7 +78,7 @@ test("deletePacket removes the file, index line, and branch, and commits", async
     await deletePacket(l, "login-token-refresh");
 
     assert.equal(existsSync(join(root, "packets", "login-token-refresh.md")), false);
-    assert.doesNotMatch(readFileSync(join(root, "plans", "index.md"), "utf8"), /login-token-refresh/);
+    assert.equal(findIssue(l, "login-token-refresh"), null);
     assert.equal(git(root, ["branch", "--list", "mc/login-token-refresh"]), "");
     assert.match(git(root, ["log", "--oneline", "-1"]), /delete login-token-refresh/);
   } finally {
@@ -98,13 +99,9 @@ test("approvePacket merges the branch, marks Done, and deletes the packet", asyn
     fabricateBuildRun(l);
     await approvePacket(l, "login-token-refresh");
 
-    // Packet file gone; the plan item is marked done in place (no Done category).
+    // Packet file gone; the issue moved to done/.
     assert.equal(existsSync(join(root, "packets", "login-token-refresh.md")), false);
-    const index = readFileSync(join(root, "plans", "index.md"), "utf8");
-    assert.match(index, /- \[x\] login-token-refresh/);
-    const line = index.split("\n").findIndex((entry) => entry.includes("login-token-refresh"));
-    const features = index.split("\n").findIndex((entry) => entry.trim() === "## Features");
-    assert.ok(features >= 0 && line > features, "done item stays under its type heading");
+    assert.equal(findIssue(l, "login-token-refresh")?.status, "done");
     // Main now contains the branch's work (merge was --no-ff).
     assert.equal(readFileSync(join(root, "src.txt"), "utf8"), "fixed\n");
     assert.match(git(root, ["log", "--oneline", "-5"]), /Merge login-token-refresh/);

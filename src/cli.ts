@@ -13,7 +13,7 @@ import { cmdInit, cmdInstall, cmdProviders, cmdPolicy, cmdConfig, cmdTools, cmdL
 import { cmdModels, cmdCatalogueSnapshot, cmdCatalogueRefresh, cmdProvider, cmdAvailability, cmdModel } from "./cli/models.js";
 import { cmdRun, controlCommand, cmdRespond, cmdFork, cmdResume, cmdPrune, cmdWorktree, cmdCorrect } from "./cli/run.js";
 import { cmdLog, cmdStatus, cmdRuns, cmdProcesses, cmdShow, cmdEval, cmdPack, cmdContext, cmdSpend, cmdPrompts } from "./cli/runs.js";
-import { cmdApprove, cmdPlan, cmdPacket, cmdBuild, cmdBatch, cmdDelete } from "./cli/packets.js";
+import { cmdApprove, cmdPlan, cmdPacket, cmdBuild, cmdBatch, cmdDelete, cmdIssue } from "./cli/packets.js";
 
 async function main(): Promise<void> {
   loadEnvFiles();
@@ -113,6 +113,9 @@ async function main(): Promise<void> {
       break;
     case "worktree":
       code = await cmdWorktree(rest);
+      break;
+    case "issue":
+      code = await cmdIssue(rest);
       break;
     case "approve":
       code = await cmdApprove(rest);

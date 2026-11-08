@@ -31,11 +31,11 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
       "[selection.weights]",
       "reasoning = 0.4",
       "",
-      "[agents.build]",
+      "[agents.engineer]",
       "min_capability = 7.4",
       "min_fit = 7.1",
       "max_turns = 12",
-      "[agents.build.axes]",
+      "[agents.engineer.axes]",
       "code = 6.1",
       "",
       "[providers.opencode-go]",
@@ -43,10 +43,10 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
       "",
     ].join("\n"),
     [
-      "[agents.build]",
+      "[agents.engineer]",
       "min_capability = 7.6",
       "min_fit = 7.2",
-      "[agents.build.axes]",
+      "[agents.engineer.axes]",
       "code = 6.3",
       "",
     ].join("\n"),
@@ -62,10 +62,10 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
     assert.deepEqual(policy.agents.research.minAxes, { reasoning: 7 });
     assert.deepEqual(policy.agents.research.axisWeights, { reasoning: 0.4 });
 
-    assert.equal(policy.agents.build.minCapability, 7.6, "repo wins on the composite");
-    assert.equal(policy.agents.build.minFit, 7.2, "repo wins on the role-weighted floor");
-    assert.equal(policy.agents.build.maxTurns, 12, "max_turns parses as a per-run cap");
-    assert.deepEqual(policy.agents.build.minAxes, { reasoning: 7, code: 6.3 }, "axes merge per axis");
+    assert.equal(policy.agents.engineer.minCapability, 7.6, "repo wins on the composite");
+    assert.equal(policy.agents.engineer.minFit, 7.2, "repo wins on the role-weighted floor");
+    assert.equal(policy.agents.engineer.maxTurns, 12, "max_turns parses as a per-run cap");
+    assert.deepEqual(policy.agents.engineer.minAxes, { reasoning: 7, code: 6.3 }, "axes merge per axis");
     assert.equal(policy.agents.review.minCapability, 7.2, "global default applies to unnamed roles");
     assert.equal(policy.agents.research.minFit, 6, "min_fit falls back to the built-in default");
     assert.equal(DEFAULT_AGENT_POLICY.minCapability, 0);
@@ -78,27 +78,27 @@ test("machine selection defaults, per-role overrides, and repo precedence", () =
 test("free floors parse and merge per axis across policy layers", () => {
   const { root, layout } = setup(
     [
-      "[agents.build]",
+      "[agents.engineer]",
       "min_fit = 6.0",
-      "[agents.build.free]",
+      "[agents.engineer.free]",
       "min_fit = 5.25",
-      "[agents.build.free.axes]",
+      "[agents.engineer.free.axes]",
       "reasoning = 4.5",
       "",
     ].join("\n"),
     [
-      "[agents.build.free]",
+      "[agents.engineer.free]",
       "min_fit = 5.0",
-      "[agents.build.free.axes]",
+      "[agents.engineer.free.axes]",
       "general = 2.5",
       "",
     ].join("\n"),
   );
   try {
     const policy = loadPolicy(layout);
-    assert.equal(policy.agents.build.freeMinFit, 5.0, "repo free min_fit wins");
+    assert.equal(policy.agents.engineer.freeMinFit, 5.0, "repo free min_fit wins");
     assert.deepEqual(
-      policy.agents.build.freeMinAxes,
+      policy.agents.engineer.freeMinAxes,
       { reasoning: 4.5, code: 5, agentic: 5, general: 2.5 },
       "free axes merge with the defaults per axis",
     );
@@ -124,11 +124,11 @@ test("invalid tier and negative multiplier are rejected", () => {
 });
 
 test("agent overrides accept verification and worktree layers", () => {
-  const { root, layout } = setup('', '[agents.build]\nverification = "verified"\nworktree = false\n');
+  const { root, layout } = setup('', '[agents.engineer]\nverification = "verified"\nworktree = false\n');
   try {
     const policy = loadPolicy(layout);
-    assert.equal(policy.agents.build.verification, "verified");
-    assert.equal(policy.agents.build.worktree, false);
+    assert.equal(policy.agents.engineer.verification, "verified");
+    assert.equal(policy.agents.engineer.worktree, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -42,6 +42,7 @@ import { isFreeRow } from "../select.js";
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
+import { approveIssue, deleteIssue, planIssueWaves } from "../tasks/issue.js";
 import { approvePacket, commitPlanningFiles, deletePacket, planBatchWaves } from "../tasks/packet.js";
 import { deleteRun } from "../state/run-delete.js";
 import {
@@ -53,15 +54,14 @@ import {
   PACKET_REVIEWS,
   readPacketFile,
   renderPacketFile,
-  renderPlan,
   slugify,
-  toTaskPacket,
   writePacketFile,
   type PacketFile,
   type PacketReview,
   type PacketStatus,
 } from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
+import { listIssues, findIssue, writeIssue, moveIssue, parseKind, legalStatus, ISSUE_KIND_LABELS, ISSUE_KINDS, ISSUE_STATUS_LABELS, statusesForKind, type IssueStatus } from "../plan/issues.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
@@ -82,8 +82,8 @@ export async function cmdApprove(argv: string[]): Promise<number> {
   if (!target) fail("usage: machine_code approve <slug>");
   const l = layout();
   const slug = slugify(target);
-  if (!readPacketFile(l, slug)) fail(`no packet ${slug}`);
-  await approvePacket(l, slug);
+  if (!findIssue(l, slug) && !readPacketFile(l, slug)) fail(`no issue or packet ${slug}`);
+  await approveIssue(l, slug);
   process.stdout.write(`approved and merged ${slug}\n`);
   return 0;
 }
@@ -92,12 +92,112 @@ export async function cmdApprove(argv: string[]): Promise<number> {
 export function cmdPlan(argv: string[]): number {
   const { flags } = parseFlags(argv);
   const l = layout();
-  const view = renderPlan(l);
+  const issues = listIssues(l);
   if (flags.has("json")) {
-    process.stdout.write(`${JSON.stringify(view.items, null, 2)}\n`);
-  } else {
-    process.stdout.write(`${view.text}\n`);
+    process.stdout.write(`${JSON.stringify(issues, null, 2)}\n`);
+    return 0;
   }
+  const lines: string[] = ["# Issues"];
+  for (const kind of ISSUE_KINDS) {
+    lines.push("", `## ${ISSUE_KIND_LABELS[kind]}`);
+    for (const status of statusesForKind(kind)) {
+      const group = issues.filter((issue) => issue.kind === kind && issue.status === status);
+      if (group.length === 0) continue;
+      lines.push(`### ${ISSUE_STATUS_LABELS[status]}`);
+      for (const issue of group) lines.push(`- [ ] ${issue.slug} - ${issue.title}`);
+    }
+  }
+  process.stdout.write(`${lines.join("\n")}\n`);
+  return 0;
+}
+
+
+/* -------------------------------------------------------------- issue */
+
+/** Inspect and edit issue files: list, create, move, show, run. */
+export async function cmdIssue(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const l = layout();
+  const sub = positional[0];
+
+  if (sub === "create" || sub === "new") {
+    const kindArg = positional[1];
+    const slugArg = positional[2];
+    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|agent|human] [--depends a,b] [--tags a,b] [--status <dir>]');
+    const kind = parseKind(kindArg);
+    if (!kind) fail(`unknown kind ${JSON.stringify(kindArg)}; use ideas|features|bugs`);
+    const slug = slugify(slugArg);
+    if (!slug) fail("issue slug becomes empty");
+    if (findIssue(l, slug)) fail(`issue ${slug} already exists`);
+    const statusFlag = flags.get("status");
+    if (statusFlag && !legalStatus(kind, statusFlag)) fail(`invalid status ${JSON.stringify(statusFlag)} for ${kind}`);
+    const reviewFlag = flags.get("review") ?? "none";
+    if (!["none", "agent", "human"].includes(reviewFlag)) fail("--review must be none|agent|human");
+    const issue = writeIssue(l, {
+      kind,
+      slug,
+      prompt: positional.slice(3).join(" ").trim() || slug,
+      ...(statusFlag ? { status: statusFlag as IssueStatus } : {}),
+      ...(flags.get("priority") ? { priority: flags.get("priority") } : {}),
+      ...(flags.get("depends") ? { depends: flags.get("depends")!.split(",").map((e) => slugify(e)) } : {}),
+      ...(flags.get("tags") ? { tags: flags.get("tags")!.split(",").map((e) => e.trim()) } : {}),
+      review: reviewFlag as "none" | "agent" | "human",
+    });
+    await commitPlanningFiles(l, `issues: add ${slug}`);
+    process.stdout.write(`created ${issue.rel}\n`);
+    return 0;
+  }
+
+  if (sub === "move") {
+    const slug = positional[1];
+    const to = positional[2];
+    if (!slug || !to) fail("usage: machine_code issue move <slug> <status>");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    if (!legalStatus(issue.kind, to)) fail(`invalid status ${JSON.stringify(to)} for ${issue.kind}`);
+    const moved = moveIssue(l, cleaned, to as IssueStatus);
+    await commitPlanningFiles(l, `issues: ${cleaned} → ${to}`);
+    process.stdout.write(`moved ${cleaned} → ${moved?.rel ?? ""}\n`);
+    return 0;
+  }
+
+  if (sub === "run") {
+    const slug = positional[1];
+    if (!slug) fail("usage: machine_code issue run <slug> [--agent research|engineer]");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    const agent = flags.get("agent") ?? (issue.kind === "ideas" ? "research" : "engineer");
+    const include = JSON.stringify({ files: [issue.rel] });
+    const child = spawn(
+      process.execPath,
+      [process.argv[1]!, "run", "--agent", agent, "--item", cleaned, "--context-include", include, issue.prompt],
+      { stdio: "inherit" },
+    );
+    const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
+    return code;
+  }
+
+  if (sub === "list" || sub === "ls" || sub === undefined) {
+    const issues = listIssues(l);
+    if (flags.has("json")) {
+      process.stdout.write(`${JSON.stringify(issues, null, 2)}\n`);
+      return 0;
+    }
+    if (issues.length === 0) {
+      process.stdout.write('no issues (use `machine_code issue create ideas|features|bugs <slug> "<prompt>"`)\n');
+      return 0;
+    }
+    for (const issue of issues) {
+      process.stdout.write(`${issue.rel}\n  ${issue.title}\n`);
+    }
+    return 0;
+  }
+
+  const issue = findIssue(l, slugify(sub ?? ""));
+  if (!issue) fail(`no issue ${sub} (run \`machine_code issue list\`)`);
+  process.stdout.write(`${issue.rel}\npriority ${issue.priority} · review ${issue.review}\n\n${issue.prompt}\n`);
   return 0;
 }
 
@@ -221,16 +321,22 @@ export async function cmdPacket(argv: string[]): Promise<number> {
 
 export async function runPacketBuild(l: ReturnType<typeof layout>, packetFile: PacketFile, flags: Map<string, string>): Promise<number> {
   const slug = packetFile.slug;
-  const packet = toTaskPacket(packetFile);
+  const packet = {
+    id: slug,
+    goal: packetFile.deliverable.trim() || slug,
+    context: [...packetFile.files],
+    constraints: packetFile.acceptance.map((entry) => `- ${entry}`),
+    acceptance: packetFile.verify.map((command) => ({ command })),
+  };
 
   const runtime = await loadRuntime(l);
   const recorder = new RunRecorder(l, {
-    agent: "build",
+    agent: "engineer",
     mode: "verified",
     request: packet.goal,
     repoRoot: l.repoRoot,
     packetId: slug,
-    phase: "build",
+    phase: "engineer",
   });
   registerProject(l.home, l.repoRoot);
 
@@ -336,7 +442,7 @@ export async function cmdBatch(argv: string[]): Promise<number> {
   const dryRun = flags.has("dry-run");
   const autoApprove = flags.has("auto-approve");
 
-  const waves = planBatchWaves(l, maxParallel);
+  const waves = planIssueWaves(l, maxParallel);
   if (waves.length === 0) {
     process.stdout.write("no ready packets\n");
     return 0;
@@ -363,7 +469,7 @@ export async function cmdBatch(argv: string[]): Promise<number> {
 
   let guard = 0;
   while (guard++ < 1000) {
-    const current = planBatchWaves(l, maxParallel);
+    const current = planIssueWaves(l, maxParallel);
     const wave = current[0] ?? [];
     if (wave.length === 0) break;
     process.stdout.write(`wave ${guard}: ${wave.join(", ")}\n`);
@@ -375,7 +481,7 @@ export async function cmdBatch(argv: string[]): Promise<number> {
         continue;
       }
       try {
-        await approvePacket(l, slug);
+        await approveIssue(l, slug);
       } catch {
         // Failed build stays live; its dependents wait for the next run.
       }
@@ -399,7 +505,7 @@ export async function cmdDelete(argv: string[]): Promise<number> {
   const l = layout();
   const slug = slugify(slugArg);
   if (!readPacketFile(l, slug)) fail(`no packet ${slug}`);
-  await deletePacket(l, slug, { force: flags.has("force") });
+  await deleteIssue(l, slug, { force: flags.has("force") });
   process.stdout.write(`deleted ${slug}\n`);
   return 0;
 }

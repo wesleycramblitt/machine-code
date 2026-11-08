@@ -72,8 +72,7 @@ test("runs list renders hierarchy rows and footer affordances", () => {
     runs: [run({ id: "r1", packetId: "p1" })],
     group: "all",
     packetRepo: "/repo",
-    packets: [{ slug: "p1", status: "todo", deps: [], blocked: "", deliverable: "Do", files: [], acceptance: [], verify: [] }],
-    planItems: [{ plan: "plans/tui.md", planTitle: "TUI", kind: "feature", slug: "p1", title: "Do", done: false, archived: false, line: 0 }],
+    issues: [{ kind: "features", slug: "p1", title: "Do the thing", status: "todo", effective: "todo", priority: "medium", review: "none", prompt: "Do the thing", body: "", depends: [], tags: [], plan: "plans/tui.md", planTitle: "TUI", rel: "issues/features/ready/p1.md", path: "/tmp/issues/features/ready/p1.md" }],
     preferredRepo: "/repo",
   });
   const frame = renderRunsList({
@@ -83,22 +82,23 @@ test("runs list renders hierarchy rows and footer affordances", () => {
   assert.equal(frame.body.length, 30);
   assert.match(frame.actions, /New run/);
   const flat = frame.body.join("\n");
-  assert.match(flat, /\[(In Progress|Ready to Build|Needs Planning|Done)\]/, "status name is rendered, not color alone");
+  assert.match(flat, /\[(Todo|In Progress|Blocked|Done|Needs Research|Researched)\]/, "status name is rendered, not color alone");
   assert.match(flat, /p1/);
 });
 
 test("packet renders contract plus attached runs", () => {
   const frame = renderPacket({
     ...vp, slug: "p1",
-    item: {
-      slug: "p1", title: "Do the thing", kindLabel: "Feature", plan: "plans/tui.md",
-      statusLabel: "Ready to Build", hasContract: true, background: ["## Features", "- [ ] p1 — Do the thing"],
+    issue: {
+      slug: "p1", title: "Do the thing", kindLabel: "Feature",
+      statusLabel: "Todo", rel: "issues/features/ready/p1.md",
+      priority: "medium", review: "none", tags: [], depends: [],
+      body: ["# Do the thing", "Deliverable text"],
     },
-    packet: { slug: "p1", status: "todo", deps: [], blocked: "", deliverable: "Do", files: ["a.ts"], acceptance: ["ok"], verify: ["t"] },
     runs: [], scroll: 0,
   });
   assert.ok(frame.body.some((line) => line.includes("p1")));
-  assert.match(frame.body.join("\n"), /Ready to Build/);
+  assert.match(frame.body.join("\n"), /Todo/);
 });
 
 test("run detail renders overview and timeline sections", () => {

@@ -1,14 +1,14 @@
 /**
  * machine_code — runs list screen.
  *
- * Pure render of the run hierarchy (repository → category → packet → runs,
- * or repository → status). Row focus dimming, packet tones, the pending-answer
- * affordance, and footer commands all live here; the caller supplies the
- * prebuilt index plus a pending-question lookup.
+ * Pure render of the work tree (repository → kind → issue → runs, or
+ * repository → status). Row focus dimming, issue tones, and the
+ * pending-answer affordance live here; the caller supplies the prebuilt
+ * index plus a pending-question lookup.
  */
 import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
-import { ITEM_STATUS_LABELS, type ItemStatus } from "../../plan/lifecycle.js";
+import { ISSUE_STATUS_LABELS, type DisplayStatus } from "../../plan/issues.js";
 import type { RunSummary } from "../../state/runs.js";
 import { windowedBody, type Viewport } from "./types.js";
 
@@ -32,39 +32,22 @@ export interface RunsListFrame {
   scroll: number;
 }
 
-/** Shared status glyph + color. Always render the name too, not color alone. */
-function statusStyle(status: "todo" | "in-progress" | "blocked" | "done"): { tone: string; glyph: string } {
-  switch (status) {
-    case "in-progress":
-      return { tone: C, glyph: "●" };
-    case "blocked":
-      return { tone: Y, glyph: "⏸" };
-    case "done":
-      return { tone: G, glyph: "✓" };
-    default:
-      return { tone: W, glyph: "○" };
-  }
-}
-
-/** Lifecycle colors for work items (packet is a status, not a row). */
-const ITEM_STATUS_STYLE: Record<ItemStatus, { tone: string; glyph: string }> = {
+/** Directory-status colors: status is spelled out, color is decoration. */
+const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }> = {
   "needs-research": { tone: Y, glyph: "?" },
   researched: { tone: M, glyph: "◐" },
-  "needs-planning": { tone: Y, glyph: "○" },
-  ready: { tone: BL, glyph: "◆" },
+  todo: { tone: BL, glyph: "◆" },
   "in-progress": { tone: C, glyph: "●" },
+  blocked: { tone: RED, glyph: "⏸" },
   done: { tone: G, glyph: "✓" },
-  archived: { tone: GR, glyph: "–" },
 };
 
-/** Category header colors: type, plan file, and exception buckets. */
+/** Category header colors: type and exception buckets. */
 const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {
   feature: G,
   bug: RED,
   idea: Y,
   other: W,
-  plan: C,
-  unplanned: M,
   untracked: GR,
   status: Y,
 };
@@ -86,30 +69,19 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const tone = SECTION_TONES[row.tone];
       const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
-    } else if (row.kind === "planline") {
-      // Lifecycle status, color-encoded and spelled out. A ▣ marks the item
-      // as having a build contract; blocked is an orthogonal flag.
-      const style = ITEM_STATUS_STYLE[row.status];
-      const label = ITEM_STATUS_LABELS[row.status];
+    } else if (row.kind === "issue") {
+      // Directory status, color-encoded and spelled out. Runs nest under the
+      // issue; the review mode is a small tag when it will run.
+      const style = ISSUE_STATUS_STYLE[row.effective];
+      const label = ISSUE_STATUS_LABELS[row.effective];
       const badge = `${B}${style.tone}[${label}]${R}`;
       const folded = row.collapsible ? `${row.collapsed ? "▸" : "▾"} ` : "";
-      const contract = row.contract ? `${C}▣${R} ` : "";
-      const flag = row.blocked ? ` ${RED}⚠ blocked${R}` : "";
+      const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
+      const priority = row.priority && row.priority !== "medium" ? ` ${D}· ${row.priority}${R}` : "";
       const title = row.title
-        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - label.length - 24))}${R}`
+        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - label.length - 30))}${R}`
         : "";
-      const text = ` ${indent}${folded}${style.tone}${style.glyph}${R} ${badge} ${contract}${style.tone}${row.slug}${R}${flag}${title}`;
-      rendered.push(selected(text, isSelected));
-    } else if (row.kind === "packet") {
-      const status = row.packet.status;
-      const style = statusStyle(status);
-      const badge = `${B}${style.tone}[${status}]${R}`;
-      // Packets use a box glyph so they read as contracts, distinct from the
-      // item status circles/triangles.
-      const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${style.tone}▣${R} ${badge} ${style.tone}${row.slug}${R}`;
-      const runs = row.directRuns > 0 ? `${D}${row.directRuns} run${row.directRuns === 1 ? "" : "s"}${R}` : "";
-      const detail = `${D}${trunc(row.packet.deliverable, Math.max(12, cols - indent.length - 34))}${R}`;
-      const text = ` ${pad(left, Math.max(20, cols - visible(`${runs}  ${detail}`) - 2))}${runs}  ${detail}`;
+      const text = ` ${indent}${folded}${style.tone}${style.glyph}${R} ${badge} ${style.tone}${row.slug}${R}${priority}${review}${title}`;
       rendered.push(selected(text, isSelected));
     } else {
       const run = row.run;

@@ -53,17 +53,15 @@ import {
   PACKET_REVIEWS,
   readPacketFile,
   renderPacketFile,
-  renderPlan,
   slugify,
-  toTaskPacket,
   writePacketFile,
   type PacketFile,
   type PacketReview,
   type PacketStatus,
 } from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
-import { planItems } from "../plan/items.js";
-import { ITEM_STATUS_LABELS } from "../plan/lifecycle.js";
+import { listIssues } from "../plan/issues.js";
+import { ISSUE_STATUS_LABELS } from "../plan/issues.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";
 import { buildRunIndex, parseRunGroup, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
@@ -114,20 +112,11 @@ export function rowText(row: RunRow, width: number, group: RunGroup): string {
   if (row.kind === "section") {
     return `${indent}${row.collapsed ? "▸" : "▾"} ${row.label} (${row.count})`;
   }
-  if (row.kind === "packet") {
+  if (row.kind === "issue") {
+    const label = ISSUE_STATUS_LABELS[row.effective];
     const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
-    const runs = row.directRuns > 0 ? `runs ${row.directRuns}` : "";
-    const head = `${indent}${fold} ▣ ${row.slug} [${row.packet.status}]`;
-    const tail = `  ${row.packet.deliverable.replace(/\s+/g, " ").slice(0, width < 100 ? 24 : 48)}${runs ? `  ${runs}` : ""}`;
-    if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
-    return cell(head, width - visibleWidth(tail)) + tail;
-  }
-  if (row.kind === "planline") {
-    const label = ITEM_STATUS_LABELS[row.status];
-    const contract = row.contract ? "▣ " : "";
-    const flag = row.blocked ? " ⚠ blocked" : "";
     const tail = row.title ? `  ${row.title.slice(0, width < 100 ? 24 : 40)}` : "";
-    return cell(`${indent}${contract}${row.slug} [${label}]${flag}`, Math.max(20, width - visibleWidth(tail))) + tail;
+    return cell(`${indent}${fold} ${row.slug} [${label}]`, Math.max(20, width - visibleWidth(tail))) + tail;
   }
   const run = row.run;
   const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
@@ -184,8 +173,8 @@ export async function cmdRuns(argv: string[]): Promise<number> {
     text,
     attentionOnly: attention,
     preferredRepo: l.repoRoot,
-    ...(group === "all" || group === "plan"
-      ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planItems: planItems(l) }
+    ...(group === "all" || group === "type"
+      ? { packetRepo: l.repoRoot, issues: listIssues(l) }
       : {}),
   });
 
@@ -197,20 +186,15 @@ export async function cmdRuns(argv: string[]): Promise<number> {
       if (row.kind === "section") {
         return { kind: row.kind, depth: row.depth, id: row.id, label: row.label, count: row.count };
       }
-      if (row.kind === "packet") {
-        return { kind: row.kind, slug: row.slug, status: row.packet.status, depth: row.depth, directRuns: row.directRuns, deliverable: row.packet.deliverable };
-      }
-      if (row.kind === "planline") {
+      if (row.kind === "issue") {
         return {
           kind: row.kind,
           slug: row.slug,
           title: row.title,
           itemKind: row.itemKind,
-          plan: row.plan,
           status: row.status,
-          ...(row.blocked ? { blocked: row.blocked } : {}),
-          done: row.done,
-          ...(row.contract ? { contract: row.contract } : {}),
+          effective: row.effective,
+          priority: row.priority,
           depth: row.depth,
         };
       }
@@ -563,7 +547,7 @@ export async function cmdPack(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv);
   const l = layout();
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
-  const agent = flags.get("agent") ?? "build";
+  const agent = flags.get("agent") ?? "engineer";
   const agentPolicy = policy.agents[agent];
   if (!agentPolicy) fail(`unknown agent "${agent}"; choose one of ${Object.keys(policy.agents).join(", ")}`);
 

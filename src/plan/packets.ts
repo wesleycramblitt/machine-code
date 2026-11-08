@@ -73,7 +73,6 @@ export interface PacketFile {
 /* ---------------------------------------------------------------- slugs */
 
 import { isValidSlug, slugify } from "./slug.js";
-import { planItems, PLAN_ITEM_KINDS, PLAN_ITEM_KIND_LABELS } from "./items.js";
 
 export { isValidSlug, slugify };
 
@@ -385,71 +384,6 @@ function statusGlyph(status: PacketStatus): string {
     case "done":
       return "✓";
   }
-}
-
-export interface PlanItem {
-  heading: string;
-  done: boolean;
-  /** Slug when the line keys a packet (or links to one). */
-  slug?: string;
-  title: string;
-  hasPacket: boolean;
-  status?: PacketStatus;
-  blocked?: string;
-}
-
-export interface PlanView {
-  items: PlanItem[];
-  text: string;
-}
-
-/**
- * Render the plan tree: every plan file, its item types, and each item's
- * status/blocker annotations from its linked packet. Items come from every
- * plan file, not just `plans/index.md`.
- */
-export function renderPlan(layout: Layout): PlanView {
-  const packets = new Map(listPacketFiles(layout).map((packet) => [packet.slug, packet]));
-  const workItems = planItems(layout);
-  const items: PlanItem[] = [];
-  const rendered: string[] = ["# Plans"];
-  const byPlan = new Map<string, { title: string; items: typeof workItems }>();
-  for (const item of workItems) {
-    const entry = byPlan.get(item.plan) ?? { title: item.planTitle, items: [] };
-    entry.items.push(item);
-    byPlan.set(item.plan, entry);
-  }
-  for (const [plan, entry] of [...byPlan.entries()].sort((a, b) => a[1].title.localeCompare(b[1].title))) {
-    rendered.push("", `## ${entry.title}`, `_${plan}_`);
-    for (const kind of PLAN_ITEM_KINDS) {
-      const list = entry.items.filter((item) => item.kind === kind);
-      if (list.length === 0) continue;
-      rendered.push("", `### ${PLAN_ITEM_KIND_LABELS[kind]}`);
-      for (const item of [...list].sort((a, b) => a.line - b.line)) {
-        const packet =
-          item.kind === "idea"
-            ? undefined
-            : (item.packet ? packets.get(item.packet) : undefined) ?? packets.get(item.slug);
-        const status = item.done ? "done" : packet?.status;
-        const glyph = status ? `${statusGlyph(status)} ${status}` : "";
-        const branchTag = packet && status && status !== "done" ? `  ⤳ ${packetBranch(packet.slug)}` : "";
-        const box = item.done ? "x" : " ";
-        rendered.push(`- [${box}] ${item.slug}${item.title ? ` - ${item.title}` : ""}  ${glyph}${branchTag}`.trimEnd());
-        if (packet?.blocked) rendered.push(`      blocked: ${packet.blocked}`);
-        if (packet && packet.deps.length > 0) rendered.push(`      deps: ${packet.deps.join(", ")}`);
-        items.push({
-          heading: `${entry.title} / ${PLAN_ITEM_KIND_LABELS[kind]}`,
-          done: item.done,
-          slug: item.slug,
-          title: item.title,
-          hasPacket: Boolean(packet),
-          ...(status ? { status: status as PacketStatus } : {}),
-          ...(packet?.blocked ? { blocked: packet.blocked } : {}),
-        });
-      }
-    }
-  }
-  return { items, text: rendered.join("\n") };
 }
 
 /* ------------------------------------------------------- packet → Task */

@@ -1,63 +1,65 @@
 ---
 name: plan-curation
-description: Use when creating or updating plan files in plans/. Items are typed checklist lines that the Runs page renders.
+description: Use when creating or updating issues under issues/. Items are YAML issue files whose status is the directory.
 ---
 
 # Plan curation
 
-`plans/` is the single work tree. Each plan file is a category (TUI, Models,
-Web tools, …), and its checklist lines are the items the Runs page and
-`machine_code plan` render.
+`issues/` is the single work tree. Each file is one work item:
 
-## Item grammar
-
-```text
-- [ ] slug - short title
-- [ ] slug - short title → packets/<slug>.md
-- [x] slug - short title
+```
+issues/
+  ideas/<slug>.md              # needs research
+  ideas/.researched/<slug>.md  # researched
+  features/{todo,blocked,done}/<slug>.md
+  bugs/{todo,blocked,done}/<slug>.md
 ```
 
-- **slug**: lowercase, hyphenated, 2–5 words. Stable once written; the item
-  id and any branch use it.
-- **type**: the nearest `## Features` / `## Bugs` / `## Ideas` heading.
-  When the heading is prose, the parser infers from the line (`fix`/`crash`/
-  `error` → bug, `maybe`/`explore`/`investigate` → idea, else feature).
-  Prefer explicit headings.
-- **link**: add `→ packets/<slug>.md` once the packet exists. That nests the
-  packet and its runs under the item.
-- **done**: `[x]` is a status badge, not a category. Never create a
-  `## Done` section or move completed lines.
-- **archived**: `[~]` hides the item from normal attention without deleting
-  its history.
+Status is a directory: the item's status is where it lives. Move work with
+`git mv` or `machine_code issue move <slug> <status>`.
 
-Ideas are vague statements that can become features or bugs. Put them under
-`## Ideas`; a research run turns them into concrete features or bugs. Ideas
-never link a packet — a packet is a build contract, so it belongs to the
-feature or bug that research produced, not to the idea.
+## File shape
 
-The Runs page derives one lifecycle status per item: ideas are
-Needs Research → Researched; features/bugs are Needs Planning → Ready to
-Build → In Progress → Done. A packet is that item's contract (opened from the
-item), not a separate row.
+```toml
+---
+priority = "medium"
+prompt = "Make the thing fast."
+depends = ["other-slug"]
+tags = ["tui"]
+review = "none"
+---
+
+# Short title
+
+One paragraph of detail the prompt needs.
+```
+
+- **priority**: `low` / `medium` / `high`.
+- **prompt**: what the agent should do, one or two sentences.
+- **depends**: other issue slugs that must finish first (optional).
+- **tags**: area tags (optional).
+- **review**: `none` (gates only) / `agent` (gates + independent review) /
+  `human` (gates only, never auto-merged). Default `none`.
+- **status**: the directory. Ideas leave `ideas/` for `.researched/` when
+  research finishes; features/bugs move todo → blocked ⇄ todo → done. There
+  is no archived status: delete an issue you no longer want.
+
+## Which agent does what
+
+- **Research** takes an idea (`issues/ideas/<slug>.md`) into detailed
+  features or bugs. It writes issue files under `features/todo/` or
+  `bugs/todo/`, then moves the idea to `.researched/`.
+- **Engineer** takes a feature or bug in one run: plan + build with a fast
+  keyword/semantic context lookup, commit, then move it to done/ (or blocked
+  with a reason in the body). Ideas never carry a review mode of their own;
+  the feature/bug they produce does.
 
 ## Procedure
 
-1. Read `plans/index.md` to find the right plan file. If none covers the
-   area, create `plans/<area>.md` with a `# <Area>` heading and add it to the
-   index.
-2. Add the item under `## Features`, `## Bugs`, or `## Ideas` as
-   `- [ ] slug - title`. Keep the title one sentence.
-3. If a packet exists (or you just created one) for a feature or bug, append
-   `→ packets/<slug>.md`. Never attach one to an idea.
-4. Mark finished work `[x]` in place.
-5. Keep prose outside checklist lines; it is ignored by the parser but useful
-   to humans. Do not put real items inside fenced code blocks — fenced
-   examples are skipped.
-
-## Rules
-
-- One area per file; split at roughly 200 lines and add the new file to
-  `plans/index.md`.
-- Write plans, not run logs. No run history or events.
-- Do not duplicate what `knowledge/` or packets already record; link instead.
-- Use short, active sentences.
+1. Read `issues/` (or `machine_code plan`) to find the item.
+2. Edit the front-matter or body. Keep the prompt tight; put narrative in
+   the body.
+3. Move the file with `machine_code issue move` or `git mv` when its status
+   changes: `ideas/.researched/`, `features/todo|blocked|done/`.
+4. `plans/` and `packets/` are legacy bridges only. New work goes to
+   `issues/`.

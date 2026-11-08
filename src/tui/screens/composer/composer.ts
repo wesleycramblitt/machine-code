@@ -20,6 +20,7 @@ import {
 } from "../../format.js";
 import { layout } from "../../../paths.js";
 import { listPacketFiles, readPacketFile } from "../../../plan/packets.js";
+import { listIssues } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
 import { defaultSkillsFor, resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
@@ -346,8 +347,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
   const packetSource = ctx.sources.find((source) => source.kind === "packet");
   const packetItems: ContextPanelItem[] = [];
+  const seenPacketKeys = new Set<string>();
   for (const packet of listPacketFiles(newRunLayout)) {
     const selected = run.packet === packet.slug;
+    seenPacketKeys.add(`packet:${packet.slug}`);
     packetItems.push({
       text:
         `${packet.slug} · ${trunc(packet.deliverable || "(no deliverable)", Math.max(12, cols - 40))} ` +
@@ -356,6 +359,19 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       chars: selected ? (packetSource?.chars ?? 0) : 0,
       exists: true,
       key: `packet:${packet.slug}`,
+      ...(selected ? {} : { available: true, counted: false }),
+    });
+  }
+  // Issues are the primary work tree: every issue is a packet source.
+  for (const issue of listIssues(newRunLayout)) {
+    const key = `packet:${issue.slug}`;
+    if (seenPacketKeys.has(key)) continue;
+    const selected = run.packet === issue.slug;
+    packetItems.push({
+      text: `${issue.slug} · ${trunc(issue.prompt, Math.max(12, cols - 40))} [${issue.status}]` + (selected ? " · selected" : ""),
+      chars: selected ? (packetSource?.chars ?? 0) : 0,
+      exists: true,
+      key,
       ...(selected ? {} : { available: true, counted: false }),
     });
   }

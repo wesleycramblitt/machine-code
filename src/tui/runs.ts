@@ -1,54 +1,52 @@
 /**
  * machine_code — navigable work hierarchy.
  *
- * The Runs page groups work three ways:
+ * Two modes over the issues tree:
  *
- *   all       repository → item type (Features/Bugs/Ideas) → item → packet → runs
- *   plan      repository → plan file → item type → item → packet → runs
- *   status    repository → run status
- *   overall   run status across every repository
+ *   all   repository → kind (Features/Bugs/Ideas) → issue → runs
+ *   type  repository → kind → status section → issue → runs
+ *   status  repository → run status
+ *   overall run status across every repository
  *
- * Rows stay flat for keyboard navigation; `depth` carries the visual
- * hierarchy and `parent` identifies fold groups.
+ * Status is a directory: the row set comes from `issues/<kind>/<status>/`.
+ * Packets are whatever the issue file carries; there are no packet rows.
  */
 import { basename } from "node:path";
 import type { RunSummary } from "../state/runs.js";
-import type { PacketFile } from "../plan/packets.js";
-import { PLAN_ITEM_KIND_LABELS, PLAN_ITEM_KINDS, type PlanItem, type PlanItemKind } from "../plan/items.js";
-import { itemState, runItemId, type ItemStatus } from "../plan/lifecycle.js";
+import {
+  ISSUE_KIND_LABELS,
+  ISSUE_KINDS,
+  ISSUE_STATUS_LABELS,
+  statusesForKind,
+  type Issue,
+  type IssueKind,
+  type IssueStatus,
+} from "../plan/issues.js";
+import { effectiveStatus, runItemId } from "../plan/lifecycle.js";
+import type { DisplayStatus } from "../plan/issues.js";
 import { sortRuns } from "./status.js";
 
-export type RunGroup = "all" | "plan" | "status" | "overall";
+export type RunGroup = "all" | "type" | "status" | "overall";
 
 /** Modes the TUI cycles with `g`. */
-export const RUN_GROUPS: readonly RunGroup[] = ["all", "plan"];
+export const RUN_GROUPS: readonly RunGroup[] = ["all", "type"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
   all: "All",
-  plan: "By plan",
+  type: "By type",
   status: "Status",
   overall: "Overall status",
 };
-
-/** Section header tone: work type, plan file, or run-status grouping. */
-export type SectionTone =
-  | "feature"
-  | "bug"
-  | "idea"
-  | "other"
-  | "plan"
-  | "unplanned"
-  | "untracked"
-  | "status";
 
 /** Parse a `--group` value, accepting the pre-restructure names. */
 export function parseRunGroup(value: string | undefined): RunGroup | undefined {
   if (!value) return undefined;
   if (value === "packets") return "all";
-  if (value === "category") return "plan";
-  return (["all", "plan", "status", "overall"] as const).find((group) => group === value);
+  if (value === "category" || value === "plan") return "type";
+  return (["all", "type", "status", "overall"] as const).find((group) => group === value);
 }
 
+export type SectionTone = "feature" | "bug" | "idea" | "other" | "status" | "untracked";
 
 export type RunRow =
   | {
@@ -70,8 +68,8 @@ export type RunRow =
       collapsible: boolean;
       collapsed: boolean;
       tone: SectionTone;
-      /** Plan file this section represents (By plan mode), for seeded runs. */
-      plan?: string;
+      issueKind?: IssueKind;
+      issueStatus?: IssueStatus;
     }
   | {
       kind: "run";
@@ -81,31 +79,16 @@ export type RunRow =
       parent?: string;
     }
   | {
-      kind: "packet";
-      id: string;
-      slug: string;
-      packet: PacketFile;
-      depth: number;
-      parent?: string;
-      directRuns: number;
-      collapsible: boolean;
-      collapsed: boolean;
-    }
-  | {
-      kind: "planline";
+      kind: "issue";
       id: string;
       slug: string;
       title: string;
-      kindLabel: string;
-      itemKind: PlanItemKind;
-      /** Source plan file. */
-      plan: string;
-      status: ItemStatus;
-      /** Blocking flag (reason), orthogonal to the lifecycle status. */
-      blocked?: string;
-      done: boolean;
-      /** The item's contract slug, when one exists. */
-      contract?: string;
+      itemKind: IssueKind;
+      status: IssueStatus;
+      /** Effective status while a run is live. */
+      effective: DisplayStatus;
+      priority: string;
+      review: Issue["review"];
       depth: number;
       parent?: string;
       collapsible: boolean;
@@ -114,12 +97,10 @@ export type RunRow =
 
 export interface RunOptions {
   runs: readonly RunSummary[];
-  /** Repo root the work catalog belongs to (the cwd/preferred repo). */
+  /** Repo root the issues tree belongs to (the cwd/preferred repo). */
   packetRepo?: string;
-  /** Packet files for the work catalog (one repo). */
-  packets?: readonly PacketFile[];
-  /** Plan items parsed from every plan file. */
-  planItems?: readonly PlanItem[];
+  /** Issues for the work tree (one repo). */
+  issues?: readonly Issue[];
   group?: RunGroup;
   collapsed?: ReadonlySet<string>;
   /** Case-insensitive substring over run fields and repository paths. */
@@ -162,6 +143,7 @@ function runText(run: RunSummary): string {
     run.repoRoot,
     run.prNumber ? `pr #${run.prNumber}` : "",
     run.packetId ?? "",
+    run.itemId ?? "",
   ].join(" ");
 }
 
@@ -192,8 +174,6 @@ const STATUS_ORDER: Array<{ status: RunSummary["status"]; label: string }> = [
 export function buildRunIndex(options: RunOptions): RunIndex {
   const collapsed = options.collapsed ?? new Set<string>();
   const text = options.text?.trim().toLowerCase() ?? "";
-  // The TUI and CLI default to the `packets` group explicitly; the library
-  // default stays `packets` as well now that issues are gone.
   const group = options.group ?? "all";
   const rows: RunRow[] = [];
   const byRunId = new Map<string, RunRow & { kind: "run" }>();
@@ -205,9 +185,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const untracked: RunSummary[] = [];
   const orphaned: RunSummary[] = [];
   for (const run of baseRuns) {
-    if (!runItemId(run)) {
-      untracked.push(run);
-    }
+    if (!runItemId(run)) untracked.push(run);
   }
 
   const runMatches = (run: RunSummary): boolean => {
@@ -228,15 +206,9 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     for (const run of sortRuns(list, "activity")) pushRun(run, depth, parent);
   };
 
-  const pushSection = (
-    id: string,
-    label: string,
-    count: number,
-    depth: number,
-    tone: SectionTone,
-  ): boolean => {
+  const pushSection = (id: string, label: string, count: number, depth: number, tone: SectionTone, kind?: IssueKind, status?: IssueStatus): boolean => {
     if (count === 0) return false;
-    rows.push({ kind: "section", id, label, count, depth, collapsible: true, collapsed: collapsed.has(id), tone });
+    rows.push({ kind: "section", id, label, count, depth, collapsible: true, collapsed: collapsed.has(id), tone, ...(kind ? { issueKind: kind } : {}), ...(status ? { issueStatus: status } : {}) });
     return !collapsed.has(id);
   };
 
@@ -256,11 +228,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     return !isCollapsed;
   };
 
-  const pushStatusGroups = (
-    list: readonly RunSummary[],
-    depth: number,
-    idPrefix: string,
-  ): void => {
+  const pushStatusGroups = (list: readonly RunSummary[], depth: number, idPrefix: string): void => {
     for (const { status, label } of STATUS_ORDER) {
       const groupRuns = list.filter((run) => run.status === status);
       if (groupRuns.length === 0) continue;
@@ -270,9 +238,17 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     }
   };
 
-  const pushPacketTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
-    const packets = options.packets ?? [];
-    const bySlug = new Map(packets.map((packet) => [packet.slug, packet] as const));
+  const RANK: Record<DisplayStatus, number> = {
+    "needs-research": 0,
+    researched: 1,
+    todo: 0,
+    "in-progress": 1,
+    blocked: 2,
+    done: 3,
+  };
+
+  const pushWorkTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
+    const issues = options.issues ?? [];
     const runsByItem = new Map<string, RunSummary[]>();
     for (const run of repoRuns) {
       const itemId = runItemId(run);
@@ -281,121 +257,66 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       list.push(run);
       runsByItem.set(itemId, list);
     }
-
-    // One row per work item. A packet is the item's contract, shown as a ▣
-    // affordance, not a second row; its runs hang directly off the item.
-    const placed = new Set<string>();
-    const pushPlanLine = (item: PlanItem, lineDepth: number, parentId: string): void => {
-      // Ideas never own a contract: research turns them into features/bugs.
-      const contract =
-        item.kind === "idea"
-          ? undefined
-          : (item.packet ? bySlug.get(item.packet) : undefined) ?? bySlug.get(item.slug);
-      const state = itemState(item, contract, repoRuns);
-      const related = runsByItem.get(item.slug) ?? [];
-      const id = `planline:${repoRoot}:${item.plan}:${item.slug}`;
+    const sortIssues = (list: readonly Issue[]): Issue[] =>
+      [...list].sort(
+        (a, b) =>
+          RANK[effectiveStatus(a, repoRuns.filter((r) => runItemId(r) === a.slug))] -
+            RANK[effectiveStatus(b, repoRuns.filter((r) => runItemId(r) === b.slug))] ||
+          a.slug.localeCompare(b.slug),
+      );
+    const pushIssue = (issue: Issue, issueDepth: number, parentId: string): void => {
+      const related = runsByItem.get(issue.slug) ?? [];
+      const id = `issue:${issue.kind}:${issue.slug}`;
       const isCollapsed = collapsed.has(id);
       rows.push({
-        kind: "planline",
+        kind: "issue",
         id,
-        slug: item.slug,
-        title: item.title,
-        kindLabel: PLAN_ITEM_KIND_LABELS[item.kind],
-        itemKind: item.kind,
-        plan: item.plan,
-        status: state.status,
-        ...(state.blocked ? { blocked: state.blocked } : {}),
-        done: item.done,
-        ...(contract ? { contract: contract.slug } : {}),
-        depth: lineDepth,
+        slug: issue.slug,
+        title: issue.title,
+        itemKind: issue.kind,
+        status: issue.status,
+        effective: effectiveStatus(issue, repoRuns),
+        priority: issue.priority,
+        review: issue.review,
+        depth: issueDepth,
         parent: parentId,
         collapsible: related.length > 0,
         collapsed: isCollapsed,
       });
-      if (contract) placed.add(contract.slug);
       if (isCollapsed || related.length === 0) return;
-      pushRuns(sortRuns(related, "activity"), lineDepth + 1, id);
+      pushRuns(sortRuns(related, "activity"), issueDepth + 1, id);
     };
+    const toneFor = (kind: IssueKind): SectionTone =>
+      kind === "features" ? "feature" : kind === "bugs" ? "bug" : kind === "ideas" ? "idea" : "other";
 
-    const STATE_RANK: Record<ItemStatus, number> = {
-      "in-progress": 0,
-      "needs-research": 1,
-      "needs-planning": 1,
-      researched: 2,
-      ready: 2,
-      done: 3,
-      archived: 4,
-    };
-    const sortItems = (list: readonly PlanItem[]): PlanItem[] =>
-      [...list].sort((a, b) => {
-        const ca = a.kind === "idea" ? undefined : bySlug.get(a.slug);
-        const cb = b.kind === "idea" ? undefined : bySlug.get(b.slug);
-        const sa = itemState(a, ca, repoRuns).status;
-        const sb = itemState(b, cb, repoRuns).status;
-        return STATE_RANK[sa] - STATE_RANK[sb] || a.title.localeCompare(b.title);
-      });
-
-    const pushKindSections = (items: readonly PlanItem[], sectionDepth: number, prefix: string): void => {
-      for (const kind of PLAN_ITEM_KINDS) {
-        const list = items.filter((item) => item.kind === kind);
+    if (group === "type") {
+      for (const kind of ISSUE_KINDS) {
+        const list = issues.filter((issue) => issue.kind === kind);
         if (list.length === 0) continue;
-        const id = `${prefix}:${kind}`;
-        const tone: SectionTone = kind === "feature" ? "feature" : kind === "bug" ? "bug" : kind === "idea" ? "idea" : "other";
-        if (!pushSection(id, PLAN_ITEM_KIND_LABELS[kind], list.length, sectionDepth, tone)) continue;
-        for (const item of sortItems(list)) pushPlanLine(item, sectionDepth + 1, id);
-      }
-    };
-
-    const items = options.planItems ?? [];
-    if (group === "plan") {
-      const byPlan = new Map<string, { title: string; items: PlanItem[] }>();
-      for (const item of items) {
-        const entry = byPlan.get(item.plan) ?? { title: item.planTitle, items: [] };
-        entry.items.push(item);
-        byPlan.set(item.plan, entry);
-      }
-      const plans = [...byPlan.entries()].sort((a, b) => a[1].title.localeCompare(b[1].title));
-      for (const [plan, entry] of plans) {
-        const id = `plan:${repoRoot}:${plan}`;
-        rows.push({
-          kind: "section",
-          id,
-          label: entry.title,
-          count: entry.items.length,
-          depth,
-          collapsible: true,
-          collapsed: collapsed.has(id),
-          tone: "plan",
-          plan,
-        });
-        if (collapsed.has(id)) continue;
-        pushKindSections(entry.items, depth + 1, `kind:${repoRoot}:${plan}`);
+        const kindId = `kind:${repoRoot}:${kind}`;
+        if (!pushSection(kindId, ISSUE_KIND_LABELS[kind], list.length, depth, toneFor(kind), kind)) continue;
+        const byStatus = new Map<IssueStatus, Issue[]>();
+        for (const issue of list) {
+          const entry = byStatus.get(issue.status) ?? [];
+          entry.push(issue);
+          byStatus.set(issue.status, entry);
+        }
+        const order = statusesForKind(kind);
+        const sorted = [...byStatus.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+        for (const [status, entries] of sorted) {
+          if (entries.length === 0) continue;
+          const id = `${kindId}:${status}`;
+          if (!pushSection(id, ISSUE_STATUS_LABELS[status], entries.length, depth + 1, "status", kind, status)) continue;
+          for (const issue of sortIssues(entries)) pushIssue(issue, depth + 2, id);
+        }
       }
     } else {
-      pushKindSections(items, depth, `kind:${repoRoot}`);
-    }
-
-    // A contract with no plan item is a data error: surface it rather than
-    // hiding the work.
-    const orphans = packets.filter((packet) => !placed.has(packet.slug));
-    const orphanId = `plan:${repoRoot}:orphans`;
-    if (pushSection(orphanId, "Orphaned contracts", orphans.length, depth, "unplanned")) {
-      for (const packet of [...orphans].sort((a, b) => a.slug.localeCompare(b.slug))) {
-        const related = runsByItem.get(packet.slug) ?? [];
-        const id = `packet:${packet.slug}`;
-        const isCollapsed = collapsed.has(id);
-        rows.push({
-          kind: "packet",
-          id,
-          slug: packet.slug,
-          packet,
-          depth: depth + 1,
-          parent: orphanId,
-          directRuns: related.length,
-          collapsible: related.length > 0,
-          collapsed: isCollapsed,
-        });
-        if (!isCollapsed && related.length > 0) pushRuns(sortRuns(related, "activity"), depth + 2, id);
+      for (const kind of ISSUE_KINDS) {
+        const list = issues.filter((issue) => issue.kind === kind);
+        if (list.length === 0) continue;
+        const id = `kind:${repoRoot}:${kind}`;
+        if (!pushSection(id, ISSUE_KIND_LABELS[kind], list.length, depth, toneFor(kind), kind)) continue;
+        for (const issue of sortIssues(list)) pushIssue(issue, depth + 1, id);
       }
     }
 
@@ -406,8 +327,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     }
   };
 
-  // A repo with work but no runs still shows its tree in the work groups.
-  const workGroup = group === "all" || group === "plan";
+  const workGroup = group === "all" || group === "type";
   const repoNames = [
     ...new Set([
       ...baseRuns.map(repoOf),
@@ -435,14 +355,12 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
         continue;
       }
-      // Only the repo that owns the work catalog gets the item tree; other
-      // repos list their (packet-less) runs under Untracked.
       if (packetRepo) {
-        pushPacketTree(repoRoot, repoRuns, 1);
+        pushWorkTree(repoRoot, repoRuns, 1);
       } else {
-        const free = repoRuns.filter((run) => !run.packetId);
+        const free = repoRuns.filter((run) => !runItemId(run));
         const untrackedId = `untracked:${repoRoot}`;
-        if (pushSection(untrackedId, "Untracked", free.length, 1, "untracked")) {
+        if (pushSection(untrackedId, "Untracked runs", free.length, 1, "untracked")) {
           pushRuns(free, 2, untrackedId);
         }
       }
@@ -463,22 +381,10 @@ export function buildRunIndex(options: RunOptions): RunIndex {
 }
 
 /**
- * Rows that stay bright while the cursor sits on a packet or run.
- *
- * A focus keeps the selected row, its ancestors, its peers at the same
- * level, and its immediate children bright: runs under a packet. Repo and
- * section headings always stay bright; selecting one disables dimming.
+ * Rows that stay bright while the cursor sits on an issue or run.
  */
-export function focusRowIds(
-  rows: readonly RunRow[],
-  selected: RunRow | undefined,
-): Set<string> | null {
-  if (
-    !selected ||
-    (selected.kind !== "packet" && selected.kind !== "run" && selected.kind !== "planline")
-  ) {
-    return null;
-  }
+export function focusRowIds(rows: readonly RunRow[], selected: RunRow | undefined): Set<string> | null {
+  if (!selected || (selected.kind !== "issue" && selected.kind !== "run")) return null;
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   const focus = new Set<string>([selected.id]);
 
@@ -499,14 +405,12 @@ export function focusRowIds(
   const selectedParent = "parent" in selected ? selected.parent : undefined;
   for (const ancestor of ancestorsOf(selected)) focus.add(ancestor.id);
   for (const row of rows) {
-    if (row.kind !== "run" && row.kind !== "packet" && row.kind !== "planline") continue;
+    if (row.kind !== "run" && row.kind !== "issue") continue;
     if (row.parent === selectedParent) focus.add(row.id);
   }
-
   for (const row of rows) {
-    if (row.kind !== "run" && row.kind !== "packet") continue;
-    if (row.parent !== selected.id) continue;
-    if (row.kind === "run") focus.add(row.id);
+    if (row.kind !== "run") continue;
+    if (row.parent === selected.id) focus.add(row.id);
   }
   return focus;
 }

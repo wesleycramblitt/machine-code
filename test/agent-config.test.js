@@ -41,22 +41,21 @@ function tempDir(prefix) {
 /* ------------------------------------------------------ config resolution */
 
 test("role presets resolve to the documented defaults", () => {
-  const planner = resolveAgentConfig({ role: "planner" });
-  assert.equal(planner.preset, "plan");
+  const engineer = resolveAgentConfig({ role: "engineer" });
+  assert.equal(engineer.preset, "implement");
+  assert.equal(engineer.delegate, false);
+  assert.equal(engineer.ask, false);
+  assert.equal(engineer.verification, "verified");
+  assert.equal(engineer.artifactScripts, true);
 
   const review = resolveAgentConfig({ role: "review" });
   assert.equal(review.preset, "review");
   assert.equal(review.delegate, false);
-  const build = resolveAgentConfig({ role: "build" });
-  assert.equal(build.preset, "implement");
-  assert.equal(build.delegate, false);
-  assert.equal(build.ask, false);
-  assert.equal(build.verification, "verified");
-  assert.equal(build.artifactScripts, true);
 
   const general = resolveAgentConfig({ role: "research" });
-  assert.equal(general.preset, "assistant");
+  assert.equal(general.preset, "research");
   assert.equal(general.ask, true);
+  assert.equal(general.ambiguity, "strict", "research defaults to strict ambiguity");
 });
 
 test("override precedence: run flag > repo policy > machine; presets no longer steer", () => {
@@ -86,18 +85,18 @@ test("override precedence: run flag > repo policy > machine; presets no longer s
   );
   // preset overrides are ignored: the role default always wins
   assert.equal(
-    resolveAgentConfig({ role: "build", agentPolicy: { preset: "plan" }, machineOverrides: { preset: "review" } })
+    resolveAgentConfig({ role: "engineer", agentPolicy: { preset: "plan" }, machineOverrides: { preset: "review" } })
       .preset,
     "implement",
   );
-  assert.equal(resolveAgentConfig({ role: "planner", runOverrides: { preset: "implement" } }).preset, "plan");
+  assert.equal(resolveAgentConfig({ role: "engineer", runOverrides: { preset: "review" } }).preset, "implement");
 });
 
 test("verification is direct|verified; redundant normalizes to verified", () => {
-  const verified = resolveAgentConfig({ role: "build", runOverrides: { verification: "verified" } });
+  const verified = resolveAgentConfig({ role: "engineer", runOverrides: { verification: "verified" } });
   assert.equal(verified.verification, "verified");
-  assert.equal(verified.delegate, false, "build cannot delegate regardless of verification");
-  const redundant = resolveAgentConfig({ role: "build", runOverrides: { verification: "redundant" } });
+  assert.equal(verified.delegate, false, "engineer cannot delegate regardless of verification");
+  const redundant = resolveAgentConfig({ role: "engineer", runOverrides: { verification: "redundant" } });
   assert.equal(redundant.verification, "verified");
   const direct = resolveAgentConfig({ role: "review", runOverrides: { verification: "direct" } });
   assert.equal(direct.verification, "direct");
@@ -108,7 +107,7 @@ test("roles no longer declare orchestration modes", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-modes-"));
   try {
     const layout = fakeLayout(root);
-    for (const role of ["research", "planner", "build", "review"]) {
+    for (const role of ["research", "engineer", "review"]) {
       assert.deepEqual(agentDef(layout, role).modes, []);
     }
   } finally {
@@ -128,10 +127,10 @@ test("ask is disabled in autonomous mode regardless of the ask flag", () => {
 
 /* --------------------------------------------------------- capabilities */
 
-test("capability matrix: build, review, research, planner", () => {
-  const build = capabilitiesFor("build", { ...PRESETS.implement });
-  assert.ok(hasCapability(build, "code:write"));
-  assert.ok(hasCapability(build, "artifact:provision"));
+test("capability matrix: engineer, review, research", () => {
+  const engineer = capabilitiesFor("engineer", { ...PRESETS.implement });
+  assert.ok(hasCapability(engineer, "code:write"));
+  assert.ok(hasCapability(engineer, "artifact:provision"));
 
   const review = capabilitiesFor("review", { ...PRESETS.review });
   assert.ok(hasCapability(review, "review:write"));
@@ -139,18 +138,15 @@ test("capability matrix: build, review, research, planner", () => {
 
   const general = capabilitiesFor("research", { ...PRESETS.assistant });
   assert.ok(hasCapability(general, "code:read"));
-
-  const planner = capabilitiesFor("planner", { ...PRESETS.plan });
-  assert.ok(hasCapability(planner, "code:read"));
-  assert.ok(hasCapability(planner, "knowledge:write"));
-  assert.ok(!hasCapability(planner, "code:write"));
+  assert.ok(hasCapability(general, "knowledge:write"));
+  assert.ok(!hasCapability(general, "code:write"));
 });
 
 test("capabilities carry no issue grants", () => {
   const root = tempDir("access");
   try {
     const layout = fakeLayout(root);
-    for (const role of ["planner", "build", "research", "review"]) {
+    for (const role of ["engineer", "research", "review"]) {
       const resolved = resolveAgent(layout, role);
       assert.ok(!resolved.def.tools.includes("issue"), `${role} has no issue tool`);
       assert.ok(!resolved.def.tools.includes("issue_graph"), `${role} has no issue_graph tool`);
@@ -169,22 +165,17 @@ test("tools are capability-gated and no role has the task tool", () => {
   const root = tempDir("tools");
   try {
     const layout = fakeLayout(root);
-    const plan = resolveAgent(layout, "planner");
-    assert.ok(!plan.def.tools.includes("task"));
-    assert.ok(plan.def.tools.includes("ask"));
-    assert.ok(plan.def.tools.includes("write"), "planner writes packet files");
+    const engineer = resolveAgent(layout, "engineer");
+    assert.ok(!engineer.def.tools.includes("task"));
+    assert.ok(engineer.def.tools.includes("ask"), "ask is available unless autonomous");
+    assert.ok(engineer.def.tools.includes("write"));
+    assert.ok(engineer.def.tools.includes("artifact"));
 
-    const build = resolveAgent(layout, "build");
-    assert.ok(!build.def.tools.includes("task"));
-    assert.ok(build.def.tools.includes("ask"), "ask is available unless autonomous");
-    assert.ok(build.def.tools.includes("write"));
-    assert.ok(build.def.tools.includes("artifact"));
+    const engineerAsk = resolveAgent(layout, "engineer", { runOverrides: { ask: true } });
+    assert.ok(engineerAsk.def.tools.includes("ask"), "engineer may be configured to ask");
 
-    const buildAsk = resolveAgent(layout, "build", { runOverrides: { ask: true } });
-    assert.ok(buildAsk.def.tools.includes("ask"), "build may be configured to ask");
-
-    const buildAuto = resolveAgent(layout, "build", { runOverrides: { ambiguity: "autonomous" } });
-    assert.ok(!buildAuto.def.tools.includes("ask"), "autonomous runs never get ask");
+    const engineerAuto = resolveAgent(layout, "engineer", { runOverrides: { ambiguity: "autonomous" } });
+    assert.ok(!engineerAuto.def.tools.includes("ask"), "autonomous runs never get ask");
 
     const generalAuto = resolveAgent(layout, "research", { runOverrides: { ambiguity: "autonomous" } });
     assert.ok(!generalAuto.def.tools.includes("ask"), "autonomous runs never get ask");
@@ -197,13 +188,13 @@ test("composed prompt states worktree, verification, approval, and ambiguity", (
   const root = tempDir("prompt");
   try {
     const layout = fakeLayout(root);
-    const resolved = resolveAgent(layout, "planner", { runOverrides: { ambiguity: "strict" } });
+    const resolved = resolveAgent(layout, "engineer", { runOverrides: { ambiguity: "strict" } });
     assert.match(resolved.prompt, /Config: worktree (on|off) · verification \S+ · approval (human|agent)\./);
     assert.doesNotMatch(resolved.prompt, /preset/);
     assert.match(resolved.prompt, /Ambiguity policy STRICT/);
     assert.match(resolved.prompt, /core:map/);
     assert.match(resolved.prompt, /context note/);
-    const off = resolveAgent(layout, "planner", { runOverrides: { worktree: false } });
+    const off = resolveAgent(layout, "engineer", { runOverrides: { worktree: false } });
     assert.match(off.prompt, /Config: worktree off ·/);
   } finally {
     rmSync(root, { recursive: true, force: true });

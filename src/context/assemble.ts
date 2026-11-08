@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
+import { listIssues } from "../plan/issues.js";
 import type { MachineConfig } from "../config.js";
 import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
@@ -471,6 +472,16 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
+  // The issues tree is context for any role that plans or engineers: include
+  // a compact index (kind/status/slug/prompt) so the agent knows what exists
+  // without reading every file.
+  if (input.agent === "research" || input.agent === "engineer" || input.agent === "review") {
+    const list = listIssues(layout);
+    if (list.length > 0) {
+      const body = list.map((issue) => `- [${issue.status}] ${issue.slug} - ${issue.prompt.slice(0, 120)}`).join("\n");
+      pending.push({ kind: "plan", origin: "inherited", ref: "issues/", depth: 3, body, band: 7 });
+    }
+  }
   // The plan map is context only for the planner: include plans/index.md (or
   // the configured plan file), never the topic files, and never for other roles.
   if (input.agent === "planner") {

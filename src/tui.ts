@@ -15,8 +15,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
 import { readPacketFile, writePacketFile, listPacketFiles, type PacketFile } from "./plan/packets.js";
-import { planItems, planItemBackground } from "./plan/items.js";
-import { ITEM_STATUS_LABELS, itemState } from "./plan/lifecycle.js";
+import { findIssue, listIssues, ISSUE_STATUS_LABELS, type Issue } from "./plan/issues.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -257,7 +256,7 @@ export async function runTui(): Promise<void> {
   s.newrun = defaultNewRun();
 
   /** Roles that isolate in a worktree and expose the verify switch. */
-  const agentIsolates = (agent: string): boolean => agent === "build";
+  const agentIsolates = (agent: string): boolean => agent === "engineer";
 
   const resetNewRunUi = () => {
     s.newRunInsert = false;
@@ -287,7 +286,7 @@ export async function runTui(): Promise<void> {
     const packetFile = packetSlug ? readPacketFile(layout(repoRoot), packetSlug) : null;
     // A packet is implementation work: start with Build. A seeded run (plan
     // row, plan line) names its own agent. Untracked runs keep the last agent.
-    const preferredAgent = seed?.agent ?? (packetSlug ? "build" : previous.agent);
+    const preferredAgent = seed?.agent ?? (packetSlug ? "engineer" : previous.agent);
     s.newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
@@ -307,6 +306,11 @@ export async function runTui(): Promise<void> {
     else if (packetFile) s.newrun.prompt = packetFile.deliverable || packetSlug || "";
     resetNewRunUi();
     if (seed?.plan) s.newRunContextIncluded.add(`plan:${seed.plan}`);
+    // The issue file is the objective and is always explicit context.
+    if (seed?.item) {
+      const issue = findIssue(layout(repoRoot), seed.item);
+      if (issue) s.newRunContextIncluded.add(`file:${issue.rel}`);
+    }
     for (const name of seed?.skills ?? []) s.newRunSkillModes.set(name, "include");
     s.screen = "newrun";
   };
@@ -860,8 +864,8 @@ export async function runTui(): Promise<void> {
       text: s.runsText,
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
-      ...(s.runsGroup === "all" || s.runsGroup === "plan"
-        ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planItems: planItems(l) }
+      ...(s.runsGroup === "all" || s.runsGroup === "type"
+        ? { packetRepo: l.repoRoot, issues: listIssues(l) }
         : {}),
     });
     if (s.runsSel >= runIndex.selectable.length) s.runsSel = Math.max(0, runIndex.selectable.length - 1);
@@ -1057,25 +1061,24 @@ export async function runTui(): Promise<void> {
     /* ---------------------------------------------------------- packet */
     else if (s.page === "runs" && s.screen === "packet") {
       const itemSlug = s.selectedPacketSlug;
-      const item = itemSlug ? planItems(l).find((entry) => entry.slug === itemSlug) : undefined;
-      const packet = itemSlug ? readPacketFile(l, itemSlug) : null;
-      const lifecycle = item ? itemState(item, packet ?? undefined, allRuns) : undefined;
+      const issue = itemSlug ? findIssue(l, itemSlug) : undefined;
       const frame = renderPacket({
         cols, narrow, bodyH, theme, toast: s.toast,
         slug: itemSlug,
-        item: item
+        issue: issue
           ? {
-              slug: item.slug,
-              title: item.title,
-              kindLabel: item.kind.charAt(0).toUpperCase() + item.kind.slice(1),
-              plan: item.plan,
-              statusLabel: lifecycle ? ITEM_STATUS_LABELS[lifecycle.status] : "",
-              ...(lifecycle?.blocked ? { blocked: lifecycle.blocked } : {}),
-              hasContract: Boolean(packet),
-              background: planItemBackground(l, item),
+              slug: issue.slug,
+              title: issue.title,
+              kindLabel: issue.kind === "ideas" ? "Idea" : issue.kind === "features" ? "Feature" : "Bug",
+              statusLabel: ISSUE_STATUS_LABELS[issue.status],
+              rel: issue.rel,
+              priority: issue.priority,
+              review: issue.review,
+              tags: issue.tags,
+              depends: issue.depends,
+              body: issue.body.split("\n"),
             }
           : null,
-        packet,
         runs: allRuns,
         scroll: s.packetScroll,
       });
@@ -1247,7 +1250,7 @@ export async function runTui(): Promise<void> {
     // A blank composer that was opened with `N` still starts as research. Once
     // a packet is attached, default to the agent that does the work.
     if (!hadPacket && s.newrun.agent === "research") {
-      s.newrun.agent = "build";
+      s.newrun.agent = "engineer";
       s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
       s.newrun.worktree = true;
       enforceLockedSkills(true);

@@ -25,7 +25,7 @@ const deltas = Object.fromEntries(
 test("base and role deltas stay small", () => {
   assert.ok(base.length <= 1_950, `base is ${base.length} chars`);
   for (const [role, delta] of Object.entries(deltas)) {
-    const limit = role === "planner" ? 950 : 400;
+    const limit = role === "research" || role === "engineer" ? 600 : 400;
     assert.ok(delta.length <= limit, `${role} delta is ${delta.length} chars`);
     assert.match(delta, /Stop/, `${role} has a stop condition`);
   }
@@ -49,46 +49,32 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
       assert.doesNotMatch(resolved.prompt, /Tools: \./, `${role} prompt has an empty tool list`);
     }
 
-    const planner = resolveAgent(l, "planner");
-    assert.deepEqual(planner.def.tools, ["context", "read", "search", "ask", "skill", "write"]);
-    assert.ok(!planner.def.tools.includes("command"), "planner must not hold command");
-    assert.ok(!planner.def.tools.includes("pr"), "planner must not hold pr");
-    assert.match(planner.prompt, /Read the plan map/);
-    assert.match(planner.prompt, /plans\/index\.md/);
-    assert.match(planner.prompt, /packets\/<slug>\.md/);
-    assert.match(planner.prompt, /## Deliverable/);
-    assert.match(planner.prompt, /## Files/);
-    assert.match(planner.prompt, /## Acceptance/);
-    assert.match(planner.prompt, /## Verify/);
-    assert.match(planner.prompt, /<=3/);
-    assert.match(planner.prompt, /one file-level change/);
-    assert.match(planner.prompt, /Do not edit source code/);
-    assert.match(planner.prompt, /→ packets\//);
-    assert.match(planner.prompt, /the slugs you created/);
-
-    const build = resolveAgent(l, "build");
-    assert.match(build.prompt, /Feature Deliverable/);
-    assert.match(build.prompt, /if empty, stop/);
-    assert.match(build.prompt, /3-line change plan/);
-    assert.match(build.prompt, /Next must be an edit or needs_planning/);
-    assert.match(build.prompt, /map\/sections/);
-    assert.match(build.prompt, /Outcome:/);
-
-    const review = resolveAgent(l, "review");
-    assert.match(review.prompt, /Feature build/);
-    assert.match(review.prompt, /Verdict:/);
-
     const research = resolveAgent(l, "research");
     assert.deepEqual(research.def.tools, ["context", "read", "search", "ask", "skill", "write"]);
     assert.ok(!research.def.tools.includes("command"), "research must not hold command");
-    assert.match(research.prompt, /core:map with command/);
+    assert.match(research.prompt, /Turn one idea into detailed features or bugs/);
+    assert.match(research.prompt, /issues\/ideas\//);
+    assert.match(research.prompt, /issues\/ideas\/\.researched\//);
+    assert.match(research.prompt, /YAML front-matter/);
+    assert.match(research.prompt, /Curate references only when they carry the work/);
 
-    for (const role of ["build", "review"]) {
+    const engineer = resolveAgent(l, "engineer");
+    assert.match(engineer.prompt, /Take one issue under issues\/features or issues\/bugs/);
+    assert.match(engineer.prompt, /Scout <=> act/);
+    assert.match(engineer.prompt, /map\/semantic index/);
+    assert.match(engineer.prompt, /Outcome line \(completed\|blocked\|failed\)/);
+    assert.match(engineer.prompt, /Prefer reusable scripts in scripts\//);
+
+    const review = resolveAgent(l, "review");
+    assert.match(review.prompt, /same worktree and branch the engineer used/);
+    assert.match(review.prompt, /Verdict: approved/);
+
+    for (const role of ["engineer", "review"]) {
       const resolved = resolveAgent(l, role);
       assert.match(resolved.prompt, /ask is available/, `${role} must describe ask availability`);
       assert.match(resolved.prompt, /wrong change is likely/, `${role} must scope asking to risky changes`);
     }
-    const autonomous = resolveAgent(l, "build", { runOverrides: { ambiguity: "autonomous" } });
+    const autonomous = resolveAgent(l, "engineer", { runOverrides: { ambiguity: "autonomous" } });
     assert.match(autonomous.prompt, /Do not ask/, "autonomous prompt must forbid asking");
     assert.match(autonomous.prompt, /stop and report/, "autonomous prompt must report blockers instead of asking");
   } finally {
