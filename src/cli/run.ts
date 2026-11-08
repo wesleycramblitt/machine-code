@@ -518,7 +518,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     skillOverrides: skillModeOverrides,
   });
   if (contextBundle.text) {
-    writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
+    writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings, sections: contextBundle.sections });
     recorder.event("context_assembled", { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
   }
   const contextText = contextBundle.text || undefined;

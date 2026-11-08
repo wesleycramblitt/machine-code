@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 
 import { assembleContext } from "../dist/context/assemble.js";
 import { previewContext } from "../dist/context/preview.js";
+import { trimContextText } from "../dist/context/render.js";
 import { parseArtifactReferences, parseSkillFrontMatter } from "../dist/context/references.js";
 import { writePacket } from "../dist/packet.js";
 
@@ -257,7 +258,7 @@ test("included reference citations load from the central store", async () => {
   }
 });
 
-test("over-budget context is preserved and warned, not silently clipped", async () => {
+test("over-budget context drops lowest-priority bands first with named omissions", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx4-"));
   try {
     writeFileSync(join(root, "big-a.md"), "A".repeat(20_000), "utf8");
@@ -268,13 +269,141 @@ test("over-budget context is preserved and warned, not silently clipped", async 
       include: { files: ["big-a.md", "big-b.md"] },
       budgetChars: 4000,
     });
-    assert.ok(bundle.text.length > 20_000, "curated context is not silently truncated");
-    assert.ok(bundle.warnings.some((warning) => /model input budget/.test(warning)));
-    assert.ok(bundle.text.includes("A".repeat(1_000)), "sources are still present");
-    assert.ok(bundle.sources.every((source) => source.truncated === false));
+    // One whole file is omitted by name, the other is trimmed with an
+    // explicit marker — never a silent middle-cut.
+    assert.ok(bundle.warnings.some((warning) => /omitted file:big-/.test(warning)), "omission names the dropped file");
+    const trimmed = bundle.sources.find((source) => source.kind === "file" && source.truncated);
+    assert.ok(trimmed, "the surviving over-budget file is marked truncated");
+    assert.match(trimmed.warning ?? "", /trimmed/);
+    assert.ok(bundle.warnings.some((warning) => /trimmed file:big-/.test(warning)));
+    assert.doesNotMatch(bundle.text, /…\[context truncated\]/);
+    assert.match(bundle.text, /…\[trimmed file:big-/);
+    assert.ok(bundle.text.length <= 4000, "assembled context fits the budget");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("planner index and explicit packet survive file trimming", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-survive-"));
+  try {
+    const layout = fakeLayout(root);
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nSURVIVE PLAN\n", "utf8");
+    writePacket(layout, {
+      id: "pkt-9",
+      mode: "verified",
+      goal: "survive trimming",
+      context: [],
+      constraints: [],
+      acceptance: [{ command: "typescript:test" }],
+    });
+    writeFileSync(join(root, "big-c.md"), "C".repeat(20_000), "utf8");
+    writeFileSync(join(root, "big-d.md"), "D".repeat(20_000), "utf8");
+    const bundle = await assembleContext({
+      layout,
+      machine: machine(),
+      agent: "planner",
+      packetId: "pkt-9",
+      include: { files: ["big-c.md", "big-d.md"] },
+      budgetChars: 6000,
+    });
+    assert.match(bundle.text, /survive trimming/);
+    assert.match(bundle.text, /SURVIVE PLAN/);
+    assert.ok(bundle.sources.some((source) => source.kind === "packet" && source.ref === "pkt-9"));
+    assert.ok(bundle.sources.some((source) => source.kind === "plan" && source.ref === "plans/index.md"));
+    assert.ok(bundle.warnings.some((warning) => /omitted file:big-c\.md/.test(warning)));
+    assert.ok(bundle.warnings.some((warning) => /omitted file:big-d\.md/.test(warning)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context bundle records per-section chars", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-sections-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nShip it.", "utf8");
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      agent: "planner",
+      machine: machine(),
+      include: { files: ["src/a.ts"] },
+    });
+    for (const section of ["system", "plan", "files", "tools", "skills", "parents"]) {
+      assert.equal(typeof bundle.sections[section], "number", `sections.${section} is recorded`);
+    }
+    assert.ok(bundle.sections.files > 0);
+    assert.ok(bundle.sections.plan > 0);
+    assert.equal(bundle.sections.system, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("preview chars match assembled chars within rounding for the same inputs", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-parity-"));
+  try {
+    const layout = fakeLayout(root);
+    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, "knowledge"), { recursive: true });
+    mkdirSync(join(root, ".machine_code", "skills", "alpha"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), `# Plan index\n\n${"plan detail\n".repeat(50)}END\n`, "utf8");
+    writeFileSync(join(root, "src", "a.ts"), `export const a = 1;\n${"// detail\n".repeat(50)}END\n`, "utf8");
+    writeFileSync(join(root, "knowledge", "index.md"), `# Knowledge\n\n${"fact\n".repeat(50)}END\n`, "utf8");
+    const skillBody = "---\nname: alpha\ndescription: alpha things\n---\n# Alpha\n\nbody text\n";
+    writeFileSync(join(root, ".machine_code", "skills", "alpha", "SKILL.md"), skillBody, "utf8");
+    const opts = {
+      layout,
+      agent: "planner",
+      machine: machine({
+        context: { maxChars: 64_000, planFile: undefined, knowledgeIndex: "knowledge/index.md" },
+      }),
+      include: { files: ["src/a.ts"] },
+      defaultSkills: ["alpha"],
+    };
+    const bundle = await assembleContext(opts);
+    const preview = previewContext(layout, "", {
+      agent: "planner",
+      files: ["src/a.ts"],
+      knowledgeIndex: "knowledge/index.md",
+      defaultSkills: ["alpha"],
+    });
+    const slack = Math.max(256, bundle.chars * 0.02);
+    assert.ok(
+      Math.abs(preview.chars - bundle.chars) <= slack,
+      `preview ${preview.chars} ≈ assembled ${bundle.chars}`,
+    );
+    assert.deepEqual(
+      Object.keys(preview.sections).sort(),
+      ["files", "parents", "plan", "skills", "system", "tools"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("trimContextText drops the lowest-priority tail with named omissions", async () => {
+  const block = (kind, ref, body) =>
+    `<context-block kind="${kind}" source="${ref}" origin="explicit" depth="0">\n${body}\n</context-block>`;
+  const text = [
+    "<context>",
+    "Blocks.",
+    block("packet", "pkt-1", "keep me"),
+    block("file", "src/a.ts", "also kept"),
+    block("tool", "3 commands", `dropped body ${"x".repeat(500)}`),
+    "</context>",
+  ].join("\n");
+  const out = trimContextText(text, text.length - 50);
+  assert.ok(out.length <= text.length - 50);
+  assert.match(out, /keep me/);
+  assert.match(out, /also kept/);
+  assert.doesNotMatch(out, /dropped body/);
+  assert.match(out, /omitted for the model budget: 3 commands/);
+  assert.doesNotMatch(out, /…\[context truncated\]/);
 });
 
 test("the plan index is inherited only by the planner", async () => {

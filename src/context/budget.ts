@@ -7,6 +7,7 @@
  * soft limit: record it, warn on unusual cost, but never silently drop
  * task-critical bytes.
  */
+import type { ContextKind, ContextSection } from "./types.js";
 
 /** Conservative characters per token for prompt estimation. */
 export const CHARS_PER_TOKEN = 4;
@@ -53,4 +54,82 @@ export function inputCost(tokens: number, pricePerMillion: number): number {
 /** Move a character count to a token estimate. */
 export function charsToTokens(chars: number): number {
   return Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN);
+}
+
+/**
+ * Per-section share of the usable input budget. System covers the prompt
+ * prefix in render; assemble records 0 for it. Plan (packets + plans) is
+ * task-critical, files carry the working set, and tools/skills/parents are
+ * the first to yield when over budget.
+ */
+export const SECTION_FRACTIONS: Record<ContextSection, number> = {
+  system: 0.1,
+  plan: 0.25,
+  files: 0.4,
+  tools: 0.05,
+  skills: 0.1,
+  parents: 0.1,
+};
+
+/** Map a context kind onto its budget section. Unknown kinds are files. */
+export function sectionForKind(kind: ContextKind | string): ContextSection {
+  switch (kind) {
+    case "plan":
+    case "project":
+    case "packet":
+      return "plan";
+    case "skill":
+      return "skills";
+    case "tool":
+    case "script":
+      return "tools";
+    case "parent-run":
+    case "epic":
+    case "feature":
+    case "task":
+      return "parents";
+    case "file":
+    case "knowledge":
+    case "reference":
+    default:
+      return "files";
+  }
+}
+
+export interface SectionBudgets {
+  /** Usable input budget in chars: limit - response reserve. */
+  budget: number;
+  responseReserveChars: number;
+  caps: Record<ContextSection, number>;
+}
+
+/**
+ * Explicit per-section budgets. `limitChars` is the model input budget
+ * (already `limit - response_reserve` when callers pass
+ * `contextBudget().inputChars`); pass a reserve here only when starting
+ * from the raw window size.
+ */
+export function sectionBudgets(limitChars: number, responseReserveChars = 0): SectionBudgets {
+  const reserve = Math.max(0, Math.floor(responseReserveChars));
+  const budget = Math.max(1024, Math.floor(limitChars) - reserve);
+  const caps = {} as Record<ContextSection, number>;
+  for (const [section, fraction] of Object.entries(SECTION_FRACTIONS) as Array<[ContextSection, number]>) {
+    caps[section] = Math.floor(budget * fraction);
+  }
+  return { budget, responseReserveChars: reserve, caps };
+}
+
+/**
+ * Rendered wrapper overhead for one context block, mirroring
+ * assembleContext, so the composer preview can estimate real costs without
+ * assembling.
+ */
+export function blockOverhead(kind: string, ref: string, origin: string, depth?: number): number {
+  const attrs = [
+    `kind="${kind}"`,
+    `source="${ref.replace(/"/g, "'")}"`,
+    `origin="${origin}"`,
+    ...(depth !== undefined ? [`depth="${depth}"`] : []),
+  ];
+  return `<context-block ${attrs.join(" ")}>\n`.length + "\n</context-block>".length + 1;
 }

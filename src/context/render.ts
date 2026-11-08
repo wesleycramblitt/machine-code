@@ -32,8 +32,8 @@ function toolCalls(message: MessageLike): string[] {
 
 /**
  * Trim an assembled context bundle to a model budget. Blocks are already in
- * priority order, so the first blocks that fit are kept and the rest are
- * named as omitted.
+ * priority order, so the lowest-priority tail is dropped first and every
+ * omission is named. Kept blocks are never sliced mid-content.
  */
 export function trimContextText(text: string | undefined, maxChars?: number): string | undefined {
   if (!text) return text;
@@ -42,24 +42,24 @@ export function trimContextText(text: string | undefined, maxChars?: number): st
   if (blocks.length === 0) {
     return `${text.slice(0, Math.max(0, maxChars - 24)).replace(/\s+$/, "")}\n…[context truncated]`;
   }
+  const nameOf = (block: string): string => block.match(/\ssource="([^"]*)"/)?.[1] ?? "context block";
   const header = "<context>\nAssembled context for this run. Blocks are in priority order.\n";
   const footer = "\n</context>";
-  let out = header;
-  let kept = 0;
-  for (const block of blocks) {
-    if (out.length + block.length + 2 + footer.length > maxChars) break;
-    out += `\n${block}`;
-    kept += 1;
+  const describe = (names: string[]): string =>
+    `\n_…${names.length} block(s) omitted for the model budget: ${names.slice(0, 5).join(", ")}${names.length > 5 ? `, +${names.length - 5} more` : ""}._`;
+  let kept = blocks.length;
+  while (kept > 0) {
+    const dropped = blocks.slice(kept).map(nameOf);
+    const omission = dropped.length === 0 ? "" : describe(dropped);
+    let out = header;
+    for (const block of blocks.slice(0, kept)) out += `\n${block}`;
+    out += omission + footer;
+    if (out.length <= maxChars) return out;
+    kept -= 1;
   }
-  if (kept === 0) {
-    return `${header}\n_Context blocks omitted for the model budget._${footer}`.slice(0, maxChars);
-  }
-  const omission = kept < blocks.length ? `\n_…${blocks.length - kept} block(s) omitted._` : "";
-  if (out.length + omission.length + footer.length > maxChars) {
-    out = out.slice(0, Math.max(0, maxChars - omission.length - footer.length));
-  }
-  out += omission + footer;
-  return out.length <= maxChars ? out : `${out.slice(0, Math.max(0, maxChars - 24)).replace(/\s+$/, "")}\n…[context truncated]`;
+  const fallback = `${header}${describe(blocks.map(nameOf))}${footer}`;
+  if (fallback.length <= maxChars) return fallback;
+  return `${header}\n_…${blocks.length} block(s) omitted for the model budget._${footer}`.slice(0, maxChars);
 }
 
 /** Cap on one replayed tool-result text block. The ledger keeps the full

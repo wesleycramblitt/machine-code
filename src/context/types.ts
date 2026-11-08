@@ -26,6 +26,11 @@ export type ContextKind =
 
 export type ContextOrigin = "inherited" | "explicit" | "discovered";
 
+/** Budget section for per-section chars (context.json + composer preview). */
+export type ContextSection = "system" | "plan" | "files" | "tools" | "skills" | "parents";
+
+export type ContextSections = Record<ContextSection, number>;
+
 export interface ContextSource {
   kind: ContextKind;
   origin: ContextOrigin;
@@ -45,6 +50,8 @@ export interface ContextBundle {
   chars: number;
   /** Human-readable over-budget/truncation notes. Never silently drop curated sources. */
   warnings: string[];
+  /** Kept body chars per section (system is render-side; assemble records 0). */
+  sections: ContextSections;
 }
 
 /** Warning threshold when the caller has no selected model budget. Not a cap. */

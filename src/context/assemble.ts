@@ -26,8 +26,11 @@ import {
   type ContextBundle,
   type ContextKind,
   type ContextOrigin,
+  type ContextSection,
+  type ContextSections,
   type ContextSource,
 } from "./types.js";
+import { blockOverhead, sectionBudgets, sectionForKind } from "./budget.js";
 
 interface Pending {
   kind: ContextKind;
@@ -409,20 +412,107 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     selected.push(item);
   }
 
-  // Render every curated source. The runner may trim the prompt to the
-  // selected model's input window, but that is a model limit, not a per-file
-  // rule. Report the overage instead of silently changing a source.
+  // Explicit per-section budgets: the usable input budget (limit minus the
+  // caller's response reserve) is split into caps per section
+  // (system/plan/files/tools/skills/parents). Over budget, whole sources are
+  // dropped lowest-priority-first with a named omission; a kept block is
+  // never sliced mid-content. Packets and plans are never dropped while
+  // anything else remains, so the planner index and the explicit packet
+  // survive file trimming.
+  const { budget: usable, caps } = sectionBudgets(budget);
+  const sectionOf = (item: Pending): ContextSection => sectionForKind(item.kind);
+
+  // Drop rank: higher is dropped first. Aggregates (tool index, skill
+  // descriptions) go first, then the parent chain, skill bodies, and
+  // working-set files; packets and plans go last.
+  const dropRank = (item: Pending): number => {
+    if (item.kind === "tool") return 60;
+    if (item.kind === "skill" && /^\d+ skills$/.test(item.ref)) return 60;
+    if (item.kind === "parent-run") return 50;
+    if (item.kind === "skill" || item.kind === "script") return 40;
+    if (item.kind === "file" || item.kind === "knowledge" || item.kind === "reference") return 30;
+    if (item.kind === "plan" || item.kind === "project") return item.origin === "explicit" ? 15 : 20;
+    if (item.kind === "packet") return 10;
+    return 30;
+  };
+  const PROTECTED_RANK = 20;
+
+  interface Kept extends Pending {
+    len: number;
+    trimmed?: boolean;
+  }
+  const entries: Kept[] = [];
   const sources: ContextSource[] = [];
   const warnings: string[] = [];
-  const blocks: string[] = [];
-  let used = 0;
   for (const item of selected) {
     if (item.warning && item.body === "") {
       sources.push({ kind: item.kind, origin: item.origin, ref: item.ref, depth: item.depth, bytes: 0, hash: "", truncated: false, warning: item.warning });
       continue;
     }
     if (item.body.trim().length === 0) continue;
-    used += item.body.length;
+    entries.push({ ...item, len: item.body.length });
+  }
+
+  const sectionTotals = (): Record<ContextSection, number> => {
+    const totals: Record<ContextSection, number> = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+    for (const entry of entries) totals[sectionOf(entry)] += entry.len;
+    return totals;
+  };
+  const totalLen = (): number => entries.reduce((sum, entry) => sum + entry.len, 0);
+
+  let guard = entries.length + 1;
+  while (totalLen() > usable && guard-- > 0) {
+    // A lone droppable source that alone exceeds the budget is trimmed
+    // below, not dropped, so the run keeps working context.
+    if (entries.length <= 1) break;
+    const totals = sectionTotals();
+    let pool = entries.filter((entry) => dropRank(entry) > PROTECTED_RANK);
+    if (pool.length === 0) break;
+    // Sections over their cap yield first.
+    const overCap = pool.filter((entry) => totals[sectionOf(entry)]! > caps[sectionOf(entry)]!);
+    if (overCap.length > 0) pool = overCap;
+    pool.sort((a, b) => dropRank(b) - dropRank(a) || b.len - a.len);
+    const victim = pool[0]!;
+    entries.splice(entries.indexOf(victim), 1);
+    warnings.push(
+      `omitted ${victim.kind}:${victim.ref} (${victim.len.toLocaleString()} chars) to fit the ${usable.toLocaleString()} char input budget`,
+    );
+  }
+  if (entries.length === 1 && totalLen() > usable) {
+    const only = entries[0]!;
+    if (dropRank(only) > PROTECTED_RANK) {
+      const fixedOverhead =
+        "<context>".length +
+        "Assembled context for this run. Each block is labelled with its source and origin (explicit, inherited).".length +
+        "</context>".length +
+        3 +
+        blockOverhead(only.kind, only.ref, only.origin, only.depth);
+      // Shrink to an exact fit: the marker carries final numbers, so the
+      // room accounts for its own length.
+      let room = Math.max(0, usable - fixedOverhead);
+      let candidate = only.body;
+      for (;;) {
+        const newline = only.body.lastIndexOf("\n", room);
+        const cut = newline > room / 2 ? newline : room;
+        const marker = `…[trimmed ${only.kind}:${only.ref} to fit the ${usable.toLocaleString()} char input budget: kept ${cut.toLocaleString()} of ${only.len.toLocaleString()} chars]`;
+        candidate = `${only.body.slice(0, cut).replace(/\s+$/, "")}\n${marker}`;
+        if (fixedOverhead + candidate.length <= usable || room <= 0) break;
+        room = Math.max(0, room - (fixedOverhead + candidate.length - usable) - 16);
+      }
+      only.body = candidate;
+      only.len = only.body.length;
+      only.trimmed = true;
+      warnings.push(
+        `trimmed ${only.kind}:${only.ref} to ${only.len.toLocaleString()} chars to fit the ${usable.toLocaleString()} char input budget`,
+      );
+    }
+  }
+
+  // Render every kept source. The runner may trim the prompt to the
+  // selected model's input window, but that is a model limit, not a per-file
+  // rule. Report the overage instead of silently changing a source.
+  const blocks: string[] = [];
+  for (const item of entries) {
     const attrs = [
       `kind="${item.kind}"`,
       `source="${item.ref.replace(/"/g, "'")}"`,
@@ -435,14 +525,21 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       origin: item.origin,
       ref: item.ref,
       depth: item.depth,
-      bytes: item.body.length,
+      bytes: item.len,
       hash: sha1(item.body),
-      truncated: false,
+      truncated: item.trimmed === true,
+      ...(item.trimmed === true
+        ? { warning: `trimmed to ${item.len.toLocaleString()} chars to fit the ${usable.toLocaleString()} char input budget` }
+        : {}),
     });
   }
-  if (used > budget) {
+  const used = totalLen();
+  if (used > usable) {
     warnings.push(`curated context is ${used.toLocaleString()} chars; model input budget is ${budget.toLocaleString()} chars; the runner will trim to fit`);
   }
+
+  const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+  for (const entry of entries) sections[sectionOf(entry)] += entry.len;
 
   const text =
     blocks.length === 0
@@ -454,5 +551,5 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
           "</context>",
         ].join("\n");
 
-  return { text, sources, chars: text.length, warnings };
+  return { text, sources, chars: text.length, warnings, sections };
 }
