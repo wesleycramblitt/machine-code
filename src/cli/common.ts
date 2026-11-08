@@ -200,7 +200,7 @@ Usage:
   machine_code context <run-id>     Print the run context manifest
   machine_code eval <run-id>        Score calls, tokens, cost, context, gates [--baseline <id>]
                                     [--max-calls N] [--max-cost N] [--max-tokens N]
-                                    [--max-context N] [--json]
+                                    [--max-context N] [--gold a.ts,b.ts] [--json]
   machine_code pack                 Preview the curated run context
                                     [--agent <role>] [--model <key>]
                                     [--context-include <json>] [--context] [--json]

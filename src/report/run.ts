@@ -369,3 +369,99 @@ export function touchedPaths(events: readonly RunEvent[]): string[] {
   }
   return [...paths];
 }
+
+/* ------------------------------------------------- context eval harness */
+
+const CHARS_PER_TOKEN = 4;
+
+/** Estimated tokens per context section, derived from section chars. */
+export function sectionTokens(sections: ContextSections): Record<keyof ContextSections, number> {
+  const out = {} as Record<keyof ContextSections, number>;
+  for (const key of Object.keys(sections) as Array<keyof ContextSections>) {
+    out[key] = Math.ceil(Math.max(0, sections[key]) / CHARS_PER_TOKEN);
+  }
+  return out;
+}
+
+export interface GoldRecall {
+  expected: string[];
+  found: string[];
+  missing: string[];
+  /** 1 when no gold set is supplied; found/expected otherwise. */
+  recall: number;
+}
+
+/**
+ * Gold-file recall: were the expected files among the context sources?
+ * A gold entry matches a source whose ref equals it or extends it with a
+ * line range (e.g. gold `src/a.ts` matches source `src/a.ts:2-4`).
+ */
+export function goldRecall(
+  sources: readonly Pick<ContextSource, "ref">[],
+  gold: readonly string[],
+): GoldRecall {
+  const expected = gold.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  const found: string[] = [];
+  const missing: string[] = [];
+  for (const want of expected) {
+    const hit = sources.some((source) => source.ref === want || source.ref.startsWith(`${want}:`));
+    (hit ? found : missing).push(want);
+  }
+  return { expected, found, missing, recall: expected.length === 0 ? 1 : found.length / expected.length };
+}
+
+export interface CitedClaim {
+  path: string;
+  line: number;
+}
+
+export interface FaithfulnessResult {
+  citations: CitedClaim[];
+  /** Human-readable failures: uncited file claims and unresolvable citations. */
+  failures: string[];
+}
+
+/** Repo-relative `path` or `path:line` mentions (`path/to/file.ext[:line]`). */
+const FILE_MENTION = /([\w.~\-]+(?:\/[\w.~\-]+)+\.[\w]+)(?::(\d+))?/g;
+
+/**
+ * Faithfulness spot-check for model text: every repo-file claim must cite
+ * a `path:line`, and every cited line must resolve via `lineExists` (wired
+ * to a repo grep/read in production, faked in tests). Pure function, no
+ * model calls.
+ */
+export function checkFaithfulness(
+  modelText: string,
+  lineExists: (path: string, line: number) => boolean,
+): FaithfulnessResult {
+  const citations: CitedClaim[] = [];
+  const failures: string[] = [];
+  for (const match of modelText.matchAll(FILE_MENTION)) {
+    const path = match[1]!;
+    const rawLine = match[2];
+    if (rawLine === undefined) {
+      failures.push(`uncited file claim: ${path} cites no path:line`);
+      continue;
+    }
+    const line = Number(rawLine);
+    citations.push({ path, line });
+    if (!lineExists(path, line)) {
+      failures.push(`unresolved citation: ${path}:${line} not found`);
+    }
+  }
+  return { citations, failures };
+}
+
+/** `lineExists` backed by on-disk reads under `repoRoot`. */
+export function diskLineExists(repoRoot: string): (path: string, line: number) => boolean {
+  return (path, line) => {
+    if (!Number.isInteger(line) || line < 1) return false;
+    if (path.includes("..")) return false;
+    try {
+      const content = readFileSync(join(repoRoot, path), "utf8").split("\n");
+      return line <= content.length;
+    } catch {
+      return false;
+    }
+  };
+}

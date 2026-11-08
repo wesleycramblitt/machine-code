@@ -68,7 +68,7 @@ import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spen
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "../artifacts/registry.js";
 import { artifactPeek } from "../context/preview.js";
-import { changesFor, contextUsage, exceededLimits, readContextManifest, relatedRuns, runMetrics, thinkingChunks, touchedPaths } from "../report/run.js";
+import { changesFor, checkFaithfulness, contextUsage, diskLineExists, exceededLimits, goldRecall, readContextManifest, relatedRuns, runMetrics, sectionTokens, thinkingChunks, touchedPaths } from "../report/run.js";
 import { buildSettings, settingsFileFor } from "../tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "../data.js";
 import { runTui } from "../tui.js";
@@ -474,6 +474,18 @@ export async function cmdEval(argv: string[]): Promise<number> {
     if (!Number.isFinite(value) || value < 0) fail(`--${name.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)} needs a non-negative number`);
   }
   const failures = exceededLimits(metrics, limits);
+  const gold = (flags.get("gold") ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const manifest = readContextManifest(join(found.layout.runsDir, metrics.id));
+  const sections = manifest ? manifest.sections : undefined;
+  const perSectionTokens = sections ? sectionTokens(sections) : undefined;
+  const recall = manifest ? goldRecall(manifest.sources, gold) : gold.length > 0 ? goldRecall([], gold) : undefined;
+  const faithful = found.run.summary.finalText
+    ? checkFaithfulness(found.run.summary.finalText, diskLineExists(found.run.summary.repoRoot))
+    : undefined;
+  const contextEval = manifest || recall ? { sections, sectionTokens: perSectionTokens, gold: recall, faithfulness: faithful ?? null } : undefined;
   const delta = baseline
     ? {
         calls: metrics.modelCalls - baseline.modelCalls,
@@ -486,7 +498,7 @@ export async function cmdEval(argv: string[]): Promise<number> {
     : undefined;
 
   if (flags.has("json")) {
-    process.stdout.write(`${JSON.stringify({ metrics, baseline, delta, limits, failures }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ metrics, baseline, delta, limits, failures, context: contextEval ?? null }, null, 2)}\n`);
     return failures.length > 0 ? 1 : 0;
   }
 
@@ -505,6 +517,26 @@ export async function cmdEval(argv: string[]): Promise<number> {
   process.stdout.write(
     `  context ${fmtRunTokens(metrics.peakContextTokens)} peak\n`,
   );
+  if (sections && perSectionTokens) {
+    const nonzero = (Object.entries(perSectionTokens) as Array<[string, number]>)
+      .filter(([, tokens]) => tokens > 0)
+      .sort((a, b) => b[1] - a[1])
+      .map(([section, tokens]) => `${section} ${fmtRunTokens(tokens)}`);
+    process.stdout.write(`  sections ${nonzero.length > 0 ? nonzero.join(" · ") : "(empty)"}\n`);
+  }
+  if (recall && gold.length > 0) {
+    process.stdout.write(
+      `  recall  ${recall.found.length}/${recall.expected.length}` +
+        (recall.missing.length > 0 ? ` missing ${recall.missing.join(", ")}` : " all gold files in context") + "\n",
+    );
+  }
+  if (faithful && faithful.citations.length + faithful.failures.length > 0) {
+    process.stdout.write(
+      `  cites   ${faithful.citations.length} cited` +
+        (faithful.failures.length > 0 ? ` · ${faithful.failures.length} issue(s): ${faithful.failures.slice(0, 3).join("; ")}` : " · all resolve") +
+        "\n",
+    );
+  }
   process.stdout.write(`  time    ${Math.round(metrics.wallMs / 1000)}s · changes ${metrics.changedPaths.length} · gates ${metrics.gates ? (metrics.gates.passed ? "pass" : `fail (${metrics.gates.failed.join(", ")})`) : "not run"}\n`);
   if (metrics.loopReason) process.stdout.write(`  loop    ${metrics.loopReason}\n`);
   if (baseline && delta) {
