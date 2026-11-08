@@ -87,8 +87,8 @@ export interface TuiState {
   settingsSel: number;
   settingsScroll: number;
   selectedRunId: string | null;
-  selectedPacketSlug: string | null;
-  packetScroll: number;
+  selectedIssueSlug: string | null;
+  issueScroll: number;
   deleteRunTarget: RunSummary | undefined;
   deleteReturn: Screen;
   deletingRuns: Set<string>;
@@ -113,9 +113,9 @@ export interface TuiState {
   newRunRepo: string;
   /** Parent run id when the composer was opened with fork[f]. */
   newRunParentId: string | null;
-  packetPick: "newrun" | null;
-  packetPickSel: number;
-  packetPickText: string;
+  itemPick: "newrun" | null;
+  itemPickSel: number;
+  itemPickText: string;
   modelPick: "newrun" | null;
   modelPickSel: number;
   modelPickText: string;
@@ -205,8 +205,8 @@ export function createTuiState(repoRoot: string): TuiState {
     settingsSel: 0,
     settingsScroll: 0,
     selectedRunId: null,
-    selectedPacketSlug: null,
-    packetScroll: 0,
+    selectedIssueSlug: null,
+    issueScroll: 0,
     deleteRunTarget: undefined,
     deleteReturn: "list",
     deletingRuns: new Set<string>(),
@@ -239,9 +239,9 @@ export function createTuiState(repoRoot: string): TuiState {
     },
     newRunRepo: repoRoot,
     newRunParentId: null,
-    packetPick: null,
-    packetPickSel: 0,
-    packetPickText: "",
+    itemPick: null,
+    itemPickSel: 0,
+    itemPickText: "",
     modelPick: null,
     modelPickSel: 0,
     modelPickText: "",

@@ -7,7 +7,7 @@
  * means the key was consumed; the root redraws and stops dispatching.
  */
 import type { RunSummary } from "../../state/runs.js";
-import type { PacketFile } from "../../plan/packets.js";
+import type { Issue } from "../../plan/issues.js";
 import type { ModelPickerEntry } from "../format.js";
 import type { NewRunSeed, RunDetail } from "../state.js";
 import type { RunRow } from "../runs.js";
@@ -31,9 +31,9 @@ export interface KeyServices {
   cycleMinFit: () => void;
   cycleFloors: () => void;
   enforceLockedSkills: (announce: boolean) => void;
-  startPacketPicker: () => void;
-  pickerPackets: () => PacketFile[];
-  choosePacket: (packet: PacketFile) => void;
+  startIssuePicker: () => void;
+  pickerIssues: () => Issue[];
+  chooseIssue: (issue: Issue) => void;
   pickerModels: () => ModelPickerEntry[];
   startModelPicker: () => void;
   buildNewRunArgs: () => string[] | null;

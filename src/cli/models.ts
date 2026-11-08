@@ -20,7 +20,7 @@ import { pick, axisWeights } from "../select.js";
 import { CAPABILITY_AXES } from "../config.js";
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
-import { orchestrate, executePacket } from "../orchestrate.js";
+import { orchestrate, executeIssue } from "../orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/question.js";
 import { summarizeRun, readStateView } from "../state/outcome.js";
@@ -42,23 +42,7 @@ import { isFreeRow } from "../select.js";
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
-import { approvePacket, commitPlanningFiles, deletePacket, planBatchWaves } from "../tasks/packet.js";
 import { deleteRun } from "../state/run-delete.js";
-import {
-  addIndexEntry,
-  isBuildable,
-  isValidSlug,
-  listPacketFiles,
-  PACKET_STATUSES,
-  PACKET_REVIEWS,
-  readPacketFile,
-  renderPacketFile,
-  slugify,
-  writePacketFile,
-  type PacketFile,
-  type PacketReview,
-  type PacketStatus,
-} from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";

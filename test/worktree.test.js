@@ -109,14 +109,14 @@ test("worktree remove and prune helpers are recorded by the supervisor", async (
   }
 });
 
-test("packet worktree is created on an mc/<slug> branch from the base branch", async () => {
+test("issue worktree is created on an mc/<slug> branch from the base branch", async () => {
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
     const spec = await createWorktree({
       layout,
       runId: "r1",
-      kind: "packet",
+      kind: "issue",
       slug: "add-login-form",
     });
     assert.equal(spec.branch, "mc/add-login-form");
@@ -139,7 +139,7 @@ test("packet worktree is created on an mc/<slug> branch from the base branch", a
   }
 });
 
-test("dirty main tree blocks creation; runner-owned artifacts are allowed and materialized", async () => {
+test("dirty main tree blocks creation; runtime state is not a blocker", async () => {
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
@@ -151,38 +151,33 @@ test("dirty main tree blocks creation; runner-owned artifacts are allowed and ma
     );
     rmSync(join(dir, "scratch.txt"));
 
-    // A packet artifact is allowed and materialized into the worktree.
-    mkdirSync(join(dir, ".machine_code", "tasks"), { recursive: true });
-    const packet = { id: "pkt-1", mode: "verified", goal: "g", context: [], constraints: [], acceptance: [] };
-    writeFileSync(join(dir, ".machine_code", "tasks", "pkt-1.json"), JSON.stringify(packet), "utf8");
-    const spec = await createWorktree({ layout, runId: "r-clean", kind: "run", packetId: "pkt-1" });
+    // Runtime state under .machine_code is ignored, not a dirty-tree blocker.
+    mkdirSync(join(dir, ".machine_code", "local"), { recursive: true });
+    writeFileSync(join(dir, ".machine_code", "local", "note.txt"), "runtime\n", "utf8");
+    const spec = await createWorktree({ layout, runId: "r-clean", kind: "run" });
     assert.deepEqual(spec.skippedLinks, []);
-    assert.equal(spec.materialized.length, 1);
-    assert.deepEqual(
-      JSON.parse(readFileSync(join(spec.path, ".machine_code", "local", "tasks", "pkt-1.json"), "utf8")),
-      packet,
-    );
+    assert.deepEqual(spec.materialized, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("packet branches are reused across runs; same branch cannot be checked out twice", async () => {
+test("issue branches are reused across runs; same branch cannot be checked out twice", async () => {
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
-    const first = await createWorktree({ layout, runId: "r-a", kind: "packet", slug: "demo" });
+    const first = await createWorktree({ layout, runId: "r-a", kind: "issue", slug: "demo" });
     assert.ok(first.createdBranches.includes("mc/demo"));
 
     // A second concurrent run on the same packet branch is refused.
     await assert.rejects(
-      createWorktree({ layout, runId: "r-b", kind: "packet", slug: "demo" }),
+      createWorktree({ layout, runId: "r-b", kind: "issue", slug: "demo" }),
       (error) => error instanceof WorktreeError && error.code === "branch_checked_out",
     );
 
     // After removing the first worktree (branch kept), the branch is reused.
     await removeWorktree({ layout, runId: "r-a" });
-    const second = await createWorktree({ layout, runId: "r-c", kind: "packet", slug: "demo" });
+    const second = await createWorktree({ layout, runId: "r-c", kind: "issue", slug: "demo" });
     assert.equal(second.branch, "mc/demo");
     assert.ok(!second.createdBranches.includes("mc/demo"), "existing branch must be reused, not recreated");
   } finally {
@@ -194,7 +189,7 @@ test("a terminal parent worktree can be reused by a fork on the same branch", as
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
-    const spec = await createWorktree({ layout, runId: "r-parent", kind: "packet", slug: "demo" });
+    const spec = await createWorktree({ layout, runId: "r-parent", kind: "issue", slug: "demo" });
     assert.equal(spec.branch, "mc/demo");
     const parent = { worktree: spec.path, branch: spec.branch, status: "failed" };
     assert.equal(reusableWorktree(parent, "mc/demo"), spec.path);
@@ -333,16 +328,16 @@ test("pruneWorktrees removes only orphaned worktree directories", async () => {
   }
 });
 
-test("packet branches derive from the slug", async () => {
+test("issue branches derive from the slug", async () => {
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
-    const spec = await createWorktree({ layout, runId: "r-slug", kind: "packet", slug: "add-login-form" });
+    const spec = await createWorktree({ layout, runId: "r-slug", kind: "issue", slug: "add-login-form" });
     assert.equal(spec.branch, "mc/add-login-form");
     await removeWorktree({ layout, runId: "r-slug" });
 
     // Recreating the same packet reuses the kept branch.
-    const again = await createWorktree({ layout, runId: "r-again", kind: "packet", slug: "add-login-form" });
+    const again = await createWorktree({ layout, runId: "r-again", kind: "issue", slug: "add-login-form" });
     assert.equal(again.branch, "mc/add-login-form");
     assert.ok(!again.createdBranches.includes("mc/add-login-form"));
   } finally {

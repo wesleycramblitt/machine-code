@@ -1,0 +1,365 @@
+/**
+ * machine_code — issues CLI (create, move, list, build, batch, approve, delete).
+ *
+ * The issue file is the contract: its prompt is the objective and its
+ * `verify` list is the gate set. There are no packet files.
+ */
+import { spawn } from "node:child_process";
+import { join } from "node:path";
+import { layout } from "../paths.js";
+import { loadEnvFiles } from "../env.js";
+import { RunRecorder, registerProject } from "../state/runs.js";
+import { createWorktree, WorktreeError } from "../worktree.js";
+import { loadAvailability } from "../availability.js";
+import { ProcessSupervisor } from "../processes/supervisor.js";
+import { executeIssue } from "../orchestrate.js";
+import { slugify } from "../plan/slug.js";
+import {
+  findIssue,
+  listIssues,
+  writeIssue,
+  moveIssue,
+  parseKind,
+  legalStatus,
+  ISSUE_KIND_LABELS,
+  ISSUE_KINDS,
+  ISSUE_STATUS_LABELS,
+  statusesForKind,
+  type Issue,
+  type IssueStatus,
+} from "../plan/issues.js";
+import { approveIssue, deleteIssue, planIssueWaves } from "../tasks/issue.js";
+import { commitPlanningFiles } from "../tasks/planning.js";
+import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
+
+export async function cmdApprove(argv: string[]): Promise<number> {
+  const target = argv[0];
+  if (!target) fail("usage: machine_code approve <slug>");
+  const l = layout();
+  const slug = slugify(target);
+  const issue = findIssue(l, slug);
+  if (!issue) fail(`no issue ${slug}`);
+  if (issue.kind === "ideas") fail(`ideas are researched, not approved: ${slug}`);
+  if (issue.review === "human") {
+    process.stderr.write(`note: ${slug} has review = human (never auto-merged by batch)\n`);
+  }
+  await approveIssue(l, slug);
+  process.stdout.write(`approved and merged ${slug}\n`);
+  return 0;
+}
+
+export function cmdPlan(argv: string[]): number {
+  const { flags } = parseFlags(argv);
+  const l = layout();
+  const issues = listIssues(l);
+  if (flags.has("json")) {
+    process.stdout.write(`${JSON.stringify(issues, null, 2)}\n`);
+    return 0;
+  }
+  const lines: string[] = ["# Issues"];
+  for (const kind of ISSUE_KINDS) {
+    lines.push("", `## ${ISSUE_KIND_LABELS[kind]}`);
+    for (const status of statusesForKind(kind)) {
+      const group = issues.filter((issue) => issue.kind === kind && issue.status === status);
+      if (group.length === 0) continue;
+      lines.push(`### ${ISSUE_STATUS_LABELS[status]}`);
+      for (const issue of group) lines.push(`- [ ] ${issue.slug} - ${issue.title}`);
+    }
+  }
+  process.stdout.write(`${lines.join("\n")}\n`);
+  return 0;
+}
+
+/* -------------------------------------------------------------- issue */
+
+/** Inspect and edit issue files: list, create, move, show, run. */
+export async function cmdIssue(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const l = layout();
+  const sub = positional[0];
+
+  if (sub === "create" || sub === "new") {
+    const kindArg = positional[1];
+    const slugArg = positional[2];
+    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|agent|human] [--depends a,b] [--tags a,b] [--verify a,b] [--status <dir>]');
+    const kind = parseKind(kindArg);
+    if (!kind) fail(`unknown kind ${JSON.stringify(kindArg)}; use ideas|features|bugs`);
+    const slug = slugify(slugArg);
+    if (!slug) fail("issue slug becomes empty");
+    if (findIssue(l, slug)) fail(`issue ${slug} already exists`);
+    const statusFlag = flags.get("status");
+    if (statusFlag && !legalStatus(kind, statusFlag)) fail(`invalid status ${JSON.stringify(statusFlag)} for ${kind}`);
+    const reviewFlag = flags.get("review") ?? "none";
+    if (!["none", "agent", "human"].includes(reviewFlag)) fail("--review must be none|agent|human");
+    const issue = writeIssue(l, {
+      kind,
+      slug,
+      prompt: positional.slice(3).join(" ").trim() || slug,
+      ...(statusFlag ? { status: statusFlag as IssueStatus } : {}),
+      ...(flags.get("priority") ? { priority: flags.get("priority") } : {}),
+      ...(flags.get("depends") ? { depends: flags.get("depends")!.split(",").map((e) => slugify(e)) } : {}),
+      ...(flags.get("tags") ? { tags: flags.get("tags")!.split(",").map((e) => e.trim()) } : {}),
+      ...(flags.get("verify") ? { verify: flags.get("verify")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
+      review: reviewFlag as "none" | "agent" | "human",
+    });
+    await commitPlanningFiles(l, `issues: add ${slug}`);
+    process.stdout.write(`created ${issue.rel}\n`);
+    return 0;
+  }
+
+  if (sub === "move") {
+    const slug = positional[1];
+    const to = positional[2];
+    if (!slug || !to) fail("usage: machine_code issue move <slug> <status>");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    if (!legalStatus(issue.kind, to)) fail(`invalid status ${JSON.stringify(to)} for ${issue.kind}`);
+    const moved = moveIssue(l, cleaned, to as IssueStatus);
+    await commitPlanningFiles(l, `issues: ${cleaned} → ${to}`);
+    process.stdout.write(`moved ${cleaned} → ${moved?.rel ?? ""}\n`);
+    return 0;
+  }
+
+  if (sub === "run") {
+    const slug = positional[1];
+    if (!slug) fail("usage: machine_code issue run <slug> [--agent research|engineer]");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    const agent = flags.get("agent") ?? (issue.kind === "ideas" ? "research" : "engineer");
+    const include = JSON.stringify({ files: [issue.rel] });
+    const child = spawn(
+      process.execPath,
+      [process.argv[1]!, "run", "--agent", agent, "--item", cleaned, "--context-include", include, issue.prompt],
+      { stdio: "inherit" },
+    );
+    const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
+    return code;
+  }
+
+  if (sub === "review") {
+    const slug = positional[1];
+    if (!slug) fail("usage: machine_code issue review <slug>");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    if (issue.kind === "ideas") fail(`ideas are researched, not reviewed: ${cleaned}`);
+    const child = spawn(
+      process.execPath,
+      [process.argv[1]!, "run", "--agent", "review", "--item", cleaned, "--context-include", JSON.stringify({ files: [issue.rel] }), issue.prompt],
+      { stdio: "inherit" },
+    );
+    return new Promise<number>((resolve) => child.on("exit", (code) => resolve(code ?? 1)));
+  }
+
+  if (sub === "list" || sub === "ls" || sub === undefined) {
+    const issues = listIssues(l);
+    if (flags.has("json")) {
+      process.stdout.write(`${JSON.stringify(issues, null, 2)}\n`);
+      return 0;
+    }
+    if (issues.length === 0) {
+      process.stdout.write('no issues (use `machine_code issue create ideas|features|bugs <slug> "<prompt>"`)\n');
+      return 0;
+    }
+    for (const issue of issues) {
+      process.stdout.write(`${issue.rel}\n  ${issue.title}\n`);
+    }
+    return 0;
+  }
+
+  const issue = findIssue(l, slugify(sub ?? ""));
+  if (!issue) fail(`no issue ${sub} (run \`machine_code issue list\`)`);
+  process.stdout.write(`${issue.rel}\npriority ${issue.priority} · review ${issue.review}\n\n${issue.prompt}\n`);
+  return 0;
+}
+
+/* ------------------------------------------------------------------ build */
+
+/** Shared bounded build: issue → worktree → engineer → gates → review → commit. */
+export async function runIssueBuild(
+  l: ReturnType<typeof layout>,
+  issue: Issue,
+  flags: Map<string, string>,
+): Promise<number> {
+  const slug = issue.slug;
+  const goal = issue.prompt.trim() || issue.title || slug;
+  const packet = {
+    id: slug,
+    goal,
+    context: [],
+    constraints: issue.tags.map((tag) => `tag: ${tag}`),
+    acceptance: issue.verify.map((command) => ({ command })),
+  };
+  const runtime = await loadRuntime(l);
+  const recorder = new RunRecorder(l, {
+    agent: "engineer",
+    mode: "verified",
+    request: goal,
+    repoRoot: l.repoRoot,
+    itemId: slug,
+    phase: "engineer",
+  });
+  registerProject(l.home, l.repoRoot);
+  recorder.event("issue_build_start", { slug });
+
+  let toolRoot = l.repoRoot;
+  try {
+    const supervisor = new ProcessSupervisor({
+      runId: recorder.id,
+      runDir: recorder.dir,
+      onEvent: (type, data) => recorder.event(type, data),
+    });
+    const spec = await createWorktree({ layout: l, runId: recorder.id, kind: "issue", slug, processes: supervisor });
+    toolRoot = spec.path;
+    recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
+    recorder.event("worktree_created", { path: spec.path, branch: spec.branch, baseRef: spec.baseRef, baseBranch: spec.baseBranch });
+  } catch (error) {
+    if (error instanceof WorktreeError) {
+      recorder.finalize("blocked", `${error.code}: ${error.message}`);
+      moveIssue(l, slug, "blocked");
+      return EXIT["blocked"];
+    }
+    throw error;
+  }
+
+  const result = await executeIssue({
+    models: runtime.models,
+    catalogue: runtime.catalogue.models,
+    configuredProviders: runtime.configuredProviders,
+    availability: loadAvailability(l.home),
+    layout: l,
+    machine: runtime.machine,
+    policy: runtime.policy,
+    packet,
+    verification: "verified",
+    review: flags.has("no-review") ? false : issue.review === "agent",
+    request: goal,
+    root: l.repoRoot,
+    toolRoot,
+    home: l.home,
+    recorder,
+    ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
+  });
+  recorder.finalize(result.status, result.error, result.finalText);
+  if (result.status === "completed") moveIssue(l, slug, "done");
+  else if (result.status === "blocked") moveIssue(l, slug, "blocked");
+  await commitPlanningFiles(l, `issues: build ${slug} (${result.status})`);
+  process.stdout.write(`build ${slug}: ${result.status}${result.error ? ` — ${result.error}` : ""}\n`);
+  if (result.status === "completed") {
+    process.stdout.write(`  commit ${result.commit ?? "(none)"}\n  next: machine_code approve ${slug}\n`);
+  }
+  return EXIT[result.status];
+}
+
+/**
+ * Build an issue (`build <slug>`), or self-scope a free-form goal into a
+ * feature issue and build it (`build "<goal>"`).
+ */
+export async function cmdBuild(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const joined = positional.join(" ").trim();
+  if (!joined) {
+    fail('usage:\n  machine_code build <slug> [--review] [--model <key>]\n  machine_code build "<goal>"   (self-scopes a feature issue)');
+  }
+  const l = layout();
+
+  if (positional.length === 1 && !positional[0]!.includes(" ")) {
+    const slug = slugify(positional[0]!);
+    const issue = findIssue(l, slug);
+    if (!issue) fail(`no issue ${slug} — create one with \`machine_code issue create features|bugs ${slug} "..."\``);
+    if (issue.kind === "ideas") fail(`ideas are researched first: machine_code issue run ${slug}`);
+    if (issue.status === "done") fail(`issue ${slug} is already done`);
+    return runIssueBuild(l, issue, flags);
+  }
+
+  const slug = slugify(joined).slice(0, 40) || "task";
+  let issue = findIssue(l, slug);
+  if (!issue) {
+    issue = writeIssue(l, { kind: "features", slug, prompt: joined });
+    await commitPlanningFiles(l, `issues: add ${slug}`);
+    process.stderr.write(`self-scoped as ${slug} → issues/features/todo/${slug}.md\n`);
+  }
+  return runIssueBuild(l, issue, flags);
+}
+
+/* ------------------------------------------------------------------ batch */
+
+/**
+ * Build ready issues across isolated worktrees, honoring `depends` and a
+ * `--max-parallel` cap. With `--auto-approve` it builds and merges wave by wave.
+ */
+export async function cmdBatch(argv: string[]): Promise<number> {
+  const { flags } = parseFlags(argv);
+  const l = layout();
+  const maxParallel = Math.max(1, Number(flags.get("max-parallel") ?? "2") || 2);
+  const dryRun = flags.has("dry-run");
+  const autoApprove = flags.has("auto-approve");
+
+  const waves = planIssueWaves(l, maxParallel);
+  if (waves.length === 0) {
+    process.stdout.write("no ready issues\n");
+    return 0;
+  }
+  if (dryRun) {
+    for (let i = 0; i < waves.length; i++) process.stdout.write(`wave ${i + 1}: ${waves[i]!.join(", ")}\n`);
+    return 0;
+  }
+
+  const runBuildChild = (slug: string): Promise<{ slug: string; code: number }> =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, [process.argv[1]!, "build", slug], { stdio: "inherit" });
+      child.on("error", () => resolve({ slug, code: 1 }));
+      child.on("exit", (code) => resolve({ slug, code: code ?? 1 }));
+    });
+
+  if (!autoApprove) {
+    const wave = waves[0] ?? [];
+    process.stdout.write(`wave 1: ${wave.join(", ")}\n`);
+    await Promise.all(wave.map(runBuildChild));
+    process.stdout.write(`next: machine_code approve ${wave.join(", ")}  (or re-run with --auto-approve)\n`);
+    return 0;
+  }
+
+  let guard = 0;
+  while (guard++ < 1000) {
+    const current = planIssueWaves(l, maxParallel);
+    const wave = current[0] ?? [];
+    if (wave.length === 0) break;
+    process.stdout.write(`wave ${guard}: ${wave.join(", ")}\n`);
+    const results = await Promise.all(wave.map(runBuildChild));
+    for (const slug of wave) {
+      if (findIssue(l, slug)?.review === "human") {
+        process.stderr.write(`leaving ${slug} for a human merge (review=human)\n`);
+        continue;
+      }
+      try {
+        await approveIssue(l, slug);
+      } catch {
+        // Failed build stays live; its dependents wait for the next run.
+      }
+    }
+    const failed = results.filter((result) => result.code !== 0).map((result) => result.slug);
+    if (failed.length > 0) {
+      process.stderr.write(`build failed: ${failed.join(", ")}\n`);
+      break;
+    }
+  }
+  return 0;
+}
+
+/* ----------------------------------------------------------------- delete */
+
+/** Delete an issue and its branch. */
+export async function cmdDelete(argv: string[]): Promise<number> {
+  const { flags, positional } = parseFlags(argv);
+  const slugArg = positional[0];
+  if (!slugArg) fail("usage: machine_code delete <slug> [--force]");
+  const l = layout();
+  const slug = slugify(slugArg);
+  if (!findIssue(l, slug)) fail(`no issue ${slug}`);
+  await deleteIssue(l, slug, { force: flags.has("force") });
+  process.stdout.write(`deleted ${slug}\n`);
+  return 0;
+}

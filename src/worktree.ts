@@ -29,7 +29,6 @@ import { runProc } from "./proc.js";
 import type { ProcessSupervisor } from "./processes/supervisor.js";
 import type { Layout } from "./paths.js";
 import { loadMachineConfig } from "./config.js";
-import { readPacket } from "./packet.js";
 import { writeJsonAtomic, isActiveStatus, type RunSummary } from "./state/run-schema.js";
 import { listRuns } from "./state/runs.js";
 
@@ -228,18 +227,16 @@ export function reusableWorktreeOwner(
 
 /* ------------------------------------------------------------- creation */
 
-export type WorktreeKind = "run" | "packet";
+export type WorktreeKind = "run" | "issue";
 
 export interface WorktreeRequest {
   layout: Layout;
   runId: string;
   kind: WorktreeKind;
-  /** Packet slug for `kind === "packet"`; branch is `mc/<slug>`. */
+  /** Issue slug for `kind === "issue"`; branch is `mc/<slug>`. */
   slug?: string;
   /** Explicit base branch/ref override. */
   base?: string;
-  /** Queue packets: materialize the packet snapshot into the worktree. */
-  packetId?: string;
   /** Optional run supervisor for worktree git processes. */
   processes?: ProcessSupervisor;
 }
@@ -256,7 +253,7 @@ export interface WorktreeSpec {
 }
 
 function branchFor(kind: WorktreeKind, runId: string, slug?: string): string {
-  if (kind === "packet") {
+  if (kind === "issue") {
     if (!slug) throw new WorktreeError("slug_required", "a packet worktree needs --slug");
     return `mc/${slug}`;
   }
@@ -376,14 +373,6 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   const { linked, skipped } = await linkDependencies(mainRoot, path, await dependencyLinks(layout));
 
   const materialized: string[] = [];
-  if (req.packetId) {
-    const packet = readPacket(layout, req.packetId);
-    if (packet) {
-      const file = join(path, ".machine_code", "local", "tasks", `${packet.id}.json`);
-      writeJsonAtomic(file, packet);
-      materialized.push(file);
-    }
-  }
 
   return {
     path,

@@ -22,7 +22,7 @@ async function git(cwd: string, args: string[]): Promise<{ code: number; stdout:
 
 /** Latest engine run for a slug. */
 export function issueRuns(layout: Layout, slug: string): RunSummary[] {
-  return listRuns(layout).filter((run) => run.packetId === slug || run.itemId === slug);
+  return listRuns(layout).filter((run) => run.itemId === slug || run.itemId === slug);
 }
 
 async function commitIssues(layout: Layout, message: string): Promise<void> {

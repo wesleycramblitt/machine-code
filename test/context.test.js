@@ -94,10 +94,10 @@ function hierarchyProvider() {
 
 test("artifact reference + skill front-matter parsers", () => {
   const refs = parseArtifactReferences(
-    '<!-- mc:context {"packets":["p1"],"knowledge":["knowledge/a.md"],"skills":["reference"],"tools":["scripts/x.sh"],"junk":1} -->',
+    '<!-- mc:context {"files":["p1"],"knowledge":["knowledge/a.md"],"skills":["reference"],"tools":["scripts/x.sh"],"junk":1} -->',
   );
-  assert.deepEqual(refs, { packets: ["p1"], files: [], knowledge: ["knowledge/a.md"], references: [], skills: ["reference"], tools: ["scripts/x.sh"], scripts: [] });
-  assert.deepEqual(parseArtifactReferences("none"), { packets: [], files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] });
+  assert.deepEqual(refs, { files: ["p1"], knowledge: ["knowledge/a.md"], references: [], skills: ["reference"], tools: ["scripts/x.sh"], scripts: [] });
+  assert.deepEqual(parseArtifactReferences("none"), { files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] });
   const skill = parseSkillFrontMatter("---\nname: reference\ndescription: research\n---\n# body", "x");
   assert.deepEqual(skill, { name: "reference", description: "research", path: "x" });
 });
@@ -195,26 +195,19 @@ test("configured knowledge index is inherited into context", async () => {
   }
 });
 
-test("explicit packet is the highest-priority source", async () => {
+test("explicit issue is the highest-priority source", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx2-"));
   try {
-    const layout = fakeLayout(root);
-    writePacket(layout, {
-      id: "pkt-1",
-      mode: "verified",
-      goal: "fix parser",
-      context: ["src/parser.ts"],
-      constraints: [],
-      acceptance: [{ command: "typescript:test" }],
-    });
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
+    writeFileSync(join(root, "issues", "features", "todo", "fix-parser.md"), "---\nprompt = \"fix parser\"\n---\n# Fix parser\n", "utf8");
+    writeFileSync(join(root, "work.md"), "work\n".repeat(200), "utf8");
     const bundle = await assembleContext({
-      layout,
+      layout: fakeLayout(root),
       machine: machine(),
-      provider: hierarchyProvider(),
-      issue: { provider: "github", repo: "o/r", number: 31 },
-      packetId: "pkt-1",
+      agent: "engineer",
+      include: { issues: ["issues/features/todo/fix-parser.md"], files: ["work.md"] },
     });
-    assert.equal(bundle.sources[0].kind, "packet");
+    assert.equal(bundle.sources[0].kind, "issue");
     assert.match(bundle.text, /fix parser/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -288,33 +281,22 @@ test("over-budget context drops lowest-priority bands first with named omissions
   }
 });
 
-test("explicit issue and packet survive file trimming", async () => {
+test("explicit issue survives file trimming", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-survive-"));
   try {
     const layout = fakeLayout(root);
     mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
     writeFileSync(join(root, "issues", "features", "todo", "survive.md"), "# Issue\nSURVIVE ISSUE\n", "utf8");
-    writePacket(layout, {
-      id: "pkt-9",
-      mode: "verified",
-      goal: "survive trimming",
-      context: [],
-      constraints: [],
-      acceptance: [{ command: "typescript:test" }],
-    });
     writeFileSync(join(root, "big-c.md"), "C".repeat(20_000), "utf8");
     writeFileSync(join(root, "big-d.md"), "D".repeat(20_000), "utf8");
     const bundle = await assembleContext({
       layout,
       machine: machine(),
       agent: "engineer",
-      packetId: "pkt-9",
       include: { issues: ["issues/features/todo/survive.md"], files: ["big-c.md", "big-d.md"] },
       budgetChars: 6000,
     });
-    assert.match(bundle.text, /survive trimming/);
     assert.match(bundle.text, /SURVIVE ISSUE/);
-    assert.ok(bundle.sources.some((source) => source.kind === "packet" && source.ref === "pkt-9"));
     assert.ok(bundle.sources.some((source) => source.kind === "issue" && source.ref === "issues/features/todo/survive.md"));
     assert.ok(bundle.warnings.some((warning) => /omitted file:big-c\.md/.test(warning)));
     assert.ok(bundle.warnings.some((warning) => /omitted file:big-d\.md/.test(warning)));
@@ -381,7 +363,7 @@ test("context bundle records per-section chars", async () => {
       machine: machine(),
       include: { files: ["src/a.ts"], issues: ["issues/features/todo/ship.md"] },
     });
-    for (const section of ["packets", "issues", "plans", "knowledge", "skills", "scripts", "tools", "references", "files", "parents", "system"]) {
+    for (const section of ["issues", "plans", "knowledge", "skills", "scripts", "tools", "references", "files", "parents", "system"]) {
       assert.equal(typeof bundle.sections[section], "number", `sections.${section} is recorded`);
     }
     assert.ok(bundle.sections.files > 0);
@@ -428,7 +410,7 @@ test("preview chars match assembled chars within rounding for the same inputs", 
     );
     assert.deepEqual(
       Object.keys(preview.sections).sort(),
-      ["files", "issues", "knowledge", "packets", "parents", "plans", "references", "scripts", "skills", "system", "tools"],
+      ["files", "issues", "knowledge", "parents", "plans", "references", "scripts", "skills", "system", "tools"],
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -1041,62 +1023,48 @@ test("assembled blocks follow the fixed cache-stable section order", async () =>
   try {
     const layout = fakeLayout(root);
     mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "plans", "topic.md"), "# Topic plan\nShip it.\n", "utf8");
+    writeFileSync(join(root, "issues", "features", "todo", "order.md"), "# Order\nDo it.\n", "utf8");
     writeFileSync(join(root, "src", "work.ts"), "export const work = 1;\n", "utf8");
-    writePacket(layout, {
-      id: "pkt-order",
-      mode: "verified",
-      goal: "ordered context",
-      context: [],
-      constraints: [],
-      acceptance: [{ command: "typescript:test" }],
-    });
     const bundle = await assembleContext({
       layout,
       machine: machine(),
-      agent: "build",
-      packetId: "pkt-order",
-      include: { files: ["src/work.ts"], plans: ["plans/topic.md"] },
+      agent: "engineer",
+      include: { files: ["src/work.ts"], plans: ["plans/topic.md"], issues: ["issues/features/todo/order.md"] },
     });
     const at = (kind) => bundle.text.indexOf(`kind="${kind}"`);
-    assert.ok(at("packet") >= 0 && at("plan") >= 0 && at("file") >= 0 && at("tool") >= 0);
-    assert.ok(at("packet") < at("plan"), "packet renders before plan");
-    assert.ok(at("plan") < at("file"), "plan/packet render before retrieved files");
+    assert.ok(at("plan") >= 0 && at("issue") >= 0 && at("file") >= 0 && at("tool") >= 0);
+    assert.ok(at("plan") < at("issue"), "plan renders first");
+    assert.ok(at("issue") < at("file"), "issue renders before retrieved files");
     assert.ok(at("file") < at("tool"), "retrieved files render before tool/skill aggregates");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("plan/packet recap block renders last when plan sources exist", async () => {
+test("issue/plan recap block renders last when plan sources exist", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-recap-"));
   try {
     const layout = fakeLayout(root);
     mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
     writeFileSync(join(root, "plans", "topic.md"), "# Topic plan\nShip the recap.\n", "utf8");
-    writePacket(layout, {
-      id: "pkt-recap",
-      mode: "verified",
-      goal: "recap the objective",
-      context: [],
-      constraints: [],
-      acceptance: [{ command: "typescript:test" }],
-    });
+    writeFileSync(join(root, "issues", "features", "todo", "recap.md"), "---\nprompt = \"recap the objective\"\n---\n# Recap\n", "utf8");
     const bundle = await assembleContext({
       layout,
       machine: machine(),
-      agent: "build",
-      packetId: "pkt-recap",
-      include: { plans: ["plans/topic.md"] },
+      agent: "engineer",
+      include: { plans: ["plans/topic.md"], issues: ["issues/features/todo/recap.md"] },
     });
     const recap = bundle.text.indexOf("<context-recap>");
-    assert.ok(recap >= 0, "recap block is present when plan sources exist");
+    assert.ok(recap >= 0, "recap block is present when plan/issue sources exist");
     assert.ok(recap > bundle.text.lastIndexOf("</context-block>"), "recap renders after every context block");
     assert.match(bundle.text, /recap the objective/);
     assert.match(bundle.text, /plans\/topic\.md/);
 
-    // No plan/packet sources, no recap.
+    // No plan/issue sources, no recap.
     const bare = await assembleContext({ layout: fakeLayout(root), machine: machine() });
     assert.doesNotMatch(bare.text, /<context-recap>/);
   } finally {

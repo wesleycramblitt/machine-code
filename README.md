@@ -19,17 +19,17 @@ node dist/cli.js catalogue refresh
 # read-only question
 node dist/cli.js run --agent research "summarize README.md"
 
-# plan a project: planner materializes plan lines into packets
-node dist/cli.js run --agent planner "plan the thermal model work"
+# research: turn one idea into features/bugs
+node dist/cli.js issue run <idea-slug>
 
-# build one packet in an isolated mc/<slug> worktree
+# engineer one issue in an isolated mc/<slug> worktree
 node dist/cli.js build <slug>
 
-# build every ready packet in dependency order, then merge
+# build todo issues by priority/dependency, then merge
 node dist/cli.js batch --auto-approve
 
 # agent configuration (preset + explicit overrides)
-node dist/cli.js run --agent planner --preset plan --ambiguity precise "plan the release"
+node dist/cli.js run --agent research --ambiguity strict "scope the thermal model work"
 
 # follow-ups, pause/fork, resume after a crash
 node dist/cli.js respond <run-id> "use leapfrog"
@@ -37,10 +37,10 @@ node dist/cli.js pause <run-id>
 node dist/cli.js fork <run-id> "instead, use RK4"
 node dist/cli.js resume <run-id>
 
-# packets: the bounded contract for one buildable unit
-node dist/cli.js packet list
-node dist/cli.js packet create <slug> "deliverable" --verify typescript:test
-node dist/cli.js packet <slug>             # show the contract
+# issues: one YAML file per idea/feature/bug, status = directory
+node dist/cli.js issue list
+node dist/cli.js issue create features <slug> "do the thing" --verify typescript:test
+node dist/cli.js issue <slug>              # show the issue
 node dist/cli.js approve <slug>            # merge mc/<slug> into main
 
 # model selection: catalogue, hard floors, role weighting, dry-run
@@ -55,7 +55,7 @@ node dist/cli.js catalogue snapshot          # update committed data/models + da
 # worktrees, inspection, run cleanup
 node dist/cli.js worktree list
 node dist/cli.js runs delete <run-id> --yes
-node dist/cli.js runs                 # plan category → packet → runs, or by status
+node dist/cli.js runs                 # kind → issue → runs, or by status
 node dist/cli.js show <run-id>        # summary/overview/context/changes/related/events
 node dist/cli.js spend --days 30
 node dist/cli.js tools
@@ -206,16 +206,16 @@ issue's first tag. Select an issue and press Enter to open its page: prompt,
 priority, tags, dependencies, review mode, and the runs attached to it.
 
 `--group status` keeps repository headings but groups each repository's runs by
-run status with no packet tree. `--group overall` drops repository headings
+run status with no work tree. `--group overall` drops repository headings
 entirely and groups every run on the machine by status, so blocked, failed, and
 running work is visible at a glance. `machine_code status` is shorthand for the
-overall view. In the TUI, `g` cycles Packets → Status and `f` toggles all repos
+overall view. In the TUI, `g` cycles All → By type → By category and `f` toggles all repos
 vs the TUI cwd; `!` limits the list to work needing a human or in flight. With
 the cwd scope, `n` opens the composer for the cwd.
 
-In the packets view, the highlighted row keeps its branch bright: the selected
-packet or run, its ancestors, its peers at the same level, and its immediate
-children (runs under a packet). Unrelated rows dim to gray. Repository and
+In the work view, the highlighted row keeps its branch bright: the selected
+issue or run, its ancestors, its peers at the same level, and its immediate
+children (runs under an issue). Unrelated rows dim to gray. Repository and
 section headings stay bright so the page structure remains readable.
 
 `machine_code show <run-id>` exposes the same overview, summary, context,
@@ -233,7 +233,7 @@ Every terminal run records a deterministic outcome summary in
 `run.json.summary` and a `run_summary` event. The summary is generated from the
 event stream and run state, so it exists even when the model produced no final
 message (turn cap, provider failure, interruption). It lists the stop reason,
-packets touched, files changed, reads/searches/commands, retries, errors, and
+issues touched, files changed, reads/searches/commands, retries, errors, and
 the model's final response. `machine_code show`, the TUI Overview, and the
 `run` command print it. A run that hits the turn cap is recorded as `blocked`,
 not `completed`, and says so in the summary.
@@ -256,7 +256,7 @@ the outcome summary, a live activity tail, and the latest thinking text.
 
 Press `f` on any run detail section to fork the run settings into a new run.
 The New Run composer opens with the same agent, model setting, tier, preset,
-verification, packet, ask, approval, ambiguity, min-fit, floors, and request. An
+verification, issue, ask, approval, ambiguity, min-fit, floors, and request. An
 explicit parent model pin is copied; a parent that used
 auto-selection stays on auto. A fork of a finished build run reuses the parent
 worktree on the same branch, so one branch is not checked out twice.
@@ -300,17 +300,17 @@ machine_code processes kill <run-id> p-0001   # or: all
 # dependency-ordered waves, then parallel builds
 machine_code batch --dry-run
 machine_code batch --max-parallel 4
-machine_code batch --auto-approve   # merge only gates-gated packets; human-gated never auto-merge
+machine_code batch --auto-approve   # merge gates-gated issues; human-gated never auto-merge
 ```
 
-`batch` plans priority/dependency-ordered waves over `issues/` and builds ready
-packets in parallel child processes. Each build runs in an isolated
-`mc/<slug>` worktree, executes the packet's `## Verify` gates, and — when the
-packet's `review` gate is `agent` — an independent Review run. `--dry-run`
-prints the waves without building. `batch --auto-approve` merges packets whose
-gate is `gates` right after their gates pass; packets gated `agent` need a
-passing Review verdict, and `human` packets are never auto-merged — approve
-them by hand.
+`batch` plans priority/dependency-ordered waves over `issues/` and builds todo
+issues in parallel child processes. Each build runs in an isolated
+`mc/<slug>` worktree, executes the issue's `verify` gates, and — when the
+issue's `review` value is `agent` — an independent Review run. `--dry-run`
+prints the waves without building. `batch --auto-approve` merges issues whose
+review is `none` right after their gates pass; `agent` issues need a passing
+Review verdict, and `human` issues are never auto-merged — approve them by
+hand.
 
 ```bash
 machine_code approve <slug>   # merge mc/<slug> into main
@@ -327,7 +327,7 @@ when unshared, and its branch when unshared. Open PR branches are kept unless
 
 ```bash
 machine_code runs delete <run-id> --yes
-machine_code packet delete <slug>   # remove the contract (also via TUI `d`)
+machine_code delete <slug>          # remove the issue + branch (also via TUI `d`)
 ```
 
 Orphaned running records are marked failed when read and during prune. Map
@@ -336,66 +336,55 @@ creation/commit/remove/prune git helpers, and the synchronous git-status safety
 net. There is no MCP client in this build; any future MCP spawn must use the
 same supervisor.
 
-Builds execute packet contracts directly: Build in an isolated worktree,
-gates, independent Review when the gate demands it, then commit. Roles declare
-no orchestration modes, and there is no delegation layer beyond `batch`
-spawning parallel `build` children.
+Builds run the Engineer directly: one isolated worktree, gates, independent
+Review when the issue asks for it, then commit. Roles declare no orchestration
+modes, and there is no delegation layer beyond `batch` spawning parallel
+`build` children.
 
-### Packet lifecycle
+### Issue lifecycle
 
-`batch` is the right path for a ready set of packets. The packet commands are
-the same lifecycle one packet at a time, with a human decision between Build
+`batch` is the right path for a ready set of issues. The single-issue commands
+are the same lifecycle one issue at a time, with a human decision between build
 and merge.
 
 ```bash
-machine_code packet list
-machine_code packet create <slug> "deliverable" --verify typescript:test
+machine_code issue list
+machine_code issue create features <slug> "do the thing" --verify typescript:test
 machine_code build <slug> [--review]
 machine_code approve <slug>   # merge mc/<slug> into main
-machine_code packet delete <slug>
+machine_code delete <slug>
 ```
 
 - `issue list` shows the issues tree; `issue create <kind> <slug> "<prompt>"`
   scaffolds `issues/<kind>/<status>/<slug>.md`.
 - `issue move <slug> <todo|blocked|done|researched>` moves it between status
   dirs; one issue = one file-level change.
-- `build <slug>` scaffolds a contract in `issues/packets/` when needed, creates
-  the isolated `mc/<slug>` worktree, runs Engineer, executes the gates,
+- `build <slug>` creates
+  the isolated `mc/<slug>` worktree, runs Engineer, executes the issue `verify` gates,
   commits, and runs an independent Review when `review = "agent"`.
   `--no-review` skips the Review agent.
-- `approve <slug>` merges the branch, marks the plan line done, and commits
+- `approve <slug>` merges the branch, moves the issue to `done/`, and commits
   the planning write on main.
 
-A packet file is TOML front-matter plus markdown sections:
+An issue file is TOML front-matter plus markdown:
 
 ```markdown
 ---
-status = "todo"   # todo | in-progress | blocked | done
-deps = []         # slugs this packet waits on
-review = "gates"  # gates | agent | human
+priority = "medium"
+prompt = "Make the thing fast."
+depends = ["other-slug"]
+tags = ["tui"]
+review = "none"          # none | agent | human
+verify = ["typescript:test"]
 ---
 
-# <slug>
+# Short title
 
-## Deliverable
-
-...
-
-## Files
-
-- src/...
-
-## Acceptance
-
-- ...
-
-## Verify
-
-typescript:test
+Detail the prompt needs.
 ```
 
 Verification commands must be named commands (or the small npm alias table in
-`packet.ts`), because acceptance gates dispatch through the command registry —
+`src/packet.ts`), because gates dispatch through the command registry —
 never shell strings. The runner maps common npm commands to the typed registry
 (`typescript:typecheck`, `typescript:test`, and so on).
 
@@ -495,7 +484,7 @@ Each run keeps its working memory outside the transcript:
   artifacts/    content-addressed tool bodies
 ```
 
-The model sees the run state, an always-on overview (packet, knowledge, repo
+The model sees the run state, an always-on overview (issues, knowledge, repo
 map, semantic index), the last two complete tool steps, not the full tool
 history, and no hidden task pack. The prompt is exactly the context curated in
 the composer plus the always-on indexes. There is no automatic preload,
@@ -532,11 +521,11 @@ features/bugs as issue files under `issues/features/todo/` or
 run in a `mc/<slug>` worktree. Review is read-only and judges the same
 worktree and commit the Engineer used.
 
-A packet is one deliverable: one file-level change and at most **three**
-acceptance criteria in an `issues/<kind>/todo/<slug>.md` issue. One issue = one
-file-level change; split anything bigger into several packets joined by
-`deps`. Set `review = "agent"` for consequential packets and `review = "human"`
-when it must not auto-merge; otherwise the `gates` default applies.
+An issue is one deliverable: one file-level change and at most **three**
+verify commands in `issues/<kind>/todo/<slug>.md`. Split anything bigger into
+several issues joined by `depends`. Set `review = "agent"` for consequential
+work and `review = "human"` when it must not auto-merge; otherwise `none`
+(gates only) applies.
 
 LLM annotations are optional. An `edit`/`write` appends its path to
 `semantic.dirty` and a bounded entry to `changes.jsonl` with the turn, changing

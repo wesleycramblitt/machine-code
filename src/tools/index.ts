@@ -521,8 +521,6 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
             p.startsWith("plans/") ||
             p === "issues" ||
             p.startsWith("issues/") ||
-            p === "packets" ||
-            p.startsWith("packets/") ||
             p === ".machine_code" ||
             p.startsWith(".machine_code/");
           if (!allowed) {

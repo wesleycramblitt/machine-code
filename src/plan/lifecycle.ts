@@ -40,7 +40,7 @@ export function effectiveStatus(issue: Issue, runs: readonly RunSummary[]): Disp
   return issue.status;
 }
 
-/** The work item a run belongs to: explicit item, else its packet. */
+/** The work item a run belongs to (legacy packet ids included). */
 export function runItemId(run: Pick<RunSummary, "itemId" | "packetId">): string | undefined {
-  return run.itemId ?? run.packetId;
+  return run.itemId ?? run.itemId;
 }

@@ -16,7 +16,6 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { listIssues } from "../plan/issues.js";
 import type { MachineConfig } from "../config.js";
-import { readPacket } from "../packet.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
 import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
@@ -109,7 +108,6 @@ export interface AssembleInput {
 }
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
-  packets: ["packet"],
   files: ["file"],
   knowledge: ["knowledge"],
   references: ["reference"],
@@ -128,7 +126,7 @@ function sha1(text: string): string {
  * Fixed render order for assembled context blocks (lost-in-the-middle
  * layout, prompt-cache stable).
  *
- * Section order is fixed and documented: packet/plan first (highest
+ * Section order is fixed and documented: plan first (highest
  * relevance), then retrieved files by relevance (file, knowledge,
  * reference), then tools/skills/scripts aggregates, then the parent-run
  * chain last (most volatile). Within a section, band/depth priority order
@@ -138,7 +136,6 @@ function sha1(text: string): string {
  * never shifts this stable prefix.
  */
 export const CONTEXT_RENDER_ORDER: Record<string, number> = {
-  packet: 0,
   plan: 1,
   project: 1,
   issue: 2,
@@ -282,10 +279,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const budget = Math.max(1024, input.budgetChars ?? machine.context.maxChars ?? DEFAULT_CONTEXT_BUDGET);
   const pending: Pending[] = [];
 
-  // Explicit packet (runner-provided).
-  const packetIds = new Set<string>();
-  if (input.packetId) packetIds.add(input.packetId);
-
   // Composer selections are known before pending items are built so they can
   // filter aggregate blocks (skill descriptions) as well as complete items.
   const excludedSections = new Set(input.exclude?.sections ?? []);
@@ -314,6 +307,22 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Explicit composer includes. These are user-selected knowledge files that
   // no composer file or configured index references; they are still ordinary
   // provenance-tracked context blocks.
+  for (const path of input.include?.issues ?? []) {
+    const abs = withinRepo(layout.repoRoot, path);
+    if (!abs || !existsSync(abs) || isSecretPath(path)) {
+      pending.push({
+        kind: "issue",
+        origin: "explicit",
+        ref: path,
+        body: "",
+        band: 1,
+        warning: "included issue is missing, secret, or outside the repo",
+      });
+      continue;
+    }
+    const read = readFileText(abs);
+    if (read) pending.push({ kind: "issue", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
+  }
   for (const entry of input.include?.files ?? []) {
     const range = parseIncludeRange(entry);
     if (range) {
@@ -396,22 +405,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       pending.push({ kind: "plan", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
     }
   }
-  for (const path of input.include?.issues ?? []) {
-    const abs = withinRepo(layout.repoRoot, path);
-    if (!abs || !existsSync(abs) || isSecretPath(path)) {
-      pending.push({
-        kind: "issue",
-        origin: "explicit",
-        ref: path,
-        body: "",
-        band: 1,
-        warning: "included issue is missing, secret, or outside the repo",
-      });
-      continue;
-    }
-    const read = readFileText(abs);
-    if (read) pending.push({ kind: "issue", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
-  }
   for (const citation of input.include?.references ?? []) {
     const read = readReference(layout, citation, Number.MAX_SAFE_INTEGER);
     if (!read.ok) {
@@ -432,23 +425,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       ref: citation,
       depth: 0,
       body: `${label}\n\n${read.text}`,
-      band: 1,
-    });
-  }
-
-  // Packets.
-  for (const id of packetIds) {
-    const packet = readPacket(layout, id);
-    if (!packet) {
-      pending.push({ kind: "packet", origin: "explicit", ref: id, body: "", band: 1, warning: "packet not found" });
-      continue;
-    }
-    pending.push({
-      kind: "packet",
-      origin: "explicit",
-      ref: packet.id,
-      depth: 0,
-      body: JSON.stringify(packet, null, 2),
       band: 1,
     });
   }
@@ -611,7 +587,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (item.kind === "skill" && /^\d+ skills$/.test(item.ref)) return 60;
     if (item.kind === "parent-run") return 50;
     if (item.kind === "skill" || item.kind === "script") return 40;
-    if (item.kind === "packet") return 10;
     if (item.kind === "issue") return item.origin === "explicit" ? 8 : 22;
     if (item.kind === "plan" || item.kind === "project") {
       if (item.origin === "explicit") return 15;
@@ -697,7 +672,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   }
 
   // Render every kept source in fixed section order (CONTEXT_RENDER_ORDER):
-  // packet/plan first, retrieved files by relevance, tools/skills, parents
+  // plan first, retrieved files by relevance, tools/skills, parents
   // last. Array.prototype.sort is stable, so relevance (band/depth) order is
   // preserved within a section. The runner may trim the prompt to the
   // selected model's input window, but that is a model limit, not a per-file
@@ -728,7 +703,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
   const sections: ContextSections = {
-    packets: 0,
     issues: 0,
     plans: 0,
     knowledge: 0,
@@ -742,31 +716,22 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   };
   for (const entry of entries) sections[sectionForKind(entry.kind)] += entry.len;
 
-  // Lost-in-the-middle recap: when plan/packet sources exist, restate the
+  // Lost-in-the-middle recap: when plan/issue sources exist, restate the
   // critical objective last (highest-relevance first AND last) so the tail of
   // the stable prefix re-anchors the run before the volatile per-turn
   // content (working context, ledger, transcript) follows in render.ts.
   const planSources = ordered.filter(
-    (entry) => entry.kind === "packet" || entry.kind === "plan" || entry.kind === "project",
+    (entry) => entry.kind === "issue" || entry.kind === "plan" || entry.kind === "project",
   );
   let recap = "";
   if (planSources.length > 0) {
     const points = planSources.slice(0, 4).map((entry) => {
-      if (entry.kind === "packet") {
-        let goal = "";
-        try {
-          goal = String((JSON.parse(entry.body) as { goal?: unknown }).goal ?? "");
-        } catch {
-          goal = "";
-        }
-        return `packet "${entry.ref}"${goal ? `: ${goal.slice(0, 160)}` : ""}`;
-      }
       const first = entry.body.split("\n").find((line) => line.trim() !== "") ?? entry.ref;
       return `plan ${entry.ref}: ${first.trim().slice(0, 120)}`;
     });
-    recap = `<context-recap>\nRecap (authoritative — act on this): ${points.join("; ")}. The packet/plan blocks above outrank the working files in between.\n</context-recap>`;
+    recap = `<context-recap>\nRecap (authoritative — act on this): ${points.join("; ")}. The issue/plan blocks above outrank the working files in between.\n</context-recap>`;
     blocks.push(recap);
-    const bucket = ordered.some((entry) => entry.kind === "packet") ? "packets" : "plans";
+    const bucket = "plans";
     sections[bucket] += recap.length;
   }
 

@@ -100,7 +100,7 @@ export type RunRow =
 export interface RunOptions {
   runs: readonly RunSummary[];
   /** Repo root the issues tree belongs to (the cwd/preferred repo). */
-  packetRepo?: string;
+  issueRepo?: string;
   /** Issues for the work tree (one repo). */
   issues?: readonly Issue[];
   group?: RunGroup;
@@ -144,7 +144,7 @@ function runText(run: RunSummary): string {
     run.status,
     run.repoRoot,
     run.prNumber ? `pr #${run.prNumber}` : "",
-    run.packetId ?? "",
+    run.itemId ?? "",
     run.itemId ?? "",
   ].join(" ");
 }
@@ -346,7 +346,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const repoNames = [
     ...new Set([
       ...baseRuns.map(repoOf),
-      ...(workGroup && options.packetRepo ? [options.packetRepo] : []),
+      ...(workGroup && options.issueRepo ? [options.issueRepo] : []),
     ]),
   ];
   const preferred = options.preferredRepo;
@@ -363,14 +363,14 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   } else {
     for (const repoRoot of repoNames) {
       const repoRuns = baseRuns.filter((run) => repoOf(run) === repoRoot && visibleRun(run));
-      const packetRepo = workGroup && options.packetRepo === repoRoot;
-      if (repoRuns.length === 0 && !packetRepo) continue;
+      const issueRepo = workGroup && options.issueRepo === repoRoot;
+      if (repoRuns.length === 0 && !issueRepo) continue;
       if (!pushRepo(repoRoot, repoRuns.length)) continue;
       if (group === "status") {
         pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
         continue;
       }
-      if (packetRepo) {
+      if (issueRepo) {
         pushWorkTree(repoRoot, repoRuns, 1);
       } else {
         const free = repoRuns.filter((run) => !runItemId(run));

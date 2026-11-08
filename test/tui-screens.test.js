@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { resolveTheme } from "../dist/tui/format.js";
 import { renderHeader, renderFooterRows, TABS } from "../dist/tui/screens/chrome.js";
 import { renderRunsList } from "../dist/tui/screens/runs-list.js";
-import { renderPacket } from "../dist/tui/screens/packet.js";
+import { renderIssue } from "../dist/tui/screens/issue.js";
 import { renderRunDetail } from "../dist/tui/screens/run-detail/run-detail.js";
 import { renderComposer } from "../dist/tui/screens/composer/composer.js";
 import { renderModelsList, renderModelDetail } from "../dist/tui/screens/models.js";
@@ -71,7 +71,7 @@ test("runs list renders hierarchy rows and footer affordances", () => {
   const index = buildRunIndex({
     runs: [run({ id: "r1", packetId: "p1" })],
     group: "all",
-    packetRepo: "/repo",
+    issueRepo: "/repo",
     issues: [{ kind: "features", slug: "p1", title: "Do the thing", status: "todo", effective: "todo", priority: "medium", review: "none", prompt: "Do the thing", body: "", depends: [], tags: [], plan: "plans/tui.md", planTitle: "TUI", rel: "issues/features/ready/p1.md", path: "/tmp/issues/features/ready/p1.md" }],
     preferredRepo: "/repo",
   });
@@ -87,7 +87,7 @@ test("runs list renders hierarchy rows and footer affordances", () => {
 });
 
 test("packet renders contract plus attached runs", () => {
-  const frame = renderPacket({
+  const frame = renderIssue({
     ...vp, slug: "p1",
     issue: {
       slug: "p1", title: "Do the thing", kindLabel: "Feature",
@@ -126,7 +126,7 @@ test("composer renders prompt box pinned to the body bottom", () => {
     contextTab: 0, contextItem: 0, contextFilter: "", contextFiltering: false,
     excluded: new Set(), included: new Set(), skillModes: new Map(), skillShown: new Map(),
     preview: { context: { chars: 0, promptChars: 0, sources: [], issueChain: [], artifacts: { files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] }, warnings: [] } },
-    pickers: { model: null, packet: null },
+    pickers: { model: null, issue: null },
     agentIsolates: (agent) => agent === "build",
     mapTokens: () => [],
     lockedSkills: () => [],
@@ -151,10 +151,10 @@ test("composer issues tab lists issue files for any agent", async () => {
       ...vp,
       run: { agent: "research", preset: "unrestricted", verification: "verified", worktree: true, ask: true, approval: "human", ambiguity: "precise", tier: "free", floors: "role", prompt: "hello" },
       repoRoot: root, home: root, insert: false, cursor: 0, colon: false,
-      contextTab: 1, contextItem: 0, contextFilter: "", contextFiltering: false,
+      contextTab: 0, contextItem: 0, contextFilter: "", contextFiltering: false,
       excluded: new Set(), included: new Set(["issue:issues/features/todo/demo.md"]), skillModes: new Map(), skillShown: new Map(),
       preview: { context: { chars: 0, promptChars: 0, sources: [{ kind: "issue", ref: "issues/features/todo/demo.md", origin: "explicit", depth: 0, chars: 10, exists: true }], issueChain: [], artifacts: { files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] }, warnings: [] } },
-      pickers: { model: null, packet: null },
+      pickers: { model: null, issue: null },
       agentIsolates: (agent) => agent === "engineer",
       mapTokens: () => [],
       lockedSkills: () => [],

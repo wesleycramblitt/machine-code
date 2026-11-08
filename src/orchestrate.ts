@@ -2,10 +2,10 @@
  * machine_code — mode orchestration.
  *
  * An agent with no configured modes runs alone.
- * direct/verified/redundant → the selected orchestrator compiles a packet →
+ * direct/verified/redundant → the selected orchestrator compiles an issue →
  * Build implements it → runner-owned acceptance gates → (redundant) Review
  * judges. Which modes exist, and the default, come from data/agents/*.toml.
- * Queued packets (input.packet) run Build → gates → Review directly.
+ * Queued issues (input.packet) run Engineer → gates → Review directly.
  *
  * `runLoop` (M0) runs a single agent; this layer chains phases per mode.
  */
@@ -132,7 +132,7 @@ export function policyFor(layout: Layout, name: AgentName, policy: Policy): Agen
   return policy.agents[name] ?? { ...DEFAULT_AGENT_POLICY, toolCall: name !== "research" };
 }
 
-export interface ExecutePacketInput {
+export interface ExecuteIssueInput {
   models: MutableModels;
   catalogue: readonly CatalogueRow[];
   configuredProviders: ReadonlySet<string>;
@@ -159,10 +159,11 @@ export interface ExecutePacketInput {
 }
 
 /**
- * Execute a frozen packet: Build → gates → independent Review → commit/PR.
- * This is the Orchestrator path; it never asks a model to plan the packet.
+ * Execute one issue: Engineer → gates → independent Review → commit. The
+ * issue's prompt is the objective; acceptance comes from its verify list.
+ * This is the deterministic path: Engineer → gates → Review → commit.
  */
-export async function executePacket(input: ExecutePacketInput): Promise<OrchestrateResult> {
+export async function executeIssue(input: ExecuteIssueInput): Promise<OrchestrateResult> {
   const { layout, machine, policy, packet, recorder } = input;
   const root = input.root;
   const toolRoot = input.toolRoot ?? root;
@@ -176,8 +177,8 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
   recorder.recordConfig({ ...resolvedBuild.config, capabilities: resolvedBuild.capabilities });
   const buildPolicy = policyFor(layout, "build", policy);
   const buildRequest =
-    `Implement this task packet exactly:\n\n${JSON.stringify(packet, null, 2)}\n\n` +
-    "Acceptance commands must pass. If the packet is wrong or a gate cannot run, report blocked with evidence.";
+    `Implement this issue exactly:\n\n${JSON.stringify(packet, null, 2)}\n\n` +
+    "Acceptance commands must pass. If the issue is wrong or a gate cannot run, report blocked with evidence.";
   const buildResult = await singleAgentRun({
     models: input.models,
     catalogue: input.catalogue,
@@ -199,7 +200,7 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
     contextText: input.contextText,
-    // The packet's context files land in the working set up front, so the
+    // The issue's context files land in the working set up front, so the
     // first prompt already carries the code the deliverable names.
     ...(packet.context.length > 0 ? { seedFiles: [...packet.context] } : {}),
     skipMap: input.skipMap,
@@ -255,7 +256,7 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
     const message =
       `mc(${packet.id}): ${packet.goal}\n\n` +
       `run: ${recorder.id}\n` +
-      `packet: ${packet.id}`;
+      `issue: ${packet.id}`;
     const committed = await commitWorktree({ path: toolRoot, message, processes: gateProcesses });
     if (committed.sha) {
       commit = committed.sha;
@@ -279,10 +280,10 @@ export async function executePacket(input: ExecutePacketInput): Promise<Orchestr
       { root: toolRoot, commands },
     );
     const reviewRequest =
-      `Review this packet and the committed diff. Approve or reject with concrete evidence citing paths.\n\n` +
+      `Review this issue and the committed diff. Approve or reject with concrete evidence citing paths.\n\n` +
       `COMMIT: ${commit ?? "(no commit created)"}\n` +
       `BASE: ${reviewBase ?? "(unknown)"}\n\n` +
-      `PACKET:\n${JSON.stringify(packet, null, 2)}\n\nDIFF:\n${diffResult.text}`;
+      `ISSUE:\n${JSON.stringify(packet, null, 2)}\n\nDIFF:\n${diffResult.text}`;
     const reviewRecorder = new RunRecorder(layout, {
       agent: "review",
       mode: "",
@@ -379,7 +380,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
   const { layout, machine, policy, root, recorder } = input;
   if (input.packet) {
     const verification: Verification = input.packet.mode === "direct" ? "direct" : "verified";
-    return executePacket({
+    return executeIssue({
       models: input.models,
       catalogue: input.catalogue,
       configuredProviders: input.configuredProviders,

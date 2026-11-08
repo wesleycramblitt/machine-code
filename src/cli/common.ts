@@ -20,7 +20,7 @@ import { pick, axisWeights } from "../select.js";
 import { CAPABILITY_AXES } from "../config.js";
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
-import { orchestrate, executePacket } from "../orchestrate.js";
+import { orchestrate, executeIssue } from "../orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/question.js";
 import { summarizeRun, readStateView } from "../state/outcome.js";
@@ -42,24 +42,7 @@ import { isFreeRow } from "../select.js";
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
-import { approvePacket, commitPlanningFiles, deletePacket, planBatchWaves } from "../tasks/packet.js";
 import { deleteRun } from "../state/run-delete.js";
-import {
-  addIndexEntry,
-  isBuildable,
-  isValidSlug,
-  listPacketFiles,
-  PACKET_STATUSES,
-  PACKET_REVIEWS,
-  readPacketFile,
-  renderPacketFile,
-  slugify,
-  toTaskPacket,
-  writePacketFile,
-  type PacketFile,
-  type PacketReview,
-  type PacketStatus,
-} from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";
@@ -147,13 +130,11 @@ export const HELP = `machine_code ${VERSION}
 
 Usage:
   machine_code run --agent research [--provider <id>] [--model <key>] "<question>"
-  machine_code run --agent <role> --packet <slug> ["<prompt>"]
-                                    Attach the run to a packet; its deliverable feeds the objective
-                                    when the prompt is empty. Use "build <slug>" for the structured
-                                    build on that packet. --item attaches to a plan item that has
-                                    no contract yet (research/planning runs).
-                                    Build runs use an isolated worktree (default on):
-                                    [--packet <slug> | --item <slug>] [--base <ref>]
+  machine_code run --agent <role> --item <slug> ["<prompt>"]
+                                    Attach the run to an issue; its prompt feeds the objective
+                                    when the prompt is empty and the issue file is added to
+                                    context. Engineer runs use an isolated worktree:
+                                    [--item <slug>] [--base <ref>]
                                     Agent config overrides:
                                     [--verify direct|verified]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
@@ -236,25 +217,17 @@ Usage:
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code plan                 Render the issues tree: kind → status dir → issue (--json)
   machine_code issue list           List issue files under issues/<kind>/<status>/<slug>.md (--json)
-  machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority N] [--review none|agent|human]
+  machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority N] [--review none|agent|human] [--verify a,b]
                                      Scaffold an issue file under issues/
   machine_code issue move <slug> <todo|blocked|done|researched>  Move an issue
   machine_code issue run <slug>     Start the research or engineer run for an issue
   machine_code issue review <slug>  Review the issue in its latest engineer worktree
-  machine_code packet list          List packet files (slug, status, deliverable) [--json]
-  machine_code packet create <slug> "<deliverable>" [--verify a,b] [--review gates|agent|human]
-                                     Scaffold a legacy contract in issues/packets/<slug>.md
-                                     (issues/ is the primary work tree)
-  machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."]
-                                     [deps=a,b] [verify=a,b] [review=gates|agent|human]
-                                     Update status, blocker, deps, gates, or merge gate
-  machine_code packet <slug>        Show a packet file
-  machine_code build <slug>         Build a packet: gates + commit in an mc/<slug> branch
+  machine_code build <slug>         Build an issue: engineer → gates → commit → done/
                                      [--review] add an independent review step [--model <key>]
-  machine_code build "<goal>"        Self-scope a free-form goal into a packet, then build
-  machine_code approve <slug>       Merge a built packet into main, mark it Done, delete it
-  machine_code delete <slug>        Remove a packet + branch + worktree [--force]
-  machine_code batch                Build ready packets across worktrees, honoring deps
+  machine_code build "<goal>"        Self-scope a free-form goal into a feature, then build
+  machine_code approve <slug>       Merge the issue branch into main and move it to done/
+  machine_code delete <slug>        Remove an issue + branch [--force]
+  machine_code batch                Build todo issues across worktrees by priority/deps
                                      [--max-parallel N] [--dry-run] [--auto-approve]
   machine_code version
 `;

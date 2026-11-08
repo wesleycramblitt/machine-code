@@ -12,8 +12,8 @@ import { layout } from "../../paths.js";
 import type { TuiState } from "../state.js";
 import type { KeyServices } from "./keys.js";
 
-export function handlePacketKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
-  const slug = s.selectedPacketSlug;
+export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
+  const slug = s.selectedIssueSlug;
   const l = layout(ctx.repoRoot);
   const spawnCli = (args: string[], note: string): void => {
     const cliPath = fileURLToPath(new URL("../../cli.js", import.meta.url));
@@ -28,8 +28,8 @@ export function handlePacketKeys(s: TuiState, ctx: KeyServices, data: string): b
     ctx.startNewRun(undefined, l.repoRoot, { agent, item: slug });
   };
   if (data === "\x1b" || data === "q") { s.screen = "list"; ctx.draw(); return true; }
-  if (data === "\x1b[A" || data === "k") { s.packetScroll = Math.max(0, s.packetScroll - 1); ctx.draw(); return true; }
-  if (data === "\x1b[B" || data === "j") { s.packetScroll += 1; ctx.draw(); return true; }
+  if (data === "\x1b[A" || data === "k") { s.issueScroll = Math.max(0, s.issueScroll - 1); ctx.draw(); return true; }
+  if (data === "\x1b[B" || data === "j") { s.issueScroll += 1; ctx.draw(); return true; }
   if (data === "n") { startForIssue(); ctx.draw(); return true; }
   if (data === "v" && slug) {
     const issue = findIssue(l, slug);

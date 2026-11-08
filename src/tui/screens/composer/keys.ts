@@ -10,7 +10,6 @@ import { CTRL_D, CTRL_U, HALF_PAGE, modelReasonText } from "../../format.js";
 import { printable } from "../../format.js";
 import { loadAvailability } from "../../../availability.js";
 import { layout } from "../../../paths.js";
-import { readPacketFile } from "../../../plan/packets.js";
 import { NEW_RUN_CONTEXT_TABS } from "./types.js";
 import type { SkillMode } from "../../../context/references.js";
 import type { TuiState } from "../../state.js";
@@ -71,13 +70,13 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     ctx.draw();
     return true;
   }
-  if (s.packetPick === "newrun") {
-    if (data === "\x1b") { s.packetPick = null; ctx.draw(); return true; }
-    if (data === "\x1b[A" || data === "k") { s.packetPickSel = Math.max(0, s.packetPickSel - 1); ctx.draw(); return true; }
-    if (data === "\x1b[B" || data === "j") { const list = ctx.pickerPackets(); s.packetPickSel = Math.min(Math.max(0, list.length - 1), s.packetPickSel + 1); ctx.draw(); return true; }
-    if (data === "\r" || data === "\n") { const list = ctx.pickerPackets(); const picked = list[s.packetPickSel]; if (picked) ctx.choosePacket(picked); ctx.draw(); return true; }
-    if (data === "\x7f" || data === "\b") { s.packetPickText = s.packetPickText.slice(0, -1); s.packetPickSel = 0; ctx.draw(); return true; }
-    if (!data.startsWith("\x1b")) { s.packetPickText += printable(data); s.packetPickSel = 0; ctx.draw(); return true; }
+  if (s.itemPick === "newrun") {
+    if (data === "\x1b") { s.itemPick = null; ctx.draw(); return true; }
+    if (data === "\x1b[A" || data === "k") { s.itemPickSel = Math.max(0, s.itemPickSel - 1); ctx.draw(); return true; }
+    if (data === "\x1b[B" || data === "j") { const list = ctx.pickerIssues(); s.itemPickSel = Math.min(Math.max(0, list.length - 1), s.itemPickSel + 1); ctx.draw(); return true; }
+    if (data === "\r" || data === "\n") { const list = ctx.pickerIssues(); const picked = list[s.itemPickSel]; if (picked) ctx.chooseIssue(picked); ctx.draw(); return true; }
+    if (data === "\x7f" || data === "\b") { s.itemPickText = s.itemPickText.slice(0, -1); s.itemPickSel = 0; ctx.draw(); return true; }
+    if (!data.startsWith("\x1b")) { s.itemPickText += printable(data); s.itemPickSel = 0; ctx.draw(); return true; }
     ctx.draw();
     return true;
   }
@@ -130,14 +129,6 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === " ") {
     const key = s.newRunContextItemKeys[s.newRunContextItem];
     const available = s.newRunContextItemAvailable[s.newRunContextItem] === true;
-    if (key && key.startsWith("packet:")) {
-      const slug = key.slice("packet:".length);
-      const packet = readPacketFile(layout(ctx.repoRoot), slug);
-      if (packet) ctx.choosePacket(packet);
-      else ctx.notify(`packet ${slug} is missing`);
-      ctx.draw();
-      return true;
-    }
     if (key && key.startsWith("skill:")) {
       // Three modes cycle: include (body inlined) → on-demand
       // (description only, pulled with the skill tool) → exclude.
@@ -191,9 +182,9 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "g") { ctx.cycleAmbiguity(); ctx.draw(); return true; }
   if (data === "f") { ctx.cycleMinFit(); ctx.draw(); return true; }
   if (data === "F") { ctx.cycleFloors(); ctx.draw(); return true; }
-  if (data === "i" && s.newRunContextSectionKey === "section:packets") { ctx.startPacketPicker(); ctx.draw(); return true; }
+  if (data === "i" && s.newRunContextSectionKey === "section:issues") { ctx.startIssuePicker(); ctx.draw(); return true; }
   if (data === "m") { ctx.startModelPicker(); ctx.draw(); return true; }
   if (data === "e" || data === "p") { s.newRunInsert = true; ctx.draw(); return true; }
-  if (data === "X" && s.newrun.packet) { s.newrun.packet = undefined; ctx.draw(); return true; }
+  if (data === "X" && s.newrun.item) { s.newrun.item = undefined; ctx.draw(); return true; }
   ctx.draw();
   return true;}

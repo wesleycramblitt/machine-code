@@ -24,21 +24,21 @@ export interface IssueHeader {
   body: string[];
 }
 
-export interface PacketProps extends Viewport {
+export interface IssueProps extends Viewport {
   slug: string | null;
   issue: IssueHeader | null;
   runs: readonly RunSummary[];
   scroll: number;
 }
 
-export interface PacketFrame {
+export interface IssueFrame {
   body: string[];
   actions: string;
   secondary: string;
   scroll: number;
 }
 
-export function renderPacket(props: PacketProps): PacketFrame {
+export function renderIssue(props: IssueProps): IssueFrame {
   const { bodyH, toast, slug, issue, runs, scroll } = props;
   const lines: string[] = [];
   if (!slug) {

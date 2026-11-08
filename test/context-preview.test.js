@@ -40,19 +40,18 @@ test("preview includes always-visible skill descriptions", () => {
   }
 });
 
-test("preview surfaces an attached packet contract", () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-preview-packet-"));
+test("preview surfaces an attached issue", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-preview-issue-"));
   try {
-    mkdirSync(join(root, "issues", "packets"), { recursive: true });
-    const body = `---\nstatus = "todo"\n---\n# demo\n\n## Deliverable\n\nDo the thing.\n`;
-    writeFileSync(join(root, "issues", "packets", "demo.md"), body, "utf8");
-    const preview = previewContext(fakeLayout(root), "", { packet: "demo" });
-    const packet = preview.sources.find((source) => source.kind === "packet");
-    assert.ok(packet, "packet contract is part of the assembled context");
-    assert.equal(packet.ref, "demo");
-    assert.ok(packet.chars > 0);
-    const missing = previewContext(fakeLayout(root), "", { packet: "nope" });
-    assert.ok(missing.warnings.some((w) => /packet nope is missing/.test(w)));
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
+    writeFileSync(join(root, "issues", "features", "todo", "demo.md"), "---\nprompt = \"Do the thing.\"\n---\n# demo\n", "utf8");
+    const preview = previewContext(fakeLayout(root), "", { agent: "engineer", issues: ["issues/features/todo/demo.md"] });
+    const issue = preview.sources.find((source) => source.kind === "issue");
+    assert.ok(issue, "issue is part of the assembled context");
+    assert.equal(issue.ref, "issues/features/todo/demo.md");
+    assert.ok(issue.chars > 0);
+    const missing = previewContext(fakeLayout(root), "", { agent: "engineer", issues: ["issues/features/todo/nope.md"] });
+    assert.ok(missing.warnings.some((w) => /issue issues\/features\/todo\/nope\.md is missing/.test(w)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

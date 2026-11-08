@@ -14,7 +14,6 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { readPacketFile, writePacketFile, listPacketFiles, type PacketFile } from "./plan/packets.js";
 import { findIssue, listIssues, ISSUE_STATUS_LABELS, type Issue } from "./plan/issues.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
@@ -33,7 +32,7 @@ import {
 import { scrollLines, selectableLines } from "./tui/scroll.js";
 import { createTuiState, type NewRunSeed, type NewRunState, type Page, type RunDetail, type RunsRepoScope, type Screen, type TuiState } from "./tui/state.js";
 import { renderDeleteConfirm } from "./tui/screens/delete.js";
-import { renderPacket } from "./tui/screens/packet.js";
+import { renderIssue } from "./tui/screens/issue.js";
 import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
 import { renderAnswer } from "./tui/screens/answer.js";
 import { TABS, renderFooterRows, renderHeader, rightHeaderPath } from "./tui/screens/chrome.js";
@@ -41,7 +40,7 @@ import { renderComposer } from "./tui/screens/composer/composer.js";
 import { handleAnswerKeys } from "./tui/screens/answer-keys.js";
 import { handleCorrectKeys } from "./tui/screens/correct-keys.js";
 import { handleDeleteKeys } from "./tui/screens/delete-keys.js";
-import { handlePacketKeys } from "./tui/screens/packet-keys.js";
+import { handleIssueKeys } from "./tui/screens/issue-keys.js";
 import { handleSettingsKeys } from "./tui/screens/settings-keys.js";
 import { handleSpendKeys } from "./tui/screens/spend-keys.js";
 import type { KeyServices } from "./tui/screens/keys.js";
@@ -98,7 +97,7 @@ import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/regis
 import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
-import { commitPlanningFiles } from "./tasks/packet.js";
+import { commitPlanningFiles } from "./tasks/planning.js";
 
 /* Terminal primitives live in ./tui/format.js; imported above. */
 
@@ -275,42 +274,34 @@ export async function runTui(): Promise<void> {
     s.modelPickSel = 0;
     s.modelPickText = "";
     s.modelPickEntries = [];
-    s.packetPick = null;
-    s.packetPickSel = 0;
-    s.packetPickText = "";
+    s.itemPick = null;
+    s.itemPickSel = 0;
+    s.itemPickText = "";
   };
 
-  const startNewRun = (packetSlug?: string, repoRoot = l.repoRoot, seed?: NewRunSeed) => {
+  const startNewRun = (itemSlug?: string, repoRoot = l.repoRoot, seed?: NewRunSeed) => {
     const previous = s.newrun;
     s.newRunRepo = repoRoot;
-    const packetFile = packetSlug ? readPacketFile(layout(repoRoot), packetSlug) : null;
-    // A packet is implementation work: start with Build. A seeded run (plan
-    // row, plan line) names its own agent. Untracked runs keep the last agent.
-    const preferredAgent = seed?.agent ?? (packetSlug ? "engineer" : previous.agent);
+    const slug = itemSlug ?? seed?.item;
+    const issue = slug ? findIssue(layout(repoRoot), slug) : undefined;
+    // An issue is the work item: ideas start research, features/bugs start
+    // engineer. A seeded run names its own agent; blank runs keep the last.
+    const preferredAgent = seed?.agent ?? (issue ? (issue.kind === "ideas" ? "research" : "engineer") : previous.agent);
     s.newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
-      ...(packetSlug ? { packet: packetSlug } : {}),
-      ...(seed?.item && !packetSlug ? { item: seed.item } : {}),
+      ...(slug ? { item: slug } : {}),
     };
-    // Verification and isolation are role-shaped: only build verifies, and a
-    // fresh build isolates in a worktree.
     s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
     s.newrun.worktree = true;
     enforceLockedSkills(true);
-    // A packet-attached run starts with a concrete objective. A seeded run
-    // carries its own prompt (and any explicit plan context). The prompt stays
-    // editable either way.
     if (seed?.prompt) s.newrun.prompt = seed.prompt;
-    else if (packetFile) s.newrun.prompt = packetFile.deliverable || packetSlug || "";
+    else if (issue) s.newrun.prompt = issue.prompt || issue.slug || "";
     resetNewRunUi();
-    if (seed?.plan) s.newRunContextIncluded.add(`plan:${seed.plan}`);
     // The issue file is the objective and is always explicit context.
-    if (seed?.item) {
-      const issue = findIssue(layout(repoRoot), seed.item);
-      if (issue) s.newRunContextIncluded.add(`file:${issue.rel}`);
-    }
+    if (issue) s.newRunContextIncluded.add(`file:${issue.rel}`);
+    if (seed?.plan) s.newRunContextIncluded.add(`plan:${seed.plan}`);
     for (const name of seed?.skills ?? []) s.newRunSkillModes.set(name, "include");
     s.screen = "newrun";
   };
@@ -349,10 +340,10 @@ export async function runTui(): Promise<void> {
       worktree: s.newrun.worktree,
     };
     // A generic inherited request ("Build the task.") hides the real objective.
-    // When the run is attached to a packet, derive the request from it.
-    const forkPacket = s.newrun.packet ? readPacketFile(repoLayout, s.newrun.packet) : null;
-    if (forkPacket && (!s.newrun.prompt.trim() || isGenericTaskRequest(s.newrun.prompt))) {
-      s.newrun.prompt = forkPacket.deliverable || s.newrun.packet || "";
+    // When the run is attached to an issue, derive the request from it.
+    const forkIssue = s.newrun.item ? findIssue(repoLayout, s.newrun.item) : null;
+    if (forkIssue && (!s.newrun.prompt.trim() || isGenericTaskRequest(s.newrun.prompt))) {
+      s.newrun.prompt = forkIssue.prompt || s.newrun.item || "";
     }
     resetNewRunUi();
     s.newRunParentId = summary.id;
@@ -434,7 +425,7 @@ export async function runTui(): Promise<void> {
     const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
     const includedPlansKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("plan:")).sort().join(",");
     const includedIssuesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("issue:")).sort().join(",");
-    const previewKey = `${s.newRunRepo}\0${s.newrun.packet ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}\0${includedIssuesKey}`;
+    const previewKey = `${s.newRunRepo}\0${s.newrun.item ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}\0${includedIssuesKey}`;
     const previewTtl = s.newRunInsert ? 60_000 : 5_000;
     if (
       !s.newRunPreviewCache ||
@@ -448,7 +439,6 @@ export async function runTui(): Promise<void> {
         at: Date.now(),
         context: previewContext(newRunLayout, "", {
           agent: s.newrun.agent,
-          ...(s.newrun.packet ? { packet: s.newrun.packet } : {}),
           planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
           files: [...s.newRunContextIncluded]
@@ -472,10 +462,10 @@ export async function runTui(): Promise<void> {
       };
     }
     const base = s.newRunPreviewCache;
-    const previewPacket = s.newrun.packet ? readPacketFile(newRunLayout, s.newrun.packet) : null;
+    const previewIssue = s.newrun.item ? findIssue(newRunLayout, s.newrun.item) : null;
     const previewPrompt =
       s.newrun.prompt.trim() ||
-      (previewPacket ? previewPacket.deliverable : "");
+      (previewIssue ? previewIssue.prompt : "");
     const context: ContextPreview = { ...base.context, promptChars: previewPrompt.length };
     const policy = base.policy;
     const machine = base.machine;
@@ -558,7 +548,7 @@ export async function runTui(): Promise<void> {
   };
 
   const buildNewRunArgs = (): string[] | null => {
-    if (s.newrun.prompt.trim().length === 0 && !s.newrun.packet) {
+    if (s.newrun.prompt.trim().length === 0 && !s.newrun.item) {
       notify("type a task before starting");
       return null;
     }
@@ -601,9 +591,7 @@ export async function runTui(): Promise<void> {
       });
       args.push("--min-axes", floors.join(","));
     }
-    if (s.newrun.packet) {
-      args.push("--packet", s.newrun.packet);
-    } else if (s.newrun.item) {
+    if (s.newrun.item) {
       args.push("--item", s.newrun.item);
     }
     const excludedSections = [...s.newRunContextExcluded]
@@ -873,7 +861,7 @@ export async function runTui(): Promise<void> {
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
       ...(s.runsGroup === "all" || s.runsGroup === "type" || s.runsGroup === "category"
-        ? { packetRepo: l.repoRoot, issues: listIssues(l) }
+        ? { issueRepo: l.repoRoot, issues: listIssues(l) }
         : {}),
     });
     if (s.runsSel >= runIndex.selectable.length) s.runsSel = Math.max(0, runIndex.selectable.length - 1);
@@ -961,10 +949,10 @@ export async function runTui(): Promise<void> {
             text: s.modelPickText,
             sort: s.modelPickSort,
           },
-          packet: s.packetPick === null ? null : {
-            text: s.packetPickText,
-            sel: s.packetPickSel,
-            list: pickerPackets(),
+          issue: s.itemPick === null ? null : {
+            text: s.itemPickText,
+            sel: s.itemPickSel,
+            list: pickerIssues(),
           },
         },
         agentIsolates,
@@ -985,7 +973,7 @@ export async function runTui(): Promise<void> {
       s.newRunContextItemAvailable = frame.contextItemAvailable;
       s.newRunContextItem = frame.contextItem;
       s.modelPickSel = frame.modelPickSel;
-      s.packetPickSel = frame.packetPickSel;
+      s.itemPickSel = frame.itemPickSel;
     }
 
     /* ------------------------------------------------------------ model */
@@ -1068,9 +1056,9 @@ export async function runTui(): Promise<void> {
 
     /* ---------------------------------------------------------- packet */
     else if (s.page === "runs" && s.screen === "packet") {
-      const itemSlug = s.selectedPacketSlug;
+      const itemSlug = s.selectedIssueSlug;
       const issue = itemSlug ? findIssue(l, itemSlug) : undefined;
-      const frame = renderPacket({
+      const frame = renderIssue({
         cols, narrow, bodyH, theme, toast: s.toast,
         slug: itemSlug,
         issue: issue
@@ -1088,9 +1076,9 @@ export async function runTui(): Promise<void> {
             }
           : null,
         runs: allRuns,
-        scroll: s.packetScroll,
+        scroll: s.issueScroll,
       });
-      s.packetScroll = frame.scroll;
+      s.issueScroll = frame.scroll;
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
@@ -1235,39 +1223,40 @@ export async function runTui(): Promise<void> {
 
   /* ------------------------------------------------------------ packet modal helpers */
 
-  const startPacketPicker = () => {
-    s.packetPick = "newrun";
-    s.packetPickSel = 0;
-    s.packetPickText = "";
+  const startIssuePicker = () => {
+    s.itemPick = "newrun";
+    s.itemPickSel = 0;
+    s.itemPickText = "";
   };
 
-  const pickerPackets = () => {
-    const needle = s.packetPickText.trim().toLowerCase();
-    const packets = listPacketFiles(layout(s.newRunRepo));
-    if (!needle) return packets;
-    return packets.filter((packet) =>
-      `${packet.slug} ${packet.deliverable} ${packet.status}`.toLowerCase().includes(needle),
+  const pickerIssues = () => {
+    const needle = s.itemPickText.trim().toLowerCase();
+    const issues = listIssues(layout(s.newRunRepo));
+    if (!needle) return issues;
+    return issues.filter((issue) =>
+      `${issue.slug} ${issue.prompt} ${issue.status} ${issue.kind}`.toLowerCase().includes(needle),
     );
   };
 
-  const choosePacket = (packet: PacketFile) => {
-    const previousPacket = s.newrun.packet ? readPacketFile(layout(s.newRunRepo), s.newrun.packet) : null;
-    const previousPrompt = previousPacket?.deliverable ?? "";
-    const hadPacket = Boolean(s.newrun.packet);
-    s.newrun.packet = packet.slug;
+  const chooseIssue = (issue: Issue) => {
+    const previousPrompt = s.newrun.item ? findIssue(layout(s.newRunRepo), s.newrun.item)?.prompt ?? "" : "";
+    const hadItem = Boolean(s.newrun.item);
+    s.newrun.item = issue.slug;
     // A blank composer that was opened with `N` still starts as research. Once
-    // a packet is attached, default to the agent that does the work.
-    if (!hadPacket && s.newrun.agent === "research") {
-      s.newrun.agent = "engineer";
+    // an issue is attached, default to the agent that does the work.
+    const wanted = issue.kind === "ideas" ? "research" : "engineer";
+    if (!hadItem && s.newrun.agent !== wanted) {
+      s.newrun.agent = wanted;
       s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
       s.newrun.worktree = true;
       enforceLockedSkills(true);
     }
     if (!s.newrun.prompt.trim() || (previousPrompt && s.newrun.prompt === previousPrompt)) {
-      s.newrun.prompt = packet.deliverable || packet.slug;
+      s.newrun.prompt = issue.prompt || issue.slug;
     }
-    s.packetPick = null;
-    notify(`linked ${packet.slug}; ready · ${packet.status} · gate ${packet.review ?? "gates"}`);
+    s.newRunContextIncluded.add(`file:${issue.rel}`);
+    s.itemPick = null;
+    notify(`linked ${issue.slug}; ${issue.status} · review ${issue.review}`);
   };
 
   const newRunWeights = () => {
@@ -1359,7 +1348,7 @@ export async function runTui(): Promise<void> {
     draw, notify, launch, openEditor, startNewRun, forkRun, answerRun,
     interrupt, startCorrect, submitCorrection, runDetailData, pendingForRun,
     cycleAgent, cycleVerify, cycleAmbiguity, cycleMinFit, cycleFloors,
-    enforceLockedSkills, startPacketPicker, pickerPackets, choosePacket,
+    enforceLockedSkills, startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun, lockedSkills,
     agentIsolates, searchSeed,
     repoRoot: l.repoRoot,
@@ -1419,7 +1408,7 @@ export async function runTui(): Promise<void> {
     /* --------------------------------------------------------- runs keys */
     if (s.page === "runs" && s.screen === "list") return handleRunsListKeys(s, keyCtx, data);
     /* ------------------------------------------------------ packet keys */
-    if (s.page === "runs" && s.screen === "packet") return handlePacketKeys(s, keyCtx, data);
+    if (s.page === "runs" && s.screen === "packet") return handleIssueKeys(s, keyCtx, data);
     /* --------------------------------------------------------- run keys */
     if (s.page === "runs" && s.screen === "run") return handleRunKeys(s, keyCtx, data);
 

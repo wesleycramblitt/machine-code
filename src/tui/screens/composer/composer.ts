@@ -2,9 +2,9 @@
  * machine_code — new-run composer screen.
  *
  * Pure-ish render of the run composer: agent/preset/verify controls, the
- * packet link, context tabs (packets, issues, knowledge, skills, scripts,
+ * issue link, context tabs (issues, knowledge, skills, scripts,
  * tools, codebase, references, prompt, files), the prompt box, and the
- * model/packet picker overlays. Props carry snapshots of composer state;
+ * model/issue picker overlays. Props carry snapshots of composer state;
  * the frame returns rendered content plus updated cursor derivations.
  * The skill-mode memo map is mutated in place (render-derived, read by
  * the space-cycle key).
@@ -19,8 +19,7 @@ import {
   wrapCommands, wrapText, wrapTokenList,
 } from "../../format.js";
 import { layout } from "../../../paths.js";
-import { listPacketFiles, readPacketFile } from "../../../plan/packets.js";
-import { listIssues } from "../../../plan/issues.js";
+import { findIssue, listIssues } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
 import { defaultSkillsFor, resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
@@ -48,14 +47,14 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   let contextItemKeys: string[] = [];
   let contextItemAvailable: boolean[] = [];
   let modelPickSel = pickers.model?.sel ?? 0;
-  let packetPickSel = pickers.packet?.sel ?? 0;
+  let itemPickSel = pickers.issue?.sel ?? 0;
   const modelPickActive = pickers.model !== null;
-  const packetPickActive = pickers.packet !== null;
+  const itemPickActive = pickers.issue !== null;
   const modelEntries = pickers.model?.entries ?? [];
   const modelSort = pickers.model?.sort ?? "fit";
   const modelText = pickers.model?.text ?? "";
-  const packetList = pickers.packet?.list ?? [];
-  const packetText = pickers.packet?.text ?? "";
+  const packetList = pickers.issue?.list ?? [];
+  const packetText = pickers.issue?.text ?? "";
   let body: string[] = [];
   let actions = "";
   let secondary = "";
@@ -69,8 +68,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   footerBandTone = theme.bodyBg;
     const ctx = preview.context;
   const ap = preview.policy?.agents[run.agent];
-  const newRunPacketFile = run.packet ? readPacketFile(layout(repoRoot), run.packet) : null;
-  const packetValue = run.packet ?? "NA";
+  const newRunIssue = run.item ? findIssue(layout(repoRoot), run.item) : undefined;
+  const issueValue = run.item ?? "NA";
   const displayAgent = run.agent ? `${run.agent[0]!.toUpperCase()}${run.agent.slice(1)}` : run.agent;
   const resolvedAgent = resolveAgent(layout(repoRoot), run.agent, {
     agentPolicy: ap,
@@ -84,12 +83,12 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       ambiguity: run.ambiguity,
     },
   });
-  const packetOutcome = (() => {
-    if (run.packet) {
-      if (!newRunPacketFile) return "packet file is missing";
-      return `ready · ${newRunPacketFile.status} · gate ${newRunPacketFile.review ?? "gates"}`;
+  const issueOutcome = (() => {
+    if (run.item) {
+      if (!newRunIssue) return "issue file is missing";
+      return `${newRunIssue.status} · review ${newRunIssue.review}`;
     }
-    return "no packet · run is untracked";
+    return "no issue · run is untracked";
   })();
   const displayTier = run.tier === "free" ? "Free" : "Paid";
   const itemsFor = (kinds: readonly string[]) =>
@@ -343,36 +342,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     Math.max(10, cols - 1),
   );
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
-  const packetSource = ctx.sources.find((source) => source.kind === "packet");
-  const packetItems: ContextPanelItem[] = [];
-  const seenPacketKeys = new Set<string>();
-  for (const packet of listPacketFiles(newRunLayout)) {
-    const selected = run.packet === packet.slug;
-    seenPacketKeys.add(`packet:${packet.slug}`);
-    packetItems.push({
-      text:
-        `${packet.slug} · ${trunc(packet.deliverable || "(no deliverable)", Math.max(12, cols - 40))} ` +
-        `[${packet.status}]` +
-        (selected ? " · selected" : ""),
-      chars: selected ? (packetSource?.chars ?? 0) : 0,
-      exists: true,
-      key: `packet:${packet.slug}`,
-      ...(selected ? {} : { available: true, counted: false }),
-    });
-  }
-  // Issues are the primary work tree: every issue is a packet source.
-  for (const issue of listIssues(newRunLayout)) {
-    const key = `packet:${issue.slug}`;
-    if (seenPacketKeys.has(key)) continue;
-    const selected = run.packet === issue.slug;
-    packetItems.push({
-      text: `${issue.slug} · ${trunc(issue.prompt, Math.max(12, cols - 40))} [${issue.status}]` + (selected ? " · selected" : ""),
-      chars: selected ? (packetSource?.chars ?? 0) : 0,
-      exists: true,
-      key,
-      ...(selected ? {} : { available: true, counted: false }),
-    });
-  }
   const mapEnabled = preview.machine?.map.enabled !== false;
   const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
   const semantic = loadSemanticOrDeterministic(repoRoot);
@@ -417,7 +386,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       counted: false,
     }));
   const sections = [
-    { label: "Packets", tone: Y, sectionKey: "section:packets", items: packetItems },
     { label: "Issues", tone: contextTone("plan"), sectionKey: "section:issues", items: issueItems },
     { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
     { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
@@ -525,8 +493,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     false,
     true,
   );
-  const packetHint = activeSection.sectionKey === "section:packets"
-    ? panelLine(` ${D}${packetOutcome}${R}`, false, true)
+  const issueHint = activeSection.sectionKey === "section:issues"
+    ? panelLine(` ${D}${issueOutcome}${R}`, false, true)
     : "";
   const itemRoom = Math.max(1, Math.floor(bodyH * 0.28));
   const itemStart = Math.max(
@@ -562,8 +530,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       activeSection.sectionKey === "section:skills"
         ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
         : `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
-      !insert && activeSection.sectionKey === "section:packets"
-        ? command("i", "Packet", packetValue, run.packet ? C : GR)
+      !insert && activeSection.sectionKey === "section:issues"
+        ? command("i", "Issue", issueValue, run.item ? C : GR)
         : "",
     ]),
     false,
@@ -576,14 +544,14 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     ...tabBar,
     panelLine(""),
     sectionHeader,
-    ...(packetHint ? [packetHint] : []),
+    ...(issueHint ? [issueHint] : []),
     ...(itemLines.length ? itemLines : [panelLine(`  ${D}none${R}`)]),
   ];
   if (ctx.warnings.length > 0) summary.push(` ${Y}${ctx.warnings[0]}${R}`);
 
   const boxWidth = panelWidth;
   const inner = Math.max(12, boxWidth - 2);
-  const promptText = run.prompt || (insert ? "" : run.packet ? "Press :! to run the packet" : "Press p to type the task");
+  const promptText = run.prompt || (insert ? "" : run.item ? "Press :! to run the packet" : "Press p to type the task");
   // Include the cursor before wrapping so a freshly typed trailing space is
   // not trimmed away until the next keystroke.
   const promptLines = wrapText(insert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
@@ -595,7 +563,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       ])
     : joinCommands([
         command("p", "Prompt", undefined, M),
-        run.prompt.trim() || run.packet ? commandBadge("Start", ":!", START_BG, WHITE) : "",
+        run.prompt.trim() || run.item ? commandBadge("Start", ":!", START_BG, WHITE) : "",
       ]);
   const agentControls = insert
     ? ""
@@ -696,15 +664,15 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       `${D}${list.length} model(s) · ✓ eligible · ⏸ cooling · ✕ ineligible` +
       `${modelText ? ` · “${modelText}”` : ""}${R}` +
       `${toast ? ` · ${Y}${toast}${R}` : ""}`;
-  } else if (packetPickActive) {
+  } else if (itemPickActive) {
     const list = packetList;
-    if (packetPickSel >= list.length) packetPickSel = Math.max(0, list.length - 1);
-    const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link a packet${R} ${D}(type to filter; Enter selects)${R}`, ""];
+    if (itemPickSel >= list.length) itemPickSel = Math.max(0, list.length - 1);
+    const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link an issue${R} ${D}(type to filter; Enter selects)${R}`, ""];
     for (let i = 0; i < list.length; i++) {
-      const packet = list[i]!;
-      const isSelected = run.packet === packet.slug;
-      const line = ` ${isSelected ? C + "▸" : " "} ${C}${packet.slug}${R} ${D}[${packet.status}]${R} ${W}${trunc(packet.deliverable || "(no deliverable)", Math.max(12, cols - packet.slug.length - 24))}${R}`;
-      picker.push(selected(line, i === packetPickSel));
+      const item = list[i]!;
+      const isSelected = run.item === item.slug;
+      const line = ` ${isSelected ? C + "▸" : " "} ${C}${item.slug}${R} ${D}[${item.status}]${R} ${W}${trunc(item.prompt || "(no prompt)", Math.max(12, cols - item.slug.length - 24))}${R}`;
+      picker.push(selected(line, i === itemPickSel));
     }
     picker.push("", ` ${D}filter: ${packetText || "(all)"}${R}`);
     body = clipLines(picker.slice(0, bodyH), bodyH);
@@ -713,7 +681,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       command("j/k", "Move", undefined, M),
       command("Esc", "Close", undefined, GR),
     ]);
-    secondary = `${D}${list.length} packet(s)${packetText ? ` · “${packetText}”` : ""}${R}`;
+    secondary = `${D}${list.length} issue(s)${packetText ? ` · “${packetText}”` : ""}${R}`;
   } else {
     // Context and inherited sources stay above; the composer is pinned to
     // the bottom of the body so it sits directly above the key-command row.
@@ -750,6 +718,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     contextItemAvailable,
     contextItem,
     modelPickSel,
-    packetPickSel,
+    itemPickSel,
   };
 }

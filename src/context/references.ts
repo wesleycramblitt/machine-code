@@ -4,7 +4,7 @@
  * Blocks stay concise and point at repository artifacts:
  *
  *   <!-- mc:context
- *   {"packets":["20261031-thermal"],"files":["src/parser.ts"],
+ *   {"files":["src/parser.ts"],
  *    "knowledge":["knowledge/thermal.md"],"skills":["reference"],
  *    "references":["glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions"],
  *    "tools":["bench"],"scripts":["release-check"]}
@@ -20,7 +20,6 @@ import { join } from "node:path";
 import type { Layout } from "../paths.js";
 
 export interface ArtifactReferences {
-  packets: string[];
   files: string[];
   knowledge: string[];
   /** Exact central-store citations: `product/version/content/file.md#anchor`. */
@@ -31,7 +30,6 @@ export interface ArtifactReferences {
 }
 
 const EMPTY: ArtifactReferences = {
-  packets: [],
   files: [],
   knowledge: [],
   references: [],
@@ -50,7 +48,6 @@ export function parseArtifactReferences(body: string): ArtifactReferences {
   try {
     const raw = JSON.parse(match[1]!.trim()) as Record<string, unknown>;
     return {
-      packets: strings(raw.packets),
       files: strings(raw.files),
       knowledge: strings(raw.knowledge),
       references: strings(raw.references ?? raw.reference),

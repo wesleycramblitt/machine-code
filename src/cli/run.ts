@@ -20,13 +20,16 @@ import { pick, axisWeights } from "../select.js";
 import { CAPABILITY_AXES } from "../config.js";
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
-import { orchestrate, executePacket } from "../orchestrate.js";
+import { orchestrate, executeIssue } from "../orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/question.js";
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { packetPath, parseVerificationCommands, readPacket } from "../packet.js";
+import { parseVerificationCommands } from "../packet.js";
+import { findIssue } from "../plan/issues.js";
+import { commitPlanningFiles } from "../tasks/planning.js";
+import { slugify } from "../plan/slug.js";
 import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
@@ -42,23 +45,7 @@ import { isFreeRow } from "../select.js";
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
-import { approvePacket, commitPlanningFiles, deletePacket, planBatchWaves } from "../tasks/packet.js";
 import { deleteRun } from "../state/run-delete.js";
-import {
-  addIndexEntry,
-  isBuildable,
-  isValidSlug,
-  listPacketFiles,
-  PACKET_STATUSES,
-  PACKET_REVIEWS,
-  readPacketFile,
-  renderPacketFile,
-  slugify,
-  writePacketFile,
-  type PacketFile,
-  type PacketReview,
-  type PacketStatus,
-} from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";
@@ -95,7 +82,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   let requireProvider = flags.get("provider");
   let requireModel = flags.get("model");
-  const packetFlag = flags.get("packet");
+  if (flags.get("packet") !== undefined) {
+    fail("--packet was removed; attach the run to an issue with --item <slug>");
+  }
   const itemFlag = flags.get("item");
   const baseFlag = flags.get("base");
   let request = positional.join(" ").trim();
@@ -103,10 +92,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
     fail("issue tracking was removed; attach the run with --packet <slug> instead");
   }
 
-  // A packet-attached run can derive its objective from the packet.
+  // An item-attached run can derive its objective from the issue.
   // Only an untracked run needs the human to type one.
-  if (request.length === 0 && packetFlag === undefined) {
-    fail(`run needs a question or --packet <slug> (or --item <slug>)`);
+  if (request.length === 0 && itemFlag === undefined) {
+    fail(`run needs a question or --item <slug>`);
   }
 
   // Run-level agent configuration overrides (Phase 3).
@@ -140,17 +129,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const directExec = flags.has("direct-exec");
 
   const l = layout();
-  let packetSlug: string | undefined;
-  if (packetFlag !== undefined) {
-    const slug = slugify(packetFlag);
-    const packetFile = readPacketFile(l, slug);
-    if (!packetFile) fail(`no packet ${slug} — create one with \`packet create ${slug} "...\"\``);
-    packetSlug = slug;
-    if (request.length === 0) request = packetFile.deliverable || slug;
+  const itemSlug = itemFlag !== undefined ? slugify(itemFlag) : undefined;
+  if (itemSlug) {
+    const issue = findIssue(l, itemSlug);
+    if (!issue) fail(`no issue ${itemSlug} — create one with \`machine_code issue create features|bugs ${itemSlug} "..."\``);
+    if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
-  // --item attaches a run to a plan item without requiring a contract
-  // (research/planning runs). A packet run belongs to its item implicitly.
-  const itemSlug = itemFlag !== undefined ? slugify(itemFlag) : packetSlug;
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const tier = flags.get("tier");
   if (tier !== undefined) {
@@ -222,6 +206,15 @@ export async function cmdRun(argv: string[]): Promise<number> {
       fail("--context-include must be a JSON object");
     }
   }
+  // The attached issue file is always explicit context, regardless of how the
+  // run was started.
+  if (itemSlug) {
+    const issue = findIssue(l, itemSlug);
+    if (issue) {
+      contextInclude = contextInclude ?? {};
+      contextInclude.files = [...(contextInclude.files ?? []), issue.rel];
+    }
+  }
   const contextBudgetFlag = flags.get("context-budget");
   let contextBudgetChars: number | undefined;
   if (contextBudgetFlag !== undefined) {
@@ -268,7 +261,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (agentNameParsed === "review" && itemFlag !== undefined && reviewOf === undefined) {
     const item = slugify(itemFlag);
     const candidate = listRuns(layout())
-      .filter((run) => (run.itemId ?? run.packetId) === item && run.agent === "engineer" && Boolean(run.worktree))
+      .filter((run) => (run.itemId ?? run.itemId) === item && run.agent === "engineer" && Boolean(run.worktree))
       .sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1))[0];
     if (candidate) {
       reviewOf = candidate.id;
@@ -391,7 +384,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     request,
     repoRoot: l.repoRoot,
     settings: runSettings,
-    ...(packetSlug ? { packetId: packetSlug } : {}),
     ...(itemSlug ? { itemId: itemSlug } : {}),
     ...(parentRun
       ? {
@@ -402,7 +394,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       : {}),
   });
   registerProject(l.home, l.repoRoot);
-  if (packetSlug) recorder.event("packet_linked", { slug: packetSlug });
+  if (itemSlug) recorder.event("item_linked", { slug: itemSlug });
   for (const result of probeResults) {
     recorder.event("availability_probe", {
       key: result.key,
@@ -926,13 +918,16 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     startMode,
   });
 
-  // A resumed Build phase still owes the runner its gates.
-  if (result.status === "completed" && resumeAgent === "engineer" && s.packetId) {
-    const packet = readPacket(l2, s.packetId);
-    if (packet) {
-      const gateOutcome = await runGates(resolveGates(packet), { root: toolRoot, commands });
+  // A resumed Engineer phase still owes the runner its gates.
+  if (result.status === "completed" && resumeAgent === "engineer" && s.itemId) {
+    const issue = findIssue(l2, s.itemId);
+    if (issue) {
+      const gateOutcome = await runGates(
+        resolveGates({ id: issue.slug, goal: issue.prompt, context: [], constraints: [], acceptance: issue.verify.map((command: string) => ({ command })) }),
+        { root: toolRoot, commands },
+      );
       recorder.event("gates", {
-        packet: packet.id,
+        packet: issue.slug,
         passed: gateOutcome.passed,
         results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
       });

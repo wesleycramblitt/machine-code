@@ -714,7 +714,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       memory.renderBlock(),
       reason,
       "Do not call tools. Answer the user's request from the evidence above. If the evidence is insufficient, say exactly what is missing.",
-      "Keep the answer under 20 lines. For a planning run, list the created packets and the next concrete step; do not restate bodies.",
+      "Keep the answer under 20 lines. For a research run, list the created issues and the next concrete step; do not restate bodies.",
       `Request: ${input.request}`,
     ].filter(Boolean).join("\n\n");
     try {

@@ -50,7 +50,7 @@ test("header counts and the awaiting-human queue", () => {
   const now = Date.now();
   const runs = [
     run({ id: "a", status: "running" }),
-    run({ id: "b", status: "awaiting_input", packetId: "demo" }),
+    run({ id: "b", status: "awaiting_input", itemId: "demo" }),
     run({ id: "c", status: "paused" }),
     run({ id: "d", status: "blocked" }),
     run({ id: "e", status: "completed", prState: "open", prNumber: 91 }),
@@ -66,6 +66,6 @@ test("header counts and the awaiting-human queue", () => {
   const queue = awaitingHuman(runs, now);
   assert.equal(queue.length, 2);
   assert.equal(queue[0].kind, "question");
-  assert.equal(queue[0].packetId, "demo");
+  assert.equal(queue[0].itemId, "demo");
   assert.equal(queue[1].kind, "pr");
 });

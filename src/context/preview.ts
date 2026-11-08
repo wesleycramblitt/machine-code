@@ -18,7 +18,7 @@ import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
 
 export interface PreviewSource {
-  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "packet" | "issue" | "parent-run";
+  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "issue" | "parent-run";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;
@@ -66,7 +66,6 @@ export interface PreviewContextOptions {
   /** Role name; the plan map is inherited only by the planner. */
   agent?: string;
   /** Packet slug attached in the composer; its contract is explicit context. */
-  packet?: string;
   planFile?: string;
   knowledgeIndex?: string;
   /** Explicit repo-relative files selected in the composer. */
@@ -163,17 +162,6 @@ export function previewContext(
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
     sources.push({ kind: "plan", ref: path, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`plan ${path} is missing or outside the repo`);
-  }
-
-  if (options.packet) {
-    const packetPath = join("issues", "packets", `${options.packet}.md`);
-    const root = resolve(layout.repoRoot);
-    const abs = resolve(root, packetPath);
-    const inside = abs === root || abs.startsWith(root + sep);
-    const exists = inside && existsSync(abs);
-    const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    sources.push({ kind: "packet", ref: options.packet, origin: "explicit", depth: 0, chars: size, exists });
-    if (!exists) warnings.push(`packet ${options.packet} is missing`);
   }
 
   if (options.agent === "research" || options.agent === "engineer" || options.agent === "review") {
@@ -278,7 +266,6 @@ export function previewContext(
   }
 
   const sections: ContextSections = {
-    packets: 0,
     issues: 0,
     plans: 0,
     knowledge: 0,

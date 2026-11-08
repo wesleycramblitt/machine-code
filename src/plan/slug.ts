@@ -1,7 +1,7 @@
 /**
- * machine_code — slug rules shared by packets and plan items.
+ * machine_code — slug rules shared by issues and plan items.
  *
- * Kept in its own module so plan-item parsing does not import the packet
+ * Kept in its own module so issue parsing does not import the
  * writer (which imports plan-item rendering back).
  */
 
@@ -16,7 +16,7 @@ export function slugify(text: string): string {
     .replace(/-+$/g, "");
 }
 
-/** True when the string is already a safe packet slug. */
+/** True when the string is already a safe issue slug. */
 export function isValidSlug(slug: string): boolean {
   return slug.length > 0 && slug.length <= 48 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug);
 }

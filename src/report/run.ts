@@ -20,7 +20,6 @@ export interface ContextManifest {
 /** Per-section chars for manifests written before section budgets existed. */
 export function sectionsFromSources(sources: readonly ContextSource[]): ContextSections {
   const sections: ContextSections = {
-    packets: 0,
     issues: 0,
     plans: 0,
     knowledge: 0,
@@ -43,8 +42,7 @@ function parseSections(raw: unknown, sources: ContextSource[]): ContextSections 
   if (raw && typeof raw === "object") {
     const record = raw as Record<string, unknown>;
     const sections: ContextSections = {
-      packets: 0,
-      issues: 0,
+        issues: 0,
       plans: 0,
       knowledge: 0,
       skills: 0,
@@ -248,8 +246,8 @@ export function relatedRuns(runs: readonly RunSummary[], summary: RunSummary): R
       return Boolean(
         summary.orchestrationId &&
           run.orchestrationId === summary.orchestrationId &&
-          summary.packetId &&
-          run.packetId === summary.packetId,
+          (summary.itemId ?? summary.packetId) &&
+          (run.itemId ?? run.packetId) === (summary.itemId ?? summary.packetId),
       );
     })
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));

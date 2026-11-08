@@ -12,7 +12,7 @@ import type { CatalogueRow } from "../../../catalogue/types.js";
 import type { MachineConfig, Policy } from "../../../config.js";
 import type { ContextPreview } from "../../../context/preview.js";
 import type { SkillMode } from "../../../context/references.js";
-import type { PacketFile } from "../../../plan/packets.js";
+import type { Issue } from "../../../plan/issues.js";
 import type { ModelPickerEntry } from "../../format.js";
 import type { ForkedRunSettings } from "../../fork.js";
 import type { Viewport } from "../types.js";
@@ -50,10 +50,10 @@ export interface ComposerPickers {
     text: string;
     sort: "fit" | "price";
   } | null;
-  packet: {
+  issue: {
     text: string;
     sel: number;
-    list: PacketFile[];
+    list: Issue[];
   } | null;
 }
 
@@ -98,7 +98,7 @@ export interface ComposerFrame {
   contextItemAvailable: boolean[];
   contextItem: number;
   modelPickSel: number;
-  packetPickSel: number;
+  itemPickSel: number;
 }
 
 export const NEW_RUN_CONTEXT_TABS = ["Packets", "Issues", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;

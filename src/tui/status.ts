@@ -89,7 +89,7 @@ export function headerCounts(runs: readonly RunSummary[], now = Date.now()): Hea
 export interface AwaitingEntry {
   kind: "question" | "pr" | "close";
   runId?: string;
-  packetId?: string;
+  itemId?: string;
   pr?: number;
   label: string;
   ageMs: number;
@@ -106,8 +106,8 @@ export function awaitingHuman(
       out.push({
         kind: "question",
         runId: run.id,
-        ...(run.packetId ? { packetId: run.packetId } : {}),
-        label: `answer question${run.packetId ? ` on ${run.packetId}` : ""}`,
+        ...(run.itemId ? { itemId: run.itemId } : {}),
+        label: `answer question${run.itemId ? ` on ${run.itemId}` : ""}`,
         ageMs: now - lastActivity(run),
         order: 0,
       });
@@ -116,9 +116,9 @@ export function awaitingHuman(
       out.push({
         kind: "pr",
         runId: run.id,
-        ...(run.packetId ? { packetId: run.packetId } : {}),
+        ...(run.itemId ? { itemId: run.itemId } : {}),
         pr: run.prNumber,
-        label: `review/merge PR #${run.prNumber}${run.packetId ? ` for ${run.packetId}` : ""}`,
+        label: `review/merge PR #${run.prNumber}${run.itemId ? ` for ${run.itemId}` : ""}`,
         ageMs: now - lastActivity(run),
         order: 1,
       });

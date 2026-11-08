@@ -68,6 +68,8 @@ export interface Issue {
   depends: string[];
   tags: string[];
   review: ReviewMode;
+  /** Named gate commands; empty means the runner's defaults. */
+  verify: string[];
   title: string;
 }
 
@@ -177,6 +179,11 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
           ? front.tags.filter((entry): entry is string => typeof entry === "string")
           : [],
     review: toReview(front.review),
+    verify: typeof front.verify === "string"
+      ? front.verify.split(",").map((entry) => entry.trim()).filter(Boolean)
+      : Array.isArray(front.verify)
+        ? front.verify.filter((entry): entry is string => typeof entry === "string")
+        : [],
     title: titleOf(slug, body),
   };
 }
@@ -221,6 +228,7 @@ export interface NewIssueInput {
   depends?: string[];
   tags?: string[];
   review?: ReviewMode;
+  verify?: string[];
   body?: string;
 }
 
@@ -232,6 +240,7 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     prompt: input.prompt,
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
+    ...(input.verify && input.verify.length > 0 ? { verify: input.verify } : {}),
     review: input.review ?? "none",
   };
   const title = input.title?.trim() ? `# ${input.title.trim()}` : `# ${slug}`;

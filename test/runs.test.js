@@ -59,7 +59,7 @@ test("All groups issues by kind; runs attach to the issue", () => {
   const index = buildRunIndex({
     runs,
     group: "all",
-    packetRepo: repoA,
+    issueRepo: repoA,
     issues: [
       issue({ kind: "bugs", status: "in-progress", slug: "fix-login", title: "Fix login" }),
       issue({ kind: "ideas", status: "needs-research", slug: "try-thing", title: "Try the thing" }),
@@ -90,7 +90,7 @@ test("a ready issue with a live run reads in-progress without moving", () => {
   const index = buildRunIndex({
     runs: [run({ id: "r1", itemId: "live", status: "running" })],
     group: "all",
-    packetRepo: repoA,
+    issueRepo: repoA,
     issues: [issue({ status: "todo", slug: "live", title: "Live" })],
   });
   const live = row(index, "live");
@@ -103,7 +103,7 @@ test("By type groups kind, then status directory", () => {
   const index = buildRunIndex({
     runs: [],
     group: "type",
-    packetRepo: repoA,
+    issueRepo: repoA,
     issues: [
       issue({ kind: "features", status: "todo", slug: "demo", title: "Demo" }),
       issue({ kind: "features", status: "blocked", slug: "plan-me", title: "Plan" }),
@@ -124,7 +124,7 @@ test("collapsing an issue hides its runs", () => {
   const options = {
     runs,
     group: "all",
-    packetRepo: repoA,
+    issueRepo: repoA,
     issues: [issue({ slug: "demo", title: "Demo" })],
   };
   const base = buildRunIndex(options);
@@ -143,7 +143,7 @@ test("category sections carry a type tone", () => {
   const index = buildRunIndex({
     runs: [],
     group: "all",
-    packetRepo: repoA,
+    issueRepo: repoA,
     issues: [
       issue({ kind: "features", slug: "f", title: "F" }),
       issue({ kind: "bugs", slug: "b", title: "B" }),
@@ -165,7 +165,7 @@ test("focus keeps the selected issue and its runs bright", () => {
   const index = buildRunIndex({
     runs,
     group: "all",
-    packetRepo: repoA,
+    issueRepo: repoA,
     issues: [
       issue({ kind: "features", slug: "one", title: "One" }),
       issue({ kind: "features", slug: "two", title: "Two" }),
@@ -207,7 +207,7 @@ test("By category groups issues by their first tag", () => {
   const index = buildRunIndex({
     runs: [],
     group: "category",
-    packetRepo: repoA,
+    issueRepo: repoA,
     issues: [
       issue({ kind: "features", slug: "a", title: "A", tags: ["tui"] }),
       issue({ kind: "bugs", slug: "b", title: "B", tags: ["tui", "models"] }),

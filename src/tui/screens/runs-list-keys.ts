@@ -25,7 +25,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     attentionOnly: s.runsAttention,
     preferredRepo: l.repoRoot,
     ...(s.runsGroup === "all" || s.runsGroup === "type" || s.runsGroup === "category"
-      ? { packetRepo: l.repoRoot, issues: listIssues(l) }
+      ? { issueRepo: l.repoRoot, issues: listIssues(l) }
       : {}),
   });
   const repoForRow = (row: RunRow | undefined): string => {
@@ -60,8 +60,8 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     if (row?.kind === "run") { s.selectedRunId = row.run.id; s.runSection = "overview"; s.runScroll = 0; s.screen = "run"; }
     else if (row?.kind === "issue") {
       // The issue page is the hub: prompt, dependencies, runs, and actions.
-      s.selectedPacketSlug = row.slug;
-      s.packetScroll = 0;
+      s.selectedIssueSlug = row.slug;
+      s.issueScroll = 0;
       s.screen = "packet";
     }
     ctx.draw();
@@ -98,7 +98,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       ctx.draw();
       return true;
     }
-    const packet = row?.kind === "run" ? row.run.packetId : undefined;
+    const packet = row?.kind === "run" ? row.run.itemId : undefined;
     ctx.startNewRun(packet, repoForRow(row));
     ctx.draw();
     return true;
