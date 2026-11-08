@@ -45,6 +45,18 @@ function statusStyle(status: "todo" | "in-progress" | "blocked" | "done"): { ton
   }
 }
 
+/** Category header colors: type, plan file, and exception buckets. */
+const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {
+  feature: G,
+  bug: RED,
+  idea: Y,
+  other: W,
+  plan: C,
+  unplanned: M,
+  untracked: GR,
+  status: Y,
+};
+
 export function renderRunsList(props: RunsListProps): RunsListFrame {
   const { cols, narrow, runNarrow, bodyH, theme, toast, index, selectedRow, focus, group, reposScope, pendingFor } = props;
   const lines: string[] = [];
@@ -58,7 +70,8 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "section") {
-      const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : GR;
+      // Category color: work type, plan file, or status grouping at a glance.
+      const tone = SECTION_TONES[row.tone];
       const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "planline") {
