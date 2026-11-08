@@ -46,6 +46,8 @@ export interface NewRunSeed {
   plan?: string;
   /** Default prompt; editable in the composer. */
   prompt?: string;
+  /** Skill names forced to include for this seed. */
+  skills?: string[];
 }
 
 export interface TuiState {

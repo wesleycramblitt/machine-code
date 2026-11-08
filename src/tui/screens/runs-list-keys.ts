@@ -69,6 +69,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
           agent: "research",
           plan: row.plan,
           prompt: `Research the idea "${row.title}" in ${row.plan} and propose concrete features or bugs to add to that plan.`,
+          skills: ["plan-curation"],
         }
       : {
           agent: "planner",

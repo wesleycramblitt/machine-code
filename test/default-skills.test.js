@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 
 import { assembleContext } from "../dist/context/assemble.js";
 import { defaultSkillsFor } from "../dist/context/references.js";
+import { roleSkillPresets } from "../dist/agents.js";
 import { previewContext } from "../dist/context/preview.js";
 
 function fakeLayout(root) {
@@ -80,6 +81,7 @@ test("defaultSkillsFor maps agent and verification to skills", () => {
   assert.deepEqual(defaultSkillsFor({ agent: "build", verification: "verified" }), ["clean-code", "verified-testing"]);
   assert.deepEqual(defaultSkillsFor({ agent: "build", verification: "redundant" }), ["clean-code", "verified-testing"]);
   assert.deepEqual(defaultSkillsFor({ agent: "planner" }), ["clean-code"]);
+  assert.deepEqual(defaultSkillsFor({ agent: "research" }), ["clean-code", "plan-curation"]);
   assert.deepEqual(defaultSkillsFor({ agent: "review", verification: "verified" }), []);
   assert.deepEqual(defaultSkillsFor({ agent: "unknown" }), []);
 });
@@ -178,6 +180,24 @@ test("previewContext surfaces default skills as descriptions for the TUI", async
     assert.ok(!preview.sources.some((s) => s.kind === "skill" && s.ref === "clean-code"));
     // Missing default leaves no source behind.
     assert.ok(!preview.sources.some((s) => s.ref === "verified-testing"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("research runs activate the plan-curation skill", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-defskill-research-"));
+  try {
+    writeSkill(root, "plan-curation", "# Plan curation\nUse typed checklist items.");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      agent: "research",
+      defaultSkills: defaultSkillsFor({ agent: "research" }),
+      skillPresets: roleSkillPresets("research"),
+    });
+    assert.match(bundle.text, /Use typed checklist items/);
+    assert.ok(bundle.sources.some((source) => source.kind === "skill" && source.ref === "plan-curation"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
