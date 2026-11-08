@@ -167,8 +167,14 @@ export function renderPromptMessages(
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
-  // The assembled context is the prompt. Stable content stays before volatile
-  // state so the provider cache can reuse the prefix.
+  // Fixed prompt section order (prompt-cache stable):
+  //   system → assembled context → map index → tool guide → command index
+  //     → working context → ledger tail → run state → transcript tail.
+  // Stable content always renders before volatile per-turn content, so the
+  // shared prefix stays byte-identical across turns and only the volatile
+  // tail shifts — that is what keeps the provider prompt cache hot. Do not
+  // reorder these sections or interleave volatile content into the stable
+  // prefix without updating the prefix-stability test in test/context.test.js.
   const details = state.renderWorkingContext();
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);

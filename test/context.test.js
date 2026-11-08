@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 
 import { assembleContext } from "../dist/context/assemble.js";
 import { previewContext } from "../dist/context/preview.js";
-import { trimContextText } from "../dist/context/render.js";
+import { trimContextText, renderPromptMessages } from "../dist/context/render.js";
 import { parseArtifactReferences, parseSkillFrontMatter } from "../dist/context/references.js";
 import { writePacket } from "../dist/packet.js";
 
@@ -918,4 +918,131 @@ test("cold skills save preview chars: on-demand vs include delta covers the body
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("assembled blocks follow the fixed cache-stable section order", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-order-"));
+  try {
+    const layout = fakeLayout(root);
+    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "plans", "topic.md"), "# Topic plan\nShip it.\n", "utf8");
+    writeFileSync(join(root, "src", "work.ts"), "export const work = 1;\n", "utf8");
+    writePacket(layout, {
+      id: "pkt-order",
+      mode: "verified",
+      goal: "ordered context",
+      context: [],
+      constraints: [],
+      acceptance: [{ command: "typescript:test" }],
+    });
+    const bundle = await assembleContext({
+      layout,
+      machine: machine(),
+      agent: "build",
+      packetId: "pkt-order",
+      include: { files: ["src/work.ts"], plans: ["plans/topic.md"] },
+    });
+    const at = (kind) => bundle.text.indexOf(`kind="${kind}"`);
+    assert.ok(at("packet") >= 0 && at("plan") >= 0 && at("file") >= 0 && at("tool") >= 0);
+    assert.ok(at("packet") < at("plan"), "packet renders before plan");
+    assert.ok(at("plan") < at("file"), "plan/packet render before retrieved files");
+    assert.ok(at("file") < at("tool"), "retrieved files render before tool/skill aggregates");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan/packet recap block renders last when plan sources exist", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-recap-"));
+  try {
+    const layout = fakeLayout(root);
+    mkdirSync(join(root, "plans"), { recursive: true });
+    writeFileSync(join(root, "plans", "topic.md"), "# Topic plan\nShip the recap.\n", "utf8");
+    writePacket(layout, {
+      id: "pkt-recap",
+      mode: "verified",
+      goal: "recap the objective",
+      context: [],
+      constraints: [],
+      acceptance: [{ command: "typescript:test" }],
+    });
+    const bundle = await assembleContext({
+      layout,
+      machine: machine(),
+      agent: "build",
+      packetId: "pkt-recap",
+      include: { plans: ["plans/topic.md"] },
+    });
+    const recap = bundle.text.indexOf("<context-recap>");
+    assert.ok(recap >= 0, "recap block is present when plan sources exist");
+    assert.ok(recap > bundle.text.lastIndexOf("</context-block>"), "recap renders after every context block");
+    assert.match(bundle.text, /recap the objective/);
+    assert.match(bundle.text, /plans\/topic\.md/);
+
+    // No plan/packet sources, no recap.
+    const bare = await assembleContext({ layout: fakeLayout(root), machine: machine() });
+    assert.doesNotMatch(bare.text, /<context-recap>/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("near-duplicate blocks dedupe on whitespace-normalized content", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-nodedupe-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "export const value   = 1;\n  \n", "utf8");
+    writeFileSync(join(root, "src", "b.ts"), "export  const  value = 1;\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/a.ts", "src/b.ts"] },
+    });
+    const files = bundle.sources.filter((source) => source.kind === "file");
+    assert.equal(files.length, 1, "whitespace-only duplicates collapse to one block");
+    assert.match(bundle.text, /export const value/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reordered volatile tail does not shift the stable prompt prefix", () => {
+  const fakeState = (working, runState) => ({
+    renderWorkingContext: () => working,
+    renderBlock: () => runState,
+  });
+  const messages = [
+    { role: "system", content: "SYSTEM-PROMPT" },
+    { role: "user", content: "hello" },
+  ];
+  const startup = "<context>\nSTABLE-STARTUP-MARKER\n</context>";
+  const renderWith = (ledger) =>
+    renderPromptMessages(
+      messages,
+      fakeState("VOLATILE-WORKING-MARKER", "VOLATILE-STATE-MARKER"),
+      "MAP-MARKER",
+      startup,
+      ledger,
+      undefined,
+      "COMMANDS-MARKER",
+    ).messages[1].content;
+  const a = renderWith("LEDGER-VARIANT-A");
+  const b = renderWith("LEDGER-VARIANT-B");
+  assert.equal(typeof a, "string");
+  assert.equal(typeof b, "string");
+  // Volatile content renders last, after every stable section.
+  for (const content of [a, b]) {
+    const order = ["STABLE-STARTUP-MARKER", "MAP-MARKER", "COMMANDS-MARKER", "VOLATILE-WORKING-MARKER", "VOLATILE-STATE-MARKER"]
+      .map((marker) => content.indexOf(marker));
+    assert.ok(order.every((index) => index >= 0), "every section renders");
+    assert.ok(order.every((index, i) => i === 0 || order[i - 1] < index), "stable sections precede the volatile tail");
+  }
+  // The two renders share a byte-identical prefix covering the whole stable
+  // region: only the volatile ledger tail differs.
+  let common = 0;
+  while (common < a.length && common < b.length && a[common] === b[common]) common += 1;
+  const stableEnd = Math.max(a.indexOf("COMMANDS-MARKER"), b.indexOf("COMMANDS-MARKER")) + "COMMANDS-MARKER".length;
+  assert.ok(common >= stableEnd, "stable prefix is byte-identical across volatile-tail reorder");
+  assert.ok(a.includes("LEDGER-VARIANT-A") && b.includes("LEDGER-VARIANT-B"));
 });

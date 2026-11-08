@@ -120,6 +120,42 @@ function sha1(text: string): string {
   return createHash("sha1").update(text).digest("hex");
 }
 
+/**
+ * Fixed render order for assembled context blocks (lost-in-the-middle
+ * layout, prompt-cache stable).
+ *
+ * Section order is fixed and documented: packet/plan first (highest
+ * relevance), then retrieved files by relevance (file, knowledge,
+ * reference), then tools/skills/scripts aggregates, then the parent-run
+ * chain last (most volatile). Within a section, band/depth priority order
+ * (relevance) is preserved. Volatile per-turn content (working context,
+ * ledger tail, run state, transcript) is render-side and always renders
+ * after this block in renderPromptMessages, so reordering the volatile tail
+ * never shifts this stable prefix.
+ */
+export const CONTEXT_RENDER_ORDER: Record<string, number> = {
+  packet: 0,
+  plan: 1,
+  project: 1,
+  file: 2,
+  knowledge: 3,
+  reference: 4,
+  skill: 5,
+  script: 6,
+  tool: 7,
+  "parent-run": 8,
+};
+
+/**
+ * Whitespace-normalized form used for near-duplicate dedupe. Exact sha1
+ * misses copies that differ only in indentation, trailing whitespace, or
+ * line wrapping, so blocks are also compared by the hash of this form.
+ * Bodies are kept verbatim; normalization only affects the dedupe key.
+ */
+export function normalizeForDedupe(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 function withinRepo(root: string, path: string): string | null {
   if (isAbsolute(path)) return null;
   const abs = resolve(root, path);
@@ -480,6 +516,9 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   );
 
   // Dedupe by (kind, ref) and content hash; keep the earliest (highest priority).
+  // Content-hash dedupe is normalized: exact bytes plus a whitespace-folded
+  // hash, so near-duplicate blocks (reindented, rewrapped, trailing-space
+  // copies) collapse instead of consuming budget twice.
   const seen = new Set<string>();
   const selected: Pending[] = [];
   for (const item of keptPending.sort((a, b) => a.band - b.band || (a.depth ?? 0) - (b.depth ?? 0))) {
@@ -491,8 +530,10 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     // warnings (e.g. two out-of-range snippet includes).
     if (item.body !== "") {
       const hash = sha1(item.body);
-      if (seen.has(`h:${hash}`)) continue;
+      const folded = sha1(normalizeForDedupe(item.body));
+      if (seen.has(`h:${hash}`) || seen.has(`n:${folded}`)) continue;
       seen.add(`h:${hash}`);
+      seen.add(`n:${folded}`);
     }
     selected.push(item);
   }
@@ -594,11 +635,17 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     }
   }
 
-  // Render every kept source. The runner may trim the prompt to the
+  // Render every kept source in fixed section order (CONTEXT_RENDER_ORDER):
+  // packet/plan first, retrieved files by relevance, tools/skills, parents
+  // last. Array.prototype.sort is stable, so relevance (band/depth) order is
+  // preserved within a section. The runner may trim the prompt to the
   // selected model's input window, but that is a model limit, not a per-file
   // rule. Report the overage instead of silently changing a source.
+  const ordered = [...entries].sort(
+    (a, b) => (CONTEXT_RENDER_ORDER[a.kind] ?? 99) - (CONTEXT_RENDER_ORDER[b.kind] ?? 99),
+  );
   const blocks: string[] = [];
-  for (const item of entries) {
+  for (const item of ordered) {
     const attrs = [
       `kind="${item.kind}"`,
       `source="${item.ref.replace(/"/g, "'")}"`,
@@ -619,11 +666,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         : {}),
     });
   }
-  const used = totalLen();
-  if (used > usable) {
-    warnings.push(`curated context is ${used.toLocaleString()} chars; model input budget is ${budget.toLocaleString()} chars; the runner will trim to fit`);
-  }
-
   const sections: ContextSections = {
     packets: 0,
     plans: 0,
@@ -637,6 +679,39 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     system: 0,
   };
   for (const entry of entries) sections[sectionForKind(entry.kind)] += entry.len;
+
+  // Lost-in-the-middle recap: when plan/packet sources exist, restate the
+  // critical objective last (highest-relevance first AND last) so the tail of
+  // the stable prefix re-anchors the run before the volatile per-turn
+  // content (working context, ledger, transcript) follows in render.ts.
+  const planSources = ordered.filter(
+    (entry) => entry.kind === "packet" || entry.kind === "plan" || entry.kind === "project",
+  );
+  let recap = "";
+  if (planSources.length > 0) {
+    const points = planSources.slice(0, 4).map((entry) => {
+      if (entry.kind === "packet") {
+        let goal = "";
+        try {
+          goal = String((JSON.parse(entry.body) as { goal?: unknown }).goal ?? "");
+        } catch {
+          goal = "";
+        }
+        return `packet "${entry.ref}"${goal ? `: ${goal.slice(0, 160)}` : ""}`;
+      }
+      const first = entry.body.split("\n").find((line) => line.trim() !== "") ?? entry.ref;
+      return `plan ${entry.ref}: ${first.trim().slice(0, 120)}`;
+    });
+    recap = `<context-recap>\nRecap (authoritative — act on this): ${points.join("; ")}. The packet/plan blocks above outrank the working files in between.\n</context-recap>`;
+    blocks.push(recap);
+    const bucket = ordered.some((entry) => entry.kind === "packet") ? "packets" : "plans";
+    sections[bucket] += recap.length;
+  }
+
+  const used = totalLen() + recap.length;
+  if (used > usable) {
+    warnings.push(`curated context is ${used.toLocaleString()} chars; model input budget is ${budget.toLocaleString()} chars; the runner will trim to fit`);
+  }
 
   const text =
     blocks.length === 0
