@@ -52,6 +52,7 @@ import {
   PACKET_STATUSES,
   PACKET_REVIEWS,
   planCategories,
+  planIndexItems,
   readPacketFile,
   renderPacketFile,
   renderPlan,
@@ -63,6 +64,7 @@ import {
   type PacketStatus,
 } from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
+import { discoverPlanEntries } from "../context/plans.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";
 import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
@@ -120,6 +122,15 @@ export function rowText(row: RunRow, width: number, group: RunGroup): string {
     const tail = `  ${row.packet.deliverable.replace(/\s+/g, " ").slice(0, width < 100 ? 24 : 48)}${runs ? `  ${runs}` : ""}`;
     if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
     return cell(head, width - visibleWidth(tail)) + tail;
+  }
+  if (row.kind === "plan") {
+    const tail = `  ${row.title}`;
+    return cell(`${indent}≡ ${row.path}`, Math.max(20, width - visibleWidth(tail))) + tail;
+  }
+  if (row.kind === "planline") {
+    const box = row.done ? "✓" : "·";
+    const tail = row.title ? `  ${row.title.slice(0, width < 100 ? 30 : 60)}` : "";
+    return cell(`${indent}${box} ${row.slug}`, Math.max(20, width - visibleWidth(tail))) + tail;
   }
   const run = row.run;
   const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
@@ -196,7 +207,12 @@ export async function cmdRuns(argv: string[]): Promise<number> {
     attentionOnly: attention,
     preferredRepo: l.repoRoot,
     ...(group === "packets"
-      ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
+      ? {
+          packetRepo: l.repoRoot,
+          packets: listPacketFiles(l),
+          plans: discoverPlanEntries(l),
+          planItems: planIndexItems(l),
+        }
       : {}),
   });
 
@@ -210,6 +226,12 @@ export async function cmdRuns(argv: string[]): Promise<number> {
       }
       if (row.kind === "packet") {
         return { kind: row.kind, slug: row.slug, status: row.packet.status, depth: row.depth, directRuns: row.directRuns, deliverable: row.packet.deliverable };
+      }
+      if (row.kind === "plan") {
+        return { kind: row.kind, path: row.path, title: row.title, depth: row.depth };
+      }
+      if (row.kind === "planline") {
+        return { kind: row.kind, slug: row.slug, title: row.title, heading: row.heading, done: row.done, depth: row.depth };
       }
       return { kind: row.kind, depth: row.depth, run: row.run };
     });

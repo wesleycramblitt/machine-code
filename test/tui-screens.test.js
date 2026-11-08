@@ -73,6 +73,7 @@ test("runs list renders hierarchy rows and footer affordances", () => {
     group: "packets",
     packetRepo: "/repo",
     packets: [{ slug: "p1", status: "todo", deps: [], blocked: "", deliverable: "Do", files: [], acceptance: [], verify: [] }],
+    planItems: [{ heading: "W", slug: "p1", title: "Do", done: false, packet: "p1" }],
     planCategories: { categories: [{ heading: "W", slugs: ["p1"] }], orphanSlugs: [] },
     preferredRepo: "/repo",
   });

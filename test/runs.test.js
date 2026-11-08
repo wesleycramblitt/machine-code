@@ -46,6 +46,10 @@ test("packets group by repository, category, packet, then runs", () => {
     group: "packets",
     packetRepo: repoA,
     packets: [packetFile("fix-login", { status: "in-progress" }), packetFile("rate-limiter"), packetFile("orphan-task")],
+    planItems: [
+      { heading: "Bugs", slug: "fix-login", title: "Fix login", done: false, packet: "fix-login" },
+      { heading: "Features", slug: "rate-limiter", title: "Add limiter", done: false, packet: "rate-limiter" },
+    ],
     planCategories: {
       categories: [
         { heading: "Bugs", slugs: ["fix-login"] },
@@ -64,7 +68,7 @@ test("packets group by repository, category, packet, then runs", () => {
   const sectionLabels = index.rows.filter((row) => row.kind === "section").map((row) => row.label);
   assert.ok(sectionLabels.includes("Bugs"));
   assert.ok(sectionLabels.includes("Features"));
-  assert.ok(sectionLabels.includes("No plan"));
+  assert.ok(sectionLabels.includes("Unplanned packets"));
   assert.ok(sectionLabels.includes("Untracked"));
   const packetSlugs = index.rows.filter((row) => row.kind === "packet").map((row) => row.slug);
   assert.deepEqual(packetSlugs, ["fix-login", "rate-limiter", "orphan-task"]);
@@ -85,6 +89,7 @@ test("packet rows carry their direct runs and fold", () => {
     group: "packets",
     packetRepo: repoA,
     packets: [packetFile("demo")],
+    planItems: [{ heading: "Work", slug: "demo", title: "Do demo", done: false, packet: "demo" }],
     planCategories: { categories: [{ heading: "Work", slugs: ["demo"] }], orphanSlugs: [] },
   });
   const packetRow = base.rows.find((row) => row.kind === "packet");
@@ -100,6 +105,7 @@ test("packet rows carry their direct runs and fold", () => {
     group: "packets",
     packetRepo: repoA,
     packets: [packetFile("demo")],
+    planItems: [{ heading: "Work", slug: "demo", title: "Do demo", done: false, packet: "demo" }],
     planCategories: { categories: [{ heading: "Work", slugs: ["demo"] }], orphanSlugs: [] },
     collapsed: new Set([packetRow.id]),
   });
@@ -163,6 +169,10 @@ test("focus keeps the selected branch, its peers, and descendants bright", () =>
     group: "packets",
     packetRepo: repoA,
     packets: [packetFile("one"), packetFile("two")],
+    planItems: [
+      { heading: "W", slug: "one", title: "One", done: false, packet: "one" },
+      { heading: "W", slug: "two", title: "Two", done: false, packet: "two" },
+    ],
     planCategories: { categories: [{ heading: "W", slugs: ["one", "two"] }], orphanSlugs: [] },
   });
   const packetRow = (slug) => {
@@ -184,7 +194,37 @@ test("focus keeps the selected branch, its peers, and descendants bright", () =>
       .sort();
   };
 
-  assert.deepEqual(bright(packetRow("one")), ["a", "a2", "packet:one", "packet:two"]);
+  // Packets now nest under their plan line, so a sibling plan line is the
+  // peer — not the sibling packet under it.
+  assert.deepEqual(bright(packetRow("one")), ["a", "a2", "packet:one"]);
   assert.deepEqual(bright(runRow("a")), ["a", "a2", "packet:one"]);
   assert.equal(focusRowIds(index.rows, index.rows[0]), null);
+});
+
+test("packets nest under their plan line; unplanned packets and plans get sections", () => {
+  const index = buildRunIndex({
+    runs: [run({ id: "r1", packetId: "demo" })],
+    group: "packets",
+    packetRepo: repoA,
+    packets: [packetFile("demo"), packetFile("loose")],
+    plans: [{ path: "plans/tui.md", title: "TUI work" }],
+    planItems: [{ heading: "Features", slug: "demo", title: "Do demo", done: false, packet: "demo" }],
+    preferredRepo: repoA,
+  });
+  const line = index.rows.find((row) => row.kind === "planline");
+  assert.ok(line && line.kind === "planline");
+  assert.equal(line.title, "Do demo");
+  const demo = index.rows.find((row) => row.kind === "packet" && row.slug === "demo");
+  assert.ok(demo && demo.kind === "packet");
+  assert.equal(demo.parent, line.id, "packet nests under its plan line");
+  const labels = index.rows.filter((row) => row.kind === "section").map((row) => row.label);
+  assert.ok(labels.includes("Features"));
+  assert.ok(labels.includes("Unplanned packets"));
+  assert.ok(labels.includes("Plans"));
+  const loose = index.rows.find((row) => row.kind === "packet" && row.slug === "loose");
+  assert.ok(loose && loose.kind === "packet");
+  assert.match(loose.parent, /unplanned/);
+  const plan = index.rows.find((row) => row.kind === "plan");
+  assert.ok(plan && plan.kind === "plan");
+  assert.equal(plan.path, "plans/tui.md");
 });

@@ -14,7 +14,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { readPacketFile, writePacketFile, listPacketFiles, planCategories, type PacketFile } from "./plan/packets.js";
+import { readPacketFile, writePacketFile, listPacketFiles, planIndexItems, type PacketFile } from "./plan/packets.js";
+import { discoverPlanEntries } from "./context/plans.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -30,7 +31,7 @@ import {
   type RunRow,
 } from "./tui/runs.js";
 import { scrollLines, selectableLines } from "./tui/scroll.js";
-import { createTuiState, type NewRunState, type Page, type RunDetail, type RunsRepoScope, type Screen, type TuiState } from "./tui/state.js";
+import { createTuiState, type NewRunSeed, type NewRunState, type Page, type RunDetail, type RunsRepoScope, type Screen, type TuiState } from "./tui/state.js";
 import { renderDeleteConfirm } from "./tui/screens/delete.js";
 import { renderPacket } from "./tui/screens/packet.js";
 import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
@@ -279,13 +280,13 @@ export async function runTui(): Promise<void> {
     s.packetPickText = "";
   };
 
-  const startNewRun = (packetSlug?: string, repoRoot = l.repoRoot) => {
+  const startNewRun = (packetSlug?: string, repoRoot = l.repoRoot, seed?: NewRunSeed) => {
     const previous = s.newrun;
     s.newRunRepo = repoRoot;
     const packetFile = packetSlug ? readPacketFile(layout(repoRoot), packetSlug) : null;
-    // A packet is implementation work: start with Build. Untracked runs keep
-    // the last agent.
-    const preferredAgent = packetSlug ? "build" : previous.agent;
+    // A packet is implementation work: start with Build. A seeded run (plan
+    // row, plan line) names its own agent. Untracked runs keep the last agent.
+    const preferredAgent = seed?.agent ?? (packetSlug ? "build" : previous.agent);
     s.newrun = {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
@@ -297,10 +298,13 @@ export async function runTui(): Promise<void> {
     s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
     s.newrun.worktree = true;
     enforceLockedSkills(true);
-    // A packet-attached run starts with a concrete objective. The prompt stays
-    // editable, but the human no longer has to type one.
-    if (packetFile) s.newrun.prompt = packetFile.deliverable || packetSlug || "";
+    // A packet-attached run starts with a concrete objective. A seeded run
+    // carries its own prompt (and any explicit plan context). The prompt stays
+    // editable either way.
+    if (seed?.prompt) s.newrun.prompt = seed.prompt;
+    else if (packetFile) s.newrun.prompt = packetFile.deliverable || packetSlug || "";
     resetNewRunUi();
+    if (seed?.plan) s.newRunContextIncluded.add(`plan:${seed.plan}`);
     s.screen = "newrun";
   };
 
@@ -852,7 +856,12 @@ export async function runTui(): Promise<void> {
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
       ...(s.runsGroup === "packets"
-        ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planCategories: planCategories(l) }
+        ? {
+            packetRepo: l.repoRoot,
+            packets: listPacketFiles(l),
+            plans: discoverPlanEntries(l),
+            planItems: planIndexItems(l),
+          }
         : {}),
     });
     if (s.runsSel >= runIndex.selectable.length) s.runsSel = Math.max(0, runIndex.selectable.length - 1);

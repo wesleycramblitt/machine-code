@@ -47,6 +47,14 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : GR;
       const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
+    } else if (row.kind === "plan") {
+      const text = ` ${indent}  ${C}≡${R} ${W}${row.path}${R} ${D}${trunc(row.title, Math.max(12, cols - indent.length - row.path.length - 8))}${R}`;
+      rendered.push(selected(text, isSelected));
+    } else if (row.kind === "planline") {
+      const box = row.done ? `${G}✓${R}` : `${D}·${R}`;
+      const title = row.title ? ` ${D}${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 12))}${R}` : "";
+      const text = ` ${indent}  ${box} ${D}${row.slug}${R}${title}`;
+      rendered.push(selected(text, isSelected));
     } else if (row.kind === "packet") {
       const status = row.packet.status;
       const tone = status === "in-progress" ? C : status === "blocked" ? Y : status === "done" ? G : D;

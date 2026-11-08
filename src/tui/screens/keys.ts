@@ -9,7 +9,7 @@
 import type { RunSummary } from "../../state/runs.js";
 import type { PacketFile } from "../../plan/packets.js";
 import type { ModelPickerEntry } from "../format.js";
-import type { RunDetail } from "../state.js";
+import type { NewRunSeed, RunDetail } from "../state.js";
 import type { RunRow } from "../runs.js";
 
 export interface KeyServices {
@@ -17,7 +17,7 @@ export interface KeyServices {
   notify: (message: string) => void;
   launch: (args: string[], repoRoot?: string) => boolean;
   openEditor: (file: string | null | undefined) => void;
-  startNewRun: (packetSlug?: string, repoRoot?: string) => void;
+  startNewRun: (packetSlug?: string, repoRoot?: string, seed?: NewRunSeed) => void;
   forkRun: (detail: RunDetail) => void;
   answerRun: (run: RunRow | RunSummary | undefined) => void;
   interrupt: (summary: RunSummary | undefined) => void;

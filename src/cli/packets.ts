@@ -117,7 +117,7 @@ export async function cmdPacket(argv: string[]): Promise<number> {
     if (!slug) fail("packet slug becomes empty; use letters, digits, and hyphens");
     if (readPacketFile(l, slug)) fail(`packet ${slug} already exists`);
     const deliverable = flags.get("deliverable") ?? positional.slice(2).join(" ");
-    const heading = flags.get("heading") ?? "Ideas";
+    const heading = flags.get("heading") ?? "Features";
     const reviewFlag = flags.get("review") ?? "gates";
     if (!PACKET_REVIEWS.includes(reviewFlag as PacketReview)) fail(`--review must be ${PACKET_REVIEWS.join("|")}`);
     const packet: PacketFile = {
@@ -315,8 +315,8 @@ export async function cmdBuild(argv: string[]): Promise<number> {
   if (!packetFile) {
     packetFile = { slug, status: "todo", deps: [], blocked: "", deliverable: joined, files: [], acceptance: [], verify: [] };
     writePacketFile(l, packetFile);
-    addIndexEntry(l, "Ideas", slug, joined);
-    process.stderr.write(`self-scoped as ${slug} → plans/${slug}.md\n`);
+    addIndexEntry(l, "Features", slug, joined);
+    process.stderr.write(`self-scoped as ${slug} → packets/${slug}.md\n`);
   }
   return runPacketBuild(l, packetFile, flags);
 }
