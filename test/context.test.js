@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { assembleContext } from "../dist/context/assemble.js";
+import { previewContext } from "../dist/context/preview.js";
 import { parseArtifactReferences, parseSkillFrontMatter } from "../dist/context/references.js";
 import { writePacket } from "../dist/packet.js";
 
@@ -422,6 +423,90 @@ test("a blocked parent's closing summary is not inherited as truth", async () =>
     assert.match(bundle.text, /error: repeated identical tool calls detected/);
     assert.match(bundle.text, /previous attempt stopped early/);
     assert.doesNotMatch(bundle.text, /result: The task details are missing/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("preview and assemble agree on skill-body size for identical inputs", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-skillparity-"));
+  try {
+    mkdirSync(join(root, ".machine_code", "skills", "alpha"), { recursive: true });
+    const body = `---\nname: alpha\ndescription: alpha things\n---\n# Alpha body\n\n${"detail\n".repeat(200)}END\n`;
+    writeFileSync(join(root, ".machine_code", "skills", "alpha", "SKILL.md"), body, "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      defaultSkills: ["alpha"],
+    });
+    const assembled = bundle.sources.find((item) => item.kind === "skill" && item.ref === "alpha");
+    assert.ok(assembled, "skill body is a context source");
+    const preview = previewContext(fakeLayout(root), "", { defaultSkills: ["alpha"] });
+    const previewed = preview.sources.find((item) => item.kind === "skill" && item.ref === "alpha");
+    assert.ok(previewed, "skill body is a preview source");
+    // Neither path caps skill bodies: both report the full on-disk size.
+    assert.equal(assembled.bytes, Buffer.byteLength(body, "utf8"));
+    assert.equal(previewed.chars, assembled.bytes);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("secret files are warned (not inlined) in both preview and assemble", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-secret-"));
+  try {
+    writeFileSync(join(root, ".env"), "SUPER=sekret\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: [".env"] },
+    });
+    const assembled = bundle.sources.find((item) => item.kind === "file" && item.ref === ".env");
+    assert.ok(assembled, "secret file is a warned source");
+    assert.equal(assembled.bytes, 0);
+    assert.match(assembled.warning ?? "", /secret/);
+    assert.doesNotMatch(bundle.text, /sekret/);
+    const preview = previewContext(fakeLayout(root), "", { files: [".env"] });
+    const previewed = preview.sources.find((item) => item.kind === "file" && item.ref === ".env");
+    assert.ok(previewed, "secret file is a warned preview source");
+    assert.equal(previewed.chars, 0);
+    assert.equal(previewed.exists, false);
+    assert.ok(preview.warnings.some((warning) => /secret/.test(warning)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("preview and assemble share depth/provenance semantics", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-depth-"));
+  try {
+    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nShip it.", "utf8");
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      agent: "planner",
+      machine: machine(),
+      include: { files: ["src/a.ts"] },
+    });
+    const file = bundle.sources.find((item) => item.kind === "file" && item.ref === "src/a.ts");
+    assert.ok(file);
+    assert.equal(file.origin, "explicit");
+    assert.equal(file.depth, 0);
+    const plan = bundle.sources.find((item) => item.kind === "plan" && item.ref === "plans/index.md");
+    assert.ok(plan);
+    assert.equal(plan.origin, "inherited");
+    assert.equal(plan.depth, 3);
+    const preview = previewContext(fakeLayout(root), "", { agent: "planner", files: ["src/a.ts"] });
+    const previewFile = preview.sources.find((item) => item.kind === "file" && item.ref === "src/a.ts");
+    assert.ok(previewFile);
+    assert.equal(previewFile.origin, "explicit");
+    assert.equal(previewFile.depth, 0);
+    const previewPlan = preview.sources.find((item) => item.kind === "plan" && item.ref === "plans/index.md");
+    assert.ok(previewPlan);
+    assert.equal(previewPlan.origin, "inherited");
+    assert.equal(previewPlan.depth, 3);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

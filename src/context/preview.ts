@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
+import { isSecretPath } from "../tools/safety.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
 import { resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
 
@@ -92,11 +93,14 @@ export function previewContext(
     const root = resolve(layout.repoRoot);
     const abs = resolve(root, path);
     const inside = abs === root || abs.startsWith(root + sep);
-    const exists = inside && existsSync(abs);
+    // Mirror assembleContext: secrets never inline, and missing/secret/outside
+    // all collapse to a zero-char warned source so the measurement matches.
+    const secret = isSecretPath(path);
+    const exists = inside && !secret && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
     chars += size;
     sources.push({ kind: "file", ref: path, origin: "explicit", depth: 0, chars: size, exists });
-    if (!exists) warnings.push(`file ${path} is missing or outside the repo`);
+    if (!exists) warnings.push(`file ${path} is missing, secret, or outside the repo`);
   }
 
   for (const path of options.plans ?? []) {

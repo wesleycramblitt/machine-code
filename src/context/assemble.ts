@@ -33,6 +33,7 @@ interface Pending {
   kind: ContextKind;
   origin: ContextOrigin;
   ref: string;
+  /** 0 = explicit current-task source, 3 = inherited config, N = parent-run chain. Mirrors previewContext. */
   depth?: number;
   body: string;
   band: number;
@@ -174,7 +175,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (mode !== "include") continue;
     const skill = skillBody(layout, name);
     if (!skill) continue;
-    pending.push({ kind: "skill", origin: "explicit", ref: name, body: skill.text, band: 2 });
+    pending.push({ kind: "skill", origin: "explicit", ref: name, depth: 0, body: skill.text, band: 2 });
   }
 
   // Explicit composer includes. These are user-selected knowledge files that
@@ -194,7 +195,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       continue;
     }
     const read = readFileText(abs);
-    if (read) pending.push({ kind: "file", origin: "explicit", ref: path, body: read.text, band: 1 });
+    if (read) pending.push({ kind: "file", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
   }
   for (const path of input.include?.knowledge ?? []) {
     const abs = withinRepo(layout.repoRoot, path);
@@ -211,7 +212,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     }
     const read = readFileText(abs);
     if (read) {
-      pending.push({ kind: "knowledge", origin: "explicit", ref: path, body: read.text, band: 1 });
+      pending.push({ kind: "knowledge", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
     }
   }
   for (const path of input.include?.plans ?? []) {
@@ -229,7 +230,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     }
     const read = readFileText(abs);
     if (read) {
-      pending.push({ kind: "plan", origin: "explicit", ref: path, body: read.text, band: 1 });
+      pending.push({ kind: "plan", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
     }
   }
   for (const citation of input.include?.references ?? []) {
@@ -250,6 +251,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       kind: "reference",
       origin: "explicit",
       ref: citation,
+      depth: 0,
       body: `${label}\n\n${read.text}`,
       band: 1,
     });
@@ -266,6 +268,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       kind: "packet",
       origin: "explicit",
       ref: packet.id,
+      depth: 0,
       body: JSON.stringify(packet, null, 2),
       band: 1,
     });
@@ -326,7 +329,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     const abs = withinRepo(layout.repoRoot, planPath);
     if (abs && existsSync(abs)) {
       const read = readFileText(abs);
-      if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, body: read.text, band: 7 });
+      if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, depth: 3, body: read.text, band: 7 });
     }
   }
   if (machine.context.knowledgeIndex) {
@@ -338,6 +341,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
           kind: "knowledge",
           origin: "inherited",
           ref: machine.context.knowledgeIndex,
+          depth: 3,
           body: read.text,
           band: 7,
         });
@@ -364,7 +368,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const skills = skillMetas(layout).filter((skill) => !excludedSkillNames.has(skill.name));
   if (skills.length > 0) {
     const text = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
-    pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, body: text, band: 8 });
+    pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, depth: 0, body: text, band: 8 });
   }
   try {
     const commands = [...allCommands(layout).keys()].sort();
@@ -373,6 +377,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         kind: "tool",
         origin: "explicit",
         ref: `${commands.length} commands`,
+        depth: 0,
         body: commands.join(", "),
         band: 8,
       });
