@@ -206,7 +206,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let contextInclude: import("../context/assemble.js").ContextInclude | undefined;
   if (contextIncludeFlag !== undefined) {
     try {
-      const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; knowledge?: unknown; plans?: unknown; references?: unknown };
+      const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; knowledge?: unknown; plans?: unknown; references?: unknown; issues?: unknown };
       const strings = (value: unknown): string[] | undefined =>
         Array.isArray(value)
           ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
@@ -216,6 +216,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         knowledge: strings(raw.knowledge),
         plans: strings(raw.plans),
         references: strings(raw.references),
+        issues: strings(raw.issues),
       };
     } catch {
       fail("--context-include must be a JSON object");

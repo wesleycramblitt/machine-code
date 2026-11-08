@@ -199,11 +199,11 @@ candidates. Minimums are layered in `~/.machine_code/config.toml` and
 ### Runs pages and modes
 
 `machine_code runs` is the scriptable version of the TUI's Runs page. The
-default `--group packets` groups by repository, then by plan category
-(`plans/index.md` headings), then packet, then runs. Runs with no packet sit
-under Untracked. Select a packet and press Enter to open the packet detail:
-deliverable, files, acceptance, gates, the review gate (`g` cycles
-`gates → agent → human`), and the runs attached to it.
+default `--group all` groups by repository, then issue kind (Ideas, Features,
+Bugs), then issue, then runs. Runs with no issue sit under Untracked.
+`--group type` adds the status directory, and `--group category` groups by the
+issue's first tag. Select an issue and press Enter to open its page: prompt,
+priority, tags, dependencies, review mode, and the runs attached to it.
 
 `--group status` keeps repository headings but groups each repository's runs by
 run status with no packet tree. `--group overall` drops repository headings
@@ -316,10 +316,10 @@ them by hand.
 machine_code approve <slug>   # merge mc/<slug> into main
 ```
 
-`approve` merges the packet branch, marks `plans/index.md` done, and commits
-the planning write on main. From the TUI, open a packet and press `o` to turn
-orchestration on (runs `batch`), `b` to build just that packet, `a` to approve
-it, `g` to cycle its review gate.
+`approve` merges the `mc/<slug>` branch, moves the issue to `done/`, and
+commits on main. From the TUI, open an issue and press `n` to start the run it
+needs, `v` to review it in the engineer's worktree, `o` to orchestrate the
+batch, `b` to build, `a` to approve, and `d` to delete.
 
 Press `D` on a run row or run detail to delete that run record, its worktree
 when unshared, and its branch when unshared. Open PR branches are kept unless
@@ -355,13 +355,13 @@ machine_code approve <slug>   # merge mc/<slug> into main
 machine_code packet delete <slug>
 ```
 
-- `packet list` shows slugs, status, and deliverables.
-- `issue create <kind> <slug> "<prompt>"` scaffolds `issues/<kind>/<status>/<slug>.md`
-  `plans/index.md`. One packet = one file-level change; split anything bigger
-  into several packets joined by `deps`.
-- `build <slug>` marks the packet in-progress, creates the isolated
-  `mc/<slug>` worktree, runs Build, executes the `## Verify` gates, commits,
-  and runs an independent Review when the packet's `review` gate is `agent`.
+- `issue list` shows the issues tree; `issue create <kind> <slug> "<prompt>"`
+  scaffolds `issues/<kind>/<status>/<slug>.md`.
+- `issue move <slug> <todo|blocked|done|researched>` moves it between status
+  dirs; one issue = one file-level change.
+- `build <slug>` scaffolds a contract in `issues/packets/` when needed, creates
+  the isolated `mc/<slug>` worktree, runs Engineer, executes the gates,
+  commits, and runs an independent Review when `review = "agent"`.
   `--no-review` skips the Review agent.
 - `approve <slug>` merges the branch, marks the plan line done, and commits
   the planning write on main.
@@ -401,10 +401,9 @@ never shell strings. The runner maps common npm commands to the typed registry
 
 ### Composer context and reusable tools
 
-The new-run composer previews exactly which packet, files, tools, scripts,
-plans, and knowledge the selected run will inherit before it starts. The
-**Packets** subtab lists `issues/` items; `i` links one to the run
-(passing `--packet <slug>`) and `space` on a row does the same. The **Files**
+The new-run composer previews exactly which issue, files, tools, scripts,
+and knowledge the selected run will inherit before it starts. The **Issues**
+subtab lists `issues/` files; `space` includes one explicitly. The **Files**
 subtab lists repo files; press `space` on a file to include it explicitly.
 The **Tools** subtab lists every tool available to the selected agent, plus
 custom repository/machine tools. Core tool definitions are sent with every
@@ -525,11 +524,13 @@ availability, and approval mode. The tools line is the exact post-filter list,
 so a role never sees a tool it cannot call. When `ask` is unavailable, the
 ambiguity policy says to stop and report the question instead of asking.
 
-The Planner holds only `context`, `read`, `search`, `ask`, `skill`, and
-`write`. It reads the plan map and the source each line names, then writes one
-packet file per buildable unit and links it from `plans/index.md`. It never
-edits source; the build agent implements packets. Build and Review say
-`ask off` and report blockers; their ambiguity policy matches.
+Research holds only `context`, `read`, `search`, `ask`, `skill`, and `write`.
+It reads one idea, asks until the scope is precise, and writes concrete
+features/bugs as issue files under `issues/features/todo/` or
+`issues/bugs/todo/`. Engineer holds `context`, `read`, `write`, `edit`,
+`search`, `command`, `ask`, `artifact`, and `skill`; it plans and builds in one
+run in a `mc/<slug>` worktree. Review is read-only and judges the same
+worktree and commit the Engineer used.
 
 A packet is one deliverable: one file-level change and at most **three**
 acceptance criteria in an `issues/<kind>/todo/<slug>.md` issue. One issue = one
@@ -604,4 +605,4 @@ The index links to deeper notes such as `knowledge/architecture.md`. The
 deterministic module index handles "where is this code"; the knowledge files
 handle "why is this code shaped this way".
 
-Remaining work: [plans/plan.md](plans/plan.md).
+Remaining work: [issues/](issues/).

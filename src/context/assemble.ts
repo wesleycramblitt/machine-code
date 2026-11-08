@@ -44,7 +44,7 @@ interface Pending {
 }
 
 export interface ContextExclusion {
-  /** Whole composer sections: files, knowledge, skills, tools, scripts, plans. */
+  /** Whole composer sections: files, issues, knowledge, skills, tools, scripts. */
   sections?: string[];
   /** Per-source keys shaped as `kind:ref`. */
   items?: string[];
@@ -57,6 +57,8 @@ export interface ContextInclude {
   knowledge?: string[];
   /** Repo-relative plan files to add explicitly from the composer. */
   plans?: string[];
+  /** Repo-relative issue files to add explicitly from the composer. */
+  issues?: string[];
   /** Reference citations to add explicitly from the composer. */
   references?: string[];
 }
@@ -115,6 +117,7 @@ const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
   tools: ["tool"],
   scripts: ["script"],
   plans: ["plan", "project"],
+  issues: ["issue"],
 };
 
 function sha1(text: string): string {
@@ -138,6 +141,7 @@ export const CONTEXT_RENDER_ORDER: Record<string, number> = {
   packet: 0,
   plan: 1,
   project: 1,
+  issue: 2,
   file: 2,
   knowledge: 3,
   reference: 4,
@@ -392,6 +396,22 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       pending.push({ kind: "plan", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
     }
   }
+  for (const path of input.include?.issues ?? []) {
+    const abs = withinRepo(layout.repoRoot, path);
+    if (!abs || !existsSync(abs) || isSecretPath(path)) {
+      pending.push({
+        kind: "issue",
+        origin: "explicit",
+        ref: path,
+        body: "",
+        band: 1,
+        warning: "included issue is missing, secret, or outside the repo",
+      });
+      continue;
+    }
+    const read = readFileText(abs);
+    if (read) pending.push({ kind: "issue", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
+  }
   for (const citation of input.include?.references ?? []) {
     const read = readReference(layout, citation, Number.MAX_SAFE_INTEGER);
     if (!read.ok) {
@@ -479,17 +499,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     const list = listIssues(layout);
     if (list.length > 0) {
       const body = list.map((issue) => `- [${issue.status}] ${issue.slug} - ${issue.prompt.slice(0, 120)}`).join("\n");
-      pending.push({ kind: "plan", origin: "inherited", ref: "issues/", depth: 3, body, band: 7 });
-    }
-  }
-  // The plan map is context only for the planner: include plans/index.md (or
-  // the configured plan file), never the topic files, and never for other roles.
-  if (input.agent === "planner") {
-    const planPath = machine.context.planFile ?? "plans/index.md";
-    const abs = withinRepo(layout.repoRoot, planPath);
-    if (abs && existsSync(abs)) {
-      const read = readFileText(abs);
-      if (read) pending.push({ kind: "plan", origin: "inherited", ref: planPath, depth: 3, body: read.text, band: 7 });
+      pending.push({ kind: "issue", origin: "inherited", ref: "issues/", depth: 3, body, band: 7 });
     }
   }
   if (machine.context.knowledgeIndex) {
@@ -602,6 +612,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (item.kind === "parent-run") return 50;
     if (item.kind === "skill" || item.kind === "script") return 40;
     if (item.kind === "packet") return 10;
+    if (item.kind === "issue") return item.origin === "explicit" ? 8 : 22;
     if (item.kind === "plan" || item.kind === "project") {
       if (item.origin === "explicit") return 15;
       // Inherited plan index: the planner's core context, droppable docs elsewhere.
@@ -718,6 +729,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   }
   const sections: ContextSections = {
     packets: 0,
+    issues: 0,
     plans: 0,
     knowledge: 0,
     skills: 0,

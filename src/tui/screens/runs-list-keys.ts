@@ -24,7 +24,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     text: s.runsText,
     attentionOnly: s.runsAttention,
     preferredRepo: l.repoRoot,
-    ...(s.runsGroup === "all" || s.runsGroup === "type"
+    ...(s.runsGroup === "all" || s.runsGroup === "type" || s.runsGroup === "category"
       ? { packetRepo: l.repoRoot, issues: listIssues(l) }
       : {}),
   });

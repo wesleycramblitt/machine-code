@@ -6,7 +6,7 @@
  * pending-answer affordance live here; the caller supplies the prebuilt
  * index plus a pending-question lookup.
  */
-import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
+import { AMBER, B, BL, C, D, G, GR, LIME, M, R, RED, ROSE, SKY, SLATE, VIOLET, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
 import { ISSUE_STATUS_LABELS, type DisplayStatus } from "../../plan/issues.js";
 import type { RunSummary } from "../../state/runs.js";
@@ -34,22 +34,25 @@ export interface RunsListFrame {
 
 /** Directory-status colors: status is spelled out, color is decoration. */
 const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }> = {
-  "needs-research": { tone: Y, glyph: "?" },
-  researched: { tone: M, glyph: "◐" },
-  todo: { tone: BL, glyph: "◆" },
-  "in-progress": { tone: C, glyph: "●" },
-  blocked: { tone: RED, glyph: "⏸" },
-  done: { tone: G, glyph: "✓" },
+  "needs-research": { tone: AMBER, glyph: "?" },
+  researched: { tone: VIOLET, glyph: "◐" },
+  todo: { tone: SLATE, glyph: "◆" },
+  "in-progress": { tone: SKY, glyph: "●" },
+  blocked: { tone: ROSE, glyph: "⏸" },
+  done: { tone: LIME, glyph: "✓" },
 };
+
+const PRIORITY_TONE: Record<string, string> = { high: ROSE, medium: D, low: SLATE };
 
 /** Category header colors: type and exception buckets. */
 const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {
-  feature: G,
-  bug: RED,
-  idea: Y,
+  feature: LIME,
+  bug: ROSE,
+  idea: AMBER,
   other: W,
-  untracked: GR,
-  status: Y,
+  category: VIOLET,
+  untracked: SLATE,
+  status: AMBER,
 };
 
 export function renderRunsList(props: RunsListProps): RunsListFrame {
@@ -77,7 +80,8 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const badge = `${B}${style.tone}[${label}]${R}`;
       const folded = row.collapsible ? `${row.collapsed ? "▸" : "▾"} ` : "";
       const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
-      const priority = row.priority && row.priority !== "medium" ? ` ${D}· ${row.priority}${R}` : "";
+      const priorityTone = PRIORITY_TONE[row.priority] ?? D;
+      const priority = row.priority && row.priority !== "medium" ? ` ${priorityTone}· ${row.priority}${R}` : "";
       const title = row.title
         ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - label.length - 30))}${R}`
         : "";

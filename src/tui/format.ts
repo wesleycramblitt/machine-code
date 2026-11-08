@@ -49,6 +49,13 @@ export const SUBTAB_BG = "\x1b[48;2;5;5;5m";
 /** Start action is the only destructive-red control in the composer. */
 export const START_BG = "\x1b[48;2;170;30;30m";
 export const WHITE = "\x1b[97m";
+/** 256-color accents for status/category encodings on dark terminals. */
+export const SKY = "\x1b[38;5;75m";
+export const LIME = "\x1b[38;5;114m";
+export const AMBER = "\x1b[38;5;214m";
+export const ROSE = "\x1b[38;5;203m";
+export const VIOLET = "\x1b[38;5;141m";
+export const SLATE = "\x1b[38;5;110m";
 export const WRAP_OFF = "\x1b[?7l";
 export const WRAP_ON = "\x1b[?7h";
 

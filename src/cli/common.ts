@@ -165,7 +165,7 @@ Usage:
                                     takes over if the pinned model fails (same for --provider)
                                     [--context-exclude '<json>'] omit selected context
                                     sections or sources from a run
-                                    [--context-include '<json>'] add knowledge/plan files
+                                    [--context-include '<json>'] add issue/knowledge/plan files
                                     selected in the composer
                                     [--skill-modes '<json>'] per-skill include|on-demand|exclude
   machine_code init                 Check CLIs, config, and repo layout
@@ -184,9 +184,9 @@ Usage:
                                     reconcile automatically; refresh re-scores everything)
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
-  machine_code runs [--group all|type|status|overall] [--filter ...] [--text Q]
-                                    Work tree: kind → issue → runs. Group by kind
-                                    (All), kind+status dir (By type), or run status.
+  machine_code runs [--group all|type|category|status|overall] [--filter ...] [--text Q]
+                                    Work tree: All (kind) · By type (kind+status) · By category (tag).
+                                    Status/overall group raw runs.
   machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch]
                                     [--force] [--no-cancel]
                                     Delete a run and its resources; active runs
@@ -242,10 +242,9 @@ Usage:
   machine_code issue run <slug>     Start the research or engineer run for an issue
   machine_code issue review <slug>  Review the issue in its latest engineer worktree
   machine_code packet list          List packet files (slug, status, deliverable) [--json]
-  machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas] [--plan plans/tui.md]
-                                     (default heading: Features; item line lands in --plan, else plans/index.md)
-                                     [--verify a,b] [--review gates|agent|human]
-                                     Scaffold issues/packets/<slug>.md and index it
+  machine_code packet create <slug> "<deliverable>" [--verify a,b] [--review gates|agent|human]
+                                     Scaffold a legacy contract in issues/packets/<slug>.md
+                                     (issues/ is the primary work tree)
   machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."]
                                      [deps=a,b] [verify=a,b] [review=gates|agent|human]
                                      Update status, blocker, deps, gates, or merge gate

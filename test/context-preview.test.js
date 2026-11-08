@@ -58,17 +58,17 @@ test("preview surfaces an attached packet contract", () => {
   }
 });
 
-test("preview reports the real plan size instead of a fixed 2 KiB cap", () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-preview-plan-"));
+test("preview reports the real issue size instead of a fixed 2 KiB cap", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-preview-issue-"));
   try {
-    mkdirSync(join(root, "plans"), { recursive: true });
-    const body = `# Plan\n\n${"line\n".repeat(1000)}END\n`;
-    writeFileSync(join(root, "plans", "index.md"), body, "utf8");
-    const preview = previewContext(fakeLayout(root), "", { agent: "planner" });
-    const plan = preview.sources.find((source) => source.kind === "plan");
-    assert.ok(plan);
-    assert.equal(plan.chars, Buffer.byteLength(body, "utf8"));
-    assert.ok(plan.chars > 2048);
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
+    const body = `# Issue\n\n${"line\n".repeat(1000)}END\n`;
+    writeFileSync(join(root, "issues", "features", "todo", "big.md"), body, "utf8");
+    const preview = previewContext(fakeLayout(root), "", { agent: "engineer", issues: ["issues/features/todo/big.md"] });
+    const issue = preview.sources.find((source) => source.kind === "issue" && source.origin === "explicit");
+    assert.ok(issue);
+    assert.equal(issue.chars, Buffer.byteLength(body, "utf8"));
+    assert.ok(issue.chars > 2048);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

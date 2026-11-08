@@ -202,3 +202,22 @@ test("status mode and overall status still group raw runs", () => {
     ["running", "blocked", "done"],
   );
 });
+
+test("By category groups issues by their first tag", () => {
+  const index = buildRunIndex({
+    runs: [],
+    group: "category",
+    packetRepo: repoA,
+    issues: [
+      issue({ kind: "features", slug: "a", title: "A", tags: ["tui"] }),
+      issue({ kind: "bugs", slug: "b", title: "B", tags: ["tui", "models"] }),
+      issue({ kind: "features", slug: "c", title: "C", tags: [] }),
+    ],
+  });
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "section").map((row) => row.label),
+    ["tui", "Untagged"],
+  );
+  const sections = index.rows.filter((row) => row.kind === "section");
+  assert.equal(sections[0]?.tone, "category");
+});

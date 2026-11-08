@@ -102,21 +102,22 @@ test("artifact reference + skill front-matter parsers", () => {
   assert.deepEqual(skill, { name: "reference", description: "research", path: "x" });
 });
 
-test("plans are included up to the model budget, not a fixed 2 KiB cap", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-ctx-plan-full-"));
+test("explicit issues are included up to the model budget, not a fixed 2 KiB cap", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-issue-full-"));
   try {
-    mkdirSync(join(root, "plans"), { recursive: true });
-    const long = `# Long plan\n\n${"detail line\n".repeat(400)}END OF PLAN\n`;
-    writeFileSync(join(root, "plans", "index.md"), long, "utf8");
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
+    const long = `# Long issue\n\n${"detail line\n".repeat(400)}END OF ISSUE\n`;
+    writeFileSync(join(root, "issues", "features", "todo", "long.md"), long, "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
-      agent: "planner",
-      machine: machine({ context: { maxChars: 24_000, planFile: undefined, knowledgeIndex: undefined } }),
+      agent: "engineer",
+      machine: machine({ context: { maxChars: 64_000, knowledgeIndex: undefined } }),
+      include: { issues: ["issues/features/todo/long.md"] },
     });
-    const source = bundle.sources.find((item) => item.kind === "plan");
-    assert.ok(source, "plan is a context source");
-    assert.ok(source.bytes > 4096, "the plan is not silently cut at 2 KiB");
-    assert.match(bundle.text, /END OF PLAN/);
+    const source = bundle.sources.find((item) => item.kind === "issue" && item.origin === "explicit");
+    assert.ok(source, "issue is a context source");
+    assert.ok(source.bytes > 4096, "the issue is not silently cut at 2 KiB");
+    assert.match(bundle.text, /END OF ISSUE/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -125,18 +126,20 @@ test("plans are included up to the model budget, not a fixed 2 KiB cap", async (
 test("context over budget is reported instead of silently truncated", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-over-"));
   try {
-    mkdirSync(join(root, "plans"), { recursive: true });
-    writeFileSync(join(root, "plans", "index.md"), `# Plan\n\n${"line\n".repeat(300)}END OF PLAN\n`, "utf8");
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
+    writeFileSync(join(root, "issues", "features", "todo", "big.md"), `# Issue\n\n${"line\n".repeat(300)}END OF ISSUE\n`, "utf8");
+    writeFileSync(join(root, "work.md"), "work\n".repeat(300), "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
-      agent: "planner",
-      machine: machine({ context: { maxChars: 1_000, planFile: undefined, knowledgeIndex: undefined } }),
+      agent: "engineer",
+      machine: machine({ context: { maxChars: 2_000, knowledgeIndex: undefined } }),
+      include: { issues: ["issues/features/todo/big.md"], files: ["work.md"] },
     });
-    assert.match(bundle.text, /END OF PLAN/);
-    const plan = bundle.sources.find((item) => item.kind === "plan");
-    assert.ok(plan);
-    assert.equal(plan.truncated, false);
-    assert.ok(bundle.warnings.some((warning) => /model input budget/.test(warning)));
+    assert.match(bundle.text, /END OF ISSUE/);
+    const issue = bundle.sources.find((item) => item.kind === "issue" && item.origin === "explicit");
+    assert.ok(issue);
+    assert.equal(issue.truncated, false);
+    assert.ok(bundle.warnings.some((warning) => /model input budget/.test(warning) || /omitted file:work\.md/.test(warning)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -285,12 +288,12 @@ test("over-budget context drops lowest-priority bands first with named omissions
   }
 });
 
-test("planner index and explicit packet survive file trimming", async () => {
+test("explicit issue and packet survive file trimming", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-survive-"));
   try {
     const layout = fakeLayout(root);
-    mkdirSync(join(root, "plans"), { recursive: true });
-    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nSURVIVE PLAN\n", "utf8");
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
+    writeFileSync(join(root, "issues", "features", "todo", "survive.md"), "# Issue\nSURVIVE ISSUE\n", "utf8");
     writePacket(layout, {
       id: "pkt-9",
       mode: "verified",
@@ -304,15 +307,15 @@ test("planner index and explicit packet survive file trimming", async () => {
     const bundle = await assembleContext({
       layout,
       machine: machine(),
-      agent: "planner",
+      agent: "engineer",
       packetId: "pkt-9",
-      include: { files: ["big-c.md", "big-d.md"] },
+      include: { issues: ["issues/features/todo/survive.md"], files: ["big-c.md", "big-d.md"] },
       budgetChars: 6000,
     });
     assert.match(bundle.text, /survive trimming/);
-    assert.match(bundle.text, /SURVIVE PLAN/);
+    assert.match(bundle.text, /SURVIVE ISSUE/);
     assert.ok(bundle.sources.some((source) => source.kind === "packet" && source.ref === "pkt-9"));
-    assert.ok(bundle.sources.some((source) => source.kind === "plan" && source.ref === "plans/index.md"));
+    assert.ok(bundle.sources.some((source) => source.kind === "issue" && source.ref === "issues/features/todo/survive.md"));
     assert.ok(bundle.warnings.some((warning) => /omitted file:big-c\.md/.test(warning)));
     assert.ok(bundle.warnings.some((warning) => /omitted file:big-d\.md/.test(warning)));
   } finally {
@@ -348,38 +351,41 @@ test("files section counts only files, and priority is role-aware", async () => 
     });
     assert.match(tight.text, /Deep/, "research keeps knowledge");
     assert.ok(tight.warnings.some((w) => /omitted file:work\.md/.test(w)), "research drops files first");
-    // planner keeps the inherited plan index over working files
-    const planTight = await assembleContext({
+    // an explicit issue is protected over working files
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
+    writeFileSync(join(root, "issues", "features", "todo", "keep.md"), "# Keep\nTHE ISSUE\n", "utf8");
+    const issueTight = await assembleContext({
       layout,
       machine: machine(),
-      agent: "planner",
-      include: { files: ["work.md"] },
-      budgetChars: 3000,
+      agent: "engineer",
+      include: { files: ["work.md"], issues: ["issues/features/todo/keep.md"] },
+      budgetChars: 1200,
     });
-    assert.match(planTight.text, /Plan index/, "planner keeps the plan index");
-    assert.ok(planTight.warnings.some((w) => /omitted file:work\.md/.test(w)), "planner drops files first");
+    assert.match(issueTight.text, /THE ISSUE/, "engineer keeps the explicit issue");
+    assert.ok(issueTight.warnings.some((w) => /omitted file:work\.md/.test(w)), "engineer drops files first");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("context bundle records per-section chars", async () => {  const root = mkdtempSync(join(tmpdir(), "mc-ctx-sections-"));
+test("context bundle records per-section chars", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-sections-"));
   try {
-    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
     mkdirSync(join(root, "src"), { recursive: true });
-    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nShip it.", "utf8");
+    writeFileSync(join(root, "issues", "features", "todo", "ship.md"), "# Ship\nShip it.", "utf8");
     writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
-      agent: "planner",
+      agent: "engineer",
       machine: machine(),
-      include: { files: ["src/a.ts"] },
+      include: { files: ["src/a.ts"], issues: ["issues/features/todo/ship.md"] },
     });
-    for (const section of ["packets", "plans", "knowledge", "skills", "scripts", "tools", "references", "files", "parents", "system"]) {
+    for (const section of ["packets", "issues", "plans", "knowledge", "skills", "scripts", "tools", "references", "files", "parents", "system"]) {
       assert.equal(typeof bundle.sections[section], "number", `sections.${section} is recorded`);
     }
     assert.ok(bundle.sections.files > 0);
-    assert.ok(bundle.sections.plans > 0);
+    assert.ok(bundle.sections.issues > 0);
     assert.equal(bundle.sections.system, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -422,7 +428,7 @@ test("preview chars match assembled chars within rounding for the same inputs", 
     );
     assert.deepEqual(
       Object.keys(preview.sections).sort(),
-      ["files", "knowledge", "packets", "parents", "plans", "references", "scripts", "skills", "system", "tools"],
+      ["files", "issues", "knowledge", "packets", "parents", "plans", "references", "scripts", "skills", "system", "tools"],
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -449,21 +455,22 @@ test("trimContextText drops the lowest-priority tail with named omissions", asyn
   assert.doesNotMatch(out, /…\[context truncated\]/);
 });
 
-test("the plan index is inherited only by the planner", async () => {
+test("the issues index is inherited by agent roles", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx5-"));
   try {
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
     mkdirSync(join(root, "plans"), { recursive: true });
-    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nShip it.", "utf8");
-    writeFileSync(join(root, "plans", "topic.md"), "# Topic note\nDo not auto-include.", "utf8");
+    writeFileSync(join(root, "issues", "features", "todo", "ship.md"), "# Ship\nShip it.", "utf8");
+    writeFileSync(join(root, "plans", "index.md"), "# Legacy plan\nDo not inherit.", "utf8");
 
-    const planner = await assembleContext({ layout: fakeLayout(root), agent: "planner", machine: machine() });
-    assert.ok(planner.sources.some((s) => s.kind === "plan"));
-    assert.match(planner.text, /Plan index/);
-    assert.doesNotMatch(planner.text, /Do not auto-include/);
+    const research = await assembleContext({ layout: fakeLayout(root), agent: "research", machine: machine() });
+    assert.ok(research.sources.some((s) => s.kind === "issue" && s.ref === "issues/"));
+    assert.match(research.text, /ship/);
+    assert.doesNotMatch(research.text, /Do not inherit/);
 
-    const build = await assembleContext({ layout: fakeLayout(root), agent: "build", machine: machine() });
-    assert.ok(!build.sources.some((s) => s.kind === "plan"));
-    assert.doesNotMatch(build.text, /Plan index/);
+    const engineer = await assembleContext({ layout: fakeLayout(root), agent: "engineer", machine: machine() });
+    assert.ok(engineer.sources.some((s) => s.kind === "issue" && s.ref === "issues/"));
+    assert.doesNotMatch(engineer.text, /Legacy plan/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -509,21 +516,28 @@ test("context exclusions drop whole sections and individual sources", async () =
     mkdirSync(join(root, "plans"), { recursive: true });
     writeFileSync(join(root, "plans", "index.md"), "# Next plan\nShip it.", "utf8");
 
-    const all = await assembleContext({ layout: fakeLayout(root), agent: "planner", machine: machine() });
+    const all = await assembleContext({
+      layout: fakeLayout(root),
+      agent: "engineer",
+      machine: machine(),
+      include: { plans: ["plans/index.md"] },
+    });
     assert.match(all.text, /Next plan/);
 
     const noPlans = await assembleContext({
       layout: fakeLayout(root),
-      agent: "planner",
+      agent: "engineer",
       machine: machine(),
+      include: { plans: ["plans/index.md"] },
       exclude: { sections: ["plans"] },
     });
     assert.doesNotMatch(noPlans.text, /Next plan/);
 
     const onePlan = await assembleContext({
       layout: fakeLayout(root),
-      agent: "planner",
+      agent: "engineer",
       machine: machine(),
+      include: { plans: ["plans/index.md"] },
       exclude: { items: ["plan:plans/index.md"] },
     });
     assert.doesNotMatch(onePlan.text, /Next plan/);
@@ -752,13 +766,13 @@ test("secret files are warned (not inlined) in both preview and assemble", async
 test("preview and assemble share depth/provenance semantics", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-depth-"));
   try {
-    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
     mkdirSync(join(root, "src"), { recursive: true });
-    writeFileSync(join(root, "plans", "index.md"), "# Plan index\nShip it.", "utf8");
+    writeFileSync(join(root, "issues", "features", "todo", "ship.md"), "# Ship\nShip it.", "utf8");
     writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
-      agent: "planner",
+      agent: "engineer",
       machine: machine(),
       include: { files: ["src/a.ts"] },
     });
@@ -766,19 +780,19 @@ test("preview and assemble share depth/provenance semantics", async () => {
     assert.ok(file);
     assert.equal(file.origin, "explicit");
     assert.equal(file.depth, 0);
-    const plan = bundle.sources.find((item) => item.kind === "plan" && item.ref === "plans/index.md");
-    assert.ok(plan);
-    assert.equal(plan.origin, "inherited");
-    assert.equal(plan.depth, 3);
-    const preview = previewContext(fakeLayout(root), "", { agent: "planner", files: ["src/a.ts"] });
+    const index = bundle.sources.find((item) => item.kind === "issue" && item.ref === "issues/");
+    assert.ok(index);
+    assert.equal(index.origin, "inherited");
+    assert.equal(index.depth, 3);
+    const preview = previewContext(fakeLayout(root), "", { agent: "engineer", files: ["src/a.ts"] });
     const previewFile = preview.sources.find((item) => item.kind === "file" && item.ref === "src/a.ts");
     assert.ok(previewFile);
     assert.equal(previewFile.origin, "explicit");
     assert.equal(previewFile.depth, 0);
-    const previewPlan = preview.sources.find((item) => item.kind === "plan" && item.ref === "plans/index.md");
-    assert.ok(previewPlan);
-    assert.equal(previewPlan.origin, "inherited");
-    assert.equal(previewPlan.depth, 3);
+    const previewIndex = preview.sources.find((item) => item.kind === "issue" && item.ref === "issues/");
+    assert.ok(previewIndex);
+    assert.equal(previewIndex.origin, "inherited");
+    assert.equal(previewIndex.depth, 3);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

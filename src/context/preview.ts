@@ -18,7 +18,7 @@ import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
 
 export interface PreviewSource {
-  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "packet" | "parent-run";
+  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "packet" | "issue" | "parent-run";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;
@@ -73,6 +73,8 @@ export interface PreviewContextOptions {
   files?: string[];
   /** Explicit repo-relative plan files selected in the composer. */
   plans?: string[];
+  /** Explicit repo-relative issue files selected in the composer. */
+  issues?: string[];
   /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
   defaultSkills?: string[];
   /** Parent run and its ancestors, nearest first (same shape as assembleContext). */
@@ -143,6 +145,16 @@ export function previewContext(
     if (!exists) warnings.push(`file ${entry} is missing, secret, or outside the repo`);
   }
 
+  for (const path of options.issues ?? []) {
+    const root = resolve(layout.repoRoot);
+    const abs = resolve(root, path);
+    const inside = abs === root || abs.startsWith(root + sep);
+    const exists = inside && existsSync(abs);
+    const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
+    sources.push({ kind: "issue", ref: path, origin: "explicit", depth: 0, chars: size, exists });
+    if (!exists) warnings.push(`issue ${path} is missing or outside the repo`);
+  }
+
   for (const path of options.plans ?? []) {
     const root = resolve(layout.repoRoot);
     const abs = resolve(root, path);
@@ -168,18 +180,7 @@ export function previewContext(
     const issues = listIssues(layout);
     if (issues.length > 0) {
       const body = issues.map((issue) => `- [${issue.status}] ${issue.slug} - ${issue.prompt.slice(0, 120)}`).join("\n");
-      sources.push({ kind: "plan", ref: "issues/", origin: "inherited", depth: 3, chars: body.length, exists: true });
-    }
-  }
-  if (options.agent === "planner") {
-    const planPath = options.planFile ?? "plans/index.md";
-    const planRoot = resolve(layout.repoRoot);
-    const abs = resolve(planRoot, planPath);
-    const inside = abs === planRoot || abs.startsWith(planRoot + sep);
-    const exists = inside && existsSync(abs);
-    if (exists) {
-      const size = capFor(abs, Number.MAX_SAFE_INTEGER);
-      sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
+      sources.push({ kind: "issue", ref: "issues/", origin: "inherited", depth: 3, chars: body.length, exists: true });
     }
   }
   // Default skills and explicit composer includes are candidates for body
@@ -278,6 +279,7 @@ export function previewContext(
 
   const sections: ContextSections = {
     packets: 0,
+    issues: 0,
     plans: 0,
     knowledge: 0,
     skills: 0,

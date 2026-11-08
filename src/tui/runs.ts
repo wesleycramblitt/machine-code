@@ -26,14 +26,15 @@ import { effectiveStatus, runItemId } from "../plan/lifecycle.js";
 import type { DisplayStatus } from "../plan/issues.js";
 import { sortRuns } from "./status.js";
 
-export type RunGroup = "all" | "type" | "status" | "overall";
+export type RunGroup = "all" | "type" | "category" | "status" | "overall";
 
 /** Modes the TUI cycles with `g`. */
-export const RUN_GROUPS: readonly RunGroup[] = ["all", "type"];
+export const RUN_GROUPS: readonly RunGroup[] = ["all", "type", "category"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
   all: "All",
   type: "By type",
+  category: "By category",
   status: "Status",
   overall: "Overall status",
 };
@@ -42,11 +43,12 @@ export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
 export function parseRunGroup(value: string | undefined): RunGroup | undefined {
   if (!value) return undefined;
   if (value === "packets") return "all";
-  if (value === "category" || value === "plan") return "type";
-  return (["all", "type", "status", "overall"] as const).find((group) => group === value);
+  if (value === "plan") return "type";
+  if (value === "tag" || value === "tags") return "category";
+  return (["all", "type", "category", "status", "overall"] as const).find((group) => group === value);
 }
 
-export type SectionTone = "feature" | "bug" | "idea" | "other" | "status" | "untracked";
+export type SectionTone = "feature" | "bug" | "idea" | "other" | "category" | "status" | "untracked";
 
 export type RunRow =
   | {
@@ -310,6 +312,19 @@ export function buildRunIndex(options: RunOptions): RunIndex {
           for (const issue of sortIssues(entries)) pushIssue(issue, depth + 2, id);
         }
       }
+    } else if (group === "category") {
+      const byTag = new Map<string, Issue[]>();
+      for (const issue of issues) {
+        const tag = issue.tags[0] ?? "Untagged";
+        const list = byTag.get(tag) ?? [];
+        list.push(issue);
+        byTag.set(tag, list);
+      }
+      for (const [tag, list] of [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const id = `tag:${repoRoot}:${tag}`;
+        if (!pushSection(id, tag, list.length, depth, "category")) continue;
+        for (const issue of sortIssues(list)) pushIssue(issue, depth + 1, id);
+      }
     } else {
       for (const kind of ISSUE_KINDS) {
         const list = issues.filter((issue) => issue.kind === kind);
@@ -327,7 +342,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     }
   };
 
-  const workGroup = group === "all" || group === "type";
+  const workGroup = group === "all" || group === "type" || group === "category";
   const repoNames = [
     ...new Set([
       ...baseRuns.map(repoOf),

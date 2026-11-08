@@ -433,7 +433,8 @@ export async function runTui(): Promise<void> {
     const skillModesKey = [...s.newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
     const includedPlansKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("plan:")).sort().join(",");
-    const previewKey = `${s.newRunRepo}\0${s.newrun.packet ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}`;
+    const includedIssuesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("issue:")).sort().join(",");
+    const previewKey = `${s.newRunRepo}\0${s.newrun.packet ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}\0${includedIssuesKey}`;
     const previewTtl = s.newRunInsert ? 60_000 : 5_000;
     if (
       !s.newRunPreviewCache ||
@@ -456,6 +457,9 @@ export async function runTui(): Promise<void> {
           plans: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("plan:"))
             .map((key) => key.slice("plan:".length)),
+          issues: [...s.newRunContextIncluded]
+            .filter((key) => key.startsWith("issue:"))
+            .map((key) => key.slice("issue:".length)),
           defaultSkills: defaultSkillsFor({ agent: s.newrun.agent, verification: s.newrun.verification }),
           skillPresets: roleSkillPresets(s.newrun.agent),
           skillOverrides: Object.fromEntries(s.newRunSkillModes),
@@ -612,6 +616,9 @@ export async function runTui(): Promise<void> {
     const includedFiles = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("file:"))
       .map((key) => key.slice("file:".length));
+    const includedIssues = [...s.newRunContextIncluded]
+      .filter((key) => key.startsWith("issue:"))
+      .map((key) => key.slice("issue:".length));
     const includedKnowledge = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("knowledge:"))
       .map((key) => key.slice("knowledge:".length));
@@ -621,9 +628,10 @@ export async function runTui(): Promise<void> {
     const includedReferences = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("reference:"))
       .map((key) => key.slice("reference:".length));
-    if (includedFiles.length > 0 || includedKnowledge.length > 0 || includedPlans.length > 0 || includedReferences.length > 0) {
+    if (includedFiles.length > 0 || includedIssues.length > 0 || includedKnowledge.length > 0 || includedPlans.length > 0 || includedReferences.length > 0) {
       args.push("--context-include", JSON.stringify({
         ...(includedFiles.length > 0 ? { files: includedFiles } : {}),
+        ...(includedIssues.length > 0 ? { issues: includedIssues } : {}),
         ...(includedKnowledge.length > 0 ? { knowledge: includedKnowledge } : {}),
         ...(includedPlans.length > 0 ? { plans: includedPlans } : {}),
         ...(includedReferences.length > 0 ? { references: includedReferences } : {}),
@@ -864,7 +872,7 @@ export async function runTui(): Promise<void> {
       text: s.runsText,
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
-      ...(s.runsGroup === "all" || s.runsGroup === "type"
+      ...(s.runsGroup === "all" || s.runsGroup === "type" || s.runsGroup === "category"
         ? { packetRepo: l.repoRoot, issues: listIssues(l) }
         : {}),
     });
