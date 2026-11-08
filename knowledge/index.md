@@ -10,6 +10,7 @@ not maximum autonomy.
 - knowledge/architecture.md — runtime flow, module map, invariants.
 - knowledge/context-pack.md — curated context, budgets, tool order.
 - knowledge/model-tool-calling.md — native calls and repair.
+- knowledge/urls-latest-harness-research.md — harness/context paper reading list.
 - knowledge/run-failures-2026-11-05.md — incidents.
 - plans/plan.md — remaining work and open validation.
 - src/ — TypeScript source. test/ — node:test suites. data/ — prompts,
