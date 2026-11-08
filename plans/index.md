@@ -7,4 +7,3 @@
 
 
 ## Ideas
-- [ ] ctx-eval-harness — Context quality eval: gold-file recall, faithfulness spot-check, token cost per section → packets/ctx-eval-harness.md
