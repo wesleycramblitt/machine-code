@@ -76,7 +76,7 @@ import { SEARCH_EXCLUDES } from "../tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "../install.js";
 import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serverForLanguage } from "../lsp/index.js";
 
-import { fail, parseFlags, loadRuntime, findRunAnywhere, visibleWidth, cell, runGlyph, fmtTokens, fmtRunTokens, fmtMoney, fmtCtx, modeSuffix, packetGlyph, fmtEvent, indentEventLines, type Runtime } from "./common.js";
+import { fail, parseFlags, loadRuntime, findRunAnywhere, visibleWidth, cell, runGlyph, fmtTokens, fmtRunTokens, fmtMoney, fmtCtx, modeSuffix, fmtEvent, indentEventLines, type Runtime } from "./common.js";
 
 export function cmdLog(id: string | undefined): number {
   if (!id) fail("log needs a run id");
@@ -116,7 +116,7 @@ export function rowText(row: RunRow, width: number, group: RunGroup): string {
   if (row.kind === "packet") {
     const fold = row.collapsible ? (row.collapsed ? "▸" : "▾") : " ";
     const runs = row.directRuns > 0 ? `runs ${row.directRuns}` : "";
-    const head = `${indent}${fold} ${packetGlyph(row.packet.status)} ${row.slug} [${row.packet.status}]`;
+    const head = `${indent}${fold} ▣ ${row.slug} [${row.packet.status}]`;
     const tail = `  ${row.packet.deliverable.replace(/\s+/g, " ").slice(0, width < 100 ? 24 : 48)}${runs ? `  ${runs}` : ""}`;
     if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
     return cell(head, width - visibleWidth(tail)) + tail;

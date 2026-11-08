@@ -258,13 +258,29 @@ test("a packet pops up under an item with the same slug even without a link", ()
     group: "all",
     packetRepo: repoA,
     packets: [packetFile("demo")],
-    planItems: [item({ kind: "idea", slug: "demo", title: "Try the demo" })],
+    planItems: [item({ kind: "feature", slug: "demo", title: "Try the demo" })],
   });
   const line = index.rows.find((row) => row.kind === "planline" && row.slug === "demo");
   assert.ok(line && line.kind === "planline");
   const packet = index.rows.find((row) => row.kind === "packet" && row.slug === "demo");
   assert.ok(packet && packet.kind === "packet");
   assert.equal(packet.parent, line.id, "slug match associates without a link");
+});
+
+test("ideas never own a packet; a matching packet stays unplanned", () => {
+  const index = buildRunIndex({
+    runs: [],
+    group: "all",
+    packetRepo: repoA,
+    packets: [packetFile("demo")],
+    planItems: [item({ kind: "idea", slug: "demo", title: "Try the demo" })],
+  });
+  const line = index.rows.find((row) => row.kind === "planline" && row.slug === "demo");
+  assert.ok(line && line.kind === "planline");
+  assert.equal(line.packet, undefined);
+  const packet = index.rows.find((row) => row.kind === "packet" && row.slug === "demo");
+  assert.ok(packet && packet.kind === "packet");
+  assert.match(packet.parent, /unplanned/, "ideas do not own packets");
 });
 
 test("category sections carry a type tone", () => {

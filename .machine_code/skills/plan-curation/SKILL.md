@@ -29,7 +29,9 @@ Web tools, …), and its checklist lines are the items the Runs page and
   `## Done` section or move completed lines.
 
 Ideas are vague statements that can become features or bugs. Put them under
-`## Ideas`; a research run turns them into concrete items.
+`## Ideas`; a research run turns them into concrete features or bugs. Ideas
+never link a packet — a packet is a build contract, so it belongs to the
+feature or bug that research produced, not to the idea.
 
 ## Procedure
 
@@ -38,8 +40,8 @@ Ideas are vague statements that can become features or bugs. Put them under
    index.
 2. Add the item under `## Features`, `## Bugs`, or `## Ideas` as
    `- [ ] slug — title`. Keep the title one sentence.
-3. If a packet exists (or you just created one), append
-   `→ packets/<slug>.md`.
+3. If a packet exists (or you just created one) for a feature or bug, append
+   `→ packets/<slug>.md`. Never attach one to an idea.
 4. Mark finished work `[x]` in place.
 5. Keep prose outside checklist lines; it is ignored by the parser but useful
    to humans. Do not put real items inside fenced code blocks — fenced

@@ -89,7 +89,9 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const status = row.packet.status;
       const style = statusStyle(status);
       const badge = `${B}${style.tone}[${status}]${R}`;
-      const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${style.tone}${style.glyph}${R} ${badge} ${style.tone}${row.slug}${R}`;
+      // Packets use a box glyph so they read as contracts, distinct from the
+      // item status circles/triangles.
+      const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${style.tone}▣${R} ${badge} ${style.tone}${row.slug}${R}`;
       const runs = row.directRuns > 0 ? `${D}${row.directRuns} run${row.directRuns === 1 ? "" : "s"}${R}` : "";
       const detail = `${D}${trunc(row.packet.deliverable, Math.max(12, cols - indent.length - 34))}${R}`;
       const text = ` ${pad(left, Math.max(20, cols - visible(`${runs}  ${detail}`) - 2))}${runs}  ${detail}`;

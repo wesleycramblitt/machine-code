@@ -571,16 +571,3 @@ export function fmtMoney(n: number): string {
 export function modeSuffix(mode: string | undefined): string {
   return mode ? `/${mode}` : "";
 }
-
-export function packetGlyph(status: string): string {
-  switch (status) {
-    case "in-progress":
-      return "●";
-    case "blocked":
-      return "⏸";
-    case "done":
-      return "✓";
-    default:
-      return "○";
-  }
-}
