@@ -104,12 +104,12 @@ test("skill modes resolve with overrides first and on-demand last", async () => 
   assert.equal(isSkillMode("exclude"), true);
   assert.equal(isSkillMode("sometimes"), false);
   assert.equal(resolveSkillMode("x"), "on-demand");
-  assert.equal(resolveSkillMode("x", { defaults: ["x"] }), "include");
   assert.equal(resolveSkillMode("x", { declared: ["x"] }), "include");
-  assert.equal(resolveSkillMode("x", { defaults: ["x"], presets: { x: "on-demand" } }), "on-demand");
+  assert.equal(resolveSkillMode("x", { presets: { x: "include" } }), "include");
+  assert.equal(resolveSkillMode("x", { presets: { x: "on-demand" } }), "on-demand");
   assert.equal(
-    resolveSkillMode("x", { defaults: ["x"], presets: { x: "on-demand" }, overrides: { x: "exclude" } }),
+    resolveSkillMode("x", { presets: { x: "on-demand" }, overrides: { x: "exclude" } }),
     "exclude",
   );
-  assert.equal(resolveSkillMode("x", { presets: { x: "bogus" }, defaults: ["x"] }), "include");
+  assert.equal(resolveSkillMode("x", { presets: { x: "bogus" } }), "on-demand");
 });

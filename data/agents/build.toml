@@ -20,5 +20,5 @@ reasoning = 0.15
 general = 0.1
 
 [skills]
-clean-code = "include"
-verified-testing = "include"
+clean-code = "on-demand"
+verified-testing = "on-demand"

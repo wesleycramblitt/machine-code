@@ -120,8 +120,6 @@ export function isSkillMode(value: unknown): value is SkillMode {
 export interface SkillModeInput {
   /** Role preset table (`[skills]` in the role TOML), if any. */
   presets?: Record<string, string>;
-  /** Agent mode defaults that inline bodies (from `defaultSkillsFor`). */
-  defaults?: string[];
   /** Declared skills (from `mc:context`). */
   declared?: string[];
   /** Composer/explicit per-skill overrides (highest precedence). */
@@ -130,8 +128,12 @@ export interface SkillModeInput {
 
 /**
  * Single precedence chain shared by assembly, preview, and the composer:
- * explicit overrides > role presets > declared (include) >
- * agent defaults (include) > on-demand.
+ * explicit overrides > role presets > declared (include) > on-demand.
+ *
+ * There is no "defaults include" tier: agent default skills (clean-code,
+ * verified-testing) are description-only, listed in the skill index and
+ * pulled on demand with the skill tool. Only an explicit composer include,
+ * a role preset, or a declaration inlines a body.
  */
 export function resolveSkillMode(name: string, input: SkillModeInput = {}): SkillMode {
   const override = input.overrides?.[name];
@@ -139,17 +141,20 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
   const preset = input.presets?.[name];
   if (isSkillMode(preset)) return preset;
   if (input.declared?.includes(name)) return "include";
-  if (input.defaults?.includes(name)) return "include";
   return "on-demand";
 }
 
 /**
- * Mode default skills for a run.
+ * Mode default skills for a run: description-only by default.
  *
  * `clean-code` rides every coding/planning run (build, planner);
  * `verified-testing` joins it when verification is verified or
  * higher. `safe-refactor` stays opt-in via `mc:context`.
  * Review is harness-owned (independent Review run), not a skill.
+ *
+ * "Default" means listed in the skill index, not inlined: bodies load only
+ * through an explicit include, a role preset, or a declaration, so the
+ * agent pulls as much of a default skill as the task actually needs.
  */
 export function defaultSkillsFor(args: { agent: string; verification?: string }): string[] {
   if (!["build", "planner", "research"].includes(args.agent)) return [];

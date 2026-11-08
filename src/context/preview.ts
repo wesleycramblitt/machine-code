@@ -174,24 +174,24 @@ export function previewContext(
       sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
     }
   }
-  // Mode default skill bodies plus explicit composer includes. Missing ones
-  // are skipped silently. On-demand modes keep the description only; the agent
-  // pulls the body with the skill tool.
+  // Default skills and explicit composer includes are candidates for body
+  // inlining; the mode chain decides. Defaults resolve to on-demand
+  // (description-only) unless a role preset or composer override says
+  // include, so no name is pushed into the declared set before resolution.
   const includeOverrides = Object.entries(options.skillOverrides ?? {})
     .filter(([, mode]) => mode === "include")
     .map(([name]) => name);
   for (const name of [...(options.defaultSkills ?? []), ...includeOverrides]) {
-    if (skills.includes(name)) continue;
-    skills.push(name);
     const path = skillPath(layout, name);
     if (!path) continue;
     const mode = resolveSkillMode(name, {
       presets: options.skillPresets,
-      defaults: options.defaultSkills,
-      declared: skills,
+      declared: [],
       overrides: options.skillOverrides,
     });
     if (mode !== "include") continue;
+    if (skills.includes(name)) continue;
+    skills.push(name);
     const size = capFor(path, Number.MAX_SAFE_INTEGER);
     sources.push({ kind: "skill", ref: name, origin: "explicit", depth: 0, chars: size, exists: true });
   }

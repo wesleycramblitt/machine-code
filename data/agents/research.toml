@@ -20,4 +20,4 @@ agentic = 0.25
 code = 0.1
 
 [skills]
-clean-code = "include"
+clean-code = "on-demand"

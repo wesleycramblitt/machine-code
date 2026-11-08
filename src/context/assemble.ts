@@ -288,15 +288,15 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
 
   // Mode default skills (clean-code on coding/planning runs, verified-testing
   // on verified+). Missing defaults are skipped silently.
-  // Defaults plus explicit composer includes. Overrides alone do not
-  // enumerate skills, so include-overrides join the candidate list here.
+  // Default skills plus explicit composer includes are candidates for body
+  // inlining; the mode chain decides. Defaults resolve to on-demand
+  // (description-only) unless a role preset or override says include.
   const includeOverrides = Object.entries(input.skillOverrides ?? {})
     .filter(([, mode]) => mode === "include")
     .map(([name]) => name);
   for (const name of [...(input.defaultSkills ?? []), ...includeOverrides]) {
     const mode = resolveSkillMode(name, {
       presets: input.skillPresets,
-      defaults: input.defaultSkills,
       declared: [],
       overrides: input.skillOverrides,
     });
