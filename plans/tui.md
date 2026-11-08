@@ -8,6 +8,8 @@ Planning features, bugs, and ideas for the machine_code TUI.
 - [ ] repo-map-view — Visualize the repo map and semantic index.
 - [ ] runs-page-hierarchy — Runs page hierarchy colors, branch/orchestration visibility, cwd default, PR removal.
 - [ ] run-start-handoff — Run-start handoff as an immediate run-details page with progressive fill-in.
+- [ ] encodings - Feature that are [Done] should be gray instead of green. Also, leave slug as normal text color, only encode status for all encodings on runs page (Features, Bugs, Ideas)
+- [ ] plans-to-issues - Change the folder plans/ to be issues/ and update references in TUI. Makes more sense for ideas, features, bugs. Also move packets/ into issues/ as issues/packets/ 
 
 ## Bugs
 
