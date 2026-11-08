@@ -170,15 +170,15 @@ test("addIndexEntry inserts under a heading and replaces by slug", () => {
     addIndexEntry(layout, "Bugs", "login-token-refresh", "auth flaky");
     addIndexEntry(layout, "Bugs", "rate-limiter", "API limits");
     const body = readFileSync(join(root, "plans", "index.md"), "utf8");
-    assert.match(body, /- \[ \] login-token-refresh — auth flaky → packets\/login-token-refresh\.md/);
-    assert.match(body, /- \[ \] rate-limiter — API limits/);
+    assert.match(body, /- \[ \] login-token-refresh - auth flaky → packets\/login-token-refresh\.md/);
+    assert.match(body, /- \[ \] rate-limiter - API limits/);
     // Replace renames the title in place: exactly one live bullet remains.
     addIndexEntry(layout, "Bugs", "login-token-refresh", "auth flaky, renamed");
     assert.doesNotMatch(body, /auth flaky, renamed/); // body is stale; re-read
     const after = readFileSync(join(root, "plans", "index.md"), "utf8");
     assert.equal(after.split("\n").filter((line) => line.includes("- [ ] login-token-refresh")).length, 1);
     assert.match(after, /auth flaky, renamed/);
-    assert.doesNotMatch(after, /auth flaky —/);
+    assert.doesNotMatch(after, /auth flaky -/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -202,7 +202,7 @@ test("renderPlan annotates item status, deps, and blockers", () => {
     assert.equal(item.status, "blocked");
     assert.equal(item.hasPacket, true);
     // The index line itself is untouched; annotation is additive.
-    assert.equal(indexLine("payments", "vendor payouts"), "- [ ] payments — vendor payouts → packets/payments.md");
+    assert.equal(indexLine("payments", "vendor payouts"), "- [ ] payments - vendor payouts → packets/payments.md");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -242,7 +242,7 @@ test("addIndexEntry can target a plan file instead of index.md", () => {
     const plan = readFileSync(join(root, "plans", "tui.md"), "utf8");
     assert.match(plan, /^# tui$/m);
     assert.match(plan, /## Bugs/);
-    assert.match(plan, /- \[ \] fix-login — Auth flaky → packets\/fix-login\.md/);
+    assert.match(plan, /- \[ \] fix-login - Auth flaky → packets\/fix-login\.md/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

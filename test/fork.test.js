@@ -149,3 +149,15 @@ test("fork settings drop an unavailable model and validate bad values", () => {
   assert.equal(result.ambiguity, "precise");
   assert.equal(result.tier, "paid");
 });
+
+test("fork settings inherit the item id, so the run stays attached", () => {
+  const summary = {
+    id: "r1", repoRoot: "/repo", agent: "planner", mode: "", request: "Plan this",
+    status: "completed", pid: 1, startedAt: "", lastActivityAt: "", turns: 1,
+    usage: { input: 0, inputTokens: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+    cost: { actual: 0, estimated: 0 }, modelCalls: 1, itemId: "encodings",
+  };
+  const result = forkSettingsFromRun({ summary, events: [], defaults: { preset: "assistant", verification: "direct", ask: false, approval: "human", ambiguity: "precise" } });
+  assert.equal(result.item, "encodings");
+  assert.equal(result.packet, undefined);
+});

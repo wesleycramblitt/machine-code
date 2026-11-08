@@ -12,9 +12,9 @@ Web tools, …), and its checklist lines are the items the Runs page and
 ## Item grammar
 
 ```text
-- [ ] slug — short title
-- [ ] slug — short title → packets/<slug>.md
-- [x] slug — short title
+- [ ] slug - short title
+- [ ] slug - short title → packets/<slug>.md
+- [x] slug - short title
 ```
 
 - **slug**: lowercase, hyphenated, 2–5 words. Stable once written; the item
@@ -46,7 +46,7 @@ item), not a separate row.
    area, create `plans/<area>.md` with a `# <Area>` heading and add it to the
    index.
 2. Add the item under `## Features`, `## Bugs`, or `## Ideas` as
-   `- [ ] slug — title`. Keep the title one sentence.
+   `- [ ] slug - title`. Keep the title one sentence.
 3. If a packet exists (or you just created one) for a feature or bug, append
    `→ packets/<slug>.md`. Never attach one to an idea.
 4. Mark finished work `[x]` in place.

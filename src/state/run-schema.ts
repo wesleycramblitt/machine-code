@@ -114,6 +114,8 @@ export interface RunSummary {
   repoRoot: string;
   /** Queued packet id this run executed, if any. */
   packetId?: string;
+  /** Parent run this one was forked from. */
+  forkedFrom?: string;
   /** Plan item (feature/bug/idea) this run belongs to, contract or not. */
   itemId?: string;
   agent: string;
@@ -246,6 +248,7 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     id,
     repoRoot: str(r.repoRoot) ?? "",
     packetId: str(r.packetId),
+    itemId: str(r.itemId),
     agent: str(r.agent) ?? "unknown",
     mode: str(r.mode) ?? "unknown",
     preset: str(r.preset),
