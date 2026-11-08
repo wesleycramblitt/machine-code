@@ -10,7 +10,7 @@ ordered so measurements are valid before optimizations land.
 - no eval (recall/faithfulness/cost) to ablate against
 
 ## Packets (in build order)
-1. ctx-preview-parity — unify preview/assemble (prerequisite)
+1. ~~ctx-preview-parity — unify preview/assemble (prerequisite)~~ — done 2026-11-08
 2. ctx-section-budgets — per-section budgets + accounting
 3. ctx-chunk-expand — path:lines snippet includes
 4. ctx-tier-descriptions — description-only defaults, on-demand bodies
