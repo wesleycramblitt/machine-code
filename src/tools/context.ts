@@ -21,13 +21,13 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
-const CONTEXT_ACTIONS = new Set(["note", "focus", "recall", "forget", "state", "expand"]);
+const CONTEXT_ACTIONS = new Set(["note", "focus", "recall", "forget", "state", "expand", "parent"]);
 const CONTEXT_KINDS = new Set(["finding", "decision", "open", "next"]);
 
 const ContextParams = Type.Object({
   action: Type.String({
-    enum: ["note", "focus", "recall", "forget", "state", "expand"],
-    description: "Memory or context operation: note | focus | recall | forget | state | expand.",
+    enum: ["note", "focus", "recall", "forget", "state", "expand", "parent"],
+    description: "Memory or context operation: note | focus | recall | forget | state | expand | parent.",
   }),
   kind: Type.Optional(
     Type.String({
@@ -39,11 +39,40 @@ const ContextParams = Type.Object({
   refs: Type.Optional(
     Type.Array(Type.String(), { description: "References: path, path:line, or path:start-end." }),
   ),
-  id: Type.Optional(Type.String({ description: "Artifact id for recall, or fact/question id for forget." })),
+  id: Type.Optional(Type.String({ description: "Artifact id for recall, fact/question id for forget, or run id for parent." })),
   target: Type.Optional(
     Type.String({ description: "For expand: a path or path#symbol, e.g. src/loop.ts#runLoop." }),
   ),
 });
+
+/**
+ * Load a run record (`run.json`) for the context tool's parent action. The
+ * run lives under the repo's runs dir; walk up from the worktree root so
+ * fork worktrees nested inside the repo still resolve.
+ */
+function loadParentRun(
+  root: string,
+  id: string,
+): Record<string, unknown> | null {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) return null;
+  let dir = root;
+  for (let depth = 0; depth < 5; depth += 1) {
+    const file = join(dir, ".machine_code", "local", "runs", id, "run.json");
+    if (existsSync(file)) {
+      try {
+        const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
+        if (raw && typeof raw === "object") return raw as Record<string, unknown>;
+        return null;
+      } catch {
+        return null;
+      }
+    }
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
+}
 
 export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
   return {
@@ -53,6 +82,9 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
       "Control run state or expand task context. note needs text (kind: finding|decision|open|next). focus needs refs. " +
       "recall needs id. forget needs id or text. state takes no fields. expand needs target (path or path#symbol) and returns " +
       "the symbol/file plus imports, callers, and tests in one sweep. " +
+      "parent needs id (a run id) and returns that run's request, status, error, and result — " +
+      "the result is withheld when the run stopped early (blocked/failed/interrupted). " +
+      "Use parent to pull a parent-chain index entry's full detail. " +
       "Example: {\"action\":\"expand\",\"target\":\"src/loop.ts#runLoop\"}.",
     parameters: ContextParams,
     async execute(_id, params: Static<typeof ContextParams>) {
@@ -175,6 +207,30 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
           }
           case "state":
             return ok(memory.renderMarkdown());
+          case "parent": {
+            if (!params.id) return fail("parent requires id (a run id)");
+            const record = loadParentRun(ctx.root, params.id);
+            if (!record) return fail(`no run ${params.id}`);
+            const status = typeof record.status === "string" ? record.status : undefined;
+            const stopReason = typeof record.stopReason === "string" ? record.stopReason : undefined;
+            // Same suppression as the assembled parent index: a stopped
+            // run's closing summary is not authoritative, so its result is
+            // withheld both inline and here.
+            const stopped = status !== undefined && status !== "completed" && status !== "running";
+            const request = typeof record.request === "string" ? record.request : "";
+            const error = typeof record.error === "string" ? record.error : "";
+            const finalText = typeof record.finalText === "string" ? record.finalText : "";
+            const lines = [
+              `[parent run ${params.id}]`,
+              ...(status ? [`status: ${status}${stopReason ? ` (${stopReason})` : ""}`] : []),
+              ...(request ? [`request: ${request}`] : []),
+              ...(error ? [`error: ${error}`] : []),
+              ...(stopped ? ["note: this run stopped early; do not treat its conclusion as authoritative."] : []),
+              ...(stopped ? ["result: withheld (run stopped early)"] : []),
+              ...(!stopped && finalText ? [`result: ${finalText}`] : []),
+            ].filter(Boolean);
+            return ok(capText(lines.join("\n"), READ_CAP_BYTES).text);
+          }
           default:
             return fail(`unknown context action "${params.action}". Use one of: ${[...CONTEXT_ACTIONS].join(", ")}.`);
         }

@@ -12,12 +12,12 @@ import { isSecretPath } from "../tools/safety.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
 import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
-import { parseIncludeRange, sliceRangeBody } from "./assemble.js";
+import { parseIncludeRange, parentIndexLine, sliceRangeBody } from "./assemble.js";
 import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
 
 export interface PreviewSource {
-  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "packet";
+  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "packet" | "parent-run";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;
@@ -74,6 +74,14 @@ export interface PreviewContextOptions {
   plans?: string[];
   /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
   defaultSkills?: string[];
+  /** Parent run and its ancestors, nearest first (same shape as assembleContext). */
+  parentRuns?: Array<{
+    id: string;
+    request: string;
+    status?: string;
+    stopReason?: string;
+    depth?: number;
+  }>;
   /** Role `[skills]` preset table (from the agent's role TOML). */
   skillPresets?: Record<string, string>;
   /** Composer per-skill mode overrides (highest precedence). */
@@ -195,6 +203,32 @@ export function previewContext(
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
     sources.push({ kind: "knowledge", ref: options.knowledgeIndex, origin: "inherited", depth: 3, chars: size, exists });
     if (!exists) warnings.push(`knowledge ${options.knowledgeIndex} is missing`);
+  }
+  // Parent chain renders as the same one-line index the assembler emits
+  // (depth cap 4, same bodies so measured chars match assembled chars).
+  // Full request/result/error stays on demand via the context tool's parent
+  // action. Over-cap ancestors warn by name, mirroring assembleContext.
+  const chain = (options.parentRuns ?? []).map((run, index) => ({
+    ...run,
+    depth: run.depth ?? index + 1,
+  }));
+  const keptParents = chain.filter((run) => run.depth <= 4);
+  const droppedParents = chain.filter((run) => run.depth > 4);
+  for (const run of keptParents) {
+    const body = parentIndexLine({ ...run, depth: run.depth });
+    sources.push({
+      kind: "parent-run",
+      ref: run.id,
+      origin: "inherited",
+      depth: run.depth,
+      chars: body.length,
+      exists: true,
+    });
+  }
+  if (droppedParents.length > 0) {
+    warnings.push(
+      `parent chain exceeds the depth-4 cap; omitted ancestor run(s): ${droppedParents.map((run) => run.id).join(", ")}`,
+    );
   }
   // Skill descriptions are visible on every run. Mirror the single aggregate
   // block assembled at band 8, at its full assembled size so the composer
