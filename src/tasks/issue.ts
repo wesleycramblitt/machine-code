@@ -10,6 +10,7 @@ import { branchExists, defaultBaseBranch, mainWorktreeRoot, removeWorktree } fro
 import { listRuns, RunRecorder, type RunSummary } from "../state/runs.js";
 import { findIssue, listIssues, moveIssue, writeIssue, type Issue, type IssueKind, type IssueStatus, parseKind, legalStatus, ISSUE_KINDS, statusesForKind } from "../plan/issues.js";
 import { slugify } from "../plan/slug.js";
+import type { TaskPacket } from "../packet.js";
 
 function mainRoot(layout: Layout): Promise<string> {
   return mainWorktreeRoot(layout.repoRoot);
@@ -22,7 +23,18 @@ async function git(cwd: string, args: string[]): Promise<{ code: number; stdout:
 
 /** Latest engine run for a slug. */
 export function issueRuns(layout: Layout, slug: string): RunSummary[] {
-  return listRuns(layout).filter((run) => run.itemId === slug || run.itemId === slug);
+  return listRuns(layout).filter((run) => run.itemId === slug || run.packetId === slug);
+}
+
+/** The runner's task view of one issue: goal + declared gates. */
+export function issueToTaskPacket(issue: Issue): TaskPacket {
+  return {
+    id: issue.slug,
+    goal: issue.prompt.trim() || issue.title || issue.slug,
+    context: [],
+    constraints: issue.tags.map((tag) => `tag: ${tag}`),
+    acceptance: issue.verify.map((command) => ({ command })),
+  };
 }
 
 async function commitIssues(layout: Layout, message: string): Promise<void> {

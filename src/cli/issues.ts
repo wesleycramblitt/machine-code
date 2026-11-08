@@ -28,7 +28,7 @@ import {
   type Issue,
   type IssueStatus,
 } from "../plan/issues.js";
-import { approveIssue, deleteIssue, planIssueWaves } from "../tasks/issue.js";
+import { approveIssue, deleteIssue, issueToTaskPacket, planIssueWaves } from "../tasks/issue.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
 
@@ -185,13 +185,7 @@ export async function runIssueBuild(
 ): Promise<number> {
   const slug = issue.slug;
   const goal = issue.prompt.trim() || issue.title || slug;
-  const packet = {
-    id: slug,
-    goal,
-    context: [],
-    constraints: issue.tags.map((tag) => `tag: ${tag}`),
-    acceptance: issue.verify.map((command) => ({ command })),
-  };
+  const packet = issueToTaskPacket(issue);
   const runtime = await loadRuntime(l);
   const recorder = new RunRecorder(l, {
     agent: "engineer",

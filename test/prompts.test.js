@@ -50,7 +50,7 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     }
 
     const research = resolveAgent(l, "research");
-    assert.deepEqual(research.def.tools, ["context", "read", "search", "ask", "skill", "write"]);
+    assert.deepEqual(research.def.tools, ["context", "read", "search", "glob", "grep", "ask", "skill", "write"]);
     assert.ok(!research.def.tools.includes("command"), "research must not hold command");
     assert.match(research.prompt, /Turn one idea into detailed features or bugs/);
     assert.match(research.prompt, /issues\/ideas\//);
@@ -61,7 +61,8 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     const engineer = resolveAgent(l, "engineer");
     assert.match(engineer.prompt, /Deliver one issue in one run/);
     assert.match(engineer.prompt, /Scout:/);
-    assert.match(engineer.prompt, /map\/semantic index/);
+    assert.match(engineer.prompt, /`glob`/);
+    assert.match(engineer.prompt, /`grep`/);
     assert.match(engineer.prompt, /Outcome: completed/);
     assert.match(engineer.prompt, /reusable scripts\//);
 

@@ -27,8 +27,9 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { parseVerificationCommands } from "../packet.js";
-import { findIssue } from "../plan/issues.js";
+import { findIssue, moveIssue } from "../plan/issues.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
+import { issueToTaskPacket } from "../tasks/issue.js";
 import { slugify } from "../plan/slug.js";
 import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
@@ -38,7 +39,7 @@ import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/profiles.js";
-import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
+import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
 import { isFreeRow } from "../select.js";
@@ -62,6 +63,24 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
+
+/** Commits dirty work, or accepts an existing commit on the branch. */
+async function ensureCommitted(
+  path: string,
+  baseRef: string | undefined,
+  message: string,
+): Promise<string | null> {
+  const committed = await commitWorktree({ path, message });
+  if (committed.sha) return committed.sha;
+  if (!baseRef) return null;
+  const ahead = await runProc("git", ["rev-list", "--count", `${baseRef}..HEAD`], {
+    cwd: path,
+    timeoutMs: 30_000,
+  });
+  if ((Number(ahead.stdout.trim()) || 0) === 0) return null;
+  const head = await runProc("git", ["rev-parse", "HEAD"], { cwd: path, timeoutMs: 30_000 });
+  return head.stdout.trim() || null;
+}
 
 export async function cmdRun(argv: string[]): Promise<number> {
   // Bare --worktree predates the true|false value; treat it as --worktree true.
@@ -459,10 +478,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
           runDir: recorder.dir,
           onEvent: (type, data) => recorder.event(type, data),
         });
+        const issueWorktree = itemSlug && agentNameParsed === "engineer";
         const spec = await createWorktree({
           layout: l,
           runId: recorder.id,
-          kind: "run",
+          kind: issueWorktree ? "issue" : "run",
+          ...(issueWorktree ? { slug: itemSlug } : {}),
           base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
           processes: worktreeProcesses,
         });
@@ -640,6 +661,51 @@ export async function cmdRun(argv: string[]): Promise<number> {
     });
   }
 
+  // Engineer runs are the finish line for an issue: gates, commit, and the
+  // directory move happen in the runner, not in the prompt. Without this a
+  // "completed" run could leave uncommitted work and the issue in todo/.
+  if (
+    result.status === "completed" &&
+    itemSlug &&
+    agentNameParsed === "engineer" &&
+    toolRoot !== l.repoRoot
+  ) {
+    const issue = findIssue(l, itemSlug);
+    if (issue) {
+      const commands = allCommands(l);
+      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), {
+        root: toolRoot,
+        commands,
+      });
+      recorder.event("gates", {
+        issue: issue.slug,
+        passed: gateOutcome.passed,
+        results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
+      });
+      if (!gateOutcome.passed) {
+        moveIssue(l, issue.slug, "blocked");
+        result = {
+          ...result,
+          status: "blocked",
+          error: `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`,
+        };
+      } else {
+        const commit = await ensureCommitted(
+          toolRoot,
+          recorder.current.baseRef,
+          `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
+        );
+        if (!commit) {
+          result = { ...result, status: "blocked", error: "engineer produced no committable change" };
+        } else {
+          recorder.patchSummary({ commit });
+          recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
+          moveIssue(l, issue.slug, "done");
+          await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+        }
+      }
+    }
+  }
   recorder.finalize(result.status, result.error, result.finalText);
   if (agentNameParsed === "research") {
     // Research writes issues//knowledge in the main tree; commit
@@ -918,23 +984,34 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     startMode,
   });
 
-  // A resumed Engineer phase still owes the runner its gates.
+  // A resumed Engineer phase still owes the runner its gates, commit, and move.
   if (result.status === "completed" && resumeAgent === "engineer" && s.itemId) {
     const issue = findIssue(l2, s.itemId);
     if (issue) {
-      const gateOutcome = await runGates(
-        resolveGates({ id: issue.slug, goal: issue.prompt, context: [], constraints: [], acceptance: issue.verify.map((command: string) => ({ command })) }),
-        { root: toolRoot, commands },
-      );
+      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), { root: toolRoot, commands });
       recorder.event("gates", {
-        packet: issue.slug,
+        issue: issue.slug,
         passed: gateOutcome.passed,
         results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
       });
       if (!gateOutcome.passed) {
+        moveIssue(l2, issue.slug, "blocked");
         recorder.finalize("blocked", `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`, result.finalText);
         printRunOutcome({ ...result, status: "blocked" }, recorder);
         return EXIT.blocked;
+      }
+      if (toolRoot !== l2.repoRoot) {
+        const commit = await ensureCommitted(
+          toolRoot,
+          recorder.current.baseRef,
+          `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
+        );
+        if (commit) {
+          recorder.patchSummary({ commit });
+          recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
+          moveIssue(l2, issue.slug, "done");
+          await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+        }
       }
     }
   }

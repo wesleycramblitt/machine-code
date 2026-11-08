@@ -8,7 +8,7 @@
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
   READ_CAP_BYTES,
@@ -1209,7 +1209,8 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               // answers either way.
               return ok(
                 `no matches for "${params.pattern}"\n` +
-                  `[try search { "pattern": "${params.pattern}" } for identifier forms, or check case and scope]`,
+                  `[try grep { "pattern": "${params.pattern}", "ignoreCase": true }, a shorter regex, ` +
+                  `or glob { "pattern": "**/*.ts" } to see the file set]`,
               );
             }
             return found;
@@ -1254,7 +1255,8 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               return ok(
                 defs.length > 0
                   ? `locate "${query}": ${defs.length} definition(s), no references\ndefinitions:\n${defs.join("\n")}`
-                  : `no matches for "${query}"`,
+                  : `no matches for "${query}"\n` +
+                    `[try grep { "pattern": "${query}", "ignoreCase": true } or a shorter identifier]`,
               );
             }
             const outlines = new Map<string, Awaited<ReturnType<typeof outlineFile>>>();
@@ -1697,11 +1699,159 @@ function prUnavailable(): AgentTool<typeof PrUnavailableParams> {
 
 /* ------------------------------------------------------------------ all */
 
+/* -------------------------------------------------------------- glob/grep */
+
+const GlobParams = Type.Object({
+  pattern: Type.String({
+    description: "Glob pattern, e.g. src/**/*.ts, **/*.test.js, or src/tui/*.tsx.",
+  }),
+  path: Type.Optional(Type.String({ description: "Directory to search (default: worktree root)." })),
+  limit: Type.Optional(Type.Number({ description: "Max paths (default 200)." })),
+});
+
+const GrepParams = Type.Object({
+  pattern: Type.String({ description: "Regular expression to find in file contents." }),
+  path: Type.Optional(Type.String({ description: "File or directory to search (default: worktree root)." })),
+  glob: Type.Optional(Type.String({ description: "Only report files matching this glob, e.g. *.ts or src/**." })),
+  ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive match (default false)." })),
+  context: Type.Optional(Type.Number({ description: "Lines of context around each match (default 2)." })),
+  limit: Type.Optional(Type.Number({ description: "Max matches (default 100)." })),
+});
+
+function globMatchers(pattern: string): RegExp[] {
+  return expandGlobBraces(pattern).map((entry) => globToRegExp(entry));
+}
+
+export function globTool(ctx: ToolContext): AgentTool<typeof GlobParams> {
+  return {
+    name: "glob",
+    label: "glob",
+    description:
+      "Find files by path with a glob (src/**/*.ts, **/*.test.js). Returns repo-relative paths, one per line. " +
+      "Use this to locate files; use grep for text inside files. Excludes node_modules, dist, build, target, .git, " +
+      "runtime state, secret files, and binaries.",
+    parameters: GlobParams,
+    async execute(_id, params: Static<typeof GlobParams>) {
+      try {
+        const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
+        let scopeIsFile = false;
+        try {
+          scopeIsFile = statSync(scope).isFile();
+        } catch {
+          return fail(`no such path: ${params.path ?? "."}`);
+        }
+        const matchers = globMatchers(params.pattern);
+        const limit = Math.max(1, Math.floor(params.limit ?? 200));
+        if (scopeIsFile) {
+          const rel = toRelative(ctx.root, scope);
+          if (isSecretPath(rel)) return ok("no matches");
+          return ok(matchers.some((matcher) => matcher.test(rel) || matcher.test(basename(rel))) ? rel : "no matches");
+        }
+        const result = await runProc("rg", ["--files", ...excludeGlobs()], {
+          cwd: scope,
+          timeoutMs: 30_000,
+        });
+        if (result.outcome === "spawn-error") return fail(`configuration gap: ${result.spawnError}`);
+        if (result.outcome === "timeout") return fail("rg timed out after 30s (process group killed)");
+        if (result.code !== 0 && result.stdout.length === 0) {
+          if (result.code === 1) return ok("no matches");
+          return fail(`rg exited ${result.code}: ${result.stderr.trim() || "(no stderr)"}`);
+        }
+        const rootRelative = (file: string): string => toRelative(ctx.root, join(scope, file));
+        const found = result.stdout
+          .split("\n")
+          .filter(Boolean)
+          .filter((file) => {
+            const rooted = rootRelative(file);
+            return matchers.some((matcher) => matcher.test(file) || matcher.test(rooted));
+          })
+          .map(rootRelative);
+        const unique = [...new Set(found)].sort().slice(0, limit);
+        return ok(unique.length > 0 ? capText(unique.join("\n"), SEARCH_CAP_BYTES).text : `no files match "${params.pattern}"`);
+      } catch (error) {
+        return fail(error instanceof ToolError ? error.message : String(error));
+      }
+    },
+  };
+}
+
+export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
+  return {
+    name: "grep",
+    label: "grep",
+    description:
+      "Search file contents with a regular expression (ripgrep). Returns path:line:text with context. " +
+      "This is the plain text tool: use glob to pick paths, then grep for a literal or regex. " +
+      "Excludes node_modules, dist, build, target, .git, runtime state, secret files, and binaries.",
+    parameters: GrepParams,
+    async execute(_id, params: Static<typeof GrepParams>) {
+      try {
+        const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
+        let scopeIsFile = false;
+        try {
+          scopeIsFile = statSync(scope).isFile();
+        } catch {
+          return fail(`no such path: ${params.path ?? "."}`);
+        }
+        if (scopeIsFile && isSecretPath(toRelative(ctx.root, scope))) return ok("no matches");
+        const limit = Math.max(1, Math.floor(params.limit ?? 100));
+        const context = Math.max(0, Math.floor(params.context ?? 2));
+        const args = [
+          "--line-number",
+          "--with-filename",
+          "--no-heading",
+          "--color",
+          "never",
+          "--max-count",
+          String(limit),
+          "--context",
+          String(context),
+          ...(params.ignoreCase ? ["--ignore-case"] : []),
+          ...excludeGlobs(),
+          "--",
+          params.pattern,
+        ];
+        if (scope !== ctx.root) args.push(toRelative(ctx.root, scope));
+        const result = await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
+        if (result.isError) return result;
+        let text = result.content
+          .map((item) => (item.type === "text" ? item.text : ""))
+          .join("\n");
+        if (text === "no matches") {
+          return ok(
+            `no matches for "${params.pattern}"\n` +
+              `[try ignoreCase: true, a shorter regex, or glob: "*.ts" to narrow the file set]`,
+          );
+        }
+        if (params.glob) {
+          const matchers = globMatchers(params.glob);
+          text = text
+            .split("\n")
+            .filter((line) => {
+              if (line === "--" || line.startsWith("[")) return true;
+              const match = /^(.*?)(?::|-)\d+(?::|-)/.exec(line);
+              if (!match) return true;
+              const rel = match[1]!;
+              return matchers.some((matcher) => matcher.test(rel) || matcher.test(basename(rel)));
+            })
+            .join("\n");
+          if (!text.trim()) return ok(`no matches for "${params.pattern}" in files matching "${params.glob}"`);
+        }
+        return ok(text || "no matches");
+      } catch (error) {
+        return fail(error instanceof ToolError ? error.message : String(error));
+      }
+    },
+  };
+}
+
 export type CoreToolName =
   | "read"
   | "write"
   | "edit"
   | "search"
+  | "glob"
+  | "grep"
   | "command"
   | "context"
   | "ask"
@@ -1715,6 +1865,8 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     write: writeTool(ctx),
     edit: editTool(ctx),
     search: searchTool(ctx),
+    glob: globTool(ctx),
+    grep: grepTool(ctx),
     command: commandTool(ctx),
     context: contextTool(ctx),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),

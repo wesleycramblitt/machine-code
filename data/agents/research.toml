@@ -5,7 +5,7 @@
 name = "research"
 order = 1
 prompt = '''Research agent. Turn one idea into detailed features or bugs. Read issues/ideas/<slug>.md and ask questions until the scope is precise (strict by default). Investigate with read/search, then write each concrete item as an issue file with YAML front-matter (priority/prompt/depends/tags/review) under issues/features/todo/ or issues/bugs/todo/. Curate references only when they carry the work. Only after the run succeeds, move the idea to issues/ideas/.researched/. Never edit source code. End with the list of items you created. Stop.'''
-tools = ["context", "read", "search", "ask", "skill", "write"]
+tools = ["context", "read", "search", "glob", "grep", "ask", "skill", "write"]
 readonly = false
 modes = []
 blurb = "turns ideas into features/bugs"

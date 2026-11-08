@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { commandTool, editTool, readTool, searchTool, writeTool } from "../dist/tools/index.js";
+import { commandTool, editTool, globTool, grepTool, readTool, searchTool, writeTool } from "../dist/tools/index.js";
 import { contextTool } from "../dist/tools/context.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 import { RunStateStore } from "../dist/context/state.js";
@@ -233,7 +233,7 @@ test("text with no matches points at locate", async () => {
     assert.equal(result.isError, undefined);
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /no matches for "zzz-no-such-string"/);
-    assert.match(text, /try search \{ "pattern": "zzz-no-such-string" \}/);
+    assert.match(text, /try grep \{ "pattern": "zzz-no-such-string", "ignoreCase": true \}/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -362,6 +362,54 @@ test("locate answers references when no symbol matches", async () => {
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /src\.ts:1/);
     assert.doesNotMatch(text, /no symbols/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("glob lists matching repo-relative paths and honors excludes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-glob-"));
+  try {
+    mkdirSync(join(root, "src", "tui"), { recursive: true });
+    mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "export const a = 1;\n", "utf8");
+    writeFileSync(join(root, "src", "tui", "b.ts"), "export const b = 2;\n", "utf8");
+    writeFileSync(join(root, "src", "notes.md"), "# notes\n", "utf8");
+    writeFileSync(join(root, "node_modules", "pkg", "hidden.ts"), "export const h = 3;\n", "utf8");
+    const tool = globTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { pattern: "src/**/*.ts" });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /src\/a\.ts/);
+    assert.match(text, /src\/tui\/b\.ts/);
+    assert.doesNotMatch(text, /notes\.md/);
+    assert.doesNotMatch(text, /node_modules/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("grep is literal, case-insensitive on request, and glob-scoped", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-grep-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "const GRAY = 1;\nconst other = 2;\n", "utf8");
+    writeFileSync(join(root, "src", "b.md"), "gray is a color\n", "utf8");
+    const tool = grepTool({ root, commands: CORE_COMMANDS });
+    const insensitive = await tool.execute("id", { pattern: "gray", ignoreCase: true });
+    const insensitiveText = insensitive.content.map((c) => c.text ?? "").join("\n");
+    assert.match(insensitiveText, /src\/a\.ts:1/);
+    assert.match(insensitiveText, /src\/b\.md:1/);
+
+    const scoped = await tool.execute("id", { pattern: "gray", ignoreCase: true, glob: "*.ts" });
+    const scopedText = scoped.content.map((c) => c.text ?? "").join("\n");
+    assert.match(scopedText, /src\/a\.ts/);
+    assert.doesNotMatch(scopedText, /src\/b\.md/);
+
+    const missing = await tool.execute("id", { pattern: "zzz-nope" });
+    const missingText = missing.content.map((c) => c.text ?? "").join("\n");
+    assert.match(missingText, /no matches for "zzz-nope"/);
+    assert.match(missingText, /ignoreCase: true/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

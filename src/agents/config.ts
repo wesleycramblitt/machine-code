@@ -224,6 +224,8 @@ export interface ResolvedAgent {
 const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   read: "code:read",
   search: "code:read",
+  glob: "code:read",
+  grep: "code:read",
   write: "code:write",
   edit: "code:write",
   command: null,

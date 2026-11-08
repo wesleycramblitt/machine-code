@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { findIssue, listIssues, moveIssue, parseIssueFile, statusesForKind, writeIssue } from "../dist/plan/issues.js";
+import { issueToTaskPacket } from "../dist/tasks/issue.js";
 
 function fakeLayout(root) {
   return {
@@ -34,9 +35,15 @@ test("writeIssue creates front-matter plus body under kind/status", () => {
       priority: "high",
       tags: ["tui"],
       review: "human",
+      verify: ["typescript:test", "typescript:typecheck"],
     });
     assert.equal(issue.rel, "issues/features/todo/fast-lookup.md");
     assert.equal(issue.status, "todo");
+    assert.deepEqual(issue.verify, ["typescript:test", "typescript:typecheck"]);
+    assert.deepEqual(issueToTaskPacket(issue).acceptance, [
+      { command: "typescript:test" },
+      { command: "typescript:typecheck" },
+    ]);
     const text = readFileSync(issue.path, "utf8");
     assert.match(text, /priority = "high"/);
     assert.match(text, /prompt = "Make lookups fast\."/);

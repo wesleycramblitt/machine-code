@@ -126,7 +126,7 @@ export function compileGateName(commands: ReadonlyMap<string, unknown>): string 
 
 /** Research calls before a writable role is nudged to act. Steering, not a
  * quota: the model has already read the target; the note just says so. */
-const RESEARCH_NUDGE_AFTER = 15;
+const RESEARCH_NUDGE_AFTER = 10;
 /** Gate failures tolerated before the run is reported blocked. */
 const GATE_BLOCK_LIMIT = 3;
 
@@ -665,7 +665,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   /** Run-level loop detector; a model rotation does not erase evidence. */
   // Read-only roles (review/research/planner) cannot make progress by editing,
   // so an identical-repeat streak is a loop much sooner than for build.
-  const evidence = new EvidenceTracker(input.agent.name === "build" ? 20 : 8);
+  // Four identical evidence keys with no mutation is a loop. A single-line
+  // fix should not spend half its turns re-running the same search.
+  const evidence = new EvidenceTracker(4);
   let turns = 0;
   /** Cumulative turns across resumes, for the run summary. */
   let reportedTurns = recorder.current.turns;

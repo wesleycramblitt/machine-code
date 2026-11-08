@@ -39,20 +39,20 @@ const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }>
   todo: { tone: SLATE, glyph: "◆" },
   "in-progress": { tone: SKY, glyph: "●" },
   blocked: { tone: ROSE, glyph: "⏸" },
-  done: { tone: LIME, glyph: "✓" },
+  done: { tone: GR, glyph: "✓" },
 };
 
 const PRIORITY_TONE: Record<string, string> = { high: ROSE, medium: D, low: SLATE };
 
 /** Category header colors: type and exception buckets. */
 const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {
-  feature: LIME,
-  bug: ROSE,
-  idea: AMBER,
+  feature: W,
+  bug: W,
+  idea: W,
   other: W,
-  category: VIOLET,
-  untracked: SLATE,
-  status: AMBER,
+  category: D,
+  untracked: D,
+  status: D,
 };
 
 export function renderRunsList(props: RunsListProps): RunsListFrame {

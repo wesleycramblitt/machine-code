@@ -513,13 +513,23 @@ availability, and approval mode. The tools line is the exact post-filter list,
 so a role never sees a tool it cannot call. When `ask` is unavailable, the
 ambiguity policy says to stop and report the question instead of asking.
 
-Research holds only `context`, `read`, `search`, `ask`, `skill`, and `write`.
-It reads one idea, asks until the scope is precise, and writes concrete
-features/bugs as issue files under `issues/features/todo/` or
-`issues/bugs/todo/`. Engineer holds `context`, `read`, `write`, `edit`,
-`search`, `command`, `ask`, `artifact`, and `skill`; it plans and builds in one
-run in a `mc/<slug>` worktree. Review is read-only and judges the same
-worktree and commit the Engineer used.
+Research holds only `context`, `read`, `search`, `glob`, `grep`, `ask`,
+`skill`, and `write`. It reads one idea, asks until the scope is precise, and
+writes concrete features/bugs as issue files under
+`issues/features/todo/` or `issues/bugs/todo/`. Engineer holds `context`,
+`read`, `write`, `edit`, `search`, `glob`, `grep`, `command`, `ask`,
+`artifact`, and `skill`; it plans and builds in one run in a `mc/<slug>`
+worktree. Review is read-only and judges the same worktree and commit the
+Engineer used.
+
+The file tools are deliberately split. `glob { "pattern": "src/**/*.ts" }`
+lists paths. `grep { "pattern": "GRAY", "ignoreCase": true }` is plain
+ripgrep. `search` is the one-verb router for identifiers (definitions plus
+references), file paths (outline), and free text. `read` prefers
+`symbol`/`section`/`around`; `offset`/`limit` are for large unindexed files.
+When an Engineer run has an issue in a worktree, the runner owns the finish:
+it runs the issue's `verify` gates, commits the branch, and moves the issue to
+`done/` (or `blocked/`), even if the model stops early.
 
 An issue is one deliverable: one file-level change and at most **three**
 verify commands in `issues/<kind>/todo/<slug>.md`. Split anything bigger into
