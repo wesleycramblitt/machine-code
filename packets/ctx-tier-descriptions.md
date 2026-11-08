@@ -1,8 +1,10 @@
 ---
 status = "todo"
-deps = ["ctx-section-budgets"]
+deps = []
 review = "gates"
+
 ---
+
 # ctx-tier-descriptions
 
 ## Deliverable
