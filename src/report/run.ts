@@ -19,7 +19,18 @@ export interface ContextManifest {
 
 /** Per-section chars for manifests written before section budgets existed. */
 export function sectionsFromSources(sources: readonly ContextSource[]): ContextSections {
-  const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+  const sections: ContextSections = {
+    packets: 0,
+    plans: 0,
+    knowledge: 0,
+    skills: 0,
+    scripts: 0,
+    tools: 0,
+    references: 0,
+    files: 0,
+    parents: 0,
+    system: 0,
+  };
   for (const source of sources) {
     const chars = typeof source.bytes === "number" && Number.isFinite(source.bytes) ? Math.max(0, source.bytes) : 0;
     sections[sectionForKind(source.kind)] += chars;
@@ -30,7 +41,18 @@ export function sectionsFromSources(sources: readonly ContextSource[]): ContextS
 function parseSections(raw: unknown, sources: ContextSource[]): ContextSections {
   if (raw && typeof raw === "object") {
     const record = raw as Record<string, unknown>;
-    const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+    const sections: ContextSections = {
+      packets: 0,
+      plans: 0,
+      knowledge: 0,
+      skills: 0,
+      scripts: 0,
+      tools: 0,
+      references: 0,
+      files: 0,
+      parents: 0,
+      system: 0,
+    };
     let valid = true;
     for (const key of Object.keys(sections) as Array<keyof ContextSections>) {
       const value = record[key];
