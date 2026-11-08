@@ -11,3 +11,4 @@
 - [ ] ctx-chunk-expand — Snippet includes with path:lines parent fallback instead of whole-file only → packets/ctx-chunk-expand.md
 - [ ] ctx-tier-descriptions — Description-only defaults for tools/skills/references with on-demand body fetch → packets/ctx-tier-descriptions.md
 - [ ] ctx-eval-harness — Context quality eval: gold-file recall, faithfulness spot-check, token cost per section → packets/ctx-eval-harness.md
+- [ ] ctx-ordering-cache — Lost-in-middle ordering plus stable section order for prompt cache hits → packets/ctx-ordering-cache.md
