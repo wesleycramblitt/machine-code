@@ -13,10 +13,9 @@ ordered so measurements are valid before optimizations land.
 1. ~~ctx-preview-parity — unify preview/assemble (prerequisite)~~ — done 2026-11-08
 2. ~~ctx-section-budgets — per-section budgets + accounting~~ — done 2026-11-08 (superseded: static caps removed, see 3)
 3. ~~ctx-chunk-expand — path:lines snippet includes~~ — done 2026-11-08 (folded in: TUI-mirroring sections, role-aware priority, no static caps)
-3. ctx-chunk-expand — path:lines snippet includes
 4. ~~ctx-tier-descriptions — description-only defaults, on-demand bodies~~ — done 2026-11-08
 5. ctx-eval-harness — recall/faithfulness/cost eval
-6. ctx-ordering-cache — lost-in-middle ordering + cache-stable layout
+6. ~~ctx-ordering-cache — lost-in-middle ordering + cache-stable layout~~ — done 2026-11-08
 7. ctx-compaction — rolling compaction for parent history
 
 Research deferred: revisit SOTA (hybrid retrieval + rerank, embeddings) only if
