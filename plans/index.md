@@ -3,8 +3,8 @@
 Hand-written plan files. Each file is a category (TUI, Models, …), and its
 checklist lines are work items:
 
-- `- [ ] slug — title` — a feature, bug, or idea
-- `- [ ] slug — title → packets/<slug>.md` — feature/bug linked to its build contract
+- `- [ ] slug - title` — a feature, bug, or idea
+- `- [ ] slug - title → packets/<slug>.md` — feature/bug linked to its build contract
 - `- [x] …` — done (a status, not a category)
 - `- [~] …` — archived (kept, hidden from normal attention)
 

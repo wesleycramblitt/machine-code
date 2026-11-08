@@ -288,7 +288,7 @@ function isHeadingLine(line: string): boolean {
 /** `- [ ] slug — title` / `- [x] slug — title` / optional `→ packets/<slug>.md` link. */
 export function indexLine(slug: string, title: string, opts: { done?: boolean; link?: boolean } = {}): string {
   const box = opts.done ? "[x]" : "[ ]";
-  const label = title.trim() ? ` — ${title.trim()}` : "";
+  const label = title.trim() ? ` - ${title.trim()}` : "";
   const link = opts.link === false ? "" : ` → ${PACKETS_DIR}/${slug}.md`;
   return `- ${box} ${slug}${label}${link}`;
 }
@@ -434,7 +434,7 @@ export function renderPlan(layout: Layout): PlanView {
         const glyph = status ? `${statusGlyph(status)} ${status}` : "";
         const branchTag = packet && status && status !== "done" ? `  ⤳ ${packetBranch(packet.slug)}` : "";
         const box = item.done ? "x" : " ";
-        rendered.push(`- [${box}] ${item.slug}${item.title ? ` — ${item.title}` : ""}  ${glyph}${branchTag}`.trimEnd());
+        rendered.push(`- [${box}] ${item.slug}${item.title ? ` - ${item.title}` : ""}  ${glyph}${branchTag}`.trimEnd());
         if (packet?.blocked) rendered.push(`      blocked: ${packet.blocked}`);
         if (packet && packet.deps.length > 0) rendered.push(`      deps: ${packet.deps.join(", ")}`);
         items.push({

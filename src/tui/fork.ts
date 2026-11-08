@@ -113,6 +113,7 @@ export function forkSettingsFromRun(input: {
     minFit: settings?.minFit,
     floors,
     ...(summary.packetId ? { packet: summary.packetId } : {}),
+    ...(summary.itemId ? { item: summary.itemId } : {}),
     prompt: summary.request,
   };
 }
