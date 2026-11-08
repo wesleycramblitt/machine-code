@@ -44,7 +44,7 @@ test("role presets resolve to the documented defaults", () => {
   const engineer = resolveAgentConfig({ role: "engineer" });
   assert.equal(engineer.preset, "implement");
   assert.equal(engineer.delegate, false);
-  assert.equal(engineer.ask, false);
+  assert.equal(engineer.ask, true);
   assert.equal(engineer.verification, "verified");
   assert.equal(engineer.artifactScripts, true);
 

@@ -261,6 +261,22 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   const agentNameParsed = (agentName as AgentName | undefined) ?? "research";
 
+  // Review binds to the engineer's worktree/commit automatically when the run
+  // is attached to an issue. Explicit --review-of still wins.
+  let reviewOf = flags.get("review-of");
+  if (agentNameParsed === "review" && itemFlag !== undefined && reviewOf === undefined) {
+    const item = slugify(itemFlag);
+    const candidate = listRuns(layout())
+      .filter((run) => (run.itemId ?? run.packetId) === item && run.agent === "engineer" && Boolean(run.worktree))
+      .sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1))[0];
+    if (candidate) {
+      reviewOf = candidate.id;
+      process.stderr.write(`review bound to engineer run ${candidate.id.slice(-8)} (${candidate.branch ?? "worktree"})\n`);
+    } else {
+      process.stderr.write(`warning: no engineer worktree for ${item}; review runs against the main tree\n`);
+    }
+  }
+
   if (request.length === 0) {
     fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
   }
@@ -564,7 +580,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
     if (role === "review") {
       // A delegated review may target a specific build worktree.
-      const reviewOf = flags.get("review-of");
       if (reviewOf) {
         const target = readRun(l, reviewOf);
         if (target?.summary.worktree) {

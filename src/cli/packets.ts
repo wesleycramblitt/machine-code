@@ -179,6 +179,21 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     return code;
   }
 
+  if (sub === "review") {
+    const slug = positional[1];
+    if (!slug) fail("usage: machine_code issue review <slug>");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    if (issue.kind === "ideas") fail(`ideas are researched, not reviewed: ${cleaned}`);
+    const child = spawn(
+      process.execPath,
+      [process.argv[1]!, "run", "--agent", "review", "--item", cleaned, "--context-include", JSON.stringify({ files: [issue.rel] }), issue.prompt],
+      { stdio: "inherit" },
+    );
+    return new Promise<number>((resolve) => child.on("exit", (code) => resolve(code ?? 1)));
+  }
+
   if (sub === "list" || sub === "ls" || sub === undefined) {
     const issues = listIssues(l);
     if (flags.has("json")) {

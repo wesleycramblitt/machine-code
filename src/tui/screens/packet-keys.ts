@@ -31,6 +31,16 @@ export function handlePacketKeys(s: TuiState, ctx: KeyServices, data: string): b
   if (data === "\x1b[A" || data === "k") { s.packetScroll = Math.max(0, s.packetScroll - 1); ctx.draw(); return true; }
   if (data === "\x1b[B" || data === "j") { s.packetScroll += 1; ctx.draw(); return true; }
   if (data === "n") { startForIssue(); ctx.draw(); return true; }
+  if (data === "v" && slug) {
+    const issue = findIssue(l, slug);
+    if (!issue) {
+      ctx.notify(`no issue ${slug}`);
+      ctx.draw();
+      return true;
+    }
+    spawnCli(["run", "--agent", "review", "--item", slug, issue.prompt], `review ${slug} started`);
+    return true;
+  }
   if (data === "e" && slug) {
     const issue = findIssue(l, slug);
     if (issue) ctx.openEditor(issue.path);

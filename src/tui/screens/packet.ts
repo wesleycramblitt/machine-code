@@ -5,7 +5,7 @@
  * review mode, body, and every run attached to it. Actions move the issue
  * forward (plan/build/gate/approve/delete/orchestrate/edit).
  */
-import { B, C, D, G, GR, R, RED, W, Y, command, joinCommands, trunc } from "../format.js";
+import { B, C, D, G, GR, M, R, RED, W, Y, command, joinCommands, trunc } from "../format.js";
 import { sortRuns } from "../status.js";
 import type { RunSummary } from "../../state/runs.js";
 import { runItemId } from "../../plan/lifecycle.js";
@@ -62,6 +62,7 @@ export function renderPacket(props: PacketProps): PacketFrame {
     ...w,
     actions: joinCommands([
       command("n", "Run", undefined, C),
+      command("v", "Review", undefined, M),
       command("o", "Orchestrate", undefined, GR),
       command("b", "Build", undefined, C),
       command("g", "Gate", issue?.review ?? "none", issue?.review === "agent" ? C : issue?.review === "human" ? Y : D),

@@ -59,11 +59,11 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     assert.match(research.prompt, /Curate references only when they carry the work/);
 
     const engineer = resolveAgent(l, "engineer");
-    assert.match(engineer.prompt, /Take one issue under issues\/features or issues\/bugs/);
-    assert.match(engineer.prompt, /Scout <=> act/);
+    assert.match(engineer.prompt, /Deliver one issue in one run/);
+    assert.match(engineer.prompt, /Scout:/);
     assert.match(engineer.prompt, /map\/semantic index/);
-    assert.match(engineer.prompt, /Outcome line \(completed\|blocked\|failed\)/);
-    assert.match(engineer.prompt, /Prefer reusable scripts in scripts\//);
+    assert.match(engineer.prompt, /Outcome: completed/);
+    assert.match(engineer.prompt, /reusable scripts\//);
 
     const review = resolveAgent(l, "review");
     assert.match(review.prompt, /same worktree and branch the engineer used/);

@@ -4,7 +4,7 @@
 
 name = "engineer"
 order = 2
-prompt = '''Engineer. Take one issue under issues/features or issues/bugs and implement it in one run. Scout <=> act: inspect the map/semantic index and the issue, alternate small reads/expands with edits, and only load what the change needs. Prefer reusable scripts in scripts/ over one-off commands for config, tests, and setup. Write a 3-line plan, make one logical change at a time, then run the gates. End with an Outcome line (completed|blocked|failed). Ask only when information is missing. Move the issue to done/ on success or blocked/ with the reason, and commit the work. Stop.'''
+prompt = '''Engineer. Deliver one issue in one run. Scout: read the issue, use the map/semantic index, search by symbol, expand only the ranges the change touches. Act: 3-line plan, one logical edit per call, re-read only the affected region after each edit. Verify: run the issue's gates once; on failure inspect it, never rerun unchanged. Finish: commit, move the issue to done/ (or blocked/ with the reason), print `Outcome: completed|blocked|failed`. Prefer a small reusable scripts/ helper over repeated setup. Ask once only if a wrong change is likely. Stop.'''
 tools = ["context", "read", "write", "edit", "search", "command", "ask", "artifact", "skill"]
 readonly = false
 modes = []

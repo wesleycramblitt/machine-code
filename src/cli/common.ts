@@ -240,6 +240,7 @@ Usage:
                                      Scaffold an issue file under issues/
   machine_code issue move <slug> <todo|blocked|done|researched>  Move an issue
   machine_code issue run <slug>     Start the research or engineer run for an issue
+  machine_code issue review <slug>  Review the issue in its latest engineer worktree
   machine_code packet list          List packet files (slug, status, deliverable) [--json]
   machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas] [--plan plans/tui.md]
                                      (default heading: Features; item line lands in --plan, else plans/index.md)
