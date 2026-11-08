@@ -29,6 +29,17 @@ export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
   overall: "Overall status",
 };
 
+/** Section header tone: work type, plan file, or run-status grouping. */
+export type SectionTone =
+  | "feature"
+  | "bug"
+  | "idea"
+  | "other"
+  | "plan"
+  | "unplanned"
+  | "untracked"
+  | "status";
+
 /** Parse a `--group` value, accepting the pre-restructure names. */
 export function parseRunGroup(value: string | undefined): RunGroup | undefined {
   if (!value) return undefined;
@@ -57,7 +68,7 @@ export type RunRow =
       depth: number;
       collapsible: boolean;
       collapsed: boolean;
-      tone: "untracked" | "orphaned" | "status";
+      tone: SectionTone;
       /** Plan file this section represents (By plan mode), for seeded runs. */
       plan?: string;
     }
@@ -217,7 +228,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     label: string,
     count: number,
     depth: number,
-    tone: "untracked" | "orphaned" | "status",
+    tone: SectionTone,
   ): boolean => {
     if (count === 0) return false;
     rows.push({ kind: "section", id, label, count, depth, collapsible: true, collapsed: collapsed.has(id), tone });
@@ -291,7 +302,9 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     const statusOf = (item: PlanItem, packet: PacketFile | undefined): PlanItemStatus =>
       item.done ? "done" : packet ? packet.status : "todo";
     const pushPlanLine = (item: PlanItem, lineDepth: number, parentId: string): void => {
-      const packet = item.packet ? bySlug.get(item.packet) : undefined;
+      // Association is the explicit link, then the shared slug. A packet named
+      // like the item therefore pops up under it even before the link is added.
+      const packet = (item.packet ? bySlug.get(item.packet) : undefined) ?? bySlug.get(item.slug);
       const id = `planline:${repoRoot}:${item.plan}:${item.slug}`;
       rows.push({
         kind: "planline",
@@ -332,7 +345,8 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         const list = items.filter((item) => item.kind === kind);
         if (list.length === 0) continue;
         const id = `${prefix}:${kind}`;
-        if (!pushSection(id, PLAN_ITEM_KIND_LABELS[kind], list.length, sectionDepth, "status")) continue;
+        const tone: SectionTone = kind === "feature" ? "feature" : kind === "bug" ? "bug" : kind === "idea" ? "idea" : "other";
+        if (!pushSection(id, PLAN_ITEM_KIND_LABELS[kind], list.length, sectionDepth, tone)) continue;
         for (const item of sortItems(list)) pushPlanLine(item, sectionDepth + 1, id);
       }
     };
@@ -356,7 +370,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
           depth,
           collapsible: true,
           collapsed: collapsed.has(id),
-          tone: "status",
+          tone: "plan",
           plan,
         });
         if (collapsed.has(id)) continue;
@@ -370,7 +384,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     // not yet placed on the hand-written map.
     const unplaced = packets.filter((packet) => !placed.has(packet.slug));
     const unplannedId = `plan:${repoRoot}:unplanned`;
-    if (pushSection(unplannedId, "Unplanned packets", unplaced.length, depth, "orphaned")) {
+    if (pushSection(unplannedId, "Unplanned packets", unplaced.length, depth, "unplanned")) {
       const ordered = [...unplaced].sort(
         (a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || a.slug.localeCompare(b.slug),
       );

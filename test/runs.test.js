@@ -251,3 +251,41 @@ test("unlinked packets appear under Unplanned packets", () => {
   assert.ok(loose && loose.kind === "packet");
   assert.match(loose.parent, /unplanned/);
 });
+
+test("a packet pops up under an item with the same slug even without a link", () => {
+  const index = buildRunIndex({
+    runs: [run({ id: "r1", packetId: "demo" })],
+    group: "all",
+    packetRepo: repoA,
+    packets: [packetFile("demo")],
+    planItems: [item({ kind: "idea", slug: "demo", title: "Try the demo" })],
+  });
+  const line = index.rows.find((row) => row.kind === "planline" && row.slug === "demo");
+  assert.ok(line && line.kind === "planline");
+  const packet = index.rows.find((row) => row.kind === "packet" && row.slug === "demo");
+  assert.ok(packet && packet.kind === "packet");
+  assert.equal(packet.parent, line.id, "slug match associates without a link");
+});
+
+test("category sections carry a type tone", () => {
+  const index = buildRunIndex({
+    runs: [],
+    group: "all",
+    packetRepo: repoA,
+    packets: [packetFile("loose")],
+    planItems: [
+      item({ kind: "feature", slug: "f", title: "F" }),
+      item({ kind: "bug", slug: "b", title: "B" }),
+      item({ kind: "idea", slug: "i", title: "I" }),
+    ],
+  });
+  const tones = Object.fromEntries(
+    index.rows
+      .filter((row) => row.kind === "section")
+      .map((row) => [row.label, row.tone]),
+  );
+  assert.equal(tones.Features, "feature");
+  assert.equal(tones.Bugs, "bug");
+  assert.equal(tones.Ideas, "idea");
+  assert.equal(tones["Unplanned packets"], "unplanned");
+});
