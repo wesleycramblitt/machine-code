@@ -31,6 +31,20 @@ export interface RunsListFrame {
   scroll: number;
 }
 
+/** Shared status glyph + color. Always render the name too, not color alone. */
+function statusStyle(status: "todo" | "in-progress" | "blocked" | "done"): { tone: string; glyph: string } {
+  switch (status) {
+    case "in-progress":
+      return { tone: C, glyph: "●" };
+    case "blocked":
+      return { tone: Y, glyph: "⏸" };
+    case "done":
+      return { tone: G, glyph: "✓" };
+    default:
+      return { tone: W, glyph: "○" };
+  }
+}
+
 export function renderRunsList(props: RunsListProps): RunsListFrame {
   const { cols, narrow, runNarrow, bodyH, theme, toast, index, selectedRow, focus, group, reposScope, pendingFor } = props;
   const lines: string[] = [];
@@ -48,22 +62,21 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "planline") {
-      // Status is color-encoded: dim todo, cyan in progress, yellow blocked,
-      // green done. The checkbox is the item's own state; a linked packet's
-      // status wins when it is further along.
-      const tone =
-        row.status === "in-progress" ? C : row.status === "blocked" ? Y : row.status === "done" ? G : D;
-      const glyph = row.status === "in-progress" ? "●" : row.status === "blocked" ? "⏸" : row.status === "done" ? "✓" : "○";
+      // Status is both color-encoded and spelled out: color alone is easy to
+      // miss and inaccessible. A linked packet's status wins when it is
+      // further along than the checkbox.
+      const style = statusStyle(row.status);
+      const badge = `${B}${style.tone}[${row.status}]${R}`;
       const title = row.title
-        ? ` ${D}${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 14))}${R}`
+        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - row.status.length - 21))}${R}`
         : "";
-      const text = ` ${indent}${tone}${glyph}${R} ${tone}${row.slug}${R}${title}`;
+      const text = ` ${indent}${style.tone}${style.glyph}${R} ${badge} ${style.tone}${row.slug}${R}${title}`;
       rendered.push(selected(text, isSelected));
     } else if (row.kind === "packet") {
       const status = row.packet.status;
-      const tone = status === "in-progress" ? C : status === "blocked" ? Y : status === "done" ? G : D;
-      const glyph = status === "in-progress" ? "●" : status === "blocked" ? "⏸" : status === "done" ? "✓" : "○";
-      const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${glyph} ${tone}${row.slug}${R} ${D}[${status}]${R}`;
+      const style = statusStyle(status);
+      const badge = `${B}${style.tone}[${status}]${R}`;
+      const left = `${indent}${row.collapsible ? (row.collapsed ? "▸" : "▾") : " "} ${style.tone}${style.glyph}${R} ${badge} ${style.tone}${row.slug}${R}`;
       const runs = row.directRuns > 0 ? `${D}${row.directRuns} run${row.directRuns === 1 ? "" : "s"}${R}` : "";
       const detail = `${D}${trunc(row.packet.deliverable, Math.max(12, cols - indent.length - 34))}${R}`;
       const text = ` ${pad(left, Math.max(20, cols - visible(`${runs}  ${detail}`) - 2))}${runs}  ${detail}`;
