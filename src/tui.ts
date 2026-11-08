@@ -596,6 +596,9 @@ export async function runTui(): Promise<void> {
     if (excludedSections.length > 0 || excludedItems.length > 0) {
       args.push("--context-exclude", JSON.stringify({ sections: excludedSections, items: excludedItems }));
     }
+    const includedFiles = [...s.newRunContextIncluded]
+      .filter((key) => key.startsWith("file:"))
+      .map((key) => key.slice("file:".length));
     const includedKnowledge = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("knowledge:"))
       .map((key) => key.slice("knowledge:".length));
@@ -605,8 +608,9 @@ export async function runTui(): Promise<void> {
     const includedReferences = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("reference:"))
       .map((key) => key.slice("reference:".length));
-    if (includedKnowledge.length > 0 || includedPlans.length > 0 || includedReferences.length > 0) {
+    if (includedFiles.length > 0 || includedKnowledge.length > 0 || includedPlans.length > 0 || includedReferences.length > 0) {
       args.push("--context-include", JSON.stringify({
+        ...(includedFiles.length > 0 ? { files: includedFiles } : {}),
         ...(includedKnowledge.length > 0 ? { knowledge: includedKnowledge } : {}),
         ...(includedPlans.length > 0 ? { plans: includedPlans } : {}),
         ...(includedReferences.length > 0 ? { references: includedReferences } : {}),
