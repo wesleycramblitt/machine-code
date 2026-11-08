@@ -2,6 +2,7 @@
 - tui.md - Features for upgrading or improving the TUI
 - web-tools.md - Features for improving or building web fetch, search, and browse 
 - models.md - Features for providers, models, and associated algorithms.
+- context.md - Context algorithm upgrades (preview parity, budgets, chunking, tiering, eval)
 
 
 
