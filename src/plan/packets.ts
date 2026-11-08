@@ -504,6 +504,48 @@ export interface PlanCategories {
   orphanSlugs: string[];
 }
 
+/** One captured work item line in the hand-written plan index. */
+export interface PlanIndexItem {
+  heading: string;
+  slug: string;
+  title: string;
+  done: boolean;
+  /** Linked packet slug, when the line points at `packets/<slug>.md`. */
+  packet?: string;
+}
+
+/**
+ * Parse `plans/index.md` work-item lines (`- [ ] slug — title → packets/x.md`)
+ * into flat items with their heading. Lines that are not checklist items are
+ * ignored, so prose between headings does not leak into the Runs page.
+ */
+export function planIndexItems(layout: Layout): PlanIndexItem[] {
+  const file = indexPath(layout);
+  if (!existsSync(file)) return [];
+  const lines = readFileSync(file, "utf8").split("\n");
+  const items: PlanIndexItem[] = [];
+  const headingText = (line: string): string => line.replace(/^\s*#{1,6}\s*/, "").trim();
+  let heading = "";
+  for (const line of lines) {
+    if (isHeadingLine(line)) {
+      heading = headingText(line);
+      continue;
+    }
+    const match = /^\s*-\s*\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)\b(?:\s+—\s+(.*?))?\s*$/.exec(line);
+    if (!match || !heading) continue;
+    const slug = match[2]!;
+    let title = (match[3] ?? "").trim();
+    let packet: string | undefined;
+    const link = new RegExp(`→\\s*${PACKETS_DIR}/([a-z0-9-]+)\\.md`).exec(title);
+    if (link?.[1]) {
+      packet = link[1];
+      title = title.replace(link[0], "").trim();
+    }
+    items.push({ heading, slug, title, done: match[1]!.toLowerCase() === "x", ...(packet ? { packet } : {}) });
+  }
+  return items;
+}
+
 /**
  * Map every packet to its category heading. A packet links to a heading via a
  * `→ packets/<slug>.md` line; packets with no matching line are orphans (they

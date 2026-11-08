@@ -12,7 +12,7 @@
  */
 import { basename } from "node:path";
 import type { RunSummary } from "../state/runs.js";
-import type { PacketFile, PlanCategories } from "../plan/packets.js";
+import type { PacketFile, PlanIndexItem } from "../plan/packets.js";
 import { sortRuns } from "./status.js";
 
 export type RunGroup = "packets" | "status" | "overall";
@@ -63,6 +63,25 @@ export type RunRow =
       directRuns: number;
       collapsible: boolean;
       collapsed: boolean;
+    }
+  | {
+      kind: "plan";
+      id: string;
+      /** Repo-relative plan path. */
+      path: string;
+      title: string;
+      depth: number;
+      parent?: string;
+    }
+  | {
+      kind: "planline";
+      id: string;
+      slug: string;
+      title: string;
+      heading: string;
+      done: boolean;
+      depth: number;
+      parent?: string;
     };
 
 export interface RunOptions {
@@ -71,8 +90,10 @@ export interface RunOptions {
   packetRepo?: string;
   /** Packet files for the `packets` group (one repo). */
   packets?: readonly PacketFile[];
-  /** Plan category headings + orphan slugs for the `packets` group. */
-  planCategories?: PlanCategories;
+  /** Plan files for the collapsible Plans section. */
+  plans?: readonly { path: string; title: string }[];
+  /** Parsed plan index items; un-packeted ones surface under their heading. */
+  planItems?: readonly { heading: string; slug: string; title: string; done: boolean; packet?: string }[];
   group?: RunGroup;
   collapsed?: ReadonlySet<string>;
   /** Case-insensitive substring over run fields and repository paths. */
@@ -225,7 +246,6 @@ export function buildRunIndex(options: RunOptions): RunIndex {
 
   const pushPacketTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
     const packets = options.packets ?? [];
-    if (packets.length === 0) return;
     const bySlug = new Map(packets.map((packet) => [packet.slug, packet] as const));
     const runsBySlug = new Map<string, RunSummary[]>();
     for (const run of repoRuns) {
@@ -254,19 +274,70 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       if (isCollapsed) return;
       pushRuns(sortRuns(directRuns, "activity"), packetDepth + 1, id);
     };
-    const categories = options.planCategories?.categories ?? [];
-    for (const category of categories) {
-      const slugs = category.slugs.filter((slug) => bySlug.has(slug));
-      if (slugs.length === 0) continue;
-      const sectionId = `plan:${repoRoot}:${category.heading}`;
-      if (!pushSection(sectionId, category.heading, slugs.length, depth, "status")) continue;
-      for (const slug of slugs) pushPacketRow(slug, depth + 1, sectionId);
+
+    // Plan categories hold the captured lines. A linked packet nests under its
+    // line, so the intent and its build contract read as one item instead of
+    // appearing in two places. Lines without a packet stay plain capture rows.
+    const byHeading = new Map<string, PlanIndexItem[]>();
+    for (const item of options.planItems ?? []) {
+      const list = byHeading.get(item.heading) ?? [];
+      list.push(item);
+      byHeading.set(item.heading, list);
     }
-    const orphanSlugs = (options.planCategories?.orphanSlugs ?? []).filter((slug) => bySlug.has(slug));
-    if (orphanSlugs.length > 0) {
-      const sectionId = `plan:${repoRoot}:orphan`;
-      if (pushSection(sectionId, "No plan", orphanSlugs.length, depth, "orphaned")) {
-        for (const slug of orphanSlugs) pushPacketRow(slug, depth + 1, sectionId);
+    const placed = new Set<string>();
+    for (const [heading, list] of byHeading) {
+      const sectionId = `plan:${repoRoot}:${heading}`;
+      if (!pushSection(sectionId, heading, list.length, depth, "status")) continue;
+      for (const item of list) {
+        const packet = item.packet ? bySlug.get(item.packet) : undefined;
+        const lineId = `planline:${repoRoot}:${heading}:${item.slug}`;
+        rows.push({
+          kind: "planline",
+          id: lineId,
+          slug: item.slug,
+          title: item.title,
+          heading,
+          done: item.done,
+          depth: depth + 1,
+          parent: sectionId,
+        });
+        if (!packet) continue;
+        placed.add(packet.slug);
+        pushPacketRow(packet.slug, depth + 2, lineId);
+      }
+    }
+
+    // Packets with no plan line still need a home: they are build-ready but
+    // not yet placed on the hand-written map.
+    const unplaced = packets.filter((packet) => !placed.has(packet.slug));
+    const unplannedId = `plan:${repoRoot}:unplanned`;
+    if (pushSection(unplannedId, "Unplanned packets", unplaced.length, depth, "orphaned")) {
+      const STATUS_RANK: Record<PacketFile["status"], number> = {
+        "in-progress": 0,
+        blocked: 1,
+        todo: 2,
+        done: 3,
+      };
+      const ordered = [...unplaced].sort(
+        (a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || a.slug.localeCompare(b.slug),
+      );
+      for (const packet of ordered) pushPacketRow(packet.slug, depth + 1, unplannedId);
+    }
+
+    // Plan files: Enter/n opens the composer seeded for a planner run. Plans
+    // are reference documents, not runs, so they never carry children.
+    const plans = options.plans ?? [];
+    const plansSectionId = `plans:${repoRoot}`;
+    if (pushSection(plansSectionId, "Plans", plans.length, depth, "status")) {
+      for (const plan of plans) {
+        rows.push({
+          kind: "plan",
+          id: `plan:${repoRoot}:${plan.path}`,
+          path: plan.path,
+          title: plan.title,
+          depth: depth + 1,
+          parent: plansSectionId,
+        });
       }
     }
   };
@@ -340,7 +411,12 @@ export function focusRowIds(
   rows: readonly RunRow[],
   selected: RunRow | undefined,
 ): Set<string> | null {
-  if (!selected || (selected.kind !== "packet" && selected.kind !== "run")) return null;
+  if (
+    !selected ||
+    (selected.kind !== "packet" && selected.kind !== "run" && selected.kind !== "plan" && selected.kind !== "planline")
+  ) {
+    return null;
+  }
   const byId = new Map(rows.map((row) => [row.id, row] as const));
   const focus = new Set<string>([selected.id]);
 
@@ -361,7 +437,7 @@ export function focusRowIds(
   const selectedParent = "parent" in selected ? selected.parent : undefined;
   for (const ancestor of ancestorsOf(selected)) focus.add(ancestor.id);
   for (const row of rows) {
-    if (row.kind !== "run" && row.kind !== "packet") continue;
+    if (row.kind !== "run" && row.kind !== "packet" && row.kind !== "plan" && row.kind !== "planline") continue;
     if (row.parent === selectedParent) focus.add(row.id);
   }
 

@@ -7,6 +7,17 @@ This file details upgrades or issues to be planned for the TUI
 
 - [ ] Feature #164: Runs page hierarchy colors, branch/orchestration visibility, cwd default, PR removal
 
+# Runs page hierarchy
+Repository → plan categories → plan line → packet → runs.
+
+- Categories come from `plans/index.md` headings. Each checklist line is a
+  plan line; a linked packet (`→ packets/<slug>.md`) nests under it, so the
+  intent and its build contract are one item.
+- Packets with no plan line sit under "Unplanned packets".
+- A collapsible "Plans" section lists plan files. Enter/`n` on a plan or plan
+  line opens the composer seeded for a planner run with that plan attached.
+- Runs with no packet stay under "Untracked".
+
 # Orchestration
 
 

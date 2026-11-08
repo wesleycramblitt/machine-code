@@ -238,6 +238,7 @@ Usage:
                                      packet status, branch, deps, blockers (--json)
   machine_code packet list          List packet files (slug, status, deliverable) [--json]
   machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas]
+                                     (default heading: Features)
                                      [--verify a,b] [--review gates|agent|human]
                                      Scaffold packets/<slug>.md and index it
   machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."]

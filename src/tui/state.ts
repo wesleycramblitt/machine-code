@@ -38,6 +38,16 @@ export interface RunDetail {
   dir: string;
 }
 
+/** Composer seed when a run is started from a plan file or plan line. */
+export interface NewRunSeed {
+  /** Role to preselect (planner for plan rows). */
+  agent?: string;
+  /** Repo-relative plan attached as explicit context. */
+  plan?: string;
+  /** Default prompt; editable in the composer. */
+  prompt?: string;
+}
+
 export interface TuiState {
   page: Page;
   screen: Screen;

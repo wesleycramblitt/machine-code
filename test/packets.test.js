@@ -18,6 +18,7 @@ import {
   markIndexDone,
   packetBranch,
   parsePacketDoc,
+  planIndexItems,
   readPacketFile,
   removeIndexEntry,
   renderPacketFile,
@@ -250,6 +251,49 @@ test("readPacketFile and writePacketFile are symmetric", () => {
     const packet = parsePacketDoc("sym", DOC).packet;
     writePacketFile(layout, packet);
     assert.deepEqual(readPacketFile(layout, "sym"), packet);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("planIndexItems parses checklist lines with headings, titles, links, and done", () => {
+  const root = temp("items");
+  const layout = fakeLayout(root);
+  try {
+    writeFileSync(
+      join(root, "plans", "index.md"),
+      [
+        "# Plan",
+        "",
+        "## Features",
+        "- [ ] rate-limiter — add public API rate limiting → packets/rate-limiter.md",
+        "- [ ] search-ui — build the search screen",
+        "",
+        "## Bugs",
+        "- [x] fix-login — auth flaky timeout → packets/fix-login.md",
+        "",
+        "Prose between headings is ignored.",
+        "- not a checklist item",
+      ].join("\n"),
+      "utf8",
+    );
+    const items = planIndexItems(layout);
+    assert.equal(items.length, 3);
+    assert.deepEqual(items[0], {
+      heading: "Features",
+      slug: "rate-limiter",
+      title: "add public API rate limiting",
+      done: false,
+      packet: "rate-limiter",
+    });
+    assert.deepEqual(items[1], { heading: "Features", slug: "search-ui", title: "build the search screen", done: false });
+    assert.deepEqual(items[2], {
+      heading: "Bugs",
+      slug: "fix-login",
+      title: "auth flaky timeout",
+      done: true,
+      packet: "fix-login",
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
