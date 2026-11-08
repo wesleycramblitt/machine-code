@@ -10,6 +10,7 @@ issues/
   bugs/{todo,blocked,done}/<slug>.md
 ```
 
+Contracts live in `issues/packets/<slug>.md`; branches stay `mc/<slug>`.
 Use `machine_code issue move <slug> <todo|blocked|done|researched>` or
 `git mv`. `machine_code plan` and the Runs page render the issues tree.
 The files below are historical design notes and are not read by agents.
