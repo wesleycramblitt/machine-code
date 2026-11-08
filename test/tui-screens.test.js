@@ -82,6 +82,9 @@ test("runs list renders hierarchy rows and footer affordances", () => {
   });
   assert.equal(frame.body.length, 30);
   assert.match(frame.actions, /New run/);
+  const flat = frame.body.join("\n");
+  assert.match(flat, /\[todo\]/, "status name is rendered, not color alone");
+  assert.match(flat, /p1/);
 });
 
 test("packet renders contract plus attached runs", () => {
