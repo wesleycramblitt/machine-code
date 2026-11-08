@@ -2,11 +2,11 @@
  * machine_code — packet-file work model.
  *
  * Two file trees: the hand-written plan map under `plans/`, and the
- * machine-built contracts under `packets/`.
+ * machine-built contracts under `issues/packets/`.
  *
  *   plans/index.md   the index — headings are categories, lines are work items
  *   plans/<topic>.md optional per-category handwritten plans
- *   packets/<slug>.md  one packet — the bounded contract for ONE buildable unit
+ *   issues/packets/<slug>.md  one contract — bounded scope for ONE buildable unit
  *
  * Slugs are human-readable (`login-token-refresh`, not `#42`) and derive the
  * branch (`mc/<slug>`) and worktree name, so nothing is stored in two places.
@@ -43,7 +43,7 @@ import { parseVerificationCommands, type TaskPacket } from "../packet.js";
 
 export const PLANS_DIR = "plans";
 export const INDEX_FILE = "index.md";
-export const PACKETS_DIR = "packets";
+export const PACKETS_DIR = join("issues", "packets");
 
 export const PACKET_STATUSES = ["todo", "in-progress", "blocked", "done"] as const;
 export type PacketStatus = (typeof PACKET_STATUSES)[number];
@@ -155,7 +155,7 @@ export interface ParsePacketResult {
 }
 
 /**
- * Parse a packet document (`packets/<slug>.md`). A missing front-matter block is
+ * Parse a packet document (`issues/packets/<slug>.md`). A missing front-matter block is
  * treated as all defaults; invalid TOML is a hard parse error.
  */
 export function parsePacketDoc(slug: string, text: string): ParsePacketResult {

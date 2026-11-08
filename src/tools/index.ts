@@ -510,8 +510,8 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
     prepareArguments: (args) => cleanWritePath(args) as Static<typeof WriteParams>,
     async execute(_id, params: Static<typeof WriteParams>) {
       try {
-        // A role that can write but not edit (research, planner) persists only
-        // under the project's knowledge/, plans/, packets/, and .machine_code/ dirs.
+        // A role that can write but not edit (research) persists only under the
+        // project's issues/, knowledge/, plans/, and .machine_code/ dirs.
         if (ctx.tools && !ctx.tools.includes("edit")) {
           const p = params.path.replace(/\\/g, "/").replace(/^\.\//, "");
           const allowed =
@@ -519,12 +519,14 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
             p.startsWith("knowledge/") ||
             p === "plans" ||
             p.startsWith("plans/") ||
+            p === "issues" ||
+            p.startsWith("issues/") ||
             p === "packets" ||
             p.startsWith("packets/") ||
             p === ".machine_code" ||
             p.startsWith(".machine_code/");
           if (!allowed) {
-            return fail(`write is limited to knowledge/, plans/, or packets/ for this role: ${params.path}`);
+            return fail(`write is limited to issues/, knowledge/, or plans/ for this role: ${params.path}`);
           }
         }
         const abs = resolveWithin(ctx.root, params.path);

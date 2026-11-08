@@ -43,9 +43,9 @@ test("preview includes always-visible skill descriptions", () => {
 test("preview surfaces an attached packet contract", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-preview-packet-"));
   try {
-    mkdirSync(join(root, "packets"), { recursive: true });
+    mkdirSync(join(root, "issues", "packets"), { recursive: true });
     const body = `---\nstatus = "todo"\n---\n# demo\n\n## Deliverable\n\nDo the thing.\n`;
-    writeFileSync(join(root, "packets", "demo.md"), body, "utf8");
+    writeFileSync(join(root, "issues", "packets", "demo.md"), body, "utf8");
     const preview = previewContext(fakeLayout(root), "", { packet: "demo" });
     const packet = preview.sources.find((source) => source.kind === "packet");
     assert.ok(packet, "packet contract is part of the assembled context");

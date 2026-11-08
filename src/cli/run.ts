@@ -634,7 +634,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   recorder.finalize(result.status, result.error, result.finalText);
   if (agentNameParsed === "research") {
-    // Planning agents write plans//packets//knowledge in the main tree; commit
+    // Research writes issues//knowledge in the main tree; commit
     // them so the map stays the committed source of truth.
     await commitPlanningFiles(l, `plans: ${agentNameParsed} run ${recorder.id.slice(-8)}`);
   }

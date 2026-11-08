@@ -244,7 +244,7 @@ Usage:
   machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas] [--plan plans/tui.md]
                                      (default heading: Features; item line lands in --plan, else plans/index.md)
                                      [--verify a,b] [--review gates|agent|human]
-                                     Scaffold packets/<slug>.md and index it
+                                     Scaffold issues/packets/<slug>.md and index it
   machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."]
                                      [deps=a,b] [verify=a,b] [review=gates|agent|human]
                                      Update status, blocker, deps, gates, or merge gate

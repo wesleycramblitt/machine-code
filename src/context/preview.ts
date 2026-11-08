@@ -154,7 +154,7 @@ export function previewContext(
   }
 
   if (options.packet) {
-    const packetPath = join("packets", `${options.packet}.md`);
+    const packetPath = join("issues", "packets", `${options.packet}.md`);
     const root = resolve(layout.repoRoot);
     const abs = resolve(root, packetPath);
     const inside = abs === root || abs.startsWith(root + sep);

@@ -303,7 +303,7 @@ machine_code batch --max-parallel 4
 machine_code batch --auto-approve   # merge only gates-gated packets; human-gated never auto-merge
 ```
 
-`batch` plans dependency-ordered waves over `packets/` and builds ready
+`batch` plans priority/dependency-ordered waves over `issues/` and builds ready
 packets in parallel child processes. Each build runs in an isolated
 `mc/<slug>` worktree, executes the packet's `## Verify` gates, and — when the
 packet's `review` gate is `agent` — an independent Review run. `--dry-run`
@@ -356,7 +356,7 @@ machine_code packet delete <slug>
 ```
 
 - `packet list` shows slugs, status, and deliverables.
-- `packet create` scaffolds `packets/<slug>.md` and links it from
+- `issue create <kind> <slug> "<prompt>"` scaffolds `issues/<kind>/<status>/<slug>.md`
   `plans/index.md`. One packet = one file-level change; split anything bigger
   into several packets joined by `deps`.
 - `build <slug>` marks the packet in-progress, creates the isolated
@@ -403,7 +403,7 @@ never shell strings. The runner maps common npm commands to the typed registry
 
 The new-run composer previews exactly which packet, files, tools, scripts,
 plans, and knowledge the selected run will inherit before it starts. The
-**Packets** subtab lists `packets/` contracts; `i` links one to the run
+**Packets** subtab lists `issues/` items; `i` links one to the run
 (passing `--packet <slug>`) and `space` on a row does the same. The **Files**
 subtab lists repo files; press `space` on a file to include it explicitly.
 The **Tools** subtab lists every tool available to the selected agent, plus
@@ -532,7 +532,7 @@ edits source; the build agent implements packets. Build and Review say
 `ask off` and report blockers; their ambiguity policy matches.
 
 A packet is one deliverable: one file-level change and at most **three**
-acceptance criteria in a `packets/<slug>.md` contract. One packet = one
+acceptance criteria in an `issues/<kind>/todo/<slug>.md` issue. One issue = one
 file-level change; split anything bigger into several packets joined by
 `deps`. Set `review = "agent"` for consequential packets and `review = "human"`
 when it must not auto-merge; otherwise the `gates` default applies.

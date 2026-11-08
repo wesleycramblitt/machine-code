@@ -77,7 +77,7 @@ test("deletePacket removes the file, index line, and branch, and commits", async
 
     await deletePacket(l, "login-token-refresh");
 
-    assert.equal(existsSync(join(root, "packets", "login-token-refresh.md")), false);
+    assert.equal(existsSync(join(root, "issues", "packets", "login-token-refresh.md")), false);
     assert.equal(findIssue(l, "login-token-refresh"), null);
     assert.equal(git(root, ["branch", "--list", "mc/login-token-refresh"]), "");
     assert.match(git(root, ["log", "--oneline", "-1"]), /delete login-token-refresh/);
@@ -100,7 +100,7 @@ test("approvePacket merges the branch, marks Done, and deletes the packet", asyn
     await approvePacket(l, "login-token-refresh");
 
     // Packet file gone; the issue moved to done/.
-    assert.equal(existsSync(join(root, "packets", "login-token-refresh.md")), false);
+    assert.equal(existsSync(join(root, "issues", "packets", "login-token-refresh.md")), false);
     assert.equal(findIssue(l, "login-token-refresh")?.status, "done");
     // Main now contains the branch's work (merge was --no-ff).
     assert.equal(readFileSync(join(root, "src.txt"), "utf8"), "fixed\n");

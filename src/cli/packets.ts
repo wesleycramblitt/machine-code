@@ -237,7 +237,7 @@ export async function cmdPacket(argv: string[]): Promise<number> {
     writePacketFile(l, packet);
     addIndexEntry(l, heading, slug, deliverable ?? slug, planFile ? { plan: planFile } : {});
     await commitPlanningFiles(l, `plans: add ${slug}`);
-    process.stdout.write(`created packets/${slug}.md\n`);
+    process.stdout.write(`created issues/packets/${slug}.md\n`);
     return 0;
   }
 
@@ -422,7 +422,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
     packetFile = { slug, status: "todo", deps: [], blocked: "", deliverable: joined, files: [], acceptance: [], verify: [] };
     writePacketFile(l, packetFile);
     addIndexEntry(l, "Features", slug, joined);
-    process.stderr.write(`self-scoped as ${slug} → packets/${slug}.md\n`);
+    process.stderr.write(`self-scoped as ${slug} → issues/packets/${slug}.md\n`);
   }
   return runPacketBuild(l, packetFile, flags);
 }

@@ -81,14 +81,14 @@ async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<{ c
 }
 
 /**
- * Stage and commit the planning trees (`plans/`, `packets/`, `knowledge/`) on
+ * Stage and commit the planning trees (`issues/`, `plans/`, `knowledge/`) on
  * main. Best-effort: returns false when there is nothing to commit or git is
  * unavailable, and never throws.
  */
 export async function commitPlanningFiles(layout: Layout, message: string): Promise<boolean> {
   try {
     const root = await mainRoot(layout);
-    const dirs = ["plans", "packets", "knowledge"].filter((dir) => existsSync(join(root, dir)));
+    const dirs = ["issues", "plans", "knowledge"].filter((dir) => existsSync(join(root, dir)));
     if (dirs.length === 0) return false;
     await git(root, ["add", "-A", "--", ...dirs]);
     const status = await git(root, ["status", "--porcelain", "--", ...dirs]);

@@ -1,6 +1,6 @@
 /**
  * Packet-file work model: slugs, front-matter parsing, canonical render,
- * TaskPacket mapping, and the plans/index.md + packets/ index + annotation.
+ * TaskPacket mapping, and the issues/packets contract files.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -105,7 +105,7 @@ test("renderPacketFile round-trips and is canonical", () => {
   try {
     const source = parsePacketDoc("rt", DOC).packet;
     const file = writePacketFile(layout, source);
-    assert.equal(file, join(root, "packets", "rt.md"));
+    assert.equal(file, join(root, "issues", "packets", "rt.md"));
     const text = renderPacketFile(source);
     assert.match(text, /^---\n/);
     assert.match(text, /rate-limiter/);
@@ -123,12 +123,12 @@ test("listPacketFiles lists only valid slug packets, sorted", () => {
   try {
     writePacketFile(layout, parsePacketDoc("a", "# a\n\n## Deliverable\nA\n").packet);
     writePacketFile(layout, parsePacketDoc("b", "# b\n\n## Deliverable\nB\n").packet);
-    writeFileSync(join(root, "packets", "notes.txt"), "not a packet", "utf8");
-    writeFileSync(join(root, "packets", "UPPER.md"), "# not a slug\n", "utf8");
+    writeFileSync(join(root, "issues", "packets", "notes.txt"), "not a packet", "utf8");
+    writeFileSync(join(root, "issues", "packets", "UPPER.md"), "# not a slug\n", "utf8");
     // The index and a topic note are not packets, even though their names
     // would be valid slugs.
     ensureIndex(layout);
-    writeFileSync(join(root, "packets", "tui.md"), "# TUI\n\n## Later\n- polish\n", "utf8");
+    writeFileSync(join(root, "issues", "packets", "tui.md"), "# TUI\n\n## Later\n- polish\n", "utf8");
     assert.deepEqual(listPacketFiles(layout).map((p) => p.slug), ["a", "b"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -158,7 +158,7 @@ test("addIndexEntry inserts under a heading and replaces by slug", () => {
     addIndexEntry(layout, "Bugs", "login-token-refresh", "auth flaky");
     addIndexEntry(layout, "Bugs", "rate-limiter", "API limits");
     const body = readFileSync(join(root, "plans", "index.md"), "utf8");
-    assert.match(body, /- \[ \] login-token-refresh - auth flaky → packets\/login-token-refresh\.md/);
+    assert.match(body, /- \[ \] login-token-refresh - auth flaky → issues\/packets\/login-token-refresh\.md/);
     assert.match(body, /- \[ \] rate-limiter - API limits/);
     // Replace renames the title in place: exactly one live bullet remains.
     addIndexEntry(layout, "Bugs", "login-token-refresh", "auth flaky, renamed");
@@ -206,7 +206,7 @@ test("addIndexEntry can target a plan file instead of index.md", () => {
     const plan = readFileSync(join(root, "plans", "tui.md"), "utf8");
     assert.match(plan, /^# tui$/m);
     assert.match(plan, /## Bugs/);
-    assert.match(plan, /- \[ \] fix-login - Auth flaky → packets\/fix-login\.md/);
+    assert.match(plan, /- \[ \] fix-login - Auth flaky → issues\/packets\/fix-login\.md/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
