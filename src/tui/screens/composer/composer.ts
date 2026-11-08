@@ -225,8 +225,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (excluded.has(`skill:${name}`)) return "exclude";
     return resolveSkillMode(name, {
       presets: skillPresets,
-      defaults: skillDefaults,
-      declared: ctx.artifacts.skills,
+      declared: [],
       overrides: skillOverrides,
     });
   };

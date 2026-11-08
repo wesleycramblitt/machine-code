@@ -706,10 +706,14 @@ test("preview and assemble agree on skill-body size for identical inputs", async
       layout: fakeLayout(root),
       machine: machine(),
       defaultSkills: ["alpha"],
+      skillPresets: { alpha: "include" },
     });
     const assembled = bundle.sources.find((item) => item.kind === "skill" && item.ref === "alpha");
     assert.ok(assembled, "skill body is a context source");
-    const preview = previewContext(fakeLayout(root), "", { defaultSkills: ["alpha"] });
+    const preview = previewContext(fakeLayout(root), "", {
+      defaultSkills: ["alpha"],
+      skillPresets: { alpha: "include" },
+    });
     const previewed = preview.sources.find((item) => item.kind === "skill" && item.ref === "alpha");
     assert.ok(previewed, "skill body is a preview source");
     // Neither path caps skill bodies: both report the full on-disk size.
@@ -798,8 +802,9 @@ test("skill modes gate bodies but keep descriptions", async () => {
       skillPresets: { beta: "on-demand", gamma: "exclude" },
     };
     const bundle = await assembleContext(base);
-    // alpha default -> include: body inlined.
-    assert.match(bundle.text, /# alpha body/);
+    // alpha is a default -> description only; no body is inlined.
+    assert.match(bundle.text, /alpha: alpha things/);
+    assert.doesNotMatch(bundle.text, /# alpha body/);
     // beta preset on-demand -> description only, no body.
     assert.match(bundle.text, /beta: beta things/);
     assert.doesNotMatch(bundle.text, /# beta body/);

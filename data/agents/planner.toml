@@ -19,4 +19,4 @@ code = 0.2
 general = 0.15
 
 [skills]
-clean-code = "include"
+clean-code = "on-demand"

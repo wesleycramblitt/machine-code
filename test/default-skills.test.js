@@ -84,7 +84,7 @@ test("defaultSkillsFor maps agent and verification to skills", () => {
   assert.deepEqual(defaultSkillsFor({ agent: "unknown" }), []);
 });
 
-test("default skill bodies load without issue declarations", async () => {
+test("default skills are description-only without issue declarations", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-defskill-"));
   try {
     writeSkill(root, "clean-code", "# Clean Code\nBe clean.");
@@ -93,8 +93,13 @@ test("default skill bodies load without issue declarations", async () => {
       machine: machine(),
       defaultSkills: ["clean-code", "verified-testing"],
     });
-    assert.match(bundle.text, /Be clean/);
-    assert.ok(bundle.sources.some((s) => s.kind === "skill" && s.ref === "clean-code"));
+    // The index carries the one-line description plus the pull path, never
+    // the body: defaults are on-demand.
+    assert.match(bundle.text, /clean-code: clean-code description/);
+    assert.match(bundle.text, /pull a body with the skill tool/);
+    assert.doesNotMatch(bundle.text, /Be clean/);
+    const bodies = bundle.sources.filter((s) => s.kind === "skill" && s.ref === "clean-code");
+    assert.equal(bodies.length, 0, "no body source for a default skill");
     // Missing defaults are skipped silently: no warning source.
     assert.ok(!bundle.sources.some((s) => s.ref === "verified-testing"));
   } finally {
@@ -120,38 +125,57 @@ test("composer include overrides win ties over defaults", async () => {
   }
 });
 
-test("composer exclusions drop default skill bodies", async () => {
+test("composer exclusions drop the default skill description and body", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-defskill-exc-"));
   try {
     writeSkill(root, "clean-code", "# Clean Code\nBe clean.");
+    // Default: description only, no body.
+    const plain = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      defaultSkills: ["clean-code"],
+    });
+    assert.match(plain.text, /clean-code: clean-code description/);
+    assert.doesNotMatch(plain.text, /Be clean/);
+    // Excluding the item hides the description too.
     const excluded = await assembleContext({
       layout: fakeLayout(root),
       machine: machine(),
       defaultSkills: ["clean-code"],
       exclude: { items: ["skill:clean-code"] },
     });
-    assert.doesNotMatch(excluded.text, /Be clean/);
+    assert.doesNotMatch(excluded.text, /clean-code: clean-code description/);
     const sectionOff = await assembleContext({
       layout: fakeLayout(root),
       machine: machine(),
       defaultSkills: ["clean-code"],
       exclude: { sections: ["skills"] },
     });
-    assert.doesNotMatch(sectionOff.text, /Be clean/);
+    assert.doesNotMatch(sectionOff.text, /clean-code: clean-code description/);
+    // An explicit include inlines the body; exclusions still win.
+    const included = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      defaultSkills: ["clean-code"],
+      skillOverrides: { "clean-code": "include" },
+      exclude: { items: ["skill:clean-code"] },
+    });
+    assert.doesNotMatch(included.text, /Be clean/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("previewContext surfaces default skill bodies for the TUI", async () => {
+test("previewContext surfaces default skills as descriptions for the TUI", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-defskill-prev-"));
   try {
     writeSkill(root, "clean-code", "# Clean Code\nBe clean.");
     const preview = previewContext(fakeLayout(root), "", {
       defaultSkills: ["clean-code", "verified-testing"],
     });
-    assert.ok(preview.sources.some((s) => s.kind === "skill" && s.ref === "clean-code"));
-    assert.ok(preview.artifacts.skills.includes("clean-code"));
+    // Defaults appear in the aggregate description index, not as body sources.
+    assert.ok(preview.sources.some((s) => s.kind === "skill" && /skills$/.test(s.ref)));
+    assert.ok(!preview.sources.some((s) => s.kind === "skill" && s.ref === "clean-code"));
     // Missing default leaves no source behind.
     assert.ok(!preview.sources.some((s) => s.ref === "verified-testing"));
   } finally {
