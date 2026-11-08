@@ -735,9 +735,11 @@ test("file range includes assemble only that range with provenance", async () =>
     assert.match(bundle.text, /\[source: src\/loop\.ts:2-4\]/);
     assert.match(bundle.text, /\[parent: src\/loop\.ts; expand with the read tool\]/);
     assert.match(bundle.text, /\ntwo\nthree\nfour\n/);
-    assert.doesNotMatch(bundle.text, /one/);
-    assert.doesNotMatch(bundle.text, /five/);
-    assert.doesNotMatch(bundle.text, /six/);
+    // Whole-line anchors: the tool/skill description index shares the
+    // bundle, so only file-content lines count here.
+    assert.doesNotMatch(bundle.text, /^one$/m);
+    assert.doesNotMatch(bundle.text, /^five$/m);
+    assert.doesNotMatch(bundle.text, /^six$/m);
     // A single line is a one-line range.
     const single = await assembleContext({
       layout: fakeLayout(root),
@@ -746,7 +748,7 @@ test("file range includes assemble only that range with provenance", async () =>
     });
     assert.match(single.text, /\[source: src\/loop\.ts:5-5\]/);
     assert.match(single.text, /\nfive\n/);
-    assert.doesNotMatch(single.text, /four/);
+    assert.doesNotMatch(single.text, /^four$/m);
     // Whole-file includes still inline the full body with no range header.
     const whole = await assembleContext({
       layout: fakeLayout(root),
@@ -824,6 +826,95 @@ test("preview counts range chars the same as assembly", async () => {
     assert.equal(badSource.chars, 0);
     assert.equal(badSource.exists, false);
     assert.ok(bad.warnings.length > 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tool index carries one-line descriptions with an on-demand pull path", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-tier-tools-"));
+  try {
+    const bundle = await assembleContext({ layout: fakeLayout(root), machine: machine() });
+    const tool = bundle.sources.find((item) => item.kind === "tool");
+    assert.ok(tool, "tool index is a context source");
+    assert.match(tool.ref, /commands$/);
+    // One-line descriptions, not bare names and not full schemas.
+    assert.match(bundle.text, /- core:status: /);
+    assert.match(bundle.text, /- reference:read: /);
+    assert.doesNotMatch(bundle.text, /"args"/);
+    // The block documents how to pull a body on demand.
+    assert.match(bundle.text, /command tool \(describe /);
+    assert.match(bundle.text, /artifact tool \(show /);
+    // Preview mirrors the same block so measured chars match assembled chars.
+    const preview = previewContext(fakeLayout(root), "", {});
+    const previewed = preview.sources.find((item) => item.kind === "tool");
+    assert.ok(previewed, "tool index is a preview source");
+    assert.equal(previewed.chars, tool.bytes);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("skill index documents the on-demand pull path and carries no bodies by default", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-tier-skills-"));
+  try {
+    mkdirSync(join(root, ".machine_code", "skills", "alpha"), { recursive: true });
+    writeFileSync(
+      join(root, ".machine_code", "skills", "alpha", "SKILL.md"),
+      "---\nname: alpha\ndescription: alpha things\n---\n# Alpha body\n",
+      "utf8",
+    );
+    // No defaults, no presets: the run carries the description, not the body.
+    const bundle = await assembleContext({ layout: fakeLayout(root), machine: machine() });
+    assert.match(bundle.text, /- alpha: alpha things/);
+    assert.match(bundle.text, /skill tool \(show /);
+    assert.ok(!bundle.sources.some((item) => item.kind === "skill" && item.ref === "alpha"));
+    assert.doesNotMatch(bundle.text, /# Alpha body/);
+    const preview = previewContext(fakeLayout(root), "", {});
+    const aggregate = preview.sources.find((item) => item.kind === "skill" && /skills$/.test(item.ref));
+    assert.ok(aggregate, "skill descriptions are a preview source");
+    assert.ok(!preview.sources.some((item) => item.kind === "skill" && item.ref === "alpha"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cold skills save preview chars: on-demand vs include delta covers the body", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-tier-saving-"));
+  try {
+    mkdirSync(join(root, ".machine_code", "skills", "big"), { recursive: true });
+    const body = `---\nname: big\ndescription: big things\n---\n# Big body\n\n${"detail line\n".repeat(200)}END\n`;
+    writeFileSync(join(root, ".machine_code", "skills", "big", "SKILL.md"), body, "utf8");
+    const base = {
+      layout: fakeLayout(root),
+      machine: machine(),
+      agent: "build",
+      defaultSkills: ["big"],
+    };
+    // Cold: on-demand skill mode keeps the description and skips the body.
+    const cold = await assembleContext({ ...base, skillPresets: { big: "on-demand" } });
+    assert.doesNotMatch(cold.text, /# Big body/);
+    assert.match(cold.text, /- big: big things/);
+    // Hot: skill-mode include still inlines the full body.
+    const hot = await assembleContext({ ...base, skillPresets: { big: "include" } });
+    assert.match(hot.text, /# Big body/);
+    // The tiering saving is measurable: at least the whole body stays out.
+    assert.ok(hot.chars - cold.chars >= body.length, "assembled chars drop by the body");
+    // Preview measures the same saving.
+    const coldPreview = previewContext(fakeLayout(root), "", {
+      agent: "build",
+      defaultSkills: ["big"],
+      skillPresets: { big: "on-demand" },
+    });
+    const hotPreview = previewContext(fakeLayout(root), "", {
+      agent: "build",
+      defaultSkills: ["big"],
+      skillPresets: { big: "include" },
+    });
+    assert.ok(
+      hotPreview.chars - coldPreview.chars >= body.length,
+      "preview chars drop by the body",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -11,7 +11,7 @@ import type { Layout } from "../paths.js";
 import { isSecretPath } from "../tools/safety.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
-import { resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
+import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
 import { parseIncludeRange, sliceRangeBody } from "./assemble.js";
 import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
@@ -198,10 +198,11 @@ export function previewContext(
   }
   // Skill descriptions are visible on every run. Mirror the single aggregate
   // block assembled at band 8, at its full assembled size so the composer
-  // shows the real cost.
+  // shows the real cost. The block carries one-line descriptions plus the
+  // on-demand pull path, never bodies.
   const allSkills = skillMetas(layout);
   if (allSkills.length > 0) {
-    const text = allSkills.map((skill) => `- ${skill.name}: ${skill.description}`).join("\n");
+    const text = skillIndexBody(allSkills);
     const size = text.length;
     sources.push({
       kind: "skill",
@@ -213,15 +214,16 @@ export function previewContext(
       note: allSkills.map((skill) => skill.name).join(", "),
     });
   }
-  // Tool/command names are assembled alongside the skill descriptions.
-  // Mirror the aggregate block so preview chars match assembled chars.
+  // Tool/command descriptions are assembled alongside the skill descriptions.
+  // Mirror the aggregate block so preview chars match assembled chars: one
+  // line per command plus the on-demand pull path, never full schemas.
   try {
-    const commands = [...allCommands(layout).keys()].sort();
-    if (commands.length > 0) {
-      const body = commands.join(", ");
+    const commands = allCommands(layout);
+    if (commands.size > 0) {
+      const body = toolIndexBody(commands);
       sources.push({
         kind: "tool",
-        ref: `${commands.length} commands`,
+        ref: `${commands.size} commands`,
         origin: "explicit",
         depth: 0,
         chars: body.length,
