@@ -426,7 +426,10 @@ export function renderPlan(layout: Layout): PlanView {
       if (list.length === 0) continue;
       rendered.push("", `### ${PLAN_ITEM_KIND_LABELS[kind]}`);
       for (const item of [...list].sort((a, b) => a.line - b.line)) {
-        const packet = (item.packet ? packets.get(item.packet) : undefined) ?? packets.get(item.slug);
+        const packet =
+          item.kind === "idea"
+            ? undefined
+            : (item.packet ? packets.get(item.packet) : undefined) ?? packets.get(item.slug);
         const status = item.done ? "done" : packet?.status;
         const glyph = status ? `${statusGlyph(status)} ${status}` : "";
         const branchTag = packet && status && status !== "done" ? `  ⤳ ${packetBranch(packet.slug)}` : "";

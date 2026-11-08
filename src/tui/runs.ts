@@ -302,9 +302,13 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     const statusOf = (item: PlanItem, packet: PacketFile | undefined): PlanItemStatus =>
       item.done ? "done" : packet ? packet.status : "todo";
     const pushPlanLine = (item: PlanItem, lineDepth: number, parentId: string): void => {
-      // Association is the explicit link, then the shared slug. A packet named
-      // like the item therefore pops up under it even before the link is added.
-      const packet = (item.packet ? bySlug.get(item.packet) : undefined) ?? bySlug.get(item.slug);
+      // Association is the explicit link, then the shared slug. Ideas never
+      // own a packet: they are vague, and research turns them into features or
+      // bugs first. A packet named like an idea stays in Unplanned packets.
+      const packet =
+        item.kind === "idea"
+          ? undefined
+          : (item.packet ? bySlug.get(item.packet) : undefined) ?? bySlug.get(item.slug);
       const id = `planline:${repoRoot}:${item.plan}:${item.slug}`;
       rows.push({
         kind: "planline",
