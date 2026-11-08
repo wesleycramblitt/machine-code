@@ -43,6 +43,7 @@ test("plan items derive type from headings, links, and checkboxes", () => {
         "",
         "## Ideas",
         "- [ ] maybe-ollama — Explore a local Ollama provider",
+        "- [~] old-idea — Settled long ago",
       ].join("\n"),
       "utf8",
     );
@@ -69,6 +70,8 @@ test("plan items derive type from headings, links, and checkboxes", () => {
     assert.equal(bySlug.get("cursor-blink")?.done, true);
 
     assert.equal(bySlug.get("maybe-ollama")?.kind, "idea");
+    assert.equal(bySlug.get("old-idea")?.archived, true);
+    assert.equal(bySlug.get("old-idea")?.done, false);
 
     // With no matching heading, the line text decides.
     assert.equal(bySlug.get("price-table")?.kind, "feature");

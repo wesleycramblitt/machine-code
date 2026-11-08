@@ -151,9 +151,10 @@ Usage:
   machine_code run --agent <role> --packet <slug> ["<prompt>"]
                                     Attach the run to a packet; its deliverable feeds the objective
                                     when the prompt is empty. Use "build <slug>" for the structured
-                                    build on that packet.
+                                    build on that packet. --item attaches to a plan item that has
+                                    no contract yet (research/planning runs).
                                     Build runs use an isolated worktree (default on):
-                                    [--packet <slug>] [--base <ref>]
+                                    [--packet <slug> | --item <slug>] [--base <ref>]
                                     Agent config overrides:
                                     [--verify direct|verified]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]

@@ -54,7 +54,8 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     if (
       target?.kind !== "section" &&
       target?.kind !== "repo" &&
-      target?.kind !== "packet"
+      target?.kind !== "packet" &&
+      target?.kind !== "planline"
     ) return false;
     if (!target.collapsible) return false;
     if (s.collapsed.has(target.id)) s.collapsed.delete(target.id);
@@ -63,19 +64,29 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     if (targetIndex >= 0) s.runsSel = targetIndex;
     return true;
   };
-  const seedForLine = (row: Extract<RunRow, { kind: "planline" }>) =>
-    row.itemKind === "idea"
-      ? {
-          agent: "research",
-          plan: row.plan,
-          prompt: `Research the idea "${row.title}" in ${row.plan} and propose concrete features or bugs to add to that plan.`,
-          skills: ["plan-curation"],
-        }
-      : {
-          agent: "planner",
-          plan: row.plan,
-          prompt: `Turn the ${row.itemKind} "${row.title}" in ${row.plan} into a packet under plans/index.md.`,
-        };
+  const startForLine = (row: Extract<RunRow, { kind: "planline" }>): void => {
+    const repo = repoForRow(row);
+    if (row.itemKind === "idea" || row.status === "done" || row.status === "archived") {
+      ctx.startNewRun(undefined, repo, {
+        agent: "research",
+        item: row.slug,
+        plan: row.plan,
+        prompt: `Research "${row.title}" in ${row.plan} and propose concrete features or bugs to add to that plan.`,
+        skills: ["plan-curation"],
+      });
+      return;
+    }
+    if (row.status === "needs-planning" || !row.contract) {
+      ctx.startNewRun(undefined, repo, {
+        agent: "planner",
+        item: row.slug,
+        plan: row.plan,
+        prompt: `Turn the ${row.itemKind} "${row.title}" in ${row.plan} into a build contract.`,
+      });
+      return;
+    }
+    ctx.startNewRun(row.contract, repo, { agent: "build", item: row.slug });
+  };
   if (data === "\r" || data === "\n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); ctx.draw(); return true; }
@@ -85,15 +96,10 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       s.packetScroll = 0;
       s.screen = "packet";
     } else if (row?.kind === "planline") {
-      // A line with a packet opens its contract; a bare feature/bug/idea
-      // seeds the run that turns it into one (research for ideas).
-      if (row.packet) {
-        s.selectedPacketSlug = row.packet;
-        s.packetScroll = 0;
-        s.screen = "packet";
-      } else {
-        ctx.startNewRun(undefined, repoForRow(row), seedForLine(row));
-      }
+      // The item page is the hub: background, contract, runs, and actions.
+      s.selectedPacketSlug = row.slug;
+      s.packetScroll = 0;
+      s.screen = "packet";
     }
     ctx.draw();
     return true;
@@ -113,7 +119,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "planline") {
-      ctx.startNewRun(undefined, repoForRow(row), seedForLine(row));
+      startForLine(row);
       ctx.draw();
       return true;
     }

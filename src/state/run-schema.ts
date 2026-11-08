@@ -114,6 +114,8 @@ export interface RunSummary {
   repoRoot: string;
   /** Queued packet id this run executed, if any. */
   packetId?: string;
+  /** Plan item (feature/bug/idea) this run belongs to, contract or not. */
+  itemId?: string;
   agent: string;
   mode: string;
   /** Resolved agent configuration snapshot (Phase 3). */

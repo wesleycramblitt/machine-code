@@ -19,6 +19,8 @@ export interface ForkedRunSettings {
   floors: "role" | "strict" | "off";
   /** Packet slug attached in the composer; run with `--packet <slug>`. */
   packet?: string;
+  /** Plan item slug for runs without a contract; run with `--item <slug>`. */
+  item?: string;
   prompt: string;
 }
 

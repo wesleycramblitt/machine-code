@@ -98,6 +98,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let requireProvider = flags.get("provider");
   let requireModel = flags.get("model");
   const packetFlag = flags.get("packet");
+  const itemFlag = flags.get("item");
   const baseFlag = flags.get("base");
   let request = positional.join(" ").trim();
   if (flags.has("issue") || flags.has("auto-issue")) {
@@ -107,7 +108,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // A packet-attached run can derive its objective from the packet.
   // Only an untracked run needs the human to type one.
   if (request.length === 0 && packetFlag === undefined) {
-    fail(`run needs a question or --packet <slug>`);
+    fail(`run needs a question or --packet <slug> (or --item <slug>)`);
   }
 
   // Run-level agent configuration overrides (Phase 3).
@@ -149,6 +150,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     packetSlug = slug;
     if (request.length === 0) request = packetFile.deliverable || slug;
   }
+  // --item attaches a run to a plan item without requiring a contract
+  // (research/planning runs). A packet run belongs to its item implicitly.
+  const itemSlug = itemFlag !== undefined ? slugify(itemFlag) : packetSlug;
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const tier = flags.get("tier");
   if (tier !== undefined) {
@@ -373,6 +377,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     repoRoot: l.repoRoot,
     settings: runSettings,
     ...(packetSlug ? { packetId: packetSlug } : {}),
+    ...(itemSlug ? { itemId: itemSlug } : {}),
     ...(parentRun
       ? {
           parentRunId: parentRun.id,

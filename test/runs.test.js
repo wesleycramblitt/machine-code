@@ -1,6 +1,6 @@
 /**
- * Runs hierarchy: the All / By plan work tree, per-repo status, and
- * machine-wide overall status.
+ * Runs hierarchy: the All / By plan work tree, lifecycle statuses, and
+ * machine-wide status views. A packet is an item's contract, not a row.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -31,7 +31,7 @@ function run(overrides = {}) {
   };
 }
 
-function packetFile(slug, overrides = {}) {
+function contract(slug, overrides = {}) {
   return { slug, status: "todo", deps: [], blocked: "", deliverable: `Do ${slug}`, files: [], acceptance: [], verify: [], ...overrides };
 }
 
@@ -43,42 +43,93 @@ function item(overrides = {}) {
     slug: "item",
     title: "An item",
     done: false,
+    archived: false,
     line: 0,
     ...overrides,
   };
 }
 
-test("All groups items by type across plan files, then packet, then runs", () => {
+const line = (index, slug) => index.rows.find((row) => row.kind === "planline" && row.slug === slug);
+
+test("All groups items by type; runs attach to the item, not a packet row", () => {
   const runs = [
-    run({ id: "r1", packetId: "fix-login", status: "completed" }),
-    run({ id: "r2", packetId: "fix-login", status: "running" }),
+    run({ id: "build-1", packetId: "fix-login", itemId: "fix-login", status: "running" }),
+    run({ id: "research-1", itemId: "rate-limiter", agent: "research", status: "completed", packetId: undefined }),
     run({ id: "free", agent: "research", mode: "", status: "completed" }),
   ];
   const index = buildRunIndex({
     runs,
     group: "all",
     packetRepo: repoA,
-    packets: [packetFile("fix-login", { status: "in-progress" }), packetFile("rate-limiter"), packetFile("orphan-task")],
+    packets: [contract("fix-login", { status: "in-progress" })],
     planItems: [
-      item({ kind: "bug", slug: "fix-login", title: "Fix login", packet: "fix-login" }),
-      item({ kind: "feature", slug: "rate-limiter", title: "Add limiter", packet: "rate-limiter" }),
-      item({ plan: "plans/models.md", planTitle: "Models", kind: "idea", slug: "try-ollama", title: "Try Ollama" }),
+      item({ kind: "bug", slug: "fix-login", title: "Fix login" }),
+      item({ kind: "idea", slug: "rate-limiter", title: "Add limiter" }),
     ],
     preferredRepo: repoA,
   });
 
-  assert.equal(index.group, "all");
-  const sectionLabels = index.rows.filter((row) => row.kind === "section").map((row) => row.label);
-  assert.deepEqual(sectionLabels, ["Features", "Bugs", "Ideas", "Unplanned packets", "Untracked"]);
-  // Items come from different plan files in the same type section.
-  const lines = index.rows.filter((row) => row.kind === "planline");
-  assert.deepEqual(lines.map((row) => row.slug), ["rate-limiter", "fix-login", "try-ollama"]);
-  const packetSlugs = index.rows.filter((row) => row.kind === "packet").map((row) => row.slug);
-  assert.deepEqual(packetSlugs, ["rate-limiter", "fix-login", "orphan-task"]);
-  const runIds = index.rows.filter((row) => row.kind === "run").map((row) => row.run.id).sort();
-  assert.deepEqual(runIds, ["free", "r1", "r2"]);
+  const labels = index.rows.filter((row) => row.kind === "section").map((row) => row.label);
+  assert.deepEqual(labels, ["Bugs", "Ideas", "Untracked runs"]);
+  assert.ok(!index.rows.some((row) => row.kind === "packet"), "no packet rows for matched items");
+
+  const fix = line(index, "fix-login");
+  assert.ok(fix && fix.kind === "planline");
+  assert.equal(fix.status, "in-progress");
+  assert.equal(fix.contract, "fix-login");
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "run" && row.parent === fix.id).map((row) => row.run.id),
+    ["build-1"],
+  );
+
+  const rate = line(index, "rate-limiter");
+  assert.ok(rate && rate.kind === "planline");
+  assert.equal(rate.status, "researched", "a completed research run promotes the item");
+  assert.deepEqual(
+    index.rows.filter((row) => row.kind === "run" && row.parent === rate.id).map((row) => row.run.id),
+    ["research-1"],
+  );
   assert.deepEqual(index.untracked.map((entry) => entry.id), ["free"]);
-  assert.equal(index.byRunId.get("r1")?.run.status, "completed");
+});
+
+test("lifecycle statuses derive from contract, runs, and markers", () => {
+  const runs = [
+    run({ id: "r-idea", itemId: "idea-researched", agent: "research", status: "completed", packetId: undefined }),
+    run({ id: "r-build", itemId: "building", packetId: "building", status: "running" }),
+  ];
+  const index = buildRunIndex({
+    runs,
+    group: "all",
+    packetRepo: repoA,
+    packets: [
+      contract("ready"),
+      contract("building", { status: "in-progress" }),
+      contract("done-item", { status: "done" }),
+      contract("blocked-item", { status: "blocked", blocked: "vendor key" }),
+    ],
+    planItems: [
+      item({ kind: "idea", slug: "idea-new", title: "Idea" }),
+      item({ kind: "idea", slug: "idea-researched", title: "Researched idea" }),
+      item({ kind: "feature", slug: "unplanned", title: "No contract" }),
+      item({ kind: "feature", slug: "ready", title: "Ready" }),
+      item({ kind: "feature", slug: "building", title: "Building" }),
+      item({ kind: "bug", slug: "done-item", title: "Shipped" }),
+      item({ kind: "bug", slug: "blocked-item", title: "Blocked" }),
+      item({ kind: "feature", slug: "old", title: "Old", archived: true }),
+    ],
+    preferredRepo: repoA,
+  });
+  const status = (slug) => line(index, slug)?.status;
+  assert.equal(status("idea-new"), "needs-research");
+  assert.equal(status("idea-researched"), "researched");
+  assert.equal(status("unplanned"), "needs-planning");
+  assert.equal(status("ready"), "ready");
+  assert.equal(status("building"), "in-progress");
+  assert.equal(status("done-item"), "done");
+  assert.equal(status("old"), "archived");
+  assert.equal(line(index, "blocked-item")?.blocked, "vendor key");
+  // The blocked item still has a lifecycle status, separate from the flag.
+  assert.equal(status("blocked-item"), "ready");
 });
 
 test("By plan groups by plan file, then item type", () => {
@@ -86,72 +137,78 @@ test("By plan groups by plan file, then item type", () => {
     runs: [],
     group: "plan",
     packetRepo: repoA,
-    packets: [packetFile("demo")],
+    packets: [contract("demo")],
     planItems: [
-      item({ plan: "plans/tui.md", planTitle: "TUI", kind: "feature", slug: "demo", title: "Demo", packet: "demo" }),
+      item({ plan: "plans/tui.md", planTitle: "TUI", kind: "feature", slug: "demo", title: "Demo" }),
       item({ plan: "plans/tui.md", planTitle: "TUI", kind: "bug", slug: "blink", title: "Blinking cursor" }),
       item({ plan: "plans/models.md", planTitle: "Models", kind: "feature", slug: "prices", title: "Price table" }),
     ],
     preferredRepo: repoA,
   });
-  const sections = index.rows.filter((row) => row.kind === "section");
   assert.deepEqual(
-    sections.map((row) => row.label),
+    index.rows.filter((row) => row.kind === "section").map((row) => row.label),
     ["Models", "Features", "TUI", "Features", "Bugs"],
   );
-  const planSections = sections.filter((row) => row.plan);
-  assert.deepEqual(planSections.map((row) => row.plan), ["plans/models.md", "plans/tui.md"]);
-  const demo = index.rows.find((row) => row.kind === "planline" && row.slug === "demo");
+  const demo = line(index, "demo");
   assert.ok(demo && demo.kind === "planline");
   assert.equal(demo.itemKind, "feature");
+  assert.equal(demo.contract, "demo");
 });
 
-test("item status is the checkbox or the linked packet status, done is not a category", () => {
-  const index = buildRunIndex({
-    runs: [],
-    group: "all",
-    packetRepo: repoA,
-    packets: [packetFile("running", { status: "in-progress" }), packetFile("blocked", { status: "blocked" })],
-    planItems: [
-      item({ kind: "feature", slug: "running", title: "Running", packet: "running" }),
-      item({ kind: "bug", slug: "blocked", title: "Blocked", packet: "blocked" }),
-      item({ kind: "feature", slug: "shipped", title: "Shipped", done: true }),
-      item({ kind: "idea", slug: "maybe", title: "Maybe" }),
-    ],
-    preferredRepo: repoA,
-  });
-  const status = (slug) => index.rows.find((row) => row.kind === "planline" && row.slug === slug).status;
-  assert.equal(status("running"), "in-progress");
-  assert.equal(status("blocked"), "blocked");
-  assert.equal(status("shipped"), "done");
-  assert.equal(status("maybe"), "todo");
-  // Done items stay under their type, not a Done section.
-  const labels = index.rows.filter((row) => row.kind === "section").map((row) => row.label);
-  assert.ok(!labels.includes("Done"));
-  assert.ok(labels.includes("Features"));
-  assert.ok(labels.includes("Ideas"));
-});
-
-test("packet rows carry their direct runs and fold", () => {
-  const runs = [run({ id: "a", packetId: "demo" }), run({ id: "b", packetId: "demo" })];
+test("collapsing an item hides its runs, and runs fold by parent", () => {
+  const runs = [run({ id: "a", itemId: "demo", packetId: "demo" }), run({ id: "b", itemId: "demo", packetId: "demo" })];
   const options = {
     runs,
     group: "all",
     packetRepo: repoA,
-    packets: [packetFile("demo")],
-    planItems: [item({ kind: "feature", slug: "demo", title: "Do demo", packet: "demo" })],
+    packets: [contract("demo")],
+    planItems: [item({ slug: "demo", title: "Demo" })],
   };
   const base = buildRunIndex(options);
-  const packetRow = base.rows.find((row) => row.kind === "packet");
-  assert.ok(packetRow && packetRow.kind === "packet");
-  assert.equal(packetRow.directRuns, 2);
+  const row = line(base, "demo");
+  assert.ok(row && row.kind === "planline");
+  assert.equal(row.collapsible, true);
   assert.deepEqual(
-    base.rows.filter((row) => row.kind === "run" && row.parent === packetRow.id).map((row) => row.run.id).sort(),
+    base.rows.filter((entry) => entry.kind === "run" && entry.parent === row.id).map((entry) => entry.run.id).sort(),
     ["a", "b"],
   );
+  const collapsed = buildRunIndex({ ...options, collapsed: new Set([row.id]) });
+  assert.ok(!collapsed.rows.some((entry) => entry.kind === "run"));
+});
 
-  const collapsed = buildRunIndex({ ...options, collapsed: new Set([packetRow.id]) });
-  assert.ok(!collapsed.rows.some((row) => row.kind === "run"));
+test("contracts with no plan item surface as orphaned contracts", () => {
+  const index = buildRunIndex({
+    runs: [run({ id: "orphan-run", packetId: "loose" })],
+    group: "all",
+    packetRepo: repoA,
+    packets: [contract("loose")],
+    planItems: [item({ slug: "demo", title: "Demo", packet: "demo" })],
+  });
+  const labels = index.rows.filter((row) => row.kind === "section").map((row) => row.label);
+  assert.ok(labels.includes("Orphaned contracts"));
+  const orphan = index.rows.find((row) => row.kind === "packet" && row.slug === "loose");
+  assert.ok(orphan && orphan.kind === "packet");
+  assert.match(orphan.parent, /orphans/);
+});
+
+test("category sections carry a type tone", () => {
+  const index = buildRunIndex({
+    runs: [],
+    group: "all",
+    packetRepo: repoA,
+    packets: [],
+    planItems: [
+      item({ kind: "feature", slug: "f", title: "F" }),
+      item({ kind: "bug", slug: "b", title: "B" }),
+      item({ kind: "idea", slug: "i", title: "I" }),
+    ],
+  });
+  const tones = Object.fromEntries(
+    index.rows.filter((row) => row.kind === "section").map((row) => [row.label, row.tone]),
+  );
+  assert.equal(tones.Features, "feature");
+  assert.equal(tones.Bugs, "bug");
+  assert.equal(tones.Ideas, "idea");
 });
 
 test("per-repo status mode has no work tree", () => {
@@ -161,14 +218,12 @@ test("per-repo status mode has no work tree", () => {
     run({ id: "done", status: "completed" }),
   ];
   const index = buildRunIndex({ runs, group: "status" });
-
   assert.ok(index.rows.some((row) => row.kind === "repo"));
-  assert.ok(!index.rows.some((row) => row.kind === "packet"));
+  assert.ok(!index.rows.some((row) => row.kind === "planline"));
   assert.deepEqual(
     index.rows.filter((row) => row.kind === "section").map((row) => row.label),
     ["Running", "Blocked", "Completed"],
   );
-  assert.equal(index.rows.filter((row) => row.kind === "run").length, 3);
 });
 
 test("overall status mode drops repository headings and sorts by status", () => {
@@ -178,7 +233,6 @@ test("overall status mode drops repository headings and sorts by status", () => 
     run({ id: "running", repoRoot: repoB, status: "running" }),
   ];
   const index = buildRunIndex({ runs, group: "overall" });
-
   assert.ok(!index.rows.some((row) => row.kind === "repo"));
   assert.deepEqual(
     index.rows.filter((row) => row.kind === "section").map((row) => row.label),
@@ -196,112 +250,30 @@ test("attention-only keeps blocked/running work and drops completed rows", () =>
   assert.deepEqual(index.rows.filter((row) => row.kind === "run").map((row) => row.run.id), ["blocked"]);
 });
 
-test("focus keeps the selected branch, its peers, and descendants bright", () => {
+test("focus keeps the selected item and its runs bright", () => {
   const now = "2026-01-01T00:00:00.000Z";
   const runs = [
-    run({ id: "a", packetId: "one", startedAt: now, lastActivityAt: now }),
-    run({ id: "a2", packetId: "one", startedAt: now, lastActivityAt: now }),
-    run({ id: "b2", packetId: "two", startedAt: now, lastActivityAt: now }),
+    run({ id: "a", itemId: "one", packetId: "one", startedAt: now, lastActivityAt: now }),
+    run({ id: "a2", itemId: "one", packetId: "one", startedAt: now, lastActivityAt: now }),
   ];
   const index = buildRunIndex({
     runs,
     group: "all",
     packetRepo: repoA,
-    packets: [packetFile("one"), packetFile("two")],
-    planItems: [
-      item({ kind: "feature", slug: "one", title: "One", packet: "one" }),
-      item({ kind: "feature", slug: "two", title: "Two", packet: "two" }),
-    ],
+    packets: [contract("one")],
+    planItems: [item({ slug: "one", title: "One" }), item({ slug: "two", title: "Two" })],
   });
-  const packetRow = (slug) => {
-    const row = index.rows.find((candidate) => candidate.kind === "packet" && candidate.slug === slug);
-    assert.ok(row, `missing packet row ${slug}`);
-    return row;
-  };
-  const runRow = (id) => {
-    const row = index.rows.find((candidate) => candidate.kind === "run" && candidate.run.id === id);
-    assert.ok(row, `missing run row ${id}`);
-    return row;
-  };
+  const one = line(index, "one");
+  const runA = index.rows.find((row) => row.kind === "run" && row.run.id === "a");
   const bright = (selected) => {
     const focus = focusRowIds(index.rows, selected);
     assert.ok(focus);
     return index.rows
-      .filter((row) => (row.kind === "packet" || row.kind === "run") && focus.has(row.id))
-      .map((row) => (row.kind === "packet" ? `packet:${row.slug}` : row.run.id))
+      .filter((row) => (row.kind === "planline" || row.kind === "run") && focus.has(row.id))
+      .map((row) => (row.kind === "planline" ? `item:${row.slug}` : row.run.id))
       .sort();
   };
-
-  // Items under the same type section are peers; their packets are not.
-  assert.deepEqual(bright(packetRow("one")), ["a", "a2", "packet:one"]);
-  assert.deepEqual(bright(runRow("a")), ["a", "a2", "packet:one"]);
+  assert.deepEqual(bright(one), ["a", "a2", "item:one", "item:two"]);
+  assert.deepEqual(bright(runA), ["a", "a2", "item:one"]);
   assert.equal(focusRowIds(index.rows, index.rows[0]), null);
-});
-
-test("unlinked packets appear under Unplanned packets", () => {
-  const index = buildRunIndex({
-    runs: [run({ id: "r1", packetId: "demo" })],
-    group: "all",
-    packetRepo: repoA,
-    packets: [packetFile("demo"), packetFile("loose")],
-    planItems: [item({ kind: "feature", slug: "demo", title: "Do demo", packet: "demo" })],
-    preferredRepo: repoA,
-  });
-  const loose = index.rows.find((row) => row.kind === "packet" && row.slug === "loose");
-  assert.ok(loose && loose.kind === "packet");
-  assert.match(loose.parent, /unplanned/);
-});
-
-test("a packet pops up under an item with the same slug even without a link", () => {
-  const index = buildRunIndex({
-    runs: [run({ id: "r1", packetId: "demo" })],
-    group: "all",
-    packetRepo: repoA,
-    packets: [packetFile("demo")],
-    planItems: [item({ kind: "feature", slug: "demo", title: "Try the demo" })],
-  });
-  const line = index.rows.find((row) => row.kind === "planline" && row.slug === "demo");
-  assert.ok(line && line.kind === "planline");
-  const packet = index.rows.find((row) => row.kind === "packet" && row.slug === "demo");
-  assert.ok(packet && packet.kind === "packet");
-  assert.equal(packet.parent, line.id, "slug match associates without a link");
-});
-
-test("ideas never own a packet; a matching packet stays unplanned", () => {
-  const index = buildRunIndex({
-    runs: [],
-    group: "all",
-    packetRepo: repoA,
-    packets: [packetFile("demo")],
-    planItems: [item({ kind: "idea", slug: "demo", title: "Try the demo" })],
-  });
-  const line = index.rows.find((row) => row.kind === "planline" && row.slug === "demo");
-  assert.ok(line && line.kind === "planline");
-  assert.equal(line.packet, undefined);
-  const packet = index.rows.find((row) => row.kind === "packet" && row.slug === "demo");
-  assert.ok(packet && packet.kind === "packet");
-  assert.match(packet.parent, /unplanned/, "ideas do not own packets");
-});
-
-test("category sections carry a type tone", () => {
-  const index = buildRunIndex({
-    runs: [],
-    group: "all",
-    packetRepo: repoA,
-    packets: [packetFile("loose")],
-    planItems: [
-      item({ kind: "feature", slug: "f", title: "F" }),
-      item({ kind: "bug", slug: "b", title: "B" }),
-      item({ kind: "idea", slug: "i", title: "I" }),
-    ],
-  });
-  const tones = Object.fromEntries(
-    index.rows
-      .filter((row) => row.kind === "section")
-      .map((row) => [row.label, row.tone]),
-  );
-  assert.equal(tones.Features, "feature");
-  assert.equal(tones.Bugs, "bug");
-  assert.equal(tones.Ideas, "idea");
-  assert.equal(tones["Unplanned packets"], "unplanned");
 });
