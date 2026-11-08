@@ -83,6 +83,11 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "issue") {
+      if (row.effective === "done") {
+        ctx.notify(`${row.slug} is done; move it back to todo before a new run`);
+        ctx.draw();
+        return true;
+      }
       const agent = row.itemKind === "ideas" ? "research" : "engineer";
       ctx.startNewRun(undefined, repoForRow(row), { agent, item: row.slug });
       ctx.draw();

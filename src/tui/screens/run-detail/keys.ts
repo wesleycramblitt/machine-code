@@ -8,6 +8,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { layout } from "../../../paths.js";
+import { findIssue } from "../../../plan/issues.js";
 import { listAllRuns } from "../../../state/runs.js";
 import { isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "../../timeline.js";
 import { CTRL_D, CTRL_U, HALF_PAGE } from "../../format.js";
@@ -167,6 +168,12 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   if (data === "p") {
     const item = detail.summary.itemId ?? detail.summary.packetId;
     if (!item) { ctx.notify("run has no issue to approve"); ctx.draw(); return true; }
+    const issue = findIssue(layout(detail.summary.repoRoot), item);
+    if (issue?.status !== "done") {
+      ctx.notify(`${item} is ${issue?.status ?? "not an issue"}; build it before approving`);
+      ctx.draw();
+      return true;
+    }
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
     spawn(process.execPath, [cliPath, "approve", item], { cwd: detail.summary.repoRoot, detached: true, stdio: "ignore" }).unref();
     ctx.notify(`approve ${item} queued`);

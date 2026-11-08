@@ -526,8 +526,10 @@ ripgrep. `search` is the one-verb router for identifiers (definitions plus
 references), file paths (outline), and free text. `read` prefers
 `symbol`/`section`/`around`; `offset`/`limit` are for large unindexed files.
 When an Engineer run has an issue in a worktree, the runner owns the finish:
-it runs the issue's `verify` gates, commits the branch, and moves the issue to
-`done/` (or `blocked/`), even if the model stops early.
+it runs the issue's `verify` gates, commits the branch, moves the issue to
+`done/` (or `blocked/`), and starts a Review run when `review = "agent"`, even
+if the model stops early. A review that does not approve moves the issue back
+to `blocked/`, so `approve` cannot merge rejected work.
 
 An issue is one deliverable: one file-level change and at most **three**
 verify commands in `issues/<kind>/todo/<slug>.md`. Split anything bigger into
