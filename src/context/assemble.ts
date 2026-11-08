@@ -220,6 +220,48 @@ export function sliceRangeBody(
   return { body: `[source: ${file}:${start}-${clamped}]\n${snippet}\n[parent: ${file}; expand with the read tool]` };
 }
 
+/** Depth label for a parent-chain entry: parent, grandparent, then depth. */
+export function parentDepthLabel(depth: number): string {
+  if (depth <= 1) return "parent run";
+  if (depth === 2) return "grandparent run";
+  return `ancestor run (depth ${depth})`;
+}
+
+/** First line of the request, whitespace-collapsed and truncated to one line. */
+export function parentObjectiveOneLiner(request: string, cap = 120): string {
+  const oneLine = request.replace(/\s+/g, " ").trim();
+  return oneLine.length > cap ? `${oneLine.slice(0, cap).trimEnd()}…` : oneLine;
+}
+
+/**
+ * One-line index entry for a parent run: depth label, run id, objective
+ * one-liner, status, and the named pull path for the full detail. Never
+ * carries result text — not even for completed parents — so a blocked or
+ * failed parent's closing summary cannot leak in as evidence. The agent
+ * pulls the full request/result/error with the context tool.
+ */
+export function parentIndexLine(run: {
+  id: string;
+  request: string;
+  status?: string;
+  stopReason?: string;
+  depth: number;
+}): string {
+  const label = parentDepthLabel(run.depth);
+  const state = run.status
+    ? `status: ${run.status}${run.stopReason ? ` (${run.stopReason})` : ""}`
+    : "status: unknown";
+  return (
+    `${label}: ${run.id} | objective: ${parentObjectiveOneLiner(run.request)} | ${state} | ` +
+    `pull full detail with the context tool: {"action": "parent", "id": "${run.id}"}`
+  );
+}
+
+/** A stopped (neither completed nor running) parent's result is not evidence. */
+export function isParentStopped(status?: string): boolean {
+  return status !== undefined && status !== "completed" && status !== "running";
+}
+
 function skillBody(layout: Layout, name: string): { path: string; text: string } | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;
   for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
@@ -390,11 +432,14 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // Parent run + ancestors. A fork inherits the immediate parent's objective,
-  // then the chain above it (grandparent, …) so a fork of a fork does not lose
-  // the original task. A blocked/failed parent's closing summary is not
-  // authoritative: it often claims the task is undefined. Keep its status and
-  // error, but do not replay that summary as evidence.
+  // Parent run + ancestors. Each parent contributes one index line (depth
+  // label, run id, objective one-liner, status) plus a named pull path; the
+  // agent pulls the full request/result/error on demand through the context
+  // tool (`{"action":"parent","id":"<run>"}`) instead of inheriting a
+  // transcript it may never need. A blocked/failed parent's closing summary
+  // is not authoritative: it often claims the task is undefined. Its result
+  // is suppressed both here and in the pulled detail; only its status and
+  // error are kept.
   type ParentRun = {
     id: string;
     request: string;
@@ -410,30 +455,18 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       : input.parentRun
         ? [{ ...input.parentRun, depth: 1 }]
         : [];
+  const droppedAncestors: string[] = [];
   for (const run of chain) {
-    if (run.depth > 4) break;
-    const label =
-      run.depth <= 1 ? "parent run" : run.depth === 2 ? "grandparent run" : `ancestor run (depth ${run.depth})`;
-    const stopped = run.status !== undefined && run.status !== "completed" && run.status !== "running";
-    const state = run.status
-      ? `status: ${run.status}${run.stopReason ? ` (${run.stopReason})` : ""}`
-      : "";
-    const text = [
-      `${label}: ${run.id}`,
-      `objective: ${run.request.slice(0, 800)}`,
-      state,
-      run.error ? `error: ${run.error.slice(0, 400)}` : "",
-      stopped ? "note: previous attempt stopped early; do not treat its conclusion as authoritative." : "",
-      run.finalText && !stopped ? `result: ${run.finalText.slice(0, 1200)}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
+    if (run.depth > 4) {
+      droppedAncestors.push(run.id);
+      continue;
+    }
     pending.push({
       kind: "parent-run",
       origin: "inherited",
       ref: run.id,
       depth: run.depth,
-      body: text,
+      body: parentIndexLine({ ...run, depth: run.depth }),
       band: 6,
     });
   }
@@ -580,6 +613,12 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const entries: Kept[] = [];
   const sources: ContextSource[] = [];
   const warnings: string[] = [];
+  if (droppedAncestors.length > 0) {
+    warnings.push(
+      `parent chain exceeds the depth-4 cap; omitted ancestor run(s): ${droppedAncestors.join(", ")}; ` +
+        `pull any of them with the context tool if needed ({"action": "parent", "id": "<run>"})`,
+    );
+  }
   for (const item of selected) {
     if (item.warning && item.body === "") {
       sources.push({ kind: item.kind, origin: item.origin, ref: item.ref, depth: item.depth, bytes: 0, hash: "", truncated: false, warning: item.warning });

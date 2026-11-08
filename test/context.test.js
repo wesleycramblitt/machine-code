@@ -551,7 +551,7 @@ test("composer file includes carry provenance", async () => {
   }
 });
 
-test("fork context keeps the whole parent chain", async () => {
+test("fork context renders the parent chain as a one-line index with a pull path", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-context-"));
   try {
     mkdirSync(join(root, ".machine_code"), { recursive: true });
@@ -559,14 +559,20 @@ test("fork context keeps the whole parent chain", async () => {
       layout: fakeLayout(root),
       machine: machine(),
       parentRuns: [
-        { id: "child-parent", request: "Try now" },
+        { id: "child-parent", request: "Try now\nwith more detail", finalText: "child result detail" },
         { id: "grandparent", request: "original task", finalText: "original result" },
       ],
     });
-    assert.match(bundle.text, /parent run: child-parent/);
-    assert.match(bundle.text, /grandparent run: grandparent/);
-    assert.match(bundle.text, /objective: original task/);
-    assert.match(bundle.text, /result: original result/);
+    // One line per parent: label, id, objective one-liner, status, pull path.
+    const lines = bundle.text.split("\n").filter((line) => /^(parent run|grandparent run|ancestor run)/.test(line));
+    assert.equal(lines.length, 2);
+    assert.match(bundle.text, /parent run: child-parent \| objective: Try now with more detail \|/);
+    assert.match(bundle.text, /grandparent run: grandparent \| objective: original task \|/);
+    assert.match(bundle.text, /"action": "parent", "id": "child-parent"/);
+    // Full detail is not inlined: the agent pulls it on demand.
+    assert.doesNotMatch(bundle.text, /child result detail/);
+    assert.doesNotMatch(bundle.text, /original result/);
+    assert.doesNotMatch(bundle.text, /^with more detail$/m);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -590,10 +596,100 @@ test("a blocked parent's closing summary is not inherited as truth", async () =>
         },
       ],
     });
-    assert.match(bundle.text, /status: blocked \(loop\)/);
-    assert.match(bundle.text, /error: repeated identical tool calls detected/);
-    assert.match(bundle.text, /previous attempt stopped early/);
-    assert.doesNotMatch(bundle.text, /result: The task details are missing/);
+    // Index line keeps the status; the result is suppressed, not inlined.
+    assert.match(bundle.text, /parent run: blocked-parent \| objective: Build the task\. \| status: blocked \(loop\)/);
+    assert.doesNotMatch(bundle.text, /The task details are missing/);
+    assert.doesNotMatch(bundle.text, /result:/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("parent chain depth cap keeps four parents and warns naming the dropped ancestors", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-context-"));
+  try {
+    mkdirSync(join(root, ".machine_code"), { recursive: true });
+    const parentRuns = ["p1", "p2", "p3", "p4", "p5", "p6"].map((id) => ({ id, request: `task ${id}` }));
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      parentRuns,
+    });
+    const parents = bundle.sources.filter((item) => item.kind === "parent-run");
+    assert.equal(parents.length, 4);
+    assert.ok(bundle.warnings.some((warning) => /depth-4 cap/.test(warning) && /p5/.test(warning) && /p6/.test(warning)));
+    assert.doesNotMatch(bundle.text, /task p5/);
+    assert.doesNotMatch(bundle.text, /task p6/);
+    const preview = previewContext(fakeLayout(root), "", {
+      parentRuns,
+    });
+    const previewed = preview.sources.filter((item) => item.kind === "parent-run");
+    assert.equal(previewed.length, 4);
+    assert.ok(preview.warnings.some((warning) => /depth-4 cap/.test(warning) && /p5/.test(warning)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("preview parent index lines measure the same chars as the assembled bundle", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-context-"));
+  try {
+    mkdirSync(join(root, ".machine_code"), { recursive: true });
+    const parentRuns = [
+      { id: "child-parent", request: "Try now", status: "completed" },
+      { id: "grandparent", request: "original task", status: "completed" },
+    ];
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      parentRuns,
+    });
+    const preview = previewContext(fakeLayout(root), "", { parentRuns });
+    for (const run of parentRuns) {
+      const assembled = bundle.sources.find((item) => item.kind === "parent-run" && item.ref === run.id);
+      const previewed = preview.sources.find((item) => item.kind === "parent-run" && item.ref === run.id);
+      assert.ok(assembled, `assembled index for ${run.id}`);
+      assert.ok(previewed, `preview index for ${run.id}`);
+      assert.equal(previewed.chars, assembled.bytes, `preview chars match assembled bytes for ${run.id}`);
+      assert.equal(previewed.depth, assembled.depth);
+      assert.equal(previewed.origin, "inherited");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context tool parent action pulls full run detail with stopped-result suppression", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-context-"));
+  try {
+    const { contextTool } = await import("../dist/tools/context.js");
+    const writeRun = (id, record) => {
+      const dir = join(root, ".machine_code", "local", "runs", id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "run.json"), JSON.stringify({ id, ...record }), "utf8");
+    };
+    writeRun("run-good", { request: "Build the widget.", status: "completed", finalText: "The widget is done." });
+    writeRun("run-bad", {
+      request: "Build the task.",
+      status: "blocked",
+      stopReason: "loop",
+      error: "repeated identical tool calls detected",
+      finalText: "The task details are missing.",
+    });
+    const tool = contextTool({ root, state: {} });
+    const textOf = (result) => result.content.map((item) => item.text ?? "").join("\n");
+    const good = await tool.execute("test", { action: "parent", id: "run-good" });
+    assert.equal(good.isError, undefined);
+    assert.match(textOf(good), /request: Build the widget\./);
+    assert.match(textOf(good), /result: The widget is done\./);
+    const bad = await tool.execute("test", { action: "parent", id: "run-bad" });
+    assert.equal(bad.isError, undefined);
+    assert.match(textOf(bad), /status: blocked \(loop\)/);
+    assert.match(textOf(bad), /error: repeated identical tool calls detected/);
+    assert.doesNotMatch(textOf(bad), /The task details are missing/);
+    assert.match(textOf(bad), /result: withheld/);
+    const missing = await tool.execute("test", { action: "parent", id: "no-such-run" });
+    assert.equal(missing.isError, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
