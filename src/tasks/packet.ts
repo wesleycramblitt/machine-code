@@ -15,12 +15,11 @@ import { branchExists, defaultBaseBranch, mainWorktreeRoot, removeWorktree } fro
 import {
   isBuildable,
   listPacketFiles,
-  markIndexDone,
   packetBranch,
   packetFilePath,
   readPacketFile,
-  removeIndexEntry,
 } from "../plan/packets.js";
+import { markItemDone, removeItemFromPlans } from "../plan/items.js";
 
 /** Latest build-phase run for a packet slug (newest first). */
 export function packetRuns(layout: Layout, slug: string): RunSummary[] {
@@ -156,10 +155,11 @@ export async function approvePacket(layout: Layout, slug: string, opts: ApproveP
   recorder.event("approval_granted", { slug, by: "human" });
   recorder.event("packet_merged", { slug, branch, baseBranch, by: "human" });
 
-  // Complete the packet: drop the file, move the index line to Done, commit.
+  // Complete the packet: drop the file and mark its plan item `[x]` in place.
+  // Done is a status; there is no Done category to move the line into.
   const file = packetFilePath(layout, slug);
   if (existsSync(file)) rmSync(file, { force: true });
-  markIndexDone(layout, slug, packet.deliverable || slug);
+  markItemDone(layout, slug);
   await commitPlanningFiles(layout, `plans: complete ${slug}`);
 
   if (opts.clean !== false && run.worktree && existsSync(run.worktree)) {
@@ -185,7 +185,7 @@ export async function deletePacket(layout: Layout, slug: string, opts: DeletePac
 
   const file = packetFilePath(layout, slug);
   if (existsSync(file)) rmSync(file, { force: true });
-  removeIndexEntry(layout, slug);
+  removeItemFromPlans(layout, slug);
 
   for (const run of packetRuns(layout, slug)) {
     const owner = run.worktreeOwnerRunId ?? run.id;

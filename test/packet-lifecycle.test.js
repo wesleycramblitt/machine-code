@@ -98,12 +98,13 @@ test("approvePacket merges the branch, marks Done, and deletes the packet", asyn
     fabricateBuildRun(l);
     await approvePacket(l, "login-token-refresh");
 
-    // Packet file gone; index line moved to Done (no dead link).
+    // Packet file gone; the plan item is marked done in place (no Done category).
     assert.equal(existsSync(join(root, "packets", "login-token-refresh.md")), false);
     const index = readFileSync(join(root, "plans", "index.md"), "utf8");
-    assert.match(index, /## Done/);
     assert.match(index, /- \[x\] login-token-refresh/);
-    assert.doesNotMatch(index, /plans\/login-token-refresh\.md/);
+    const line = index.split("\n").findIndex((entry) => entry.includes("login-token-refresh"));
+    const features = index.split("\n").findIndex((entry) => entry.trim() === "## Features");
+    assert.ok(features >= 0 && line > features, "done item stays under its type heading");
     // Main now contains the branch's work (merge was --no-ff).
     assert.equal(readFileSync(join(root, "src.txt"), "utf8"), "fixed\n");
     assert.match(git(root, ["log", "--oneline", "-5"]), /Merge login-token-refresh/);

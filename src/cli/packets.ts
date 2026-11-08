@@ -51,7 +51,6 @@ import {
   listPacketFiles,
   PACKET_STATUSES,
   PACKET_REVIEWS,
-  planCategories,
   readPacketFile,
   renderPacketFile,
   renderPlan,
@@ -112,12 +111,13 @@ export async function cmdPacket(argv: string[]): Promise<number> {
 
   if (sub === "create" || sub === "new") {
     const slugArg = positional[1];
-    if (!slugArg) fail('usage: machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas]');
+    if (!slugArg) fail('usage: machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas] [--plan plans/tui.md]');
     const slug = slugify(slugArg);
     if (!slug) fail("packet slug becomes empty; use letters, digits, and hyphens");
     if (readPacketFile(l, slug)) fail(`packet ${slug} already exists`);
     const deliverable = flags.get("deliverable") ?? positional.slice(2).join(" ");
     const heading = flags.get("heading") ?? "Features";
+    const planFile = flags.get("plan");
     const reviewFlag = flags.get("review") ?? "gates";
     if (!PACKET_REVIEWS.includes(reviewFlag as PacketReview)) fail(`--review must be ${PACKET_REVIEWS.join("|")}`);
     const packet: PacketFile = {
@@ -135,7 +135,7 @@ export async function cmdPacket(argv: string[]): Promise<number> {
         .filter(Boolean),
     };
     writePacketFile(l, packet);
-    addIndexEntry(l, heading, slug, deliverable ?? slug);
+    addIndexEntry(l, heading, slug, deliverable ?? slug, planFile ? { plan: planFile } : {});
     await commitPlanningFiles(l, `plans: add ${slug}`);
     process.stdout.write(`created packets/${slug}.md\n`);
     return 0;

@@ -36,7 +36,7 @@
  * canonical so later readers are simpler than the writers people hand-edit.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { parse, stringify } from "smol-toml";
 import type { Layout } from "../paths.js";
 import { parseVerificationCommands, type TaskPacket } from "../packet.js";
@@ -72,21 +72,10 @@ export interface PacketFile {
 
 /* ---------------------------------------------------------------- slugs */
 
-/** Lowercase, hyphen-separated, trimmed slug from free text. */
-export function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48)
-    .replace(/-+$/g, "");
-}
+import { isValidSlug, slugify } from "./slug.js";
+import { planItems, PLAN_ITEM_KINDS, PLAN_ITEM_KIND_LABELS } from "./items.js";
 
-/** True when the string is already a safe packet slug. */
-export function isValidSlug(slug: string): boolean {
-  return slug.length > 0 && slug.length <= 48 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug);
-}
+export { isValidSlug, slugify };
 
 /** Branch for a packet: `mc/<slug>`. */
 export function packetBranch(slug: string): string {
@@ -286,7 +275,7 @@ export function isBuildable(packet: Pick<PacketFile, "status" | "deliverable" | 
 
 /* ------------------------------------------------------------- index */
 
-const DEFAULT_HEADINGS = ["Features", "Bugs", "Ideas", "Done"];
+const DEFAULT_HEADINGS = ["Features", "Bugs", "Ideas"];
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -314,6 +303,22 @@ export function ensureIndex(layout: Layout): string {
   return file;
 }
 
+/** Ensure a plan file exists (repo-relative), creating it with a title. */
+function ensurePlanFile(layout: Layout, planPath: string): string {
+  const base = resolve(layout.repoRoot);
+  const abs = resolve(base, planPath);
+  if (abs !== base && !abs.startsWith(base + sep)) {
+    throw new Error(`plan file is outside the repo: ${planPath}`);
+  }
+  if (!abs.endsWith(".md")) throw new Error(`plan file must be Markdown: ${planPath}`);
+  if (!existsSync(abs)) {
+    mkdirSync(dirname(abs), { recursive: true });
+    const title = (abs.split(sep).pop() ?? "Plan").replace(/\.md$/, "");
+    writeFileSync(abs, `# ${title}\n`, "utf8");
+  }
+  return abs;
+}
+
 function slugReference(line: string, slug: string): boolean {
   return line.includes(`${PACKETS_DIR}/${slug}.md`) || new RegExp(`(^|\\W)${escapeRegExp(slug)}(\\.|\\s|$)`).test(line);
 }
@@ -321,15 +326,17 @@ function slugReference(line: string, slug: string): boolean {
 /**
  * Insert or replace a work-item line under a heading. Missing headings are
  * created at the end; an existing line for the slug is replaced in place.
+ * `opts.plan` writes into that plan file instead of `plans/index.md`, so
+ * items live next to the plan they belong to.
  */
 export function addIndexEntry(
   layout: Layout,
   heading: string,
   slug: string,
   title: string,
-  opts: { done?: boolean; link?: boolean } = {},
+  opts: { done?: boolean; link?: boolean; plan?: string } = {},
 ): void {
-  const file = ensureIndex(layout);
+  const file = opts.plan ? ensurePlanFile(layout, opts.plan) : ensureIndex(layout);
   const line = indexLine(slug, title, { done: opts.done, link: opts.link });
   const lines = readFileSync(file, "utf8").split("\n");
   const headingTitle = heading.trim();
@@ -365,23 +372,6 @@ export function addIndexEntry(
   writeFileSync(file, lines.join("\n"), "utf8");
 }
 
-/** Remove every work-item line referencing a slug. */
-export function removeIndexEntry(layout: Layout, slug: string): void {
-  const file = indexPath(layout);
-  if (!existsSync(file)) return;
-  const next = readFileSync(file, "utf8")
-    .split("\n")
-    .filter((line) => !(/^\s*-\s+\[[ x]\]\s/.test(line) && slugReference(line, slug)))
-    .join("\n");
-  writeFileSync(file, next, "utf8");
-}
-
-/** Move an item to `## Done`: drop the live line, append a checked one. */
-export function markIndexDone(layout: Layout, slug: string, title: string): void {
-  removeIndexEntry(layout, slug);
-  addIndexEntry(layout, "Done", slug, title, { done: true, link: false });
-}
-
 /* -------------------------------------------------------------- render */
 
 function statusGlyph(status: PacketStatus): string {
@@ -413,178 +403,50 @@ export interface PlanView {
   text: string;
 }
 
-/** Read index + packet files and render an annotated human view. */
+/**
+ * Render the plan tree: every plan file, its item types, and each item's
+ * status/blocker annotations from its linked packet. Items come from every
+ * plan file, not just `plans/index.md`.
+ */
 export function renderPlan(layout: Layout): PlanView {
-  const file = indexPath(layout);
-  const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : ["# Plan", ""];
   const packets = new Map(listPacketFiles(layout).map((packet) => [packet.slug, packet]));
-
+  const workItems = planItems(layout);
   const items: PlanItem[] = [];
-  const rendered: string[] = [];
-  let heading = "";
-  for (const line of lines) {
-    if (isHeadingLine(line)) {
-      heading = line.replace(/^\s*#{1,6}\s*/, "").trim();
-      rendered.push(line);
-      continue;
-    }
-    const bullet = line.match(/^\s*-\s+\[([ x])\]\s+(.*)$/);
-    if (!bullet) {
-      rendered.push(line);
-      continue;
-    }
-    const done = bullet[1] === "x";
-    let rest = (bullet[2] ?? "").trim();
-
-    // Completed lines resolve against a (likely deleted) packet; keep `## Done`
-    // lines verbatim rather than mis-annotating them with a stale status.
-    if (done) {
-      rendered.push(line);
-      items.push({ heading, done, title: rest, hasPacket: false });
-      continue;
-    }
-
-    let slug: string | undefined;
-    const link = rest.match(new RegExp(`^(.*?)\\s*→\\s*${PACKETS_DIR}/([^)]+\\.md)\\s*$`));
-    if (link) rest = (link[1] ?? "").trim();
-    const split = rest.split("—").map((part) => part.trim());
-    const firstToken = split[0] ?? "";
-    if (firstToken && isValidSlug(firstToken) && packets.has(firstToken)) {
-      slug = firstToken;
-      rest = split.slice(1).join(" — ").trim();
-    }
-    const packet = slug ? packets.get(slug) : undefined;
-    const hasPacket = Boolean(packet);
-    const status = packet?.status;
-    const title = rest || packet?.deliverable || "";
-
-    if (!slug && !hasPacket) {
-      // Plain idea line with no packet: render untouched.
-      rendered.push(line);
-      items.push({ heading, done, title: rest || firstToken, hasPacket: false });
-      continue;
-    }
-
-    const parts: string[] = [];
-    if (slug) {
-      const glyph = status ? `${statusGlyph(status)} ${status}` : "";
-      const branchTag = status && status !== "done" ? `  ⤳ ${packetBranch(slug)}` : "";
-      parts.push(`${line}  ${glyph}${branchTag}`.trimEnd());
-      if (packet?.blocked) parts.push(`      blocked: ${packet.blocked}`);
-      if (packet && packet.deps.length > 0) parts.push(`      deps: ${packet.deps.join(", ")}`);
-    }
-    rendered.push(...parts);
-
-    items.push({
-      heading,
-      done,
-      ...(slug ? { slug } : {}),
-      title,
-      hasPacket,
-      ...(status ? { status } : {}),
-      ...(packet?.blocked ? { blocked: packet.blocked } : {}),
-    });
+  const rendered: string[] = ["# Plans"];
+  const byPlan = new Map<string, { title: string; items: typeof workItems }>();
+  for (const item of workItems) {
+    const entry = byPlan.get(item.plan) ?? { title: item.planTitle, items: [] };
+    entry.items.push(item);
+    byPlan.set(item.plan, entry);
   }
-
-  return { items, text: rendered.join("\n") };
-}
-
-/* ------------------------------------------------------ plan categories */
-
-/** One plan heading and the packet slugs linked beneath it. */
-export interface PlanCategory {
-  heading: string;
-  slugs: string[];
-}
-
-export interface PlanCategories {
-  /** Category headings in `plans/index.md` order, each holding ≥1 packet. */
-  categories: PlanCategory[];
-  /** Packet slugs present in `packets/` but not linked from any category. */
-  orphanSlugs: string[];
-}
-
-/** One captured work item line in the hand-written plan index. */
-export interface PlanIndexItem {
-  heading: string;
-  slug: string;
-  title: string;
-  done: boolean;
-  /** Linked packet slug, when the line points at `packets/<slug>.md`. */
-  packet?: string;
-}
-
-/**
- * Parse `plans/index.md` work-item lines (`- [ ] slug — title → packets/x.md`)
- * into flat items with their heading. Lines that are not checklist items are
- * ignored, so prose between headings does not leak into the Runs page.
- */
-export function planIndexItems(layout: Layout): PlanIndexItem[] {
-  const file = indexPath(layout);
-  if (!existsSync(file)) return [];
-  const lines = readFileSync(file, "utf8").split("\n");
-  const items: PlanIndexItem[] = [];
-  const headingText = (line: string): string => line.replace(/^\s*#{1,6}\s*/, "").trim();
-  let heading = "";
-  for (const line of lines) {
-    if (isHeadingLine(line)) {
-      heading = headingText(line);
-      continue;
-    }
-    const match = /^\s*-\s*\[([ xX])\]\s+([a-z0-9][a-z0-9-]*)\b(?:\s+—\s+(.*?))?\s*$/.exec(line);
-    if (!match || !heading) continue;
-    const slug = match[2]!;
-    let title = (match[3] ?? "").trim();
-    let packet: string | undefined;
-    const link = new RegExp(`→\\s*${PACKETS_DIR}/([a-z0-9-]+)\\.md`).exec(title);
-    if (link?.[1]) {
-      packet = link[1];
-      title = title.replace(link[0], "").trim();
-    }
-    items.push({ heading, slug, title, done: match[1]!.toLowerCase() === "x", ...(packet ? { packet } : {}) });
-  }
-  return items;
-}
-
-/**
- * Map every packet to its category heading. A packet links to a heading via a
- * `→ packets/<slug>.md` line; packets with no matching line are orphans (they
- * exist in `packets/` but are not yet placed on the hand-written map).
- */
-export function planCategories(layout: Layout): PlanCategories {
-  const file = indexPath(layout);
-  const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : [];
-  const known = listPacketFiles(layout).map((packet) => packet.slug);
-  const categories: PlanCategory[] = [];
-  const placed = new Set<string>();
-  const byHeading = new Map<string, PlanCategory>();
-  const headingText = (line: string): string => line.replace(/^\s*#{1,6}\s*/, "").trim();
-  let current: PlanCategory | undefined;
-  const LINK = new RegExp(`→\\s*${PACKETS_DIR}/([a-z0-9-]+)\\.md`);
-
-  for (const line of lines) {
-    if (isHeadingLine(line)) {
-      const heading = headingText(line);
-      current = byHeading.get(heading);
-      if (!current) {
-        current = { heading, slugs: [] };
-        byHeading.set(heading, current);
-        categories.push(current);
+  for (const [plan, entry] of [...byPlan.entries()].sort((a, b) => a[1].title.localeCompare(b[1].title))) {
+    rendered.push("", `## ${entry.title}`, `_${plan}_`);
+    for (const kind of PLAN_ITEM_KINDS) {
+      const list = entry.items.filter((item) => item.kind === kind);
+      if (list.length === 0) continue;
+      rendered.push("", `### ${PLAN_ITEM_KIND_LABELS[kind]}`);
+      for (const item of [...list].sort((a, b) => a.line - b.line)) {
+        const packet = item.packet ? packets.get(item.packet) : undefined;
+        const status = item.done ? "done" : packet?.status;
+        const glyph = status ? `${statusGlyph(status)} ${status}` : "";
+        const branchTag = packet && status && status !== "done" ? `  ⤳ ${packetBranch(packet.slug)}` : "";
+        const box = item.done ? "x" : " ";
+        rendered.push(`- [${box}] ${item.slug}${item.title ? ` — ${item.title}` : ""}  ${glyph}${branchTag}`.trimEnd());
+        if (packet?.blocked) rendered.push(`      blocked: ${packet.blocked}`);
+        if (packet && packet.deps.length > 0) rendered.push(`      deps: ${packet.deps.join(", ")}`);
+        items.push({
+          heading: `${entry.title} / ${PLAN_ITEM_KIND_LABELS[kind]}`,
+          done: item.done,
+          slug: item.slug,
+          title: item.title,
+          hasPacket: Boolean(packet),
+          ...(status ? { status: status as PacketStatus } : {}),
+          ...(packet?.blocked ? { blocked: packet.blocked } : {}),
+        });
       }
-      continue;
-    }
-    if (!current) continue;
-    const link = line.match(LINK);
-    if (link?.[1] && known.includes(link[1])) {
-      current.slugs.push(link[1]);
-      placed.add(link[1]);
     }
   }
-
-  return {
-    categories: categories.filter((category) => category.slugs.length > 0),
-    orphanSlugs: known.filter((slug) => !placed.has(slug)).sort(),
-  };
+  return { items, text: rendered.join("\n") };
 }
 
 /* ------------------------------------------------------- packet → Task */

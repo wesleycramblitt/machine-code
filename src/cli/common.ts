@@ -51,7 +51,6 @@ import {
   listPacketFiles,
   PACKET_STATUSES,
   PACKET_REVIEWS,
-  planCategories,
   readPacketFile,
   renderPacketFile,
   renderPlan,
@@ -185,7 +184,9 @@ Usage:
                                     reconcile automatically; refresh re-scores everything)
                                     [--snapshot] also update data/models + data/offers
   machine_code catalogue snapshot   Write committed data/models + data/offers [base-dir]
-  machine_code runs [--group packets|status|overall] [--filter ...] [--text Q]
+  machine_code runs [--group all|plan|status|overall] [--filter ...] [--text Q]
+                                    Work tree: All (by item type) or By plan
+                                    (plan file → type), each item → packet → runs
                                     Run hierarchy grouped by packet or status
   machine_code runs delete <run-id> [--yes] [--keep-worktree] [--keep-branch]
                                     [--force] [--no-cancel]
@@ -237,8 +238,8 @@ Usage:
   machine_code plan                 Render the plan tree: index annotated with
                                      packet status, branch, deps, blockers (--json)
   machine_code packet list          List packet files (slug, status, deliverable) [--json]
-  machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas]
-                                     (default heading: Features)
+  machine_code packet create <slug> "<deliverable>" [--heading Bugs|Features|Ideas] [--plan plans/tui.md]
+                                     (default heading: Features; item line lands in --plan, else plans/index.md)
                                      [--verify a,b] [--review gates|agent|human]
                                      Scaffold packets/<slug>.md and index it
   machine_code packet set <slug> status=<todo|in-progress|blocked> [blocked="..."]

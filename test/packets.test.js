@@ -15,12 +15,9 @@ import {
   isBuildable,
   isValidSlug,
   listPacketFiles,
-  markIndexDone,
   packetBranch,
   parsePacketDoc,
-  planIndexItems,
   readPacketFile,
-  removeIndexEntry,
   renderPacketFile,
   renderPlan,
   slugify,
@@ -158,8 +155,9 @@ test("ensureIndex writes the standard skeleton exactly once", () => {
     const body = readFileSync(file, "utf8");
     assert.match(body, /# Plan/);
     assert.match(body, /## Features/);
-    assert.match(body, /## Done/);
-    assert.ok(!body.includes("## Done\n\n## Done"));
+    assert.match(body, /## Bugs/);
+    assert.match(body, /## Ideas/);
+    assert.doesNotMatch(body, /## Done/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -181,26 +179,6 @@ test("addIndexEntry inserts under a heading and replaces by slug", () => {
     assert.equal(after.split("\n").filter((line) => line.includes("- [ ] login-token-refresh")).length, 1);
     assert.match(after, /auth flaky, renamed/);
     assert.doesNotMatch(after, /auth flaky —/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("markIndexDone moves the line to Done and removeIndexEntry clears it", () => {
-  const root = temp("done");
-  const layout = fakeLayout(root);
-  try {
-    addIndexEntry(layout, "Features", "thermal-model", "the model");
-    markIndexDone(layout, "thermal-model", "the model");
-    let body = readFileSync(join(root, "plans", "index.md"), "utf8");
-    assert.match(body, /## Done/);
-    // Done lines carry no dead packet link: exactly one bullet, checked.
-    assert.match(body, /- \[x\] thermal-model — the model\n/);
-    assert.doesNotMatch(body, /\[x\] thermal-model.*plans\/thermal-model/);
-    assert.equal(body.split("\n").filter((line) => line.includes("thermal-model")).length, 1);
-    removeIndexEntry(layout, "thermal-model");
-    body = readFileSync(join(root, "plans", "index.md"), "utf8");
-    assert.doesNotMatch(body, /thermal-model/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -256,44 +234,15 @@ test("readPacketFile and writePacketFile are symmetric", () => {
   }
 });
 
-test("planIndexItems parses checklist lines with headings, titles, links, and done", () => {
-  const root = temp("items");
+test("addIndexEntry can target a plan file instead of index.md", () => {
+  const root = temp("plan-target");
   const layout = fakeLayout(root);
   try {
-    writeFileSync(
-      join(root, "plans", "index.md"),
-      [
-        "# Plan",
-        "",
-        "## Features",
-        "- [ ] rate-limiter — add public API rate limiting → packets/rate-limiter.md",
-        "- [ ] search-ui — build the search screen",
-        "",
-        "## Bugs",
-        "- [x] fix-login — auth flaky timeout → packets/fix-login.md",
-        "",
-        "Prose between headings is ignored.",
-        "- not a checklist item",
-      ].join("\n"),
-      "utf8",
-    );
-    const items = planIndexItems(layout);
-    assert.equal(items.length, 3);
-    assert.deepEqual(items[0], {
-      heading: "Features",
-      slug: "rate-limiter",
-      title: "add public API rate limiting",
-      done: false,
-      packet: "rate-limiter",
-    });
-    assert.deepEqual(items[1], { heading: "Features", slug: "search-ui", title: "build the search screen", done: false });
-    assert.deepEqual(items[2], {
-      heading: "Bugs",
-      slug: "fix-login",
-      title: "auth flaky timeout",
-      done: true,
-      packet: "fix-login",
-    });
+    addIndexEntry(layout, "Bugs", "fix-login", "Auth flaky", { plan: "plans/tui.md" });
+    const plan = readFileSync(join(root, "plans", "tui.md"), "utf8");
+    assert.match(plan, /^# tui$/m);
+    assert.match(plan, /## Bugs/);
+    assert.match(plan, /- \[ \] fix-login — Auth flaky → packets\/fix-login\.md/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

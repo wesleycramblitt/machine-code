@@ -9,8 +9,8 @@
 import { layout } from "../../paths.js";
 import { listAllRuns } from "../../state/runs.js";
 import { buildRunIndex, repoOf, RUN_GROUPS, type RunRow } from "../runs.js";
-import { listPacketFiles, planIndexItems } from "../../plan/packets.js";
-import { discoverPlanEntries } from "../../context/plans.js";
+import { listPacketFiles } from "../../plan/packets.js";
+import { planItems } from "../../plan/items.js";
 import type { TuiState } from "../state.js";
 import type { KeyServices } from "./keys.js";
 
@@ -25,12 +25,11 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     text: s.runsText,
     attentionOnly: s.runsAttention,
     preferredRepo: l.repoRoot,
-    ...(s.runsGroup === "packets"
+    ...(s.runsGroup === "all" || s.runsGroup === "plan"
       ? {
           packetRepo: l.repoRoot,
           packets: listPacketFiles(l),
-          plans: discoverPlanEntries(l),
-          planItems: planIndexItems(l),
+          planItems: planItems(l),
         }
       : {}),
   });
@@ -64,6 +63,18 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     if (targetIndex >= 0) s.runsSel = targetIndex;
     return true;
   };
+  const seedForLine = (row: Extract<RunRow, { kind: "planline" }>) =>
+    row.itemKind === "idea"
+      ? {
+          agent: "research",
+          plan: row.plan,
+          prompt: `Research the idea "${row.title}" in ${row.plan} and propose concrete features or bugs to add to that plan.`,
+        }
+      : {
+          agent: "planner",
+          plan: row.plan,
+          prompt: `Turn the ${row.itemKind} "${row.title}" in ${row.plan} into a packet under plans/index.md.`,
+        };
   if (data === "\r" || data === "\n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "section" || row?.kind === "repo") { toggleFold(row); ctx.draw(); return true; }
@@ -72,18 +83,16 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       s.selectedPacketSlug = row.slug;
       s.packetScroll = 0;
       s.screen = "packet";
-    } else if (row?.kind === "plan") {
-      ctx.startNewRun(undefined, repoForRow(row), {
-        agent: "planner",
-        plan: row.path,
-        prompt: `Materialize the open work items in ${row.path} into packets under plans/index.md.`,
-      });
     } else if (row?.kind === "planline") {
-      ctx.startNewRun(undefined, repoForRow(row), {
-        agent: "planner",
-        plan: `plans/index.md`,
-        prompt: `Turn the "${row.heading}" item ${row.slug}${row.title ? ` (${row.title})` : ""} into a packet under plans/index.md.`,
-      });
+      // A line with a packet opens its contract; a bare feature/bug/idea
+      // seeds the run that turns it into one (research for ideas).
+      if (row.packet) {
+        s.selectedPacketSlug = row.packet;
+        s.packetScroll = 0;
+        s.screen = "packet";
+      } else {
+        ctx.startNewRun(undefined, repoForRow(row), seedForLine(row));
+      }
     }
     ctx.draw();
     return true;
@@ -102,20 +111,16 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   }
   if (data === "n") {
     const row = index.selectable[s.runsSel];
-    if (row?.kind === "plan") {
-      ctx.startNewRun(undefined, repoForRow(row), {
-        agent: "planner",
-        plan: row.path,
-        prompt: `Materialize the open work items in ${row.path} into packets under plans/index.md.`,
-      });
+    if (row?.kind === "planline") {
+      ctx.startNewRun(undefined, repoForRow(row), seedForLine(row));
       ctx.draw();
       return true;
     }
-    if (row?.kind === "planline") {
+    if (row?.kind === "section" && row.plan) {
       ctx.startNewRun(undefined, repoForRow(row), {
         agent: "planner",
-        plan: "plans/index.md",
-        prompt: `Turn the "${row.heading}" item ${row.slug}${row.title ? ` (${row.title})` : ""} into a packet under plans/index.md.`,
+        plan: row.plan,
+        prompt: `Materialize the open items in ${row.plan} into packets under plans/index.md.`,
       });
       ctx.draw();
       return true;

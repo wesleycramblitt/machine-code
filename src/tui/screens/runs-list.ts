@@ -47,13 +47,17 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const tone = row.tone === "status" ? Y : row.tone === "orphaned" ? Y : GR;
       const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
-    } else if (row.kind === "plan") {
-      const text = ` ${indent}  ${C}≡${R} ${W}${row.path}${R} ${D}${trunc(row.title, Math.max(12, cols - indent.length - row.path.length - 8))}${R}`;
-      rendered.push(selected(text, isSelected));
     } else if (row.kind === "planline") {
-      const box = row.done ? `${G}✓${R}` : `${D}·${R}`;
-      const title = row.title ? ` ${D}${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 12))}${R}` : "";
-      const text = ` ${indent}  ${box} ${D}${row.slug}${R}${title}`;
+      // Status is color-encoded: dim todo, cyan in progress, yellow blocked,
+      // green done. The checkbox is the item's own state; a linked packet's
+      // status wins when it is further along.
+      const tone =
+        row.status === "in-progress" ? C : row.status === "blocked" ? Y : row.status === "done" ? G : D;
+      const glyph = row.status === "in-progress" ? "●" : row.status === "blocked" ? "⏸" : row.status === "done" ? "✓" : "○";
+      const title = row.title
+        ? ` ${D}${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 14))}${R}`
+        : "";
+      const text = ` ${indent}${tone}${glyph}${R} ${tone}${row.slug}${R}${title}`;
       rendered.push(selected(text, isSelected));
     } else if (row.kind === "packet") {
       const status = row.packet.status;

@@ -51,7 +51,6 @@ import {
   listPacketFiles,
   PACKET_STATUSES,
   PACKET_REVIEWS,
-  planCategories,
   readPacketFile,
   renderPacketFile,
   renderPlan,
