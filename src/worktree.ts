@@ -121,7 +121,7 @@ export async function mainWorktreeRoot(repoRoot: string): Promise<string> {
 
 /**
  * Runner-owned paths that never block a worktree: planning artifacts, task
- * packets, and the gitignored runtime state directory. Git reports an
+ * issues, and the gitignored runtime state directory. Git reports an
  * untracked `.machine_code/` as the bare directory, which is also allowed —
  * tracked files under it (e.g. a modified policy.toml) still appear by their
  * own path and block.
@@ -254,7 +254,7 @@ export interface WorktreeSpec {
 
 function branchFor(kind: WorktreeKind, runId: string, slug?: string): string {
   if (kind === "issue") {
-    if (!slug) throw new WorktreeError("slug_required", "a packet worktree needs --slug");
+    if (!slug) throw new WorktreeError("slug_required", "an issue worktree needs --slug");
     return `mc/${slug}`;
   }
   return `mc/run/${runId}`;

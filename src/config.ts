@@ -2,7 +2,7 @@
  * machine_code — config.toml and policy.toml loaders.
  *
  * config.toml (machine): rate caps, vetoes, default output-token ceiling,
- * default packet mode. Only the machine may set money.
+ * default run mode. Only the machine may set money.
  * policy.toml (repo, committed): per-agent requirements; may override the
  * output-token ceiling per agent. Unknown keys are ignored (forward-compat).
  */

@@ -26,7 +26,6 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { packetPath, parseVerificationCommands, readPacket } from "../packet.js";
 import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
@@ -246,14 +245,14 @@ funded = true
 `;
   }
   return `# machine_code repo policy (committed; overrides machine config)
-# [agents.build]
+# [agents.engineer]
 # min_fit = 7.0           # primary role-weighted gate
-# [agents.build.axes]
+# [agents.engineer.axes]
 # code = 6.5
 # agentic = 6.5
 # reasoning = 5.5
 # general = 3.0
-# [agents.build.weights]
+# [agents.engineer.weights]
 # code = 0.40
 `;
 }

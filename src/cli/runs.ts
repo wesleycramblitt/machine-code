@@ -26,7 +26,6 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { packetPath, parseVerificationCommands, readPacket } from "../packet.js";
 import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
@@ -342,7 +341,8 @@ export function cmdShow(argv: string[]): number {
     `  context  ${fmtRunTokens(ctx.tokens)} ctx  ${fmtRunTokens(s.usage.totalTokens)} total  ${fmtRunTokens(ctx.peakTokens)} peak\n`,
   );
   process.stdout.write(`  spend    ${s.modelCalls} calls  ${fmtTokens(s.usage.totalTokens)} tok  ${fmtMoney(s.cost.actual)} actual / ${fmtMoney(s.cost.estimated)} estimated\n`);
-  if (s.packetId) process.stdout.write(`  packet   ${s.packetId}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
+  const itemId = s.itemId ?? s.packetId;
+  if (itemId) process.stdout.write(`  issue    ${itemId}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
   if (s.parentRunId) process.stdout.write(`  parent   ${s.parentRunId}\n`);
   if (s.worktree) process.stdout.write(`  worktree ${s.worktree}\n`);
   if (s.error) process.stdout.write(`  error    ${s.error}\n`);

@@ -9,7 +9,7 @@
  *   overall run status across every repository
  *
  * Status is a directory: the row set comes from `issues/<kind>/<status>/`.
- * Packets are whatever the issue file carries; there are no packet rows.
+ * The issue file is the work item; there are no packet rows.
  */
 import { basename } from "node:path";
 import type { RunSummary } from "../state/runs.js";
@@ -144,8 +144,8 @@ function runText(run: RunSummary): string {
     run.status,
     run.repoRoot,
     run.prNumber ? `pr #${run.prNumber}` : "",
-    run.itemId ?? "",
-    run.itemId ?? "",
+    run.itemId ?? run.packetId ?? "",
+    run.packetId ?? "",
   ].join(" ");
 }
 

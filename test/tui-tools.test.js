@@ -15,7 +15,7 @@ test("tool subtab lists core tools and custom tools", () => {
     "tool:bench",
     "tool:lint",
   ]);
-  assert.match(items.find((item) => item.key === "core-tool:search").text, /map, outline, search/);
+  assert.match(items.find((item) => item.key === "core-tool:search").text, /symbols, outlines, map/);
   assert.match(items.find((item) => item.key === "tool:bench").text, /Run benchmarks/);
   const core = items.filter((item) => item.key.startsWith("core-tool:"));
   const custom = items.filter((item) => item.key.startsWith("tool:"));

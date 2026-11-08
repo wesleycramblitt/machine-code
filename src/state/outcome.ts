@@ -269,10 +269,15 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
       `${formatTokens(summary.usage.totalTokens)} tokens · $${summary.cost.actual.toFixed(6)}`,
   );
 
-  if (issues.length === 0) {
+  const changedIssues = [...changed].filter((path) =>
+    /^issues\/(?:features|bugs)\//.test(path),
+  );
+  if (issues.length === 0 && changedIssues.length > 0) {
+    lines.push(`Issues: ${changedIssues.map((path) => path.replace(/^issues\//, "")).join("; ")}`);
+  } else if (issues.length === 0) {
     lines.push(
-      summary.agent === "planner"
-        ? "Issues: none created — the planner did not create any issues."
+      summary.agent === "research"
+        ? "Issues: none created — the research run did not create any issues."
         : "Issues: none created",
     );
   } else {

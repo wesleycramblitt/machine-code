@@ -11,8 +11,8 @@
  *     bugs/{todo,blocked,done}/<slug>.md
  *
  * Each file is YAML front-matter (`priority`, `prompt`, `depends`, `tags`,
- * `review`) plus markdown. There is no "archived": delete an issue when it
- * is no longer wanted.
+ * `review`, `verify`) plus markdown. There is no "archived": delete an issue
+ * when it is no longer wanted.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
@@ -234,6 +234,9 @@ export interface NewIssueInput {
 
 export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   const status = input.status ?? (input.kind === "ideas" ? "needs-research" : "todo");
+  if (!legalStatus(input.kind, status)) {
+    throw new Error(`invalid status ${JSON.stringify(status)} for ${input.kind}`);
+  }
   const slug = slugify(input.slug) || "untitled";
   const front: Record<string, unknown> = {
     priority: input.priority ?? "medium",
@@ -254,10 +257,24 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   return issue;
 }
 
+/** Update just the review gate, preserving front-matter and body. */
+export function updateIssueReview(layout: Layout, slug: string, review: ReviewMode): Issue | null {
+  const issue = findIssue(layout, slug);
+  if (!issue) return null;
+  const text = readFileSync(issue.path, "utf8");
+  const { front, body } = parseIssueFile(text);
+  front.review = review;
+  writeFileSync(issue.path, `---\n${stringify(front)}---\n\n${body}`, "utf8");
+  return readIssue(layout, issue.kind, issue.status, slug);
+}
+
 /** Move work to another status by moving its file. */
 export function moveIssue(layout: Layout, slug: string, to: IssueStatus): Issue | null {
   const issue = findIssue(layout, slug);
   if (!issue || issue.status === to) return issue;
+  if (!legalStatus(issue.kind, to)) {
+    throw new Error(`invalid status ${JSON.stringify(to)} for ${issue.kind} issue ${slug}`);
+  }
   const dir = issueDir(layout, issue.kind, to);
   mkdirSync(dir, { recursive: true });
   const dest = join(dir, `${slug}.md`);

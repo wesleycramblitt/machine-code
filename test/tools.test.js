@@ -54,19 +54,19 @@ test("command list with a name describes it directly", async () => {
 
 test("command describe points at tools, not commands", async () => {
   const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS });
-  const result = await tool.execute("id", { action: "describe", name: "issue" });
+  const result = await tool.execute("id", { action: "describe", name: "read" });
   assert.equal(result.isError, true);
   const text = result.content.map((c) => c.text ?? "").join("\n");
-  assert.match(text, /issue is a tool, not a command/);
+  assert.match(text, /read is a tool, not a command/);
 });
 
 test("command describe reports a tool the role does not have", async () => {
-  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS, tools: ["read", "search"] });
-  const result = await tool.execute("id", { action: "describe", name: "issue" });
+  const tool = commandTool({ root: process.cwd(), commands: CORE_COMMANDS, tools: ["search", "glob"] });
+  const result = await tool.execute("id", { action: "describe", name: "read" });
   assert.equal(result.isError, true);
   const text = result.content.map((c) => c.text ?? "").join("\n");
-  assert.match(text, /issue is a tool, but this role does not have it/);
-  assert.match(text, /read, search/);
+  assert.match(text, /read is a tool, but this role does not have it/);
+  assert.match(text, /search, glob/);
 });
 
 test("unknown command suggests the closest name", async () => {
@@ -84,6 +84,20 @@ test("command accepts the {command, args} spelling", async () => {
   assert.equal(prepared.name, "core:status");
   assert.equal(prepared.action, "run");
   assert.equal(prepared.command, undefined);
+});
+
+test("read refuses secret files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-secret-"));
+  try {
+    writeFileSync(join(root, ".env"), "TOKEN=SECRET\n", "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: ".env" });
+    assert.equal(result.isError, true);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /refusing to read a secret file/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("search graph renders module import edges", async () => {

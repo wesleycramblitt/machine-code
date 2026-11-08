@@ -159,7 +159,8 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       ` ${M}${fmtRunTokens(s.usage.totalTokens)}${R}${D} total${R}`,
     ];
     footerCtx = `${C}ctx${R} ${W}${fmtRunTokens(ctxUsage.tokens)}${R}`;
-    const prMeta = [s.packetId ? `${s.packetId}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
+    const itemId = s.itemId ?? s.packetId;
+    const prMeta = [itemId ? `${itemId}` : "", s.prNumber ? `PR #${s.prNumber} ${s.prState ?? ""}` : ""]
       .filter(Boolean)
       .join("  ");
     if (prMeta) lines.push(` ${D}${prMeta}${R}`);

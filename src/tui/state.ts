@@ -22,12 +22,12 @@ import type { ForkedRunSettings } from "./fork.js";
 import type { ModelPickerEntry } from "./format.js";
 
 export type Page = "runs" | "models" | "spend" | "settings";
-export type Screen = "list" | "run" | "newrun" | "answer" | "correct" | "model" | "delete" | "packet";
+export type Screen = "list" | "run" | "newrun" | "answer" | "correct" | "model" | "delete" | "issue";
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
 export type RunsRepoScope = "all" | "cwd";
 
 export type NewRunState = ForkedRunSettings & {
-  /** Isolation worktree. Shown only for build; other agents ignore it. */
+  /** Isolation worktree. Shown only for engineer; other agents ignore it. */
   worktree: boolean;
 };
 
@@ -40,7 +40,7 @@ export interface RunDetail {
 
 /** Composer seed when a run is started from a plan file or plan line. */
 export interface NewRunSeed {
-  /** Role to preselect (planner for plan rows). */
+  /** Role to preselect (research for idea rows, engineer for features/bugs). */
   agent?: string;
   /** Repo-relative plan attached as explicit context. */
   plan?: string;
@@ -88,6 +88,7 @@ export interface TuiState {
   settingsScroll: number;
   selectedRunId: string | null;
   selectedIssueSlug: string | null;
+  selectedIssueRepo: string | null;
   issueScroll: number;
   deleteRunTarget: RunSummary | undefined;
   deleteReturn: Screen;
@@ -206,6 +207,7 @@ export function createTuiState(repoRoot: string): TuiState {
     settingsScroll: 0,
     selectedRunId: null,
     selectedIssueSlug: null,
+    selectedIssueRepo: null,
     issueScroll: 0,
     deleteRunTarget: undefined,
     deleteReturn: "list",

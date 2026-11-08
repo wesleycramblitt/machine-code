@@ -18,7 +18,7 @@ export function handleDeleteKeys(s: TuiState, ctx: KeyServices, data: string): b
   if (data === "D" && s.deleteRunTarget) {
     const run = s.deleteRunTarget;
     s.deletingRuns.add(run.id);
-    const l = layout(ctx.repoRoot);
+    const l = layout(run.repoRoot);
     const cliPath = fileURLToPath(new URL("../../cli.js", import.meta.url));
     const child = spawn(
       process.execPath,

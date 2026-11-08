@@ -3,8 +3,7 @@
  *
  * Status is the directory: an issue's status field here is derived from where
  * it lives (`issues/<kind>/<status>/<slug>.md`), and runs attached to it move
- * it between directories when they change state. `blocked` is a front-matter
- * flag, not a status.
+ * it between directories when they change state.
  */
 import type { RunSummary } from "../state/runs.js";
 import { ISSUE_STATUS_LABELS, type DisplayStatus, type Issue, type IssueStatus } from "./issues.js";
@@ -42,5 +41,5 @@ export function effectiveStatus(issue: Issue, runs: readonly RunSummary[]): Disp
 
 /** The work item a run belongs to (legacy packet ids included). */
 export function runItemId(run: Pick<RunSummary, "itemId" | "packetId">): string | undefined {
-  return run.itemId ?? run.itemId;
+  return run.itemId ?? run.packetId;
 }

@@ -359,10 +359,18 @@ export function changesFor(worktree: string | undefined): ChangeSummary {
 /** Paths touched by write/edit tool events, for the run timeline. */
 export function touchedPaths(events: readonly RunEvent[]): string[] {
   const paths = new Set<string>();
+  const failed = new Set<string>();
+  for (const event of events) {
+    if (event.type === "tool_call" && event.isError === true && typeof event.toolCallId === "string") {
+      failed.add(event.toolCallId);
+    }
+  }
   for (const event of events) {
     if (event.type !== "tool_call" && event.type !== "tool_call_start") continue;
     const tool = String(event.tool ?? "");
     if (tool !== "write" && tool !== "edit") continue;
+    const id = typeof event.toolCallId === "string" ? event.toolCallId : "";
+    if (id && failed.has(id)) continue;
     const args = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
     const path = typeof args?.path === "string" ? args.path : undefined;
     if (path) paths.add(path);

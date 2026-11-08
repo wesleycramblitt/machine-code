@@ -26,7 +26,6 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { packetPath, parseVerificationCommands, readPacket } from "../packet.js";
 import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
@@ -219,8 +218,9 @@ Usage:
   machine_code issue list           List issue files under issues/<kind>/<status>/<slug>.md (--json)
   machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority N] [--review none|agent|human] [--verify a,b]
                                      Scaffold an issue file under issues/
+  machine_code issue show <slug>    Show an issue file
   machine_code issue move <slug> <todo|blocked|done|researched>  Move an issue
-  machine_code issue run <slug>     Start the research or engineer run for an issue
+  machine_code issue run <slug>     Research an idea, or build a feature/bug (gates + review)
   machine_code issue review <slug>  Review the issue in its latest engineer worktree
   machine_code build <slug>         Build an issue: engineer → gates → commit → done/
                                      [--review] add an independent review step [--model <key>]
@@ -268,6 +268,8 @@ export const BOOLEAN_FLAGS = new Set([
   "semantic",
   "state",
   "no-review",
+  "packet",
+  "with-review",
   "no-commit",
   "no-merge",
   "no-checks",

@@ -57,7 +57,7 @@ test("fork settings preserve a new run's saved selection and agent config", () =
   assert.equal(result.minFit, 7.5);
   assert.equal(result.floors, "strict");
   assert.equal(result.prompt, "implement the task");
-  assert.equal(result.packet, "demo");
+  assert.equal(result.item, "demo");
 });
 
 test("fork settings keep auto-selection when the snapshot has no model pin", () => {
@@ -152,12 +152,11 @@ test("fork settings drop an unavailable model and validate bad values", () => {
 
 test("fork settings inherit the item id, so the run stays attached", () => {
   const summary = {
-    id: "r1", repoRoot: "/repo", agent: "planner", mode: "", request: "Plan this",
+    id: "r1", repoRoot: "/repo", agent: "research", mode: "", request: "Plan this",
     status: "completed", pid: 1, startedAt: "", lastActivityAt: "", turns: 1,
     usage: { input: 0, inputTokens: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
     cost: { actual: 0, estimated: 0 }, modelCalls: 1, itemId: "encodings",
   };
   const result = forkSettingsFromRun({ summary, events: [], defaults: { preset: "assistant", verification: "direct", ask: false, approval: "human", ambiguity: "precise" } });
   assert.equal(result.item, "encodings");
-  assert.equal(result.packet, undefined);
 });

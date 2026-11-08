@@ -77,10 +77,9 @@ class FakeProvider {
 }
 
 test("defaultSkillsFor maps agent and verification to skills", () => {
-  assert.deepEqual(defaultSkillsFor({ agent: "build", verification: "direct" }), ["clean-code"]);
-  assert.deepEqual(defaultSkillsFor({ agent: "build", verification: "verified" }), ["clean-code", "verified-testing"]);
-  assert.deepEqual(defaultSkillsFor({ agent: "build", verification: "redundant" }), ["clean-code", "verified-testing"]);
-  assert.deepEqual(defaultSkillsFor({ agent: "planner" }), ["clean-code"]);
+  assert.deepEqual(defaultSkillsFor({ agent: "engineer", verification: "direct" }), ["clean-code"]);
+  assert.deepEqual(defaultSkillsFor({ agent: "engineer", verification: "verified" }), ["clean-code", "verified-testing"]);
+  assert.deepEqual(defaultSkillsFor({ agent: "engineer", verification: "redundant" }), ["clean-code", "verified-testing"]);
   assert.deepEqual(defaultSkillsFor({ agent: "research" }), ["clean-code", "plan-curation"]);
   assert.deepEqual(defaultSkillsFor({ agent: "review", verification: "verified" }), []);
   assert.deepEqual(defaultSkillsFor({ agent: "unknown" }), []);

@@ -14,10 +14,10 @@ import {
 
 const decision = (text) => [{ kind: "decision", status: "active", text }];
 
-test("only Build has the mandatory change-plan gate", () => {
-  assert.equal(needsBuildPlan("build"), true);
-  assert.equal(needsBuildPlan("planner"), false);
+test("only Engineer has the mandatory change-plan gate", () => {
+  assert.equal(needsBuildPlan("engineer"), true);
   assert.equal(needsBuildPlan("research"), false);
+  assert.equal(needsBuildPlan("review"), false);
 });
 
 test("a decision that merely mentions a plan is not a change plan", () => {

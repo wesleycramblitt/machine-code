@@ -2,7 +2,7 @@
  * machine_code — synchronous context preview for the TUI.
  *
  * This is deliberately not `assembleContext`: the draw path must never block
- * on a slow filesystem. It derives the packet contract and configured
+ * on a slow filesystem. It derives the issue contract and configured
  * defaults, which is enough to show what a run will inherit before it starts.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -63,7 +63,7 @@ function skillPath(layout: Layout, name: string): string | null {
 }
 
 export interface PreviewContextOptions {
-  /** Role name; the plan map is inherited only by the planner. */
+  /** Role name; the plan map is inherited for every role. */
   agent?: string;
   /** Packet slug attached in the composer; its contract is explicit context. */
   planFile?: string;

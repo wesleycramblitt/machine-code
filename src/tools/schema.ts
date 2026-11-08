@@ -20,7 +20,6 @@ const SCHEMA_CONTEXT = {
   ask: {},
   task: {},
   artifacts: {},
-  prs: {},
 } as unknown as ToolContext;
 
 /** Approximate the provider's per-tool JSON envelope. */

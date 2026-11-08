@@ -6,7 +6,7 @@
  * lines, two header lines, two footer lines, content clipped to the middle.
  *
  * The TUI wraps the CLI's file/CLI primitives rather than inventing a second
- * source of truth. Every s.screen is derived from run summaries, the packet
+ * source of truth. Every s.screen is derived from run summaries, the issue
  * catalog, the catalogue, config, and the spend ledger on each refresh.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -15,6 +15,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
 import { findIssue, listIssues, ISSUE_STATUS_LABELS, type Issue } from "./plan/issues.js";
+import { effectiveStatus } from "./plan/lifecycle.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -80,7 +81,7 @@ import { toolSchemaChars } from "./tools/schema.js";
 import { readLogTail } from "./processes/logs.js";
 import { reconcileProcessRecords } from "./processes/reconcile.js";
 import { terminateAllProcesses, terminateProcessRecord } from "./processes/supervisor.js";
-import { AGENT_META, AGENT_NAMES, agentDef, roleSkillPresets } from "./agents.js";
+import { AGENT_META, AGENT_NAMES, agentDef, normalizeAgentName, roleSkillPresets } from "./agents.js";
 import { resolveAgent, resolveAgentConfig } from "./agents/config.js";
 import { createModelsCollection, providerStatuses } from "./models.js";
 import { fundedProviderIds } from "./data.js";
@@ -284,6 +285,7 @@ export async function runTui(): Promise<void> {
     s.newRunRepo = repoRoot;
     const slug = itemSlug ?? seed?.item;
     const issue = slug ? findIssue(layout(repoRoot), slug) : undefined;
+    const attached = issue ? slug : undefined;
     // An issue is the work item: ideas start research, features/bugs start
     // engineer. A seeded run names its own agent; blank runs keep the last.
     const preferredAgent = seed?.agent ?? (issue ? (issue.kind === "ideas" ? "research" : "engineer") : previous.agent);
@@ -291,7 +293,7 @@ export async function runTui(): Promise<void> {
       ...defaultNewRun(),
       ...(previous.tier ? { tier: previous.tier } : {}),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
-      ...(slug ? { item: slug } : {}),
+      ...(attached ? { item: attached } : {}),
     };
     s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
     s.newrun.worktree = true;
@@ -313,7 +315,8 @@ export async function runTui(): Promise<void> {
       return;
     }
     const repoLayout = layout(summary.repoRoot);
-    const agent = AGENT_NAMES.includes(summary.agent) ? summary.agent : "research";
+    const candidate = normalizeAgentName(summary.agent);
+    const agent = AGENT_NAMES.includes(candidate) ? candidate : "research";
     const policy = effectivePolicy(summary.repoRoot);
     const machine = (() => {
       try { return loadMachineConfig(repoLayout); } catch { return undefined; }
@@ -339,6 +342,10 @@ export async function runTui(): Promise<void> {
       }),
       worktree: s.newrun.worktree,
     };
+    // A legacy packet id is not an issue; do not attach a run to it.
+    if (s.newrun.item && !findIssue(repoLayout, s.newrun.item)) {
+      s.newrun.item = undefined;
+    }
     // A generic inherited request ("Build the task.") hides the real objective.
     // When the run is attached to an issue, derive the request from it.
     const forkIssue = s.newrun.item ? findIssue(repoLayout, s.newrun.item) : null;
@@ -355,7 +362,7 @@ export async function runTui(): Promise<void> {
     const previousAgent = s.newrun.agent;
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
     s.newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
-    // Verification and isolation follow the role: only build verifies and
+    // Verification and isolation follow the role: only engineer verifies and
     // isolates in a worktree.
     s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
     s.newrun.worktree = true;
@@ -419,7 +426,7 @@ export async function runTui(): Promise<void> {
     machine?: MachineConfig;
   } => {
     const newRunLayout = layout(s.newRunRepo);
-    // Everything below depends on the repo/packet, not on the text being typed.
+    // Everything below depends on the repo/issue, not on the text being typed.
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...s.newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
@@ -763,7 +770,7 @@ export async function runTui(): Promise<void> {
     // filesystem walk there keeps prompt typing responsive.
     const needRunData =
       s.pendingRunAt > 0 ||
-      (s.page === "runs" && (s.screen === "list" || s.screen === "run"));
+      (s.page === "runs" && (s.screen === "list" || s.screen === "run" || s.screen === "issue"));
     const allRuns = needRunData ? listAllRuns(l.home).filter((run) => !s.deletingRuns.has(run.id)) : [];
     const counts = needRunData ? headerCounts(allRuns) : headerCounts([]);
     const settingsMachine = (() => { try { return loadMachineConfig(l); } catch { return undefined; } })();
@@ -1054,10 +1061,12 @@ export async function runTui(): Promise<void> {
       secondary = frame.secondary;
     }
 
-    /* ---------------------------------------------------------- packet */
-    else if (s.page === "runs" && s.screen === "packet") {
+    /* ----------------------------------------------------------- issue */
+    else if (s.page === "runs" && s.screen === "issue") {
       const itemSlug = s.selectedIssueSlug;
-      const issue = itemSlug ? findIssue(l, itemSlug) : undefined;
+      const issueLayout = layout(s.selectedIssueRepo ?? l.repoRoot);
+      const issue = itemSlug ? findIssue(issueLayout, itemSlug) : undefined;
+      const issueRuns = allRuns.filter((run) => run.repoRoot === issueLayout.repoRoot);
       const frame = renderIssue({
         cols, narrow, bodyH, theme, toast: s.toast,
         slug: itemSlug,
@@ -1066,7 +1075,7 @@ export async function runTui(): Promise<void> {
               slug: issue.slug,
               title: issue.title,
               kindLabel: issue.kind === "ideas" ? "Idea" : issue.kind === "features" ? "Feature" : "Bug",
-              statusLabel: ISSUE_STATUS_LABELS[issue.status],
+              statusLabel: ISSUE_STATUS_LABELS[effectiveStatus(issue, issueRuns)],
               rel: issue.rel,
               priority: issue.priority,
               review: issue.review,
@@ -1075,7 +1084,7 @@ export async function runTui(): Promise<void> {
               body: issue.body.split("\n"),
             }
           : null,
-        runs: allRuns,
+        runs: issueRuns,
         scroll: s.issueScroll,
       });
       s.issueScroll = frame.scroll;
@@ -1219,9 +1228,9 @@ export async function runTui(): Promise<void> {
     process.stdout.write(SYNC_ON + WRAP_OFF + HOME + output.join("\n") + CLEAR_BELOW + WRAP_ON + SYNC_OFF);
   };
 
-  /* ------------------------------------------------------------ packet modal helpers */
+  /* ------------------------------------------------------------- issue modal helpers */
 
-  /* ------------------------------------------------------------ packet modal helpers */
+  /* ------------------------------------------------------------- issue modal helpers */
 
   const startIssuePicker = () => {
     s.itemPick = "newrun";
@@ -1407,8 +1416,8 @@ export async function runTui(): Promise<void> {
 
     /* --------------------------------------------------------- runs keys */
     if (s.page === "runs" && s.screen === "list") return handleRunsListKeys(s, keyCtx, data);
-    /* ------------------------------------------------------ packet keys */
-    if (s.page === "runs" && s.screen === "packet") return handleIssueKeys(s, keyCtx, data);
+    /* ------------------------------------------------------- issue keys */
+    if (s.page === "runs" && s.screen === "issue") return handleIssueKeys(s, keyCtx, data);
     /* --------------------------------------------------------- run keys */
     if (s.page === "runs" && s.screen === "run") return handleRunKeys(s, keyCtx, data);
 

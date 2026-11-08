@@ -17,7 +17,7 @@ export interface KeyServices {
   notify: (message: string) => void;
   launch: (args: string[], repoRoot?: string) => boolean;
   openEditor: (file: string | null | undefined) => void;
-  startNewRun: (packetSlug?: string, repoRoot?: string, seed?: NewRunSeed) => void;
+  startNewRun: (itemSlug?: string, repoRoot?: string, seed?: NewRunSeed) => void;
   forkRun: (detail: RunDetail) => void;
   answerRun: (run: RunRow | RunSummary | undefined) => void;
   interrupt: (summary: RunSummary | undefined) => void;

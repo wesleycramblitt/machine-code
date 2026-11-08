@@ -53,8 +53,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const modelEntries = pickers.model?.entries ?? [];
   const modelSort = pickers.model?.sort ?? "fit";
   const modelText = pickers.model?.text ?? "";
-  const packetList = pickers.issue?.list ?? [];
-  const packetText = pickers.issue?.text ?? "";
+  const issueList = pickers.issue?.list ?? [];
+  const issueText = pickers.issue?.text ?? "";
   let body: string[] = [];
   let actions = "";
   let secondary = "";
@@ -551,7 +551,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
 
   const boxWidth = panelWidth;
   const inner = Math.max(12, boxWidth - 2);
-  const promptText = run.prompt || (insert ? "" : run.item ? "Press :! to run the packet" : "Press p to type the task");
+  const promptText = run.prompt || (insert ? "" : run.item ? "Press :! to run the issue" : "Press p to type the task");
   // Include the cursor before wrapping so a freshly typed trailing space is
   // not trimmed away until the next keystroke.
   const promptLines = wrapText(insert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
@@ -665,7 +665,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       `${modelText ? ` · “${modelText}”` : ""}${R}` +
       `${toast ? ` · ${Y}${toast}${R}` : ""}`;
   } else if (itemPickActive) {
-    const list = packetList;
+    const list = issueList;
     if (itemPickSel >= list.length) itemPickSel = Math.max(0, list.length - 1);
     const picker: string[] = [` ${command("Esc", "Back", undefined, GR)}  ${B}${W}Link an issue${R} ${D}(type to filter; Enter selects)${R}`, ""];
     for (let i = 0; i < list.length; i++) {
@@ -674,14 +674,14 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       const line = ` ${isSelected ? C + "▸" : " "} ${C}${item.slug}${R} ${D}[${item.status}]${R} ${W}${trunc(item.prompt || "(no prompt)", Math.max(12, cols - item.slug.length - 24))}${R}`;
       picker.push(selected(line, i === itemPickSel));
     }
-    picker.push("", ` ${D}filter: ${packetText || "(all)"}${R}`);
+    picker.push("", ` ${D}filter: ${issueText || "(all)"}${R}`);
     body = clipLines(picker.slice(0, bodyH), bodyH);
     actions = joinCommands([
       command("Enter", "Select", undefined, G),
       command("j/k", "Move", undefined, M),
       command("Esc", "Close", undefined, GR),
     ]);
-    secondary = `${D}${list.length} issue(s)${packetText ? ` · “${packetText}”` : ""}${R}`;
+    secondary = `${D}${list.length} issue(s)${issueText ? ` · “${issueText}”` : ""}${R}`;
   } else {
     // Context and inherited sources stay above; the composer is pinned to
     // the bottom of the body so it sits directly above the key-command row.

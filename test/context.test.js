@@ -13,7 +13,6 @@ import { checkFaithfulness, goldRecall, sectionTokens } from "../dist/report/run
 import { previewContext } from "../dist/context/preview.js";
 import { trimContextText, renderPromptMessages } from "../dist/context/render.js";
 import { parseArtifactReferences, parseSkillFrontMatter } from "../dist/context/references.js";
-import { writePacket } from "../dist/packet.js";
 
 function fakeLayout(root) {
   return {

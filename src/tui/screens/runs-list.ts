@@ -42,7 +42,7 @@ const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }>
   done: { tone: GR, glyph: "✓" },
 };
 
-const PRIORITY_TONE: Record<string, string> = { high: ROSE, medium: D, low: SLATE };
+const PRIORITY_TONE: Record<string, string> = { high: D, medium: D, low: D };
 
 /** Category header colors: type and exception buckets. */
 const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {

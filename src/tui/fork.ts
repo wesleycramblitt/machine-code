@@ -17,9 +17,7 @@ export interface ForkedRunSettings {
   /** undefined = role policy; null = explicit zero. */
   minFit: number | null | undefined;
   floors: "role" | "strict" | "off";
-  /** Packet slug attached in the composer; run with `--packet <slug>`. */
-  packet?: string;
-  /** Plan item slug for runs without a contract; run with `--item <slug>`. */
+  /** Issue slug attached in the composer; run with `--item <slug>`. */
   item?: string;
   prompt: string;
 }
@@ -112,8 +110,7 @@ export function forkSettingsFromRun(input: {
     tier,
     minFit: settings?.minFit,
     floors,
-    ...(summary.packetId ? { packet: summary.packetId } : {}),
-    ...(summary.itemId ? { item: summary.itemId } : {}),
+    ...((summary.itemId ?? summary.packetId) ? { item: summary.itemId ?? summary.packetId } : {}),
     prompt: summary.request,
   };
 }

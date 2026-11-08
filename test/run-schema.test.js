@@ -221,7 +221,7 @@ test("finalize derives a turn-cap summary when the model produced no final text"
   const root = tempDir("turncap");
   const layout = fakeLayout(root);
   const recorder = new RunRecorder(layout, {
-    agent: "planner",
+    agent: "research",
     mode: "",
     request: "plan the work",
     repoRoot: root,
@@ -235,7 +235,7 @@ test("finalize derives a turn-cap summary when the model produced no final text"
     assert.equal(done.status, "blocked");
     assert.equal(done.stopReason, "turn-cap");
     assert.match(done.summary, /Stopped at the turn cap \(25\)/);
-    assert.match(done.summary, /the planner did not create any issues/);
+    assert.match(done.summary, /the research run did not create any issues/);
     assert.match(done.summary, /Response: none/);
   } finally {
     rmSync(root, { recursive: true, force: true });

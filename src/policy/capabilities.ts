@@ -17,9 +17,6 @@ export type Capability =
   | "code:write"
   | "artifact:write"
   | "artifact:provision"
-  | "pr:read"
-  | "pr:create"
-  | "pr:merge"
   | "review:write"
   | "knowledge:write"
   | "context:inherit";
@@ -29,9 +26,6 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   "code:write",
   "artifact:write",
   "artifact:provision",
-  "pr:read",
-  "pr:create",
-  "pr:merge",
   "review:write",
   "knowledge:write",
   "context:inherit",

@@ -1,7 +1,7 @@
 /**
  * machine_code — composer keys.
  *
- * Model/packet picker overlays, insert-mode prompt editing, context-tab
+ * Model/issue picker overlays, insert-mode prompt editing, context-tab
  * navigation, agent/verify/worktree/ambiguity/min-fit/floor cycling, and
  * `:!` submit. The heaviest keymap; all composer state flows through `s`
  * with app services on the context. Returns true when consumed.
@@ -172,11 +172,11 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "a") { ctx.cycleAgent(); ctx.draw(); return true; }
   if (data === "t") { s.newrun.tier = s.newrun.tier === "paid" ? "free" : "paid"; ctx.draw(); return true; }
   if (data === "v") {
-    if (!ctx.agentIsolates(s.newrun.agent)) { ctx.notify("verify is build-only"); ctx.draw(); return true; }
+    if (!ctx.agentIsolates(s.newrun.agent)) { ctx.notify("verify is engineer-only"); ctx.draw(); return true; }
     ctx.cycleVerify(); ctx.draw(); return true;
   }
   if (data === "w") {
-    if (!ctx.agentIsolates(s.newrun.agent)) { ctx.notify("worktree is build-only"); ctx.draw(); return true; }
+    if (!ctx.agentIsolates(s.newrun.agent)) { ctx.notify("worktree is engineer-only"); ctx.draw(); return true; }
     s.newrun.worktree = !s.newrun.worktree; ctx.draw(); return true;
   }
   if (data === "g") { ctx.cycleAmbiguity(); ctx.draw(); return true; }

@@ -307,9 +307,9 @@ machine_code batch --auto-approve   # merge gates-gated issues; human-gated neve
 issues in parallel child processes. Each build runs in an isolated
 `mc/<slug>` worktree, executes the issue's `verify` gates, and — when the
 issue's `review` value is `agent` — an independent Review run. `--dry-run`
-prints the waves without building. `batch --auto-approve` merges issues whose
-review is `none` right after their gates pass; `agent` issues need a passing
-Review verdict, and `human` issues are never auto-merged — approve them by
+prints the waves without building. `batch --auto-approve` merges only issues
+that reached `done/`: `review = "none"` after gates pass, `agent` only after a
+passing Review verdict. `human` issues are never auto-merged — approve them by
 hand.
 
 ```bash
@@ -322,8 +322,8 @@ needs, `v` to review it in the engineer's worktree, `o` to orchestrate the
 batch, `b` to build, `a` to approve, and `d` to delete.
 
 Press `D` on a run row or run detail to delete that run record, its worktree
-when unshared, and its branch when unshared. Open PR branches are kept unless
-`--force` is used.
+when unshared, and its branch when unshared. Branches shared with another run
+are kept unless `--force` is used.
 
 ```bash
 machine_code runs delete <run-id> --yes
@@ -383,10 +383,9 @@ verify = ["typescript:test"]
 Detail the prompt needs.
 ```
 
-Verification commands must be named commands (or the small npm alias table in
-`src/packet.ts`), because gates dispatch through the command registry —
-never shell strings. The runner maps common npm commands to the typed registry
-(`typescript:typecheck`, `typescript:test`, and so on).
+Verification commands must be named registry commands
+(`typescript:typecheck`, `typescript:test`, and so on), because gates dispatch
+through the command registry — never shell strings.
 
 ### Composer context and reusable tools
 
@@ -426,10 +425,9 @@ cooldown; those require the opt-in free completion probe. An unknown result
 leaves the cooldown in place.
 
 Prompted runs: every run has a stable id, an append-only event log, and a
-transcript checkpoint. Build and orchestrated runs get their own worktree and
-branch; Sudo edits the main tree by default (`--worktree` opts into isolation);
-General and Review never create one. Runs can ask clarifying questions, be
-paused/forked, and resume after a restart.
+transcript checkpoint. Engineer runs get their own `mc/<slug>` worktree and
+branch; Research and Review never create one. Runs can ask clarifying
+questions, be paused/forked, and resume after a restart.
 
 ### Repository map, run state, and prompts
 

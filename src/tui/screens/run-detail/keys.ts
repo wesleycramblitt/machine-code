@@ -3,7 +3,7 @@
  *
  * Section navigation (j/k, ^D/^U), timeline expand/follow/verbosity,
  * process follow/open/kill, related-run opening, answer/interrupt/
- * correct/fork, packet approval, and delete. Returns true when consumed.
+ * correct/fork, issue approval, and delete. Returns true when consumed.
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -165,11 +165,11 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   if (data === "i") { ctx.interrupt(detail.summary); ctx.draw(); return true; }
   if (data === "c") { ctx.startCorrect(detail.summary); ctx.draw(); return true; }
   if (data === "p") {
-    const packet = detail.summary.packetId;
-    if (!packet) { ctx.notify("run has no packet to approve"); ctx.draw(); return true; }
+    const item = detail.summary.itemId ?? detail.summary.packetId;
+    if (!item) { ctx.notify("run has no issue to approve"); ctx.draw(); return true; }
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
-    spawn(process.execPath, [cliPath, "approve", packet], { detached: true, stdio: "ignore" }).unref();
-    ctx.notify(`approve ${packet} queued`);
+    spawn(process.execPath, [cliPath, "approve", item], { cwd: detail.summary.repoRoot, detached: true, stdio: "ignore" }).unref();
+    ctx.notify(`approve ${item} queued`);
     ctx.draw();
     return true;
   }

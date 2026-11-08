@@ -28,7 +28,7 @@ export interface ContextPanelItem {
 }
 
 export type ComposerRun = ForkedRunSettings & {
-  /** Isolation worktree. Shown only for build; other agents ignore it. */
+  /** Isolation worktree. Shown only for engineer; other agents ignore it. */
   worktree: boolean;
 };
 

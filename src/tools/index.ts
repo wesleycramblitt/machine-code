@@ -1,7 +1,7 @@
 /**
  * machine_code — the core tools.
  *
- * Read, write, edit, search, command, context, ask, artifact, skill, and pr.
+ * Read, write, edit, search, glob, grep, command, context, ask, artifact, skill.
  * Everything else is a named typed command dispatched through `command`.
  * Tools never get a shell.
  */
@@ -39,7 +39,6 @@ import { documentSections, sectionTitle } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
-import { prTool, type PrToolContext } from "./pr.js";
 import { contextTool } from "./context.js";
 import { loadSemanticOrDeterministic, renderModuleGraph, searchSemantic, type SemanticMap } from "../map/semantic.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
@@ -58,8 +57,6 @@ export interface ToolContext {
   artifacts?: ArtifactToolContext;
   /** When provided, the `skill` tool is live (on-demand skill bodies). */
   skills?: SkillToolContext;
-  /** When provided, the `pr` tool is live (capability-gated PR access). */
-  prs?: PrToolContext;
   /** Run state for the `context` tool. */
   state?: RunStateStore;
   /** Current semantic map, if one is available. */
@@ -215,6 +212,9 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
       try {
         const abs = resolveWithin(ctx.root, params.path);
         assertRegularFile(abs);
+        if (isSecretPath(toRelative(ctx.root, abs))) {
+          return fail(`refusing to read a secret file: ${params.path}`);
+        }
         if (isBinaryFile(abs)) return fail(`refusing to read a binary file: ${params.path}`);
         const wantsSymbols = Boolean(params.symbols && params.symbols.length > 0);
         const wantsSections = Boolean(params.sections && params.sections.length > 0);
@@ -528,6 +528,9 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
           }
         }
         const abs = resolveWithin(ctx.root, params.path);
+        if (isSecretPath(toRelative(ctx.root, abs))) {
+          return fail(`refusing to write a secret file: ${params.path}`);
+        }
         mkdirSync(dirname(abs), { recursive: true });
         writeFileSync(abs, params.content, "utf8");
         return ok(`wrote ${params.path} (${Buffer.byteLength(params.content, "utf8")} bytes)`);
@@ -743,6 +746,9 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
 
         const abs = resolveWithin(ctx.root, params.path);
         assertRegularFile(abs);
+        if (isSecretPath(toRelative(ctx.root, abs))) {
+          return fail(`refusing to edit a secret file: ${params.path}`);
+        }
         const raw = readFileSync(abs, "utf8");
         const lines = raw.split("\n");
         const lineOffsets = [0];
@@ -1542,12 +1548,13 @@ const CORE_TOOL_NAMES = new Set([
   "write",
   "edit",
   "search",
+  "glob",
+  "grep",
   "command",
   "context",
   "ask",
-  "issue",
   "artifact",
-  "pr",
+  "skill",
 ]);
 
 /** Weak models serialize absent optionals as the string "null". No command
@@ -1579,7 +1586,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
     label: "command",
     description:
       "List all typed command schemas (large); describe one; or run it (core:* built-ins and allowlisted manifests). No arbitrary shell. " +
-      "issue, pr, artifact, read, search, context, and ask are tools, not commands; call them directly.",
+      "issue, artifact, read, search, context, and ask are tools, not commands; call them directly.",
     parameters: CommandParams,
     prepareArguments: (args) => cleanCommandArgs(args) as Static<typeof CommandParams>,
     async execute(_id, params: Static<typeof CommandParams>) {
@@ -1679,23 +1686,6 @@ function skillUnavailable(): AgentTool<typeof SkillUnavailableParams> {
   };
 }
 
-/* ---------------------------------------------------------------------- pr */
-
-const PrUnavailableParams = Type.Object({
-  action: Type.String({ description: "PR operation." }),
-});
-
-function prUnavailable(): AgentTool<typeof PrUnavailableParams> {
-  return {
-    name: "pr",
-    label: "pr",
-    description: "Pull-request access.",
-    parameters: PrUnavailableParams,
-    async execute() {
-      return fail("pull requests are not available in this run (no GitHub remote, or gh unauthenticated)");
-    },
-  };
-}
 
 /* ------------------------------------------------------------------ all */
 
@@ -1718,6 +1708,32 @@ const GrepParams = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max matches (default 100)." })),
 });
 
+/** Weak models serialize absent optionals as null/"null"; drop them. */
+function cleanOptionalArgs(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  let changed = false;
+  for (const key of ["path", "glob", "context", "limit"]) {
+    const value = out[key];
+    if (value === null || value === undefined) {
+      delete out[key];
+      changed = true;
+    } else if (typeof value === "string" && (value.trim() === "" || value.trim() === "null" || value.trim() === "undefined")) {
+      delete out[key];
+      changed = true;
+    }
+  }
+  const ignoreCase = out.ignoreCase;
+  if (ignoreCase === null || ignoreCase === undefined) {
+    delete out.ignoreCase;
+    changed = true;
+  } else if (typeof ignoreCase === "string") {
+    out.ignoreCase = ignoreCase.trim().toLowerCase() === "true";
+    changed = true;
+  }
+  return changed ? out : args;
+}
+
 function globMatchers(pattern: string): RegExp[] {
   return expandGlobBraces(pattern).map((entry) => globToRegExp(entry));
 }
@@ -1731,6 +1747,7 @@ export function globTool(ctx: ToolContext): AgentTool<typeof GlobParams> {
       "Use this to locate files; use grep for text inside files. Excludes node_modules, dist, build, target, .git, " +
       "runtime state, secret files, and binaries.",
     parameters: GlobParams,
+    prepareArguments: (args) => cleanOptionalArgs(args) as Static<typeof GlobParams>,
     async execute(_id, params: Static<typeof GlobParams>) {
       try {
         const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
@@ -1784,6 +1801,7 @@ export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
       "This is the plain text tool: use glob to pick paths, then grep for a literal or regex. " +
       "Excludes node_modules, dist, build, target, .git, runtime state, secret files, and binaries.",
     parameters: GrepParams,
+    prepareArguments: (args) => cleanOptionalArgs(args) as Static<typeof GrepParams>,
     async execute(_id, params: Static<typeof GrepParams>) {
       try {
         const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
@@ -1856,8 +1874,7 @@ export type CoreToolName =
   | "context"
   | "ask"
   | "artifact"
-  | "skill"
-  | "pr";
+  | "skill";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
   const all: Record<CoreToolName, AgentTool> = {
@@ -1872,14 +1889,16 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),
-    pr: ctx.prs ? prTool(ctx.prs) : prUnavailable(),
   };
   // Prefer provider-side JSON-schema constrained sampling. Models that pass
   // tool-call tests in OpenCode are often much weaker without it: Beam Free is
   // one example. `prefer` makes unsupported providers fall back to plain
-  // schemas instead of failing the run.
-  return allowed.map((name) => ({
-    ...all[name],
-    constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
-  }));
+  // schemas instead of failing the run. Old machine overrides may still name
+  // removed tools; skip them instead of crashing the run.
+  return allowed.flatMap((name) => {
+    const tool = (all as Record<string, AgentTool | undefined>)[name];
+    return tool
+      ? [{ ...tool, constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const } }]
+      : [];
+  });
 }

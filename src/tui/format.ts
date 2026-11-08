@@ -2,7 +2,7 @@
  * machine_code — shared TUI formatting primitives.
  *
  * Pure string/ANSI helpers with no filesystem, model, or run-state access.
- * Every screen (runs list, run detail, packet detail, composer, models,
+ * Every screen (runs list, run detail, issue detail, composer, models,
  * spend, settings) renders through these so tone, truncation, and command
  * tokens stay consistent.
  *
@@ -375,7 +375,7 @@ export function eventTone(type: string, isError = false): string {
 /** Shared semantic tones for context provenance across previews and run details. */
 export function contextTone(kind: string): string {
   switch (kind) {
-    case "packet": return M;
+    case "packet": return M; // legacy context provenance
     case "knowledge": return C;
     case "reference": return M;
     case "file": return W;
@@ -419,9 +419,11 @@ export function commandBadge(label: string, key: string, background: string, for
 export function agentTone(agent: string): string {
   switch (agent) {
     case "research": return G;
+    case "engineer": return C;
+    case "review": return M;
+    // Legacy run records keep their old colors.
     case "planner": return BL;
     case "build": return C;
-    case "review": return M;
     default: return C;
   }
 }

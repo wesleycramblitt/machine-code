@@ -29,7 +29,7 @@ export function renderDeleteConfirm(run: RunSummary | undefined, bodyH: number):
     ` ${D}This permanently deletes:${R}`,
     `   ${Y}•${R} the run record, events, transcript, and reports`,
     `   ${Y}•${R} its worktree when no other run shares it`,
-    `   ${Y}•${R} its branch when no other run shares it and no open PR owns it`,
+    `   ${Y}•${R} its branch when no other run shares it`,
     "",
     ` ${RED}This cannot be undone.${R}`,
   ];

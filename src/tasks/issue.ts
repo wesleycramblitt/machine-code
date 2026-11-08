@@ -81,9 +81,17 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   const issue = findIssue(layout, slug);
   if (!issue) throw new Error(`no issue ${slug}`);
   const root = await mainRoot(layout);
-  const branch = `mc/${slug}`;
   const baseBranch = await defaultBaseBranch(root);
-  if (!(await branchExists(root, branch))) throw new Error(`no branch ${branch} to approve`);
+  // New builds use mc/<slug>; older runs used mc/run/<id>. Fall back to the
+  // newest engineer worktree branch so those runs remain approvable.
+  let branch = `mc/${slug}`;
+  if (!(await branchExists(root, branch))) {
+    const legacy = issueRuns(layout, slug).find(
+      (run) => (run.agent === "engineer" || run.agent === "build") && run.worktree && typeof run.branch === "string",
+    );
+    if (!legacy?.branch) throw new Error(`no branch ${branch} to approve`);
+    branch = legacy.branch;
+  }
   const isAncestor = (await git(root, ["merge-base", "--is-ancestor", branch, baseBranch])).code === 0;
   if (!isAncestor) {
     const merge = await git(root, ["merge", "--no-ff", branch, "-m", `Merge ${branch} (${slug})`]);
@@ -100,10 +108,15 @@ export async function deleteIssue(layout: Layout, slug: string, opts: { force?: 
   const root = await mainRoot(layout);
   const issue = findIssue(layout, slug);
   if (issue) rmSync(issue.path, { force: true });
-  const branch = `mc/${slug}`;
-  if (await branchExists(root, branch)) {
-    const flag = opts.force ? "-D" : "-d";
-    await git(root, ["branch", flag, branch]).catch(() => undefined);
+  const branches = new Set<string>([`mc/${slug}`]);
+  for (const run of issueRuns(layout, slug)) {
+    if ((run.agent === "engineer" || run.agent === "build") && typeof run.branch === "string") branches.add(run.branch);
+  }
+  const flag = opts.force ? "-D" : "-d";
+  for (const branch of branches) {
+    if (await branchExists(root, branch)) {
+      await git(root, ["branch", flag, branch]).catch(() => undefined);
+    }
   }
   await commitIssues(layout, `issues: delete ${slug}`);
 }

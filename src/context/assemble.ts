@@ -65,8 +65,7 @@ export interface ContextInclude {
 export interface AssembleInput {
   layout: Layout;
   machine: MachineConfig;
-  packetId?: string;
-  /** Role name; the plan map is inherited only by the planner. */
+  /** Role name; the plan map is inherited for every role. */
   agent?: string;
   /** Parent run and its ancestors, nearest first, for selected context inheritance. */
   parentRuns?: Array<{
@@ -571,16 +570,16 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Priority budget: the usable input budget (limit minus the caller's
   // response reserve) with no per-section caps. Over budget, whole sources
   // are dropped lowest-priority-first with a named omission; a kept block is
-  // never sliced mid-content. Priority is role-aware: the planner keeps the
-  // plan index above all, build/review keep the packet first and working
+  // never sliced mid-content. Priority is role-aware: research keeps the
+  // plan index above all; engineer/review keep the issue first and working
   // files above plan docs, research keeps knowledge/references above files.
-  // The packet and explicitly-included plans are never dropped while
+  // The issue and explicitly-included plans are never dropped while
   // anything else remains.
   const { budget: usable } = sectionBudgets(budget);
 
   // Drop rank: higher is dropped first. Aggregates (tool index, skill
   // descriptions) go first, then the parent chain, skill bodies, and the
-  // working set; the packet and explicit plans go last on every role.
+  // working set; the issue and explicit plans go last on every role.
   const dropRank = (item: Pending): number => {
     const role = input.agent;
     if (item.kind === "tool") return 60;
@@ -590,15 +589,15 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (item.kind === "issue") return item.origin === "explicit" ? 8 : 22;
     if (item.kind === "plan" || item.kind === "project") {
       if (item.origin === "explicit") return 15;
-      // Inherited plan index: the planner's core context, droppable docs elsewhere.
-      return role === "planner" ? 12 : 28;
+      // Inherited plan index: research's core context, droppable docs elsewhere.
+      return role === "research" ? 12 : 28;
     }
     if (item.kind === "knowledge") {
       if (role === "research") return 20;
-      return role === "planner" ? 25 : 30;
+      return role === "research" ? 25 : 30;
     }
     if (item.kind === "reference") return role === "research" ? 22 : 32;
-    if (item.kind === "file") return role === "build" || role === "review" ? 25 : 30;
+    if (item.kind === "file") return role === "engineer" || role === "review" ? 25 : 30;
     return 30;
   };
   const PROTECTED_RANK = 20;

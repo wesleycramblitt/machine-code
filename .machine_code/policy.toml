@@ -34,27 +34,19 @@ code = 5.0
 agentic = 6.0
 general = 5.0
 
-[agents.architect]
+[agents.engineer]
 min_fit = 6.0
-[agents.architect.axes]
-reasoning = 6.0
-code = 5.0
-agentic = 6.0
-general = 5.0
-
-[agents.build]
-min_fit = 6.0
-[agents.build.axes]
+[agents.engineer.axes]
 code = 5.5
 agentic = 5.0
 reasoning = 6.0
 general = 5.0
 
-# Free build offers: allow a weak general/reasoning axis when the model is
+# Free engineer offers: allow a weak general/reasoning axis when the model is
 # otherwise capable and free. The paid floors above still govern paid offers.
-[agents.build.free]
+[agents.engineer.free]
 min_fit = 5.5
-[agents.build.free.axes]
+[agents.engineer.free.axes]
 reasoning = 5.0
 code = 5.0
 agentic = 5.0
@@ -69,22 +61,14 @@ code = 5.0
 agentic = 6.0
 general = 5.0
 
-# Planner free offers: keep a weak fallback from burning the turn budget on
+# Research free offers: keep a weak fallback from burning the turn budget on
 # orientation. If no free model clears this bar, the paid tier may pick a
 # stronger funded model instead.
-[agents.planner]
+[agents.research]
 # No default turn or token cap. Set max_turns/budget_tokens here only when this
 # repository needs a bound. The repeat and read guards still stop loops.
-[agents.planner.free]
+[agents.research.free]
 min_fit = 5.5
-[agents.planner.free.axes]
+[agents.research.free.axes]
 reasoning = 5.5
 agentic = 5.0
-
-[agents.sudo]
-min_fit = 6.0
-[agents.sudo.axes]
-reasoning = 6.0
-code = 5.0
-agentic = 6.0
-general = 5.0

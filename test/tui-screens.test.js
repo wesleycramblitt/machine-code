@@ -127,7 +127,7 @@ test("composer renders prompt box pinned to the body bottom", () => {
     excluded: new Set(), included: new Set(), skillModes: new Map(), skillShown: new Map(),
     preview: { context: { chars: 0, promptChars: 0, sources: [], issueChain: [], artifacts: { files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] }, warnings: [] } },
     pickers: { model: null, issue: null },
-    agentIsolates: (agent) => agent === "build",
+    agentIsolates: (agent) => agent === "engineer",
     mapTokens: () => [],
     lockedSkills: () => [],
   });

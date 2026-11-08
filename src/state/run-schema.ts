@@ -279,7 +279,7 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
         ? r.orchestrationScope
         : undefined,
     attempt: typeof r.attempt === "number" && Number.isFinite(r.attempt) ? r.attempt : undefined,
-    phase: r.phase === "build" || r.phase === "review" ? r.phase : undefined,
+    phase: r.phase === "engineer" || r.phase === "review" || r.phase === "build" ? r.phase : undefined,
     planSnapshotHash: str(r.planSnapshotHash),
     planReview: r.planReview === "agent" || r.planReview === "human" ? r.planReview : undefined,
     resultReview: r.resultReview === "agent" || r.resultReview === "human" ? r.resultReview : undefined,

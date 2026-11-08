@@ -23,6 +23,11 @@ import { allCommands } from "./commands/profiles.js";
 import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
+import { assembleContext, type ContextInclude } from "./context/assemble.js";
+import { defaultSkillsFor } from "./context/references.js";
+import { roleSkillPresets } from "./agents.js";
+import { writeJsonAtomic } from "./state/run-schema.js";
+import { join } from "node:path";
 import { inferReviewVerdict, parseBuildOutcome, parseReviewVerdict } from "./orchestrator/outcome.js";
 import type { Layout } from "./paths.js";
 
@@ -153,6 +158,8 @@ export interface ExecuteIssueInput {
   requireModel?: string;
   agentOverrides?: Partial<AgentConfig>;
   contextText?: string;
+  /** Extra context selected by the composer/builder (the issue file, usually). */
+  include?: ContextInclude;
   skipMap?: boolean;
   skipSemantic?: boolean;
   signal?: AbortSignal;
@@ -169,24 +176,57 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   const toolRoot = input.toolRoot ?? root;
   const commands = allCommands(layout);
   const availability = input.availability ?? loadAvailability(layout.home);
-  const resolvedBuild = resolveAgent(layout, "build", {
-    agentPolicy: policy.agents.build,
-    machineOverrides: machine.agents.build,
+  // The deterministic path must assemble the same inherited context as a
+  // direct run: issues index, knowledge, skills, plus any explicit include.
+  const contextBundle = await assembleContext({
+    layout,
+    machine,
+    agent: "engineer",
+    ...(input.include ? { include: input.include } : {}),
+    defaultSkills: defaultSkillsFor({ agent: "engineer", verification: input.verification }),
+    skillPresets: roleSkillPresets("engineer"),
+  });
+  if (contextBundle.text) {
+    writeJsonAtomic(join(recorder.dir, "context.json"), {
+      chars: contextBundle.chars,
+      sources: contextBundle.sources,
+      warnings: contextBundle.warnings,
+      sections: contextBundle.sections,
+    });
+    recorder.event("context_assembled", {
+      chars: contextBundle.chars,
+      sources: contextBundle.sources,
+      warnings: contextBundle.warnings,
+    });
+  }
+  const contextText =
+    [contextBundle.text, input.contextText].filter((part): part is string => Boolean(part)).join("\n\n") ||
+    undefined;
+  const seedFiles = [
+    ...packet.context,
+    ...(input.include?.issues ?? []),
+    ...contextBundle.sources
+      .filter((source) => source.kind === "file" && typeof source.ref === "string")
+      .map((source) => source.ref as string),
+  ];
+  const resolvedEngineer = resolveAgent(layout, "engineer", {
+    agentPolicy: policy.agents.engineer,
+    machineOverrides: machine.agents.engineer,
     runOverrides: { ...input.agentOverrides, verification: input.verification },
   });
-  recorder.recordConfig({ ...resolvedBuild.config, capabilities: resolvedBuild.capabilities });
-  const buildPolicy = policyFor(layout, "build", policy);
+  recorder.recordConfig({ ...resolvedEngineer.config, capabilities: resolvedEngineer.capabilities });
+  const engineerPolicy = policyFor(layout, "engineer", policy);
   const buildRequest =
     `Implement this issue exactly:\n\n${JSON.stringify(packet, null, 2)}\n\n` +
     "Acceptance commands must pass. If the issue is wrong or a gate cannot run, report blocked with evidence.";
-  const buildResult = await singleAgentRun({
+  const engineerResult = await singleAgentRun({
     models: input.models,
     catalogue: input.catalogue,
     configuredProviders: input.configuredProviders,
-    agent: resolvedBuild.def,
-    agentConfig: resolvedBuild.config,
-    agentCapabilities: resolvedBuild.capabilities,
-    policy: buildPolicy,
+    agent: resolvedEngineer.def,
+    agentConfig: resolvedEngineer.config,
+    agentCapabilities: resolvedEngineer.capabilities,
+    policy: engineerPolicy,
     fullPolicy: policy,
     layout,
     machine,
@@ -199,18 +239,18 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     commands,
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
-    contextText: input.contextText,
+    contextText,
     // The issue's context files land in the working set up front, so the
     // first prompt already carries the code the deliverable names.
-    ...(packet.context.length > 0 ? { seedFiles: [...packet.context] } : {}),
+    ...(seedFiles.length > 0 ? { seedFiles: [...new Set(seedFiles)] } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,
   });
-  if (buildResult.status === "failed" || buildResult.status === "interrupted") {
-    return { status: buildResult.status, finalText: buildResult.finalText, error: buildResult.error, packet, runId: recorder.id };
+  if (engineerResult.status === "failed" || engineerResult.status === "interrupted") {
+    return { status: engineerResult.status, finalText: engineerResult.finalText, error: engineerResult.error, packet, runId: recorder.id };
   }
-  const buildOutcome = parseBuildOutcome(buildResult.finalText);
+  const buildOutcome = parseBuildOutcome(engineerResult.finalText);
   recorder.event("build_outcome", {
     outcome: buildOutcome ?? "completed",
     source: buildOutcome ? "label" : "fallback",
@@ -218,14 +258,14 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   if (buildOutcome && buildOutcome !== "completed") {
     return {
       status: buildOutcome === "failed" ? "failed" : "blocked",
-      finalText: buildResult.finalText,
+      finalText: engineerResult.finalText,
       error: `build outcome: ${buildOutcome}`,
       packet,
       runId: recorder.id,
     };
   }
 
-  const gates = resolveGates(packet);
+  const gates = resolveGates(packet, commands);
   const gateProcesses = new ProcessSupervisor({
     runId: recorder.id,
     runDir: recorder.dir,
@@ -244,7 +284,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   if (!gateOutcome.passed) {
     return {
       status: "blocked",
-      finalText: buildResult.finalText,
+      finalText: engineerResult.finalText,
       error: `acceptance gates failed: ${gateOutcome.results.filter((result) => !result.passed).map((result) => result.command).join(", ")}`,
       packet,
       runId: recorder.id,
@@ -289,6 +329,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
       mode: "",
       request: reviewRequest,
       repoRoot: layout.repoRoot,
+      itemId: packet.id,
       phase: "review",
     });
     reviewRecorder.patchSummary({
@@ -320,7 +361,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
       commands,
       requireProvider: input.requireProvider,
       requireModel: input.requireModel,
-      contextText: input.contextText,
+      contextText,
       skipMap: input.skipMap,
       skipSemantic: input.skipSemantic,
       signal: input.signal,
@@ -364,7 +405,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
 
   return {
     status: "completed",
-    finalText: buildResult.finalText,
+    finalText: engineerResult.finalText,
     packet,
     runId: recorder.id,
     ...(commit ? { commit } : {}),

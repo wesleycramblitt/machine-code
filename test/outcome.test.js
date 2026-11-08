@@ -12,7 +12,7 @@ import { summarizeRun, readStateView } from "../dist/state/outcome.js";
 
 function summary(overrides = {}) {
   return {
-    agent: "planner",
+    agent: "research",
     status: "blocked",
     request: "plan the work",
     turns: 25,
@@ -27,7 +27,7 @@ test("turn cap summary says what stopped and that no issues were created", () =>
   const outcome = summarizeRun({
     summary: summary({ error: "turn cap reached (25) before the run finished" }),
     events: [
-      { t: "2026-11-03T01:41:36.621Z", type: "run_start", agent: "planner" },
+      { t: "2026-11-03T01:41:36.621Z", type: "run_start", agent: "research" },
       { t: "2026-11-03T01:41:44.520Z", type: "tool_call_start", toolCallId: "t1", tool: "read", args: { path: "plans/plan.md", offset: 1, limit: 250 } },
       { t: "2026-11-03T01:41:44.562Z", type: "tool_call", toolCallId: "t1", tool: "read", isError: false },
       { t: "2026-11-03T01:42:05.318Z", type: "model_call_end", text: "Need to read the rest of plan.md.", stopReason: "toolUse" },
@@ -36,7 +36,7 @@ test("turn cap summary says what stopped and that no issues were created", () =>
   });
   assert.equal(outcome.stopReason, "turn-cap");
   assert.match(outcome.headline, /turn cap \(25\)/);
-  assert.match(outcome.text, /none created — the planner did not create any issues/);
+  assert.match(outcome.text, /none created — the research run did not create any issues/);
   assert.match(outcome.text, /Read: plans\/plan\.md/);
   assert.match(outcome.text, /Response: none/);
   assert.match(outcome.text, /Last model text: Need to read the rest/);

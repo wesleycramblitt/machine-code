@@ -26,15 +26,15 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { parseVerificationCommands } from "../packet.js";
 import { findIssue, moveIssue } from "../plan/issues.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
 import { slugify } from "../plan/slug.js";
 import { runProc } from "../proc.js";
-import { agentDef, type AgentName } from "../agents.js";
+import { agentDef, normalizeAgentName, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
+import { inferReviewVerdict, parseReviewVerdict } from "../orchestrator/outcome.js";
 import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
@@ -96,7 +96,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const { flags, positional } = parseFlags(argv);
   const modeFlag = flags.get("mode");
   const agentName = flags.get("agent");
-  if (agentName !== undefined && !(AGENT_NAMES as readonly string[]).includes(agentName)) {
+  const normalizedAgent = agentName === undefined ? undefined : normalizeAgentName(agentName);
+  if (normalizedAgent !== undefined && !(AGENT_NAMES as readonly string[]).includes(normalizedAgent)) {
     fail(`unknown agent "${agentName}"; choose one of ${AGENT_NAMES.join(", ")}`);
   }
   let requireProvider = flags.get("provider");
@@ -108,7 +109,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const baseFlag = flags.get("base");
   let request = positional.join(" ").trim();
   if (flags.has("issue") || flags.has("auto-issue")) {
-    fail("issue tracking was removed; attach the run with --packet <slug> instead");
+    fail("issue tracking was removed; attach the run with --item <slug> instead");
   }
 
   // An item-attached run can derive its objective from the issue.
@@ -152,6 +153,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (itemSlug) {
     const issue = findIssue(l, itemSlug);
     if (!issue) fail(`no issue ${itemSlug} — create one with \`machine_code issue create features|bugs ${itemSlug} "..."\``);
+    if (issue.kind === "ideas" && normalizedAgent === "engineer") {
+      fail(`issue ${itemSlug} is an idea; research it first (machine_code issue run ${itemSlug})`);
+    }
+    if (issue.kind === "ideas" && normalizedAgent === "review") {
+      fail(`issue ${itemSlug} is an idea; ideas are researched, not reviewed`);
+    }
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
@@ -231,7 +238,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const issue = findIssue(l, itemSlug);
     if (issue) {
       contextInclude = contextInclude ?? {};
-      contextInclude.files = [...(contextInclude.files ?? []), issue.rel];
+      contextInclude.files = [...new Set([...(contextInclude.files ?? []), issue.rel])];
     }
   }
   const contextBudgetFlag = flags.get("context-budget");
@@ -272,15 +279,22 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (modeFlag !== undefined) {
     fail("--mode was removed; runs execute directly per their agent role");
   }
-  const agentNameParsed = (agentName as AgentName | undefined) ?? "research";
+  const agentNameParsed = normalizedAgent ?? "research";
 
   // Review binds to the engineer's worktree/commit automatically when the run
   // is attached to an issue. Explicit --review-of still wins.
   let reviewOf = flags.get("review-of");
   if (agentNameParsed === "review" && itemFlag !== undefined && reviewOf === undefined) {
     const item = slugify(itemFlag);
+    const active = new Set(["created", "running", "awaiting_input"]);
     const candidate = listRuns(layout())
-      .filter((run) => (run.itemId ?? run.itemId) === item && run.agent === "engineer" && Boolean(run.worktree))
+      .filter(
+        (run) =>
+          (run.itemId ?? run.packetId) === item &&
+          (run.agent === "engineer" || run.agent === "build") &&
+          Boolean(run.worktree) &&
+          !active.has(run.status),
+      )
       .sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1))[0];
     if (candidate) {
       reviewOf = candidate.id;
@@ -447,12 +461,15 @@ export async function cmdRun(argv: string[]): Promise<number> {
         : forceWorktree;
   let toolRoot = l.repoRoot;
   if (mutating) {
+    const issueWorktree = itemSlug && agentNameParsed === "engineer";
+    // Reuse a terminal/paused worktree that already owns this issue branch.
+    // A fresh path cannot be created while mc/<slug> is checked out.
     const reuse = reusableWorktreeOwner(
       [
         ...parentChainRuns,
         ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
       ],
-      undefined,
+      issueWorktree ? `mc/${itemSlug}` : undefined,
     );
     if (reuse) {
       // One branch cannot be checked out twice. A fork of a terminal or paused
@@ -478,7 +495,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
           runDir: recorder.dir,
           onEvent: (type, data) => recorder.event(type, data),
         });
-        const issueWorktree = itemSlug && agentNameParsed === "engineer";
         const spec = await createWorktree({
           layout: l,
           runId: recorder.id,
@@ -577,7 +593,27 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   process.stderr.write(`run ${recorder.id} (${recorder.dir})\n`);
 
+  // A review always judges the worktree/commit the engineer used. This must
+  // happen for normal runs too, not only --direct-exec children.
+  if (agentNameParsed === "review" && reviewOf) {
+    const target = readRun(l, reviewOf);
+    if (target?.summary.worktree && existsSync(target.summary.worktree)) {
+      toolRoot = target.summary.worktree;
+      recorder.patchSummary({
+        worktree: target.summary.worktree,
+        worktreeOwnerRunId: reviewOf,
+        branch: target.summary.branch,
+        baseBranch: target.summary.baseBranch,
+        ...(target.summary.baseRef ? { baseRef: target.summary.baseRef } : {}),
+      });
+      recorder.event("review_of", { runId: reviewOf, worktree: target.summary.worktree });
+    } else {
+      process.stderr.write(`warning: review target ${reviewOf} has no worktree; reviewing the main tree\n`);
+    }
+  }
+
   let result: RunLoopResult | OrchestrateResult;
+  let autoReview: { slug: string; prompt: string } | undefined;
   if (directExec) {
     // Detached delegated child: one agent, directly. Its prompt is its spec.
     const role = (agentNameParsed ?? "engineer") as AgentName;
@@ -592,22 +628,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       runOverrides: agentOverrides,
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
-    if (role === "review") {
-      // A delegated review may target a specific build worktree.
-      if (reviewOf) {
-        const target = readRun(l, reviewOf);
-        if (target?.summary.worktree) {
-          toolRoot = target.summary.worktree;
-          recorder.patchSummary({
-            worktree: target.summary.worktree,
-            worktreeOwnerRunId: reviewOf,
-            branch: target.summary.branch,
-            baseBranch: target.summary.baseBranch,
-          });
-          recorder.event("review_of", { runId: reviewOf, worktree: target.summary.worktree });
-        }
-      }
-    }
     result = await runLoop({
       models,
       catalogue: catalogueDoc.models,
@@ -661,6 +681,44 @@ export async function cmdRun(argv: string[]): Promise<number> {
     });
   }
 
+  // A successful research run moves its idea to .researched/ once it has
+  // written at least one feature/bug issue. The model has no move/delete tool,
+  // so the runner owns this transition.
+  if (result.status === "completed" && itemSlug && agentNameParsed === "research") {
+    const issue = findIssue(l, itemSlug);
+    if (issue?.kind === "ideas" && issue.status === "needs-research") {
+      const events = readRun(l, recorder.id)?.events ?? [];
+      const wroteIssue = touchedPaths(events).some((path) =>
+        /^issues\/(?:features|bugs)\//.test(path),
+      );
+      if (wroteIssue) {
+        moveIssue(l, issue.slug, "researched");
+        await commitPlanningFiles(l, `issues: ${issue.slug} researched`);
+        recorder.event("idea_researched", { slug: issue.slug });
+      }
+    }
+  }
+
+  // A review verdict is a work-item decision, not just prose. Any
+  // non-approved verdict on a completed review sends the issue back to
+  // blocked/ so approve cannot merge rejected work.
+  if (itemSlug && agentNameParsed === "review") {
+    const issue = findIssue(l, itemSlug);
+    const verdict =
+      result.status === "completed"
+        ? parseReviewVerdict(result.finalText) ?? inferReviewVerdict(result.finalText)
+        : undefined;
+    if (verdict) recorder.event("review_verdict", { verdict });
+    if (
+      issue &&
+      issue.status === "done" &&
+      (result.status === "blocked" || result.status === "failed" || (verdict !== undefined && verdict !== "approved"))
+    ) {
+      moveIssue(l, issue.slug, "blocked");
+      await commitPlanningFiles(l, `issues: ${issue.slug} review ${verdict ?? result.status}`);
+    }
+  }
+
   // Engineer runs are the finish line for an issue: gates, commit, and the
   // directory move happen in the runner, not in the prompt. Without this a
   // "completed" run could leave uncommitted work and the issue in todo/.
@@ -673,35 +731,53 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const issue = findIssue(l, itemSlug);
     if (issue) {
       const commands = allCommands(l);
-      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), {
-        root: toolRoot,
-        commands,
-      });
-      recorder.event("gates", {
-        issue: issue.slug,
-        passed: gateOutcome.passed,
-        results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
-      });
-      if (!gateOutcome.passed) {
-        moveIssue(l, issue.slug, "blocked");
-        result = {
-          ...result,
-          status: "blocked",
-          error: `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`,
-        };
-      } else {
-        const commit = await ensureCommitted(
-          toolRoot,
-          recorder.current.baseRef,
-          `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
-        );
-        if (!commit) {
+      let gatesPassed = true;
+      if (recorder.current.verification !== "direct") {
+        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), commands), {
+          root: toolRoot,
+          commands,
+        });
+        gatesPassed = gateOutcome.passed;
+        recorder.event("gates", {
+          issue: issue.slug,
+          passed: gateOutcome.passed,
+          results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
+        });
+        if (!gateOutcome.passed) {
+          moveIssue(l, issue.slug, "blocked");
+          await commitPlanningFiles(l, `issues: ${issue.slug} blocked`);
+          result = {
+            ...result,
+            status: "blocked",
+            error: `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`,
+          };
+        }
+      }
+      if (gatesPassed) {
+        let commit: string | null = null;
+        try {
+          commit = await ensureCommitted(
+            toolRoot,
+            recorder.current.baseRef,
+            `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
+          );
+        } catch (error) {
+          result = {
+            ...result,
+            status: "blocked",
+            error: `commit failed: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+        if (!commit && result.status !== "blocked") {
           result = { ...result, status: "blocked", error: "engineer produced no committable change" };
-        } else {
+        } else if (commit) {
           recorder.patchSummary({ commit });
           recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
           moveIssue(l, issue.slug, "done");
           await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+          if (issue.review === "agent" && !flags.has("no-review")) {
+            autoReview = { slug: issue.slug, prompt: issue.prompt };
+          }
         }
       }
     }
@@ -732,6 +808,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
   process.stderr.write(
     `\nrun ${summary.id}: ${summary.status}${summary.stopReason && summary.stopReason !== "completed" ? ` (${summary.stopReason})` : ""} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
+  if (autoReview) {
+    const child = spawn(
+      process.execPath,
+      [process.argv[1]!, "run", "--agent", "review", "--item", autoReview.slug, autoReview.prompt],
+      { cwd: l.repoRoot, detached: true, stdio: "ignore" },
+    );
+    child.on("error", () => undefined);
+    child.unref();
+    process.stderr.write(`review ${autoReview.slug} started (review=agent)\n`);
+  }
   return EXIT[result.status];
 }
 
@@ -818,7 +904,8 @@ export async function cmdFork(argv: string[]): Promise<number> {
     "--parent",
     parent.id,
     "--agent",
-    parent.agent,
+    normalizeAgentName(parent.agent),
+    ...(parent.itemId ? ["--item", parent.itemId] : []),
     ...(flags.has("inherit-worktree") && parentWorktreePath(parent, found.layout.localDir)
       ? ["--inherit-worktree"]
       : []),
@@ -883,16 +970,31 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   recorder.patchSummary({ pid: process.pid });
   recorder.event("resume_started", { fromStatus: s.status });
 
+  const abort = new AbortController();
+  let sigints = 0;
+  process.on("SIGINT", () => {
+    sigints += 1;
+    if (sigints === 1) {
+      abort.abort();
+    } else {
+      recorder.finalize("interrupted");
+      process.exit(130);
+    }
+  });
+  process.on("SIGTERM", () => abort.abort());
+
   // Transcript + tail repair.
   const transcript = loadTranscript(runDir);
   const inbox = readInbox(runDir);
   let startMode: "prompt" | "continue" = "prompt";
   let initialMessages: import("@earendil-works/pi-agent-core").AgentMessage[] | undefined;
-  let resumeAgent: AgentName = (s.agent as AgentName) ?? "research";
+  let resumeAgent: AgentName = normalizeAgentName(s.agent ?? "research");
+  if (!AGENT_NAMES.includes(resumeAgent)) resumeAgent = "research";
   let resumeRequest = s.request;
 
   if (transcript && transcript.messages.length > 0) {
-    resumeAgent = (transcript.agent as AgentName) ?? resumeAgent;
+    resumeAgent = transcript.agent ? normalizeAgentName(transcript.agent) : resumeAgent;
+    if (!AGENT_NAMES.includes(resumeAgent)) resumeAgent = "research";
     resumeRequest = transcript.request || resumeRequest;
     const answerForQuestion = (questionText: string): string | null => {
       // Match the recorded answer to the pending ask by question text.
@@ -979,40 +1081,71 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     recorder,
     commands,
     requireModel,
-    signal: undefined,
+    signal: abort.signal,
     initialMessages,
     startMode,
   });
 
   // A resumed Engineer phase still owes the runner its gates, commit, and move.
-  if (result.status === "completed" && resumeAgent === "engineer" && s.itemId) {
-    const issue = findIssue(l2, s.itemId);
+  let autoReview: { slug: string; prompt: string } | undefined;
+  const resumeItem = s.itemId ?? s.packetId;
+  if (result.status === "completed" && resumeAgent === "engineer" && resumeItem) {
+    const issue = findIssue(l2, resumeItem);
     if (issue) {
-      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), { root: toolRoot, commands });
-      recorder.event("gates", {
-        issue: issue.slug,
-        passed: gateOutcome.passed,
-        results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
-      });
-      if (!gateOutcome.passed) {
-        moveIssue(l2, issue.slug, "blocked");
-        recorder.finalize("blocked", `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`, result.finalText);
-        printRunOutcome({ ...result, status: "blocked" }, recorder);
-        return EXIT.blocked;
-      }
-      if (toolRoot !== l2.repoRoot) {
-        const commit = await ensureCommitted(
-          toolRoot,
-          recorder.current.baseRef,
-          `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
-        );
-        if (commit) {
-          recorder.patchSummary({ commit });
-          recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
-          moveIssue(l2, issue.slug, "done");
-          await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+      if (recorder.current.verification !== "direct") {
+        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), commands), { root: toolRoot, commands });
+        recorder.event("gates", {
+          issue: issue.slug,
+          passed: gateOutcome.passed,
+          results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
+        });
+        if (!gateOutcome.passed) {
+          moveIssue(l2, issue.slug, "blocked");
+          await commitPlanningFiles(l2, `issues: ${issue.slug} blocked`);
+          recorder.finalize("blocked", `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`, result.finalText);
+          printRunOutcome({ ...result, status: "blocked" }, recorder);
+          return EXIT.blocked;
         }
       }
+      if (toolRoot !== l2.repoRoot) {
+        try {
+          const commit = await ensureCommitted(
+            toolRoot,
+            recorder.current.baseRef,
+            `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
+          );
+          if (commit) {
+            recorder.patchSummary({ commit });
+            recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
+            moveIssue(l2, issue.slug, "done");
+            await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+            if (issue.review === "agent" && !flags.has("no-review")) {
+              autoReview = { slug: issue.slug, prompt: issue.prompt };
+            }
+          }
+        } catch (error) {
+          recorder.finalize("blocked", `commit failed: ${error instanceof Error ? error.message : String(error)}`, result.finalText);
+          printRunOutcome({ ...result, status: "blocked" }, recorder);
+          return EXIT.blocked;
+        }
+      }
+    }
+  }
+
+  if (resumeAgent === "review" && resumeItem) {
+    const issue = findIssue(l2, resumeItem);
+    const verdict =
+      result.status === "completed"
+        ? parseReviewVerdict(result.finalText) ?? inferReviewVerdict(result.finalText)
+        : undefined;
+    if (verdict) recorder.event("review_verdict", { verdict });
+    if (
+      issue &&
+      issue.status === "done" &&
+      (result.status === "blocked" || result.status === "failed" || (verdict !== undefined && verdict !== "approved"))
+    ) {
+      moveIssue(l2, issue.slug, "blocked");
+      await commitPlanningFiles(l2, `issues: ${issue.slug} review ${verdict ?? result.status}`);
     }
   }
 
@@ -1022,6 +1155,16 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   process.stderr.write(
     `\nrun ${summary.id}: ${summary.status}${summary.stopReason && summary.stopReason !== "completed" ? ` (${summary.stopReason})` : ""} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
+  if (autoReview) {
+    const child = spawn(
+      process.execPath,
+      [process.argv[1]!, "run", "--agent", "review", "--item", autoReview.slug, autoReview.prompt],
+      { cwd: l2.repoRoot, detached: true, stdio: "ignore" },
+    );
+    child.on("error", () => undefined);
+    child.unref();
+    process.stderr.write(`review ${autoReview.slug} started (review=agent)\n`);
+  }
   return EXIT[result.status];
 }
 
@@ -1124,7 +1267,8 @@ export async function cmdCorrect(argv: string[]): Promise<number> {
   const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
   const args = ["run", "--parent", parent.id];
   if (parentWorktreePath(parent, found.layout.localDir)) args.push("--inherit-worktree");
-  args.push("--agent", parent.agent);
+  args.push("--agent", normalizeAgentName(parent.agent));
+  if (parent.itemId) args.push("--item", parent.itemId);
   if (flags.get("tier")) args.push("--tier", flags.get("tier")!);
   args.push(correction);
   const child = spawn(process.execPath, [cliPath, ...args], {
@@ -1137,7 +1281,3 @@ export async function cmdCorrect(argv: string[]): Promise<number> {
   process.stdout.write(`correcting ${parent.id} with a fresh run; context and worktree are inherited\n`);
   return 0;
 }
-
-/* -------------------------------------------------------------------- plan */
-
-/** Render the plan tree: index lines annotated with packet status and branch. */

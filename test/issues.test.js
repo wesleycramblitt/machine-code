@@ -7,8 +7,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { findIssue, listIssues, moveIssue, parseIssueFile, statusesForKind, writeIssue } from "../dist/plan/issues.js";
+import { findIssue, listIssues, moveIssue, parseIssueFile, statusesForKind, updateIssueReview, writeIssue } from "../dist/plan/issues.js";
 import { issueToTaskPacket } from "../dist/tasks/issue.js";
+import { runItemId } from "../dist/plan/lifecycle.js";
+import { normalizeAgentName } from "../dist/agents.js";
 
 function fakeLayout(root) {
   return {
@@ -23,6 +25,33 @@ function fakeLayout(root) {
     runsDir: join(root, ".machine_code", "local", "runs"),
   };
 }
+
+test("legacy packet ids and removed roles map forward", () => {
+  assert.equal(runItemId({ itemId: "new" }), "new");
+  assert.equal(runItemId({ packetId: "old" }), "old");
+  assert.equal(normalizeAgentName("build"), "engineer");
+  assert.equal(normalizeAgentName("planner"), "research");
+  assert.equal(normalizeAgentName("engineer"), "engineer");
+});
+
+test("updateIssueReview changes the gate and preserves the body", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-issue-review-"));
+  try {
+    const layout = fakeLayout(root);
+    writeIssue(layout, {
+      kind: "features",
+      slug: "review-me",
+      prompt: "Do it.",
+      body: "Extra detail that must survive.",
+    });
+    const updated = updateIssueReview(layout, "review-me", "agent");
+    assert.equal(updated.review, "agent");
+    assert.match(updated.body, /Extra detail that must survive/);
+    assert.equal(findIssue(layout, "review-me").review, "agent");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("writeIssue creates front-matter plus body under kind/status", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-issue-create-"));

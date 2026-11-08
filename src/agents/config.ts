@@ -2,7 +2,7 @@
  * machine_code — agent configuration: presets, explicit overrides, ambiguity.
  *
  * Four separate axes (never conflated):
- *   role        — identity: research | planner | build | review
+ *   role        — identity: research | engineer | review
  *   config      — behavior: delegate / verification / worktree / ask / approval
  *   mode        — legacy orchestration mode declared by a role
  *   ambiguity   — clarification policy; independent of everything above
@@ -233,7 +233,6 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   ask: null, // gated by askEnabled(config)
   artifact: "artifact:provision",
   skill: null, // read-only skill bodies; exclusions are enforced inside the tool
-  pr: "pr:read", // per-action capabilities are checked inside the tool
 };
 
 /**
@@ -261,7 +260,7 @@ export function resolveAgent(
   const capSet = new Set<string>(capabilities);
   let tools = def.tools.filter((t) => {
     if (t === "ask") return askEnabled(config);
-    // `write` is shared: build writes code (code:write), research persists
+    // `write` is shared: engineer writes code (code:write), research persists
     // findings to knowledge/plans (knowledge:write). The write tool itself
     // restricts non-edit roles to those paths.
     if (t === "write") return capSet.has("code:write") || capSet.has("knowledge:write");

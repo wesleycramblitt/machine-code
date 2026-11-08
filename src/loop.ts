@@ -53,7 +53,7 @@ const BUILD_PLAN_POST_RESEARCH_LIMIT = 8;
 /** Plan-checkpoint blocked turns allowed before the run stops. */
 const PLAN_BLOCK_LIMIT = 3;
 /** Successes that show a run did real work, not just memory bookkeeping. */
-const SUBSTANTIVE_TOOLS = new Set(["read", "search", "command", "edit", "write", "pr"]);
+const SUBSTANTIVE_TOOLS = new Set(["read", "search", "glob", "grep", "command", "edit", "write"]);
 
 /** A request that is a question, not a change. A writable role answering a
  * question is not expected to edit; everything else (imperatives, bug
@@ -78,15 +78,15 @@ export function hasPlanDecision(facts: ReadonlyArray<{ text: string; status: str
     const files = new Set(text.match(file) ?? []);
     const verbs = text.match(verb) ?? [];
     // A decision that merely mentions "plan" is not a change plan. Require
-    // targets and actions; otherwise a planner note such as "Already have a
+    // targets and actions; otherwise a research note such as "Already have a
     // plan" makes the harness demand an edit the role cannot make.
     return files.size >= 2 && verbs.length >= 2;
   });
 }
 
-/** Only the Build role is a code-change run with a mandatory plan gate. */
+/** Only the Engineer role is a code-change run with a mandatory plan gate. */
 export function needsBuildPlan(agentName: string): boolean {
-  return agentName === "build";
+  return agentName === "engineer";
 }
 
 /** A line the role contract requires on a real finish. */
@@ -323,7 +323,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     // catalogue scan failure must not block the run
   }
   const triedModels = new Set<string>();
-  /** A build run that cannot plan gets one plan-only model call, then a fresh attempt. */
+  /** An engineer run that cannot plan gets one plan-only model call, then a fresh attempt. */
   let planRecovered = false;
   let recoveryPlan = "";
 
@@ -663,8 +663,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastAssistant: AssistantMessage | undefined;
   let totalTokens = 0;
   /** Run-level loop detector; a model rotation does not erase evidence. */
-  // Read-only roles (review/research/planner) cannot make progress by editing,
-  // so an identical-repeat streak is a loop much sooner than for build.
+  // Read-only roles (review/research) cannot make progress by editing,
+  // so an identical-repeat streak is a loop much sooner than for engineer.
   // Four identical evidence keys with no mutation is a loop. A single-line
   // fix should not spend half its turns re-running the same search.
   const evidence = new EvidenceTracker(4);
@@ -948,19 +948,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
         : undefined;
 
-    // PR tool: read/create/merge are capability- and approval-gated.
-    let prContext: import("./tools/pr.js").PrToolContext | undefined;
-    if (input.layout && input.agent.tools.includes("pr")) {
-      const { createPrProviderFor } = await import("./pr/factory.js");
-      const bundle = await createPrProviderFor(input.layout);
-      prContext = {
-        provider: bundle.provider,
-        capabilities: input.agentCapabilities ?? [],
-        recorder,
-        defaultApproval: input.agentConfig?.approval ?? "human",
-      };
-    }
-
     const rawTools = coreTools(
       {
         root: input.toolRoot ?? input.root,
@@ -969,7 +956,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         ask: askContext,
         artifacts: artifactContext,
         skills: skillContext,
-        prs: prContext,
         state: memory,
         semantic: () => semanticMap,
         processes,
@@ -1054,7 +1040,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // cheap rehydration exactly when the model needed it.
           const researchTool =
             tool.name === "read" ||
-            tool.name === "search";
+            tool.name === "search" ||
+            tool.name === "glob" ||
+            tool.name === "grep";
           if (researchTool) researchCalls += 1;
           const needsPlan = needsBuildPlan(input.agent.name);
           const planReady = needsPlan && hasPlanDecision(memory.getState().facts);
@@ -1158,8 +1146,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const result = await execute(id, params, signal, onUpdate);
           if (needsPlan && planNote && !result.isError && hasPlanDecision(memory.getState().facts)) {
             // The plan is the next action. Do not let the old "explore" next
-            // note survive and steer the model back into reading. Only Build
-            // has an edit contract; a Planner or Sudo run must not inherit it.
+            // note survive and steer the model back into reading. Only Engineer
+            // has an edit contract; a research or sudo run must not inherit it.
             memory.note("next", "Execute the plan: make the first edit.", [], memory.currentTurn());
           }
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
@@ -1228,6 +1216,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               evidenceKey = `read:${readBucket(params as Record<string, unknown>)}:${fileVersion(readPath) ?? resultHash}`;
             } else if (tool.name === "search" && searchScope) {
               evidenceKey = `search:${searchScope}:${searchMode}:${resultHash}`;
+            } else if (tool.name === "glob") {
+              evidenceKey = `glob:${stableKey(params)}:${resultHash}`;
+            } else if (tool.name === "grep") {
+              evidenceKey = `grep:${stableKey(params)}:${resultHash}`;
             } else if (tool.name === "command" && commandAction === "run") {
               evidenceKey = cacheableCommand
                 ? `command:${commandName}:cached`

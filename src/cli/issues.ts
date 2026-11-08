@@ -8,11 +8,11 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { layout } from "../paths.js";
 import { loadEnvFiles } from "../env.js";
-import { RunRecorder, registerProject } from "../state/runs.js";
-import { createWorktree, WorktreeError } from "../worktree.js";
+import { RunRecorder, listRuns, reconcileRun, registerProject } from "../state/runs.js";
+import { createWorktree, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability } from "../availability.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
-import { executeIssue } from "../orchestrate.js";
+import { executeIssue, type OrchestrateResult } from "../orchestrate.js";
 import { slugify } from "../plan/slug.js";
 import {
   findIssue,
@@ -29,8 +29,28 @@ import {
   type IssueStatus,
 } from "../plan/issues.js";
 import { approveIssue, deleteIssue, issueToTaskPacket, planIssueWaves } from "../tasks/issue.js";
+import { runItemId } from "../plan/lifecycle.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
+
+const ACTIVE_RUN_STATUSES = new Set(["created", "running", "awaiting_input"]);
+
+/** One mutating issue operation at a time: merge/delete/build must not race a live run. */
+function activeIssueRuns(l: ReturnType<typeof layout>, slug: string) {
+  return listRuns(l)
+    .filter((run) => runItemId(run) === slug && ACTIVE_RUN_STATUSES.has(run.status))
+    .filter((run) => ACTIVE_RUN_STATUSES.has(reconcileRun(run).status));
+}
+
+function assertNoActiveRun(l: ReturnType<typeof layout>, slug: string, action: string, force = false): void {
+  const active = activeIssueRuns(l, slug);
+  if (active.length > 0 && !force) {
+    fail(
+      `${slug} has an active run (${active.map((run) => run.id.slice(-8)).join(", ")}); ` +
+        `finish or pause it before ${action}`,
+    );
+  }
+}
 
 export async function cmdApprove(argv: string[]): Promise<number> {
   const target = argv[0];
@@ -40,6 +60,8 @@ export async function cmdApprove(argv: string[]): Promise<number> {
   const issue = findIssue(l, slug);
   if (!issue) fail(`no issue ${slug}`);
   if (issue.kind === "ideas") fail(`ideas are researched, not approved: ${slug}`);
+  if (issue.status !== "done") fail(`${slug} is ${issue.status}; build it before approving`);
+  assertNoActiveRun(l, slug, "approve");
   if (issue.review === "human") {
     process.stderr.write(`note: ${slug} has review = human (never auto-merged by batch)\n`);
   }
@@ -74,7 +96,13 @@ export function cmdPlan(argv: string[]): number {
 
 /** Inspect and edit issue files: list, create, move, show, run. */
 export async function cmdIssue(argv: string[]): Promise<number> {
-  const { flags, positional } = parseFlags(argv);
+  // `--status` is a boolean switch on other commands (show/runs). Issue create
+  // needs it as a value, so rename it before the shared parser sees it.
+  const creating = argv[0] === "create" || argv[0] === "new";
+  const normalized = creating
+    ? argv.flatMap((arg) => (arg === "--status" ? ["--issue-status"] : [arg]))
+    : argv;
+  const { flags, positional } = parseFlags(normalized);
   const l = layout();
   const sub = positional[0];
 
@@ -87,7 +115,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const slug = slugify(slugArg);
     if (!slug) fail("issue slug becomes empty");
     if (findIssue(l, slug)) fail(`issue ${slug} already exists`);
-    const statusFlag = flags.get("status");
+    const statusFlag = flags.get("issue-status");
     if (statusFlag && !legalStatus(kind, statusFlag)) fail(`invalid status ${JSON.stringify(statusFlag)} for ${kind}`);
     const reviewFlag = flags.get("review") ?? "none";
     if (!["none", "agent", "human"].includes(reviewFlag)) fail("--review must be none|agent|human");
@@ -127,13 +155,22 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const cleaned = slugify(slug);
     const issue = findIssue(l, cleaned);
     if (!issue) fail(`no issue ${cleaned}`);
-    const agent = flags.get("agent") ?? (issue.kind === "ideas" ? "research" : "engineer");
-    const include = JSON.stringify({ files: [issue.rel] });
-    const child = spawn(
-      process.execPath,
-      [process.argv[1]!, "run", "--agent", agent, "--item", cleaned, "--context-include", include, issue.prompt],
-      { stdio: "inherit" },
-    );
+    const explicitAgent = flags.get("agent");
+    // The default run for a feature/bug is the full build: gates, optional
+    // review, commit, and status move. Ideas default to research.
+    if (explicitAgent === undefined && issue.kind !== "ideas") {
+      const args = [cleaned];
+      const model = flags.get("model");
+      if (model) args.push("--model", model);
+      if (flags.has("no-review")) args.push("--no-review");
+      return cmdBuild(args);
+    }
+    const agent = explicitAgent ?? (issue.kind === "ideas" ? "research" : "engineer");
+    const args = ["run", "--agent", agent, "--item", cleaned];
+    const model = flags.get("model");
+    if (model) args.push("--model", model);
+    args.push(issue.prompt);
+    const child = spawn(process.execPath, [process.argv[1]!, ...args], { stdio: "inherit" });
     const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
     return code;
   }
@@ -145,11 +182,12 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const issue = findIssue(l, cleaned);
     if (!issue) fail(`no issue ${cleaned}`);
     if (issue.kind === "ideas") fail(`ideas are researched, not reviewed: ${cleaned}`);
-    const child = spawn(
-      process.execPath,
-      [process.argv[1]!, "run", "--agent", "review", "--item", cleaned, "--context-include", JSON.stringify({ files: [issue.rel] }), issue.prompt],
-      { stdio: "inherit" },
-    );
+    assertNoActiveRun(l, cleaned, "review");
+    const args = ["run", "--agent", "review", "--item", cleaned];
+    const model = flags.get("model");
+    if (model) args.push("--model", model);
+    args.push(issue.prompt);
+    const child = spawn(process.execPath, [process.argv[1]!, ...args], { stdio: "inherit" });
     return new Promise<number>((resolve) => child.on("exit", (code) => resolve(code ?? 1)));
   }
 
@@ -169,9 +207,13 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const issue = findIssue(l, slugify(sub ?? ""));
-  if (!issue) fail(`no issue ${sub} (run \`machine_code issue list\`)`);
-  process.stdout.write(`${issue.rel}\npriority ${issue.priority} · review ${issue.review}\n\n${issue.prompt}\n`);
+  const showSlug = sub === "show" || sub === "get" ? positional[1] : sub;
+  const issue = findIssue(l, slugify(showSlug ?? ""));
+  if (!issue) fail(`no issue ${showSlug ?? "(none)"} (run \`machine_code issue list\`)`);
+  process.stdout.write(
+    `${issue.rel}\npriority ${issue.priority} · review ${issue.review}` +
+      `${issue.verify.length ? ` · verify ${issue.verify.join(", ")}` : ""}\n\n${issue.prompt}\n`,
+  );
   return 0;
 }
 
@@ -184,6 +226,7 @@ export async function runIssueBuild(
   flags: Map<string, string>,
 ): Promise<number> {
   const slug = issue.slug;
+  assertNoActiveRun(l, slug, "build");
   const goal = issue.prompt.trim() || issue.title || slug;
   const packet = issueToTaskPacket(issue);
   const runtime = await loadRuntime(l);
@@ -198,44 +241,83 @@ export async function runIssueBuild(
   registerProject(l.home, l.repoRoot);
   recorder.event("issue_build_start", { slug });
 
+  const abort = new AbortController();
+  let sigints = 0;
+  process.on("SIGINT", () => {
+    sigints += 1;
+    if (sigints === 1) {
+      abort.abort();
+    } else {
+      recorder.finalize("interrupted");
+      process.exit(130);
+    }
+  });
+  process.on("SIGTERM", () => abort.abort());
+
   let toolRoot = l.repoRoot;
   try {
-    const supervisor = new ProcessSupervisor({
-      runId: recorder.id,
-      runDir: recorder.dir,
-      onEvent: (type, data) => recorder.event(type, data),
-    });
-    const spec = await createWorktree({ layout: l, runId: recorder.id, kind: "issue", slug, processes: supervisor });
-    toolRoot = spec.path;
-    recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
-    recorder.event("worktree_created", { path: spec.path, branch: spec.branch, baseRef: spec.baseRef, baseBranch: spec.baseBranch });
+    const reuse = reusableWorktreeOwner(listRuns(l), `mc/${slug}`);
+    if (reuse) {
+      toolRoot = reuse.path;
+      recorder.patchSummary({
+        worktree: reuse.path,
+        worktreeOwnerRunId: reuse.run.id,
+        branch: reuse.run.branch,
+        baseBranch: reuse.run.baseBranch,
+        baseRef: reuse.run.baseRef,
+      });
+      recorder.event("worktree_reused", { parentRunId: reuse.run.id, path: reuse.path, branch: reuse.run.branch });
+      process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
+    } else {
+      const supervisor = new ProcessSupervisor({
+        runId: recorder.id,
+        runDir: recorder.dir,
+        onEvent: (type, data) => recorder.event(type, data),
+      });
+      const spec = await createWorktree({ layout: l, runId: recorder.id, kind: "issue", slug, processes: supervisor });
+      toolRoot = spec.path;
+      recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
+      recorder.event("worktree_created", { path: spec.path, branch: spec.branch, baseRef: spec.baseRef, baseBranch: spec.baseBranch });
+    }
   } catch (error) {
     if (error instanceof WorktreeError) {
       recorder.finalize("blocked", `${error.code}: ${error.message}`);
       moveIssue(l, slug, "blocked");
+      await commitPlanningFiles(l, `issues: ${slug} blocked`);
       return EXIT["blocked"];
     }
     throw error;
   }
 
-  const result = await executeIssue({
-    models: runtime.models,
-    catalogue: runtime.catalogue.models,
-    configuredProviders: runtime.configuredProviders,
-    availability: loadAvailability(l.home),
-    layout: l,
-    machine: runtime.machine,
-    policy: runtime.policy,
-    packet,
-    verification: "verified",
-    review: flags.has("no-review") ? false : issue.review === "agent",
-    request: goal,
-    root: l.repoRoot,
-    toolRoot,
-    home: l.home,
-    recorder,
-    ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
-  });
+  let result: OrchestrateResult;
+  try {
+    result = await executeIssue({
+      models: runtime.models,
+      catalogue: runtime.catalogue.models,
+      configuredProviders: runtime.configuredProviders,
+      availability: loadAvailability(l.home),
+      layout: l,
+      machine: runtime.machine,
+      policy: runtime.policy,
+      packet,
+      verification: "verified",
+      review: flags.has("no-review") ? false : flags.has("with-review") || issue.review === "agent",
+      include: { issues: [issue.rel] },
+      request: goal,
+      root: l.repoRoot,
+      toolRoot,
+      home: l.home,
+      recorder,
+      ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
+      signal: abort.signal,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    recorder.finalize("failed", message);
+    await commitPlanningFiles(l, `issues: build ${slug} (failed)`);
+    process.stderr.write(`build ${slug} failed: ${message}\n`);
+    return EXIT.failed;
+  }
   recorder.finalize(result.status, result.error, result.finalText);
   if (result.status === "completed") moveIssue(l, slug, "done");
   else if (result.status === "blocked") moveIssue(l, slug, "blocked");
@@ -252,7 +334,10 @@ export async function runIssueBuild(
  * feature issue and build it (`build "<goal>"`).
  */
 export async function cmdBuild(argv: string[]): Promise<number> {
-  const { flags, positional } = parseFlags(argv);
+  // `--review` is a bare switch here; `issue create --review agent` keeps its
+  // value form in its own command.
+  const normalized = argv.flatMap((arg) => (arg === "--review" ? ["--with-review"] : [arg]));
+  const { flags, positional } = parseFlags(normalized);
   const joined = positional.join(" ").trim();
   if (!joined) {
     fail('usage:\n  machine_code build <slug> [--review] [--model <key>]\n  machine_code build "<goal>"   (self-scopes a feature issue)');
@@ -274,6 +359,9 @@ export async function cmdBuild(argv: string[]): Promise<number> {
     issue = writeIssue(l, { kind: "features", slug, prompt: joined });
     await commitPlanningFiles(l, `issues: add ${slug}`);
     process.stderr.write(`self-scoped as ${slug} → issues/features/todo/${slug}.md\n`);
+  } else {
+    if (issue.kind === "ideas") fail(`ideas are researched first: machine_code issue run ${slug}`);
+    if (issue.status === "done") fail(`issue ${slug} is already done`);
   }
   return runIssueBuild(l, issue, flags);
 }
@@ -323,15 +411,27 @@ export async function cmdBatch(argv: string[]): Promise<number> {
     if (wave.length === 0) break;
     process.stdout.write(`wave ${guard}: ${wave.join(", ")}\n`);
     const results = await Promise.all(wave.map(runBuildChild));
+    let approveFailed = false;
+    let humanPending = false;
     for (const slug of wave) {
-      if (findIssue(l, slug)?.review === "human") {
+      const issue = findIssue(l, slug);
+      if (!issue) continue;
+      if (issue.review === "human") {
+        humanPending = true;
         process.stderr.write(`leaving ${slug} for a human merge (review=human)\n`);
+        continue;
+      }
+      // Only a built issue (done/) is approvable. A failed build or a
+      // changes_requested review stays todo/blocked and must not merge.
+      if (issue.status !== "done") {
+        process.stderr.write(`not approving ${slug}: status ${issue.status}\n`);
         continue;
       }
       try {
         await approveIssue(l, slug);
-      } catch {
-        // Failed build stays live; its dependents wait for the next run.
+      } catch (error) {
+        approveFailed = true;
+        process.stderr.write(`approve ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`);
       }
     }
     const failed = results.filter((result) => result.code !== 0).map((result) => result.slug);
@@ -339,6 +439,8 @@ export async function cmdBatch(argv: string[]): Promise<number> {
       process.stderr.write(`build failed: ${failed.join(", ")}\n`);
       break;
     }
+    // A dependent must not build on an unmerged parent.
+    if (approveFailed || humanPending) break;
   }
   return 0;
 }
@@ -353,7 +455,9 @@ export async function cmdDelete(argv: string[]): Promise<number> {
   const l = layout();
   const slug = slugify(slugArg);
   if (!findIssue(l, slug)) fail(`no issue ${slug}`);
-  await deleteIssue(l, slug, { force: flags.has("force") });
+  const force = flags.has("force");
+  assertNoActiveRun(l, slug, "delete", force);
+  await deleteIssue(l, slug, { force });
   process.stdout.write(`deleted ${slug}\n`);
   return 0;
 }

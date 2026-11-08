@@ -64,7 +64,7 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     assert.match(engineer.prompt, /`glob`/);
     assert.match(engineer.prompt, /`grep`/);
     assert.match(engineer.prompt, /Outcome: completed/);
-    assert.match(engineer.prompt, /reusable scripts\//);
+    assert.match(engineer.prompt, /reusable `scripts\/` helper/);
 
     const review = resolveAgent(l, "review");
     assert.match(review.prompt, /same worktree and branch the engineer used/);

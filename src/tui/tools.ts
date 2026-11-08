@@ -22,13 +22,14 @@ const DESCRIPTIONS: Record<string, string> = {
   read: "read ranges",
   write: "write files",
   edit: "edit files",
-  search: "map, outline, search",
+  search: "symbols, outlines, map",
+  glob: "find paths by glob",
+  grep: "search file text",
   command: "typed commands",
   context: "run memory",
   ask: "ask the human",
   artifact: "tools and scripts",
   skill: "skill bodies on demand",
-  pr: "pull requests",
 };
 
 export function toolListItems(

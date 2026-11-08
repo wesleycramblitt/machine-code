@@ -2,7 +2,7 @@
  * machine_code — context bundle types.
  *
  * Context is assembled per run from inherited (plans, parent runs),
- * explicit (packet, knowledge, skills selected in the composer), and
+ * explicit (issues, knowledge, skills selected in the composer), and
  * discovered (tool results) sources. The rendered text is what the model
  * sees; the manifest (context.json) records provenance so every block is
  * traceable.
@@ -44,7 +44,7 @@ export type ContextSections = Record<ContextSection, number>;
 export interface ContextSource {
   kind: ContextKind;
   origin: ContextOrigin;
-  /** Stable reference: path, packet id, skill name. */
+  /** Stable reference: path, issue id, skill name. */
   ref: string;
   /** 0 = current task, deeper = inherited. */
   depth?: number;

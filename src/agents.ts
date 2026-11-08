@@ -211,6 +211,13 @@ function modeConfigs(role: RoleData, modes: readonly string[]): Record<string, A
   return out;
 }
 
+/** Map removed roles onto their current equivalents (legacy run records). */
+export function normalizeAgentName(name: string): AgentName {
+  if (name === "build") return "engineer";
+  if (name === "planner") return "research";
+  return name;
+}
+
 export function agentDef(layout: Layout, name: AgentName): AgentDef {
   const role = roleData(name);
   const modes = strings(role.modes);

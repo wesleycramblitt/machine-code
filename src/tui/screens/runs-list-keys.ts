@@ -61,8 +61,9 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     else if (row?.kind === "issue") {
       // The issue page is the hub: prompt, dependencies, runs, and actions.
       s.selectedIssueSlug = row.slug;
+      s.selectedIssueRepo = repoForRow(row) ?? null;
       s.issueScroll = 0;
-      s.screen = "packet";
+      s.screen = "issue";
     }
     ctx.draw();
     return true;
@@ -98,8 +99,8 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       ctx.draw();
       return true;
     }
-    const packet = row?.kind === "run" ? row.run.itemId : undefined;
-    ctx.startNewRun(packet, repoForRow(row));
+    const item = row?.kind === "run" ? (row.run.itemId ?? row.run.packetId) : undefined;
+    ctx.startNewRun(item, repoForRow(row));
     ctx.draw();
     return true;
   }
