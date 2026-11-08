@@ -26,7 +26,6 @@ import {
   type ContextBundle,
   type ContextKind,
   type ContextOrigin,
-  type ContextSection,
   type ContextSections,
   type ContextSource,
 } from "./types.js";
@@ -137,6 +136,54 @@ function readFileText(file: string): { text: string; warning?: string } | null {
   }
 }
 
+/** Repo-relative parent file plus 1-based inclusive line bounds. */
+export interface IncludeRange {
+  file: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Snippet include: `path:START-END` (1-based, inclusive) or `path:LINE` for a
+ * single line. Returns null for whole-file entries, which keep working as
+ * today. Shared with previewContext so measured chars match assembled chars.
+ */
+export function parseIncludeRange(entry: string): IncludeRange | null {
+  const match = /^(.*):(\d+)(?:-(\d+))?$/.exec(entry.trim());
+  if (!match) return null;
+  const file = (match[1] ?? "").trim();
+  if (!file) return null;
+  const start = Number(match[2]);
+  const end = match[3] === undefined ? start : Number(match[3]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
+  if (start < 1 || end < start) return null;
+  return { file, start, end };
+}
+
+/**
+ * Slice 1-based inclusive lines out of a file body. A start past EOF is an
+ * out-of-range warning (never a silent empty body); a past-EOF end clamps to
+ * the last line and the header names the lines actually included. The body
+ * carries the parent file so the agent can expand via the read tool.
+ */
+export function sliceRangeBody(
+  file: string,
+  start: number,
+  end: number,
+  text: string,
+): { body: string } | { warning: string } {
+  // Line numbers match editor/sed semantics: a trailing newline terminates
+  // the last line instead of starting a phantom empty one.
+  const raw = text.split("\n");
+  const lines = raw.length > 0 && raw[raw.length - 1] === "" ? raw.slice(0, -1) : raw;
+  if (start > lines.length) {
+    return { warning: `included range ${file}:${start}-${end} is out of range (${lines.length} lines)` };
+  }
+  const clamped = Math.min(end, lines.length);
+  const snippet = lines.slice(start - 1, clamped).join("\n");
+  return { body: `[source: ${file}:${start}-${clamped}]\n${snippet}\n[parent: ${file}; expand with the read tool]` };
+}
+
 function skillBody(layout: Layout, name: string): { path: string; text: string } | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;
   for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
@@ -184,13 +231,43 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Explicit composer includes. These are user-selected knowledge files that
   // no composer file or configured index references; they are still ordinary
   // provenance-tracked context blocks.
-  for (const path of input.include?.files ?? []) {
-    const abs = withinRepo(layout.repoRoot, path);
-    if (!abs || !existsSync(abs) || isSecretPath(path)) {
+  for (const entry of input.include?.files ?? []) {
+    const range = parseIncludeRange(entry);
+    if (range) {
+      const abs = withinRepo(layout.repoRoot, range.file);
+      if (!abs || !existsSync(abs) || isSecretPath(range.file)) {
+        pending.push({
+          kind: "file",
+          origin: "explicit",
+          ref: entry,
+          body: "",
+          band: 1,
+          warning: "included file is missing, secret, or outside the repo",
+        });
+        continue;
+      }
+      const read = readFileText(abs);
+      const sliced = read ? sliceRangeBody(range.file, range.start, range.end, read.text) : null;
+      if (!sliced || "warning" in sliced) {
+        pending.push({
+          kind: "file",
+          origin: "explicit",
+          ref: entry,
+          body: "",
+          band: 1,
+          warning: sliced && "warning" in sliced ? sliced.warning : "included file is unreadable",
+        });
+        continue;
+      }
+      pending.push({ kind: "file", origin: "explicit", ref: entry, depth: 0, body: sliced.body, band: 1 });
+      continue;
+    }
+    const abs = withinRepo(layout.repoRoot, entry);
+    if (!abs || !existsSync(abs) || isSecretPath(entry)) {
       pending.push({
         kind: "file",
         origin: "explicit",
-        ref: path,
+        ref: entry,
         body: "",
         band: 1,
         warning: "included file is missing, secret, or outside the repo",
@@ -198,7 +275,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       continue;
     }
     const read = readFileText(abs);
-    if (read) pending.push({ kind: "file", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
+    if (read) pending.push({ kind: "file", origin: "explicit", ref: entry, depth: 0, body: read.text, band: 1 });
   }
   for (const path of input.include?.knowledge ?? []) {
     const abs = withinRepo(layout.repoRoot, path);
@@ -405,34 +482,50 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const selected: Pending[] = [];
   for (const item of keptPending.sort((a, b) => a.band - b.band || (a.depth ?? 0) - (b.depth ?? 0))) {
     const key = `${item.kind}:${item.ref}`;
-    const hash = sha1(item.body);
-    if (seen.has(key) || seen.has(`h:${hash}`)) continue;
+    if (seen.has(key)) continue;
     seen.add(key);
-    seen.add(`h:${hash}`);
+    // Content-hash dedupe is for real bodies only: every warning-only source
+    // has an empty body, and collapsing them would silently drop distinct
+    // warnings (e.g. two out-of-range snippet includes).
+    if (item.body !== "") {
+      const hash = sha1(item.body);
+      if (seen.has(`h:${hash}`)) continue;
+      seen.add(`h:${hash}`);
+    }
     selected.push(item);
   }
 
-  // Explicit per-section budgets: the usable input budget (limit minus the
-  // caller's response reserve) is split into caps per section
-  // (system/plan/files/tools/skills/parents). Over budget, whole sources are
-  // dropped lowest-priority-first with a named omission; a kept block is
-  // never sliced mid-content. Packets and plans are never dropped while
-  // anything else remains, so the planner index and the explicit packet
-  // survive file trimming.
-  const { budget: usable, caps } = sectionBudgets(budget);
-  const sectionOf = (item: Pending): ContextSection => sectionForKind(item.kind);
+  // Priority budget: the usable input budget (limit minus the caller's
+  // response reserve) with no per-section caps. Over budget, whole sources
+  // are dropped lowest-priority-first with a named omission; a kept block is
+  // never sliced mid-content. Priority is role-aware: the planner keeps the
+  // plan index above all, build/review keep the packet first and working
+  // files above plan docs, research keeps knowledge/references above files.
+  // The packet and explicitly-included plans are never dropped while
+  // anything else remains.
+  const { budget: usable } = sectionBudgets(budget);
 
   // Drop rank: higher is dropped first. Aggregates (tool index, skill
-  // descriptions) go first, then the parent chain, skill bodies, and
-  // working-set files; packets and plans go last.
+  // descriptions) go first, then the parent chain, skill bodies, and the
+  // working set; the packet and explicit plans go last on every role.
   const dropRank = (item: Pending): number => {
+    const role = input.agent;
     if (item.kind === "tool") return 60;
     if (item.kind === "skill" && /^\d+ skills$/.test(item.ref)) return 60;
     if (item.kind === "parent-run") return 50;
     if (item.kind === "skill" || item.kind === "script") return 40;
-    if (item.kind === "file" || item.kind === "knowledge" || item.kind === "reference") return 30;
-    if (item.kind === "plan" || item.kind === "project") return item.origin === "explicit" ? 15 : 20;
     if (item.kind === "packet") return 10;
+    if (item.kind === "plan" || item.kind === "project") {
+      if (item.origin === "explicit") return 15;
+      // Inherited plan index: the planner's core context, droppable docs elsewhere.
+      return role === "planner" ? 12 : 28;
+    }
+    if (item.kind === "knowledge") {
+      if (role === "research") return 20;
+      return role === "planner" ? 25 : 30;
+    }
+    if (item.kind === "reference") return role === "research" ? 22 : 32;
+    if (item.kind === "file") return role === "build" || role === "review" ? 25 : 30;
     return 30;
   };
   const PROTECTED_RANK = 20;
@@ -453,11 +546,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     entries.push({ ...item, len: item.body.length });
   }
 
-  const sectionTotals = (): Record<ContextSection, number> => {
-    const totals: Record<ContextSection, number> = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
-    for (const entry of entries) totals[sectionOf(entry)] += entry.len;
-    return totals;
-  };
   const totalLen = (): number => entries.reduce((sum, entry) => sum + entry.len, 0);
 
   let guard = entries.length + 1;
@@ -465,12 +553,8 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     // A lone droppable source that alone exceeds the budget is trimmed
     // below, not dropped, so the run keeps working context.
     if (entries.length <= 1) break;
-    const totals = sectionTotals();
-    let pool = entries.filter((entry) => dropRank(entry) > PROTECTED_RANK);
+    const pool = entries.filter((entry) => dropRank(entry) > PROTECTED_RANK);
     if (pool.length === 0) break;
-    // Sections over their cap yield first.
-    const overCap = pool.filter((entry) => totals[sectionOf(entry)]! > caps[sectionOf(entry)]!);
-    if (overCap.length > 0) pool = overCap;
     pool.sort((a, b) => dropRank(b) - dropRank(a) || b.len - a.len);
     const victim = pool[0]!;
     entries.splice(entries.indexOf(victim), 1);
@@ -538,8 +622,19 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     warnings.push(`curated context is ${used.toLocaleString()} chars; model input budget is ${budget.toLocaleString()} chars; the runner will trim to fit`);
   }
 
-  const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
-  for (const entry of entries) sections[sectionOf(entry)] += entry.len;
+  const sections: ContextSections = {
+    packets: 0,
+    plans: 0,
+    knowledge: 0,
+    skills: 0,
+    scripts: 0,
+    tools: 0,
+    references: 0,
+    files: 0,
+    parents: 0,
+    system: 0,
+  };
+  for (const entry of entries) sections[sectionForKind(entry.kind)] += entry.len;
 
   const text =
     blocks.length === 0

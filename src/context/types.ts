@@ -26,8 +26,18 @@ export type ContextKind =
 
 export type ContextOrigin = "inherited" | "explicit" | "discovered";
 
-/** Budget section for per-section chars (context.json + composer preview). */
-export type ContextSection = "system" | "plan" | "files" | "tools" | "skills" | "parents";
+/** Budget section for per-section chars (context.json + composer preview). Keys mirror the composer exclusion sections 1:1, so accounting matches what the TUI shows; `files` counts only `kind:file`. Render-side sections (system) record 0 in assemble. */
+export type ContextSection =
+  | "packets"
+  | "plans"
+  | "knowledge"
+  | "skills"
+  | "scripts"
+  | "tools"
+  | "references"
+  | "files"
+  | "parents"
+  | "system";
 
 export type ContextSections = Record<ContextSection, number>;
 

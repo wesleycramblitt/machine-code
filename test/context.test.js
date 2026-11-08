@@ -319,8 +319,50 @@ test("planner index and explicit packet survive file trimming", async () => {
   }
 });
 
-test("context bundle records per-section chars", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mc-ctx-sections-"));
+test("files section counts only files, and priority is role-aware", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-roles-"));
+  try {
+    const layout = fakeLayout(root);
+    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "knowledge"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), `# Plan index\n${"plan\n".repeat(400)}`, "utf8");
+    writeFileSync(join(root, "knowledge", "deep.md"), `# Deep\n${"fact\n".repeat(400)}`, "utf8");
+    writeFileSync(join(root, "work.md"), `${"work\n".repeat(400)}`, "utf8");
+    // files section counts only kind:file
+    const full = await assembleContext({
+      layout,
+      machine: machine(),
+      agent: "research",
+      include: { files: ["work.md"], knowledge: ["knowledge/deep.md"] },
+    });
+    assert.ok(full.sections.files > 0, "files section records working files");
+    assert.ok(full.sections.knowledge > 0, "knowledge section records knowledge");
+    // research keeps knowledge over files when over budget
+    const tight = await assembleContext({
+      layout,
+      machine: machine(),
+      agent: "research",
+      include: { files: ["work.md"], knowledge: ["knowledge/deep.md"] },
+      budgetChars: 3000,
+    });
+    assert.match(tight.text, /Deep/, "research keeps knowledge");
+    assert.ok(tight.warnings.some((w) => /omitted file:work\.md/.test(w)), "research drops files first");
+    // planner keeps the inherited plan index over working files
+    const planTight = await assembleContext({
+      layout,
+      machine: machine(),
+      agent: "planner",
+      include: { files: ["work.md"] },
+      budgetChars: 3000,
+    });
+    assert.match(planTight.text, /Plan index/, "planner keeps the plan index");
+    assert.ok(planTight.warnings.some((w) => /omitted file:work\.md/.test(w)), "planner drops files first");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context bundle records per-section chars", async () => {  const root = mkdtempSync(join(tmpdir(), "mc-ctx-sections-"));
   try {
     mkdirSync(join(root, "plans"), { recursive: true });
     mkdirSync(join(root, "src"), { recursive: true });
@@ -332,11 +374,11 @@ test("context bundle records per-section chars", async () => {
       machine: machine(),
       include: { files: ["src/a.ts"] },
     });
-    for (const section of ["system", "plan", "files", "tools", "skills", "parents"]) {
+    for (const section of ["packets", "plans", "knowledge", "skills", "scripts", "tools", "references", "files", "parents", "system"]) {
       assert.equal(typeof bundle.sections[section], "number", `sections.${section} is recorded`);
     }
     assert.ok(bundle.sections.files > 0);
-    assert.ok(bundle.sections.plan > 0);
+    assert.ok(bundle.sections.plans > 0);
     assert.equal(bundle.sections.system, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -379,7 +421,7 @@ test("preview chars match assembled chars within rounding for the same inputs", 
     );
     assert.deepEqual(
       Object.keys(preview.sections).sort(),
-      ["files", "parents", "plan", "skills", "system", "tools"],
+      ["files", "knowledge", "packets", "parents", "plans", "references", "scripts", "skills", "system", "tools"],
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -671,6 +713,117 @@ test("skill modes gate bodies but keep descriptions", async () => {
     assert.match(overridden.text, /# beta body/);
     assert.doesNotMatch(overridden.text, /# alpha body/);
     assert.doesNotMatch(overridden.text, /alpha: alpha things/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("file range includes assemble only that range with provenance", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-range-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "loop.ts"), ["one", "two", "three", "four", "five", "six"].join("\n") + "\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/loop.ts:2-4"] },
+    });
+    const source = bundle.sources.find((item) => item.kind === "file" && item.ref === "src/loop.ts:2-4");
+    assert.ok(source, "range is a context source under its path:lines ref");
+    assert.equal(source.origin, "explicit");
+    assert.equal(source.warning, undefined);
+    assert.match(bundle.text, /\[source: src\/loop\.ts:2-4\]/);
+    assert.match(bundle.text, /\[parent: src\/loop\.ts; expand with the read tool\]/);
+    assert.match(bundle.text, /\ntwo\nthree\nfour\n/);
+    assert.doesNotMatch(bundle.text, /one/);
+    assert.doesNotMatch(bundle.text, /five/);
+    assert.doesNotMatch(bundle.text, /six/);
+    // A single line is a one-line range.
+    const single = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/loop.ts:5"] },
+    });
+    assert.match(single.text, /\[source: src\/loop\.ts:5-5\]/);
+    assert.match(single.text, /\nfive\n/);
+    assert.doesNotMatch(single.text, /four/);
+    // Whole-file includes still inline the full body with no range header.
+    const whole = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/loop.ts"] },
+    });
+    const wholeSource = whole.sources.find((item) => item.kind === "file" && item.ref === "src/loop.ts");
+    assert.ok(wholeSource, "whole-file include keeps its plain path ref");
+    assert.match(whole.text, /\none\ntwo\nthree\nfour\nfive\nsix\n/);
+    assert.doesNotMatch(whole.text, /\[source: /);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("missing and out-of-range file ranges warn instead of going silent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-range-warn-"));
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "loop.ts"), ["one", "two", "three"].join("\n") + "\n", "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/loop.ts:99-120", "src/missing.ts:1-10"] },
+    });
+    const warned = bundle.sources.filter((item) => item.kind === "file");
+    assert.equal(warned.length, 2, "both bad ranges are warning sources");
+    assert.ok(warned.every((item) => item.bytes === 0 && typeof item.warning === "string" && item.warning.length > 0));
+    assert.ok(warned.some((item) => /out of range/.test(item.warning ?? "")), "past-EOF start warns");
+    assert.ok(warned.some((item) => /missing/.test(item.warning ?? "")), "missing parent warns");
+    assert.doesNotMatch(bundle.text, /\[source: src\/loop\.ts:99-120\]/);
+    // A past-EOF end still yields the lines that exist, with the header
+    // naming the lines actually included.
+    const clamped = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/loop.ts:2-99"] },
+    });
+    assert.match(clamped.text, /\[source: src\/loop\.ts:2-3\]/);
+    assert.match(clamped.text, /\ntwo\nthree\n/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("preview counts range chars the same as assembly", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-range-parity-"));
+  try {
+    const layout = fakeLayout(root);
+    mkdirSync(join(root, "src"), { recursive: true });
+    const lines = Array.from({ length: 80 }, (_, i) => `line ${i + 1} with padding content to give the file real weight`);
+    writeFileSync(join(root, "src", "loop.ts"), lines.join("\n") + "\n", "utf8");
+    const bundle = await assembleContext({
+      layout,
+      machine: machine(),
+      include: { files: ["src/loop.ts:2-4"] },
+    });
+    const preview = previewContext(layout, "", { files: ["src/loop.ts:2-4"] });
+    const previewed = preview.sources.find((item) => item.kind === "file" && item.ref === "src/loop.ts:2-4");
+    assert.ok(previewed, "range is a preview source under its path:lines ref");
+    const assembled = bundle.sources.find((item) => item.kind === "file" && item.ref === "src/loop.ts:2-4");
+    assert.ok(assembled, "range is an assembled source");
+    assert.equal(previewed.chars, assembled.bytes, "preview measures the snippet body, not the whole file");
+    assert.ok(previewed.chars > 0 && previewed.chars < 600, "a 3-line snippet costs a 3-line snippet");
+    assert.equal(previewed.exists, true);
+    const wholeSource = previewContext(layout, "", { files: ["src/loop.ts"] }).sources.find(
+      (item) => item.kind === "file",
+    );
+    assert.ok(wholeSource);
+    assert.ok(previewed.chars < wholeSource.chars, "range preview is cheaper than the whole file");
+    // A bad range is a zero-char warned preview source, like assembly.
+    const bad = previewContext(layout, "", { files: ["src/loop.ts:99-120"] });
+    const badSource = bad.sources.find((item) => item.kind === "file");
+    assert.ok(badSource);
+    assert.equal(badSource.chars, 0);
+    assert.equal(badSource.exists, false);
+    assert.ok(bad.warnings.length > 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

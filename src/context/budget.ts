@@ -57,66 +57,56 @@ export function charsToTokens(chars: number): number {
 }
 
 /**
- * Per-section share of the usable input budget. System covers the prompt
- * prefix in render; assemble records 0 for it. Plan (packets + plans) is
- * task-critical, files carry the working set, and tools/skills/parents are
- * the first to yield when over budget.
+ * Map a context kind onto its budget section. Sections mirror the composer
+ * exclusion sections 1:1: `files` counts only `kind:file`, never knowledge,
+ * references, plans, or packets. Unknown kinds fall into `files`.
  */
-export const SECTION_FRACTIONS: Record<ContextSection, number> = {
-  system: 0.1,
-  plan: 0.25,
-  files: 0.4,
-  tools: 0.05,
-  skills: 0.1,
-  parents: 0.1,
-};
-
-/** Map a context kind onto its budget section. Unknown kinds are files. */
 export function sectionForKind(kind: ContextKind | string): ContextSection {
   switch (kind) {
+    case "packet":
+      return "packets";
     case "plan":
     case "project":
-    case "packet":
-      return "plan";
+      return "plans";
+    case "knowledge":
+      return "knowledge";
+    case "reference":
+      return "references";
     case "skill":
       return "skills";
     case "tool":
-    case "script":
       return "tools";
+    case "script":
+      return "scripts";
     case "parent-run":
     case "epic":
     case "feature":
     case "task":
       return "parents";
     case "file":
-    case "knowledge":
-    case "reference":
     default:
       return "files";
   }
 }
 
 export interface SectionBudgets {
-  /** Usable input budget in chars: limit - response reserve. */
+  /** Usable input budget in chars: limit - response reserve. No per-section caps: priority decides. */
   budget: number;
   responseReserveChars: number;
-  caps: Record<ContextSection, number>;
 }
 
 /**
- * Explicit per-section budgets. `limitChars` is the model input budget
+ * Usable input budget. `limitChars` is the model input budget
  * (already `limit - response_reserve` when callers pass
  * `contextBudget().inputChars`); pass a reserve here only when starting
- * from the raw window size.
+ * from the raw window size. Per-section chars are recorded for
+ * observability, never enforced as caps — role-aware priority decides
+ * what yields first.
  */
 export function sectionBudgets(limitChars: number, responseReserveChars = 0): SectionBudgets {
   const reserve = Math.max(0, Math.floor(responseReserveChars));
   const budget = Math.max(1024, Math.floor(limitChars) - reserve);
-  const caps = {} as Record<ContextSection, number>;
-  for (const [section, fraction] of Object.entries(SECTION_FRACTIONS) as Array<[ContextSection, number]>) {
-    caps[section] = Math.floor(budget * fraction);
-  }
-  return { budget, responseReserveChars: reserve, caps };
+  return { budget, responseReserveChars: reserve };
 }
 
 /**

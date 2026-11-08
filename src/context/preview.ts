@@ -12,6 +12,7 @@ import { isSecretPath } from "../tools/safety.js";
 import { allCommands } from "../commands/profiles.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
 import { resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
+import { parseIncludeRange, sliceRangeBody } from "./assemble.js";
 import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
 
@@ -93,17 +94,44 @@ export function previewContext(
   const tools: ArtifactDef[] = [];
   const scripts: ArtifactDef[] = [];
 
-  for (const path of options.files ?? []) {
+  for (const entry of options.files ?? []) {
+    const range = parseIncludeRange(entry);
+    if (range) {
+      // Range includes measure the assembled snippet body, not the whole
+      // file, so the composer shows the real cost. Unresolvable ranges are
+      // zero-char warned sources, mirroring assembleContext.
+      const root = resolve(layout.repoRoot);
+      const abs = resolve(root, range.file);
+      const inside = abs === root || abs.startsWith(root + sep);
+      const secret = isSecretPath(range.file);
+      if (!inside || secret || !existsSync(abs)) {
+        sources.push({ kind: "file", ref: entry, origin: "explicit", depth: 0, chars: 0, exists: false });
+        warnings.push(`file ${entry} is missing, secret, or outside the repo`);
+        continue;
+      }
+      let size = 0;
+      let failed: string | null = null;
+      try {
+        const sliced = sliceRangeBody(range.file, range.start, range.end, readFileSync(abs, "utf8"));
+        if ("body" in sliced) size = sliced.body.length;
+        else failed = sliced.warning;
+      } catch {
+        failed = `file ${entry} is unreadable`;
+      }
+      if (failed) warnings.push(failed.startsWith("file ") ? failed : `file ${entry}: ${failed}`);
+      sources.push({ kind: "file", ref: entry, origin: "explicit", depth: 0, chars: size, exists: size > 0 });
+      continue;
+    }
     const root = resolve(layout.repoRoot);
-    const abs = resolve(root, path);
+    const abs = resolve(root, entry);
     const inside = abs === root || abs.startsWith(root + sep);
     // Mirror assembleContext: secrets never inline, and missing/secret/outside
     // all collapse to a zero-char warned source so the measurement matches.
-    const secret = isSecretPath(path);
+    const secret = isSecretPath(entry);
     const exists = inside && !secret && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    sources.push({ kind: "file", ref: path, origin: "explicit", depth: 0, chars: size, exists });
-    if (!exists) warnings.push(`file ${path} is missing, secret, or outside the repo`);
+    sources.push({ kind: "file", ref: entry, origin: "explicit", depth: 0, chars: size, exists });
+    if (!exists) warnings.push(`file ${entry} is missing, secret, or outside the repo`);
   }
 
   for (const path of options.plans ?? []) {
@@ -204,7 +232,18 @@ export function previewContext(
     // profiles unavailable — skip
   }
 
-  const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+  const sections: ContextSections = {
+    packets: 0,
+    plans: 0,
+    knowledge: 0,
+    skills: 0,
+    scripts: 0,
+    tools: 0,
+    references: 0,
+    files: 0,
+    parents: 0,
+    system: 0,
+  };
   for (const source of sources) sections[sectionForKind(source.kind)] += source.chars;
   // Preview chars estimate the assembled bundle: body chars plus the same
   // per-block wrapper the assembler renders, so the composer shows real
