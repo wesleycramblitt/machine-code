@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { assembleContext } from "../dist/context/assemble.js";
+import { checkFaithfulness, goldRecall, sectionTokens } from "../dist/report/run.js";
 import { previewContext } from "../dist/context/preview.js";
 import { trimContextText, renderPromptMessages } from "../dist/context/render.js";
 import { parseArtifactReferences, parseSkillFrontMatter } from "../dist/context/references.js";
@@ -1141,4 +1142,73 @@ test("reordered volatile tail does not shift the stable prompt prefix", () => {
   const stableEnd = Math.max(a.indexOf("COMMANDS-MARKER"), b.indexOf("COMMANDS-MARKER")) + "COMMANDS-MARKER".length;
   assert.ok(common >= stableEnd, "stable prefix is byte-identical across volatile-tail reorder");
   assert.ok(a.includes("LEDGER-VARIANT-A") && b.includes("LEDGER-VARIANT-B"));
+});
+
+test("needle-in-repo: a planted fact is retrievable from assembled context", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-needle-"));
+  const needle = "NEEDLE-7f3a9q plasma-conduit calibration omega";
+  try {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "conduit.ts"), `// ${needle}\nexport const conduit = "plasma";\n`, "utf8");
+    const bundle = await assembleContext({
+      layout: fakeLayout(root),
+      machine: machine(),
+      include: { files: ["src/conduit.ts"] },
+    });
+    assert.match(bundle.text, new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.ok(bundle.sources.some((s) => s.kind === "file" && s.ref === "src/conduit.ts"));
+    // Gold-file recall counts the planted file as found.
+    const recall = goldRecall(bundle.sources, ["src/conduit.ts", "src/missing.ts"]);
+    assert.equal(recall.found.length, 1);
+    assert.deepEqual(recall.missing, ["src/missing.ts"]);
+    assert.equal(recall.recall, 0.5);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("faithfulness spot-check: cited lines pass, uncited and missing claims fail", () => {
+  const lines = { "src/a.ts": 40, "src/b.ts": 10 };
+  const lineExists = (path, line) => (lines[path] ?? 0) >= line;
+  const good = checkFaithfulness("Fixed the leak, see src/a.ts:12 for the guard.", lineExists);
+  assert.equal(good.failures.length, 0);
+  assert.deepEqual(good.citations, [{ path: "src/a.ts", line: 12 }]);
+  const uncited = checkFaithfulness("The bug is somewhere in src/b.ts, trust me.", lineExists);
+  assert.ok(uncited.failures.some((f) => /uncited/.test(f)), "bare file claim without path:line is rejected");
+  const missing = checkFaithfulness("See src/a.ts:400 for details.", lineExists);
+  assert.ok(missing.failures.some((f) => /unresolved/.test(f)), "cited line past EOF is rejected");
+  const ghost = checkFaithfulness("See src/ghost.ts:3 for details.", lineExists);
+  assert.ok(ghost.failures.some((f) => /unresolved/.test(f)), "cited file that does not exist is rejected");
+});
+
+test("ablation: full context vs no-skills token delta on one fixture", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-ctx-ablation-"));
+  try {
+    const layout = fakeLayout(root);
+    mkdirSync(join(root, "plans"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    mkdirSync(join(root, ".machine_code", "skills", "weld"), { recursive: true });
+    writeFileSync(join(root, "plans", "index.md"), `# Plan index\n\n${"weld sequence\n".repeat(60)}END\n`, "utf8");
+    writeFileSync(join(root, "src", "weld.ts"), `export const weld = 1;\n${"// bead\n".repeat(60)}END\n`, "utf8");
+    const skillBody = `---\nname: weld\ndescription: welding things\n---\n# Weld body\n\n${"pass detail\n".repeat(120)}END\n`;
+    writeFileSync(join(root, ".machine_code", "skills", "weld", "SKILL.md"), skillBody, "utf8");
+    const base = {
+      layout,
+      machine: machine(),
+      agent: "build",
+      include: { files: ["src/weld.ts"] },
+      defaultSkills: ["weld"],
+    };
+    const full = await assembleContext(base);
+    const lean = await assembleContext({ ...base, exclude: { sections: ["skills"] } });
+    assert.ok(full.sections.skills > 0, "full fixture carries skill chars");
+    assert.equal(lean.sections.skills, 0, "exclusion drops the skills section");
+    assert.ok(full.chars > lean.chars, "full context costs more than no-skills");
+    const deltaChars = full.chars - lean.chars;
+    const deltaTokens = sectionTokens(full.sections).skills - sectionTokens(lean.sections).skills;
+    assert.ok(deltaTokens > 0, "skills section token delta is positive");
+    console.log(`ablation no-skills vs full: +${deltaChars} chars (+${deltaTokens} tok) for skills`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
