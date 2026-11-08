@@ -11,7 +11,8 @@ ordered so measurements are valid before optimizations land.
 
 ## Packets (in build order)
 1. ~~ctx-preview-parity — unify preview/assemble (prerequisite)~~ — done 2026-11-08
-2. ~~ctx-section-budgets — per-section budgets + accounting~~ — done 2026-11-08
+2. ~~ctx-section-budgets — per-section budgets + accounting~~ — done 2026-11-08 (superseded: static caps removed, see 3)
+3. ~~ctx-chunk-expand — path:lines snippet includes~~ — done 2026-11-08 (folded in: TUI-mirroring sections, role-aware priority, no static caps)
 3. ctx-chunk-expand — path:lines snippet includes
 4. ctx-tier-descriptions — description-only defaults, on-demand bodies
 5. ctx-eval-harness — recall/faithfulness/cost eval
