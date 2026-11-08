@@ -1,3 +1,7 @@
+> Historical design note. Item grammar now lives in plan files as typed
+> checklist lines; see `plans/index.md`. The packet and build rules below
+> still apply.
+
 # Plan-file work model (files as truth)
 
 Drop GitHub issues as ground truth for local work. Promote `plans/` to the single

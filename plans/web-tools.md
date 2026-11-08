@@ -1,10 +1,9 @@
 # Web tools
-We need to thoroughly test and improve web fetch, search, and browse capabilities:
-## Web fetch
-Should be a tool for pulling information from specific urls, we should have the capability to show html, extract text, or even download files.
 
-## Web search
-Typically, web search tools rely on services for this, we should plan to wire in 2-3 services free and paid that can be turned on/off for web search, especially embeddings based like Tavily.
+Thoroughly test and improve web fetch, search, and browse.
 
-## Web browse
-Using chromium dev tools or similar mcps, we can do automated web browsing, it should be configurable headless vs not, which mcps or services are active, and so on, and the browse mode should be able to be used to replace web search, since you can browse to a search engine. We browse is also very important for building new references.
+## Features
+
+- [ ] web-fetch — Fetch a URL and show HTML, extract text, or download files.
+- [ ] web-search-providers — Wire two or three free and paid search services (e.g. Tavily) with on/off configuration.
+- [ ] web-browse — Automated browsing via Chromium DevTools/MCP, configurable headless, usable in place of search and for building references.

@@ -158,6 +158,9 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
  */
 export function defaultSkillsFor(args: { agent: string; verification?: string }): string[] {
   if (!["build", "planner", "research"].includes(args.agent)) return [];
+  // Research turns ideas into concrete plan items, so plan-curation is on by
+  // default for it (the role preset inlines the body).
+  if (args.agent === "research") return ["clean-code", "plan-curation"];
   const skills = ["clean-code"];
   if (args.verification === "verified" || args.verification === "redundant") {
     skills.push("verified-testing");

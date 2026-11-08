@@ -1,25 +1,24 @@
 # Context algorithm upgrades
 
 File-first fixes to the context pipeline (preview → composer → assemble → render),
-ordered so measurements are valid before optimizations land.
+ordered so measurements were valid before optimizations landed.
 
-## Why
-- preview/assemble diverge (caps, secret checks, dropped file includes)
-- whole-file-only includes, no chunk/expand or scoring
-- blind tail-trim instead of per-section budgets
-- no eval (recall/faithfulness/cost) to ablate against
+## Features
 
-## Packets (in build order)
-1. ~~ctx-preview-parity — unify preview/assemble (prerequisite)~~ — done 2026-11-08
-2. ~~ctx-section-budgets — per-section budgets + accounting~~ — done 2026-11-08 (superseded: static caps removed, see 3)
-3. ~~ctx-chunk-expand — path:lines snippet includes~~ — done 2026-11-08 (folded in: TUI-mirroring sections, role-aware priority, no static caps)
-4. ~~ctx-tier-descriptions — description-only defaults, on-demand bodies~~ — done 2026-11-08
-5. ~~ctx-eval-harness — recall/faithfulness/cost eval~~ — done 2026-11-08
-6. ~~ctx-ordering-cache — lost-in-middle ordering + cache-stable layout~~ — done 2026-11-08
-7. ~~ctx-compaction — rolling compaction for parent history~~ — dropped 2026-11-08 (compaction is the wrong model; replaced by ctx-parent-index below)
-8. ~~ctx-parent-index — parent chain as one-line index + on-demand pull~~ — done 2026-11-08
+- [x] preview-parity — Unify preview and assemble: same caps, secret checks, and file forwarding.
+- [x] section-budgets — Per-section accounting with priority truncation (superseded by role-aware priority).
+- [x] chunk-expand — `path:lines` snippet includes, TUI-mirroring sections, and role-aware priority.
+- [x] tier-descriptions — Description-only defaults for tools, skills, and references with on-demand bodies.
+- [x] eval-harness — Recall, faithfulness, and per-section cost in `machine_code eval`.
+- [x] ordering-cache — Fixed section order, end-of-context recap, and normalized dedupe.
+- [x] parent-index — Parent chain as one-line index with on-demand pull.
 
-Open ideas (not packeted yet): none blocking. Default skill bodies are now description-only (on-demand) unless a role preset or composer include says otherwise.
+## Ideas
 
-Research deferred: revisit SOTA (hybrid retrieval + rerank, embeddings) only if
-keyword chunk/expand + tiering prove insufficient.
+- [ ] ctx-hybrid-retrieval — Revisit hybrid retrieval and reranking only if keyword chunk/expand plus tiering prove insufficient.
+- [x] ctx-compaction-dropped — Compaction was rejected: build an index and pull on demand instead.
+
+## Notes
+
+Default skill bodies are description-only (on-demand) unless a role preset or
+composer include says otherwise.

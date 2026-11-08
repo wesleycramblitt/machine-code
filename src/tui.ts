@@ -305,6 +305,7 @@ export async function runTui(): Promise<void> {
     else if (packetFile) s.newrun.prompt = packetFile.deliverable || packetSlug || "";
     resetNewRunUi();
     if (seed?.plan) s.newRunContextIncluded.add(`plan:${seed.plan}`);
+    for (const name of seed?.skills ?? []) s.newRunSkillModes.set(name, "include");
     s.screen = "newrun";
   };
 
