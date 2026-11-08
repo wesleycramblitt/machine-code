@@ -1,4 +1,4 @@
-# Overview
+# TUI
 This file details upgrades or issues to be planned for the TUI
 
 # New Run Page
@@ -8,15 +8,21 @@ This file details upgrades or issues to be planned for the TUI
 - [ ] Feature #164: Runs page hierarchy colors, branch/orchestration visibility, cwd default, PR removal
 
 # Runs page hierarchy
-Repository → plan categories → plan line → packet → runs.
+Repository → plan file → item type → item → packet → runs.
 
-- Categories come from `plans/index.md` headings. Each checklist line is a
-  plan line; a linked packet (`→ packets/<slug>.md`) nests under it, so the
-  intent and its build contract are one item.
-- Packets with no plan line sit under "Unplanned packets".
-- A collapsible "Plans" section lists plan files. Enter/`n` on a plan or plan
-  line opens the composer seeded for a planner run with that plan attached.
-- Runs with no packet stay under "Untracked".
+- Everything is under `plans/`. Each plan file is a category; its checklist
+  lines (`- [ ] slug — title`) are items. Type comes from the nearest
+  `## Features` / `## Bugs` / `## Ideas` heading, else the line text.
+- Two views: **All** (items grouped by type across files) and **By plan**
+  (plan file → type). `g` cycles them.
+- Done is a status badge (`[x]`), color-encoded with in-progress/blocked/
+  todo; there is no Done category.
+- A linked packet (`→ packets/<slug>.md`) nests under its item. Packets with
+  no item sit under "Unplanned packets"; runs with no packet under
+  "Untracked".
+- Enter opens a linked packet or, for a bare item, seeds a run: features/bugs
+  → planner (materialize into a packet), ideas → research (propose features
+  or bugs). `n` on a plan-file header starts a planner run over that file.
 
 # Orchestration
 

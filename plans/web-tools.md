@@ -1,4 +1,4 @@
-# Overview
+# Web tools
 We need to thoroughly test and improve web fetch, search, and browse capabilities:
 ## Web fetch
 Should be a tool for pulling information from specific urls, we should have the capability to show html, extract text, or even download files.

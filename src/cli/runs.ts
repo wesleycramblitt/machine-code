@@ -51,8 +51,6 @@ import {
   listPacketFiles,
   PACKET_STATUSES,
   PACKET_REVIEWS,
-  planCategories,
-  planIndexItems,
   readPacketFile,
   renderPacketFile,
   renderPlan,
@@ -64,10 +62,10 @@ import {
   type PacketStatus,
 } from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
-import { discoverPlanEntries } from "../context/plans.js";
+import { planItems } from "../plan/items.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";
-import { buildRunIndex, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
+import { buildRunIndex, parseRunGroup, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "../artifacts/registry.js";
 import { artifactPeek } from "../context/preview.js";
 import { changesFor, checkFaithfulness, contextUsage, diskLineExists, exceededLimits, goldRecall, readContextManifest, relatedRuns, runMetrics, sectionTokens, thinkingChunks, touchedPaths } from "../report/run.js";
@@ -123,14 +121,11 @@ export function rowText(row: RunRow, width: number, group: RunGroup): string {
     if (width < 100) return cell(head, Math.max(20, width - 22)) + tail;
     return cell(head, width - visibleWidth(tail)) + tail;
   }
-  if (row.kind === "plan") {
-    const tail = `  ${row.title}`;
-    return cell(`${indent}≡ ${row.path}`, Math.max(20, width - visibleWidth(tail))) + tail;
-  }
   if (row.kind === "planline") {
-    const box = row.done ? "✓" : "·";
-    const tail = row.title ? `  ${row.title.slice(0, width < 100 ? 30 : 60)}` : "";
-    return cell(`${indent}${box} ${row.slug}`, Math.max(20, width - visibleWidth(tail))) + tail;
+    const box =
+      row.status === "in-progress" ? "●" : row.status === "blocked" ? "⏸" : row.status === "done" ? "✓" : "○";
+    const tail = row.title ? `  ${row.title.slice(0, width < 100 ? 24 : 40)}` : "";
+    return cell(`${indent}${box} ${row.slug} [${row.status}]`, Math.max(20, width - visibleWidth(tail))) + tail;
   }
   const run = row.run;
   const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
@@ -139,25 +134,6 @@ export function rowText(row: RunRow, width: number, group: RunGroup): string {
   const head = `${indent}${runGlyph(run.status)} ${run.id.slice(-8)} ${run.agent}${modeSuffix(run.mode)}${ask}${pr}${repo}`;
   const tail = ` ${fmtTokens(run.usage.totalTokens)}tok ${fmtMoney(run.cost.actual)} ${run.request.replace(/\s+/g, " ").slice(0, width < 100 ? 28 : 60)}`;
   return cell(head, Math.max(24, width - visibleWidth(tail))) + tail;
-}
-
-export function parseRunGroup(value: string): RunGroup | null {
-  switch (value.toLowerCase()) {
-    case "packet":
-    case "packets":
-    case "plan":
-    case "plans":
-      return "packets";
-    case "status":
-      return "status";
-    case "overall":
-    case "all":
-    case "all-status":
-    case "machine":
-      return "overall";
-    default:
-      return null;
-  }
 }
 
 export async function cmdRuns(argv: string[]): Promise<number> {
@@ -187,8 +163,8 @@ export async function cmdRuns(argv: string[]): Promise<number> {
   }
   const { flags } = parseFlags(argv);
   const l = layout();
-  const group = parseRunGroup(flags.get("group") ?? "packets");
-  if (!group) fail("--group must be packets|gh-issue|status|overall");
+  const group = parseRunGroup(flags.get("group") ?? "all");
+  if (!group) fail("--group must be all|plan|status|overall");
   const filter = (flags.get("filter") ?? "all") as RunFilter;
   if (!["all", "active", "awaiting", "paused", "completed"].includes(filter)) {
     fail("--filter must be all|active|awaiting|paused|completed");
@@ -206,13 +182,8 @@ export async function cmdRuns(argv: string[]): Promise<number> {
     text,
     attentionOnly: attention,
     preferredRepo: l.repoRoot,
-    ...(group === "packets"
-      ? {
-          packetRepo: l.repoRoot,
-          packets: listPacketFiles(l),
-          plans: discoverPlanEntries(l),
-          planItems: planIndexItems(l),
-        }
+    ...(group === "all" || group === "plan"
+      ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planItems: planItems(l) }
       : {}),
   });
 
@@ -227,11 +198,18 @@ export async function cmdRuns(argv: string[]): Promise<number> {
       if (row.kind === "packet") {
         return { kind: row.kind, slug: row.slug, status: row.packet.status, depth: row.depth, directRuns: row.directRuns, deliverable: row.packet.deliverable };
       }
-      if (row.kind === "plan") {
-        return { kind: row.kind, path: row.path, title: row.title, depth: row.depth };
-      }
       if (row.kind === "planline") {
-        return { kind: row.kind, slug: row.slug, title: row.title, heading: row.heading, done: row.done, depth: row.depth };
+        return {
+          kind: row.kind,
+          slug: row.slug,
+          title: row.title,
+          itemKind: row.itemKind,
+          plan: row.plan,
+          status: row.status,
+          done: row.done,
+          ...(row.packet ? { packet: row.packet } : {}),
+          depth: row.depth,
+        };
       }
       return { kind: row.kind, depth: row.depth, run: row.run };
     });

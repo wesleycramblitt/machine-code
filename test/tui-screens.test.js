@@ -70,16 +70,15 @@ test("chrome builds header tabs and footer command rows", () => {
 test("runs list renders hierarchy rows and footer affordances", () => {
   const index = buildRunIndex({
     runs: [run({ id: "r1", packetId: "p1" })],
-    group: "packets",
+    group: "all",
     packetRepo: "/repo",
     packets: [{ slug: "p1", status: "todo", deps: [], blocked: "", deliverable: "Do", files: [], acceptance: [], verify: [] }],
-    planItems: [{ heading: "W", slug: "p1", title: "Do", done: false, packet: "p1" }],
-    planCategories: { categories: [{ heading: "W", slugs: ["p1"] }], orphanSlugs: [] },
+    planItems: [{ plan: "plans/tui.md", planTitle: "TUI", kind: "feature", slug: "p1", title: "Do", done: false, packet: "p1", line: 0 }],
     preferredRepo: "/repo",
   });
   const frame = renderRunsList({
     ...vp, runNarrow: false, index, selectedRow: index.selectable[0], focus: null,
-    group: "packets", reposScope: "cwd", pendingFor: () => null, scroll: 0,
+    group: "all", reposScope: "cwd", pendingFor: () => null, scroll: 0,
   });
   assert.equal(frame.body.length, 30);
   assert.match(frame.actions, /New run/);

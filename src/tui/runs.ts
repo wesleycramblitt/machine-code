@@ -1,9 +1,10 @@
 /**
- * machine_code — navigable run hierarchy.
+ * machine_code — navigable work hierarchy.
  *
- * The Runs page has three grouping modes:
+ * The Runs page groups work three ways:
  *
- *   packets   repository → plan category → packet → runs
+ *   all       repository → item type (Features/Bugs/Ideas) → item → packet → runs
+ *   plan      repository → plan file → item type → item → packet → runs
  *   status    repository → run status
  *   overall   run status across every repository
  *
@@ -12,18 +13,30 @@
  */
 import { basename } from "node:path";
 import type { RunSummary } from "../state/runs.js";
-import type { PacketFile, PlanIndexItem } from "../plan/packets.js";
+import type { PacketFile } from "../plan/packets.js";
+import { PLAN_ITEM_KIND_LABELS, PLAN_ITEM_KINDS, type PlanItem, type PlanItemKind, type PlanItemStatus } from "../plan/items.js";
 import { sortRuns } from "./status.js";
 
-export type RunGroup = "packets" | "status" | "overall";
+export type RunGroup = "all" | "plan" | "status" | "overall";
 
-export const RUN_GROUPS: readonly RunGroup[] = ["packets", "status"];
+/** Modes the TUI cycles with `g`. */
+export const RUN_GROUPS: readonly RunGroup[] = ["all", "plan"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
-  packets: "Packets",
+  all: "All",
+  plan: "By plan",
   status: "Status",
   overall: "Overall status",
 };
+
+/** Parse a `--group` value, accepting the pre-restructure names. */
+export function parseRunGroup(value: string | undefined): RunGroup | undefined {
+  if (!value) return undefined;
+  if (value === "packets") return "all";
+  if (value === "category") return "plan";
+  return (["all", "plan", "status", "overall"] as const).find((group) => group === value);
+}
+
 
 export type RunRow =
   | {
@@ -45,6 +58,8 @@ export type RunRow =
       collapsible: boolean;
       collapsed: boolean;
       tone: "untracked" | "orphaned" | "status";
+      /** Plan file this section represents (By plan mode), for seeded runs. */
+      plan?: string;
     }
   | {
       kind: "run";
@@ -65,35 +80,30 @@ export type RunRow =
       collapsed: boolean;
     }
   | {
-      kind: "plan";
-      id: string;
-      /** Repo-relative plan path. */
-      path: string;
-      title: string;
-      depth: number;
-      parent?: string;
-    }
-  | {
       kind: "planline";
       id: string;
       slug: string;
       title: string;
-      heading: string;
+      kindLabel: string;
+      itemKind: PlanItemKind;
+      /** Source plan file. */
+      plan: string;
+      status: PlanItemStatus;
       done: boolean;
+      /** Linked packet slug, when the line points at one. */
+      packet?: string;
       depth: number;
       parent?: string;
     };
 
 export interface RunOptions {
   runs: readonly RunSummary[];
-  /** Repo root the packet catalog belongs to (the cwd/preferred repo). */
+  /** Repo root the work catalog belongs to (the cwd/preferred repo). */
   packetRepo?: string;
-  /** Packet files for the `packets` group (one repo). */
+  /** Packet files for the work catalog (one repo). */
   packets?: readonly PacketFile[];
-  /** Plan files for the collapsible Plans section. */
-  plans?: readonly { path: string; title: string }[];
-  /** Parsed plan index items; un-packeted ones surface under their heading. */
-  planItems?: readonly { heading: string; slug: string; title: string; done: boolean; packet?: string }[];
+  /** Plan items parsed from every plan file. */
+  planItems?: readonly PlanItem[];
   group?: RunGroup;
   collapsed?: ReadonlySet<string>;
   /** Case-insensitive substring over run fields and repository paths. */
@@ -168,7 +178,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const text = options.text?.trim().toLowerCase() ?? "";
   // The TUI and CLI default to the `packets` group explicitly; the library
   // default stays `packets` as well now that issues are gone.
-  const group = options.group ?? "packets";
+  const group = options.group ?? "all";
   const rows: RunRow[] = [];
   const byRunId = new Map<string, RunRow & { kind: "run" }>();
 
@@ -275,36 +285,85 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       pushRuns(sortRuns(directRuns, "activity"), packetDepth + 1, id);
     };
 
-    // Plan categories hold the captured lines. A linked packet nests under its
-    // line, so the intent and its build contract read as one item instead of
-    // appearing in two places. Lines without a packet stay plain capture rows.
-    const byHeading = new Map<string, PlanIndexItem[]>();
-    for (const item of options.planItems ?? []) {
-      const list = byHeading.get(item.heading) ?? [];
-      list.push(item);
-      byHeading.set(item.heading, list);
-    }
+    // A plan item's status is its checkbox, or the linked packet's status when
+    // one exists. Done is a status, never a category.
     const placed = new Set<string>();
-    for (const [heading, list] of byHeading) {
-      const sectionId = `plan:${repoRoot}:${heading}`;
-      if (!pushSection(sectionId, heading, list.length, depth, "status")) continue;
-      for (const item of list) {
-        const packet = item.packet ? bySlug.get(item.packet) : undefined;
-        const lineId = `planline:${repoRoot}:${heading}:${item.slug}`;
-        rows.push({
-          kind: "planline",
-          id: lineId,
-          slug: item.slug,
-          title: item.title,
-          heading,
-          done: item.done,
-          depth: depth + 1,
-          parent: sectionId,
-        });
-        if (!packet) continue;
-        placed.add(packet.slug);
-        pushPacketRow(packet.slug, depth + 2, lineId);
+    const statusOf = (item: PlanItem, packet: PacketFile | undefined): PlanItemStatus =>
+      item.done ? "done" : packet ? packet.status : "todo";
+    const pushPlanLine = (item: PlanItem, lineDepth: number, parentId: string): void => {
+      const packet = item.packet ? bySlug.get(item.packet) : undefined;
+      const id = `planline:${repoRoot}:${item.plan}:${item.slug}`;
+      rows.push({
+        kind: "planline",
+        id,
+        slug: item.slug,
+        title: item.title,
+        kindLabel: PLAN_ITEM_KIND_LABELS[item.kind],
+        itemKind: item.kind,
+        plan: item.plan,
+        status: statusOf(item, packet),
+        done: item.done,
+        ...(packet ? { packet: packet.slug } : {}),
+        depth: lineDepth,
+        parent: parentId,
+      });
+      if (!packet) return;
+      placed.add(packet.slug);
+      pushPacketRow(packet.slug, lineDepth + 1, id);
+    };
+
+    const STATUS_RANK: Record<PlanItemStatus, number> = {
+      "in-progress": 0,
+      blocked: 1,
+      todo: 2,
+      done: 3,
+    };
+    const sortItems = (list: readonly PlanItem[]): PlanItem[] =>
+      [...list].sort((a, b) => {
+        const pa = a.packet ? bySlug.get(a.packet) : undefined;
+        const pb = b.packet ? bySlug.get(b.packet) : undefined;
+        return (
+          STATUS_RANK[statusOf(a, pa)] - STATUS_RANK[statusOf(b, pb)] || a.title.localeCompare(b.title)
+        );
+      });
+
+    const pushKindSections = (items: readonly PlanItem[], sectionDepth: number, prefix: string): void => {
+      for (const kind of PLAN_ITEM_KINDS) {
+        const list = items.filter((item) => item.kind === kind);
+        if (list.length === 0) continue;
+        const id = `${prefix}:${kind}`;
+        if (!pushSection(id, PLAN_ITEM_KIND_LABELS[kind], list.length, sectionDepth, "status")) continue;
+        for (const item of sortItems(list)) pushPlanLine(item, sectionDepth + 1, id);
       }
+    };
+
+    const items = options.planItems ?? [];
+    if (group === "plan") {
+      const byPlan = new Map<string, { title: string; items: PlanItem[] }>();
+      for (const item of items) {
+        const entry = byPlan.get(item.plan) ?? { title: item.planTitle, items: [] };
+        entry.items.push(item);
+        byPlan.set(item.plan, entry);
+      }
+      const plans = [...byPlan.entries()].sort((a, b) => a[1].title.localeCompare(b[1].title));
+      for (const [plan, entry] of plans) {
+        const id = `plan:${repoRoot}:${plan}`;
+        rows.push({
+          kind: "section",
+          id,
+          label: entry.title,
+          count: entry.items.length,
+          depth,
+          collapsible: true,
+          collapsed: collapsed.has(id),
+          tone: "status",
+          plan,
+        });
+        if (collapsed.has(id)) continue;
+        pushKindSections(entry.items, depth + 1, `kind:${repoRoot}:${plan}`);
+      }
+    } else {
+      pushKindSections(items, depth, `kind:${repoRoot}`);
     }
 
     // Packets with no plan line still need a home: they are build-ready but
@@ -312,42 +371,25 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     const unplaced = packets.filter((packet) => !placed.has(packet.slug));
     const unplannedId = `plan:${repoRoot}:unplanned`;
     if (pushSection(unplannedId, "Unplanned packets", unplaced.length, depth, "orphaned")) {
-      const STATUS_RANK: Record<PacketFile["status"], number> = {
-        "in-progress": 0,
-        blocked: 1,
-        todo: 2,
-        done: 3,
-      };
       const ordered = [...unplaced].sort(
         (a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || a.slug.localeCompare(b.slug),
       );
       for (const packet of ordered) pushPacketRow(packet.slug, depth + 1, unplannedId);
     }
 
-    // Plan files: Enter/n opens the composer seeded for a planner run. Plans
-    // are reference documents, not runs, so they never carry children.
-    const plans = options.plans ?? [];
-    const plansSectionId = `plans:${repoRoot}`;
-    if (pushSection(plansSectionId, "Plans", plans.length, depth, "status")) {
-      for (const plan of plans) {
-        rows.push({
-          kind: "plan",
-          id: `plan:${repoRoot}:${plan.path}`,
-          path: plan.path,
-          title: plan.title,
-          depth: depth + 1,
-          parent: plansSectionId,
-        });
-      }
+    const free = repoRuns.filter((run) => !run.packetId);
+    const untrackedId = `untracked:${repoRoot}`;
+    if (pushSection(untrackedId, "Untracked", free.length, depth, "untracked")) {
+      pushRuns(free, depth + 1, untrackedId);
     }
   };
 
-  // A repo with packets but no runs still shows its packet tree in the
-  // `packets` group.
+  // A repo with work but no runs still shows its tree in the work groups.
+  const workGroup = group === "all" || group === "plan";
   const repoNames = [
     ...new Set([
       ...baseRuns.map(repoOf),
-      ...(group === "packets" && options.packetRepo ? [options.packetRepo] : []),
+      ...(workGroup && options.packetRepo ? [options.packetRepo] : []),
     ]),
   ];
   const preferred = options.preferredRepo;
@@ -364,26 +406,24 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   } else {
     for (const repoRoot of repoNames) {
       const repoRuns = baseRuns.filter((run) => repoOf(run) === repoRoot && visibleRun(run));
-      const packetRepo = group === "packets" && options.packetRepo === repoRoot;
+      const packetRepo = workGroup && options.packetRepo === repoRoot;
       if (repoRuns.length === 0 && !packetRepo) continue;
       if (!pushRepo(repoRoot, repoRuns.length)) continue;
       if (group === "status") {
         pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
         continue;
       }
-      if (group === "packets") {
-        // Only the repo that owns the packet catalog gets its packet tree;
-        // other repos list their (packet-less) runs under Untracked.
-        if (packetRepo) pushPacketTree(repoRoot, repoRuns, 1);
+      // Only the repo that owns the work catalog gets the item tree; other
+      // repos list their (packet-less) runs under Untracked.
+      if (packetRepo) {
+        pushPacketTree(repoRoot, repoRuns, 1);
+      } else {
         const free = repoRuns.filter((run) => !run.packetId);
         const untrackedId = `untracked:${repoRoot}`;
         if (pushSection(untrackedId, "Untracked", free.length, 1, "untracked")) {
           pushRuns(free, 2, untrackedId);
         }
-        continue;
       }
-
-      pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
     }
   }
 
@@ -413,7 +453,7 @@ export function focusRowIds(
 ): Set<string> | null {
   if (
     !selected ||
-    (selected.kind !== "packet" && selected.kind !== "run" && selected.kind !== "plan" && selected.kind !== "planline")
+    (selected.kind !== "packet" && selected.kind !== "run" && selected.kind !== "planline")
   ) {
     return null;
   }
@@ -437,7 +477,7 @@ export function focusRowIds(
   const selectedParent = "parent" in selected ? selected.parent : undefined;
   for (const ancestor of ancestorsOf(selected)) focus.add(ancestor.id);
   for (const row of rows) {
-    if (row.kind !== "run" && row.kind !== "packet" && row.kind !== "plan" && row.kind !== "planline") continue;
+    if (row.kind !== "run" && row.kind !== "packet" && row.kind !== "planline") continue;
     if (row.parent === selectedParent) focus.add(row.id);
   }
 

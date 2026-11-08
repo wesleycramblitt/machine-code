@@ -175,7 +175,7 @@ export function createTuiState(repoRoot: string): TuiState {
     screen: "list",
     runsRepoScope: "cwd",
     runsText: "",
-    runsGroup: "packets",
+    runsGroup: "all",
     runsSel: 0,
     runsScroll: 0,
     runsAttention: false,

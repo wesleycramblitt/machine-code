@@ -14,8 +14,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { readPacketFile, writePacketFile, listPacketFiles, planIndexItems, type PacketFile } from "./plan/packets.js";
-import { discoverPlanEntries } from "./context/plans.js";
+import { readPacketFile, writePacketFile, listPacketFiles, type PacketFile } from "./plan/packets.js";
+import { planItems } from "./plan/items.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -855,13 +855,8 @@ export async function runTui(): Promise<void> {
       text: s.runsText,
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
-      ...(s.runsGroup === "packets"
-        ? {
-            packetRepo: l.repoRoot,
-            packets: listPacketFiles(l),
-            plans: discoverPlanEntries(l),
-            planItems: planIndexItems(l),
-          }
+      ...(s.runsGroup === "all" || s.runsGroup === "plan"
+        ? { packetRepo: l.repoRoot, packets: listPacketFiles(l), planItems: planItems(l) }
         : {}),
     });
     if (s.runsSel >= runIndex.selectable.length) s.runsSel = Math.max(0, runIndex.selectable.length - 1);

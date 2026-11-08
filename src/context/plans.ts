@@ -4,7 +4,7 @@
  * Plans are ordinary Markdown files in `plans/` or `.machine_code/plans/`.
  * A configured plan file, when present, is included first.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 
@@ -50,31 +50,4 @@ export function discoverPlanFiles(layout: Layout, configured?: string): string[]
     for (const name of markdownFiles(join(root, dir))) add(join(dir, name));
   }
   return out;
-}
-
-export interface PlanEntry {
-  /** Repo-relative path. */
-  path: string;
-  /** First markdown heading, else the file name. */
-  title: string;
-}
-
-/**
- * Plan files with a display title for the Runs page. Reading the first
- * heading keeps the list scannable without opening each file; an unreadable
- * file still appears with its path as the title.
- */
-export function discoverPlanEntries(layout: Layout, configured?: string): PlanEntry[] {
-  const root = resolve(layout.repoRoot);
-  return discoverPlanFiles(layout, configured).map((path) => {
-    let title = path.split("/").pop() ?? path;
-    try {
-      const text = readFileSync(join(root, path), "utf8");
-      const heading = text.split("\n").find((line) => /^#{1,6}\s+/.test(line));
-      if (heading) title = heading.replace(/^#{1,6}\s+/, "").trim() || title;
-    } catch {
-      // keep the file name
-    }
-    return { path, title };
-  });
 }
