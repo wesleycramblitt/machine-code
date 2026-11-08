@@ -8,6 +8,7 @@
  */
 import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
+import { ITEM_STATUS_LABELS, type ItemStatus } from "../../plan/lifecycle.js";
 import type { RunSummary } from "../../state/runs.js";
 import { windowedBody, type Viewport } from "./types.js";
 
@@ -45,6 +46,17 @@ function statusStyle(status: "todo" | "in-progress" | "blocked" | "done"): { ton
   }
 }
 
+/** Lifecycle colors for work items (packet is a status, not a row). */
+const ITEM_STATUS_STYLE: Record<ItemStatus, { tone: string; glyph: string }> = {
+  "needs-research": { tone: Y, glyph: "?" },
+  researched: { tone: M, glyph: "◐" },
+  "needs-planning": { tone: Y, glyph: "○" },
+  ready: { tone: BL, glyph: "◆" },
+  "in-progress": { tone: C, glyph: "●" },
+  done: { tone: G, glyph: "✓" },
+  archived: { tone: GR, glyph: "–" },
+};
+
 /** Category header colors: type, plan file, and exception buckets. */
 const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {
   feature: G,
@@ -75,15 +87,18 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "planline") {
-      // Status is both color-encoded and spelled out: color alone is easy to
-      // miss and inaccessible. A linked packet's status wins when it is
-      // further along than the checkbox.
-      const style = statusStyle(row.status);
-      const badge = `${B}${style.tone}[${row.status}]${R}`;
+      // Lifecycle status, color-encoded and spelled out. A ▣ marks the item
+      // as having a build contract; blocked is an orthogonal flag.
+      const style = ITEM_STATUS_STYLE[row.status];
+      const label = ITEM_STATUS_LABELS[row.status];
+      const badge = `${B}${style.tone}[${label}]${R}`;
+      const folded = row.collapsible ? `${row.collapsed ? "▸" : "▾"} ` : "";
+      const contract = row.contract ? `${C}▣${R} ` : "";
+      const flag = row.blocked ? ` ${RED}⚠ blocked${R}` : "";
       const title = row.title
-        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - row.status.length - 21))}${R}`
+        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - label.length - 24))}${R}`
         : "";
-      const text = ` ${indent}${style.tone}${style.glyph}${R} ${badge} ${style.tone}${row.slug}${R}${title}`;
+      const text = ` ${indent}${folded}${style.tone}${style.glyph}${R} ${badge} ${contract}${style.tone}${row.slug}${R}${flag}${title}`;
       rendered.push(selected(text, isSelected));
     } else if (row.kind === "packet") {
       const status = row.packet.status;

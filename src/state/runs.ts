@@ -223,6 +223,7 @@ export class RunRecorder {
       request: string;
       repoRoot: string;
       packetId?: string;
+      itemId?: string;
       parentRunId?: string;
       rootRunId?: string;
       forkReason?: "user_interrupt" | "manual" | "resume";
@@ -283,6 +284,7 @@ export class RunRecorder {
       id: this.id,
       repoRoot: init.repoRoot,
       packetId: init.packetId,
+      ...(init.itemId ? { itemId: init.itemId } : {}),
       agent: init.agent,
       mode: init.mode,
       request: init.request,

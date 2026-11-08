@@ -73,7 +73,7 @@ test("runs list renders hierarchy rows and footer affordances", () => {
     group: "all",
     packetRepo: "/repo",
     packets: [{ slug: "p1", status: "todo", deps: [], blocked: "", deliverable: "Do", files: [], acceptance: [], verify: [] }],
-    planItems: [{ plan: "plans/tui.md", planTitle: "TUI", kind: "feature", slug: "p1", title: "Do", done: false, packet: "p1", line: 0 }],
+    planItems: [{ plan: "plans/tui.md", planTitle: "TUI", kind: "feature", slug: "p1", title: "Do", done: false, archived: false, line: 0 }],
     preferredRepo: "/repo",
   });
   const frame = renderRunsList({
@@ -83,17 +83,22 @@ test("runs list renders hierarchy rows and footer affordances", () => {
   assert.equal(frame.body.length, 30);
   assert.match(frame.actions, /New run/);
   const flat = frame.body.join("\n");
-  assert.match(flat, /\[todo\]/, "status name is rendered, not color alone");
+  assert.match(flat, /\[(In Progress|Ready to Build|Needs Planning|Done)\]/, "status name is rendered, not color alone");
   assert.match(flat, /p1/);
 });
 
 test("packet renders contract plus attached runs", () => {
   const frame = renderPacket({
     ...vp, slug: "p1",
+    item: {
+      slug: "p1", title: "Do the thing", kindLabel: "Feature", plan: "plans/tui.md",
+      statusLabel: "Ready to Build", hasContract: true, background: ["## Features", "- [ ] p1 — Do the thing"],
+    },
     packet: { slug: "p1", status: "todo", deps: [], blocked: "", deliverable: "Do", files: ["a.ts"], acceptance: ["ok"], verify: ["t"] },
     runs: [], scroll: 0,
   });
   assert.ok(frame.body.some((line) => line.includes("p1")));
+  assert.match(frame.body.join("\n"), /Ready to Build/);
 });
 
 test("run detail renders overview and timeline sections", () => {

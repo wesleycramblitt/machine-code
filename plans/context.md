@@ -17,8 +17,7 @@ ordered so measurements were valid before optimizations landed.
 
 - [ ] ctx-hybrid-retrieval — Revisit hybrid retrieval and reranking only if keyword chunk/expand plus tiering prove insufficient.
 - [x] ctx-compaction-dropped — Compaction was rejected: build an index and pull on demand instead.
+- [ ] scripting - Review the idea of specific prompting that encourage building reusable scripts on a planning run for a feature task packet ahead of time?
+- [ ] knowledge maintenance - Look into best way to maintain knowledge graph.
+- [ ] repo map, lsp, semantic map - Research best method for injecting those maps into context
 
-## Notes
-
-Default skill bodies are description-only (on-demand) unless a role preset or
-composer include says otherwise.

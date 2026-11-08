@@ -48,6 +48,8 @@ export interface NewRunSeed {
   prompt?: string;
   /** Skill names forced to include for this seed. */
   skills?: string[];
+  /** Plan item slug (research/planning runs without a contract). */
+  item?: string;
 }
 
 export interface TuiState {

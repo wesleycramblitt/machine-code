@@ -36,15 +36,17 @@ export interface PlanItem {
   slug: string;
   title: string;
   done: boolean;
+  /** `[~]` marker: hidden from the default view, kept for history. */
+  archived: boolean;
   /** Linked packet slug from `→ packets/<slug>.md`. */
   packet?: string;
   /** 0-based source line, for stable ordering. */
   line: number;
 }
 
-const ITEM_LINE = /^\s*[-*]\s*\[([ xX])\]\s+(.+?)\s*$/;
+const ITEM_LINE = /^\s*[-*]\s*\[([ xX~])\]\s+(.+?)\s*$/;
 const PACKET_LINK = /→\s*packets\/([a-z0-9-]+)\.md/;
-const LEADING_SLUG = /^([a-z0-9][a-z0-9-]{1,60})\s+—\s+(.+)$/;
+const LEADING_SLUG = /^([a-z0-9][a-z0-9-]{1,60})\s+[—–-]\s+(.+)$/;
 const HEADING = /^\s*#{1,6}\s+/;
 
 function kindFromHeading(heading: string): PlanItemKind | null {
@@ -148,13 +150,15 @@ export function planItems(layout: Layout, configured?: string): PlanItem[] {
       }
       const kind = headingKind ?? kindFromText(body);
       const slug = packet ?? explicitSlug ?? deriveSlug(body, index + 1);
+      const mark = match[1]!.toLowerCase();
       out.push({
         plan,
         planTitle,
         kind,
         slug,
         title: body,
-        done: match[1]!.toLowerCase() === "x",
+        done: mark === "x",
+        archived: mark === "~",
         ...(packet ? { packet } : {}),
         line: index,
       });
@@ -190,7 +194,7 @@ export function markItemDone(layout: Layout, slug: string, configured?: string):
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index]!;
       if (!ITEM_LINE.test(line) || !lineRefersTo(line, slug)) continue;
-      const next = line.replace(/^(\s*[-*]\s*\[)[ xX](\])/, "$1x$2");
+      const next = line.replace(/^(\s*[-*]\s*\[)[ xX~](\])/, "$1x$2");
       if (next !== line) {
         lines[index] = next;
         touched = true;
@@ -222,4 +226,36 @@ export function removeItemFromPlans(layout: Layout, slug: string, configured?: s
     }
   }
   return changed;
+}
+
+/**
+ * Prose around an item in its plan file: the nearest heading above it through
+ * the next heading of the same or higher level. This is the item's background
+ * on the detail page, without reading the whole document into the UI.
+ */
+export function planItemBackground(layout: Layout, item: PlanItem): string[] {
+  let lines: string[];
+  try {
+    lines = readFileSync(join(layout.repoRoot, item.plan), "utf8").split("\n");
+  } catch {
+    return [];
+  }
+  const level = (line: string): number => (/^\s*(#{1,6})\s+/.exec(line)?.[1]?.length ?? 0);
+  let start = -1;
+  let startLevel = 0;
+  for (let index = Math.min(item.line, lines.length - 1); index >= 0; index--) {
+    const depth = level(lines[index]!);
+    if (depth > 0) {
+      start = index;
+      startLevel = depth;
+      break;
+    }
+  }
+  if (start < 0) return [];
+  const out: string[] = [];
+  for (let index = start; index < lines.length; index++) {
+    if (index > start && level(lines[index]!) > 0 && level(lines[index]!) <= startLevel) break;
+    out.push(lines[index]!);
+  }
+  return out.map((line) => line.trim()).filter((line) => line.length > 0);
 }

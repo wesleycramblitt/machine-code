@@ -27,11 +27,18 @@ Web tools, …), and its checklist lines are the items the Runs page and
   packet and its runs under the item.
 - **done**: `[x]` is a status badge, not a category. Never create a
   `## Done` section or move completed lines.
+- **archived**: `[~]` hides the item from normal attention without deleting
+  its history.
 
 Ideas are vague statements that can become features or bugs. Put them under
 `## Ideas`; a research run turns them into concrete features or bugs. Ideas
 never link a packet — a packet is a build contract, so it belongs to the
 feature or bug that research produced, not to the idea.
+
+The Runs page derives one lifecycle status per item: ideas are
+Needs Research → Researched; features/bugs are Needs Planning → Ready to
+Build → In Progress → Done. A packet is that item's contract (opened from the
+item), not a separate row.
 
 ## Procedure
 

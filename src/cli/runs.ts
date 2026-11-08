@@ -63,6 +63,7 @@ import {
 } from "../plan/packets.js";
 import { ProcessSupervisor, terminateAllProcesses, terminateProcessRecord } from "../processes/supervisor.js";
 import { planItems } from "../plan/items.js";
+import { ITEM_STATUS_LABELS } from "../plan/lifecycle.js";
 import { filterRuns, sortRuns, type RunFilter } from "../tui/status.js";
 import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spend.js";
 import { buildRunIndex, parseRunGroup, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
@@ -122,10 +123,11 @@ export function rowText(row: RunRow, width: number, group: RunGroup): string {
     return cell(head, width - visibleWidth(tail)) + tail;
   }
   if (row.kind === "planline") {
-    const box =
-      row.status === "in-progress" ? "●" : row.status === "blocked" ? "⏸" : row.status === "done" ? "✓" : "○";
+    const label = ITEM_STATUS_LABELS[row.status];
+    const contract = row.contract ? "▣ " : "";
+    const flag = row.blocked ? " ⚠ blocked" : "";
     const tail = row.title ? `  ${row.title.slice(0, width < 100 ? 24 : 40)}` : "";
-    return cell(`${indent}${box} ${row.slug} [${row.status}]`, Math.max(20, width - visibleWidth(tail))) + tail;
+    return cell(`${indent}${contract}${row.slug} [${label}]${flag}`, Math.max(20, width - visibleWidth(tail))) + tail;
   }
   const run = row.run;
   const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
@@ -206,8 +208,9 @@ export async function cmdRuns(argv: string[]): Promise<number> {
           itemKind: row.itemKind,
           plan: row.plan,
           status: row.status,
+          ...(row.blocked ? { blocked: row.blocked } : {}),
           done: row.done,
-          ...(row.packet ? { packet: row.packet } : {}),
+          ...(row.contract ? { contract: row.contract } : {}),
           depth: row.depth,
         };
       }

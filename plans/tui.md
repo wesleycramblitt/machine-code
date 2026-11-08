@@ -19,19 +19,12 @@ Planning features, bugs, and ideas for the machine_code TUI.
 
 ## Notes
 
-The Runs page renders the work tree as
-repository → plan file → item type → item → packet → runs.
+The Runs page renders one row per work item, grouped All (by type) or By plan.
 
-- Everything lives under `plans/`. Each plan file is a category; its
-  checklist lines are items. Type comes from the nearest
-  `## Features` / `## Bugs` / `## Ideas` heading, else the line text.
-- Two views: **All** (items grouped by type across files) and **By plan**
-  (plan file → type). `g` cycles them.
-- Done is a status badge (`[x]`), color-encoded with in-progress, blocked,
-  and todo; there is no Done category.
-- A linked packet (`→ packets/<slug>.md`) nests under its item. Packets with
-  no item sit under "Unplanned packets"; runs with no packet under
-  "Untracked".
-- Enter opens a linked packet or, for a bare item, seeds a run: features and
-  bugs → planner, ideas → research. `n` on a plan-file header starts a
-  planner run over that file.
+- Ideas are `Needs Research` → `Researched`; features and bugs are
+  `Needs Planning` → `Ready to Build` → `In Progress` → `Done`. `[x]` is done;
+  `[~]` is archived; blocked is a flag with a reason.
+- A packet is the item's contract, opened from the item page (background,
+  contract, runs), not a second row. The page starts a run or a batch.
+- Contracts with no matching item surface under "Orphaned contracts"; runs
+  with no item or contract under "Untracked runs".

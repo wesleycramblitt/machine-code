@@ -14,7 +14,8 @@
 import { basename } from "node:path";
 import type { RunSummary } from "../state/runs.js";
 import type { PacketFile } from "../plan/packets.js";
-import { PLAN_ITEM_KIND_LABELS, PLAN_ITEM_KINDS, type PlanItem, type PlanItemKind, type PlanItemStatus } from "../plan/items.js";
+import { PLAN_ITEM_KIND_LABELS, PLAN_ITEM_KINDS, type PlanItem, type PlanItemKind } from "../plan/items.js";
+import { itemState, runItemId, type ItemStatus } from "../plan/lifecycle.js";
 import { sortRuns } from "./status.js";
 
 export type RunGroup = "all" | "plan" | "status" | "overall";
@@ -99,12 +100,16 @@ export type RunRow =
       itemKind: PlanItemKind;
       /** Source plan file. */
       plan: string;
-      status: PlanItemStatus;
+      status: ItemStatus;
+      /** Blocking flag (reason), orthogonal to the lifecycle status. */
+      blocked?: string;
       done: boolean;
-      /** Linked packet slug, when the line points at one. */
-      packet?: string;
+      /** The item's contract slug, when one exists. */
+      contract?: string;
       depth: number;
       parent?: string;
+      collapsible: boolean;
+      collapsed: boolean;
     };
 
 export interface RunOptions {
@@ -200,7 +205,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const untracked: RunSummary[] = [];
   const orphaned: RunSummary[] = [];
   for (const run of baseRuns) {
-    if (!run.packetId) {
+    if (!runItemId(run)) {
       untracked.push(run);
     }
   }
@@ -268,48 +273,28 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const pushPacketTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
     const packets = options.packets ?? [];
     const bySlug = new Map(packets.map((packet) => [packet.slug, packet] as const));
-    const runsBySlug = new Map<string, RunSummary[]>();
+    const runsByItem = new Map<string, RunSummary[]>();
     for (const run of repoRuns) {
-      if (!run.packetId) continue;
-      const list = runsBySlug.get(run.packetId) ?? [];
+      const itemId = runItemId(run);
+      if (!itemId) continue;
+      const list = runsByItem.get(itemId) ?? [];
       list.push(run);
-      runsBySlug.set(run.packetId, list);
+      runsByItem.set(itemId, list);
     }
-    const pushPacketRow = (slug: string, packetDepth: number, parentId?: string): void => {
-      const packet = bySlug.get(slug);
-      if (!packet) return;
-      const id = `packet:${slug}`;
-      const directRuns = runsBySlug.get(slug) ?? [];
-      const isCollapsed = collapsed.has(id);
-      rows.push({
-        kind: "packet",
-        id,
-        slug,
-        packet,
-        depth: packetDepth,
-        parent: parentId,
-        directRuns: directRuns.length,
-        collapsible: directRuns.length > 0,
-        collapsed: isCollapsed,
-      });
-      if (isCollapsed) return;
-      pushRuns(sortRuns(directRuns, "activity"), packetDepth + 1, id);
-    };
 
-    // A plan item's status is its checkbox, or the linked packet's status when
-    // one exists. Done is a status, never a category.
+    // One row per work item. A packet is the item's contract, shown as a ▣
+    // affordance, not a second row; its runs hang directly off the item.
     const placed = new Set<string>();
-    const statusOf = (item: PlanItem, packet: PacketFile | undefined): PlanItemStatus =>
-      item.done ? "done" : packet ? packet.status : "todo";
     const pushPlanLine = (item: PlanItem, lineDepth: number, parentId: string): void => {
-      // Association is the explicit link, then the shared slug. Ideas never
-      // own a packet: they are vague, and research turns them into features or
-      // bugs first. A packet named like an idea stays in Unplanned packets.
-      const packet =
+      // Ideas never own a contract: research turns them into features/bugs.
+      const contract =
         item.kind === "idea"
           ? undefined
           : (item.packet ? bySlug.get(item.packet) : undefined) ?? bySlug.get(item.slug);
+      const state = itemState(item, contract, repoRuns);
+      const related = runsByItem.get(item.slug) ?? [];
       const id = `planline:${repoRoot}:${item.plan}:${item.slug}`;
+      const isCollapsed = collapsed.has(id);
       rows.push({
         kind: "planline",
         id,
@@ -318,30 +303,36 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         kindLabel: PLAN_ITEM_KIND_LABELS[item.kind],
         itemKind: item.kind,
         plan: item.plan,
-        status: statusOf(item, packet),
+        status: state.status,
+        ...(state.blocked ? { blocked: state.blocked } : {}),
         done: item.done,
-        ...(packet ? { packet: packet.slug } : {}),
+        ...(contract ? { contract: contract.slug } : {}),
         depth: lineDepth,
         parent: parentId,
+        collapsible: related.length > 0,
+        collapsed: isCollapsed,
       });
-      if (!packet) return;
-      placed.add(packet.slug);
-      pushPacketRow(packet.slug, lineDepth + 1, id);
+      if (contract) placed.add(contract.slug);
+      if (isCollapsed || related.length === 0) return;
+      pushRuns(sortRuns(related, "activity"), lineDepth + 1, id);
     };
 
-    const STATUS_RANK: Record<PlanItemStatus, number> = {
+    const STATE_RANK: Record<ItemStatus, number> = {
       "in-progress": 0,
-      blocked: 1,
-      todo: 2,
+      "needs-research": 1,
+      "needs-planning": 1,
+      researched: 2,
+      ready: 2,
       done: 3,
+      archived: 4,
     };
     const sortItems = (list: readonly PlanItem[]): PlanItem[] =>
       [...list].sort((a, b) => {
-        const pa = a.packet ? bySlug.get(a.packet) : undefined;
-        const pb = b.packet ? bySlug.get(b.packet) : undefined;
-        return (
-          STATUS_RANK[statusOf(a, pa)] - STATUS_RANK[statusOf(b, pb)] || a.title.localeCompare(b.title)
-        );
+        const ca = a.kind === "idea" ? undefined : bySlug.get(a.slug);
+        const cb = b.kind === "idea" ? undefined : bySlug.get(b.slug);
+        const sa = itemState(a, ca, repoRuns).status;
+        const sb = itemState(b, cb, repoRuns).status;
+        return STATE_RANK[sa] - STATE_RANK[sb] || a.title.localeCompare(b.title);
       });
 
     const pushKindSections = (items: readonly PlanItem[], sectionDepth: number, prefix: string): void => {
@@ -384,20 +375,33 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       pushKindSections(items, depth, `kind:${repoRoot}`);
     }
 
-    // Packets with no plan line still need a home: they are build-ready but
-    // not yet placed on the hand-written map.
-    const unplaced = packets.filter((packet) => !placed.has(packet.slug));
-    const unplannedId = `plan:${repoRoot}:unplanned`;
-    if (pushSection(unplannedId, "Unplanned packets", unplaced.length, depth, "unplanned")) {
-      const ordered = [...unplaced].sort(
-        (a, b) => (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) || a.slug.localeCompare(b.slug),
-      );
-      for (const packet of ordered) pushPacketRow(packet.slug, depth + 1, unplannedId);
+    // A contract with no plan item is a data error: surface it rather than
+    // hiding the work.
+    const orphans = packets.filter((packet) => !placed.has(packet.slug));
+    const orphanId = `plan:${repoRoot}:orphans`;
+    if (pushSection(orphanId, "Orphaned contracts", orphans.length, depth, "unplanned")) {
+      for (const packet of [...orphans].sort((a, b) => a.slug.localeCompare(b.slug))) {
+        const related = runsByItem.get(packet.slug) ?? [];
+        const id = `packet:${packet.slug}`;
+        const isCollapsed = collapsed.has(id);
+        rows.push({
+          kind: "packet",
+          id,
+          slug: packet.slug,
+          packet,
+          depth: depth + 1,
+          parent: orphanId,
+          directRuns: related.length,
+          collapsible: related.length > 0,
+          collapsed: isCollapsed,
+        });
+        if (!isCollapsed && related.length > 0) pushRuns(sortRuns(related, "activity"), depth + 2, id);
+      }
     }
 
-    const free = repoRuns.filter((run) => !run.packetId);
+    const free = repoRuns.filter((run) => !runItemId(run));
     const untrackedId = `untracked:${repoRoot}`;
-    if (pushSection(untrackedId, "Untracked", free.length, depth, "untracked")) {
+    if (pushSection(untrackedId, "Untracked runs", free.length, depth, "untracked")) {
       pushRuns(free, depth + 1, untrackedId);
     }
   };

@@ -15,7 +15,8 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
 import { readPacketFile, writePacketFile, listPacketFiles, type PacketFile } from "./plan/packets.js";
-import { planItems } from "./plan/items.js";
+import { planItems, planItemBackground } from "./plan/items.js";
+import { ITEM_STATUS_LABELS, itemState } from "./plan/lifecycle.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -292,6 +293,7 @@ export async function runTui(): Promise<void> {
       ...(previous.tier ? { tier: previous.tier } : {}),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
       ...(packetSlug ? { packet: packetSlug } : {}),
+      ...(seed?.item && !packetSlug ? { item: seed.item } : {}),
     };
     // Verification and isolation are role-shaped: only build verifies, and a
     // fresh build isolates in a worktree.
@@ -593,6 +595,8 @@ export async function runTui(): Promise<void> {
     }
     if (s.newrun.packet) {
       args.push("--packet", s.newrun.packet);
+    } else if (s.newrun.item) {
+      args.push("--item", s.newrun.item);
     }
     const excludedSections = [...s.newRunContextExcluded]
       .filter((key) => key.startsWith("section:"))
@@ -1052,10 +1056,26 @@ export async function runTui(): Promise<void> {
 
     /* ---------------------------------------------------------- packet */
     else if (s.page === "runs" && s.screen === "packet") {
+      const itemSlug = s.selectedPacketSlug;
+      const item = itemSlug ? planItems(l).find((entry) => entry.slug === itemSlug) : undefined;
+      const packet = itemSlug ? readPacketFile(l, itemSlug) : null;
+      const lifecycle = item ? itemState(item, packet ?? undefined, allRuns) : undefined;
       const frame = renderPacket({
         cols, narrow, bodyH, theme, toast: s.toast,
-        slug: s.selectedPacketSlug,
-        packet: s.selectedPacketSlug ? readPacketFile(l, s.selectedPacketSlug) : null,
+        slug: itemSlug,
+        item: item
+          ? {
+              slug: item.slug,
+              title: item.title,
+              kindLabel: item.kind.charAt(0).toUpperCase() + item.kind.slice(1),
+              plan: item.plan,
+              statusLabel: lifecycle ? ITEM_STATUS_LABELS[lifecycle.status] : "",
+              ...(lifecycle?.blocked ? { blocked: lifecycle.blocked } : {}),
+              hasContract: Boolean(packet),
+              background: planItemBackground(l, item),
+            }
+          : null,
+        packet,
         runs: allRuns,
         scroll: s.packetScroll,
       });
