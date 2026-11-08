@@ -1,8 +1,10 @@
 ---
 status = "todo"
-deps = ["ctx-preview-parity"]
+deps = []
 review = "gates"
+
 ---
+
 # ctx-section-budgets
 
 ## Deliverable
