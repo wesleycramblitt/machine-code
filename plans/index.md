@@ -8,5 +8,4 @@
 
 ## Ideas
 - [ ] ctx-eval-harness — Context quality eval: gold-file recall, faithfulness spot-check, token cost per section → packets/ctx-eval-harness.md
-- [ ] ctx-ordering-cache — Lost-in-middle ordering plus stable section order for prompt cache hits → packets/ctx-ordering-cache.md
 - [ ] ctx-compaction — Rolling compaction for parent-chain history instead of unbounded transcript → packets/ctx-compaction.md
