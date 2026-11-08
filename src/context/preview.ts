@@ -9,8 +9,11 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { isSecretPath } from "../tools/safety.js";
+import { allCommands } from "../commands/profiles.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
 import { resolveSkillMode, skillMetas, type SkillMode } from "./references.js";
+import { blockOverhead, sectionForKind } from "./budget.js";
+import type { ContextSections } from "./types.js";
 
 export interface PreviewSource {
   kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "packet";
@@ -26,6 +29,8 @@ export interface ContextPreview {
   chars: number;
   promptChars: number;
   sources: PreviewSource[];
+  /** Kept body chars per section, mirroring the assembled bundle. */
+  sections: ContextSections;
   issueChain: [];
   artifacts: {
     files: string[];
@@ -87,7 +92,6 @@ export function previewContext(
   const skills: string[] = [];
   const tools: ArtifactDef[] = [];
   const scripts: ArtifactDef[] = [];
-  let chars = 0;
 
   for (const path of options.files ?? []) {
     const root = resolve(layout.repoRoot);
@@ -98,7 +102,6 @@ export function previewContext(
     const secret = isSecretPath(path);
     const exists = inside && !secret && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    chars += size;
     sources.push({ kind: "file", ref: path, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`file ${path} is missing, secret, or outside the repo`);
   }
@@ -109,7 +112,6 @@ export function previewContext(
     const inside = abs === root || abs.startsWith(root + sep);
     const exists = inside && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    chars += size;
     sources.push({ kind: "plan", ref: path, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`plan ${path} is missing or outside the repo`);
   }
@@ -121,7 +123,6 @@ export function previewContext(
     const inside = abs === root || abs.startsWith(root + sep);
     const exists = inside && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    chars += size;
     sources.push({ kind: "packet", ref: options.packet, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`packet ${options.packet} is missing`);
   }
@@ -134,7 +135,6 @@ export function previewContext(
     const exists = inside && existsSync(abs);
     if (exists) {
       const size = capFor(abs, Number.MAX_SAFE_INTEGER);
-      chars += size;
       sources.push({ kind: "plan", ref: planPath, origin: "inherited", depth: 3, chars: size, exists: true });
     }
   }
@@ -157,7 +157,6 @@ export function previewContext(
     });
     if (mode !== "include") continue;
     const size = capFor(path, Number.MAX_SAFE_INTEGER);
-    chars += size;
     sources.push({ kind: "skill", ref: name, origin: "explicit", depth: 0, chars: size, exists: true });
   }
   if (options.knowledgeIndex) {
@@ -166,17 +165,16 @@ export function previewContext(
     const inside = abs === root || abs.startsWith(root + sep);
     const exists = inside && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    chars += size;
     sources.push({ kind: "knowledge", ref: options.knowledgeIndex, origin: "inherited", depth: 3, chars: size, exists });
     if (!exists) warnings.push(`knowledge ${options.knowledgeIndex} is missing`);
   }
   // Skill descriptions are visible on every run. Mirror the single aggregate
-  // block assembled at band 8.
+  // block assembled at band 8, at its full assembled size so the composer
+  // shows the real cost.
   const allSkills = skillMetas(layout);
   if (allSkills.length > 0) {
     const text = allSkills.map((skill) => `- ${skill.name}: ${skill.description}`).join("\n");
-    const size = Math.min(1024, text.length);
-    chars += size;
+    const size = text.length;
     sources.push({
       kind: "skill",
       ref: `${allSkills.length} skills`,
@@ -187,11 +185,48 @@ export function previewContext(
       note: allSkills.map((skill) => skill.name).join(", "),
     });
   }
+  // Tool/command names are assembled alongside the skill descriptions.
+  // Mirror the aggregate block so preview chars match assembled chars.
+  try {
+    const commands = [...allCommands(layout).keys()].sort();
+    if (commands.length > 0) {
+      const body = commands.join(", ");
+      sources.push({
+        kind: "tool",
+        ref: `${commands.length} commands`,
+        origin: "explicit",
+        depth: 0,
+        chars: body.length,
+        exists: true,
+      });
+    }
+  } catch {
+    // profiles unavailable — skip
+  }
+
+  const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+  for (const source of sources) sections[sectionForKind(source.kind)] += source.chars;
+  // Preview chars estimate the assembled bundle: body chars plus the same
+  // per-block wrapper the assembler renders, so the composer shows real
+  // costs. Warned-missing and empty sources render no block.
+  const rendered = sources.filter((source) => source.chars > 0);
+  const estimated =
+    rendered.reduce(
+      (sum, source) => sum + source.chars + blockOverhead(source.kind, source.ref, source.origin, source.depth),
+      0,
+    ) +
+    (rendered.length > 0
+      ? "<context>".length +
+        "Assembled context for this run. Each block is labelled with its source and origin (explicit, inherited).".length +
+        "</context>".length +
+        (rendered.length + 2)
+      : 0);
 
   return {
-    chars,
+    chars: estimated,
     promptChars: prompt.length,
     sources,
+    sections,
     issueChain: [],
     artifacts: { files, knowledge, references, skills, tools, scripts },
     warnings,

@@ -6,12 +6,43 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunEvent, RunSummary } from "../state/runs.js";
-import type { ContextSource } from "../context/types.js";
+import type { ContextSections, ContextSource } from "../context/types.js";
+import { sectionForKind } from "../context/budget.js";
 
 export interface ContextManifest {
   chars: number;
   sources: ContextSource[];
   warnings: string[];
+  /** Kept body chars per section; derived from sources for old manifests. */
+  sections: ContextSections;
+}
+
+/** Per-section chars for manifests written before section budgets existed. */
+export function sectionsFromSources(sources: readonly ContextSource[]): ContextSections {
+  const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+  for (const source of sources) {
+    const chars = typeof source.bytes === "number" && Number.isFinite(source.bytes) ? Math.max(0, source.bytes) : 0;
+    sections[sectionForKind(source.kind)] += chars;
+  }
+  return sections;
+}
+
+function parseSections(raw: unknown, sources: ContextSource[]): ContextSections {
+  if (raw && typeof raw === "object") {
+    const record = raw as Record<string, unknown>;
+    const sections: ContextSections = { system: 0, plan: 0, files: 0, tools: 0, skills: 0, parents: 0 };
+    let valid = true;
+    for (const key of Object.keys(sections) as Array<keyof ContextSections>) {
+      const value = record[key];
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        valid = false;
+        break;
+      }
+      sections[key] = Math.max(0, value);
+    }
+    if (valid) return sections;
+  }
+  return sectionsFromSources(sources);
 }
 
 export interface ContextUsageView {
@@ -61,11 +92,13 @@ export function readContextManifest(runDir: string): ContextManifest | null {
   const file = join(runDir, "context.json");
   if (!existsSync(file)) return null;
   try {
-    const raw = JSON.parse(readFileSync(file, "utf8")) as { chars?: unknown; sources?: unknown; warnings?: unknown };
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { chars?: unknown; sources?: unknown; warnings?: unknown; sections?: unknown };
+    const sources = Array.isArray(raw.sources) ? (raw.sources as ContextSource[]) : [];
     return {
       chars: typeof raw.chars === "number" ? raw.chars : 0,
-      sources: Array.isArray(raw.sources) ? (raw.sources as ContextSource[]) : [],
+      sources,
       warnings: Array.isArray(raw.warnings) ? raw.warnings.filter((item): item is string => typeof item === "string") : [],
+      sections: parseSections(raw.sections, sources),
     };
   } catch {
     return null;
