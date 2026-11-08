@@ -8,3 +8,4 @@
 ## Ideas
 - [ ] ctx-preview-parity — Unify previewContext and assembleContext: same caps, secret checks, file forwarding → packets/ctx-preview-parity.md
 - [ ] ctx-section-budgets — Per-section token budgets with priority truncation and per-section accounting → packets/ctx-section-budgets.md
+- [ ] ctx-chunk-expand — Snippet includes with path:lines parent fallback instead of whole-file only → packets/ctx-chunk-expand.md
