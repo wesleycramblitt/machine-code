@@ -14,7 +14,7 @@ ordered so measurements are valid before optimizations land.
 2. ~~ctx-section-budgets — per-section budgets + accounting~~ — done 2026-11-08 (superseded: static caps removed, see 3)
 3. ~~ctx-chunk-expand — path:lines snippet includes~~ — done 2026-11-08 (folded in: TUI-mirroring sections, role-aware priority, no static caps)
 4. ~~ctx-tier-descriptions — description-only defaults, on-demand bodies~~ — done 2026-11-08
-5. ctx-eval-harness — recall/faithfulness/cost eval
+5. ~~ctx-eval-harness — recall/faithfulness/cost eval~~ — done 2026-11-08
 6. ~~ctx-ordering-cache — lost-in-middle ordering + cache-stable layout~~ — done 2026-11-08
 7. ~~ctx-compaction — rolling compaction for parent history~~ — dropped 2026-11-08 (compaction is the wrong model; replaced by ctx-parent-index below)
 8. ~~ctx-parent-index — parent chain as one-line index + on-demand pull~~ — done 2026-11-08
