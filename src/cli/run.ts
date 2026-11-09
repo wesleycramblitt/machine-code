@@ -756,6 +756,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
             (owner.status === "created" || owner.status === "running" || owner.status === "awaiting_input");
           toolRoot = existing;
           reusedWorktree = true;
+          // Never touch a worktree that an active run owns; otherwise bring
+          // it current like any other reuse.
+          const refresh = ownerActive ? "skipped" : await refreshReusedWorktree(existing);
           recorder.patchSummary({
             worktree: existing,
             ...(owner ? { worktreeOwnerRunId: owner.id } : {}),
@@ -769,6 +772,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
             branch,
             shared: true,
             ...(ownerActive ? { ownerActive: true } : {}),
+            refresh,
           });
           process.stderr.write(
             `worktree ${existing} (already checked out, branch ${branch}${ownerActive ? "; owner run still active" : ""})\n`,
