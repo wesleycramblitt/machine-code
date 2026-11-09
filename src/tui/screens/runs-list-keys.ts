@@ -112,10 +112,22 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "N") { ctx.startNewRun(undefined, l.repoRoot); ctx.draw(); return true; }
   if (data === "D") {
     const row = index.selectable[s.runsSel];
-    if (row?.kind !== "run") { ctx.notify("select a run to delete"); ctx.draw(); return true; }
-    s.deleteRunTarget = row.run;
-    s.deleteReturn = "list";
-    s.screen = "delete";
+    if (!row) return true;
+    if (row.kind === "run") {
+      s.deleteRunTarget = row.run;
+      s.deleteReturn = "list";
+      s.screen = "delete";
+      ctx.draw();
+      return true;
+    }
+    // Delete an issue from the runs list.
+    if ("slug" in row && typeof row.slug === "string" && row.slug) {
+      ctx.launch(["delete", row.slug], repoForRow(row));
+      ctx.notify(`delete ${row.slug} queued`);
+      ctx.draw();
+      return true;
+    }
+    ctx.notify("select a run or issue to delete");
     ctx.draw();
     return true;
   }
