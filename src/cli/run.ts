@@ -152,6 +152,19 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const directExec = flags.has("direct-exec");
 
   const l = layout();
+
+  // Require git with a configured remote.
+  {
+    const gitCheck = await runProc("git", ["--version"], { cwd: l.repoRoot, timeoutMs: 10_000 });
+    if (gitCheck.outcome === "spawn-error" || gitCheck.code !== 0) {
+      fail("git is required but not found. Install git and try again.");
+    }
+    const remoteCheck = await runProc("git", ["remote", "-v"], { cwd: l.repoRoot, timeoutMs: 10_000 });
+    if (remoteCheck.outcome === "spawn-error" || remoteCheck.code !== 0 || !remoteCheck.stdout.trim()) {
+      fail("no git remote configured. machine_code requires a remote (e.g. `git remote add origin <url>`).");
+    }
+  }
+
   let itemSlug = itemFlag !== undefined ? slugify(itemFlag) : undefined;
   if (itemSlug) {
     const issue = findIssue(l, itemSlug);
