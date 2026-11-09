@@ -1784,7 +1784,32 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         if (spec && !spec.readonly && ctx.allowMutations === false) {
           return fail(`${params.name} mutates files; this role is read-only`);
         }
-        const result: CommandRunResult = await runCommand(params.name, params.args ?? {}, ctx, _id);
+        const result: CommandRunResult = await runCommand(
+          params.name,
+          params.args ?? {},
+          {
+            root: ctx.root,
+            commands: ctx.commands,
+            processes: ctx.processes,
+            changedFiles: ctx.state
+              ? () => {
+                  const seen = new Set<string>();
+                  const out: string[] = [];
+                  for (const fact of ctx.state?.getState().facts ?? []) {
+                    if (fact.kind !== "change" || fact.status !== "active") continue;
+                    for (const ref of fact.refs ?? []) {
+                      if (typeof ref.path === "string" && ref.path.length > 0 && !seen.has(ref.path)) {
+                        seen.add(ref.path);
+                        out.push(ref.path);
+                      }
+                    }
+                  }
+                  return out;
+                }
+              : undefined,
+          },
+          _id,
+        );
         return result.isError ? fail(result.text) : ok(result.text);
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));

@@ -267,46 +267,64 @@ const SPECS: CommandSpec[] = [
   },
   {
     name: "core:check",
-    description: "LSP diagnostics on a saved file. The server is inferred from the path. Returns errors/warnings.",
+    description: "LSP diagnostics on saved files. Omit path to check files changed this run (up to 5).",
     binary: "lsp",
     args: () => [],
     schema: {
-      path: { type: "string", required: true, description: "File path relative to the worktree root." },
+      path: { type: "string", description: "File path relative to the worktree root. Omit to check files changed this run." },
     },
     readonly: true,
-    timeoutMs: 30_000,
+    timeoutMs: 60_000,
     handler: async (args, ctx) => {
-      const path = asPath(args.path);
-      if (!path) return { text: "core:check requires path", isError: true };
+      const explicit = asPath(args.path);
+      const targets = explicit
+        ? [explicit]
+        : [...new Set(ctx.changedFiles?.() ?? [])].filter((p) => !p.startsWith(".") && !p.includes("..")).slice(0, 5);
+      if (targets.length === 0) {
+        return { text: "core:check requires path (no files changed yet this run)", isError: true };
+      }
       const { resolveWithin } = await import("../tools/safety.js");
-      let abs: string;
-      try { abs = resolveWithin(ctx.root, path); } catch (e) { return { text: (e as Error).message, isError: true }; }
       const { readFileSync } = await import("node:fs");
-      let content = "";
-      try { content = readFileSync(abs, "utf8"); } catch (e) { return { text: (e as Error).message, isError: true }; }
       const { languageForPath, lspClientFor, serverAvailable, serverForLanguage } = await import("../lsp/index.js");
-      const language = languageForPath(path);
-      if (!language) {
-        return { text: `no LSP server for ${path}; use core:status + manual review.`, isError: true };
+      const out: string[] = [];
+      let failed = false;
+      for (const path of targets) {
+        let abs: string;
+        try { abs = resolveWithin(ctx.root, path); } catch (e) { out.push((e as Error).message); failed = true; continue; }
+        let content = "";
+        try { content = readFileSync(abs, "utf8"); } catch (e) { out.push((e as Error).message); failed = true; continue; }
+        const language = languageForPath(path);
+        if (!language) {
+          out.push(`no LSP server for ${path}; use core:status + manual review.`);
+          failed = true;
+          continue;
+        }
+        const spec = serverForLanguage(language);
+        if (!spec) { out.push(`no LSP server for language "${language}"`); failed = true; continue; }
+        if (!serverAvailable(language)) {
+          out.push(`LSP ${language} unavailable (${spec.name}). Install: ${spec.install}. Fallback: core:status + manual review.`);
+          failed = true;
+          continue;
+        }
+        const client = lspClientFor(ctx.root, language, ctx.processes);
+        if (!client) { out.push(`LSP ${language} unavailable for this language`); failed = true; continue; }
+        const diagnostics = await client.diagnosticsFor(abs, content);
+        if (diagnostics === null) {
+          out.push("LSP server did not respond (over budget, indexing, or missing project toolchain; for TypeScript install typescript). Fallback to ast-grep/rg.");
+          failed = true;
+          continue;
+        }
+        if (diagnostics.length === 0) {
+          out.push(`${path}: no diagnostics`);
+          continue;
+        }
+        out.push(diagnostics.map((d) => {
+          const sev = ["error", "warning", "info", "hint"][d.severity ?? 1] ?? "diag";
+          return `${path}:${d.range.start.line + 1}:${d.range.start.character + 1} ${sev}: ${d.message}`;
+        }).join("\n"));
+        if (diagnostics.some((d) => (d.severity ?? 1) === 1)) failed = true;
       }
-      const spec = serverForLanguage(language);
-      if (!spec) return { text: `no LSP server for language "${language}"`, isError: true };
-      if (!serverAvailable(language)) {
-        return {
-          text: `LSP ${language} unavailable (${spec.name}). Install: ${spec.install}. Fallback: core:status + manual review.`,
-          isError: true,
-        };
-      }
-      const client = lspClientFor(ctx.root, language, ctx.processes);
-      if (!client) return { text: `LSP ${language} unavailable for this language`, isError: true };
-      const diagnostics = await client.diagnosticsFor(abs, content);
-      if (diagnostics === null) return { text: "LSP server did not respond (over budget, indexing, or missing project toolchain; for TypeScript install typescript). Fallback to ast-grep/rg.", isError: true };
-      if (diagnostics.length === 0) return { text: `${path}: no diagnostics`, isError: false };
-      const lines = diagnostics.map((d) => {
-        const sev = ["error", "warning", "info", "hint"][d.severity ?? 1] ?? "diag";
-        return `${path}:${d.range.start.line + 1}:${d.range.start.character + 1} ${sev}: ${d.message}`;
-      });
-      return { text: lines.join("\n"), isError: diagnostics.some((d) => (d.severity ?? 1) === 1) };
+      return { text: out.join("\n"), isError: failed };
     },
   },
   {
@@ -419,6 +437,8 @@ export interface CommandContext {
   commands?: ReadonlyMap<string, CommandSpec>;
   /** When present, spawned commands are recorded by the run supervisor. */
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
+  /** When present, files the run has changed (for path-defaulting checks). */
+  changedFiles?: () => string[];
 }
 
 /** Levenshtein distance, capped by the caller. Command names are short, so the

@@ -8,7 +8,7 @@ You are the <role> agent of machine_code.
 ## Work loop
 1. First turn: read the issue and its files, then state the plan as a context note.
 2. Orient with core:map; then read { symbol } or search the one deciding fact.
-3. Act. Batch independent reads/searches in one block; edit one at a time, after its reads.
+3. Act. Batch independent reads/searches in one block; batch one file's hunks into one edit call.
 4. Verify with the checks your role provides; run each gate once.
 
 ## Memory
