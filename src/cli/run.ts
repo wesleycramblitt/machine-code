@@ -554,6 +554,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         ? false
         : forceWorktree;
   let toolRoot = l.repoRoot;
+  let reusedWorktree = false;
   if (mutating) {
     const issueWorktree = Boolean(itemSlug);
     // Reuse a terminal/paused worktree that already owns this issue branch.
@@ -567,6 +568,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     );
     if (reuse) {
       toolRoot = reuse.path;
+      reusedWorktree = true;
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,
@@ -650,6 +652,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
           const ownerActive = owner !== undefined &&
             (owner.status === "created" || owner.status === "running" || owner.status === "awaiting_input");
           toolRoot = existing;
+          reusedWorktree = true;
           recorder.patchSummary({
             worktree: existing,
             ...(owner ? { worktreeOwnerRunId: owner.id } : {}),
@@ -675,6 +678,28 @@ export async function cmdRun(argv: string[]): Promise<number> {
           throw error;
         }
       }
+    }
+  }
+
+  // A reused worktree may hold prior commits and uncommitted changes from an
+  // earlier run. Tell the agent what's already on the branch so it continues
+  // the work instead of starting blind.
+  if (reusedWorktree && toolRoot !== l.repoRoot) {
+    try {
+      const branch = recorder.current.branch ?? "";
+      const log = await runProc("git", ["log", "--oneline", "-8"], { cwd: toolRoot, timeoutMs: 15_000 });
+      const status = await runProc("git", ["status", "--short", "--branch"], { cwd: toolRoot, timeoutMs: 15_000 });
+      const lines = [
+        `## Existing branch state`,
+        `You are continuing work on branch ${branch || "(unknown)"}, which already exists.`,
+      ];
+      if (log.code === 0 && log.stdout.trim()) lines.push(`Recent commits:\n${log.stdout.trim()}`);
+      if (status.code === 0 && status.stdout.trim()) lines.push(`Working tree:\n${status.stdout.trim()}`);
+      lines.push(`Build on this state: keep what works, fix or extend what doesn't. Do not restart from scratch.`);
+      request = `${request}\n\n${lines.join("\n\n")}`;
+      recorder.event("branch_state_reported", { branch });
+    } catch {
+      // Best effort: the agent can inspect the tree itself with core:status.
     }
   }
 
