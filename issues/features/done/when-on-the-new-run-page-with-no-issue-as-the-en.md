@@ -1,9 +1,3 @@
----
-priority = "medium"
-prompt = "When on the new run page with no issue as the engineer agent, we should be able to specify bug vs feature and priority and tag"
-review = "none"
----
-
 # when-on-the-new-run-page-with-no-issue-as-the-en
 
 Auto-created from run.

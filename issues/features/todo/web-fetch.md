@@ -1,8 +1,3 @@
----
-priority = "medium"
-prompt = "Fetch a URL and show HTML, extract text, or download files"
-tags = ["web-tools"]
-review = "none"
----
+tags: web-tools
 
-# Fetch a URL and show HTML, extract text, or download files
+Fetch a URL and show HTML, extract text, or download files

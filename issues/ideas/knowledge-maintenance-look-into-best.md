@@ -1,8 +1,3 @@
----
-priority = "medium"
-prompt = "knowledge maintenance - Look into best way to maintain knowledge graph"
-tags = ["context"]
-review = "none"
----
+tags: context
 
-# knowledge maintenance - Look into best way to maintain knowledge graph
+knowledge maintenance - Look into best way to maintain knowledge graph
