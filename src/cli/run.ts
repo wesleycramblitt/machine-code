@@ -28,7 +28,7 @@ import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
 import { readCachedMap } from "../map/deterministic.js";
-import { skillMetas } from "../context/references.js";
+import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
 import { slugify } from "../plan/slug.js";
@@ -39,7 +39,6 @@ import { runLoop, type RunLoopResult } from "../loop.js";
 import { inferReviewVerdict, parseReviewVerdict } from "../orchestrator/outcome.js";
 import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
-import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
@@ -91,7 +90,7 @@ function hintWords(text: string): string[] {
   );
 }
 
-export function buildIssueHints(l: ReturnType<typeof layout>, request: string): string[] {
+export function buildIssueHints(l: ReturnType<typeof layout>, request: string, agent: string): string[] {
   const hints: string[] = [];
   const tokens = [...new Set(hintWords(request))];
   const intent = new Set(hintWords(request.split("\n")[0] ?? ""));
@@ -168,7 +167,10 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string): 
     );
     hints.push(`## Context\n\nRelevant files:\n${lines.join("\n")}`);
   }
-  const skills = skillMetas(l);
+  // Only the role's own skills. Listing every installed skill spends context
+  // on procedures this run will never use.
+  const wanted = new Set(defaultSkillsFor({ agent }));
+  const skills = skillMetas(l).filter((skill) => wanted.has(skill.name));
   if (skills.length > 0) {
     hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
   }
@@ -325,7 +327,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
-      const hints = buildIssueHints(l, request);
+      const hints = buildIssueHints(l, request, normalizedAgent);
       issue = writeIssue(l, {
         kind: normalizedAgent === "research" ? "ideas" : "features",
         slug: autoSlug,
@@ -347,7 +349,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // left untouched.
   if (itemSlug && !autoCreatedIssue && normalizedAgent === "engineer" && request) {
     const trimmed = request.split(/\n## (?:Context|Architecture|Skills|Verify)\b/)[0]!.trim();
-    const hints = buildIssueHints(l, trimmed || request);
+    const hints = buildIssueHints(l, trimmed || request, normalizedAgent);
     if (hints.length > 0) {
       request = `${trimmed || request}\n\n${hints.join("\n\n")}`;
       process.stderr.write(`issue hints attached (${hints.length} sections)\n`);

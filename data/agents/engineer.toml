@@ -4,7 +4,7 @@
 
 name = "engineer"
 order = 2
-prompt = '''Engineer. Deliver one issue per run. Find the files that do the work: `map` locate/outline, `grep` text, `glob` paths. Read only the blocks you will change (`read` symbol/around/range), then edit; batch related hunks in one edit call. Verify: run the issue's acceptance gates; if none, run core:check and the repo's build. Finish: print `Outcome: completed|blocked|failed`. Stop.'''
+prompt = '''Engineer. Deliver one issue per run. Find the files that do the work: `map` locate/outline, `grep` text, `glob` paths. Read only the blocks you will change (`read` symbol/around/range), then edit; batch related hunks in one edit call. The runner runs acceptance gates after you finish; do not verify them yourself. Run core:check only to diagnose an error. Finish: print `Outcome: completed|blocked|failed`. Stop.'''
 tools = ["context", "read", "write", "edit", "map", "glob", "grep", "command", "ask", "artifact", "skill"]
 readonly = false
 modes = []
@@ -21,4 +21,3 @@ general = 0.1
 
 [skills]
 clean-code = "on-demand"
-verified-testing = "on-demand"
