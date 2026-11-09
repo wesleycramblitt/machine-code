@@ -746,16 +746,22 @@ export function renderOutline(file: MapFile): string {
   return file.symbols.map((symbol) => `${symbol.line} ${symbol.kind} ${symbol.name}`).join("\n");
 }
 
-/** Stable, small repo index for the first prompt. Full slices stay on demand. */
+/** Stable, small repo index for the first prompt. Full slices stay on demand.
+ * Code directories only: docs, data, plans, and skill files are not an
+ * orientation signal and they pull the model into dead ends. */
+const MAP_INDEX_NON_CODE = new Set(["md", "markdown", "json", "yaml", "yml", "toml", "text", "other", ""]);
+
 export function renderMapIndex(map: RepoMap, maxBytes = 1024): string {
   const dirs = new Map<string, number>();
   for (const file of map.files) {
+    if (MAP_INDEX_NON_CODE.has(file.lang)) continue;
     const slash = file.path.indexOf("/");
     const dir = slash < 0 ? "." : file.path.slice(0, slash);
     dirs.set(dir, (dirs.get(dir) ?? 0) + 1);
   }
+  const codeFiles = [...dirs.values()].reduce((sum, count) => sum + count, 0);
   const lines = [
-    `Repo map: ${map.files.length} files · head ${map.head || "(no git)"} · ${symbolCount(map)} symbols.`,
+    `Repo map: ${codeFiles} code files · head ${map.head || "(no git)"} · ${symbolCount(map)} symbols.`,
     ...[...dirs.entries()]
       .sort((a, b) => (a[0] === "." ? -1 : b[0] === "." ? 1 : a[0].localeCompare(b[0])))
       .map(([dir, count]) => `${dir === "." ? "./" : `${dir}/`} ${count}`),

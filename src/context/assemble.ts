@@ -720,9 +720,10 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   if (planSources.length > 0) {
     const points = planSources.slice(0, 4).map((entry) => {
       const first = entry.body.split("\n").find((line) => line.trim() !== "") ?? entry.ref;
-      return `plan ${entry.ref}: ${first.trim().slice(0, 120)}`;
+      const label = entry.kind === "issue" ? "issue" : entry.kind;
+      return `${label} ${entry.ref}: ${first.trim().slice(0, 120)}`;
     });
-    recap = `<context-recap>\nRecap (authoritative — act on this): ${points.join("; ")}. The issue/plan blocks above outrank the working files in between.\n</context-recap>`;
+    recap = `<context-recap>\nRecap (authoritative — act on this): ${points.join("; ")}. The issue blocks above outrank the working files in between.\n</context-recap>`;
     blocks.push(recap);
     const bucket = "plans";
     sections[bucket] += recap.length;

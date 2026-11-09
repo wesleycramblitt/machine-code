@@ -33,7 +33,7 @@ import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
 import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { ensureSemanticMap } from "./map/ensure.js";
-import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
+import { isSemanticFresh, loadSemantic, readSemanticDirty, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
 import { RunStateStore } from "./context/state.js";
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
@@ -426,11 +426,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         ].join("\n")
       : "";
   let semanticMap: SemanticMap | null = null;
-  const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"], semantic: SemanticMap | null): string =>
-    [
-      wantMap ? renderMapIndex(map) : "",
-      wantSemantic ? renderSemanticIndex(semantic, 3_072, input.request) : "",
-    ].filter(Boolean).join("\n");
+  // The semantic overlay is available through `map semantic`; it is not
+  // injected into the prompt. Its LLM summaries go stale and name the wrong
+  // key files, while the deterministic map plus doc-header hints stay true.
+  const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"]): string =>
+    wantMap ? renderMapIndex(map) : "";
   if (wantMap || wantSemantic) try {
     const built = await buildRepoMap(mapRoot, { processes });
     const dirty = wantSemantic ? readSemanticDirty(mapRoot) : [];
@@ -449,7 +449,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
     semanticMap = deterministic ? mergeModuleIndex(deterministic, cachedFresh) : null;
     const fresh = Boolean(cachedFresh);
-    mapIndex = renderIndex(built.map, semanticMap);
+    mapIndex = renderIndex(built.map);
     recorder.event("map_built", {
       files: built.map.files.length,
       symbols: symbolCount(built.map),
@@ -484,7 +484,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       }).then((refreshed) => {
         if (!refreshed) return;
         semanticMap = deterministic ? mergeModuleIndex(deterministic, refreshed) : refreshed;
-        mapIndex = renderIndex(built.map, semanticMap);
+        mapIndex = renderIndex(built.map);
         recorder.event("map_refresh", {
           turn: 0,
           ok: true,
@@ -544,7 +544,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       signal: input.signal,
     });
     semanticMap = mergeModuleIndex(deterministic, semantic);
-    mapIndex = renderIndex(built.map, semanticMap);
+    mapIndex = renderIndex(built.map);
     recorder.event("map_refresh", {
       turn,
       ok: true,
@@ -1515,8 +1515,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         // Resume: the reconstructed transcript tail is already continuable.
         await agent.continue();
       } else {
-        const promptText = [input.contextText, mapIndex, input.request].filter(Boolean).join("\n\n");
-        await agent.prompt(promptText);
+        // The context and map are rendered by renderPromptMessages. Prompt
+        // the agent with only the task; passing the context here duplicated
+        // the entire prompt on the first turn.
+        await agent.prompt(input.request);
       }
       await agent.waitForIdle();
     } catch (error) {

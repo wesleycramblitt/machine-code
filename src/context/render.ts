@@ -77,19 +77,20 @@ function completeStep(messages: readonly MessageLike[], start: number, end: numb
   return calls.every((id) => results.has(id));
 }
 
-/** Every complete assistant/tool step, oldest first, unchanged. */
+/** Every complete assistant/tool step, oldest first, unchanged. Leading user
+ * messages (the task) are kept: the request must survive every turn, not just
+ * the first. */
 function transcriptSteps(messages: readonly MessageLike[]): MessageLike[] {
   const starts: number[] = [];
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i]?.role === "assistant") starts.push(i);
   }
-  if (starts.length === 0) {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i]?.role === "user") return [messages[i]!];
-    }
-    return [];
-  }
   const out: MessageLike[] = [];
+  const firstAssistant = starts[0] ?? messages.length;
+  for (let i = 0; i < firstAssistant; i += 1) {
+    if (messages[i]?.role === "user") out.push(messages[i]!);
+  }
+  if (starts.length === 0) return out;
   for (let k = 0; k < starts.length; k += 1) {
     const start = starts[k]!;
     const end = k + 1 < starts.length ? starts[k + 1]! : messages.length;
