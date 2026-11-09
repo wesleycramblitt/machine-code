@@ -85,7 +85,6 @@ const HINT_STOP = new Set([
   "our", "you", "your", "all", "any", "can", "may", "use", "per", "via", "out",
   "off", "one", "two", "how", "why", "who", "its", "too", "now", "get", "got",
 ]);
-const HINT_SKIP = /^(issues|plans|knowledge|data|test|tests|docs?)\//;
 const HINT_CODE = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i;
 const HINT_UI = /\b(ui|ux|screen|page|layout|colou?r|font|bold|badge|render)\b/i;
 
@@ -97,23 +96,32 @@ function hintWords(text: string): string[] {
 
 export function buildIssueHints(l: ReturnType<typeof layout>, request: string, agent: string): string[] {
   const hints: string[] = [];
-  const tokens = [...new Set(hintWords(request))];
+  const words = hintWords(request);
+  const tokens = [...new Set(words)];
   const intent = new Set(hintWords(request.split("\n")[0] ?? ""));
   const wantsUi = HINT_UI.test(request);
+  // Adjacent request words in code are usually one identifier: "min fit"
+  // appears as `minFit`, "run page" as `runPage`. Phrase matches are the only
+  // way to find a local function the symbol map does not expose.
+  const phrases = new Map<string, RegExp>();
+  for (let i = 0; i + 1 < words.length; i += 1) {
+    const a = words[i]!;
+    const b = words[i + 1]!;
+    if (a.length < 3 || b.length < 3) continue;
+    phrases.set(`${a} ${b}`, new RegExp(`${a}[-_ ]?${b}`, "i"));
+  }
   const cachedMap = readCachedMap(l.repoRoot);
   const candidates = (cachedMap?.files ?? [])
-    .filter(
-      (file) =>
-        HINT_CODE.test(file.path) &&
-        !HINT_SKIP.test(file.path) &&
-        !/(^|\/)(test|tests|__tests__)\//.test(file.path) &&
-        !/\.(test|spec)\.[tj]sx?$/.test(file.path),
-    )
+    .filter((file) => HINT_CODE.test(file.path))
     .map((file) => {
-      let header = "";
+      let text = "";
       try {
-        header = readFileSync(join(l.repoRoot, file.path), "utf8").slice(0, 1500);
+        text = readFileSync(join(l.repoRoot, file.path), "utf8").slice(0, 512 * 1024);
       } catch {}
+      const header = text.slice(0, 1500);
+      const lower = text.toLowerCase();
+      const bodyHits = new Set(tokens.filter((token) => lower.includes(token)));
+      const phraseHits = [...phrases].filter(([, pattern]) => pattern.test(lower)).map(([phrase]) => phrase);
       const ordered = [...file.symbols].sort((a, b) => {
         const aHit = tokens.some((token) => a.name.toLowerCase().includes(token)) ? 0 : 1;
         const bHit = tokens.some((token) => b.name.toLowerCase().includes(token)) ? 0 : 1;
@@ -128,6 +136,8 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string, a
         pathWords: new Set(file.path.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)),
         headerWords: new Set(hintWords(header)),
         symbols: file.symbols.map((symbol) => symbol.name.toLowerCase()),
+        bodyHits,
+        phraseHits,
         // Up-front symbol map: the model can read { symbol } immediately
         // instead of spending calls on map symbols/outline to learn names.
         outline: ordered
@@ -149,7 +159,8 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string, a
         (file) =>
           wordHit(file.pathWords, token) ||
           wordHit(file.headerWords, token) ||
-          file.symbols.some((symbol) => symbol.includes(token)),
+          file.symbols.some((symbol) => symbol.includes(token)) ||
+          file.bodyHits.has(token),
       ).length,
     ]),
   );
@@ -161,11 +172,16 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string, a
         const inPath = wordHit(file.pathWords, token);
         const inHeader = wordHit(file.headerWords, token);
         const inSymbol = file.symbols.some((symbol) => symbol.includes(token));
-        if (!inPath && !inHeader && !inSymbol) continue;
-        const weight = (inPath ? 1.5 : 0) + (inHeader ? 1 : 0) + (inSymbol ? 0.2 : 0);
+        const inBody = file.bodyHits.has(token);
+        if (!inPath && !inHeader && !inSymbol && !inBody) continue;
+        const weight = (inPath ? 1.5 : 0) + (inHeader ? 1 : 0) + (inSymbol ? 0.2 : 0) + (inBody ? 0.5 : 0);
         score += weight * idf(token) ** 2 * (intent.has(token) ? 2 : 1);
       }
-      if (wantsUi && file.path.startsWith("src/tui/")) score *= 1.6;
+      for (const phrase of file.phraseHits) {
+        const first = phrase.split(" ")[0] ?? "";
+        score += (intent.has(first) ? 8 : 4);
+      }
+      if (wantsUi && /^src\/tui(?:\.tsx?|\/)/.test(file.path)) score *= 1.6;
       return { path: file.path, score, outline: file.outline };
     })
     .filter((entry) => entry.score > 0)
@@ -420,7 +436,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let contextInclude: import("../context/assemble.js").ContextInclude | undefined;
   if (contextIncludeFlag !== undefined) {
     try {
-      const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; knowledge?: unknown; plans?: unknown; references?: unknown; issues?: unknown };
+      const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; knowledge?: unknown; references?: unknown; issues?: unknown };
       const strings = (value: unknown): string[] | undefined =>
         Array.isArray(value)
           ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
@@ -428,7 +444,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       contextInclude = {
         files: strings(raw.files),
         knowledge: strings(raw.knowledge),
-        plans: strings(raw.plans),
         references: strings(raw.references),
         issues: strings(raw.issues),
       };
@@ -1104,7 +1119,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (agentNameParsed === "research") {
     // Research writes issues//knowledge in the main tree; commit
     // them so the map stays the committed source of truth.
-    await commitPlanningFiles(l, `plans: ${agentNameParsed} run ${recorder.id.slice(-8)}`);
+    await commitPlanningFiles(l, `issues: ${agentNameParsed} run ${recorder.id.slice(-8)}`);
   }
   printRunOutcome(result, recorder);
   // One-way notification on terminal state (M4).

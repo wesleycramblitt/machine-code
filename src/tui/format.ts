@@ -386,8 +386,6 @@ export function contextTone(kind: string): string {
     case "skill": return G;
     case "tool": return M;
     case "script": return BL;
-    case "plan":
-    case "project":
     case "parent-run": return GR;
     default: return C;
   }

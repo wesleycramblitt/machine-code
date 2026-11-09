@@ -28,7 +28,7 @@ import {
 import { sectionHeadings, sectionTitle } from "./sections.js";
 
 export const MAP_SCHEMA = 1 as const;
-export const MAP_VERSION = 3 as const;
+export const MAP_VERSION = 4 as const;
 export const MAP_CAP_BYTES = 32 * 1024;
 /** Files larger than this are listed but not scanned for symbols. */
 const SYMBOL_SCAN_BYTES = 1024 * 1024;
@@ -53,7 +53,7 @@ export interface MapFile {
   imports?: string[];
   /** File-level documentation comment or module docstring, capped. */
   doc?: string;
-  /** Comment banners in large files; used by the semantic file index. */
+  /** Comment banners in large files; used by the module index. */
   sections?: string[];
 }
 
@@ -118,8 +118,19 @@ export function readCachedMap(root: string): RepoMap | null {
   return readMap(mapCachePath(root))?.map ?? null;
 }
 
+/**
+ * Directories we know are not source code in a project tree. Work items and
+ * harness/runtime state are not an orientation signal for the model. This is
+ * deliberately not a list of "boring" folders: docs, data, and anything else
+ * that can contain code stays in the map.
+ */
+const MAP_NON_CODE_DIRS = [".machine_code", ".opencode", "issues"] as const;
+
 function excludedPath(path: string): boolean {
   if (isSecretPath(path)) return true;
+  if (MAP_NON_CODE_DIRS.some((entry) => path === entry || path.startsWith(`${entry}/`) || path.includes(`/${entry}/`))) {
+    return true;
+  }
   return SEARCH_EXCLUDES.some(
     (entry) => path === entry || path.startsWith(`${entry}/`) || path.includes(`/${entry}/`),
   );
@@ -746,17 +757,32 @@ export function renderOutline(file: MapFile): string {
   return file.symbols.map((symbol) => `${symbol.line} ${symbol.kind} ${symbol.name}`).join("\n");
 }
 
-/** Stable, small repo index for the first prompt. Full slices stay on demand.
- * Code directories only: docs, data, plans, and skill files are not an
- * orientation signal and they pull the model into dead ends. */
-const MAP_INDEX_NON_CODE = new Set(["md", "markdown", "json", "yaml", "yml", "toml", "text", "other", ""]);
+/** True when the map language is source code. */
+const NON_CODE_LANGS = new Set(["md", "markdown", "json", "yaml", "yml", "toml", "text", "other", ""]);
 
+export function isCodeLang(lang: string): boolean {
+  return !NON_CODE_LANGS.has(lang);
+}
+
+/** Top-level module: `src/<dir>` or `src/<file>` for source trees. */
+export function moduleOf(path: string): string {
+  const parts = path.split("/");
+  if (parts[0] === "src" && parts.length > 1) {
+    const second = parts[1]!.replace(/\.[^.]+$/, "");
+    return `src/${second}`;
+  }
+  return parts.length > 1 ? parts[0]! : ".";
+}
+
+/** Stable, small repo index for the first prompt. Full slices stay on demand.
+ * Modules, not raw first-level directories: `src/tui.ts` and `src/tui/*`
+ * count together. A folder is never hidden because of its name, only because
+ * its files are not code. */
 export function renderMapIndex(map: RepoMap, maxBytes = 1024): string {
   const dirs = new Map<string, number>();
   for (const file of map.files) {
-    if (MAP_INDEX_NON_CODE.has(file.lang)) continue;
-    const slash = file.path.indexOf("/");
-    const dir = slash < 0 ? "." : file.path.slice(0, slash);
+    if (!isCodeLang(file.lang)) continue;
+    const dir = moduleOf(file.path);
     dirs.set(dir, (dirs.get(dir) ?? 0) + 1);
   }
   const codeFiles = [...dirs.values()].reduce((sum, count) => sum + count, 0);

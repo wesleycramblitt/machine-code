@@ -48,7 +48,7 @@ import { askTool, type AskContext } from "./ask.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
 import { contextTool } from "./context.js";
-import { loadSemanticOrDeterministic, renderModuleGraph, searchSemantic, type SemanticMap } from "../map/semantic.js";
+import { loadModuleIndex, renderModuleGraph, searchModules } from "../map/modules.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
 import type { LedgerEntry, RunStateStore } from "../context/state.js";
 
@@ -67,8 +67,6 @@ export interface ToolContext {
   skills?: SkillToolContext;
   /** Run state for the `context` tool. */
   state?: RunStateStore;
-  /** Current semantic map, if one is available. */
-  semantic?: () => SemanticMap | null;
   /** When present, spawned commands/processes are recorded by the supervisor. */
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
   /** False for read-only roles; blocks non-readonly typed commands. */
@@ -656,20 +654,18 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
     async execute(_id, params: Static<typeof WriteParams>) {
       try {
         // A role that can write but not edit (research) persists only under the
-        // project's issues/, knowledge/, plans/, and .machine_code/ dirs.
+        // project's issues/, knowledge/, and .machine_code/ dirs.
         if (ctx.tools && !ctx.tools.includes("edit")) {
           const p = params.path.replace(/\\/g, "/").replace(/^\.\//, "");
           const allowed =
             p === "knowledge" ||
             p.startsWith("knowledge/") ||
-            p === "plans" ||
-            p.startsWith("plans/") ||
             p === "issues" ||
             p.startsWith("issues/") ||
             p === ".machine_code" ||
             p.startsWith(".machine_code/");
           if (!allowed) {
-            return fail(`write is limited to issues/, knowledge/, or plans/ for this role: ${params.path}`);
+            return fail(`write is limited to issues/, knowledge/, or .machine_code/ for this role: ${params.path}`);
           }
         }
         const abs = resolveWithin(ctx.root, params.path);
@@ -1474,15 +1470,15 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
           case "semantic": {
             if (!params.pattern) return fail("semantic mode requires a query");
-            const semantic = ctx.semantic?.() ?? loadSemanticOrDeterministic(ctx.root);
-            if (!semantic) {
+            const index = loadModuleIndex(ctx.root);
+            if (!index) {
               return fail(
-                "semantic map is not available; use map, outline, or text search, or refresh with machine_code map --semantic",
+                "module index is not available; use map, outline, or text search, or run `machine_code map` first",
               );
             }
-            const matches = searchSemantic(semantic, params.pattern, limit);
+            const matches = searchModules(index, params.pattern, limit);
             if (matches.length === 0) {
-              return ok(`no semantic matches for "${params.pattern}"; try grep or map { "action": "outline" }`);
+              return ok(`no module matches for "${params.pattern}"; try grep or map { "action": "outline" }`);
             }
             return ok(
               matches
@@ -1493,19 +1489,16 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                   const deps = match.entry.deps?.length
                     ? `\n  deps: ${match.entry.deps.join(", ")}`
                     : "";
-                  const hints = match.entry.editHints?.length
-                    ? `\n  hints: ${match.entry.editHints.join("; ")}`
-                    : "";
-                  return `${match.module} (score ${match.score})\n  ${match.entry.summary}${files}${deps}${hints}`;
+                  return `${match.module} (score ${match.score})\n  ${match.entry.summary}${files}${deps}`;
                 })
                 .join("\n\n"),
             );
           }
           case "graph": {
             const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
-            const semantic = ctx.semantic?.() ?? loadSemanticOrDeterministic(ctx.root);
+            const index = loadModuleIndex(ctx.root);
             return ok(
-              renderModuleGraph(built.map, semantic, params.pattern ?? params.path ?? "", 16 * 1024),
+              renderModuleGraph(built.map, index, params.pattern ?? params.path ?? "", 16 * 1024),
             );
           }
           case "sections": {
@@ -1717,7 +1710,7 @@ const MapParams = Type.Object({
       description:
         "overview: repo map; outline: file symbols/sections; symbols: find a symbol by name; " +
         "locate: definitions + text references for an identifier; references: LSP references at path:line:column; " +
-        "definition/info: LSP definition or type at path:line:column; semantic: concept search; " +
+        "definition/info: LSP definition or type at path:line:column; semantic: module concept search; " +
         "graph: module imports; sections: headings in one file; structural: ast-grep pattern.",
     },
   ),
@@ -1771,7 +1764,7 @@ function cleanMapArgs(args: unknown): unknown {
 }
 
 /**
- * Code-structure search over the deterministic repo map, the semantic index,
+ * Code-structure search over the deterministic repo map, the module index,
  * and LSP. Raw text is `grep`; paths are `glob`; file contents are `read`.
  */
 /** Candidate files when a caller hands `outline` a directory. A bare error
@@ -1830,7 +1823,7 @@ export function mapTool(ctx: ToolContext): AgentTool<typeof MapParams> {
     label: "map",
     description:
       "Understand code structure. overview: files and symbols; outline: one file's symbols; " +
-      "symbols: find by name; locate: definitions and references; semantic: concept search. " +
+      "symbols: find by name; locate: definitions and references; semantic: module concept search. " +
       "Use grep for raw text, glob for paths, read for contents.",
     parameters: MapParams,
     prepareArguments: (args) => cleanMapArgs(args) as Static<typeof MapParams>,

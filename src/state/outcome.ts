@@ -187,7 +187,6 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
   const changed = new Set<string>();
   const issues: Array<{ number: number; kind: string; title: string }> = [];
   const linked: string[] = [];
-  const plans = new Set<number>();
   const errors = new Map<string, number>();
   let retries = 0;
   let children = 0;
@@ -238,9 +237,6 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
         break;
       case "issue_linked":
         linked.push(`#${num(event.issue)} under #${num(event.parent)}`);
-        break;
-      case "plan_updated":
-        plans.add(num(event.issue));
         break;
       case "error_classified":
         inc(errors, text(event.kind) || "error");
@@ -294,7 +290,6 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
     );
   }
   if (linked.length > 0) lines.push(`Linked: ${linked.join(", ")}`);
-  if (plans.size > 0) lines.push(`Plans: ${[...plans].map((n) => `#${n}`).join(", ")}`);
 
   lines.push(changed.size === 0 ? "Changes: none" : `Changes: ${[...changed].sort().join(", ")}`);
 

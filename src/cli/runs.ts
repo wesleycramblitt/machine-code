@@ -539,12 +539,12 @@ export async function cmdPack(argv: string[]): Promise<number> {
   const includeFlag = flags.get("context-include");
   if (includeFlag !== undefined) {
     try {
-      const raw = JSON.parse(includeFlag) as { files?: unknown; knowledge?: unknown; plans?: unknown; references?: unknown; issues?: unknown };
+      const raw = JSON.parse(includeFlag) as { files?: unknown; knowledge?: unknown; references?: unknown; issues?: unknown };
       const strings = (value: unknown): string[] | undefined =>
         Array.isArray(value)
           ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
           : undefined;
-      include = { files: strings(raw.files), knowledge: strings(raw.knowledge), plans: strings(raw.plans), references: strings(raw.references), issues: strings(raw.issues) };
+      include = { files: strings(raw.files), knowledge: strings(raw.knowledge), references: strings(raw.references), issues: strings(raw.issues) };
     } catch {
       fail("--context-include must be a JSON object");
     }
@@ -678,7 +678,7 @@ export function cmdSpend(argv: string[]): number {
   } else if (by === "agent") {
     process.stdout.write(`\nby agent\n`);
     for (const [key, bucket] of Object.entries(summary.byAgent).sort((a, b) => b[1].actual - a[1].actual)) {
-      printSpendBucket(key === "map" ? "map (semantic)" : key, bucket);
+      printSpendBucket(key, bucket);
     }
   } else if (by === "day") {
     process.stdout.write(`\nby day\n`);

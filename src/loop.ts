@@ -31,9 +31,8 @@ import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
-import { buildRepoMap, mapBytes, renderMapIndex, symbolCount } from "./map/deterministic.js";
-import { ensureSemanticMap } from "./map/ensure.js";
-import { isSemanticFresh, loadSemantic, readSemanticDirty, buildModuleIndex, mergeModuleIndex, saveSemanticMap, type SemanticMap } from "./map/semantic.js";
+import { buildRepoMap, mapBytes, renderMapIndex, symbolCount, type RepoMap } from "./map/deterministic.js";
+import { buildModuleIndex, renderModuleIndex, type ModuleIndex } from "./map/modules.js";
 import { RunStateStore } from "./context/state.js";
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
@@ -143,7 +142,7 @@ export interface RunLoopInput {
   contextText?: string;
   /** Skip the deterministic repo map index in the model's up-front context. */
   skipMap?: boolean;
-  /** Skip semantic module annotations in the up-front context. */
+  /** Skip the deterministic module index in the up-front context. */
   skipSemantic?: boolean;
   /** Composer-excluded skill names the skill tool must refuse. */
   skillExcludes?: string[];
@@ -407,11 +406,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     onEvent: (type, data) => recorder.event(type, data),
   });
   const wantMap = input.skipMap !== true;
-  const wantSemantic = input.skipSemantic !== true;
+  const wantModules = input.skipSemantic !== true;
   // Up-front context stays small and stable so the provider cache absorbs
-  // it once: the one-line map index, the query-biased semantic slice, and
-  // full file/symbol detail on demand (map outline, read symbol, map slice). The full per-file map is never re-sent; it costs ~26k chars a
-  // turn and the same bytes are one pull call away.
+  // it once: the one-line map index, the query-biased module index, and
+  // full file/symbol detail on demand (map outline, read symbol, map slice).
+  // The full per-file map is never re-sent.
   let mapIndex = "";
   // Names only. The model must know a command exists before it can ask for
   // its schema; guessing core:run/typescript:check was a wasted call in every
@@ -425,81 +424,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           "</commands>",
         ].join("\n")
       : "";
-  let semanticMap: SemanticMap | null = null;
-  // The semantic overlay is available through `map semantic`; it is not
-  // injected into the prompt. Its LLM summaries go stale and name the wrong
-  // key files, while the deterministic map plus doc-header hints stay true.
-  const renderIndex = (map: Awaited<ReturnType<typeof buildRepoMap>>["map"]): string =>
-    wantMap ? renderMapIndex(map) : "";
-  if (wantMap || wantSemantic) try {
+  let moduleIndex: ModuleIndex | null = null;
+  const renderIndex = (map: RepoMap, index: ModuleIndex | null): string =>
+    [
+      wantMap ? renderMapIndex(map) : "",
+      wantModules ? renderModuleIndex(index, 3_072, input.request) : "",
+    ].filter(Boolean).join("\n");
+  if (wantMap || wantModules) try {
     const built = await buildRepoMap(mapRoot, { processes });
-    const dirty = wantSemantic ? readSemanticDirty(mapRoot) : [];
-    const deterministic = wantSemantic ? buildModuleIndex(built.map) : null;
-    const cached = wantSemantic ? loadSemantic(mapRoot) : null;
-    const cachedFresh = cached && isSemanticFresh(cached, built.map, dirty) ? cached : null;
-    // Persist the deterministic index immediately when there is no fresh
-    // annotation overlay. The TUI and `search semantic` then see a current
-    // semantic map even when LLM annotations are disabled or pending.
-    if (wantSemantic && deterministic && !cachedFresh) {
-      try {
-        saveSemanticMap(mapRoot, deterministic);
-      } catch {
-        // A cache write failure must not block the run.
-      }
-    }
-    semanticMap = deterministic ? mergeModuleIndex(deterministic, cachedFresh) : null;
-    const fresh = Boolean(cachedFresh);
-    mapIndex = renderIndex(built.map);
+    moduleIndex = wantModules ? buildModuleIndex(built.map) : null;
+    mapIndex = renderIndex(built.map, moduleIndex);
     recorder.event("map_built", {
       files: built.map.files.length,
       symbols: symbolCount(built.map),
       bytes: mapBytes(built.map),
       cached: built.cached,
       head: built.map.head,
-      semantic: wantSemantic,
-      semanticMode: fresh ? "annotated" : "deterministic",
-      semanticDirty: dirty.length,
+      modules: moduleIndex ? Object.keys(moduleIndex.modules).length : 0,
     });
-    // Do not block the first prompt on a semantic refresh. Use the
-    // deterministic index immediately. LLM annotations are opt-in: only
-    // refresh them when a semantic model is pinned or refresh is "always".
-    const annotationsEnabled =
-      Boolean(input.machine.map.semanticModel) || input.machine.map.refresh === "always";
-    if (wantSemantic && !fresh && annotationsEnabled) {
-      recorder.event("map_refresh_scheduled", { turn: 0, reason: cached ? "stale" : "missing" });
-      void ensureSemanticMap({
-        root: mapRoot,
-        map: built.map,
-        models: input.models,
-        catalogue: input.catalogue,
-        configuredProviders,
-        fundedProviders,
-        policy,
-        machine: input.machine,
-        availability,
-        home: input.home,
-        runId: recorder.id,
-        recorder,
-        signal: input.signal,
-      }).then((refreshed) => {
-        if (!refreshed) return;
-        semanticMap = deterministic ? mergeModuleIndex(deterministic, refreshed) : refreshed;
-        mapIndex = renderIndex(built.map);
-        recorder.event("map_refresh", {
-          turn: 0,
-          ok: true,
-          background: true,
-          modules: Object.keys(semanticMap?.modules ?? {}).length,
-        });
-      }).catch((error) => {
-        recorder.event("map_refresh", {
-          turn: 0,
-          ok: false,
-          background: true,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
   } catch (error) {
     recorder.event("map_built", {
       ok: false,
@@ -520,49 +462,34 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   if (input.seedFiles && input.seedFiles.length > 0) {
     memory.seedWorkingFiles(input.seedFiles, 0);
   }
-  // Semantic refresh after a changed turn. Coalesce so a burst of edits
-  // produces at most one in-flight refresh plus one follow-up.
-  let semanticRefreshInFlight = false;
-  let semanticRefreshQueued = false;
-  const runSemanticRefresh = async (turn: number): Promise<void> => {
-    if (input.skipSemantic) return;
+  // Rebuild the map and module index after a changed turn. The map cache is
+  // keyed by the exact working tree, so this is a cheap stat pass when
+  // nothing changed. Coalesce a burst of edits into one rebuild.
+  let mapRefreshInFlight = false;
+  let mapRefreshQueued = false;
+  const refreshMapIndex = async (turn: number): Promise<void> => {
+    if (!wantMap && !wantModules) return;
     const built = await buildRepoMap(mapRoot, { processes });
-    const deterministic = buildModuleIndex(built.map);
-    const semantic = await ensureSemanticMap({
-      root: mapRoot,
-      map: built.map,
-      models: input.models,
-      catalogue: input.catalogue,
-      configuredProviders,
-      fundedProviders,
-      policy,
-      machine: input.machine,
-      availability,
-      home: input.home,
-      runId: recorder.id,
-      recorder,
-      signal: input.signal,
-    });
-    semanticMap = mergeModuleIndex(deterministic, semantic);
-    mapIndex = renderIndex(built.map);
+    moduleIndex = wantModules ? buildModuleIndex(built.map) : null;
+    mapIndex = renderIndex(built.map, moduleIndex);
     recorder.event("map_refresh", {
       turn,
       ok: true,
-      modules: Object.keys(semanticMap.modules).length,
+      cached: built.cached,
+      modules: moduleIndex ? Object.keys(moduleIndex.modules).length : 0,
     });
   };
-  const scheduleSemanticRefresh = (turn: number): void => {
-    if (!input.machine.map.enabled || !input.machine.map.semantic || input.machine.map.refresh === "manual") return;
-    if (!input.machine.map.semanticModel && input.machine.map.refresh !== "always") return;
-    if (semanticRefreshInFlight) {
-      semanticRefreshQueued = true;
+  const scheduleMapRefresh = (turn: number): void => {
+    if (!input.machine.map.enabled || (!wantMap && !wantModules)) return;
+    if (mapRefreshInFlight) {
+      mapRefreshQueued = true;
       return;
     }
-    semanticRefreshInFlight = true;
+    mapRefreshInFlight = true;
     recorder.event("map_refresh_scheduled", { turn });
     void (async () => {
       try {
-        await runSemanticRefresh(turn);
+        await refreshMapIndex(turn);
       } catch (error) {
         recorder.event("map_refresh", {
           turn,
@@ -570,10 +497,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           error: error instanceof Error ? error.message : String(error),
         });
       } finally {
-        semanticRefreshInFlight = false;
-        if (semanticRefreshQueued) {
-          semanticRefreshQueued = false;
-          scheduleSemanticRefresh(turn);
+        mapRefreshInFlight = false;
+        if (mapRefreshQueued) {
+          mapRefreshQueued = false;
+          scheduleMapRefresh(turn);
         }
       }
     })();
@@ -884,7 +811,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         artifacts: artifactContext,
         skills: skillContext,
         state: memory,
-        semantic: () => semanticMap,
         processes,
         allowMutations: (input.agentCapabilities ?? []).includes("code:write"),
       },
@@ -1360,7 +1286,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               turns + 1,
               { agent: input.agent.name, model: currentRow?.key },
             );
-            if (ingested.changed) scheduleSemanticRefresh(turns + 1);
+            if (ingested.changed) scheduleMapRefresh(turns + 1);
             recorder.event("context_state", {
               turn: turns + 1,
               chars: lastRequestChars,

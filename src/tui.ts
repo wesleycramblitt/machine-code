@@ -95,7 +95,7 @@ import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "
 import { listReferenceEntries } from "./references/store.js";
 import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
-import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "./map/semantic.js";
+import { loadModuleIndex } from "./map/modules.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
 import { commitPlanningFiles } from "./tasks/planning.js";
@@ -121,12 +121,11 @@ interface ChangesCache {
 /** Compact codebase-index health tokens for bottom footers. */
 function mapStatusTokens(root: string): string[] {
   const mapCached = existsSync(join(root, ".machine_code", "local", "cache", "map.json"));
-  const semantic = loadSemanticOrDeterministic(root);
-  const semanticDirty = readSemanticDirty(root);
+  const modules = loadModuleIndex(root);
   const lspReady = serverAvailable("typescript");
   return [
     `${mapCached ? G : Y}MAP${mapCached ? "✓" : "✗"}${R}`,
-    `${semantic ? (semanticDirty.length ? Y : G) : GR}SEM${semantic ? (semanticDirty.length ? "~" : "✓") : "-"}${R}`,
+    `${modules ? G : GR}MOD${modules ? "✓" : "-"}${R}`,
     `${lspReady ? G : GR}LSP${lspReady ? "✓" : "✗"}${R}`,
   ];
 }
@@ -299,7 +298,6 @@ export async function runTui(): Promise<void> {
     resetNewRunUi();
     // The issue file is the objective and is always explicit context.
     if (issue) s.newRunContextIncluded.add(`issue:${issue.rel}`);
-    if (seed?.plan) s.newRunContextIncluded.add(`plan:${seed.plan}`);
     for (const name of seed?.skills ?? []) s.newRunSkillModes.set(name, "include");
     s.screen = "newrun";
   };
@@ -392,9 +390,8 @@ export async function runTui(): Promise<void> {
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...s.newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
-    const includedPlansKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("plan:")).sort().join(",");
     const includedIssuesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("issue:")).sort().join(",");
-    const previewKey = `${s.newRunRepo}\0${s.newrun.item ?? ""}\0${s.newrun.agent}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}\0${includedIssuesKey}`;
+    const previewKey = `${s.newRunRepo}\0${s.newrun.item ?? ""}\0${s.newrun.agent}\0${skillModesKey}\0${includedFilesKey}\0${includedIssuesKey}`;
     const previewTtl = s.newRunInsert ? 60_000 : 5_000;
     if (
       !s.newRunPreviewCache ||
@@ -408,14 +405,10 @@ export async function runTui(): Promise<void> {
         at: Date.now(),
         context: previewContext(newRunLayout, "", {
           agent: s.newrun.agent,
-          planFile: machine?.context.planFile,
           knowledgeIndex: machine?.context.knowledgeIndex,
           files: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("file:"))
             .map((key) => key.slice("file:".length)),
-          plans: [...s.newRunContextIncluded]
-            .filter((key) => key.startsWith("plan:"))
-            .map((key) => key.slice("plan:".length)),
           issues: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("issue:"))
             .map((key) => key.slice("issue:".length)),
@@ -592,18 +585,14 @@ export async function runTui(): Promise<void> {
     const includedKnowledge = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("knowledge:"))
       .map((key) => key.slice("knowledge:".length));
-    const includedPlans = [...s.newRunContextIncluded]
-      .filter((key) => key.startsWith("plan:"))
-      .map((key) => key.slice("plan:".length));
     const includedReferences = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("reference:"))
       .map((key) => key.slice("reference:".length));
-    if (includedFiles.length > 0 || includedIssues.length > 0 || includedKnowledge.length > 0 || includedPlans.length > 0 || includedReferences.length > 0) {
+    if (includedFiles.length > 0 || includedIssues.length > 0 || includedKnowledge.length > 0 || includedReferences.length > 0) {
       args.push("--context-include", JSON.stringify({
         ...(includedFiles.length > 0 ? { files: includedFiles } : {}),
         ...(includedIssues.length > 0 ? { issues: includedIssues } : {}),
         ...(includedKnowledge.length > 0 ? { knowledge: includedKnowledge } : {}),
-        ...(includedPlans.length > 0 ? { plans: includedPlans } : {}),
         ...(includedReferences.length > 0 ? { references: includedReferences } : {}),
       }));
     }

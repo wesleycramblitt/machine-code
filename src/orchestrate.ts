@@ -55,7 +55,7 @@ export interface OrchestrateInput {
   contextText?: string;
   /** Repo-relative files pinned into the working set before the first model call. */
   seedFiles?: string[];
-  /** Skip the deterministic map index / semantic annotations up front. */
+  /** Skip the deterministic map and module index up front. */
   skipMap?: boolean;
   skipSemantic?: boolean;
   signal?: AbortSignal;

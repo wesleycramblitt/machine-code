@@ -21,7 +21,6 @@ export interface ContextManifest {
 export function sectionsFromSources(sources: readonly ContextSource[]): ContextSections {
   const sections: ContextSections = {
     issues: 0,
-    plans: 0,
     knowledge: 0,
     skills: 0,
     scripts: 0,
@@ -42,8 +41,7 @@ function parseSections(raw: unknown, sources: ContextSource[]): ContextSections 
   if (raw && typeof raw === "object") {
     const record = raw as Record<string, unknown>;
     const sections: ContextSections = {
-        issues: 0,
-      plans: 0,
+      issues: 0,
       knowledge: 0,
       skills: 0,
       scripts: 0,

@@ -1,16 +1,12 @@
 /**
  * machine_code — context bundle types.
  *
- * Context is assembled per run from inherited (plans, parent runs),
- * explicit (issues, knowledge, skills selected in the composer), and
- * discovered (tool results) sources. The rendered text is what the model
- * sees; the manifest (context.json) records provenance so every block is
- * traceable.
+ * Context is assembled per run from inherited (parent runs), explicit
+ * (issues, knowledge, skills selected in the composer), and discovered
+ * (tool results) sources. The rendered text is what the model sees; the
+ * manifest (context.json) records provenance so every block is traceable.
  */
 export type ContextKind =
-  | "plan"
-  /** Legacy manifests used "project" for the single plan file. */
-  | "project"
   | "epic"
   | "feature"
   /** Legacy manifests used "task" for the current issue block. */
@@ -29,7 +25,6 @@ export type ContextOrigin = "inherited" | "explicit" | "discovered";
 /** Budget section for per-section chars (context.json + composer preview). Keys mirror the composer exclusion sections 1:1, so accounting matches what the TUI shows; `files` counts only `kind:file`. Render-side sections (system) record 0 in assemble. */
 export type ContextSection =
   | "issues"
-  | "plans"
   | "knowledge"
   | "skills"
   | "scripts"

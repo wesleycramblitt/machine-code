@@ -92,7 +92,7 @@ const SPECS: CommandSpec[] = [
       action: { type: "string", description: "status | render | refresh (default render)." },
       path: { type: "string", description: "Directory or file prefix for render." },
       symbols: { type: "boolean", description: "Include symbols in render (default true)." },
-      semantic: { type: "boolean", description: "Append semantic module annotations." },
+      semantic: { type: "boolean", description: "Append the deterministic module index." },
       refresh: { type: "boolean", description: "Rebuild the cache before returning." },
     },
     readonly: true,

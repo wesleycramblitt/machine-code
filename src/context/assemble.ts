@@ -53,8 +53,6 @@ export interface ContextInclude {
   files?: string[];
   /** Repo-relative knowledge files to add explicitly from the composer. */
   knowledge?: string[];
-  /** Repo-relative plan files to add explicitly from the composer. */
-  plans?: string[];
   /** Repo-relative issue files to add explicitly from the composer. */
   issues?: string[];
   /** Reference citations to add explicitly from the composer. */
@@ -64,7 +62,7 @@ export interface ContextInclude {
 export interface AssembleInput {
   layout: Layout;
   machine: MachineConfig;
-  /** Role name; the plan map is inherited for every role. */
+  /** Role name. */
   agent?: string;
   /** Parent run and its ancestors, nearest first, for selected context inheritance. */
   parentRuns?: Array<{
@@ -112,7 +110,6 @@ const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
   skills: ["skill"],
   tools: ["tool"],
   scripts: ["script"],
-  plans: ["plan", "project"],
   issues: ["issue"],
 };
 
@@ -124,19 +121,17 @@ function sha1(text: string): string {
  * Fixed render order for assembled context blocks (lost-in-the-middle
  * layout, prompt-cache stable).
  *
- * Section order is fixed and documented: plan first (highest
+ * Section order is fixed and documented: the issue first (highest
  * relevance), then retrieved files by relevance (file, knowledge,
  * reference), then tools/skills/scripts aggregates, then the parent-run
  * chain last (most volatile). Within a section, band/depth priority order
  * (relevance) is preserved. Volatile per-turn content (working context,
- * ledger tail, run state, transcript) is render-side and always renders
- * after this block in renderPromptMessages, so reordering the volatile tail
- * never shifts this stable prefix.
+ * run state, transcript) is render-side and always renders after this block
+ * in renderPromptMessages, so reordering the volatile tail never shifts this
+ * stable prefix.
  */
 export const CONTEXT_RENDER_ORDER: Record<string, number> = {
-  plan: 1,
-  project: 1,
-  issue: 2,
+  issue: 1,
   file: 2,
   knowledge: 3,
   reference: 4,
@@ -385,24 +380,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       pending.push({ kind: "knowledge", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
     }
   }
-  for (const path of input.include?.plans ?? []) {
-    const abs = withinRepo(layout.repoRoot, path);
-    if (!abs || !existsSync(abs)) {
-      pending.push({
-        kind: "plan",
-        origin: "explicit",
-        ref: path,
-        body: "",
-        band: 1,
-        warning: "included plan is missing or outside the repo",
-      });
-      continue;
-    }
-    const read = readFileText(abs);
-    if (read) {
-      pending.push({ kind: "plan", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
-    }
-  }
   for (const citation of input.include?.references ?? []) {
     const read = readReference(layout, citation, Number.MAX_SAFE_INTEGER);
     if (!read.ok) {
@@ -564,16 +541,15 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Priority budget: the usable input budget (limit minus the caller's
   // response reserve) with no per-section caps. Over budget, whole sources
   // are dropped lowest-priority-first with a named omission; a kept block is
-  // never sliced mid-content. Priority is role-aware: research keeps the
-  // plan index above all; engineer/review keep the issue first and working
-  // files above plan docs, research keeps knowledge/references above files.
-  // The issue and explicitly-included plans are never dropped while
+  // never sliced mid-content. Priority is role-aware: engineer/review keep
+  // the issue first and working files above docs; research keeps
+  // knowledge/references above files. The issue is never dropped while
   // anything else remains.
   const { budget: usable } = sectionBudgets(budget);
 
   // Drop rank: higher is dropped first. Aggregates (tool index, skill
   // descriptions) go first, then the parent chain, skill bodies, and the
-  // working set; the issue and explicit plans go last on every role.
+  // working set; the issue goes last on every role.
   const dropRank = (item: Pending): number => {
     const role = input.agent;
     if (item.kind === "tool") return 60;
@@ -581,11 +557,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (item.kind === "parent-run") return 50;
     if (item.kind === "skill" || item.kind === "script") return 40;
     if (item.kind === "issue") return item.origin === "explicit" ? 8 : 22;
-    if (item.kind === "plan" || item.kind === "project") {
-      if (item.origin === "explicit") return 15;
-      // Inherited plan index: research's core context, droppable docs elsewhere.
-      return role === "research" ? 12 : 28;
-    }
     if (item.kind === "knowledge") {
       if (role === "research") return 20;
       return role === "research" ? 25 : 30;
@@ -665,7 +636,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   }
 
   // Render every kept source in fixed section order (CONTEXT_RENDER_ORDER):
-  // plan first, retrieved files by relevance, tools/skills, parents
+  // issue first, retrieved files by relevance, tools/skills, parents
   // last. Array.prototype.sort is stable, so relevance (band/depth) order is
   // preserved within a section. The runner may trim the prompt to the
   // selected model's input window, but that is a model limit, not a per-file
@@ -697,7 +668,6 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   }
   const sections: ContextSections = {
     issues: 0,
-    plans: 0,
     knowledge: 0,
     skills: 0,
     scripts: 0,
@@ -709,24 +679,20 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   };
   for (const entry of entries) sections[sectionForKind(entry.kind)] += entry.len;
 
-  // Lost-in-the-middle recap: when plan/issue sources exist, restate the
-  // critical objective last (highest-relevance first AND last) so the tail of
-  // the stable prefix re-anchors the run before the volatile per-turn
-  // content (working context, ledger, transcript) follows in render.ts.
-  const planSources = ordered.filter(
-    (entry) => entry.kind === "issue" || entry.kind === "plan" || entry.kind === "project",
-  );
+  // Lost-in-the-middle recap: when issue sources exist, restate the critical
+  // objective last (highest-relevance first AND last) so the tail of the
+  // stable prefix re-anchors the run before the volatile per-turn content
+  // (working context, transcript) follows in render.ts.
+  const issueSources = ordered.filter((entry) => entry.kind === "issue");
   let recap = "";
-  if (planSources.length > 0) {
-    const points = planSources.slice(0, 4).map((entry) => {
+  if (issueSources.length > 0) {
+    const points = issueSources.slice(0, 4).map((entry) => {
       const first = entry.body.split("\n").find((line) => line.trim() !== "") ?? entry.ref;
-      const label = entry.kind === "issue" ? "issue" : entry.kind;
-      return `${label} ${entry.ref}: ${first.trim().slice(0, 120)}`;
+      return `issue ${entry.ref}: ${first.trim().slice(0, 120)}`;
     });
     recap = `<context-recap>\nRecap (authoritative — act on this): ${points.join("; ")}. The issue blocks above outrank the working files in between.\n</context-recap>`;
     blocks.push(recap);
-    const bucket = "plans";
-    sections[bucket] += recap.length;
+    sections.issues += recap.length;
   }
 
   const used = totalLen() + recap.length;

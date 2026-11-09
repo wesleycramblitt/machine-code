@@ -121,16 +121,13 @@ export interface MachineConfig {
   /** Context assembly ([context]). */
   context: {
     maxChars: number;
-    planFile?: string;
     knowledgeIndex?: string;
   };
   /** Repository map ([map]). */
   map: {
     enabled: boolean;
+    /** Deterministic module index in the up-front context. */
     semantic: boolean;
-    /** Optional pinned model key/id for semantic annotations. */
-    semanticModel?: string;
-    refresh: "on-change" | "manual" | "always";
   };
   /** TUI palette ([theme]); hex strings. */
   theme: ThemeConfig;
@@ -276,7 +273,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       ? availabilityRaw.probe
       : "metadata";
   const mapRaw = (raw.map ?? {}) as Record<string, unknown>;
-  const mapRefresh = mapRaw.refresh === "manual" || mapRaw.refresh === "always" ? mapRaw.refresh : "on-change";
   const themeRaw = (raw.theme ?? {}) as Record<string, unknown>;
   const theme: ThemeConfig = {};
   for (const key of Object.keys(DEFAULT_THEME) as Array<keyof ThemeConfig>) {
@@ -316,7 +312,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     agents,
     context: {
       maxChars: asNumber(contextRaw.max_chars) ?? 64_000,
-      planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
       // No knowledge directory is injected by default. Repo facts come from
       // code doc headers and the live map; external material lives in the
       // reference store. An explicit knowledge_index still wins.
@@ -325,10 +320,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     map: {
       enabled: mapRaw.enabled !== false,
       semantic: mapRaw.semantic !== false,
-      semanticModel: typeof mapRaw.semantic_model === "string" && mapRaw.semantic_model.trim()
-        ? mapRaw.semantic_model.trim()
-        : undefined,
-      refresh: mapRefresh,
     },
     theme,
   };

@@ -35,19 +35,18 @@ export interface RunDetail {
   dir: string;
 }
 
-/** Composer seed when a run is started from a plan file or plan line. */
+/** Composer seed when a run is started from an issue row. */
 export interface NewRunSeed {
   /** Role to preselect (research for idea rows, engineer for features/bugs). */
   agent?: string;
-  /** Repo-relative plan attached as explicit context. */
-  plan?: string;
   /** Default prompt; editable in the composer. */
   prompt?: string;
   /** Skill names forced to include for this seed. */
   skills?: string[];
-  /** Plan item slug (research/planning runs without a contract). */
+  /** Issue slug. */
   item?: string;
 }
+
 
 export interface TuiState {
   page: Page;

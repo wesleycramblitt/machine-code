@@ -19,12 +19,10 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
 import { readGitStatus, type GitStatusEntry } from "./git-status.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
-import { markSemanticDirty } from "../map/semantic.js";
-import { recordSemanticChange } from "../map/changes.js";
 
 /** Keep the model-facing state block compact; full facts remain in state.jsonl. */
 const MAX_STATE_CHARS = 10_000;
-const PLAN_NEXT = /^(?:execute the plan|make the first edit)\b/i;
+const EDIT_NEXT = /^(?:make the first edit|make the edit)\b/i;
 const FINISH_NEXT = "Change recorded; finish remaining edits or stop with your terminal line.";
 
 export type FactKind = "finding" | "decision" | "change";
@@ -847,9 +845,9 @@ export class RunStateStore {
     return changed;
   }
 
-  /** Replace a plan's "first edit" next action once a change exists. */
+  /** Replace a "first edit" next action once a change exists. */
   private settleNextAfterChange(turn: number): void {
-    if (!this.state.nextAction || PLAN_NEXT.test(this.state.nextAction)) {
+    if (!this.state.nextAction || EDIT_NEXT.test(this.state.nextAction)) {
       this.append({ type: "next", text: FINISH_NEXT, turn });
     }
   }
@@ -862,18 +860,6 @@ export class RunStateStore {
   ): void {
     if (!this.repoRoot || items.length === 0) return;
     const paths = [...new Set(items.map((item) => item.path))].sort();
-    for (const item of items) {
-      markSemanticDirty(this.repoRoot, [item.path]);
-      recordSemanticChange(this.repoRoot, {
-        runId: this.runId,
-        turn,
-        agent: actor?.agent ?? "unknown",
-        ...(actor?.model ? { model: actor.model } : {}),
-        path: item.path,
-        tool: "git",
-        detail: `git status ${item.code} ${item.path}${commandName ? ` · via ${commandName}` : ""}`,
-      });
-    }
     const shown = paths.slice(0, 8).join(", ");
     this.append({
       type: "fact",
@@ -898,18 +884,6 @@ export class RunStateStore {
     summary: string,
     change?: { agent?: string; model?: string; tool?: string; detail?: string },
   ): void {
-    if (this.repoRoot) {
-      markSemanticDirty(this.repoRoot, [path]);
-      recordSemanticChange(this.repoRoot, {
-        runId: this.runId,
-        turn,
-        agent: change?.agent ?? "unknown",
-        ...(change?.model ? { model: change.model } : {}),
-        path,
-        tool: change?.tool ?? "edit",
-        detail: change?.detail ?? summary,
-      });
-    }
     const label = ref.range ? `${path}:${ref.range[0]}-${ref.range[1]}` : path;
     this.append({
       type: "fact",
@@ -1125,22 +1099,18 @@ export class RunStateStore {
       // Git status changes can come from another process sharing the tree.
       // Only edit/write facts prove this run changed something.
       const runChanges = changes.filter((fact) => !fact.key.startsWith("change:git:"));
-      const planDecision = decisions.some((fact) => /\bplan\b/i.test(fact.text));
       const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`];
       if (decisions.length > 0) {
         lines.push("Decisions:");
         for (const fact of decisions) lines.push(`- ${fact.text}`);
       }
-      // A plan that has not changed for several turns is stale. Do not let the
-      // model follow yesterday's "explore" instruction forever. Once a plan
-      // exists, the next action is the first edit, not more reading.
+      // A next action that has not changed for several turns is stale. Once
+      // a change exists, the next action is to finish, not to keep reading.
       const nextTurn = this.state.nextActionTurn;
       const nextAge = nextTurn === undefined ? 0 : this.currentTurn() - nextTurn;
-      const planNext = PLAN_NEXT.test(this.state.nextAction ?? "");
-      if (runChanges.length > 0 && (planNext || !this.state.nextAction || nextAge > 6)) {
+      const editNext = EDIT_NEXT.test(this.state.nextAction ?? "");
+      if (runChanges.length > 0 && (editNext || !this.state.nextAction || nextAge > 6)) {
         lines.push(`Next: ${FINISH_NEXT}`);
-      } else if (planDecision && runChanges.length === 0) {
-        lines.push("Next: Execute the plan: make the first edit.");
       } else if (this.state.nextAction && nextAge <= 6) {
         lines.push(`Next: ${this.state.nextAction}`);
       } else {

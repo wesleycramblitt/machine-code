@@ -439,46 +439,39 @@ questions, be paused/forked, and resume after a restart.
 ### Repository map, run state, and prompts
 
 `machine_code map [path]` prints the deterministic file and symbol map. It is
-cached under `.machine_code/local/cache/map.json`; `--status` shows map, semantic,
-and LSP health; `--semantic` adds module annotations; `--refresh` rebuilds the
+cached under `.machine_code/local/cache/map.json`; `--status` shows map, module,
+and LSP health; `--semantic` adds the module index; `--refresh` rebuilds the
 deterministic cache.
 
-The index has three layers:
+The index has two layers:
 
 - **Deterministic map** — file inventory, line counts, top-level symbols,
   large-file section headings, and resolved TS/JS import edges. Always
   available; no model call.
-- **Semantic index** — module summaries, key files, search keywords, and
-  dependency edges. Deterministic by default; LLM annotations are an optional
-  overlay. It is persisted as `semantic.json` and powers the TUI `SEM` token.
-- **LSP** — exact symbol definitions, references, hover, diagnostics, and
-  rename for the current language server. On demand; never required for the
-  deterministic or semantic layers.
+- **Module index** — module summaries, key files, search keywords, and
+  dependency edges, derived entirely from the map and each file's doc header.
+  Built on demand and never cached as a second artifact, so it cannot go stale
+  or contradict the code.
+
+LSP is a separate on-demand layer for exact definitions, references, hover,
+diagnostics, and rename. It is never required to build the map or module index.
 
 Deterministic symbol and documentation extraction covers TypeScript/JavaScript,
 Python, Rust, Go, Shell, Java, C#, Kotlin, Swift, Ruby, PHP, Lua, C/C++, Dart,
 Elixir, and Scala. Import edges resolve for TypeScript/JavaScript, Python, and
-Rust; LSP provides exact references for other languages. Module summaries prefer
-file headers and doc comments, so a documented codebase gets a conceptual
-semantic overview without an LLM call.
+Rust; LSP provides exact references for other languages. `src/tui.ts` and
+`src/tui/*` share the `src/tui` module, so an entry file and its submodules are
+described together. Files over 400 lines also get a file-level entry whose
+keywords include their comment section headings, so a monolithic file is
+searchable by section.
 
-Semantic annotations are module-level summaries with key files, edit hints, and
-search keywords. Files over 400 lines also get a file-level entry whose
-keywords include their comment section headings, so a monolithic file such as
-`src/tui.ts` is searchable by section. Every run builds a deterministic module
-index immediately from the repo map, so the semantic index is always fresh and
-costs no model call. The deterministic index is persisted to
-`semantic.json` when no fresh annotation overlay exists, so the TUI `SEM` token
-and `search semantic` see it without an LLM call. Module entries also carry
-deterministic `deps` from TS/JS imports. LLM annotations are optional: they
-refresh only when `map.semantic_model` is pinned or `map.refresh = "always"`;
-otherwise the deterministic index is used. Generate them on demand with
-`machine_code map --semantic --refresh`. The startup semantic map is
-module-level and capped at 3 KiB; file entries appear in `map` results.
-`map { "action": "semantic" }` ranks modules and large files by keyword overlap
-and returns their key files and dependency edges, so an agent can go from a
-concept or filename to the right file in one call. `map { "action": "graph" }`
-renders the deterministic module import graph, optionally ranked by a query.
+Every run builds the module index from the live map and puts a query-ranked
+slice in the up-front context (capped at 3 KiB). File entries appear in `map`
+results. `map { "action": "semantic" }` ranks modules and large files by
+keyword overlap and returns their key files and dependency edges, so an agent
+can go from a concept or filename to the right file in one call.
+`map { "action": "graph" }` renders the deterministic module import graph,
+optionally ranked by a query.
 
 Each run keeps its working memory outside the transcript:
 
@@ -490,9 +483,9 @@ Each run keeps its working memory outside the transcript:
 ```
 
 The model sees the run state, an always-on overview (issues, knowledge, repo
-map, semantic index), the last two complete tool steps, not the full tool
-history, and no hidden task pack. The prompt is exactly the context curated in
-the composer plus the always-on indexes. There is no automatic preload,
+map, module index), the full prior transcript, and no hidden task pack. The
+prompt is exactly the context curated in the composer plus the always-on
+indexes. There is no automatic preload,
 dependency expansion, inferred test list, or knowledge-note scoring: the model
 reads, searches, or expands a symbol when it needs more. Context is assembled
 in priority order. If it exceeds the
@@ -552,27 +545,18 @@ several issues joined by `depends`. Set `review = "agent"` for consequential
 work and `review = "human"` when it must not auto-merge; otherwise `none`
 (gates only) applies.
 
-LLM annotations are optional. An `edit`/`write` appends its path to
-`semantic.dirty` and a bounded entry to `changes.jsonl` with the turn, changing
-agent/model, tool result, line delta, and one-line intent. After any mutating
-tool, a git-status delta also catches deletes, renames, formatters, and
-command-side writes; it stores status codes and fingerprints, never file
-content. The semantic call reads the deterministic map slice, dirty modules,
-existing annotations, and that digest, never the transcript. At most one refresh
-is in flight; further changed turns queue one follow-up, so edits never become
-per-edit model calls. Spend groups the calls as `map (semantic)`. Automatic
-annotation refresh happens only when `map.semantic_model` is pinned or
-`map.refresh = "always"`; otherwise the deterministic index is used and no
-annotation call is made.
+There is no annotation cache and no map-side model call. After a mutating
+turn, the runner rebuilds the map from the working tree; the cache key covers
+git HEAD, git status, and every file's path, size, and mtime, so unchanged
+trees return the cached map. The module index is rebuilt from that map in the
+same pass.
 
 Map configuration lives in `~/.machine_code/config.toml`:
 
 ```toml
 [map]
 enabled = true
-semantic = true
-semantic_model = ""    # pin a model, or leave empty for automatic selection
-refresh = "on-change"  # on-change | manual | always
+semantic = true   # deterministic module index in the up-front context
 ```
 
 ### Language servers
@@ -598,7 +582,7 @@ Map actions:
   inside one file. Use it for large files whose useful blocks live inside one
   giant function.
 - `map { "action": "graph", "pattern": "context" }` renders the module import
-  graph, with semantic summaries and query-ranked modules.
+  graph, with module summaries and query-ranked modules.
 - `map { "action": "symbols", "path": "src/loop.ts", "pattern": "RunRecorder" }`
   uses LSP document symbols when a path is given, workspace symbols otherwise,
   then falls back to the repo map.

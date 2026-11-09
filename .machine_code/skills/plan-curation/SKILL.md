@@ -64,5 +64,3 @@ One paragraph of detail the prompt needs.
    semantic definition of done. A review mode decides who judges it.
 3. Move the file with `machine_code issue move` or `git mv` when its status
    changes: `ideas/.researched/`, `features/todo|blocked|done/`.
-4. `plans/` is a legacy bridge only. Contracts live in `issues/packets/`;
-   everything else is an issue under `issues/`.

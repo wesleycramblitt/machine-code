@@ -17,7 +17,7 @@ import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
 
 export interface PreviewSource {
-  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "plan" | "project" | "issue" | "parent-run";
+  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "issue" | "parent-run";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;
@@ -62,15 +62,11 @@ function skillPath(layout: Layout, name: string): string | null {
 }
 
 export interface PreviewContextOptions {
-  /** Role name; the plan map is inherited for every role. */
+  /** Role name. */
   agent?: string;
-  /** Packet slug attached in the composer; its contract is explicit context. */
-  planFile?: string;
   knowledgeIndex?: string;
   /** Explicit repo-relative files selected in the composer. */
   files?: string[];
-  /** Explicit repo-relative plan files selected in the composer. */
-  plans?: string[];
   /** Explicit repo-relative issue files selected in the composer. */
   issues?: string[];
   /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
@@ -151,16 +147,6 @@ export function previewContext(
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
     sources.push({ kind: "issue", ref: path, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`issue ${path} is missing or outside the repo`);
-  }
-
-  for (const path of options.plans ?? []) {
-    const root = resolve(layout.repoRoot);
-    const abs = resolve(root, path);
-    const inside = abs === root || abs.startsWith(root + sep);
-    const exists = inside && existsSync(abs);
-    const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    sources.push({ kind: "plan", ref: path, origin: "explicit", depth: 0, chars: size, exists });
-    if (!exists) warnings.push(`plan ${path} is missing or outside the repo`);
   }
 
   if (options.agent === "research") {
@@ -245,7 +231,6 @@ export function previewContext(
 
   const sections: ContextSections = {
     issues: 0,
-    plans: 0,
     knowledge: 0,
     skills: 0,
     scripts: 0,

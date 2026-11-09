@@ -183,7 +183,7 @@ Usage:
                                     [--agent <role>] [--model <key>]
                                     [--context-include <json>] [--context] [--json]
   machine_code map [path]           Deterministic repo map (--status, --refresh, --json,
-                                    --no-symbols, --semantic)
+                                    --no-symbols, --semantic (module index))
   machine_code lsp [list|status|install] Language servers, availability, install commands
   machine_code prompts [role]       Print rendered agent prompts with chars and words (--json)
   machine_code spend [--days N] [--by provider|model|day|agent] [--json]

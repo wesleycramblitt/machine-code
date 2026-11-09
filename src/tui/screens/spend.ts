@@ -45,7 +45,7 @@ export function renderSpend(props: SpendProps): { body: string[]; actions: strin
     const entries = Object.entries(buckets).sort((a, b) => b[1].actual - a[1].actual).slice(0, 40);
     const max = Math.max(0, ...entries.map(([, bucket]) => bucket.actual));
     for (const [key, bucket] of entries) {
-      const label = key === "map" ? "map (semantic)" : key;
+      const label = key;
       const perMillion = bucket.tokens > 0 ? bucket.actual / (bucket.tokens / 1_000_000) : 0;
       const keyTone = groupBy === "agent" ? agentTone(key) : W;
       lines.push(`  ${keyTone}${pad(label, narrow ? 20 : 38)}${R} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);

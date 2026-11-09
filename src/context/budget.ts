@@ -58,14 +58,11 @@ export function charsToTokens(chars: number): number {
 
 /**
  * Map a context kind onto its budget section. Sections mirror the composer
- * exclusion sections 1:1: `files` counts only `kind:file`, never knowledge,
- * references, or plans. Unknown kinds fall into `files`.
+ * exclusion sections 1:1: `files` counts only `kind:file`, never knowledge or
+ * references. Unknown kinds fall into `files`.
  */
 export function sectionForKind(kind: ContextKind | string): ContextSection {
   switch (kind) {
-    case "plan":
-    case "project":
-      return "plans";
     case "issue":
       return "issues";
     case "knowledge":

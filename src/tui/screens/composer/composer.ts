@@ -28,7 +28,7 @@ import { contextBudget } from "../../../context/budget.js";
 import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
 import { listReferenceEntries } from "../../../references/store.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "../../../map/deterministic.js";
-import { loadSemanticOrDeterministic, readSemanticDirty, renderSemanticIndex } from "../../../map/semantic.js";
+import { loadModuleIndex, renderModuleIndex } from "../../../map/modules.js";
 import { skillListItems, toolListItems, tokensForChars } from "../../tools.js";
 import { loadAvailability } from "../../../availability.js";
 import { clipLines } from "../types.js";
@@ -351,11 +351,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   );
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
   const mapEnabled = preview.machine?.map.enabled !== false;
-  const semanticEnabled = mapEnabled && preview.machine?.map.semantic !== false;
-  const semantic = loadSemanticOrDeterministic(repoRoot);
-  const semanticDirty = readSemanticDirty(repoRoot);
+  const modulesEnabled = mapEnabled && preview.machine?.map.semantic !== false;
+  const modules = loadModuleIndex(repoRoot);
   const mapChars = mapEnabled ? (cachedMap ? renderMapIndex(cachedMap).length : 1024) : 0;
-  const semanticChars = semanticEnabled ? (semantic ? renderSemanticIndex(semantic).length : 1024) : 0;
+  const moduleChars = modulesEnabled ? (modules ? renderModuleIndex(modules).length : 1024) : 0;
   const codebaseItems = [
     {
       text: mapEnabled
@@ -368,13 +367,13 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       key: "map:index",
     },
     {
-      text: semanticEnabled
-        ? semantic
-          ? `semantic index · ${Object.values(semantic.modules).filter((entry) => !entry.file).length} modules${semanticDirty.length ? ` · ${semanticDirty.length} dirty` : ""}`
-          : "semantic index · builds when available"
-        : "semantic index · disabled",
-      chars: semanticChars,
-      exists: semanticEnabled && Boolean(semantic),
+      text: modulesEnabled
+        ? modules
+          ? `module index · ${Object.values(modules.modules).filter((entry) => !entry.file).length} modules`
+          : "module index · builds when available"
+        : "module index · disabled",
+      chars: moduleChars,
+      exists: modulesEnabled && Boolean(modules),
       key: "semantic:index",
     },
   ];
@@ -394,7 +393,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       counted: false,
     }));
   const sections = [
-    { label: "Issues", tone: contextTone("plan"), sectionKey: "section:issues", items: issueItems },
+    { label: "Issues", tone: contextTone("issue"), sectionKey: "section:issues", items: issueItems },
     { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
     { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
     { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
@@ -409,7 +408,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const row = item as ContextPanelItem;
     return (
       row.available === true &&
-      (row.key.startsWith("file:") || row.key.startsWith("knowledge:") || row.key.startsWith("reference:") || row.key.startsWith("plan:") || row.key.startsWith("issue:")) &&
+      (row.key.startsWith("file:") || row.key.startsWith("knowledge:") || row.key.startsWith("reference:") || row.key.startsWith("issue:")) &&
       included.has(row.key)
     );
   };

@@ -345,31 +345,6 @@ export async function cmdMap(argv: string[]): Promise<number> {
   const action = flags.has("status") ? "status" : flags.has("refresh") ? "refresh" : "render";
   const path = positional[0] ?? flags.get("path");
   const l = layout();
-  if (flags.has("semantic") && flags.has("refresh")) {
-    const runtime = await loadRuntime(l);
-    const { buildRepoMap } = await import("../map/deterministic.js");
-    const { ensureSemanticMap } = await import("../map/ensure.js");
-    const built = await buildRepoMap(l.repoRoot);
-    await ensureSemanticMap({
-      root: l.repoRoot,
-      map: built.map,
-      models: runtime.models,
-      catalogue: runtime.catalogue.models,
-      configuredProviders: runtime.configuredProviders,
-      fundedProviders: fundedProviderIds(runtime.machine.providers),
-      policy: policyFor(l, "research", runtime.policy),
-      machine: runtime.machine,
-      availability: loadAvailability(l.home),
-      home: l.home,
-      runId: "map-cli",
-      force: true,
-      recorder: {
-        event: (type, data) => {
-          if (type === "map_semantic") process.stderr.write(`map semantic ${JSON.stringify(data)}\n`);
-        },
-      },
-    });
-  }
   const { runMapCommand } = await import("../commands/map.js");
   const result = await runMapCommand(
     {

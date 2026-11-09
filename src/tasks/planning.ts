@@ -1,7 +1,7 @@
 /**
  * machine_code — shared planning-tree git helpers.
  *
- * `commitPlanningFiles` stages and commits the durable trees (issues, plans,
+ * `commitPlanningFiles` stages and commits the durable trees (issues,
  * knowledge) on the main checkout. Best-effort: returns false when there is
  * nothing to commit or git is unavailable, and never throws.
  */
@@ -26,7 +26,7 @@ async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<{ c
 export async function commitPlanningFiles(layout: Layout, message: string): Promise<boolean> {
   try {
     const root = await mainRoot(layout);
-    const dirs = ["issues", "plans", "knowledge"].filter((dir) => existsSync(join(root, dir)));
+    const dirs = ["issues", "knowledge"].filter((dir) => existsSync(join(root, dir)));
     if (dirs.length === 0) return false;
     await git(root, ["add", "-A", "--", ...dirs]);
     const status = await git(root, ["status", "--porcelain", "--", ...dirs]);

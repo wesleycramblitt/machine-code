@@ -5,7 +5,7 @@
  * status first and appends map/LSP health so the model can see what is fresh.
  */
 import { buildRepoMap, mapBytes, renderRepoMap, symbolCount } from "../map/deterministic.js";
-import { isSemanticFresh, loadSemantic, readSemanticDirty, renderSemanticIndex, buildModuleIndex, mergeModuleIndex, saveSemanticMap } from "../map/semantic.js";
+import { buildModuleIndex, renderModuleIndex } from "../map/modules.js";
 import { formatLspStatus, lspStatusForPaths } from "../lsp/index.js";
 import { runProc } from "../proc.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
@@ -26,18 +26,7 @@ export async function runMapCommand(
   const symbols = args.symbols !== false;
   try {
     const built = await buildRepoMap(root, { refresh, processes });
-    const semantic = loadSemantic(root);
-    const semanticDirty = readSemanticDirty(root);
-    const semanticFresh = isSemanticFresh(semantic, built.map, semanticDirty);
-    const deterministic = buildModuleIndex(built.map);
-    if (!semanticFresh) {
-      try {
-        saveSemanticMap(root, deterministic);
-      } catch {
-        // A cache write failure must not break the map command.
-      }
-    }
-    const merged = mergeModuleIndex(deterministic, semanticFresh ? semantic : null);
+    const modules = buildModuleIndex(built.map);
     if (action === "status") {
       return {
         text: [
@@ -48,21 +37,19 @@ export async function runMapCommand(
           `bytes: ${mapBytes(built.map)}`,
           `cache: ${built.cachePath}`,
           `cache: ${built.cached ? "fresh" : "rebuilt"}`,
-          `semantic: ${semanticFresh && semantic?.model !== "deterministic" ? "annotated" : "deterministic"} · ` +
-            `${Object.keys(merged.modules).length} modules` +
-            `${semanticDirty.length ? ` · ${semanticDirty.length} changed since map index (map cache, not git changes)` : ""}`,
+          `modules: ${Object.keys(modules.modules).length}`,
           formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path))),
         ].join("\n"),
         isError: false,
       };
     }
     if (args.json === true) {
-      return { text: JSON.stringify({ map: built.map, semantic: merged }, null, 2), isError: false };
+      return { text: JSON.stringify({ map: built.map, modules }, null, 2), isError: false };
     }
     const deterministicText = renderRepoMap(built.map, { path, symbols }) || "no files";
-    const semanticText = args.semantic === true ? renderSemanticIndex(merged, 16 * 1024, path ?? "") : "";
+    const moduleText = args.semantic === true ? renderModuleIndex(modules, 16 * 1024, path ?? "") : "";
     return {
-      text: [deterministicText, semanticText].filter(Boolean).join("\n\n"),
+      text: [deterministicText, moduleText].filter(Boolean).join("\n\n"),
       isError: false,
     };
   } catch (error) {
@@ -93,18 +80,11 @@ export async function runStatusCommand(root: string, processes?: ProcessSupervis
     const mapLine =
       `map ${built.cached ? "fresh" : "rebuilt"} · ${built.map.files.length} files · ` +
       `${symbolCount(built.map)} symbols · ${mapBytes(built.map)} bytes`;
-    const semantic = loadSemantic(root);
-    const dirty = readSemanticDirty(root);
-    const semanticFresh = isSemanticFresh(semantic, built.map, dirty);
-    const semanticMode = semanticFresh && semantic?.model !== "deterministic" ? "annotated" : "deterministic";
-    const merged = mergeModuleIndex(buildModuleIndex(built.map), semanticFresh ? semantic : null);
-    const semanticLine =
-      `semantic ${semanticMode} · ` +
-      `${Object.keys(merged.modules).length} modules` +
-      `${dirty.length ? ` · ${dirty.length} changed since map index (map cache, not git changes)` : ""}`;
+    const modules = buildModuleIndex(built.map);
+    const moduleLine = `modules: ${Object.keys(modules.modules).length}`;
     const lspLine = formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path)));
     return {
-      text: [gitText, "", mapLine, semanticLine, lspLine].filter(Boolean).join("\n"),
+      text: [gitText, "", mapLine, moduleLine, lspLine].filter(Boolean).join("\n"),
       isError: git.outcome !== "exit" || git.code !== 0,
     };
   } catch (error) {

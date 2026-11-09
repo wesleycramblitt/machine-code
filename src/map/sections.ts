@@ -3,7 +3,7 @@
  *
  * Large files often keep their useful blocks inside one giant function. A
  * symbol outline cannot see those blocks, but the comment banners can. This is
- * shared by `search sections` and the semantic file index.
+ * shared by `search sections` and the module index.
  */
 export interface SectionHeading {
   line: number;

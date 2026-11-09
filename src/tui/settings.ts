@@ -88,14 +88,6 @@ export function buildSettings(
       editable: false,
     });
     rows.push({
-      id: "context.planFile",
-      section: "context",
-      label: "Plan file",
-      value: machine.context.planFile ?? "(auto)",
-      file: configFile,
-      editable: false,
-    });
-    rows.push({
       id: "map.enabled",
       section: "map",
       label: "Repository map",
@@ -107,26 +99,10 @@ export function buildSettings(
     rows.push({
       id: "map.semantic",
       section: "map",
-      label: "Semantic map",
+      label: "Module index",
       value: bool(machine.map.semantic),
       file: configFile,
-      detail: "One bounded annotation call on a stale or dirty map.",
-      editable: false,
-    });
-    rows.push({
-      id: "map.refresh",
-      section: "map",
-      label: "Semantic refresh",
-      value: machine.map.refresh,
-      file: configFile,
-      editable: false,
-    });
-    rows.push({
-      id: "map.semanticModel",
-      section: "map",
-      label: "Semantic model",
-      value: machine.map.semanticModel ?? "(auto)",
-      file: configFile,
+      detail: "Deterministic module summaries from code doc headers.",
       editable: false,
     });
     

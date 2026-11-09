@@ -7,7 +7,7 @@
  *
  * Notes:
  * - `code:write` and `artifact:write` are separate: artifact writes are
- *   path-scoped to .machine_code/plans/ and .machine_code/tasks/.
+ *   path-scoped to .machine_code/tools/ and .machine_code/scripts/.
  */
 import { roleCapabilities, type AgentName } from "../agents.js";
 import type { AgentConfig } from "../agents/config.js";
