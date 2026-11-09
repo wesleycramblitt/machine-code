@@ -281,7 +281,10 @@ const SPECS: CommandSpec[] = [
         ? [explicit]
         : [...new Set(ctx.changedFiles?.() ?? [])].filter((p) => !p.startsWith(".") && !p.includes("..")).slice(0, 5);
       if (targets.length === 0) {
-        return { text: "core:check requires path (no files changed yet this run)", isError: true };
+        return {
+          text: "no files changed this run; nothing to check. Pass path to check one file.",
+          isError: false,
+        };
       }
       const { resolveWithin } = await import("../tools/safety.js");
       const { readFileSync } = await import("node:fs");

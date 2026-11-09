@@ -449,10 +449,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     });
   }
 
+  // The goal is the issue itself. Hints and the reused-branch note are task
+  // framing; repeating them inside <run-state> duplicates the prompt.
+  const goal = input.request.split(/\n\n## (?:Context|Skills|Existing branch state)\b/)[0]!.trim() || input.request;
   const memory = new RunStateStore({
     runDir: recorder.dir,
     runId: recorder.id,
-    goal: input.request,
+    goal,
     repoRoot: mapRoot,
     recorder,
     processes,

@@ -179,7 +179,7 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string, a
       }
       for (const phrase of file.phraseHits) {
         const first = phrase.split(" ")[0] ?? "";
-        score += (intent.has(first) ? 8 : 4);
+        score += (intent.has(first) ? 20 : 10);
       }
       if (wantsUi && /^src\/tui(?:\.tsx?|\/)/.test(file.path)) score *= 1.6;
       return { path: file.path, score, outline: file.outline };
@@ -829,7 +829,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ];
       if (log.code === 0 && log.stdout.trim()) lines.push(`Recent commits:\n${log.stdout.trim()}`);
       if (status.code === 0 && status.stdout.trim()) lines.push(`Working tree:\n${status.stdout.trim()}`);
-      lines.push(`Build on this state: keep what works, fix or extend what doesn't. Do not restart from scratch.`);
+      lines.push(
+        `A previous attempt left work on this branch. Inspect it. Keep only the parts that directly satisfy the issue; replace over-built code with the smallest change instead of extending it.`,
+      );
       request = `${request}\n\n${lines.join("\n\n")}`;
       recorder.event("branch_state_reported", { branch });
     } catch {
