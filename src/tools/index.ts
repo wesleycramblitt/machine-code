@@ -25,6 +25,7 @@ import {
   isBinaryFile,
   isSecretPath,
   numberLinesCapped,
+  resolveWithExtensionFallback,
   resolveWithin,
   toRelative,
 } from "./safety.js";
@@ -214,7 +215,9 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     name: "read",
     label: "read",
     description:
-      "Read a text file inside the worktree. Returns numbered lines. The default read is one page of at most " +
+      "Read a text file inside the worktree. Returns numbered lines. A wrong extension auto-corrects " +
+      "when the directory holds one same-basename alternative (e.g. .js → .ts). " +
+      "The default read is one page of at most " +
       "25k tokens (~100 KB); a whole-file read over 256 KB needs offset/limit or allow_large:true. " +
       "Use offset (1-based) and limit to page a large file, or allow_large:true for a whole-file/long-range read up to 1 MiB. " +
       "Binary and secret files are rejected. Use map for symbols/outlines/sections and grep for text. " +
@@ -225,8 +228,17 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     async execute(_id, raw: Static<typeof ReadParams>) {
       const params = raw as ReadArgs;
       try {
-        const abs = resolveWithin(ctx.root, params.path);
-        assertRegularFile(abs);
+        let abs = resolveWithin(ctx.root, params.path);
+        let resolvedNote = "";
+        try {
+          assertRegularFile(abs);
+        } catch (error) {
+          const fallback = resolveWithExtensionFallback(abs);
+          if (!fallback || (error as Error).message.startsWith("not a regular file")) throw error;
+          abs = fallback.path;
+          resolvedNote = fallback.note;
+          assertRegularFile(abs);
+        }
         if (isSecretPath(toRelative(ctx.root, abs))) {
           return fail(`refusing to read a secret file: ${params.path}`);
         }
@@ -484,6 +496,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             text += `\n[${lines.length - (pageNextOffset - 1)} more lines; continue with offset ${pageNextOffset}]`;
           }
         }
+        if (resolvedNote) text = `[${resolvedNote}]\n${text}`;
         return remember(
           text,
           wantsSymbols ? "symbol" : wantsSections || params.section ? "section" : params.symbol ? "symbol" : "file",
@@ -1110,6 +1123,10 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
         line: number,
         column: number,
       ): Promise<AgentToolResult<undefined>> => {
+        try {
+          const fallback = resolveWithExtensionFallback(resolveWithin(ctx.root, outlinePath));
+          if (fallback && fallback.note) outlinePath = toRelative(ctx.root, fallback.path);
+        } catch {}
         const header = `${outlinePath}:${line}:${column}`;
         const language = ctx.processes ? params.language ?? languageForPath(outlinePath) : null;
         const abs = resolveWithin(ctx.root, outlinePath);
@@ -1397,8 +1414,17 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           case "outline": {
             // Accept the path in `pattern` too: models often put the filename
             // there before they learn the schema.
-            const outlinePath = params.path ?? params.pattern;
+            let outlinePath = params.path ?? params.pattern;
             if (!outlinePath) return fail('outline mode requires a path (e.g. "src/file.ts")');
+            let resolvedNote = "";
+            try {
+              const abs = resolveWithin(ctx.root, outlinePath);
+              const fallback = resolveWithExtensionFallback(abs);
+              if (fallback && fallback.note) {
+                outlinePath = toRelative(ctx.root, fallback.path);
+                resolvedNote = `[${fallback.note}]\n`;
+              }
+            } catch {}
             // LSP document symbols see nested containers and give line:column
             // positions. Fall back to the deterministic top-level outline.
             const language = params.language ?? languageForPath(outlinePath);
@@ -1435,7 +1461,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               return fail(`no outline for "${outlinePath}" (binary, missing, or unreadable)`);
             }
             return ok(
-              `${file.path} (${file.lines} lines)\n${renderOutline(file) || "(no symbols)"}`,
+              `${resolvedNote}${file.path} (${file.lines} lines)\n${renderOutline(file) || "(no symbols)"}`,
             );
           }
           case "json":
