@@ -481,12 +481,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
         : forceWorktree;
   let toolRoot = l.repoRoot;
   if (mutating) {
-    const issueWorktree = itemSlug && agentNameParsed === "engineer";
-    // Research works at the top level — no worktree.
-    const researchDirect = !itemSlug && agentNameParsed === "research";
+    const issueWorktree = Boolean(itemSlug);
     // Reuse a terminal/paused worktree that already owns this issue branch.
     // A fresh path cannot be created while mc/<slug> is checked out.
-    const reuse = researchDirect ? undefined : reusableWorktreeOwner(
+    const reuse = reusableWorktreeOwner(
       [
         ...parentChainRuns,
         ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
@@ -494,8 +492,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       issueWorktree ? `mc/${itemSlug}` : undefined,
     );
     if (reuse) {
-      // One branch cannot be checked out twice. A fork of a terminal or paused
-      // run continues in the worktree that already owns the branch.
       toolRoot = reuse.path;
       recorder.patchSummary({
         worktree: reuse.path,
@@ -510,7 +506,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         branch: reuse.run.branch,
       });
       process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
-    } else if (!researchDirect) {
+    } else {
       try {
         const worktreeProcesses = new ProcessSupervisor({
           runId: recorder.id,
@@ -527,7 +523,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
         });
         recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
         if (inheritWorktree && parentRun?.worktree) {
-          // Inherit the parent's uncommitted work explicitly; conflicts fail.
           try {
             const { inheritWorktreePatch } = await import("../worktree.js");
             const patch = await inheritWorktreePatch({
@@ -721,16 +716,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Research: auto-commit findings directly to main (no worktree).
-  if (result.status === "completed" && agentNameParsed === "research" && toolRoot === l.repoRoot) {
-    const commitMessage = `research(${itemSlug ?? recorder.id}): ${request}`;
-    await runProc("git", ["add", "-A"], { cwd: toolRoot, timeoutMs: 30_000 });
-    const commitResult = await runProc("git", ["commit", "-m", commitMessage], { cwd: toolRoot, timeoutMs: 30_000 });
-    if (commitResult.code === 0) {
-      recorder.event("research_committed", {});
-    }
-  }
-
   // A review verdict is a work-item decision, not just prose. Any
   // non-approved verdict on a completed review sends the issue back to
   // blocked/ so approve cannot merge rejected work.
@@ -769,7 +754,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (
     result.status === "completed" &&
     itemSlug &&
-    agentNameParsed === "engineer" &&
+    (agentNameParsed === "engineer" || agentNameParsed === "research") &&
     toolRoot !== l.repoRoot
   ) {
     const issue = findIssue(l, itemSlug);
