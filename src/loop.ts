@@ -410,8 +410,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const wantSemantic = input.skipSemantic !== true;
   // Up-front context stays small and stable so the provider cache absorbs
   // it once: the one-line map index, the query-biased semantic slice, and
-  // full file/symbol detail on demand (search outline, read symbol, core:map
-  // slice). The full per-file map is never re-sent; it costs ~26k chars a
+  // full file/symbol detail on demand (map outline, read symbol, map slice). The full per-file map is never re-sent; it costs ~26k chars a
   // turn and the same bytes are one pull call away.
   let mapIndex = "";
   // Names only. The model must know a command exists before it can ask for
@@ -582,7 +581,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
   // The assembled context is the single source of truth. There is no hidden
   // task pack that selects files after the user curated the context.
-  let lastLedgerChars = 0;
   let lastOverviewChars = 0;
   let lastBudget: ContextBudget | null = null;
 
@@ -1205,7 +1203,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           mapIndex,
           input.contextText,
           undefined,
-          undefined,
           commandIndex,
         ).messages;
       },
@@ -1241,21 +1238,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               });
             }
           }
-          const ledgerBudget = budget
-            ? Math.max(0, budget.inputChars - baseOverhead - overviewEstimate)
-            : 200_000;
-          // The transcript is replayed whole; the ledger is the durable record
-          // of concluded evidence.
-          const ledgerText = ledgerBudget > 0
-            ? memory.renderLedger({ maxChars: Math.min(ledgerBudget, 12_000) })
-            : undefined;
-          lastLedgerChars = ledgerText?.length ?? 0;
+          // The transcript is replayed whole; the ledger is for explicit
+          // context recall, not for re-sending bytes the model already has.
           return renderPromptMessages(
             context.messages,
             memory,
             mapIndex,
             input.contextText,
-            ledgerText,
             overviewMaxChars,
             commandIndex,
           );
@@ -1378,7 +1367,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               promptChars: lastPromptChars,
               tokens: actualContextTokens > 0 ? actualContextTokens : Math.ceil(lastRequestChars / 4),
               stateChars: memory.renderBlock().length,
-              ledgerChars: lastLedgerChars,
               overviewChars: lastOverviewChars,
               ...(lastBudget
                 ? {

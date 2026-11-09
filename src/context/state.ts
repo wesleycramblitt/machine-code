@@ -25,7 +25,7 @@ import { recordSemanticChange } from "../map/changes.js";
 /** Keep the model-facing state block compact; full facts remain in state.jsonl. */
 const MAX_STATE_CHARS = 10_000;
 const PLAN_NEXT = /^(?:execute the plan|make the first edit)\b/i;
-const VERIFY_NEXT = "Verify the change: run the task's tests and typecheck.";
+const FINISH_NEXT = "Change recorded; finish remaining edits or stop with your terminal line.";
 
 export type FactKind = "finding" | "decision" | "change";
 export type RefKind = "read" | "search" | "edit" | "focus";
@@ -581,11 +581,12 @@ export class RunStateStore {
       (focus.has(entry.path) ? 200 : 0) +
       (nextText.includes(entry.path) || nextText.includes(basename(entry.path)) ? 500 : 0) +
       Math.min(200, entry.lastTurn);
-    // Changed, preloaded, and focused files always survive: the model is
-    // acting on them. Everything else competes on score and the file/byte
-    // budget below — there is no recency cutoff, so early reads on long runs
-    // stay pinned instead of forcing re-reads.
+    // Only files the model is acting on: edited (their current bytes differ
+    // from the transcript), preloaded context, or explicitly focused. Files
+    // that were merely read stay in the transcript; re-sending them every
+    // turn duplicates bytes the model already has.
     const entries = [...this.workingFiles.values()]
+      .filter((entry) => entry.changed || entry.preloaded || focus.has(entry.path))
       .sort((a, b) => score(b) - score(a) || b.lastTurn - a.lastTurn || a.path.localeCompare(b.path))
       .slice(0, maxFiles);
 
@@ -849,7 +850,7 @@ export class RunStateStore {
   /** Replace a plan's "first edit" next action once a change exists. */
   private settleNextAfterChange(turn: number): void {
     if (!this.state.nextAction || PLAN_NEXT.test(this.state.nextAction)) {
-      this.append({ type: "next", text: VERIFY_NEXT, turn });
+      this.append({ type: "next", text: FINISH_NEXT, turn });
     }
   }
 
@@ -1137,7 +1138,7 @@ export class RunStateStore {
       const nextAge = nextTurn === undefined ? 0 : this.currentTurn() - nextTurn;
       const planNext = PLAN_NEXT.test(this.state.nextAction ?? "");
       if (runChanges.length > 0 && (planNext || !this.state.nextAction || nextAge > 6)) {
-        lines.push(`Next: ${VERIFY_NEXT}`);
+        lines.push(`Next: ${FINISH_NEXT}`);
       } else if (planDecision && runChanges.length === 0) {
         lines.push("Next: Execute the plan: make the first edit.");
       } else if (this.state.nextAction && nextAge <= 6) {

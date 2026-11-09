@@ -10,9 +10,8 @@ import { join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { listIssues, singleLine } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
-import { allCommands } from "../commands/registry.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
-import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
+import { resolveSkillMode, skillIndexBody, skillMetas, type SkillMode } from "./references.js";
 import { parseIncludeRange, parentIndexLine, sliceRangeBody } from "./assemble.js";
 import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
@@ -164,7 +163,7 @@ export function previewContext(
     if (!exists) warnings.push(`plan ${path} is missing or outside the repo`);
   }
 
-  if (options.agent === "research" || options.agent === "engineer" || options.agent === "review") {
+  if (options.agent === "research") {
     const issues = listIssues(layout);
     if (issues.length > 0) {
       const body = issues.map((issue) => `- [${issue.status}] ${issue.slug} - ${singleLine(issue.prompt).slice(0, 120)}`).join("\n");
@@ -227,11 +226,9 @@ export function previewContext(
       `parent chain exceeds the depth-4 cap; omitted ancestor run(s): ${droppedParents.map((run) => run.id).join(", ")}`,
     );
   }
-  // Skill descriptions are visible on every run. Mirror the single aggregate
-  // block assembled at band 8, at its full assembled size so the composer
-  // shows the real cost. The block carries one-line descriptions plus the
-  // on-demand pull path, never bodies.
-  const allSkills = skillMetas(layout);
+  // Only the role's own skill descriptions are in the assembled block.
+  const visibleSkills = new Set([...(options.defaultSkills ?? []), ...includeOverrides]);
+  const allSkills = skillMetas(layout).filter((skill) => visibleSkills.has(skill.name));
   if (allSkills.length > 0) {
     const text = skillIndexBody(allSkills);
     const size = text.length;
@@ -244,25 +241,6 @@ export function previewContext(
       exists: true,
       note: allSkills.map((skill) => skill.name).join(", "),
     });
-  }
-  // Tool/command descriptions are assembled alongside the skill descriptions.
-  // Mirror the aggregate block so preview chars match assembled chars: one
-  // line per command plus the on-demand pull path, never full schemas.
-  try {
-    const commands = allCommands(layout);
-    if (commands.size > 0) {
-      const body = toolIndexBody(commands);
-      sources.push({
-        kind: "tool",
-        ref: `${commands.size} commands`,
-        origin: "explicit",
-        depth: 0,
-        chars: body.length,
-        exists: true,
-      });
-    }
-  } catch {
-    // profiles unavailable — skip
   }
 
   const sections: ContextSections = {

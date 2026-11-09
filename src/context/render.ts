@@ -109,7 +109,6 @@ export function renderPromptMessages(
   state: RunStateStore,
   mapIndex?: string,
   startupContext?: string,
-  ledgerText?: string,
   overviewMaxChars?: number,
   commandIndex?: string,
 ): RenderedPrompt {
@@ -117,14 +116,14 @@ export function renderPromptMessages(
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
   //   system → assembled context → map index → tool guide → command index
-  //     → working context → ledger tail → run state → transcript.
+  //     → working context → run state → transcript.
   // Stable content always renders before volatile per-turn content, so the
   // shared prefix stays byte-identical across turns and only the transcript
   // tail shifts — that is what keeps the provider prompt cache hot.
   const details = state.renderWorkingContext();
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
-  const block = [startup, mapIndex, guide, commandIndex, details, ledgerText, state.renderBlock()]
+  const block = [startup, mapIndex, guide, commandIndex, details, state.renderBlock()]
     .filter(Boolean)
     .join("\n\n");
   const user: MessageLike = {

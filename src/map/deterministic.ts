@@ -759,7 +759,7 @@ export function renderMapIndex(map: RepoMap, maxBytes = 1024): string {
     ...[...dirs.entries()]
       .sort((a, b) => (a[0] === "." ? -1 : b[0] === "." ? 1 : a[0].localeCompare(b[0])))
       .map(([dir, count]) => `${dir === "." ? "./" : `${dir}/`} ${count}`),
-    "Use core:map --path <dir> for a slice. Use search outline <file> or read { symbol } for a range.",
+    "Use map { action: \"overview\", path: \"<dir>\" } for a slice; map { action: \"outline\", path: \"<file>\" } for one file. Use read { symbol } for a block.",
   ];
   const text = lines.join("\n");
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;

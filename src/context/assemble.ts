@@ -16,9 +16,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { listIssues, singleLine } from "../plan/issues.js";
 import type { MachineConfig } from "../config.js";
-import { allCommands } from "../commands/registry.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
-import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
+import { defaultSkillsFor, resolveSkillMode, skillIndexBody, skillMetas, type SkillMode } from "./references.js";
 import { readReference } from "../references/store.js";
 import { isSecretPath } from "../tools/safety.js";
 import {
@@ -467,10 +466,9 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // The issues tree is context for any role that plans or engineers: include
-  // a compact index (kind/status/slug/prompt) so the agent knows what exists
-  // without reading every file.
-  if (input.agent === "research" || input.agent === "engineer" || input.agent === "review") {
+  // The issues tree is context for research (avoid duplicate items); an
+  // engineer/review run already carries the one issue it works on.
+  if (input.agent === "research") {
     const list = listIssues(layout);
     if (list.length > 0) {
       const body = list.map((issue) => `- [${issue.status}] ${issue.slug} - ${singleLine(issue.prompt).slice(0, 120)}`).join("\n");
@@ -512,25 +510,21 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (mode === "exclude") excludedSkillNames.add(name);
     else excludedSkillNames.delete(name);
   }
-  const skills = skillMetas(layout).filter((skill) => !excludedSkillNames.has(skill.name));
+  // Skill descriptions: only the role's own skills plus explicit includes.
+  // Listing every installed skill spends context on procedures this run will
+  // never use. Bodies stay cold unless a mode resolves to include.
+  const roleSkills = new Set(defaultSkillsFor({ agent: input.agent ?? "" }));
+  const skillIncludes = new Set(
+    [...Object.entries(input.skillPresets ?? {}), ...Object.entries(input.skillOverrides ?? {})]
+      .filter(([, mode]) => mode === "include")
+      .map(([name]) => name),
+  );
+  const skills = skillMetas(layout).filter(
+    (skill) => (roleSkills.has(skill.name) || skillIncludes.has(skill.name)) && !excludedSkillNames.has(skill.name),
+  );
   if (skills.length > 0) {
     const text = skillIndexBody(skills);
     pending.push({ kind: "skill", origin: "explicit", ref: `${skills.length} skills`, depth: 0, body: text, band: 8 });
-  }
-  try {
-    const commands = allCommands(layout);
-    if (commands.size > 0) {
-      pending.push({
-        kind: "tool",
-        origin: "explicit",
-        ref: `${commands.size} commands`,
-        depth: 0,
-        body: toolIndexBody(commands),
-        band: 8,
-      });
-    }
-  } catch {
-    // profiles unavailable — skip
   }
 
   // Apply composer exclusions before dedupe so removed sources never consume

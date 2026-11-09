@@ -79,13 +79,8 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     name: "context",
     label: "context",
     description:
-      "Control run state or expand task context. note needs text (kind: finding|decision|open|next). focus needs refs. " +
-      "recall needs id. forget needs id or text. state takes no fields. expand needs target (path or path#symbol) and returns " +
-      "the symbol/file plus imports, callers, and tests in one sweep. " +
-      "parent needs id (a run id) and returns that run's request, status, error, and result — " +
-      "the result is withheld when the run stopped early (blocked/failed/interrupted). " +
-      "Use parent to pull a parent-chain index entry's full detail. " +
-      "Example: {\"action\":\"expand\",\"target\":\"src/loop.ts#runLoop\"}.",
+      "Run state and context. note (text; kind finding|decision|open|next), focus (refs), recall (id), forget (id|text), " +
+      "state, expand (target path or path#symbol), parent (run id).",
     parameters: ContextParams,
     async execute(_id, params: Static<typeof ContextParams>) {
       const memory = ctx.state;
