@@ -215,18 +215,23 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (!issue) {
       const hints: string[] = [];
       const keywords = request.toLowerCase().split(/\s+/).filter((w) => w.length > 3 && !["this", "that", "with", "from", "have", "been", "when", "what", "make", "just"].includes(w));
-      // Find repo files whose path or symbol names match request keywords.
+      // Suggest repo files only on strong signal: 2+ distinct request keywords
+      // in the path or symbol names, capped at 5. Weak matches mislead more
+      // than they help, so no section at all beats a wrong one.
       const cachedMap = readCachedMap(l.repoRoot);
       if (cachedMap) {
         const matched = cachedMap.files
-          .filter((f) => {
+          .map((f) => {
             const lower = f.path.toLowerCase();
             const syms = f.symbols.map((s) => s.name.toLowerCase());
-            return keywords.some((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
+            const hits = keywords.filter((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
+            return { file: f, hits: hits.length };
           })
-          .slice(0, 15);
+          .filter((entry) => entry.hits >= 2)
+          .sort((a, b) => b.hits - a.hits)
+          .slice(0, 5);
         if (matched.length > 0) {
-          hints.push(`## Context\n\nRelevant files:\n${matched.map((f) => `  - ${f.path} (${f.symbols.length} symbols)`).join("\n")}`);
+          hints.push(`## Context\n\nRelevant files:\n${matched.map((entry) => `  - ${entry.file.path} (${entry.file.symbols.length} symbols)`).join("\n")}`);
         }
       }
       // Always include architecture.md if it exists.
