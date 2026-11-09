@@ -7,7 +7,7 @@
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
@@ -110,6 +110,9 @@ type ReadArgs = Static<typeof ReadParams> & {
 
 /** Find a nested or non-map declaration so `read { symbol }` can still help. */
 function findSymbolLine(lines: readonly string[], symbol: string): number {
+  // An empty or blank name would otherwise match the first declaration in the
+  // file and return an unrelated block labeled "(around )".
+  if (!symbol.trim()) return 0;
   const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const declaration = new RegExp(
     `(?:^|\\s)(?:function|class|const|let|var|interface|type|enum|def|fn|func)\\s+${escaped}\\b`,
@@ -150,23 +153,32 @@ function readTargetLabel(path: string, params: { symbol?: string | null; symbols
   return path;
 }
 
-/** Weak models serialize absent optionals as the string "null". No definable
- * symbol or section is literally named "null", so treat it as absent before
- * the mutual-exclusion checks below. Anything else passes through untouched
- * for schema validation to judge. */
-const NULL_SELECTOR = new Set(["null", "undefined"]);
-
 /** Above this size, `read { around }` returns a page around the line instead
  * of the whole enclosing symbol. */
 const AROUND_MAX_SYMBOL_LINES = 160;
+
+/** Weak models serialize absent optionals as the string "null" or an empty
+ * string. No definable symbol or section is literally named "null" or "",
+ * so treat those as absent before any selector logic runs. Anything else
+ * passes through untouched for schema validation to judge. */
+const NULL_SELECTOR = new Set(["null", "undefined", ""]);
+
+/** A usable 1-based line selector: a finite positive number. Weak models
+ * send 0, "", false, or "null" for "not set"; treating those as real values
+ * silently overrides the range the model actually asked for. */
+function positiveLine(value: unknown): boolean {
+  const n = typeof value === "string" ? Number(value.trim()) : value;
+  return typeof n === "number" && Number.isFinite(n) && n > 0;
+}
 
 function cleanReadSelectors(args: unknown): unknown {
   if (!args || typeof args !== "object" || Array.isArray(args)) return args;
   const out = { ...(args as Record<string, unknown>) };
   let changed = false;
+  const isBlank = (value: unknown): boolean =>
+    typeof value === "string" && NULL_SELECTOR.has(value.trim().toLowerCase());
   for (const key of ["symbol", "section"] as const) {
-    const value = out[key];
-    if (typeof value === "string" && NULL_SELECTOR.has(value.trim())) {
+    if (isBlank(out[key])) {
       delete out[key];
       changed = true;
     }
@@ -179,13 +191,11 @@ function cleanReadSelectors(args: unknown): unknown {
       delete out[key];
       changed = true;
     } else if (typeof value === "string") {
-      if (NULL_SELECTOR.has(value.trim())) delete out[key];
+      if (isBlank(value)) delete out[key];
       else out[key] = [value];
       changed = true;
     } else if (Array.isArray(value)) {
-      const kept = value.filter(
-        (item) => !(typeof item === "string" && NULL_SELECTOR.has(item.trim())),
-      );
+      const kept = value.filter((item) => !isBlank(item));
       if (kept.length !== value.length) {
         if (kept.length > 0) out[key] = kept;
         else delete out[key];
@@ -203,17 +213,25 @@ function cleanReadSelectors(args: unknown): unknown {
     delete out[single];
     changed = true;
   }
-  // Numeric selectors sometimes arrive as null or the string "null".
-  for (const key of ["offset", "limit", "around", "allow_large"] as const) {
+  // Numeric selectors: absent, non-numeric, or non-positive means "not set".
+  // `offset: 0`, `around: 0`, and `limit: false` must never masquerade as a
+  // real range and override an explicit offset/limit.
+  for (const key of ["offset", "limit", "around"] as const) {
     const value = out[key];
-    if (
-      value === null ||
-      value === undefined ||
-      (typeof value === "string" && (value.trim() === "" || NULL_SELECTOR.has(value.trim())))
-    ) {
+    if (value === null || value === undefined || !positiveLine(value)) {
       delete out[key];
       changed = true;
+      continue;
     }
+    if (typeof value === "string") {
+      out[key] = Number(value);
+      changed = true;
+    }
+  }
+  const large = out.allow_large;
+  if (large === null || large === undefined || (typeof large === "string" && isBlank(large))) {
+    delete out.allow_large;
+    changed = true;
   }
   return changed ? out : args;
 }
@@ -267,15 +285,8 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     name: "read",
     label: "read",
     description:
-      "Read a text file inside the worktree. Returns numbered lines. " +
-      "A bare read of a file over 200 lines returns its outline (symbols + line numbers), not content — " +
-      "follow up with symbol/around for one block. " +
-      "Use offset (1-based) and limit to page a large file, or allow_large:true for a whole-file/long-range read up to 1 MiB. " +
-      "Binary and secret files are rejected. Use map for symbols/outlines/sections and grep for text. " +
-      "Prefer symbol/around over offset/limit pages: read one function, class, or " +
-      "neighborhood at a time. " +
-      "Examples: {\"path\":\"src/tui.ts\",\"symbol\":\"buildRunIndex\"}; {\"path\":\"src/tui.ts\",\"around\":2400}; " +
-      "{\"path\":\"README.md\",\"allow_large\":true}.",
+      "Read a file; returns numbered lines. A bare read of a file over 200 lines returns its outline — " +
+      "then read one symbol or around a line. Use offset+limit to page, or allow_large for the whole file.",
     parameters: ReadParams,
     prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
     async execute(_id, raw: Static<typeof ReadParams>) {
@@ -825,10 +836,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     name: "edit",
     label: "edit",
     description:
-      "Exact-match replacement in a file. Prefer one call with an edits array for several hunks. " +
-      "A lone oldString/newString pair is applied first, then the array, in one atomic pass. " +
-      "symbol or section scopes the match so an identical anchor elsewhere cannot win. " +
-      "Without replaceAll each hunk must be unique inside its scope.",
+      "Replace exact text in a file. Batch hunks in edits; scope with symbol or section. " +
+      "Without replaceAll each hunk must be unique in scope.",
     parameters: EditParams,
     prepareArguments: (args) => cleanEditArgs(args) as Static<typeof EditParams>,
     async execute(_id, params: Static<typeof EditParams>) {
@@ -1089,12 +1098,8 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     name: "search",
     label: "search",
     description:
-      "Read-only bounded search. One verb: pass an identifier, a file path, or a " +
-      "regex, optionally scoped by path/paths. The harness routes automatically: identifier → definitions + " +
-      "references with enclosing code and read anchors; file path → outline; path + line + column → definition + " +
-      "references + hover at that position; anything else → text search with 2 context lines. " +
-      "Large-file hits name a read-around line; empty results name the call to try next. " +
-      "Never touches excluded directories (node_modules, dist, build, target, .git, .machine_code/local, ...), secret files (.env, *.pem, keys), or binary files.",
+      "Find code. Pass an identifier, a file path, or a regex; the harness returns definitions, " +
+      "an outline, or text matches. Scope with path or paths.",
     parameters: SearchParams,
     prepareArguments: (args) => cleanSearchArgs(args) as Static<typeof SearchParams>,
     async execute(_id, params: Static<typeof SearchParams>) {
@@ -1245,7 +1250,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
         if (!file) {
           try {
             if (statSync(resolveWithin(ctx.root, outlinePath)).isDirectory()) {
-              return fail(`"${outlinePath}" is a directory; outline needs a file path`);
+              return fail(directoryOutlineHint(ctx.root, outlinePath, params.pattern));
             }
           } catch {}
           let hint = "";
@@ -1525,7 +1530,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             if (!file) {
               try {
                 if (statSync(resolveWithin(ctx.root, outlinePath)).isDirectory()) {
-                  return fail(`"${outlinePath}" is a directory; outline needs a file path`);
+                  return fail(directoryOutlineHint(ctx.root, outlinePath, params.pattern));
                 }
               } catch {}
               let hint = "";
@@ -1741,27 +1746,108 @@ function cleanMapArgs(args: unknown): unknown {
  * Code-structure search over the deterministic repo map, the semantic index,
  * and LSP. Raw text is `grep`; paths are `glob`; file contents are `read`.
  */
+/** Candidate files when a caller hands `outline` a directory. A bare error
+ * costs a turn; naming the files lets the next call be a targeted outline. */
+const OUTLINE_HINT_EXCLUDES = new Set([
+  ".git", "node_modules", "dist", "build", "target", "coverage", ".next", ".cache", "vendor", "__pycache__",
+]);
+const OUTLINE_HINT_EXTS = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs|md)$/i;
+
+function directoryOutlineHint(root: string, relDir: string, needle?: string): string {
+  let abs = "";
+  try {
+    abs = resolveWithin(root, relDir || ".");
+    if (!statSync(abs).isDirectory()) return "";
+  } catch {
+    return "";
+  }
+  const files: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 4 || files.length >= 200) return;
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (name.startsWith(".") || OUTLINE_HINT_EXCLUDES.has(name)) continue;
+      const next = join(dir, name);
+      let isDir = false;
+      try {
+        isDir = statSync(next).isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir) walk(next, depth + 1);
+      else if (OUTLINE_HINT_EXTS.test(name)) files.push(toRelative(root, next));
+    }
+  };
+  walk(abs, 0);
+  const wanted = needle?.trim().toLowerCase() ?? "";
+  const matches = wanted ? files.filter((file) => file.toLowerCase().includes(wanted)) : files;
+  const shown = (matches.length > 0 ? matches : files).slice(0, 8);
+  const rel = toRelative(root, abs) || ".";
+  if (shown.length === 0) return `"${rel}" is a directory; outline needs a file path.`;
+  const more = (matches.length > 0 ? matches : files).length - shown.length;
+  return (
+    `"${rel}" is a directory; outline needs a file path. ` +
+    `Candidates: ${shown.join(", ")}${more > 0 ? ` (+${more} more)` : ""}.`
+  );
+}
+
 export function mapTool(ctx: ToolContext): AgentTool<typeof MapParams> {
   return {
     name: "map",
     label: "map",
     description:
-      "Search code structure, not raw text. Use map when you need to understand where code lives or how it connects. " +
-      "Actions: overview (repo map: files and exported symbols; start here), outline (symbols and line ranges for one file), " +
-      "symbols (find a top-level symbol by name), locate (definitions + text references for an identifier), " +
-      "references (LSP references at path:line:column), definition/info (LSP definition or type at a position), " +
-      "semantic (concept search over module summaries and key files), graph (module import graph), " +
-      "sections (heading blocks in one large file), structural (ast-grep structural search). " +
-      "Use grep for text, glob for paths, and read for file contents.",
+      "Understand code structure. overview: files and symbols; outline: one file's symbols; " +
+      "symbols: find by name; locate: definitions and references; semantic: concept search. " +
+      "Use grep for raw text, glob for paths, read for contents.",
     parameters: MapParams,
     prepareArguments: (args) => cleanMapArgs(args) as Static<typeof MapParams>,
     async execute(id, params: Static<typeof MapParams>) {
       const search = searchTool(ctx);
       const mode = MAP_MODES[params.action];
+      // Path-oriented actions get one routing accommodation the search tool
+      // already makes for files: models put the target in `pattern` before
+      // they learn the schema. Honor it when it names an existing path, so a
+      // scoped overview is scoped (not a whole-repo dump) and an outline of a
+      // file is an outline (not a directory error).
+      const PATH_ACTIONS = new Set(["overview", "outline", "sections", "graph"]);
+      let path = params.path;
+      let pattern = params.pattern;
+      if (PATH_ACTIONS.has(params.action)) {
+        const asAbs = (value?: string): string | null => {
+          const raw = value?.trim();
+          if (!raw || raw.toLowerCase() === "null" || raw === ".") return null;
+          try {
+            return resolveWithin(ctx.root, raw);
+          } catch {
+            return null;
+          }
+        };
+        const kind = (abs: string | null): "file" | "dir" | null => {
+          if (!abs) return null;
+          try {
+            const st = statSync(abs);
+            return st.isFile() ? "file" : st.isDirectory() ? "dir" : null;
+          } catch {
+            return null;
+          }
+        };
+        const pathKind = kind(asAbs(path));
+        const patternKind = kind(asAbs(pattern));
+        const pathUsable = pathKind === "file" || (params.action !== "outline" && pathKind === "dir");
+        if (!pathUsable && patternKind) {
+          path = pattern;
+          pattern = undefined;
+        }
+      }
       return search.execute(id, {
         mode,
-        pattern: params.pattern,
-        path: params.path,
+        pattern,
+        path,
         line: params.line,
         column: params.column,
         language: params.language,
@@ -1825,8 +1911,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
     name: "command",
     label: "command",
     description:
-      "List all typed command schemas (large); describe one; or run it (core:* built-ins and allowlisted manifests). No arbitrary shell. " +
-      "artifact, read, map, context, and ask are tools, not commands; call them directly.",
+      "Run a typed command (core:* or allowlisted). No shell. list shows schemas, describe one, run it.",
     parameters: CommandParams,
     prepareArguments: (args) => cleanCommandArgs(args) as Static<typeof CommandParams>,
     async execute(_id, params: Static<typeof CommandParams>) {
@@ -2011,10 +2096,7 @@ export function globTool(ctx: ToolContext): AgentTool<typeof GlobParams> {
   return {
     name: "glob",
     label: "glob",
-    description:
-      "Find files by path with a glob (src/**/*.ts, **/*.test.js). Returns repo-relative paths, one per line. " +
-      "Use this to locate files; use grep for text inside files. Excludes node_modules, dist, build, target, .git, " +
-      "runtime state, secret files, and binaries.",
+    description: "List file paths matching a glob.",
     parameters: GlobParams,
     prepareArguments: (args) => cleanOptionalArgs(args) as Static<typeof GlobParams>,
     async execute(_id, params: Static<typeof GlobParams>) {
@@ -2065,10 +2147,7 @@ export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
   return {
     name: "grep",
     label: "grep",
-    description:
-      "Search file contents with a regular expression (ripgrep). Returns path:line:text with context. " +
-      "This is the plain text tool: use glob to pick paths, then grep for a literal or regex. " +
-      "Excludes node_modules, dist, build, target, .git, runtime state, secret files, and binaries.",
+    description: "Search file contents by regex; returns path:line:text with context.",
     parameters: GrepParams,
     prepareArguments: (args) => cleanOptionalArgs(args) as Static<typeof GrepParams>,
     async execute(_id, params: Static<typeof GrepParams>) {

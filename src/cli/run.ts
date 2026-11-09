@@ -28,7 +28,6 @@ import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
 import { readCachedMap } from "../map/deterministic.js";
-import { loadSemanticOrDeterministic, searchSemantic } from "../map/semantic.js";
 import { skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -71,49 +70,44 @@ import { parseAxisOverrides } from "./models.js";
  * symbol names contain 2+ distinct request keywords (capped at 5), plus the
  * architecture doc and skill index when present. Weak matches mislead more
  * than they help, so no section at all beats a wrong one. */
-function buildIssueHints(l: ReturnType<typeof layout>, request: string): string[] {
+/** Files worth opening first, by path word match. Deliberately simple: the
+ * issue text names things ("issue details page"), and the files that do those
+ * things are usually named the same. No scoring, no semantic pass — a wrong
+ * hint costs more than a missing one. */
+const HINT_STOP = new Set([
+  "this", "that", "with", "from", "have", "been", "when", "what", "make", "just",
+  "into", "then", "they", "them", "there", "their", "same", "like", "many", "need",
+  "needed", "line", "lines", "take", "taking", "next", "each", "over", "only",
+  "also", "more", "most", "some", "such", "than", "very", "will", "would",
+  "should", "could", "must", "about", "after", "before", "other", "parts",
+]);
+
+export function buildIssueHints(l: ReturnType<typeof layout>, request: string): string[] {
   const hints: string[] = [];
-  const files: string[] = [];
-  const addFiles = (paths: readonly string[]): void => {
-    for (const p of paths) {
-      const rel = p.replace(/^\.\//, "");
-      if (rel && !files.includes(rel) && files.length < 5) files.push(rel);
-    }
-  };
-  // Concept search first: it connects request wording to module summaries
-  // where substring matching has no shared tokens (e.g. "new run page"
-  // vs composer/NewRunState/buildNewRunArgs).
-  try {
-    const semantic = loadSemanticOrDeterministic(l.repoRoot);
-    if (semantic) {
-      const semFiles = searchSemantic(semantic, request, 8).flatMap((m) => m.entry.keyFiles ?? []);
-      addFiles(
-        semFiles.filter(
-          (f): f is string =>
-            typeof f === "string" &&
-            !/(^|\/)(test|tests|__tests__)\//.test(f) &&
-            !/\.(test|spec)\.[tj]sx?$/.test(f),
-        ),
-      );
-    }
-  } catch {}
-  // Substring fallback: 2+ distinct request keywords in the path or symbol
-  // names. Weak matches mislead more than they help, so no section at all
-  // beats a wrong one.
-  const keywords = request.toLowerCase().split(/\s+/).filter((w) => w.length > 3 && !["this", "that", "with", "from", "have", "been", "when", "what", "make", "just"].includes(w));
+  const words = new Set(
+    (request.toLowerCase().match(/[a-z][a-z0-9]+/g) ?? []).filter(
+      (word) => word.length >= 4 && !HINT_STOP.has(word),
+    ),
+  );
   const cachedMap = readCachedMap(l.repoRoot);
-  if (cachedMap && files.length < 5) {
-    const matched = cachedMap.files
-      .map((f) => {
-        const lower = f.path.toLowerCase();
-        const syms = f.symbols.map((s) => s.name.toLowerCase());
-        const hits = keywords.filter((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
-        return { file: f, hits: hits.length };
-      })
-      .filter((entry) => entry.hits >= 2)
-      .sort((a, b) => b.hits - a.hits);
-    addFiles(matched.map((entry) => entry.file.path));
-  }
+  const files = (cachedMap?.files ?? [])
+    .filter(
+      (file) =>
+        !/^(issues|plans|knowledge|data|test|tests|docs?)\//.test(file.path) &&
+        !/(^|\/)(test|tests|__tests__)\//.test(file.path) &&
+        !/\.(test|spec)\.[tj]sx?$/.test(file.path),
+    )
+    .map((file) => ({
+      path: file.path,
+      hits: file.path
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((word) => words.has(word)).length,
+    }))
+    .filter((entry) => entry.hits > 0)
+    .sort((a, b) => b.hits - a.hits || a.path.localeCompare(b.path))
+    .slice(0, 5)
+    .map((entry) => entry.path);
   if (files.length > 0) {
     hints.push(`## Context\n\nRelevant files:\n${files.map((f) => `  - ${f}`).join("\n")}`);
   }
