@@ -759,10 +759,9 @@ export async function runTui(): Promise<void> {
     const runsListScreen = s.page === "runs" && s.screen === "list";
     const runIndicators = [
       `${C}●${R} ${counts.active} running`,
-      `${Y}?${R} ${counts.awaiting} awaiting`,
-      `${Y}⏸${R} ${counts.paused} paused`,
+      `${Y}!${R} ${counts.awaiting} awaiting`,
     ];
-    const statusTokens = [`${Y}PR${R} ${counts.openPrs} open`];
+    const statusTokens: string[] = [];
 
     let catalogue: CatalogueDocument | null = null;
     let statuses: ReturnType<typeof providerStatuses> = [];

@@ -62,12 +62,9 @@ function lastActivity(run: RunSummary): number {
 export interface HeaderCounts {
   active: number;
   awaiting: number;
-  paused: number;
   blocked: number;
   completed: number;
   failed: number;
-  openPrs: number;
-  approvals: number;
   spend: number;
 }
 
@@ -76,12 +73,9 @@ export function headerCounts(runs: readonly RunSummary[], now = Date.now()): Hea
   return {
     active: runs.filter((r) => r.status === "running").length,
     awaiting: runs.filter((r) => r.status === "awaiting_input").length,
-    paused: runs.filter((r) => r.status === "paused" || r.status === "interrupted").length,
     blocked: runs.filter((r) => r.status === "blocked").length,
     completed: runs.filter((r) => r.status === "completed").length,
     failed: runs.filter((r) => r.status === "failed").length,
-    openPrs: runs.filter((r) => r.prState === "open").length,
-    approvals: runs.filter((r) => r.status === "awaiting_input").length + runs.filter((r) => r.prState === "open").length,
     spend: runs.reduce((sum, r) => sum + r.cost.actual, 0),
   };
 }
@@ -112,17 +106,7 @@ export function awaitingHuman(
         order: 0,
       });
     }
-    if (run.prState === "open" && run.status === "completed") {
-      out.push({
-        kind: "pr",
-        runId: run.id,
-        ...(run.itemId ? { itemId: run.itemId } : {}),
-        pr: run.prNumber,
-        label: `review/merge PR #${run.prNumber}${run.itemId ? ` for ${run.itemId}` : ""}`,
-        ageMs: now - lastActivity(run),
-        order: 1,
-      });
-    }
+
   }
   return out.sort((a, b) => a.order - b.order || b.ageMs - a.ageMs);
 }

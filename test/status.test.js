@@ -58,14 +58,10 @@ test("header counts and the awaiting-human queue", () => {
   const counts = headerCounts(runs, now);
   assert.equal(counts.active, 1);
   assert.equal(counts.awaiting, 1);
-  assert.equal(counts.paused, 1);
   assert.equal(counts.blocked, 1);
-  assert.equal(counts.openPrs, 1);
-  assert.equal(counts.approvals, 2);
 
   const queue = awaitingHuman(runs, now);
-  assert.equal(queue.length, 2);
+  assert.equal(queue.length, 1);
   assert.equal(queue[0].kind, "question");
   assert.equal(queue[0].itemId, "demo");
-  assert.equal(queue[1].kind, "pr");
 });
