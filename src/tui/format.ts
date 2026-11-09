@@ -48,6 +48,10 @@ export const PANEL_BG = "\x1b[48;2;18;18;18m";
 export const SUBTAB_BG = "\x1b[48;2;5;5;5m";
 /** Start action is the only destructive-red control in the composer. */
 export const START_BG = "\x1b[48;2;170;30;30m";
+/** Kind background colors for run list headers. */
+export const PURPLE_BG = "\x1b[48;5;93m";
+export const YELLOW_BG = "\x1b[48;5;214m";
+export const RED_BG = "\x1b[48;5;161m";
 export const WHITE = "\x1b[97m";
 /** 256-color accents for status/category encodings on dark terminals. */
 export const SKY = "\x1b[38;5;75m";

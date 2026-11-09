@@ -6,7 +6,7 @@
  * pending-answer affordance live here; the caller supplies the prebuilt
  * index plus a pending-question lookup.
  */
-import { AMBER, B, BL, C, D, G, GR, LIME, M, R, RED, ROSE, SKY, SLATE, VIOLET, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
+import { AMBER, B, BL, C, D, G, GR, LIME, M, PURPLE_BG, R, RED, RED_BG, ROSE, SKY, SLATE, VIOLET, W, Y, YELLOW_BG, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
 import { ISSUE_STATUS_LABELS, type DisplayStatus } from "../../plan/issues.js";
 import type { RunSummary } from "../../state/runs.js";
@@ -46,22 +46,11 @@ const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }>
 
 const PRIORITY_TONE: Record<string, string> = { high: D, medium: D, low: D };
 
-/** Kind header colors: purple for ideas, yellow for features, red for bugs. */
-const KIND_TONES: Record<string, string> = {
-  idea: M,
-  feature: Y,
-  bug: RED,
-};
-
-/** Category header colors: type and exception buckets. */
-const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {
-  feature: Y,
-  bug: RED,
-  idea: M,
-  other: W,
-  category: D,
-  untracked: D,
-  status: D,
+/** Kind background colors: purple for ideas, yellow for features, red for bugs. */
+const KIND_BG: Record<string, string> = {
+  idea: PURPLE_BG,
+  feature: YELLOW_BG,
+  bug: RED_BG,
 };
 
 export function renderRunsList(props: RunsListProps): RunsListFrame {
@@ -77,11 +66,10 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "section") {
-      // Kind headers use bold dark text on colored bg; status headers are dim.
-      const tone = SECTION_TONES[row.tone];
-      const isKind = row.tone === "feature" || row.tone === "bug" || row.tone === "idea";
-      const sectionBg = isKind ? tone : theme.sectionBg;
-      const sectionFg = isKind ? `${B}\x1b[30m` : `${B}${theme.sectionFg}`;
+      // Kind headers: their brand color as a full background. Category/status headers: dim.
+      const kindBg = KIND_BG[row.tone];
+      const sectionBg = kindBg ?? theme.sectionBg;
+      const sectionFg = kindBg ? `${B}\x1b[30m` : `${B}${theme.sectionFg}`;
       const text = ` ${indent}${sectionFg}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), sectionBg));
     } else if (row.kind === "issue") {

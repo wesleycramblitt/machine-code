@@ -310,25 +310,25 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         }
       }
     } else if (group === "category") {
-      // By category: tag → kind → status → issue.
-      const byTag = new Map<string, Issue[]>();
-      for (const issue of issues) {
-        const tag = issue.tags[0] ?? "Untagged";
-        const list = byTag.get(tag) ?? [];
-        list.push(issue);
-        byTag.set(tag, list);
-      }
-      for (const [tag, list] of [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-        const tagId = `tag:${repoRoot}:${tag}`;
-        if (!pushSection(tagId, tag, list.length, depth, "category")) continue;
-        // Within each tag, group by kind then status.
-        for (const kind of ISSUE_KINDS) {
-          const kindList = list.filter((issue) => issue.kind === kind);
-          if (kindList.length === 0) continue;
-          const kindId = `${tagId}:kind:${kind}`;
-          if (!pushSection(kindId, ISSUE_KIND_LABELS[kind], kindList.length, depth + 1, toneFor(kind), kind)) continue;
+      // By category: kind → category → status → issue.
+      for (const kind of ISSUE_KINDS) {
+        const kindList = issues.filter((issue) => issue.kind === kind);
+        if (kindList.length === 0) continue;
+        const kindId = `kind:${repoRoot}:${kind}`;
+        if (!pushSection(kindId, ISSUE_KIND_LABELS[kind], kindList.length, depth, toneFor(kind), kind)) continue;
+        // Group this kind's issues by tag.
+        const byTag = new Map<string, Issue[]>();
+        for (const issue of kindList) {
+          const tag = issue.tags[0] ?? "Untagged";
+          const list = byTag.get(tag) ?? [];
+          list.push(issue);
+          byTag.set(tag, list);
+        }
+        for (const [tag, list] of [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+          const tagId = `${kindId}:tag:${tag}`;
+          if (!pushSection(tagId, tag, list.length, depth + 1, "category")) continue;
           const byStatus = new Map<IssueStatus, Issue[]>();
-          for (const issue of kindList) {
+          for (const issue of list) {
             const entry = byStatus.get(issue.status) ?? [];
             entry.push(issue);
             byStatus.set(issue.status, entry);
@@ -337,7 +337,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
           const sorted = [...byStatus.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
           for (const [status, entries] of sorted) {
             if (entries.length === 0) continue;
-            const id = `${kindId}:${status}`;
+            const id = `${tagId}:${status}`;
             if (!pushSection(id, ISSUE_STATUS_LABELS[status], entries.length, depth + 2, "status", kind, status)) continue;
             for (const issue of sortIssues(entries)) pushIssue(issue, depth + 3, id);
           }
