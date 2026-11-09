@@ -103,6 +103,14 @@ export function describeToolArgs(tool: string, args: Record<string, unknown> | n
       const hunks = Array.isArray(args.edits) ? args.edits.length : args.oldString !== undefined ? 1 : 0;
       return `${str(args.path) ?? "?"}${hunks > 1 ? ` · ${hunks} hunks` : ""}`;
     }
+    case "map": {
+      const bits = [
+        str(args.action) ?? "overview",
+        str(args.pattern) ? `"${str(args.pattern)}"` : "",
+        str(args.path) ?? "",
+      ].filter(Boolean);
+      return bits.join(" ") || "…";
+    }
     case "search": {
       const bits = [
         str(args.pattern) ? `"${str(args.pattern)}"` : "",

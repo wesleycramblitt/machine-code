@@ -50,7 +50,7 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     }
 
     const research = resolveAgent(l, "research");
-    assert.deepEqual(research.def.tools, ["context", "read", "search", "glob", "grep", "ask", "skill", "write"]);
+    assert.deepEqual(research.def.tools, ["context", "read", "map", "glob", "grep", "ask", "skill", "write"]);
     assert.ok(!research.def.tools.includes("command"), "research must not hold command");
     assert.match(research.prompt, /Turn one idea into detailed features or bugs/);
     assert.match(research.prompt, /issues\/ideas\//);

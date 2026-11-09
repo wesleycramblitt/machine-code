@@ -225,7 +225,7 @@ export function agentDef(layout: Layout, name: AgentName): AgentDef {
   return {
     name,
     prompt: agentPrompt(layout, name),
-    tools: strings(role.tools) as CoreToolName[],
+    tools: strings(role.tools).map((tool) => (tool === "search" ? "map" : tool)) as CoreToolName[],
     readonly: role.readonly === true,
     modes,
     defaultMode: defaultModeRaw && modes.includes(defaultModeRaw) ? defaultModeRaw : undefined,

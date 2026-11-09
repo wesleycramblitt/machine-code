@@ -7,21 +7,21 @@ import { CORE_COMMANDS } from "../dist/commands/registry.js";
 test("tool schema accounting counts every sent tool definition", () => {
   assert.equal(toolSchemaChars([]), 0);
   const one = toolSchemaChars(["read"]);
-  const two = toolSchemaChars(["read", "search"]);
+  const two = toolSchemaChars(["read", "map"]);
   assert.ok(one > 0);
   assert.ok(two > one);
 
-  const map = toolSchemaCharsByName(["read", "command", "search"]);
+  const map = toolSchemaCharsByName(["read", "command", "map"]);
   assert.ok(map.get("read") > 0);
   assert.ok(map.get("command") > 0);
-  assert.ok(map.get("search") > 0);
+  assert.ok(map.get("map") > 0);
   assert.equal(map.size, 3);
 });
 
 test("core tools prefer strict JSON-schema constrained sampling", () => {
   const tools = coreTools(
     { root: process.cwd(), commands: CORE_COMMANDS },
-    ["read", "write", "edit", "search", "context", "ask"],
+    ["read", "write", "edit", "map", "context", "ask"],
   );
   for (const tool of tools) {
     assert.deepEqual(
@@ -32,8 +32,8 @@ test("core tools prefer strict JSON-schema constrained sampling", () => {
   }
   const context = tools.find((tool) => tool.name === "context");
   assert.deepEqual(context.parameters.properties.kind.enum, ["finding", "decision", "open", "next"]);
-  const search = tools.find((tool) => tool.name === "search");
-  assert.equal(search.parameters.properties.mode, undefined, "search has one verb; the harness routes");
-  assert.ok(search.parameters.properties.pattern, "search takes a query");
-  assert.ok(search.parameters.properties.path, "search takes a scope");
+  const mapTool = tools.find((tool) => tool.name === "map");
+  assert.ok(mapTool.parameters.properties.action, "map takes an action");
+  assert.ok(mapTool.parameters.properties.pattern, "map takes a query");
+  assert.ok(mapTool.parameters.properties.path, "map takes a scope");
 });

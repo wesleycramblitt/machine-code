@@ -1003,8 +1003,16 @@ export class RunStateStore {
         };
         refs.push(ref);
         this.addReadFact(ref, turn, excerpt(resultText));
-      } else if (toolName === "search") {
-        const mode = str(args.mode) ?? "text";
+      } else if (toolName === "search" || toolName === "map") {
+        const action = str(args.action) ?? "overview";
+        const mode =
+          toolName === "map"
+            ? action === "overview"
+              ? "map"
+              : action === "outline" || action === "sections"
+                ? "outline"
+                : action
+            : str(args.mode) ?? "text";
         const paths = Array.isArray(args.paths)
           ? args.paths.filter((item): item is string => typeof item === "string").join(",")
           : "";

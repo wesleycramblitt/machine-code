@@ -22,7 +22,7 @@ const DESCRIPTIONS: Record<string, string> = {
   read: "read ranges",
   write: "write files",
   edit: "edit files",
-  search: "symbols, outlines, map",
+  map: "repo map, symbols, LSP",
   glob: "find paths by glob",
   grep: "search file text",
   command: "typed commands",

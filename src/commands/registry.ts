@@ -1,15 +1,15 @@
 /**
  * machine_code — named, typed commands.
  *
- * M0 ships the four read-only core built-ins. Commands declare a fixed
- * executable, a typed argument schema, a timeout, and capped output. They run
- * with an argument vector (never a shell) in their own process group, with a
- * minimal environment that carries no provider secrets; timeout kills the
- * whole group. Mutating core commands (move/copy/delete/replace/rewrite/
- * rename) and check land with Build and LSP in M1.
+ * Commands declare a fixed executable or in-process handler, a typed argument
+ * schema, a timeout, and capped output. They run with an argument vector
+ * (never a shell) in their own process group, with a minimal environment that
+ * carries no provider secrets; timeout kills the whole group.
  */
+import { cpSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { runProc } from "../proc.js";
-import { COMMAND_CAP_BYTES, capText } from "../tools/safety.js";
+import { COMMAND_CAP_BYTES, capText, isSecretPath, resolveWithin, toRelative } from "../tools/safety.js";
 
 export interface CommandSpec {
   name: string;
@@ -33,6 +33,29 @@ function asInt(value: unknown, fallback: number, min: number, max: number): numb
 
 function asPath(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function asBool(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+/** Resolve a command path and refuse the worktree root, git internals, runtime
+ * state, and secret files. */
+function commandPath(root: string, path: string): { abs: string; rel: string } | { error: string } {
+  try {
+    const abs = resolveWithin(root, path);
+    if (abs === resolve(root)) return { error: "refusing to operate on the worktree root" };
+    const rel = toRelative(root, abs);
+    if (!rel || rel === ".") return { error: "refusing to operate on the worktree root" };
+    if (rel === ".git" || rel.startsWith(".git/")) return { error: "refusing to operate on .git" };
+    if (rel === ".machine_code/local" || rel.startsWith(".machine_code/local/")) {
+      return { error: "refusing to operate on runtime state (.machine_code/local)" };
+    }
+    if (isSecretPath(rel)) return { error: `refusing to operate on secret path ${rel}` };
+    return { abs, rel };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
 }
 
 const GIT_REF = /^[a-zA-Z0-9][a-zA-Z0-9._/^-]*$/;
@@ -121,6 +144,124 @@ const SPECS: CommandSpec[] = [
     },
     readonly: true,
     timeoutMs: 30_000,
+  },
+  {
+    name: "core:mkdir",
+    description: "Create a directory and any missing parents (typed; no shell).",
+    binary: "fs",
+    args: () => [],
+    schema: { path: { type: "string", required: true, description: "Directory path relative to the worktree root." } },
+    readonly: false,
+    timeoutMs: 30_000,
+    handler: async (args, ctx) => {
+      const path = asPath(args.path);
+      if (!path) return { text: "core:mkdir requires path", isError: true };
+      const target = commandPath(ctx.root, path);
+      if ("error" in target) return { text: target.error, isError: true };
+      if (existsSync(target.abs)) {
+        return statSync(target.abs).isDirectory()
+          ? { text: `${target.rel} already exists`, isError: false }
+          : { text: `${target.rel} exists and is not a directory`, isError: true };
+      }
+      mkdirSync(target.abs, { recursive: true });
+      return { text: `created directory ${target.rel}`, isError: false };
+    },
+  },
+  {
+    name: "core:move",
+    description: "Move or rename a file or directory inside the worktree (typed; no shell).",
+    binary: "fs",
+    args: () => [],
+    schema: {
+      from: { type: "string", required: true, description: "Source path." },
+      to: { type: "string", required: true, description: "Destination path." },
+      force: { type: "boolean", description: "Replace an existing destination (default false)." },
+    },
+    readonly: false,
+    timeoutMs: 30_000,
+    handler: async (args, ctx) => {
+      const from = asPath(args.from);
+      const to = asPath(args.to);
+      if (!from || !to) return { text: "core:move requires from and to", isError: true };
+      const src = commandPath(ctx.root, from);
+      const dst = commandPath(ctx.root, to);
+      if ("error" in src) return { text: src.error, isError: true };
+      if ("error" in dst) return { text: dst.error, isError: true };
+      if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
+      if (existsSync(dst.abs) && !asBool(args.force)) {
+        return { text: `destination exists: ${dst.rel} (pass force=true to replace)`, isError: true };
+      }
+      mkdirSync(dirname(dst.abs), { recursive: true });
+      try {
+        renameSync(src.abs, dst.abs);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
+        cpSync(src.abs, dst.abs, { recursive: true, force: true });
+        rmSync(src.abs, { recursive: true, force: true });
+      }
+      return { text: `moved ${src.rel} -> ${dst.rel}`, isError: false };
+    },
+  },
+  {
+    name: "core:copy",
+    description: "Copy a file or directory inside the worktree (typed; no shell).",
+    binary: "fs",
+    args: () => [],
+    schema: {
+      from: { type: "string", required: true, description: "Source path." },
+      to: { type: "string", required: true, description: "Destination path." },
+      recursive: { type: "boolean", description: "Required when copying a directory." },
+      force: { type: "boolean", description: "Replace an existing destination (default false)." },
+    },
+    readonly: false,
+    timeoutMs: 30_000,
+    handler: async (args, ctx) => {
+      const from = asPath(args.from);
+      const to = asPath(args.to);
+      if (!from || !to) return { text: "core:copy requires from and to", isError: true };
+      const src = commandPath(ctx.root, from);
+      const dst = commandPath(ctx.root, to);
+      if ("error" in src) return { text: src.error, isError: true };
+      if ("error" in dst) return { text: dst.error, isError: true };
+      if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
+      const source = statSync(src.abs);
+      const recursive = asBool(args.recursive);
+      if (source.isDirectory() && !recursive) {
+        return { text: `copying a directory requires recursive=true: ${src.rel}`, isError: true };
+      }
+      if (existsSync(dst.abs) && !asBool(args.force)) {
+        return { text: `destination exists: ${dst.rel} (pass force=true to replace)`, isError: true };
+      }
+      mkdirSync(dirname(dst.abs), { recursive: true });
+      cpSync(src.abs, dst.abs, { recursive, force: asBool(args.force) });
+      return { text: `copied ${src.rel} -> ${dst.rel}`, isError: false };
+    },
+  },
+  {
+    name: "core:delete",
+    description: "Delete a file or directory inside the worktree (typed; no shell). Directories require recursive=true.",
+    binary: "fs",
+    args: () => [],
+    schema: {
+      path: { type: "string", required: true, description: "Path to delete." },
+      recursive: { type: "boolean", description: "Required when deleting a directory." },
+    },
+    readonly: false,
+    timeoutMs: 30_000,
+    handler: async (args, ctx) => {
+      const path = asPath(args.path);
+      if (!path) return { text: "core:delete requires path", isError: true };
+      const target = commandPath(ctx.root, path);
+      if ("error" in target) return { text: target.error, isError: true };
+      if (!existsSync(target.abs)) return { text: `path does not exist: ${target.rel}`, isError: true };
+      const stat = statSync(target.abs);
+      const recursive = asBool(args.recursive);
+      if (stat.isDirectory() && !recursive) {
+        return { text: `deleting a directory requires recursive=true: ${target.rel}`, isError: true };
+      }
+      rmSync(target.abs, { recursive, force: false });
+      return { text: `deleted ${target.rel}`, isError: false };
+    },
   },
   {
     name: "core:check",

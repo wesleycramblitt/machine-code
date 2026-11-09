@@ -208,17 +208,17 @@ test("search outline/map/symbols and read symbol are surgical", async () => {
   }
 });
 
-test("a bare read of a large file returns the outline", async () => {
+test("a bare read of a large file returns a partial first page", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-map-large-"));
   try {
-    const body = "export function big() {\n" + "  // filler\n".repeat(4000) + "}\n";
+    const body = "export function big() {\n" + "  // filler\n".repeat(12000) + "}\n";
     writeFileSync(join(root, "big.ts"), body, "utf8");
     const read = readTool({ root, commands: CORE_COMMANDS });
     const result = await read.execute("1", { path: "big.ts" });
     const text = result.content.map((c) => c.text ?? "").join("\n");
-    assert.match(text, /full read exceeds 24576 bytes/);
-    assert.match(text, /1 function big/);
-    assert.match(text, /Read a symbol or a range/);
+    assert.match(text, /PARTIAL view: lines 1-/);
+    assert.match(text, /continue with offset/);
+    assert.match(text, /1: export function big/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

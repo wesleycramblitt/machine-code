@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { commandTool, editTool, globTool, grepTool, readTool, searchTool, writeTool } from "../dist/tools/index.js";
+import { commandTool, editTool, globTool, grepTool, mapTool, readTool, searchTool, writeTool } from "../dist/tools/index.js";
 import { contextTool } from "../dist/tools/context.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 import { RunStateStore } from "../dist/context/state.js";
@@ -232,7 +232,7 @@ test("explicit symbols with no hits points at locate", async () => {
     assert.equal(result.isError, undefined);
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /no symbols matching "zzz-no-such-symbol"/);
-    assert.match(text, /try search \{ "pattern": "zzz-no-such-symbol" \}/);
+    assert.match(text, /try map \{ "action": "locate", "pattern": "zzz-no-such-symbol" \}/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -376,6 +376,30 @@ test("locate answers references when no symbol matches", async () => {
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /src\.ts:1/);
     assert.doesNotMatch(text, /no symbols/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("map exposes structure actions with a clear routing description", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-map-tool-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "alpha.ts"), "export function alpha() { return 1; }\n", "utf8");
+    writeFileSync(join(root, "src", "beta.ts"), "export function beta() { return alpha(); }\n", "utf8");
+    const tool = mapTool({ root, commands: CORE_COMMANDS });
+    assert.match(tool.description, /code structure/);
+    assert.match(tool.description, /Use grep for text/);
+
+    const outline = await tool.execute("id", { action: "outline", path: "src/alpha.ts" });
+    assert.match(outline.content.map((c) => c.text ?? "").join("\n"), /alpha/);
+
+    const symbols = await tool.execute("id", { action: "symbols", pattern: "alpha" });
+    assert.match(symbols.content.map((c) => c.text ?? "").join("\n"), /src\/alpha\.ts/);
+
+    const locate = await tool.execute("id", { action: "locate", pattern: "alpha" });
+    assert.match(locate.content.map((c) => c.text ?? "").join("\n"), /alpha/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -555,7 +579,7 @@ test("read pages a large file with no skipped lines", async () => {
       const text = result.content.map((c) => c.text ?? "").join("\n");
       const numbers = [...text.matchAll(/^(\d+): /gm)].map((m) => Number(m[1]));
       seen.push(...numbers);
-      const next = text.match(/call read with offset (\d+)\]/);
+      const next = text.match(/continue with offset (\d+)\]/);
       if (!next) break;
       const nextOffset = Number(next[1]);
       assert.ok(nextOffset > numbers.at(-1), "next offset advances past delivered lines");
@@ -567,15 +591,48 @@ test("read pages a large file with no skipped lines", async () => {
   }
 });
 
+test("read follows Claude-style page, partial-view, and allow_large rules", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-claude-"));
+  try {
+    const partial = Array.from({ length: 12_000 }, (_, i) => `line ${i + 1} ${"x".repeat(8)}`).join("\n") + "\n";
+    writeFileSync(join(root, "partial.txt"), partial, "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const page = await tool.execute("id", { path: "partial.txt" });
+    const pageText = page.content.map((c) => c.text ?? "").join("\n");
+    assert.match(pageText, /PARTIAL view: lines 1-/);
+    assert.match(pageText, /continue with offset/);
+    const wholePartial = await tool.execute("id", { path: "partial.txt", allow_large: true });
+    assert.match(
+      wholePartial.content.map((c) => c.text ?? "").join("\n"),
+      /^12000: line 12000/m,
+      "allow_large bypasses the cached partial page",
+    );
+
+    const tooBig = Array.from({ length: 26_000 }, (_, i) => `line ${i + 1} ${"x".repeat(10)}`).join("\n") + "\n";
+    writeFileSync(join(root, "big.txt"), tooBig, "utf8");
+    const refused = await tool.execute("id", { path: "big.txt" });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content.map((c) => c.text ?? "").join("\n"), /whole-file read is limited/);
+
+    const large = await tool.execute("id", { path: "big.txt", allow_large: true });
+    assert.equal(large.isError, undefined);
+    const largeText = large.content.map((c) => c.text ?? "").join("\n");
+    assert.match(largeText, /^1: line 1/m);
+    assert.match(largeText, /^26000: line 26000/m);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("read truncates one oversized line and still advances", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-read-line-"));
   try {
-    writeFileSync(join(root, "huge.txt"), "x".repeat(40_000) + "\nshort\n", "utf8");
+    writeFileSync(join(root, "huge.txt"), "x".repeat(150_000) + "\nshort\n", "utf8");
     const tool = readTool({ root, commands: CORE_COMMANDS });
     const first = await tool.execute("id", { path: "huge.txt", offset: 1, limit: 10 });
     const firstText = first.content.map((c) => c.text ?? "").join("\n");
-    assert.match(firstText, /line 1 truncated at 24576 bytes/);
-    assert.match(firstText, /call read with offset 2/);
+    assert.match(firstText, /line 1 truncated at 102400 bytes/);
+    assert.match(firstText, /continue with offset 2/);
     const second = await tool.execute("id", { path: "huge.txt", offset: 2 });
     const secondText = second.content.map((c) => c.text ?? "").join("\n");
     assert.match(secondText, /^2: short$/m);
@@ -738,16 +795,16 @@ test("edit applies several hunks atomically and can scope to one symbol", async 
   }
 });
 
-test("read reports an offset past the end of the file as an error", async () => {
+test("read reports an offset past the end with the line count", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-read-eof-"));
   try {
     writeFileSync(join(root, "small.txt"), "one\ntwo\n", "utf8");
     const tool = readTool({ root, commands: CORE_COMMANDS });
     const result = await tool.execute("id", { path: "small.txt", offset: 999 });
-    assert.equal(result.isError, true);
+    assert.equal(result.isError, undefined);
     const text = result.content.map((c) => c.text ?? "").join("\n");
     assert.match(text, /past the end of small\.txt/);
-    assert.match(text, /file ends at line 3/);
+    assert.match(text, /\(3 lines\)/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

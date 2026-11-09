@@ -1,7 +1,7 @@
 /**
  * machine_code — the core tools.
  *
- * Read, write, edit, search, glob, grep, command, context, ask, artifact, skill.
+ * Read, write, edit, map, glob, grep, command, context, ask, artifact, skill.
  * Everything else is a named typed command dispatched through `command`.
  * Tools never get a shell.
  */
@@ -12,6 +12,9 @@ import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
   READ_CAP_BYTES,
+  READ_LARGE_MAX_BYTES,
+  READ_MAX_FILE_BYTES,
+  READ_PAGE_BYTES,
   SEARCH_CAP_BYTES,
   ToolError,
   assertRegularFile,
@@ -63,6 +66,8 @@ export interface ToolContext {
   semantic?: () => SemanticMap | null;
   /** When present, spawned commands/processes are recorded by the supervisor. */
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
+  /** False for read-only roles; blocks non-readonly typed commands. */
+  allowMutations?: boolean;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -76,15 +81,23 @@ function fail(text: string): AgentToolResult<undefined> {
 /* -------------------------------------------------------------------- read */
 
 const ReadParams = Type.Object({
-  path: Type.String({ description: "File path, relative to the worktree root." }),
-  offset: Type.Optional(Type.Number({ description: "1-based line to start at (default 1). Use only for a large unindexed file." })),
-  limit: Type.Optional(Type.Number({ description: "Max lines to return (default 2000)." })),
-  symbol: Type.Optional(Type.String({ description: "Top-level symbol to read (resolved from the repo map). Prefer this." })),
-  symbols: Type.Optional(Type.Array(Type.String(), { description: "Several symbols from one file in one call. Prefer this for a sweep." })),
-  around: Type.Optional(Type.Number({ description: "1-based line; read the symbol that contains it." })),
-  section: Type.Optional(Type.String({ description: "Comment or Markdown section heading to read. Prefer this over offset paging." })),
-  sections: Type.Optional(Type.Array(Type.String(), { description: "Several sections from one file in one call." })),
+  path: Type.String({ description: "File path, relative to the worktree root (or absolute inside it)." }),
+  offset: Type.Optional(Type.Number({ description: "1-based line to start at (default 1)." })),
+  limit: Type.Optional(Type.Number({ description: "Max lines to return. Omit to read through the per-call cap." })),
+  allow_large: Type.Optional(Type.Boolean({
+    description: "Read the whole file or a long range, up to 1 MiB, instead of the default 25k-token page.",
+  })),
 });
+
+/** Hidden selectors kept for internal callers; the model-facing schema is the
+ * Claude-style path/offset/limit/allow_large form above. */
+type ReadArgs = Static<typeof ReadParams> & {
+  symbol?: string;
+  symbols?: string[];
+  around?: number;
+  section?: string;
+  sections?: string[];
+};
 
 /** Find a nested or non-map declaration so `read { symbol }` can still help. */
 function findSymbolLine(lines: readonly string[], symbol: string): number {
@@ -103,16 +116,16 @@ function findSymbolLine(lines: readonly string[], symbol: string): number {
 }
 
 /** Stable cache key for one read target: symbol, section, window, or full file. */
-function readCacheKey(path: string, params: { symbol?: string | null; symbols?: readonly string[] | null; section?: string | null; sections?: readonly string[] | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
+function readCacheKey(path: string, params: { symbol?: string | null; symbols?: readonly string[] | null; section?: string | null; sections?: readonly string[] | null; around?: number | null; offset?: number | null; limit?: number | null; allow_large?: boolean | null }): string {
   if (params.symbols && params.symbols.length > 0) return `${path}#symbols:${[...params.symbols].sort().join(",")}`;
   if (params.sections && params.sections.length > 0) return `${path}#sections:${[...params.sections].map((item) => item.trim().toLowerCase()).sort().join(",")}`;
   if (params.symbol) return `${path}#symbol:${params.symbol}`;
   if (params.section) return `${path}#section:${params.section.trim().toLowerCase()}`;
   if (params.around != null) return `${path}#around:${params.around}`;
   if (params.offset != null || params.limit != null) {
-    return `${path}@${Math.max(1, Math.floor(params.offset ?? 1))}:${Math.max(1, Math.floor(params.limit ?? 2000))}`;
+    return `${path}@${Math.max(1, Math.floor(params.offset ?? 1))}:${params.limit == null ? "all" : Math.max(1, Math.floor(params.limit))}${params.allow_large ? "#large" : ""}`;
   }
-  return `${path}#full`;
+  return `${path}#full${params.allow_large ? "#large" : ""}`;
 }
 
 function readTargetLabel(path: string, params: { symbol?: string | null; symbols?: readonly string[] | null; section?: string | null; sections?: readonly string[] | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
@@ -182,7 +195,7 @@ function cleanReadSelectors(args: unknown): unknown {
     changed = true;
   }
   // Numeric selectors sometimes arrive as null or the string "null".
-  for (const key of ["offset", "limit", "around"] as const) {
+  for (const key of ["offset", "limit", "around", "allow_large"] as const) {
     const value = out[key];
     if (
       value === null ||
@@ -201,14 +214,16 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     name: "read",
     label: "read",
     description:
-      "Read a file inside the worktree. Prefer symbol or section for a targeted sweep; use offset/limit only " +
-      "for a large unindexed file. Capped at 24 KiB per call; a bare full read of a larger file returns its outline. " +
-      "Binary files are rejected. A past-end offset is an error; do not page further. " +
-      "Examples: {\"path\":\"src/tui.ts\",\"symbol\":\"runTui\"}; {\"path\":\"README.md\",\"section\":\"Configuration\"}; " +
-      "{\"path\":\"src/tui.ts\",\"offset\":2400,\"limit\":120}.",
+      "Read a text file inside the worktree. Returns numbered lines. The default read is one page of at most " +
+      "25k tokens (~100 KB); a whole-file read over 256 KB needs offset/limit or allow_large:true. " +
+      "Use offset (1-based) and limit to page a large file, or allow_large:true for a whole-file/long-range read up to 1 MiB. " +
+      "Binary and secret files are rejected. Use map for symbols/outlines/sections and grep for text. " +
+      "Examples: {\"path\":\"src/tui.ts\"}; {\"path\":\"src/tui.ts\",\"offset\":2400,\"limit\":120}; " +
+      "{\"path\":\"README.md\",\"allow_large\":true}.",
     parameters: ReadParams,
     prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
-    async execute(_id, params: Static<typeof ReadParams>) {
+    async execute(_id, raw: Static<typeof ReadParams>) {
+      const params = raw as ReadArgs;
       try {
         const abs = resolveWithin(ctx.root, params.path);
         assertRegularFile(abs);
@@ -230,11 +245,21 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const raw = readFileSync(abs, "utf8");
         const lines = raw.split("\n");
         const bytes = Buffer.byteLength(raw, "utf8");
+        const capBytes = params.allow_large === true ? READ_LARGE_MAX_BYTES : READ_PAGE_BYTES;
+        if (params.allow_large !== true && bytes > READ_MAX_FILE_BYTES && params.offset == null && params.limit == null) {
+          return fail(
+            `${params.path} is ${bytes} bytes; a whole-file read is limited to ${READ_MAX_FILE_BYTES} bytes. ` +
+              "Read a portion with offset/limit, search it with grep, or pass allow_large:true.",
+          );
+        }
+        if (params.allow_large === true && bytes > READ_LARGE_MAX_BYTES) {
+          return fail(`${params.path} is ${bytes} bytes; allow_large is limited to ${READ_LARGE_MAX_BYTES} bytes.`);
+        }
         // Symbol/around wins when a model also passes offset/limit. Ignore the
         // paging arguments instead of spending a turn on a schema correction.
 
         let offset = Math.max(1, Math.floor(params.offset ?? 1));
-        let limit = Math.max(1, Math.floor(params.limit ?? 2000));
+        let limit = params.limit == null ? Math.max(1, lines.length) : Math.max(1, Math.floor(params.limit));
         let header = "";
         let symbolFallback = false;
         const remember = (text: string, kind: LedgerEntry["kind"], label?: string) => {
@@ -248,6 +273,9 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
           });
           return ok(text);
         };
+        if (raw.length === 0) {
+          return remember(`${params.path} exists but is empty (0 lines)`, "outline", `${params.path}#empty`);
+        }
 
         if (wantsSymbols) {
           const file = await outlineFile(ctx.root, params.path);
@@ -259,7 +287,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
                 lines,
                 range.start,
                 Math.max(1, range.end - range.start + 1),
-                READ_CAP_BYTES,
+                capBytes,
               );
               parts.push(`### ${params.path}:${range.start}-${range.end} (${name})\n${page.text}`);
               continue;
@@ -267,7 +295,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             const found = findSymbolLine(lines, name);
             if (found > 0) {
               const start = Math.max(1, found - 20);
-              const page = numberLinesCapped(lines, start, 41, READ_CAP_BYTES);
+              const page = numberLinesCapped(lines, start, 41, capBytes);
               parts.push(`### ${params.path}:${start}-${start + 40} (around ${name})\n${page.text}`);
             } else {
               missing.push(name);
@@ -293,7 +321,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             const next = headings[index + 1];
             const start = heading.line;
             const end = next ? next.line - 1 : lines.length;
-            const page = numberLinesCapped(lines, start, Math.max(1, end - start + 1), READ_CAP_BYTES);
+            const page = numberLinesCapped(lines, start, Math.max(1, end - start + 1), capBytes);
             parts.push(`### ${params.path}:${start}-${end} (section ${sectionTitle(heading.text) || heading.text})\n${page.text}`);
           }
           if (missing.length > 0) parts.push(`[no section: ${missing.join(", ")}]`);
@@ -343,7 +371,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             const next = headings[index + 1];
             const start = heading.line;
             const end = next ? next.line - 1 : lines.length;
-            const page = numberLinesCapped(lines, start, Math.max(1, end - start + 1), READ_CAP_BYTES);
+            const page = numberLinesCapped(lines, start, Math.max(1, end - start + 1), capBytes);
             parts.push(`### ${params.path}:${start}-${end} (section ${sectionTitle(heading.text) || heading.text})\n${page.text}`);
           }
         }
@@ -407,15 +435,6 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             header = `${params.path}:${range.start}-${range.end} (${range.name})`;
             singleResolved = true;
           }
-        } else if (parts.length === 0 && bytes > READ_CAP_BYTES && params.offset == null && params.limit == null) {
-          const file = await outlineFile(ctx.root, params.path);
-          const outline = file ? renderOutline(file) : "(no symbols)";
-          return remember(
-            `[${params.path} is ${lines.length} lines / ${bytes} bytes; full read exceeds ${READ_CAP_BYTES} bytes]\n` +
-            `${outline}\nRead a symbol or a range.`,
-            "outline",
-            `${params.path}#outline`,
-          );
         }
 
         const pageParts: string[] = [];
@@ -423,31 +442,27 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const wantPage = singleResolved || params.offset != null || params.limit != null || parts.length === 0;
         if (wantPage) {
           if (offset > lines.length) {
-            // A past-end page is an error, not an empty successful read. The
-            // state ingester would otherwise record a read range that does not
-            // exist and the model would page forever.
-            const last = Math.max(1, lines.length);
-            const pastEnd =
-              `offset ${offset} is past the end of ${params.path} (${lines.length} lines). ` +
-              `The file ends at line ${last}. Do not page further; use symbol, around, or context recall.`;
-            if (parts.length > 0) {
-              parts.push(`[${pastEnd}]`);
-            } else {
-              return fail(pastEnd);
-            }
+            const pastEnd = `offset ${offset} is past the end of ${params.path} (${lines.length} lines).`;
+            if (parts.length > 0) parts.push(`[${pastEnd}]`);
+            else return remember(pastEnd, "file", `${params.path}@${offset}`);
           } else {
-            const page = numberLinesCapped(lines, offset, limit, READ_CAP_BYTES);
+            const page = numberLinesCapped(lines, offset, limit, capBytes);
             const notes: string[] = [];
             if (symbolFallback) {
               notes.push(`[${params.symbol} is not a top-level map symbol; showing the first match]`);
             }
             if (page.truncatedLine) {
-              notes.push(`[line ${page.nextOffset - 1} truncated at ${READ_CAP_BYTES} bytes]`);
+              notes.push(`[line ${page.nextOffset - 1} truncated at ${capBytes} bytes]`);
             }
             if (page.nextOffset <= lines.length) {
-              notes.push(
-                `[${lines.length - (page.nextOffset - 1)} more lines; call read with offset ${page.nextOffset}]`,
-              );
+              if (params.offset == null && params.limit == null) {
+                notes.push(
+                  `[PARTIAL view: lines ${offset}-${page.nextOffset - 1} of ${lines.length}; ` +
+                    `continue with offset ${page.nextOffset} or allow_large:true]`,
+                );
+              } else {
+                notes.push(`[${lines.length - (page.nextOffset - 1)} more lines; continue with offset ${page.nextOffset}]`);
+              }
             }
             if (page.nextOffset <= lines.length) pageNextOffset = page.nextOffset;
             pageParts.push([header, page.text, ...notes].filter(Boolean).join("\n"));
@@ -459,14 +474,14 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const body = [...parts, ...pageParts].filter(Boolean).join("\n\n");
         let text = body;
         if (parts.length > 0) {
-          const capped = capText(body, READ_CAP_BYTES);
+          const capped = capText(body, capBytes);
           text = capped.text;
           if (
             capped.truncated &&
             pageNextOffset !== undefined &&
             !/call read with offset/.test(text)
           ) {
-            text += `\n[${lines.length - (pageNextOffset - 1)} more lines; call read with offset ${pageNextOffset}]`;
+            text += `\n[${lines.length - (pageNextOffset - 1)} more lines; continue with offset ${pageNextOffset}]`;
           }
         }
         return remember(
@@ -1331,7 +1346,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             }
             const matches = searchSemantic(semantic, params.pattern, limit);
             if (matches.length === 0) {
-              return ok(`no semantic matches for "${params.pattern}"; try text or outline`);
+              return ok(`no semantic matches for "${params.pattern}"; try grep or map { "action": "outline" }`);
             }
             return ok(
               matches
@@ -1369,7 +1384,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             const text = readFileSync(abs, "utf8");
             const lines = text.split("\n");
             const found = documentSections(text, sectionPath).map((heading) => `${heading.line}: ${heading.text}`);
-            if (found.length === 0) return ok(`no section headings in ${sectionPath}; use outline or text`);
+            if (found.length === 0) return ok(`no section headings in ${sectionPath}; use map { "action": "outline" } or grep`);
             return ok(`${sectionPath} (${lines.length} lines)\n${found.slice(0, limit).join("\n")}`);
           }
           case "outline": {
@@ -1474,7 +1489,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                 // answers instead of leaving the model to guess it.
                 return ok(
                   `no symbols matching "${params.pattern ?? ""}"${note}\n` +
-                    `[try search { "pattern": "${params.pattern ?? ""}" } for definitions + references, or text for strings]`,
+                    `[try map { "action": "locate", "pattern": "${params.pattern ?? ""}" } for definitions + references, or grep for strings]`,
                 );
               }
               return ok(hits.join("\n") + note);
@@ -1531,6 +1546,116 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
   };
 }
 
+/* --------------------------------------------------------------------- map */
+
+const MAP_ACTIONS = [
+  "overview",
+  "outline",
+  "symbols",
+  "locate",
+  "references",
+  "definition",
+  "info",
+  "semantic",
+  "graph",
+  "sections",
+  "structural",
+] as const;
+
+const MapParams = Type.Object({
+  action: Type.Union(
+    MAP_ACTIONS.map((action) => Type.Literal(action)),
+    {
+      description:
+        "overview: repo map; outline: file symbols/sections; symbols: find a symbol by name; " +
+        "locate: definitions + text references for an identifier; references: LSP references at path:line:column; " +
+        "definition/info: LSP definition or type at path:line:column; semantic: concept search; " +
+        "graph: module imports; sections: headings in one file; structural: ast-grep pattern.",
+    },
+  ),
+  pattern: Type.Optional(Type.String({ description: "Symbol name, concept query, module, ast-grep pattern, or outline filter." })),
+  path: Type.Optional(Type.String({ description: "File or directory scope (repo-relative)." })),
+  line: Type.Optional(Type.Number({ description: "1-based line for LSP definition/references/info." })),
+  column: Type.Optional(Type.Number({ description: "1-based column for LSP definition/references/info." })),
+  language: Type.Optional(Type.String({ description: "Language id for LSP, e.g. typescript or python." })),
+  limit: Type.Optional(Type.Number({ description: "Max results (default 20)." })),
+});
+
+const MAP_MODES: Record<(typeof MAP_ACTIONS)[number], string> = {
+  overview: "map",
+  outline: "outline",
+  symbols: "symbols",
+  locate: "locate",
+  references: "references",
+  definition: "definition",
+  info: "info",
+  semantic: "semantic",
+  graph: "graph",
+  sections: "sections",
+  structural: "structure",
+};
+
+function cleanMapArgs(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+  const out = { ...(args as Record<string, unknown>) };
+  let changed = false;
+  for (const key of ["pattern", "path", "line", "column", "language", "limit"] as const) {
+    const value = out[key];
+    if (value === null || value === undefined) {
+      delete out[key];
+      changed = true;
+    } else if (
+      typeof value === "string" &&
+      (value.trim() === "" || value.trim() === "null" || value.trim() === "undefined")
+    ) {
+      delete out[key];
+      changed = true;
+    }
+  }
+  for (const key of ["line", "column", "limit"] as const) {
+    const value = out[key];
+    if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) {
+      out[key] = Number(value);
+      changed = true;
+    }
+  }
+  return changed ? out : args;
+}
+
+/**
+ * Code-structure search over the deterministic repo map, the semantic index,
+ * and LSP. Raw text is `grep`; paths are `glob`; file contents are `read`.
+ */
+export function mapTool(ctx: ToolContext): AgentTool<typeof MapParams> {
+  return {
+    name: "map",
+    label: "map",
+    description:
+      "Search code structure, not raw text. Use map when you need to understand where code lives or how it connects. " +
+      "Actions: overview (repo map: files and exported symbols; start here), outline (symbols and line ranges for one file), " +
+      "symbols (find a top-level symbol by name), locate (definitions + text references for an identifier), " +
+      "references (LSP references at path:line:column), definition/info (LSP definition or type at a position), " +
+      "semantic (concept search over module summaries and key files), graph (module import graph), " +
+      "sections (heading blocks in one large file), structural (ast-grep structural search). " +
+      "Use grep for text, glob for paths, and read for file contents.",
+    parameters: MapParams,
+    prepareArguments: (args) => cleanMapArgs(args) as Static<typeof MapParams>,
+    async execute(id, params: Static<typeof MapParams>) {
+      const search = searchTool(ctx);
+      const mode = MAP_MODES[params.action];
+      return search.execute(id, {
+        mode,
+        pattern: params.pattern,
+        path: params.path,
+        line: params.line,
+        column: params.column,
+        language: params.language,
+        limit: params.limit ?? 20,
+      } as Static<typeof SearchParams>);
+    },
+  };
+}
+
 /* ----------------------------------------------------------------- command */
 
 const CommandParams = Type.Object({
@@ -1547,7 +1672,7 @@ const CORE_TOOL_NAMES = new Set([
   "read",
   "write",
   "edit",
-  "search",
+  "map",
   "glob",
   "grep",
   "command",
@@ -1586,7 +1711,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
     label: "command",
     description:
       "List all typed command schemas (large); describe one; or run it (core:* built-ins and allowlisted manifests). No arbitrary shell. " +
-      "issue, artifact, read, search, context, and ask are tools, not commands; call them directly.",
+      "artifact, read, map, context, and ask are tools, not commands; call them directly.",
     parameters: CommandParams,
     prepareArguments: (args) => cleanCommandArgs(args) as Static<typeof CommandParams>,
     async execute(_id, params: Static<typeof CommandParams>) {
@@ -1622,6 +1747,10 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         }
         if (params.action === "describe") {
           return ok(describeCommand(params.name, ctx.commands));
+        }
+        const spec = ctx.commands.get(params.name);
+        if (spec && !spec.readonly && ctx.allowMutations === false) {
+          return fail(`${params.name} mutates files; this role is read-only`);
         }
         const result: CommandRunResult = await runCommand(params.name, params.args ?? {}, ctx, _id);
         return result.isError ? fail(result.text) : ok(result.text);
@@ -1867,7 +1996,7 @@ export type CoreToolName =
   | "read"
   | "write"
   | "edit"
-  | "search"
+  | "map"
   | "glob"
   | "grep"
   | "command"
@@ -1881,7 +2010,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     read: readTool(ctx),
     write: writeTool(ctx),
     edit: editTool(ctx),
-    search: searchTool(ctx),
+    map: mapTool(ctx),
     glob: globTool(ctx),
     grep: grepTool(ctx),
     command: commandTool(ctx),

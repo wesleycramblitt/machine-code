@@ -208,7 +208,12 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
         inc(tools, tool);
         const args = (event.args ?? {}) as Record<string, unknown>;
         if (tool === "read" && typeof args.path === "string") inc(reads, args.path);
-        else if (tool === "search") {
+        else if (tool === "map") {
+          const action = text(args.action) || "overview";
+          const scope = typeof args.path === "string" ? args.path : "";
+          const pattern = text(args.pattern);
+          inc(searches, `${action} ${pattern || scope || "."}`.trim());
+        } else if (tool === "search") {
           const mode = text(args.mode) || "text";
           const scope = typeof args.path === "string" ? args.path : "";
           const pattern = text(args.pattern);

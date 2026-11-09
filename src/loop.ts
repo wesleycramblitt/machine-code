@@ -53,7 +53,7 @@ const BUILD_PLAN_POST_RESEARCH_LIMIT = 8;
 /** Plan-checkpoint blocked turns allowed before the run stops. */
 const PLAN_BLOCK_LIMIT = 3;
 /** Successes that show a run did real work, not just memory bookkeeping. */
-const SUBSTANTIVE_TOOLS = new Set(["read", "search", "glob", "grep", "command", "edit", "write"]);
+const SUBSTANTIVE_TOOLS = new Set(["read", "map", "search", "glob", "grep", "command", "edit", "write"]);
 
 /** A request that is a question, not a change. A writable role answering a
  * question is not expected to edit; everything else (imperatives, bug
@@ -959,6 +959,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         state: memory,
         semantic: () => semanticMap,
         processes,
+        allowMutations: (input.agentCapabilities ?? []).includes("code:write"),
       },
       input.agent.tools,
     );
@@ -1040,6 +1041,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // cheap rehydration exactly when the model needed it.
           const researchTool =
             tool.name === "read" ||
+            tool.name === "map" ||
             tool.name === "search" ||
             tool.name === "glob" ||
             tool.name === "grep";
@@ -1048,6 +1050,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const planReady = needsPlan && hasPlanDecision(memory.getState().facts);
           const readPath = tool.name === "read" ? String((params as { path?: unknown }).path ?? "") : "";
           const blocksAfterPlan =
+            tool.name === "map" ||
             tool.name === "search" ||
             tool.name === "read";
           const postPlanResearchLimit = BUILD_PLAN_RESEARCH_LIMIT + BUILD_PLAN_POST_RESEARCH_LIMIT;
@@ -1106,19 +1109,26 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // (or one symbol/section) at a file version; a search is one scope
           // with one result set. Repeated evidence is stale even if the model
           // changes the offset or paraphrases the pattern.
+          const mapAction = tool.name === "map" ? String((params as { action?: unknown }).action ?? "overview") : "";
           const searchMode =
-            tool.name === "search" ? String((params as { mode?: unknown }).mode ?? "text") : "";
+            tool.name === "map"
+              ? mapAction
+              : tool.name === "search"
+                ? String((params as { mode?: unknown }).mode ?? "text")
+                : "";
           const searchPaths = tool.name === "search" && Array.isArray((params as { paths?: unknown }).paths)
             ? ((params as { paths?: unknown }).paths as unknown[]).filter(
                 (item): item is string => typeof item === "string",
               )
             : [];
           const searchScope =
-            tool.name === "search" && searchMode === "text"
-              ? searchPaths.length > 0
-                ? searchPaths.slice().sort().join(",")
-                : String((params as { path?: unknown }).path ?? ".")
-              : "";
+            tool.name === "map"
+              ? `${mapAction}:${String((params as { pattern?: unknown }).pattern ?? (params as { path?: unknown }).path ?? ".")}`
+              : tool.name === "search" && searchMode === "text"
+                ? searchPaths.length > 0
+                  ? searchPaths.slice().sort().join(",")
+                  : String((params as { path?: unknown }).path ?? ".")
+                : "";
           const key = `${tool.name}:${stableKey(params)}`;
           const commandAction =
             tool.name === "command" ? String((params as { action?: unknown }).action ?? "") : "";
@@ -1214,6 +1224,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             let evidenceKey: string | null = null;
             if (tool.name === "read" && readPath) {
               evidenceKey = `read:${readBucket(params as Record<string, unknown>)}:${fileVersion(readPath) ?? resultHash}`;
+            } else if (tool.name === "map" && searchScope) {
+              evidenceKey = `map:${searchScope}:${resultHash}`;
             } else if (tool.name === "search" && searchScope) {
               evidenceKey = `search:${searchScope}:${searchMode}:${resultHash}`;
             } else if (tool.name === "glob") {

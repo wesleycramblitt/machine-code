@@ -4,18 +4,18 @@ import { skillListItems, toolListItems, tokensForChars } from "../dist/tui/tools
 
 test("tool subtab lists core tools and custom tools", () => {
   const items = toolListItems(
-    ["read", "search", "artifact"],
+    ["read", "map", "artifact"],
     [{ name: "bench", description: "Run benchmarks" }, { name: "lint", description: "Lint the tree" }],
     new Map([["bench", 512]]),
   );
   assert.deepEqual(items.map((item) => item.key), [
     "core-tool:read",
-    "core-tool:search",
+    "core-tool:map",
     "core-tool:artifact",
     "tool:bench",
     "tool:lint",
   ]);
-  assert.match(items.find((item) => item.key === "core-tool:search").text, /symbols, outlines, map/);
+  assert.match(items.find((item) => item.key === "core-tool:map").text, /repo map, symbols, LSP/);
   assert.match(items.find((item) => item.key === "tool:bench").text, /Run benchmarks/);
   const core = items.filter((item) => item.key.startsWith("core-tool:"));
   const custom = items.filter((item) => item.key.startsWith("tool:"));

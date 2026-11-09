@@ -467,10 +467,10 @@ deterministic `deps` from TS/JS imports. LLM annotations are optional: they
 refresh only when `map.semantic_model` is pinned or `map.refresh = "always"`;
 otherwise the deterministic index is used. Generate them on demand with
 `machine_code map --semantic --refresh`. The startup semantic map is
-module-level and capped at 3 KiB; file entries appear in `search` results.
-`search { mode: "semantic" }` ranks modules and large files by keyword overlap
+module-level and capped at 3 KiB; file entries appear in `map` results.
+`map { "action": "semantic" }` ranks modules and large files by keyword overlap
 and returns their key files and dependency edges, so an agent can go from a
-concept or filename to the right file in one call. `search { mode: "graph" }`
+concept or filename to the right file in one call. `map { "action": "graph" }`
 renders the deterministic module import graph, optionally ranked by a query.
 
 Each run keeps its working memory outside the transcript:
@@ -511,20 +511,28 @@ availability, and approval mode. The tools line is the exact post-filter list,
 so a role never sees a tool it cannot call. When `ask` is unavailable, the
 ambiguity policy says to stop and report the question instead of asking.
 
-Research holds only `context`, `read`, `search`, `glob`, `grep`, `ask`,
+Research holds only `context`, `read`, `map`, `glob`, `grep`, `ask`,
 `skill`, and `write`. It reads one idea, asks until the scope is precise, and
 writes concrete features/bugs as issue files under
 `issues/features/todo/` or `issues/bugs/todo/`. Engineer holds `context`,
-`read`, `write`, `edit`, `search`, `glob`, `grep`, `command`, `ask`,
+`read`, `write`, `edit`, `map`, `glob`, `grep`, `command`, `ask`,
 `artifact`, and `skill`; it plans and builds in one run in a `mc/<slug>`
 worktree. Review is read-only and judges the same worktree and commit the
 Engineer used.
 
-The file tools are deliberately split. `glob { "pattern": "src/**/*.ts" }`
-lists paths. `grep { "pattern": "GRAY", "ignoreCase": true }` is plain
-ripgrep. `search` is the one-verb router for identifiers (definitions plus
-references), file paths (outline), and free text. `read` prefers
-`symbol`/`section`/`around`; `offset`/`limit` are for large unindexed files.
+The file tools are deliberately split, close to Claude Code's model:
+
+- `read { "path": "src/tui.ts" }` returns numbered lines. It reads one page of
+  at most 25k tokens; whole files over 256 KB need `offset`/`limit` or
+  `allow_large: true`. Use `offset`/`limit` to page.
+- `glob { "pattern": "src/**/*.ts" }` lists paths.
+- `grep { "pattern": "GRAY", "ignoreCase": true }` is plain ripgrep.
+- `map` is code-structure search: `overview`, `outline`, `symbols`, `locate`,
+  `references`, `definition`, `info`, `semantic`, `graph`, `sections`, and
+  `structural`. Use it for where code lives and how it connects, not raw text.
+- Basic filesystem work is typed commands, not a shell: `core:mkdir`,
+  `core:move`, `core:copy`, and `core:delete`. `write` already creates parent
+  directories; directory copies/deletes require `recursive: true`.
 When an Engineer run has an issue in a worktree, the runner owns the finish:
 it runs the issue's `verify` gates, commits the branch, moves the issue to
 `done/` (or `blocked/`), and starts a Review run when `review = "agent"`, even
@@ -574,21 +582,25 @@ servers whose languages appear in the current repo. `machine_code lsp install
 [language]` prints the structured install command for common servers; add
 `--run` to execute it. Without a language it lists every available installer.
 
-Tool modes:
+Map actions:
 
-- `search { mode: "outline", path: "src/tui.ts" }` uses LSP document symbols
+- `map { "action": "outline", "path": "src/tui.ts" }` uses LSP document symbols
   when a server is available, then falls back to the deterministic top-level
   outline.
-- `search { mode: "sections", path: "src/tui.ts" }` lists comment headings
+- `map { "action": "sections", "path": "src/tui.ts" }` lists comment headings
   inside one file. Use it for large files whose useful blocks live inside one
   giant function.
-- `search { mode: "graph", pattern: "context" }` renders the module import
+- `map { "action": "graph", "pattern": "context" }` renders the module import
   graph, with semantic summaries and query-ranked modules.
-- `search { mode: "symbols", path: "src/loop.ts", pattern: "RunRecorder" }`
+- `map { "action": "symbols", "path": "src/loop.ts", "pattern": "RunRecorder" }`
   uses LSP document symbols when a path is given, workspace symbols otherwise,
   then falls back to the repo map.
-- `search { mode: "definition" | "references" | "info", path, line, column }`
+- `map { "action": "definition" | "references" | "info", "path": ..., "line": ..., "column": ... }`
   uses the server inferred from the path (or `language`).
+- `map { "action": "locate", "pattern": "RunRecorder" }` returns definitions
+  plus text references, with read anchors.
+- `map { "action": "structural", "pattern": "console.log($X)" }` runs ast-grep
+  structural search.
 - `core:check` and `core:rename` infer the language from the path.
 
 Language IDs are per extension, so TSX uses `typescriptreact` and SCSS uses

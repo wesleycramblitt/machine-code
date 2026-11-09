@@ -4,6 +4,12 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
 
+/** Per-call read budget (~25k tokens at 4 chars/token), like Claude Code. */
+export const READ_PAGE_BYTES = 100 * 1024;
+/** Whole files above this are paged or refused, like Claude Code. */
+export const READ_MAX_FILE_BYTES = 256 * 1024;
+/** allow_large ceiling; explicit whole-file reads still stop somewhere sane. */
+export const READ_LARGE_MAX_BYTES = 1024 * 1024;
 export const READ_CAP_BYTES = 24 * 1024;
 export const SEARCH_CAP_BYTES = 12 * 1024;
 export const COMMAND_CAP_BYTES = 8 * 1024;
