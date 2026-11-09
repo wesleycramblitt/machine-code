@@ -251,10 +251,10 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     };
   }
 
-  // Billing / funds. A 402 is an account condition: another model will hit
-  // the same wall, so it must never trigger a rotation chain. A 403 budget
-  // guardrail is the same condition wearing a different status code, so it
-  // must be classified before the generic auth branch.
+  // Billing / funds / budget guardrails are account conditions, but not a
+  // reason to stop: rotate to another provider for this run. `applyErrorState`
+  // excludes every model on the affected provider so the retry cannot bounce
+  // to a sibling that hits the same wall.
   if (
     code === 402 ||
     msg.includes("insufficient") ||
@@ -272,7 +272,7 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     msg.includes("monthly limit") ||
     msg.includes("guardrail_budget")
   ) {
-    return { kind: "funds", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
+    return { kind: "funds", message: msg, retryable: true, cooldownMs: 0, target: "provider", disableProvider: false, needsAuth: false };
   }
   // Auth
   if (code === 401 || code === 403 || msg.includes("unauthorized") || msg.includes("invalid api key") || msg.includes("invalid credential") || msg.includes("api_key_expired") || msg.includes("authentication")) {

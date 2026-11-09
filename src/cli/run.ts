@@ -110,11 +110,26 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string): 
       try {
         header = readFileSync(join(l.repoRoot, file.path), "utf8").slice(0, 1500);
       } catch {}
+      const ordered = [...file.symbols].sort((a, b) => {
+        const aHit = tokens.some((token) => a.name.toLowerCase().includes(token)) ? 0 : 1;
+        const bHit = tokens.some((token) => b.name.toLowerCase().includes(token)) ? 0 : 1;
+        if (aHit !== bHit) return aHit - bHit;
+        const aConst = a.kind === "const" ? 1 : 0;
+        const bConst = b.kind === "const" ? 1 : 0;
+        if (aConst !== bConst) return aConst - bConst;
+        return a.line - b.line;
+      });
       return {
         path: file.path,
         pathWords: new Set(file.path.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)),
         headerWords: new Set(hintWords(header)),
         symbols: file.symbols.map((symbol) => symbol.name.toLowerCase()),
+        // Up-front symbol map: the model can read { symbol } immediately
+        // instead of spending calls on map symbols/outline to learn names.
+        outline: ordered
+          .slice(0, 8)
+          .map((symbol) => `${symbol.name}:${symbol.line}`)
+          .join(", "),
       };
     });
   const total = Math.max(1, candidates.length);
@@ -142,14 +157,16 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string): 
         score += weight * idf(token) ** 2 * (intent.has(token) ? 2 : 1);
       }
       if (wantsUi && file.path.startsWith("src/tui/")) score *= 1.6;
-      return { path: file.path, score };
+      return { path: file.path, score, outline: file.outline };
     })
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-    .slice(0, 5)
-    .map((entry) => entry.path);
+    .slice(0, 5);
   if (files.length > 0) {
-    hints.push(`## Context\n\nRelevant files:\n${files.map((f) => `  - ${f}`).join("\n")}`);
+    const lines = files.map((file) =>
+      file.outline ? `  - ${file.path} — ${file.outline}` : `  - ${file.path}`,
+    );
+    hints.push(`## Context\n\nRelevant files:\n${lines.join("\n")}`);
   }
   const skills = skillMetas(l);
   if (skills.length > 0) {

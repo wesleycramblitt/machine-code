@@ -293,6 +293,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     // worst. A free-tier limit is model-specific unless the provider says all
     // free models/offers are affected. Nothing is written to disk, so the next
     // run starts fresh instead of inheriting a 30m+ cooldown.
+    // Provider-level account conditions (budget, credits): exclude every model
+    // on that provider for this run, then rotate to another provider with the
+    // same conversation. Persisted health is untouched, so topping up or a
+    // reset takes effect without a manual re-enable.
+    if (classified.kind === "funds") {
+      for (const row of input.catalogue) {
+        if (row.providerID === provider) triedModels.add(row.key);
+      }
+      triedModels.add(modelKey);
+      return;
+    }
     if (classified.target === "free-models") {
       const freeKeys = freeKeysForProvider(provider);
       const keys = freeKeys.length > 0 ? freeKeys : [modelKey];
