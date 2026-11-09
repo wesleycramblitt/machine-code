@@ -326,7 +326,7 @@ export function fmtRunTokens(value: number): string {
 
 export function icon(status: string): string {
   switch (status) {
-    case "running": return `${C}●${R}`;
+    case "running": return `${G}●${R}`;
     case "done":
     case "completed": return `${G}✓${R}`;
     case "awaiting_input": return `${Y}!${R}`;

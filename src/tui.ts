@@ -758,7 +758,7 @@ export async function runTui(): Promise<void> {
 
     const runsListScreen = s.page === "runs" && s.screen === "list";
     const runIndicators = [
-      `${C}●${R} ${counts.active} running`,
+      `${G}●${R} ${counts.active} running`,
       `${Y}!${R} ${counts.awaiting} awaiting`,
     ];
     const statusTokens: string[] = [];
