@@ -607,11 +607,14 @@ such as Rust, Go, Java, and C/C++ find their homes.
 
 ### Repository knowledge
 
-`knowledge/index.md` is the English-language entry point. When it exists,
-`loadMachineConfig` includes it in the context bundle by default; set
-`[context] knowledge_index = "..."` to choose another file, or `""` to disable.
-The index links to deeper notes such as `knowledge/architecture.md`. The
-deterministic module index handles "where is this code"; the knowledge files
-handle "why is this code shaped this way".
+Repo facts come from the code itself: module doc headers plus the
+deterministic map (`core:map`, `map outline/locate`, `grep`). No knowledge
+directory is injected — a hand-maintained architecture note drifts from the
+code, and every run pays for the stale version.
+
+External material belongs in the reference store
+(`~/.machine_code/references/`), read on demand through the `reference` skill.
+A project `docs/` folder is for notes that a human or an issue attaches
+explicitly; it is not injected.
 
 Remaining work: [issues/](issues/).

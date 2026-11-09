@@ -317,14 +317,10 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     context: {
       maxChars: asNumber(contextRaw.max_chars) ?? 64_000,
       planFile: typeof contextRaw.plan_file === "string" ? contextRaw.plan_file : undefined,
-      // A repo that keeps knowledge/index.md gets it in context by default.
-      // An explicit knowledge_index (including "") still wins.
-      knowledgeIndex:
-        typeof contextRaw.knowledge_index === "string"
-          ? contextRaw.knowledge_index
-          : layout.repoRoot && existsSync(join(layout.repoRoot, "knowledge", "index.md"))
-            ? "knowledge/index.md"
-            : undefined,
+      // No knowledge directory is injected by default. Repo facts come from
+      // code doc headers and the live map; external material lives in the
+      // reference store. An explicit knowledge_index still wins.
+      knowledgeIndex: typeof contextRaw.knowledge_index === "string" ? contextRaw.knowledge_index : undefined,
     },
     map: {
       enabled: mapRaw.enabled !== false,

@@ -151,14 +151,6 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string): 
   if (files.length > 0) {
     hints.push(`## Context\n\nRelevant files:\n${files.map((f) => `  - ${f}`).join("\n")}`);
   }
-  // Always include architecture.md if it exists.
-  const archPath = join(l.repoRoot, "knowledge", "architecture.md");
-  try {
-    if (existsSync(archPath)) {
-      const arch = readFileSync(archPath, "utf8").split("\n").slice(0, 30).join("\n");
-      hints.push(`## Architecture\n\n${arch}`);
-    }
-  } catch {}
   const skills = skillMetas(l);
   if (skills.length > 0) {
     hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
