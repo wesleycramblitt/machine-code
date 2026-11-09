@@ -220,7 +220,11 @@ export function resetProviderTier(state: AvailabilityState, providerId: string):
 /** Classify a provider error. */
 export function classifyError(error: unknown, status?: number): ClassifiedError {
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  const code = status ?? 0;
+  // The status is often only in the message ("402: {...}") because provider
+  // SDKs wrap it. Without this, a 402/billing error reads as "unknown" and
+  // the run rotates through models that hit the same account limit.
+  const embedded = /\b(4\d\d|5\d\d)\b/.exec(msg);
+  const code = status ?? (embedded ? Number(embedded[1]) : 0);
 
   // Free-tier limits are usually model-specific. Do not assume that one
   // model's 429 means every free offer on the provider is blocked; users
@@ -247,12 +251,23 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     };
   }
 
-  // Billing / funds
-  if (code === 402 || msg.includes("insufficient") || msg.includes("funds") || msg.includes("billing") || msg.includes("payment required") || msg.includes("quota exceeded")) {
-    // distinguish account quota (429 with quota) from funds
-    if (msg.includes("funds") || msg.includes("billing") || code === 402) {
-      return { kind: "funds", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: true, needsAuth: false };
-    }
+  // Billing / funds. A 402 is an account condition: another model will hit
+  // the same wall, so it must never trigger a rotation chain.
+  if (
+    code === 402 ||
+    msg.includes("insufficient") ||
+    msg.includes("funds") ||
+    msg.includes("billing") ||
+    msg.includes("payment required") ||
+    msg.includes("quota exceeded") ||
+    msg.includes("available credits") ||
+    msg.includes("add credits") ||
+    msg.includes("requires more credits") ||
+    msg.includes("in_flight_budget") ||
+    msg.includes("in-flight budget") ||
+    msg.includes("in flight budget")
+  ) {
+    return { kind: "funds", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
   }
   // Auth
   if (code === 401 || code === 403 || msg.includes("unauthorized") || msg.includes("invalid api key") || msg.includes("invalid credential") || msg.includes("api_key_expired") || msg.includes("authentication")) {

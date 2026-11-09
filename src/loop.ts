@@ -163,8 +163,10 @@ function convertToLlm(messages: AgentMessage[]): Message[] {
 }
 
 
-/** Never ask a provider for the model's full (possibly 384k) output ceiling. */
-const MAX_REQUESTED_OUTPUT_TOKENS = 32_000;
+/** Never ask a provider for the model's full (possibly 384k) output ceiling.
+ * 16k is far more than an edit needs and keeps a request inside a credit
+ * balance that rejects 32k. */
+const MAX_REQUESTED_OUTPUT_TOKENS = 16_000;
 /** Cap on the input/output text recorded per call in the event log. */
 const MODEL_IO_CAP = 24_000;
 
@@ -592,6 +594,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
   let lastFailure: string | undefined;
   let lastAssistant: AssistantMessage | undefined;
+  /** Assistant turns produced across the whole run (survives rotation). */
+  let producedTurns = 0;
   let totalTokens = 0;
   /** Run-level loop detector; a model rotation does not erase evidence. */
   // Read-only roles (review/research) cannot make progress by editing,
@@ -1359,6 +1363,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const message = event.message as AssistantMessage;
           if (message.role === "assistant") {
             lastAssistant = message;
+            producedTurns += 1;
             const usage = message.usage ?? zeroUsage;
             const actual = usage.cost?.total;
             const actualContextTokens = usage.input + usage.cacheRead;
@@ -1705,6 +1710,21 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       }
       if (classified?.retryable) {
         const failedKey = currentRow?.key ?? `${la.provider}/${la.model}`;
+        // A model switch mid-run loses the plan: the new model inherits a
+        // transcript it did not produce and re-derives what is happening
+        // (observed: "the prior conversation did research… edits apparently
+        // were not made"). Rotation is safe only before the run has produced
+        // a turn. After that, report the provider failure and stop.
+        if (producedTurns > 0) {
+          recorder.event("rotation_refused", {
+            failedModel: failedKey,
+            kind: classified.kind,
+            turns: producedTurns,
+          });
+          lastFailure = la.errorMessage;
+          clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+          return { status: "failed", finalText, error: la.errorMessage };
+        }
         if (!appliedError || appliedError.key !== failedKey || appliedError.message !== la.errorMessage) {
           try {
             applyErrorState(la.provider, failedKey, classified);
