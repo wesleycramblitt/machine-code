@@ -943,9 +943,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     });
   }
 
-  // A research run is complete only when it produced at least one feature/bug
-  // and every issue it wrote carries an acceptance gate. The model has no
-  // move tool, so the runner owns the idea transition.
+  // Research may finish with new issues, curated references, or a conclusion
+  // that no change is needed. Its terminal outcome is the semantic gate; the
+  // runner does not require a file count.
   if (result.status === "completed" && itemSlug && agentNameParsed === "research") {
     const issue = findIssue(l, itemSlug);
     if (issue?.kind === "ideas" && issue.status === "needs-research") {
@@ -956,18 +956,25 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const missing = written
         .map((path) => findIssue(l, basename(path, ".md")))
         .filter((created) => created !== null && created.acceptance.length === 0);
-      if (written.length > 0 && missing.length === 0) {
-        moveIssue(l, issue.slug, "researched");
-        await commitPlanningFiles(l, `issues: ${issue.slug} researched`);
-        recorder.event("idea_researched", { slug: issue.slug, created: written.length });
-      } else if (missing.length > 0) {
+      if (missing.length > 0) {
         recorder.event("research_missing_acceptance", {
           slug: issue.slug,
           issues: missing.map((created) => created!.slug),
         });
         process.stderr.write(
-          `research left ${issue.slug} unresearched: ${missing.length} created issue(s) lack acceptance\n`,
+          `warning: ${missing.length} issue(s) created without acceptance: ${missing.map((c) => c!.slug).join(", ")}\n`,
         );
+      }
+      const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.test(
+        result.finalText ?? "",
+      );
+      if (outcome) {
+        moveIssue(l, issue.slug, "researched");
+        await commitPlanningFiles(l, `issues: ${issue.slug} researched`);
+        recorder.event("idea_researched", { slug: issue.slug, created: written.length });
+      } else {
+        recorder.event("research_incomplete", { slug: issue.slug });
+        process.stderr.write(`research left ${issue.slug} needs-research: no "Outcome: researched" line\n`);
       }
     }
   }

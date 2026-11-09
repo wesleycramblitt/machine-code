@@ -381,6 +381,15 @@ acceptance: script:test
 Detail the prompt needs.
 ```
 
+Two different contracts live here:
+
+- **`acceptance`** is the machine gate: named commands the runner executes.
+  It proves the build/check passes; it cannot prove the change is the right
+  one. Features and bugs default to `core:check` when none is named.
+- **The prompt** is the semantic definition of done: observable behavior and
+  constraints. `review: agent` asks an independent agent to judge that
+  definition; `review: human` leaves the merge decision to a person.
+
 Verification commands must be named registry commands
 (`script:typecheck`, `script:test`, and so on), because gates dispatch
 through the command registry — never shell strings.

@@ -60,6 +60,8 @@ One paragraph of detail the prompt needs.
 2. Edit the file text directly — the text is the prompt. Optional `key:
    value` header lines at the top set priority, review, tags, depends, or
    acceptance. Keep the prompt tight; put narrative in the body.
+   `acceptance` is the machine gate (named commands); the prompt is the
+   semantic definition of done. A review mode decides who judges it.
 3. Move the file with `machine_code issue move` or `git mv` when its status
    changes: `ideas/.researched/`, `features/todo|blocked|done/`.
 4. `plans/` is a legacy bridge only. Contracts live in `issues/packets/`;
