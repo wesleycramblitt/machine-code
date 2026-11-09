@@ -145,6 +145,27 @@ function toolArgSummary(tool: string, params: Record<string, unknown>): string {
   }
 }
 
+/** Argument values that are payloads, not identity: whole files, hunks, and
+ * long texts never replay. Anything short stays verbatim, so the replayed
+ * call keeps its id (provider pairing intact) and stays a valid call the
+ * model could re-issue — and the loop guard would count. Never invent
+ * pseudo-arguments: the model apes whatever shape it sees (observed: a
+ * literal {"__replay": ...} sent back as arguments, failing validation). */
+const REPLAY_ARG_CHARS = 200;
+
+function replayArgs(params: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(params)) {
+    try {
+      if ((JSON.stringify(value)?.length ?? 0) > REPLAY_ARG_CHARS) continue;
+    } catch {
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
 function firstLine(text: string, maxChars: number): string {
   const line = text.split("\n").find((entry) => entry.trim().length > 0) ?? "";
   const clipped = line.trim().slice(0, maxChars);
@@ -180,8 +201,10 @@ function tombstoneStep(step: MessageLike[], retained: ReadonlySet<string> = new 
   for (const message of step) {
     // Assistant prose (thinking, conclusions) replays intact: the transcript
     // window is the only place reasoning survives, and prose is small next
-    // to tool output. Argument payloads (whole files passed to write/edit)
-    // do not replay: the call and its target are what matter.
+    // to tool output. Tool calls replay with payloads stripped (whole files
+    // passed to write/edit never re-send) but otherwise verbatim: the ids
+    // keep provider pairing intact, and there is no invented shape for the
+    // model to ape.
     if (message.role === "assistant" && Array.isArray(message.content)) {
       out.push({
         ...message,
@@ -190,9 +213,7 @@ function tombstoneStep(step: MessageLike[], retained: ReadonlySet<string> = new 
           if (candidate?.type !== "toolCall" || typeof candidate.name !== "string") return block;
           return {
             ...candidate,
-            arguments: {
-              __replay: `${candidate.name} ${toolArgSummary(candidate.name, (candidate.arguments ?? {}) as Record<string, unknown>)}`.trim(),
-            },
+            arguments: replayArgs((candidate.arguments ?? {}) as Record<string, unknown>),
           };
         }),
       });

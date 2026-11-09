@@ -1236,6 +1236,40 @@ test("tail never replays pre-edit reads as current content", () => {
   assert.match(flat, /earlier read.*src\/a\.ts/);
 });
 
+test("tombstoned calls replay stripped args, never payloads or pseudo-keys", () => {
+  const fakeState = () => ({
+    renderWorkingContext: () => "WORKING",
+    renderBlock: () => "STATE",
+  });
+  const big = "x".repeat(500);
+  const messages = [
+    { role: "system", content: "SYSTEM-PROMPT" },
+    { role: "user", content: "hello" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "fixing now" },
+        { type: "toolCall", id: "c1", name: "edit", arguments: { path: "src/a.ts", oldString: big, newString: big } },
+      ],
+    },
+    { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "edited" }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c2", name: "read", arguments: { path: "src/b.ts" } }],
+    },
+    { role: "toolResult", toolCallId: "c2", content: [{ type: "text", text: "1: b content" }] },
+  ];
+  const out = renderPromptMessages(messages, fakeState(), undefined, undefined, undefined, undefined, undefined).messages;
+  const flat = JSON.stringify(out);
+  // No invented argument shapes for the model to ape; payloads never re-send.
+  assert.doesNotMatch(flat, /__replay/);
+  assert.doesNotMatch(flat, /xxxxxxxxxx/);
+  // Identity survives: the call still pairs with its result and reads as a call.
+  assert.match(flat, /"path":"src\/a\.ts"/);
+  assert.match(flat, /earlier edit src\/a\.ts/);
+  assert.match(flat, /1: b content/);
+});
+
 test("needle-in-repo: a planted fact is retrievable from assembled context", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-needle-"));
   const needle = "NEEDLE-7f3a9q plasma-conduit calibration omega";
