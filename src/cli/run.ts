@@ -249,14 +249,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   // Auto-create an issue for bare runs so every run is linked to a branch.
   // Gather context relevant to the request to save the agent scouting turns.
+  // Without this, issueless runs skip the post-run commit/merge block and
+  // their work is stranded in the worktree.
   let autoCreatedIssue = false;
-  if (!itemSlug && normalizedAgent === "engineer" && request) {
+  if (!itemSlug && (normalizedAgent === "engineer" || normalizedAgent === "research") && request) {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
       const hints = buildIssueHints(l, request);
       issue = writeIssue(l, {
-        kind: "features",
+        kind: normalizedAgent === "research" ? "ideas" : "features",
         slug: autoSlug,
         prompt: request,
         body: `Auto-created from run.\n\n${request}\n\n${hints.join("\n\n")}`,
@@ -965,8 +967,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
         } else if (commit) {
           recorder.patchSummary({ commit });
           recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
-          moveIssue(l, issue.slug, "done");
-          await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+          // Ideas move to researched (handled above when they produced
+          // issues); only features/bugs move to done. "done" is not a
+          // legal status for ideas.
+          if (issue.kind !== "ideas") {
+            moveIssue(l, issue.slug, "done");
+            await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+          }
           // Auto-merge: if no review required, merge the branch into main
           if (issue.review === "none") {
             const branch = recorder.current.branch;
@@ -1319,8 +1326,10 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
           if (commit) {
             recorder.patchSummary({ commit });
             recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
-            moveIssue(l2, issue.slug, "done");
-            await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+            if (issue.kind !== "ideas") {
+              moveIssue(l2, issue.slug, "done");
+              await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+            }
             // Auto-merge: if no review required, merge the branch into main
             if (issue.review === "none") {
               const branch = recorder.current.branch;
