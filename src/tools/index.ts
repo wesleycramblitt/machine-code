@@ -1419,7 +1419,14 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               }
             }
             const file = await outlineFile(ctx.root, outlinePath);
-            if (!file) return fail(`no outline for ${outlinePath} (binary or unreadable)`);
+            if (!file) {
+              try {
+                if (statSync(resolveWithin(ctx.root, outlinePath)).isDirectory()) {
+                  return fail(`"${outlinePath}" is a directory; outline needs a file path`);
+                }
+              } catch {}
+              return fail(`no outline for "${outlinePath}" (binary, missing, or unreadable)`);
+            }
             return ok(
               `${file.path} (${file.lines} lines)\n${renderOutline(file) || "(no symbols)"}`,
             );
@@ -1732,7 +1739,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
           return fail(
             "There is no shell here. The command tool runs typed commands only: " +
               `${[...ctx.commands.keys()].sort().join(", ")}. ` +
-              'Example: {"action":"run","name":"typescript:build","args":{}}.',
+              'Example: {"action":"run","name":"core:status","args":{}}.',
           );
         }
         if (CORE_TOOL_NAMES.has(params.name)) {

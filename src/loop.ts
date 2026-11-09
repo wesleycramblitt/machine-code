@@ -108,16 +108,12 @@ export function shouldNudgeStall(input: {
 /** A command that verifies the tree (compile/test/lint). These are the
  * deterministic "definition of done" gates: a failure must be fixed, not
  * researched around. */
-const GATE_NAME = /(?:^|:)(build|test|lint|typecheck)$/;
 export function isGateCommand(name: string): boolean {
-  return GATE_NAME.test(name);
+  return /(?:^|:)(build|test|lint|typecheck)$/.test(name);
 }
 
 /** The fastest compile gate available, for deterministic post-edit checks. */
 export function compileGateName(commands: ReadonlyMap<string, unknown>): string | undefined {
-  for (const candidate of ["typescript:typecheck", "typescript:lint", "typescript:build"]) {
-    if (commands.has(candidate)) return candidate;
-  }
   for (const name of commands.keys()) {
     if (/(?:^|:)(typecheck|lint|build)$/.test(name)) return name;
   }

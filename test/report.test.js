@@ -67,7 +67,7 @@ test("run metrics summarize calls, context, changes, gates, and limits", () => {
       { t: "2026-01-01T00:00:00.300Z", type: "tool_call", tool: "read" },
       { t: "2026-01-01T00:00:00.400Z", type: "tool_call", tool: "edit", args: { path: "src/a.ts" } },
       { t: "2026-01-01T00:00:00.500Z", type: "loop_blocked", reason: "loop" },
-      { t: "2026-01-01T00:00:00.600Z", type: "gates", passed: false, results: [{ command: "typescript:test", passed: false }] },
+      { t: "2026-01-01T00:00:00.600Z", type: "gates", passed: false, results: [{ command: "script:test", passed: false }] },
     ];
     const metrics = runMetrics(summary, events);
     assert.equal(metrics.model, "provider/model");
@@ -75,7 +75,7 @@ test("run metrics summarize calls, context, changes, gates, and limits", () => {
     assert.equal(metrics.toolCalls, 2);
     assert.equal(metrics.toolCallsByTool.read, 1);
     assert.equal(metrics.loopReason, "loop");
-    assert.equal(metrics.gates?.failed[0], "typescript:test");
+    assert.equal(metrics.gates?.failed[0], "script:test");
     assert.deepEqual(metrics.changedPaths, ["src/a.ts"]);
     assert.equal(metrics.wallMs, 2_500);
 

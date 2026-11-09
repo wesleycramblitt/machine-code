@@ -64,14 +64,14 @@ test("writeIssue creates front-matter plus body under kind/status", () => {
       priority: "high",
       tags: ["tui"],
       review: "human",
-      verify: ["typescript:test", "typescript:typecheck"],
+      verify: ["script:test", "script:typecheck"],
     });
     assert.equal(issue.rel, "issues/features/todo/fast-lookup.md");
     assert.equal(issue.status, "todo");
-    assert.deepEqual(issue.verify, ["typescript:test", "typescript:typecheck"]);
+    assert.deepEqual(issue.verify, ["script:test", "script:typecheck"]);
     assert.deepEqual(issueToTaskPacket(issue).acceptance, [
-      { command: "typescript:test" },
-      { command: "typescript:typecheck" },
+      { command: "script:test" },
+      { command: "script:typecheck" },
     ]);
     const text = readFileSync(issue.path, "utf8");
     assert.match(text, /priority = "high"/);

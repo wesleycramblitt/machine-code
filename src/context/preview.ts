@@ -10,7 +10,7 @@ import { join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { listIssues } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
-import { allCommands } from "../commands/profiles.js";
+import { allCommands } from "../commands/registry.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
 import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
 import { parseIncludeRange, parentIndexLine, sliceRangeBody } from "./assemble.js";

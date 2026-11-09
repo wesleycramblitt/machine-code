@@ -156,7 +156,7 @@ test("summary falls back to the last thinking when the model produced no text", 
 
 test("a blocked run with no special stop event reports blocked", () => {
   const outcome = summarizeRun({
-    summary: summary({ status: "blocked", error: "acceptance gates failed: typescript:test" }),
+    summary: summary({ status: "blocked", error: "acceptance gates failed: script:test" }),
     events: [],
   });
   assert.equal(outcome.stopReason, "blocked");

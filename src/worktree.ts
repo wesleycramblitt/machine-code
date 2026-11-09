@@ -260,10 +260,9 @@ function branchFor(kind: WorktreeKind, runId: string, slug?: string): string {
   return `mc/run/${runId}`;
 }
 
-/** Profile-declared dependency links ([worktree] links in *.toml profiles). */
-async function dependencyLinks(layout: Layout): Promise<string[]> {
-  const { loadWorktreeLinks } = await import("./commands/profiles.js");
-  return loadWorktreeLinks(layout);
+/** Profile-declared dependency links — no longer loaded from profiles. */
+async function dependencyLinks(_layout: Layout): Promise<string[]> {
+  return [];
 }
 
 function validateLink(link: string): void {

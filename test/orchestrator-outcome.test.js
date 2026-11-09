@@ -29,7 +29,7 @@ test("Review verdicts accept labels and safe fallbacks", () => {
 });
 
 test("only completion failures are retryable", () => {
-  assert.equal(isRetryableFailure("acceptance gates failed: typescript:test"), true);
+  assert.equal(isRetryableFailure("acceptance gates failed: script:test"), true);
   assert.equal(isRetryableFailure("Review verdict: changes_requested"), true);
   assert.equal(isRetryableFailure("build outcome: blocked"), true);
   assert.equal(isRetryableFailure("build outcome: needs_planning"), false);

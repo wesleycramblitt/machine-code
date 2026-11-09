@@ -16,7 +16,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { listIssues } from "../plan/issues.js";
 import type { MachineConfig } from "../config.js";
-import { allCommands } from "../commands/profiles.js";
+import { allCommands } from "../commands/registry.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
 import { resolveSkillMode, skillIndexBody, skillMetas, toolIndexBody, type SkillMode } from "./references.js";
 import { readReference } from "../references/store.js";

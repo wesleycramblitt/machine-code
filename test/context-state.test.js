@@ -105,12 +105,12 @@ test("ingestTurn records read facts, artifacts, working set, and changes", () =>
       [
         system,
         user,
-        assistant({ id: "c3", name: "command", args: { action: "run", name: "typescript:test" } }),
+        assistant({ id: "c3", name: "command", args: { action: "run", name: "script:test" } }),
         result({ id: "c3", name: "command", text: "# tests 1\n# pass 1\n# fail 0" }),
       ],
       3,
     );
-    const command = store.getState().facts.find((fact) => fact.key === "command:typescript:test:true");
+    const command = store.getState().facts.find((fact) => fact.key === "command:script:test:true");
     assert.ok(command);
     assert.match(command.text, /# tests 1/);
     assert.match(command.text, /# pass 1/);
@@ -458,14 +458,14 @@ test("command describe is not a gate run or a verification", () => {
       [
         system,
         user,
-        assistant({ id: "d1", name: "command", args: { action: "describe", name: "typescript:test" } }),
-        result({ id: "d1", name: "command", text: '{"name":"typescript:test"}' }),
+        assistant({ id: "d1", name: "command", args: { action: "describe", name: "script:test" } }),
+        result({ id: "d1", name: "command", text: '{"name":"script:test"}' }),
       ],
       1,
     );
     assert.equal(ingested.changed, false);
     assert.equal(store.getState().phase, "orient");
-    assert.equal(store.getState().facts.find((fact) => fact.key === "command:typescript:test:true"), undefined);
+    assert.equal(store.getState().facts.find((fact) => fact.key === "command:script:test:true"), undefined);
     assert.doesNotMatch(store.renderBlock(), /Next: Verify the change/);
   } finally {
     rmSync(dir, { recursive: true, force: true });

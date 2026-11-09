@@ -19,7 +19,7 @@ import { RunRecorder, type RunStatus } from "./state/runs.js";
 import { runCommand } from "./commands/registry.js";
 import type { TaskPacket } from "./packet.js";
 import { resolveGates, runGates } from "./verify.js";
-import { allCommands } from "./commands/profiles.js";
+import { allCommands } from "./commands/registry.js";
 import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
@@ -265,7 +265,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     };
   }
 
-  const gates = resolveGates(packet, commands);
+  const gates = resolveGates(packet);
   const gateProcesses = new ProcessSupervisor({
     runId: recorder.id,
     runDir: recorder.dir,

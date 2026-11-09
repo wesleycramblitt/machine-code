@@ -25,7 +25,7 @@ function record(id, status = "running") {
     id,
     runId: "run-1",
     origin: "command",
-    name: "typescript:test",
+    name: "script:test",
     argv: ["npm", "test"],
     status,
     startedAt: "2026-11-02T00:00:00.000Z",

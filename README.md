@@ -39,7 +39,7 @@ node dist/cli.js resume <run-id>
 
 # issues: one YAML file per idea/feature/bug, status = directory
 node dist/cli.js issue list
-node dist/cli.js issue create features <slug> "do the thing" --verify typescript:test
+node dist/cli.js issue create features <slug> "do the thing" --verify script:test
 node dist/cli.js issue <slug>              # show the issue
 node dist/cli.js approve <slug>            # merge mc/<slug> into main
 
@@ -349,7 +349,7 @@ and merge.
 
 ```bash
 machine_code issue list
-machine_code issue create features <slug> "do the thing" --verify typescript:test
+machine_code issue create features <slug> "do the thing" --verify script:test
 machine_code build <slug> [--review]
 machine_code approve <slug>   # merge mc/<slug> into main
 machine_code delete <slug>
@@ -375,7 +375,7 @@ prompt = "Make the thing fast."
 depends = ["other-slug"]
 tags = ["tui"]
 review = "none"          # none | agent | human
-verify = ["typescript:test"]
+verify = ["script:test"]
 ---
 
 # Short title
@@ -384,7 +384,7 @@ Detail the prompt needs.
 ```
 
 Verification commands must be named registry commands
-(`typescript:typecheck`, `typescript:test`, and so on), because gates dispatch
+(`script:typecheck`, `script:test`, and so on), because gates dispatch
 through the command registry — never shell strings.
 
 ### Composer context and reusable tools

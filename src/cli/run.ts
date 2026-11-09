@@ -38,7 +38,7 @@ import { inferReviewVerdict, parseReviewVerdict } from "../orchestrator/outcome.
 import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
-import { allCommands } from "../commands/profiles.js";
+import { allCommands } from "../commands/registry.js";
 import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
@@ -733,7 +733,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const commands = allCommands(l);
       let gatesPassed = true;
       if (recorder.current.verification !== "direct") {
-        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), commands), {
+        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), {
           root: toolRoot,
           commands,
         });
@@ -1093,7 +1093,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     const issue = findIssue(l2, resumeItem);
     if (issue) {
       if (recorder.current.verification !== "direct") {
-        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), commands), { root: toolRoot, commands });
+        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), { root: toolRoot, commands });
         recorder.event("gates", {
           issue: issue.slug,
           passed: gateOutcome.passed,
