@@ -525,6 +525,38 @@ test("read uses a symbol range even when offset or limit is also passed", async 
   }
 });
 
+test("read page names top-level symbols so the next read can target one block", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-symbols-hint-"));
+  try {
+    const fns = ["alpha", "beta", "gamma", "delta", "epsilon"]
+      .map((n) => `export function ${n}() {\n  return 1;\n}`)
+      .join("\n\n");
+    writeFileSync(join(root, "a.ts"), `${fns}\n`, "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "a.ts", offset: 1, limit: 5 });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /5 top-level symbols: alpha, beta, gamma, delta, epsilon/);
+    assert.match(text, /"symbol": "<name>"/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("read page omits the symbol hint for small files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-no-hint-"));
+  try {
+    writeFileSync(join(root, "a.ts"), "export function foo() {\n  return 1;\n}\n", "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const result = await tool.execute("id", { path: "a.ts", offset: 1, limit: 5 });
+    assert.equal(result.isError, undefined);
+    const text = result.content.map((c) => c.text ?? "").join("\n");
+    assert.doesNotMatch(text, /top-level symbols/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("read treats strict-schema null optionals as absent", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-read-null-"));
   try {

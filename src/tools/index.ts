@@ -31,6 +31,7 @@ import {
 } from "./safety.js";
 import {
   buildRepoMap,
+  extractSymbols,
   findSymbols,
   outlineFile,
   renderOutline,
@@ -458,6 +459,20 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             const notes: string[] = [];
             if (symbolFallback) {
               notes.push(`[${params.symbol} is not a top-level map symbol; showing the first match]`);
+            }
+            // Plain page read on a symbol-rich file: name the blocks once so
+            // the next read can target one instead of paging again.
+            if (!singleResolved && !wantsSymbols && !wantsSections) {
+              try {
+                const names = extractSymbols(params.path, raw).map((s) => s.name).filter((n) => n.length > 0);
+                if (names.length >= 4) {
+                  const shown = names.slice(0, 10).join(", ");
+                  const more = names.length > 10 ? ` (+${names.length - 10} more)` : "";
+                  notes.push(
+                    `[${names.length} top-level symbols: ${shown}${more} — read { "path": "${params.path}", "symbol": "<name>" } for one block]`,
+                  );
+                }
+              } catch {}
             }
             if (page.truncatedLine) {
               notes.push(`[line ${page.nextOffset - 1} truncated at ${capBytes} bytes]`);

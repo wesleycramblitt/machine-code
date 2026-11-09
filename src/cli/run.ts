@@ -28,6 +28,7 @@ import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
 import { readCachedMap } from "../map/deterministic.js";
+import { loadSemanticOrDeterministic, searchSemantic } from "../map/semantic.js";
 import { skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -72,11 +73,36 @@ import { parseAxisOverrides } from "./models.js";
  * than they help, so no section at all beats a wrong one. */
 function buildIssueHints(l: ReturnType<typeof layout>, request: string): string[] {
   const hints: string[] = [];
+  const files: string[] = [];
+  const addFiles = (paths: readonly string[]): void => {
+    for (const p of paths) {
+      const rel = p.replace(/^\.\//, "");
+      if (rel && !files.includes(rel) && files.length < 5) files.push(rel);
+    }
+  };
+  // Concept search first: it connects request wording to module summaries
+  // where substring matching has no shared tokens (e.g. "new run page"
+  // vs composer/NewRunState/buildNewRunArgs).
+  try {
+    const semantic = loadSemanticOrDeterministic(l.repoRoot);
+    if (semantic) {
+      const semFiles = searchSemantic(semantic, request, 8).flatMap((m) => m.entry.keyFiles ?? []);
+      addFiles(
+        semFiles.filter(
+          (f): f is string =>
+            typeof f === "string" &&
+            !/(^|\/)(test|tests|__tests__)\//.test(f) &&
+            !/\.(test|spec)\.[tj]sx?$/.test(f),
+        ),
+      );
+    }
+  } catch {}
+  // Substring fallback: 2+ distinct request keywords in the path or symbol
+  // names. Weak matches mislead more than they help, so no section at all
+  // beats a wrong one.
   const keywords = request.toLowerCase().split(/\s+/).filter((w) => w.length > 3 && !["this", "that", "with", "from", "have", "been", "when", "what", "make", "just"].includes(w));
-  // Suggest repo files only on strong signal: 2+ distinct request keywords
-  // in the path or symbol names, capped at 5.
   const cachedMap = readCachedMap(l.repoRoot);
-  if (cachedMap) {
+  if (cachedMap && files.length < 5) {
     const matched = cachedMap.files
       .map((f) => {
         const lower = f.path.toLowerCase();
@@ -85,11 +111,11 @@ function buildIssueHints(l: ReturnType<typeof layout>, request: string): string[
         return { file: f, hits: hits.length };
       })
       .filter((entry) => entry.hits >= 2)
-      .sort((a, b) => b.hits - a.hits)
-      .slice(0, 5);
-    if (matched.length > 0) {
-      hints.push(`## Context\n\nRelevant files:\n${matched.map((entry) => `  - ${entry.file.path} (${entry.file.symbols.length} symbols)`).join("\n")}`);
-    }
+      .sort((a, b) => b.hits - a.hits);
+    addFiles(matched.map((entry) => entry.file.path));
+  }
+  if (files.length > 0) {
+    hints.push(`## Context\n\nRelevant files:\n${files.map((f) => `  - ${f}`).join("\n")}`);
   }
   // Always include architecture.md if it exists.
   const archPath = join(l.repoRoot, "knowledge", "architecture.md");
