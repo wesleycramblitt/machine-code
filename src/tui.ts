@@ -107,6 +107,17 @@ import { commitPlanningFiles } from "./tasks/planning.js";
 
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
+/**
+ * Min-fit ladder for `f` on the new-run page: role policy, then an explicit
+ * floor from 6 to 8.5 in 0.25 steps, then 0 (no floor). Quarter points so a
+ * borderline model can be included or excluded precisely.
+ */
+const NEW_RUN_MIN_FITS: Array<number | null | undefined> = [
+  undefined,
+  ...Array.from({ length: 11 }, (_, i) => 6 + i * 0.25),
+  0,
+];
+
 
 
 
@@ -363,8 +374,8 @@ export async function runTui(): Promise<void> {
   };
 
   const cycleMinFit = () => {
-    const values: Array<number | null | undefined> = [undefined, 6, 6.5, 7, 7.5, 8, 8.5, 0];
-    s.newrun.minFit = values[(values.findIndex((value) => value === s.newrun.minFit) + 1) % values.length];
+    const index = NEW_RUN_MIN_FITS.findIndex((value) => value === s.newrun.minFit);
+    s.newrun.minFit = NEW_RUN_MIN_FITS[(index + 1) % NEW_RUN_MIN_FITS.length];
   };
 
   const cycleFloors = () => {
