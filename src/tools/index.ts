@@ -1931,6 +1931,11 @@ function cleanCommandArgs(args: unknown): unknown {
   if (typeof out.name === "string" && (out.name.trim() === "" || out.name.trim() === "null" || out.name.trim() === "undefined")) {
     delete out.name;
   }
+  // A name with no action means "run it". Models send {name:"core:status"}
+  // and should not lose a turn to a schema correction.
+  if (out.action === undefined && typeof out.name === "string" && out.name.trim() !== "") {
+    out.action = "run";
+  }
   return out;
 }
 
@@ -2206,20 +2211,22 @@ export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
           params.pattern,
         ];
         if (scope !== ctx.root) args.push(toRelative(ctx.root, scope));
-        const result = await exec("rg", args, ctx.root, SEARCH_CAP_BYTES);
-        if (result.isError) return result;
-        let text = result.content
-          .map((item) => (item.type === "text" ? item.text : ""))
-          .join("\n");
-        if (text === "no matches") {
-          return ok(
-            `no matches for "${params.pattern}"\n` +
-              `[try ignoreCase: true, a shorter regex, or glob: "*.ts" to narrow the file set]`,
-          );
+        const proc = await runProc("rg", args, { cwd: ctx.root, timeoutMs: 30_000 });
+        if (proc.outcome === "spawn-error") return fail(`configuration gap: ${proc.spawnError}`);
+        if (proc.outcome === "timeout") return fail("rg timed out after 30s (process group killed)");
+        if (proc.code !== 0 && proc.stdout.length === 0) {
+          if (proc.code === 1) {
+            return ok(
+              `no matches for "${params.pattern}"\n` +
+                `[try ignoreCase: true, a shorter regex, or glob: "*.ts" to narrow the file set]`,
+            );
+          }
+          return fail(`rg exited ${proc.code}: ${proc.stderr.trim() || "(no stderr)"}`);
         }
+        let raw = proc.stdout.trimEnd();
         if (params.glob) {
           const matchers = globMatchers(params.glob);
-          text = text
+          raw = raw
             .split("\n")
             .filter((line) => {
               if (line === "--" || line.startsWith("[")) return true;
@@ -2229,7 +2236,28 @@ export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
               return matchers.some((matcher) => matcher.test(rel) || matcher.test(basename(rel)));
             })
             .join("\n");
-          if (!text.trim()) return ok(`no matches for "${params.pattern}" in files matching "${params.glob}"`);
+          if (!raw.trim()) return ok(`no matches for "${params.pattern}" in files matching "${params.glob}"`);
+        }
+        if (!raw) return ok("no matches");
+        const capped = capText(raw, SEARCH_CAP_BYTES);
+        let text = capped.text;
+        // A broad pattern can fill the cap before the file that owns the
+        // behavior appears. Name the files and their match counts first, so
+        // the next call is scoped instead of another blind search.
+        if (capped.truncated) {
+          const counts = new Map<string, number>();
+          for (const line of raw.split("\n")) {
+            const match = /^([^:\n]+):\d+:/.exec(line);
+            if (!match) continue;
+            const file = match[1]!;
+            counts.set(file, (counts.get(file) ?? 0) + 1);
+          }
+          const summary = [...counts.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 12)
+            .map(([file, count]) => `${file}(${count})`)
+            .join(", ");
+          text = `[grep truncated; matches by file: ${summary || "unknown"}]\n${text}`;
         }
         return ok(text || "no matches");
       } catch (error) {

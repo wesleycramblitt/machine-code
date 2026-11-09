@@ -143,7 +143,6 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
 
 export function defaultSkillsFor(args: { agent: string }): string[] {
   if (args.agent === "research") return ["clean-code", "plan-curation"];
-  if (args.agent === "engineer") return ["clean-code"];
   return [];
 }
 

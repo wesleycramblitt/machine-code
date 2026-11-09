@@ -79,6 +79,11 @@ const HINT_STOP = new Set([
   "needed", "line", "lines", "take", "taking", "next", "each", "over", "only",
   "also", "more", "most", "some", "such", "than", "very", "will", "would",
   "should", "could", "must", "about", "after", "before", "other", "parts",
+  // Three-letter function words. Domain terms like "min", "fit", "new", and
+  // "run" must survive: they are often the only link to a symbol name.
+  "the", "and", "for", "not", "but", "are", "was", "were", "has", "had", "its",
+  "our", "you", "your", "all", "any", "can", "may", "use", "per", "via", "out",
+  "off", "one", "two", "how", "why", "who", "its", "too", "now", "get", "got",
 ]);
 const HINT_SKIP = /^(issues|plans|knowledge|data|test|tests|docs?)\//;
 const HINT_CODE = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i;
@@ -86,7 +91,7 @@ const HINT_UI = /\b(ui|ux|screen|page|layout|colou?r|font|bold|badge|render)\b/i
 
 function hintWords(text: string): string[] {
   return (text.toLowerCase().match(/[a-z][a-z0-9]+/g) ?? []).filter(
-    (word) => word.length >= 4 && !HINT_STOP.has(word),
+    (word) => word.length >= 3 && !HINT_STOP.has(word),
   );
 }
 
@@ -132,13 +137,18 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string, a
       };
     });
   const total = Math.max(1, candidates.length);
+  // Plural/singular should match: the prompt says "run page", the header
+  // says "runs, models". Without this, the file that owns the behavior is
+  // invisible to the ranker.
+  const wordHit = (words: Set<string>, token: string): boolean =>
+    words.has(token) || words.has(`${token}s`) || (token.endsWith("s") && words.has(token.slice(0, -1)));
   const df = new Map(
     tokens.map((token) => [
       token,
       candidates.filter(
         (file) =>
-          file.pathWords.has(token) ||
-          file.headerWords.has(token) ||
+          wordHit(file.pathWords, token) ||
+          wordHit(file.headerWords, token) ||
           file.symbols.some((symbol) => symbol.includes(token)),
       ).length,
     ]),
@@ -148,8 +158,8 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string, a
     .map((file) => {
       let score = 0;
       for (const token of tokens) {
-        const inPath = file.pathWords.has(token);
-        const inHeader = file.headerWords.has(token);
+        const inPath = wordHit(file.pathWords, token);
+        const inHeader = wordHit(file.headerWords, token);
         const inSymbol = file.symbols.some((symbol) => symbol.includes(token));
         if (!inPath && !inHeader && !inSymbol) continue;
         const weight = (inPath ? 1.5 : 0) + (inHeader ? 1 : 0) + (inSymbol ? 0.2 : 0);

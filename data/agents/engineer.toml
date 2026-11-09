@@ -18,6 +18,3 @@ code = 0.4
 agentic = 0.35
 reasoning = 0.15
 general = 0.1
-
-[skills]
-clean-code = "on-demand"
