@@ -1,5 +1,5 @@
 ---
-review = "human"
+review = "none"
 ---
 
 # when-on-the-new-run-page-with-no-issue-as-the-en
