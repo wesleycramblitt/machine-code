@@ -28,7 +28,6 @@ import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
 import { readCachedMap } from "../map/deterministic.js";
-import { discoverKnowledgeFiles } from "../context/preview.js";
 import { skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -209,22 +208,35 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
   // Auto-create an issue for bare runs so every run is linked to a branch.
-  // Pull repo map, knowledge, and skills as context hints to save the agent
-  // scouting turns.
+  // Gather context relevant to the request to save the agent scouting turns.
   if (!itemSlug && normalizedAgent === "engineer" && request) {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
       const hints: string[] = [];
+      const keywords = request.toLowerCase().split(/\s+/).filter((w) => w.length > 3 && !["this", "that", "with", "from", "have", "been", "when", "what", "make", "just"].includes(w));
+      // Find repo files whose path or symbol names match request keywords.
       const cachedMap = readCachedMap(l.repoRoot);
       if (cachedMap) {
-        const topFiles = cachedMap.files.slice(0, 30).map((f) => `  ${f.path} (${f.symbols} symbols)`);
-        hints.push(`## Repo map\n\nTop files:\n${topFiles.join("\n")}`);
+        const matched = cachedMap.files
+          .filter((f) => {
+            const lower = f.path.toLowerCase();
+            const syms = f.symbols.map((s) => s.name.toLowerCase());
+            return keywords.some((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
+          })
+          .slice(0, 15);
+        if (matched.length > 0) {
+          hints.push(`## Context\n\nRelevant files:\n${matched.map((f) => `  - ${f.path} (${f.symbols.length} symbols)`).join("\n")}`);
+        }
       }
-      const knowledgeFiles = discoverKnowledgeFiles(l);
-      if (knowledgeFiles.length > 0) {
-        hints.push(`## Knowledge\n\n${knowledgeFiles.map((k) => `  - ${k}`).join("\n")}`);
-      }
+      // Always include architecture.md if it exists.
+      const archPath = join(l.repoRoot, "knowledge", "architecture.md");
+      try {
+        if (existsSync(archPath)) {
+          const arch = readFileSync(archPath, "utf8").split("\n").slice(0, 30).join("\n");
+          hints.push(`## Architecture\n\n${arch}`);
+        }
+      } catch {}
       const skills = skillMetas(l);
       if (skills.length > 0) {
         hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
