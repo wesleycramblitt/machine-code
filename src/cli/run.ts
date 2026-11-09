@@ -64,10 +64,15 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
 
-/** Merge a feature branch into main from the top-level repo. The main repo always has main checked out. */
+/** Merge a feature branch into main. Brings main into the worktree branch first so
+ * conflicts are resolved there, then merges into main at the top level.
+ * Worktrees share refs with the main repo, so `main` resolves to the same commit everywhere. */
 async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string): Promise<boolean> {
   try {
-    await runProc("git", ["merge", "--no-ff", branch, "-m", `merge ${branch}`], { cwd: topRoot, timeoutMs: 30_000 });
+    // Bring main into the feature branch first (conflicts surface in the worktree).
+    await runProc("git", ["merge", "main", "-m", `sync ${branch} with main`], { cwd: worktreeRoot, timeoutMs: 30_000 });
+    // Merge feature branch into main (now a clean fast-forward or trivial merge).
+    await runProc("git", ["merge", branch, "--no-ff", "-m", `merge ${branch}`], { cwd: topRoot, timeoutMs: 30_000 });
     await runProc("git", ["branch", "-D", branch], { cwd: topRoot, timeoutMs: 15_000 });
     await runProc("git", ["worktree", "remove", worktreeRoot], { cwd: topRoot, timeoutMs: 15_000 });
     return true;
@@ -740,8 +745,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (verdict === "approved" && toolRoot !== l.repoRoot) {
       const branch = recorder.current.branch;
       if (branch) {
-        await mergeBranch(l.repoRoot, toolRoot, branch);
-        recorder.event("branch_merged", { branch, verdict: "approved" });
+        const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
+        if (merged) {
+          recorder.event("branch_merged", { branch, verdict: "approved" });
+        } else {
+          result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
+        }
       }
     }
     if (
@@ -811,8 +820,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
           if (issue.review === "none") {
             const branch = recorder.current.branch;
             if (branch) {
-              await mergeBranch(l.repoRoot, toolRoot, branch);
-              recorder.event("branch_merged", { branch });
+              const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
+              if (merged) {
+                recorder.event("branch_merged", { branch });
+              } else {
+                result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
+              }
             }
           }
           if (issue.review === "agent" && !flags.has("no-review")) {
