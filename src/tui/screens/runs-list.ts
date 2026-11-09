@@ -53,6 +53,13 @@ const KIND_BG: Record<string, string> = {
   bug: RED_BG,
 };
 
+/** Kind foreground colors for todo/needs-research slugs. */
+const KIND_FG: Record<string, string> = {
+  idea: M,
+  feature: Y,
+  bug: RED,
+};
+
 export function renderRunsList(props: RunsListProps): RunsListFrame {
   const { cols, narrow, runNarrow, bodyH, theme, toast, index, selectedRow, focus, group, reposScope, pendingFor } = props;
   const lines: string[] = [];
@@ -77,8 +84,9 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
         rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
       }
     } else if (row.kind === "issue") {
-      // Issue slug colored by its status. Done/researched are gray.
+      // Todo/needs-research slugs use the kind's brand color. All other statuses use their status color.
       const style = ISSUE_STATUS_STYLE[row.effective];
+      const slugTone = (row.effective === "todo" || row.effective === "needs-research") ? KIND_FG[row.itemKind] ?? style.tone : style.tone;
       const folded = row.collapsible ? `${row.collapsed ? "▸" : "▾"} ` : "";
       const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
       const priorityTone = PRIORITY_TONE[row.priority] ?? D;
@@ -86,7 +94,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const title = row.title
         ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 25))}${R}`
         : "";
-      const text = ` ${indent}${folded}${style.tone}${style.glyph}${R} ${style.tone}${row.slug}${R}${priority}${review}${title}`;
+      const text = ` ${indent}${folded}${slugTone}${style.glyph}${R} ${slugTone}${row.slug}${R}${priority}${review}${title}`;
       rendered.push(selected(text, isSelected));
     } else {
       const run = row.run;
