@@ -6,7 +6,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout } from "../paths.js";
 import { loadEnvFiles } from "../env.js";
@@ -943,20 +943,31 @@ export async function cmdRun(argv: string[]): Promise<number> {
     });
   }
 
-  // A successful research run moves its idea to .researched/ once it has
-  // written at least one feature/bug issue. The model has no move/delete tool,
-  // so the runner owns this transition.
+  // A research run is complete only when it produced at least one feature/bug
+  // and every issue it wrote carries an acceptance gate. The model has no
+  // move tool, so the runner owns the idea transition.
   if (result.status === "completed" && itemSlug && agentNameParsed === "research") {
     const issue = findIssue(l, itemSlug);
     if (issue?.kind === "ideas" && issue.status === "needs-research") {
       const events = readRun(l, recorder.id)?.events ?? [];
-      const wroteIssue = touchedPaths(events).some((path) =>
+      const written = [...new Set(touchedPaths(events))].filter((path) =>
         /^issues\/(?:features|bugs)\//.test(path),
       );
-      if (wroteIssue) {
+      const missing = written
+        .map((path) => findIssue(l, basename(path, ".md")))
+        .filter((created) => created !== null && created.acceptance.length === 0);
+      if (written.length > 0 && missing.length === 0) {
         moveIssue(l, issue.slug, "researched");
         await commitPlanningFiles(l, `issues: ${issue.slug} researched`);
-        recorder.event("idea_researched", { slug: issue.slug });
+        recorder.event("idea_researched", { slug: issue.slug, created: written.length });
+      } else if (missing.length > 0) {
+        recorder.event("research_missing_acceptance", {
+          slug: issue.slug,
+          issues: missing.map((created) => created!.slug),
+        });
+        process.stderr.write(
+          `research left ${issue.slug} unresearched: ${missing.length} created issue(s) lack acceptance\n`,
+        );
       }
     }
   }

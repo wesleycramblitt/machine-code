@@ -330,12 +330,22 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     throw new Error(`invalid status ${JSON.stringify(status)} for ${input.kind}`);
   }
   const slug = slugify(input.slug) || "untitled";
+  // Features and bugs carry an acceptance gate. If the author did not name
+  // one, default to the harness's universal check rather than leaving the
+  // engineer to guess how to verify.
+  const acceptance =
+    input.acceptance && input.acceptance.length > 0
+      ? input.acceptance
+      : input.verify && input.verify.length > 0
+        ? input.verify
+        : input.kind === "ideas"
+          ? []
+          : ["core:check"];
   const front: Record<string, unknown> = {
     ...(input.priority && input.priority !== "medium" ? { priority: input.priority } : {}),
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
-    ...(input.acceptance && input.acceptance.length > 0 ? { acceptance: input.acceptance } : {}),
-    ...(input.verify && input.verify.length > 0 ? { verify: input.verify } : {}),
+    ...(acceptance.length > 0 ? { acceptance } : {}),
     ...(input.review && input.review !== "none" ? { review: input.review } : {}),
   };
   // The file is the prompt. A bare prompt needs nothing else; a title only
