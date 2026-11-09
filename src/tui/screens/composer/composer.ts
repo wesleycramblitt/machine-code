@@ -19,7 +19,7 @@ import {
   wrapCommands, wrapText, wrapTokenList,
 } from "../../format.js";
 import { layout } from "../../../paths.js";
-import { findIssue, listIssues } from "../../../plan/issues.js";
+import { findIssue, listIssues, ISSUE_KINDS } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
 import { resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
@@ -111,9 +111,18 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const cachedMap = readCachedMap(repoRoot);
   const issueItems: ContextPanelItem[] = itemsFor(["issue"]);
   // Every issue as an available row the user can search and opt into with
-  // space. The issue file is the work item's own contract/context.
+  // space, filtered by the selected agent. The issue file is the work item's
+  // own contract/context.
   const knownIssues = new Set(issueItems.map((item) => item.key));
   for (const issue of listIssues(newRunLayout)) {
+    // Filter by agent kind.
+    if (run.agent === "research" && issue.kind !== "ideas") continue;
+    if (run.agent !== "research" && issue.kind === "ideas") continue;
+    if (run.agent === "research" && issue.kind !== "ideas") continue;
+    // Engineer: only todo or blocked issues.
+    if (run.agent === "engineer" && issue.status !== "todo" && issue.status !== "blocked") continue;
+    // Review: only done issues with agent review.
+    if (run.agent === "review" && (issue.status !== "done" || issue.review !== "agent")) continue;
     const key = `issue:${issue.rel}`;
     if (knownIssues.has(key)) continue;
     let size = 0;
@@ -133,7 +142,14 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   }
   const fileItems: ContextPanelItem[] = itemsFor(["file"]);
   const knownFiles = new Set(fileItems.map((item) => item.key));
+  // Paths that belong to other context sections; exclude from the file tab.
+  const excludedFilePrefixes = [
+    "issues/", "knowledge/", ".machine_code/skills/", ".machine_code/tools/",
+    ".machine_code/scripts/", ".machine_code/references/",
+    "node_modules/", ".git/",
+  ];
   for (const file of cachedMap?.files ?? []) {
+    if (excludedFilePrefixes.some((prefix) => file.path.startsWith(prefix))) continue;
     const key = `file:${file.path}`;
     if (knownFiles.has(key)) continue;
     fileItems.push({

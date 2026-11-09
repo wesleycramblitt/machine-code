@@ -156,11 +156,23 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (itemSlug) {
     const issue = findIssue(l, itemSlug);
     if (!issue) fail(`no issue ${itemSlug} — create one with \`machine_code issue create features|bugs ${itemSlug} "..."\``);
-    if (issue.kind === "ideas" && normalizedAgent === "engineer") {
+    // Agent must match the issue kind.
+    if (normalizedAgent === "research" && issue.kind !== "ideas") {
+      fail(`issue ${itemSlug} is ${issue.kind}, not an idea; research only runs on ideas`);
+    }
+    if (normalizedAgent === "engineer" && issue.kind === "ideas") {
       fail(`issue ${itemSlug} is an idea; research it first (machine_code issue run ${itemSlug})`);
     }
-    if (issue.kind === "ideas" && normalizedAgent === "review") {
+    if (normalizedAgent === "review" && issue.kind === "ideas") {
       fail(`issue ${itemSlug} is an idea; ideas are researched, not reviewed`);
+    }
+    // Engineer: only work on issues that are ready (todo) or blocked by review.
+    if (normalizedAgent === "engineer" && issue.status !== "todo" && issue.status !== "blocked") {
+      fail(`issue ${itemSlug} is ${issue.status}; engineer works on todo or blocked issues`);
+    }
+    // Review: only review issues that are done (agent review requested).
+    if (normalizedAgent === "review" && issue.review !== "agent") {
+      fail(`issue ${itemSlug} review is ${issue.review}; review only runs for agent review`);
     }
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
