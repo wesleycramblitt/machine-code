@@ -167,6 +167,40 @@ test("composer issues tab lists issue files for any agent", async () => {
   }
 });
 
+test("issue picker keeps a heading-led prompt on one row", () => {
+  const frame = renderComposer({
+    ...vp,
+    run: { agent: "research", preset: "unrestricted", verification: "verified", worktree: true, ask: true, approval: "human", ambiguity: "precise", tier: "free", floors: "role", prompt: "hello" },
+    repoRoot: "/tmp", home: "/tmp", insert: false, cursor: 0, colon: false,
+    contextTab: 0, contextItem: 0, contextFilter: "", contextFiltering: false,
+    excluded: new Set(), included: new Set(), skillModes: new Map(), skillShown: new Map(),
+    preview: { context: { chars: 0, promptChars: 0, sources: [], issueChain: [], artifacts: { files: [], knowledge: [], references: [], skills: [], tools: [], scripts: [] }, warnings: [] } },
+    pickers: {
+      model: null,
+      issue: {
+        text: "", sel: 0,
+        list: [{
+          kind: "features", status: "todo", slug: "fast-lookup",
+          path: "/tmp/issues/features/todo/fast-lookup.md",
+          rel: "issues/features/todo/fast-lookup.md",
+          priority: "high", prompt: "# Make lookups fast\n\nSwap the linear scan for an index.\n",
+          body: "# Make lookups fast\n\nSwap the linear scan for an index.\n",
+          depends: [], tags: [], review: "none", verify: [], acceptance: [],
+          title: "Make lookups fast",
+        }],
+      },
+    },
+    agentIsolates: (agent) => agent === "engineer",
+    mapTokens: () => [],
+    lockedSkills: () => [],
+  });
+  for (const row of frame.body) {
+    assert.equal(typeof row, "string");
+    assert.doesNotMatch(row, /\n/, "picker rows stay single-line");
+  }
+  assert.match(frame.body.join("\n"), /Make lookups fast.*Swap the linear scan/);
+});
+
 test("models list renders rows and detail falls back on missing row", () => {
   const frame = renderModelsList({
     ...vp, home: "/tmp", repoRoot: "/tmp", rows: [], group: "provider", collapsed: new Set(),

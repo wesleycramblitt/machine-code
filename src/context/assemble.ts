@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
-import { listIssues } from "../plan/issues.js";
+import { listIssues, singleLine } from "../plan/issues.js";
 import type { MachineConfig } from "../config.js";
 import { allCommands } from "../commands/registry.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
@@ -473,7 +473,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   if (input.agent === "research" || input.agent === "engineer" || input.agent === "review") {
     const list = listIssues(layout);
     if (list.length > 0) {
-      const body = list.map((issue) => `- [${issue.status}] ${issue.slug} - ${issue.prompt.slice(0, 120)}`).join("\n");
+      const body = list.map((issue) => `- [${issue.status}] ${issue.slug} - ${singleLine(issue.prompt).slice(0, 120)}`).join("\n");
       pending.push({ kind: "issue", origin: "inherited", ref: "issues/", depth: 3, body, band: 7 });
     }
   }

@@ -19,7 +19,7 @@ import {
   wrapCommands, wrapText, wrapTokenList,
 } from "../../format.js";
 import { layout } from "../../../paths.js";
-import { findIssue, listIssues, ISSUE_KINDS } from "../../../plan/issues.js";
+import { findIssue, listIssues, singleLine, ISSUE_KINDS } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
 import { resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
@@ -673,7 +673,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     for (let i = 0; i < list.length; i++) {
       const item = list[i]!;
       const isSelected = run.item === item.slug;
-      const line = ` ${isSelected ? C + "▸" : " "} ${C}${item.slug}${R} ${D}[${item.status}]${R} ${W}${trunc(item.prompt || "(no prompt)", Math.max(12, cols - item.slug.length - 24))}${R}`;
+      const line = ` ${isSelected ? C + "▸" : " "} ${C}${item.slug}${R} ${D}[${item.status}]${R} ${W}${trunc(singleLine(item.prompt) || "(no prompt)", Math.max(12, cols - item.slug.length - 24))}${R}`;
       picker.push(selected(line, i === itemPickSel));
     }
     picker.push("", ` ${D}filter: ${issueText || "(all)"}${R}`);

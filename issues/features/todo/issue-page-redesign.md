@@ -14,3 +14,5 @@ Next lines are sections for context, acceptance gates, etc (all other parts of t
 Then Runs just like it already is.
 
 # Key commands
+Remove build, review, Back[esc] (In fact, remove the heading Runs, models... and so on and put Back[esc] with a red background up top like the new run page)
+Approve can become Approve & Merge

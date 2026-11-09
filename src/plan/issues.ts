@@ -197,6 +197,18 @@ function toAcceptance(front: Record<string, unknown>): string[] {
   return [];
 }
 
+/** One-line rendering of a prompt for picker rows and summary lists.
+ * Bodies routinely span lines now (a `# heading` plus detail paragraphs);
+ * collapsing keeps every row on one terminal line and every `- ` summary
+ * item valid markdown. A leading `# ` marker is decoration, not content. */
+export function singleLine(text: string): string {
+  return text
+    .replace(/\r/g, "")
+    .replace(/^\s*#{1,6}\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function titleOf(slug: string, body: string): string {
   const heading = body.split("\n").find((line) => /^#\s+/.test(line));
   if (heading) return heading.replace(/^#+\s+/, "").trim() || slug;

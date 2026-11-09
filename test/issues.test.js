@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { findIssue, listIssues, moveIssue, parseIssueFile, statusesForKind, updateIssueReview, writeIssue } from "../dist/plan/issues.js";
+import { findIssue, listIssues, moveIssue, parseIssueFile, singleLine, statusesForKind, updateIssueReview, writeIssue } from "../dist/plan/issues.js";
 import { issueToTaskPacket } from "../dist/tasks/issue.js";
 import { runItemId } from "../dist/plan/lifecycle.js";
 import { normalizeAgentName } from "../dist/agents.js";
@@ -114,6 +114,12 @@ test("parseIssueFile leaves colon-led prose alone", () => {
   const { front, body } = parseIssueFile("Fix: the parser crashes on empty input\n");
   assert.deepEqual(front, {});
   assert.match(body, /Fix: the parser/);
+});
+
+test("singleLine collapses a heading-led body to one row", () => {
+  assert.equal(singleLine("# Score and pre-select\n\nOn a new run, score files.\n"), "Score and pre-select On a new run, score files.");
+  assert.equal(singleLine("Do the thing.\n"), "Do the thing.");
+  assert.equal(singleLine(""), "");
 });
 
 test("moveIssue relocates between status directories", () => {
