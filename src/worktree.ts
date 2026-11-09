@@ -225,6 +225,27 @@ export function reusableWorktreeOwner(
   return undefined;
 }
 
+/**
+ * Bring a reused worktree up to the current base branch when it holds no work
+ * of its own. Runs that failed before committing otherwise keep handing the
+ * next attempt a checkout that is many commits behind main. Dirty trees and
+ * branches with their own commits are left alone: that work must survive.
+ */
+export async function refreshReusedWorktree(path: string, baseBranch = "main"): Promise<boolean> {
+  try {
+    const dirty = await runProc("git", ["status", "--porcelain"], { cwd: path, timeoutMs: 20_000 });
+    if (dirty.code !== 0 || dirty.stdout.trim() !== "") return false;
+    const base = await runProc("git", ["rev-parse", "--verify", baseBranch], { cwd: path, timeoutMs: 20_000 });
+    if (base.code !== 0) return false;
+    const ahead = await runProc("git", ["rev-list", "--count", `${baseBranch}..HEAD`], { cwd: path, timeoutMs: 20_000 });
+    if (ahead.code !== 0 || Number(ahead.stdout.trim()) !== 0) return false;
+    const merge = await runProc("git", ["merge", "--ff-only", baseBranch], { cwd: path, timeoutMs: 60_000 });
+    return merge.code === 0;
+  } catch {
+    return false;
+  }
+}
+
 /* ------------------------------------------------------------- creation */
 
 export type WorktreeKind = "run" | "issue";

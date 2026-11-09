@@ -1,6 +1,6 @@
 ---
 name: plan-curation
-description: Use when creating or updating issues under issues/. Items are YAML issue files whose status is the directory.
+description: Use when creating or updating issues under issues/. Issue files are markdown whose text is the prompt; status is the directory.
 ---
 
 # Plan curation

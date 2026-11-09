@@ -324,6 +324,29 @@ const SPECS: CommandSpec[] = [
         }).join("\n"));
         if (diagnostics.some((d) => (d.severity ?? 1) === 1)) failed = true;
       }
+      // "Cannot find name 'X'" is the most common edit mistake. Resolve X to
+      // the file that exports it so the next call is the import, not a hunt.
+      const missing = [
+        ...new Set(
+          [...out.join("\n").matchAll(/Cannot find name ['"]([A-Za-z_$][\w$]*)['"]/g)].map((match) => match[1]!),
+        ),
+      ];
+      if (missing.length > 0) {
+        try {
+          const { readCachedMap } = await import("../map/deterministic.js");
+          const map = readCachedMap(ctx.root);
+          for (const name of missing) {
+            const owner = map?.files.find((file) => file.symbols.some((symbol) => symbol.name === name));
+            out.push(
+              owner
+                ? `[hint: ${name} is defined in ${owner.path} — import it (or use the local name)]`
+                : `[hint: ${name} is not a top-level symbol in the repo map; grep for its definition]`,
+            );
+          }
+        } catch {
+          // A missing map is not a check failure.
+        }
+      }
       return { text: out.join("\n"), isError: failed };
     },
   },

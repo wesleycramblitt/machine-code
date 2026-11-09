@@ -1,6 +1,6 @@
 ---
 name: verified-testing
-description: Use when verification is verified or higher. Encode each acceptance criterion as a failing test first, then implement.
+description: Use when a change needs a proof. Encode each acceptance criterion as a failing test or check first, then implement.
 ---
 
 # Verified Testing

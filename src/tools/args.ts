@@ -131,6 +131,19 @@ function coerceScalarArtifacts(
   return out;
 }
 
+/** A JSON null is never a valid typed argument here: optional fields mean
+ * absent. Providers and models send null for "not set", and schema validation
+ * then fails the whole call. Drop top-level nulls. */
+function dropNullValues(args: Record<string, unknown>): Record<string, unknown> | null {
+  let out: Record<string, unknown> | null = null;
+  for (const [key, value] of Object.entries(args)) {
+    if (value !== null) continue;
+    out ??= { ...args };
+    delete out[key];
+  }
+  return out;
+}
+
 /**
  * Repair weak-model serialization defects before schema validation. Handles
  * provider-leaked attribute syntax first, then schema-aware scalar coercion.
@@ -140,5 +153,6 @@ function coerceScalarArtifacts(
 export function repairToolArguments(args: unknown, parameters: unknown): unknown {
   const recovered = recoverSerializedArgs(args, parameters);
   if (!isRecord(recovered)) return recovered;
-  return coerceScalarArtifacts(recovered, parameters) ?? recovered;
+  const coerced = coerceScalarArtifacts(recovered, parameters) ?? recovered;
+  return dropNullValues(coerced) ?? coerced;
 }

@@ -41,7 +41,7 @@ import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
-import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
+import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
 import { isFreeRow } from "../select.js";
@@ -658,6 +658,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (reuse) {
       toolRoot = reuse.path;
       reusedWorktree = true;
+      const refreshed = await refreshReusedWorktree(reuse.path);
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,
@@ -669,8 +670,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
         parentRunId: reuse.run.id,
         path: reuse.path,
         branch: reuse.run.branch,
+        refreshed,
       });
-      process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
+      process.stderr.write(
+        `worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch}` +
+          `${refreshed ? ", fast-forwarded to main" : ""})\n`,
+      );
     } else {
       try {
         // Fetch latest main before creating the worktree so the branch starts from

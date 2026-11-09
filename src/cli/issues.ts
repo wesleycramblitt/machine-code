@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { layout } from "../paths.js";
 import { loadEnvFiles } from "../env.js";
 import { RunRecorder, listRuns, reconcileRun, registerProject } from "../state/runs.js";
-import { createWorktree, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
+import { createWorktree, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
 import { loadAvailability } from "../availability.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
 import { executeIssue, type OrchestrateResult } from "../orchestrate.js";
@@ -260,6 +260,7 @@ export async function runIssueBuild(
     const reuse = reusableWorktreeOwner(listRuns(l), `mc/${slug}`);
     if (reuse) {
       toolRoot = reuse.path;
+      const refreshed = await refreshReusedWorktree(reuse.path);
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,
@@ -267,8 +268,11 @@ export async function runIssueBuild(
         baseBranch: reuse.run.baseBranch,
         baseRef: reuse.run.baseRef,
       });
-      recorder.event("worktree_reused", { parentRunId: reuse.run.id, path: reuse.path, branch: reuse.run.branch });
-      process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
+      recorder.event("worktree_reused", { parentRunId: reuse.run.id, path: reuse.path, branch: reuse.run.branch, refreshed });
+      process.stderr.write(
+        `worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch}` +
+          `${refreshed ? ", fast-forwarded to main" : ""})\n`,
+      );
     } else {
       const supervisor = new ProcessSupervisor({
         runId: recorder.id,
