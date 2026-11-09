@@ -329,7 +329,7 @@ export function icon(status: string): string {
     case "running": return `${C}●${R}`;
     case "done":
     case "completed": return `${G}✓${R}`;
-    case "awaiting_input": return `${Y}?${R}`;
+    case "awaiting_input": return `${Y}!${R}`;
     case "paused": return `${Y}⏸${R}`;
     case "blocked": return `${Y}⊘${R}`;
     case "failed": return `${RED}✗${R}`;

@@ -201,7 +201,7 @@ test("By category groups issues by their first tag", () => {
   });
   assert.deepEqual(
     index.rows.filter((row) => row.kind === "section").map((row) => row.label),
-    ["Features", "tui", "Todo", "Untagged", "Todo", "Bugs", "tui", "Todo"],
+    ["Features", "Todo", "tui", "Untagged", "Bugs", "Todo", "tui"],
   );
   const sections = index.rows.filter((row) => row.kind === "section");
   assert.equal(sections[0]?.tone, "feature");
