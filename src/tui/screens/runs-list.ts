@@ -32,23 +32,32 @@ export interface RunsListFrame {
   scroll: number;
 }
 
-/** Directory-status colors: status is spelled out, color is decoration. */
+const DONE_STYLE = { tone: D, glyph: "✓" };
+
+/** Directory-status colors for non-terminal states; done/researched use gray. */
 const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }> = {
   "needs-research": { tone: AMBER, glyph: "?" },
-  researched: { tone: VIOLET, glyph: "◐" },
+  researched: DONE_STYLE,
   todo: { tone: SLATE, glyph: "◆" },
   "in-progress": { tone: SKY, glyph: "●" },
   blocked: { tone: ROSE, glyph: "⏸" },
-  done: { tone: GR, glyph: "✓" },
+  done: DONE_STYLE,
 };
 
 const PRIORITY_TONE: Record<string, string> = { high: D, medium: D, low: D };
 
+/** Kind header colors: purple for ideas, yellow for features, red for bugs. */
+const KIND_TONES: Record<string, string> = {
+  idea: M,
+  feature: Y,
+  bug: RED,
+};
+
 /** Category header colors: type and exception buckets. */
 const SECTION_TONES: Record<import("../runs.js").SectionTone, string> = {
-  feature: W,
-  bug: W,
-  idea: W,
+  feature: Y,
+  bug: RED,
+  idea: M,
   other: W,
   category: D,
   untracked: D,
@@ -68,31 +77,31 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "section") {
-      // Category color: work type, plan file, or status grouping at a glance.
+      // Kind headers use bold dark text on colored bg; status headers are dim.
       const tone = SECTION_TONES[row.tone];
-      const text = ` ${indent}${B}${theme.sectionFg}${tone}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
-      rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
+      const isKind = row.tone === "feature" || row.tone === "bug" || row.tone === "idea";
+      const sectionBg = isKind ? tone : theme.sectionBg;
+      const sectionFg = isKind ? `${B}\x1b[30m` : `${B}${theme.sectionFg}`;
+      const text = ` ${indent}${sectionFg}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
+      rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), sectionBg));
     } else if (row.kind === "issue") {
-      // Directory status, color-encoded and spelled out. Runs nest under the
-      // issue; the review mode is a small tag when it will run.
+      // Issue slug colored by its status. Done/researched are gray.
       const style = ISSUE_STATUS_STYLE[row.effective];
-      const label = ISSUE_STATUS_LABELS[row.effective];
-      const badge = `${B}${style.tone}[${label}]${R}`;
       const folded = row.collapsible ? `${row.collapsed ? "▸" : "▾"} ` : "";
       const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
       const priorityTone = PRIORITY_TONE[row.priority] ?? D;
       const priority = row.priority && row.priority !== "medium" ? ` ${priorityTone}· ${row.priority}${R}` : "";
       const title = row.title
-        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - label.length - 30))}${R}`
+        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 25))}${R}`
         : "";
-      const text = ` ${indent}${folded}${style.tone}${style.glyph}${R} ${badge} ${style.tone}${row.slug}${R}${priority}${review}${title}`;
+      const text = ` ${indent}${folded}${style.tone}${style.glyph}${R} ${style.tone}${row.slug}${R}${priority}${review}${title}`;
       rendered.push(selected(text, isSelected));
     } else {
       const run = row.run;
       const ask = run.status === "awaiting_input" ? ` ${Y}ASK${R}` : "";
       const pr = run.prNumber ? ` ${D}PR#${run.prNumber} ${run.prState ?? ""}${R}` : "";
       const reason = run.stopReason && run.stopReason !== "completed" ? ` ${D}${run.stopReason}${R}` : "";
-      const repoTag = group === "overall" ? ` ${D}[${repoLabel(run.repoRoot)}]${R}` : "";
+      const repoTag = "";
       const right = cols < 50
         ? `${D}${fmtTokens(run.usage.totalTokens)} · ${ago(run.lastActivityAt)}${R}`
         : `${D}${fmtTokens(run.usage.totalTokens)} tok · ${fmtMoney(run.cost.actual)} · ${ago(run.lastActivityAt)}${R}`;

@@ -26,26 +26,22 @@ import { effectiveStatus, runItemId } from "../plan/lifecycle.js";
 import type { DisplayStatus } from "../plan/issues.js";
 import { sortRuns } from "./status.js";
 
-export type RunGroup = "all" | "type" | "category" | "status" | "overall";
+export type RunGroup = "all" | "category";
 
 /** Modes the TUI cycles with `g`. */
-export const RUN_GROUPS: readonly RunGroup[] = ["all", "type", "category"];
+export const RUN_GROUPS: readonly RunGroup[] = ["all", "category"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
   all: "All",
-  type: "By type",
   category: "By category",
-  status: "Status",
-  overall: "Overall status",
 };
 
 /** Parse a `--group` value, accepting the pre-restructure names. */
 export function parseRunGroup(value: string | undefined): RunGroup | undefined {
   if (!value) return undefined;
-  if (value === "packets") return "all";
-  if (value === "plan") return "type";
+  if (value === "packets" || value === "plan" || value === "type") return "all";
   if (value === "tag" || value === "tags") return "category";
-  return (["all", "type", "category", "status", "overall"] as const).find((group) => group === value);
+  return (["all", "category"] as const).find((group) => group === value);
 }
 
 export type SectionTone = "feature" | "bug" | "idea" | "other" | "category" | "status" | "untracked";
@@ -291,11 +287,12 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     const toneFor = (kind: IssueKind): SectionTone =>
       kind === "features" ? "feature" : kind === "bugs" ? "bug" : kind === "ideas" ? "idea" : "other";
 
-    if (group === "type") {
+    if (group === "all") {
+      // All: kind → status → issue (no category).
       for (const kind of ISSUE_KINDS) {
+        const kindId = `kind:${repoRoot}:${kind}`;
         const list = issues.filter((issue) => issue.kind === kind);
         if (list.length === 0) continue;
-        const kindId = `kind:${repoRoot}:${kind}`;
         if (!pushSection(kindId, ISSUE_KIND_LABELS[kind], list.length, depth, toneFor(kind), kind)) continue;
         const byStatus = new Map<IssueStatus, Issue[]>();
         for (const issue of list) {
@@ -313,6 +310,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         }
       }
     } else if (group === "category") {
+      // By category: tag → kind → status → issue.
       const byTag = new Map<string, Issue[]>();
       for (const issue of issues) {
         const tag = issue.tags[0] ?? "Untagged";
@@ -321,17 +319,29 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         byTag.set(tag, list);
       }
       for (const [tag, list] of [...byTag.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-        const id = `tag:${repoRoot}:${tag}`;
-        if (!pushSection(id, tag, list.length, depth, "category")) continue;
-        for (const issue of sortIssues(list)) pushIssue(issue, depth + 1, id);
-      }
-    } else {
-      for (const kind of ISSUE_KINDS) {
-        const list = issues.filter((issue) => issue.kind === kind);
-        if (list.length === 0) continue;
-        const id = `kind:${repoRoot}:${kind}`;
-        if (!pushSection(id, ISSUE_KIND_LABELS[kind], list.length, depth, toneFor(kind), kind)) continue;
-        for (const issue of sortIssues(list)) pushIssue(issue, depth + 1, id);
+        const tagId = `tag:${repoRoot}:${tag}`;
+        if (!pushSection(tagId, tag, list.length, depth, "category")) continue;
+        // Within each tag, group by kind then status.
+        for (const kind of ISSUE_KINDS) {
+          const kindList = list.filter((issue) => issue.kind === kind);
+          if (kindList.length === 0) continue;
+          const kindId = `${tagId}:kind:${kind}`;
+          if (!pushSection(kindId, ISSUE_KIND_LABELS[kind], kindList.length, depth + 1, toneFor(kind), kind)) continue;
+          const byStatus = new Map<IssueStatus, Issue[]>();
+          for (const issue of kindList) {
+            const entry = byStatus.get(issue.status) ?? [];
+            entry.push(issue);
+            byStatus.set(issue.status, entry);
+          }
+          const order = statusesForKind(kind);
+          const sorted = [...byStatus.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+          for (const [status, entries] of sorted) {
+            if (entries.length === 0) continue;
+            const id = `${kindId}:${status}`;
+            if (!pushSection(id, ISSUE_STATUS_LABELS[status], entries.length, depth + 2, "status", kind, status)) continue;
+            for (const issue of sortIssues(entries)) pushIssue(issue, depth + 3, id);
+          }
+        }
       }
     }
 
@@ -342,7 +352,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     }
   };
 
-  const workGroup = group === "all" || group === "type" || group === "category";
+  const workGroup = group === "all" || group === "category";
   const repoNames = [
     ...new Set([
       ...baseRuns.map(repoOf),
@@ -358,18 +368,11 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     return a.localeCompare(b);
   });
 
-  if (group === "overall") {
-    pushStatusGroups(visibleRuns, 0, "status:all");
-  } else {
-    for (const repoRoot of repoNames) {
+  for (const repoRoot of repoNames) {
       const repoRuns = baseRuns.filter((run) => repoOf(run) === repoRoot && visibleRun(run));
       const issueRepo = workGroup && options.issueRepo === repoRoot;
       if (repoRuns.length === 0 && !issueRepo) continue;
       if (!pushRepo(repoRoot, repoRuns.length)) continue;
-      if (group === "status") {
-        pushStatusGroups(repoRuns, 1, `status:${repoRoot}`);
-        continue;
-      }
       if (issueRepo) {
         pushWorkTree(repoRoot, repoRuns, 1);
       } else {
@@ -380,7 +383,6 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         }
       }
     }
-  }
 
   return {
     group,

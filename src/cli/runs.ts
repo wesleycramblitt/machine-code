@@ -104,7 +104,7 @@ export function rowText(row: RunRow, width: number, group: RunGroup): string {
   const run = row.run;
   const pr = run.prNumber ? ` PR#${run.prNumber}${run.prState ? `:${run.prState}` : ""}` : "";
   const ask = run.status === "awaiting_input" ? " ASK" : "";
-  const repo = group === "overall" ? ` [${repoLabel(run.repoRoot)}]` : "";
+  const repo = "";
   const head = `${indent}${runGlyph(run.status)} ${run.id.slice(-8)} ${run.agent}${modeSuffix(run.mode)}${ask}${pr}${repo}`;
   const tail = ` ${fmtTokens(run.usage.totalTokens)}tok ${fmtMoney(run.cost.actual)} ${run.request.replace(/\s+/g, " ").slice(0, width < 100 ? 28 : 60)}`;
   return cell(head, Math.max(24, width - visibleWidth(tail))) + tail;
@@ -156,7 +156,7 @@ export async function cmdRuns(argv: string[]): Promise<number> {
     text,
     attentionOnly: attention,
     preferredRepo: l.repoRoot,
-    ...(group === "all" || group === "type" || group === "category"
+    ...(group === "all" || group === "category"
       ? { issueRepo: l.repoRoot, issues: listIssues(l) }
       : {}),
   });

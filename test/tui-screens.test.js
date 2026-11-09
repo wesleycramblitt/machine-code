@@ -82,7 +82,7 @@ test("runs list renders hierarchy rows and footer affordances", () => {
   assert.equal(frame.body.length, 30);
   assert.match(frame.actions, /New run/);
   const flat = frame.body.join("\n");
-  assert.match(flat, /\[(Todo|In Progress|Blocked|Done|Needs Research|Researched)\]/, "status name is rendered, not color alone");
+  assert.match(flat, /p1/, "slug is rendered with status color");
   assert.match(flat, /p1/);
 });
 

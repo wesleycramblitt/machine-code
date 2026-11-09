@@ -828,7 +828,7 @@ export async function runTui(): Promise<void> {
       text: s.runsText,
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
-      ...(s.runsGroup === "all" || s.runsGroup === "type" || s.runsGroup === "category"
+      ...(s.runsGroup === "all" || s.runsGroup === "category"
         ? { issueRepo: l.repoRoot, issues: listIssues(l) }
         : {}),
     });

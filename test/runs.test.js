@@ -68,7 +68,7 @@ test("All groups issues by kind; runs attach to the issue", () => {
   });
   assert.deepEqual(
     index.rows.filter((entry) => entry.kind === "section").map((entry) => entry.label),
-    ["Ideas", "Bugs", "Untracked runs"],
+    ["Ideas", "Needs Research", "Bugs", "In Progress", "Untracked runs"],
   );
   const fix = row(index, "fix-login");
   assert.ok(fix && fix.kind === "issue");
@@ -102,7 +102,7 @@ test("a ready issue with a live run reads in-progress without moving", () => {
 test("By type groups kind, then status directory", () => {
   const index = buildRunIndex({
     runs: [],
-    group: "type",
+    group: "all",
     issueRepo: repoA,
     issues: [
       issue({ kind: "features", status: "todo", slug: "demo", title: "Demo" }),
@@ -186,22 +186,7 @@ test("focus keeps the selected issue and its runs bright", () => {
   assert.equal(focusRowIds(index.rows, index.rows[0]), null);
 });
 
-test("status mode and overall status still group raw runs", () => {
-  const runs = [
-    run({ id: "done", repoRoot: repoA, status: "completed" }),
-    run({ id: "blocked", repoRoot: repoB, status: "blocked" }),
-    run({ id: "running", repoRoot: repoB, status: "running" }),
-  ];
-  const status = buildRunIndex({ runs, group: "status" });
-  assert.ok(status.rows.some((r) => r.kind === "repo"));
-  assert.ok(!status.rows.some((r) => r.kind === "issue"));
-  const overall = buildRunIndex({ runs, group: "overall" });
-  assert.ok(!overall.rows.some((r) => r.kind === "repo"));
-  assert.deepEqual(
-    overall.rows.filter((r) => r.kind === "run").map((r) => r.run.id),
-    ["running", "blocked", "done"],
-  );
-});
+
 
 test("By category groups issues by their first tag", () => {
   const index = buildRunIndex({
@@ -216,7 +201,7 @@ test("By category groups issues by their first tag", () => {
   });
   assert.deepEqual(
     index.rows.filter((row) => row.kind === "section").map((row) => row.label),
-    ["tui", "Untagged"],
+    ["tui", "Features", "Todo", "Bugs", "Todo", "Untagged", "Features", "Todo"],
   );
   const sections = index.rows.filter((row) => row.kind === "section");
   assert.equal(sections[0]?.tone, "category");
