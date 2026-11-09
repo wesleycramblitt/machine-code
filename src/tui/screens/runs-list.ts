@@ -66,12 +66,16 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "section") {
-      // Kind headers: their brand color as a full background. Category/status headers: dim.
+      // Kind headers: brand-color background hugging the text, bold black/white label + count.
       const kindBg = KIND_BG[row.tone];
-      const sectionBg = kindBg ?? theme.sectionBg;
-      const sectionFg = kindBg ? `${B}\x1b[30m` : `${B}${theme.sectionFg}`;
-      const text = ` ${indent}${sectionFg}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
-      rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), sectionBg));
+      if (kindBg) {
+        const text = ` ${indent}${kindBg}${B}\x1b[30m${row.collapsed ? "▸" : "▾"} ${row.label}  (${row.count})${R}`;
+        rendered.push(isSelected ? selected(text, true) : text);
+      } else {
+        const sectionFg = `${B}${theme.sectionFg}`;
+        const text = ` ${indent}${sectionFg}${row.collapsed ? "▸" : "▾"} ${row.label}${R} ${D}(${row.count})${R}`;
+        rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
+      }
     } else if (row.kind === "issue") {
       // Issue slug colored by its status. Done/researched are gray.
       const style = ISSUE_STATUS_STYLE[row.effective];
