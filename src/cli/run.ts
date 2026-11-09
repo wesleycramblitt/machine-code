@@ -168,24 +168,6 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string): 
     );
     hints.push(`## Context\n\nRelevant files:\n${lines.join("\n")}`);
   }
-  // Verification facts, so the model does not spend turns hunting for a test
-  // suite that does not exist. Only for repos that declare npm scripts.
-  try {
-    const pkg = JSON.parse(readFileSync(join(l.repoRoot, "package.json"), "utf8")) as {
-      scripts?: Record<string, unknown>;
-    };
-    const scripts = pkg.scripts ?? {};
-    const checks: string[] = [];
-    if (typeof scripts.build === "string") checks.push("`npm run build`");
-    if (typeof scripts.typecheck === "string") checks.push("`npm run typecheck`");
-    const hasTest = typeof scripts.test === "string" && scripts.test.trim() !== "";
-    hints.push(
-      `## Verify\n\n${hasTest ? "Tests: `npm test`. " : "No test suite in this repo. "}` +
-        `Run core:check after edits${checks.length > 0 ? `; ${checks.join(" / ")}` : ""}.`,
-    );
-  } catch {
-    // No package.json: the issue's acceptance commands are the contract.
-  }
   const skills = skillMetas(l);
   if (skills.length > 0) {
     hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
