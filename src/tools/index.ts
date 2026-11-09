@@ -88,14 +88,18 @@ const ReadParams = Type.Object({
   allow_large: Type.Optional(Type.Boolean({
     description: "Read the whole file or a long range, up to 1 MiB, instead of the default 25k-token page.",
   })),
+  symbol: Type.Optional(Type.String({
+    description: "Read one top-level symbol's block (function, class, interface) instead of line pages.",
+  })),
+  around: Type.Optional(Type.Number({
+    description: "1-based line to center a ~40-line window on. Prefer this over offset/limit.",
+  })),
 });
 
-/** Hidden selectors kept for internal callers; the model-facing schema is the
- * Claude-style path/offset/limit/allow_large form above. */
+/** Batch selectors kept for internal callers; the model-facing schema above
+ * covers the single-symbol and neighborhood forms. */
 type ReadArgs = Static<typeof ReadParams> & {
-  symbol?: string;
   symbols?: string[];
-  around?: number;
   section?: string;
   sections?: string[];
 };
@@ -220,7 +224,9 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
       "25k tokens (~100 KB); a whole-file read over 256 KB needs offset/limit or allow_large:true. " +
       "Use offset (1-based) and limit to page a large file, or allow_large:true for a whole-file/long-range read up to 1 MiB. " +
       "Binary and secret files are rejected. Use map for symbols/outlines/sections and grep for text. " +
-      "Examples: {\"path\":\"src/tui.ts\"}; {\"path\":\"src/tui.ts\",\"offset\":2400,\"limit\":120}; " +
+      "Prefer symbol/around over offset/limit pages: read one function, class, or " +
+      "neighborhood at a time. " +
+      "Examples: {\"path\":\"src/tui.ts\",\"symbol\":\"buildRunIndex\"}; {\"path\":\"src/tui.ts\",\"around\":2400}; " +
       "{\"path\":\"README.md\",\"allow_large\":true}.",
     parameters: ReadParams,
     prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
