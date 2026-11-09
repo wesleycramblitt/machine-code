@@ -9,7 +9,6 @@ import {
   isQuestionRequest,
   needsBuildPlan,
   readBucket,
-  shouldNudgeCompletion,
   shouldNudgeStall,
 } from "../dist/loop.js";
 
@@ -65,33 +64,6 @@ test("a writable role that stops mid-investigation gets a continuation nudge", (
   const answer = "Result: the bug is in the cache key.\nEvidence: src/cache.ts:41.";
   assert.equal(
     shouldNudgeStall({ wantsChange: true, hasToolCall: false, hasChange: false, text: answer }),
-    false,
-  );
-});
-
-test("a terminal line with no edit behind it is a false completion", () => {
-  const claimed = "Result: edited src/a.ts to fix the bug.\nChanges: src/a.ts ...";
-  assert.equal(
-    shouldNudgeCompletion({ wantsChange: true, alreadyNudged: false, madeEdit: false, text: claimed }),
-    true,
-  );
-  // An actual edit behind the claim means real work happened.
-  assert.equal(
-    shouldNudgeCompletion({ wantsChange: true, alreadyNudged: false, madeEdit: true, text: claimed }),
-    false,
-  );
-  // Fires once; a repeat ends the run and the runner blocks it.
-  assert.equal(
-    shouldNudgeCompletion({ wantsChange: true, alreadyNudged: true, madeEdit: false, text: claimed }),
-    false,
-  );
-  // Read-only roles and mid-thought prose are exempt.
-  assert.equal(
-    shouldNudgeCompletion({ wantsChange: false, alreadyNudged: false, madeEdit: false, text: claimed }),
-    false,
-  );
-  assert.equal(
-    shouldNudgeCompletion({ wantsChange: true, alreadyNudged: false, madeEdit: false, text: "Let me check one more thing." }),
     false,
   );
 });

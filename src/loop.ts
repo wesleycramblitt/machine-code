@@ -105,17 +105,7 @@ export function shouldNudgeStall(input: {
   return input.wantsChange && !input.hasToolCall && !input.hasChange && !hasTerminalLine(input.text);
 }
 
-/** A writable role that emits a terminal line with no edit/write call behind
- * it described the change instead of making it; push back once rather than
- * ending the run on prose. */
-export function shouldNudgeCompletion(input: {
-  wantsChange: boolean;
-  alreadyNudged: boolean;
-  madeEdit: boolean;
-  text: string;
-}): boolean {
-  return input.wantsChange && !input.alreadyNudged && !input.madeEdit && hasTerminalLine(input.text);
-}
+
 
 /** A command that verifies the tree (compile/test/lint). These are the
  * deterministic "definition of done" gates: a failure must be fixed, not
@@ -700,8 +690,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let stallNudge: string | null = null;
   let stallNudges = 0;
   let stalledOut = false;
-  /** False-completion pushback fires at most once per run. */
-  let completionNudged = false;
   /** Tree-state verification, per run (survives a model rotation). */
   let lastEditTurn = -1;
   
@@ -1569,27 +1557,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           stalledOut = true;
           recorder.event("stall_exhausted", { turn: turns });
         }
-        // False completion: a writable role that emits a terminal Result/
-        // Outcome line without a single edit/write call has not done the
-        // work — it described the change instead of making it. Push back
-        // once; a repeat still ends the run and the runner blocks it.
-        if (
-          shouldNudgeCompletion({
-            wantsChange,
-            alreadyNudged: completionNudged,
-            madeEdit: lastEditTurn >= 0,
-            text: assistantText(message),
-          })
-        ) {
-          completionNudged = true;
-          stallNudge = [
-            `You claimed the work is done but made no edit or write call this run (turn ${turns}).`,
-            "Prose is not a change. Read the target file, then make the change with the edit tool now.",
-            `Request: ${input.request}`,
-          ].join(" ");
-          recorder.event("completion_nudge", { turn: turns });
-          return { action: "continue" as const };
-        }
+
         // Research-to-act: a writable role that has read/searched a lot without
         // editing is circling, not converging. One steering note, not a quota.
         if (
