@@ -1,5 +1,5 @@
 /**
- * Issues: directory status, YAML front-matter, list/move, migrations.
+ * Issues: directory status, condensed issue files, list/move, migrations.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -53,7 +53,7 @@ test("updateIssueReview changes the gate and preserves the body", () => {
   }
 });
 
-test("writeIssue creates front-matter plus body under kind/status", () => {
+test("writeIssue creates a condensed file under kind/status", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-issue-create-"));
   try {
     const layout = fakeLayout(root);
@@ -68,21 +68,52 @@ test("writeIssue creates front-matter plus body under kind/status", () => {
     });
     assert.equal(issue.rel, "issues/features/todo/fast-lookup.md");
     assert.equal(issue.status, "todo");
+    assert.equal(issue.prompt, "Make lookups fast.");
     assert.deepEqual(issue.verify, ["script:test", "script:typecheck"]);
     assert.deepEqual(issueToTaskPacket(issue).acceptance, [
       { command: "script:test" },
       { command: "script:typecheck" },
     ]);
     const text = readFileSync(issue.path, "utf8");
-    assert.match(text, /priority = "high"/);
-    assert.match(text, /prompt = "Make lookups fast\."/);
-    assert.match(text, /review = "human"/);
+    assert.match(text, /priority: high/);
+    assert.match(text, /review: human/);
+    assert.match(text, /acceptance: script:test, script:typecheck/);
+    assert.doesNotMatch(text, /---/);
+    assert.doesNotMatch(text, /prompt =/);
     const found = findIssue(layout, "fast-lookup");
     assert.equal(found?.kind, "features");
     assert.equal(found?.priority, "high");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("writeIssue with a bare prompt writes just the prompt", () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-issue-bare-"));
+  try {
+    const layout = fakeLayout(root);
+    const issue = writeIssue(layout, { kind: "bugs", slug: "blink", prompt: "Fix blinking." });
+    assert.equal(readFileSync(issue.path, "utf8"), "Fix blinking.\n");
+    assert.equal(issue.prompt, "Fix blinking.");
+    assert.equal(issue.title, "Fix blinking.");
+    assert.equal(issue.priority, "medium");
+    assert.equal(issue.review, "none");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("parseIssueFile reads a condensed header; body is the prompt", () => {
+  const { front, body } = parseIssueFile("priority: high\ntags: tui, perf\n\n# Fast\n\nMake it fast.\n");
+  assert.equal(front.priority, "high");
+  assert.equal(front.tags, "tui, perf");
+  assert.match(body, /Make it fast/);
+});
+
+test("parseIssueFile leaves colon-led prose alone", () => {
+  const { front, body } = parseIssueFile("Fix: the parser crashes on empty input\n");
+  assert.deepEqual(front, {});
+  assert.match(body, /Fix: the parser/);
 });
 
 test("moveIssue relocates between status directories", () => {

@@ -55,7 +55,7 @@ test("rendered prompts name the resolved tools and config", () => {  const home 
     assert.match(research.prompt, /Turn one idea into detailed features or bugs/);
     assert.match(research.prompt, /issues\/ideas\//);
     assert.match(research.prompt, /issues\/ideas\/\.researched\//);
-    assert.match(research.prompt, /YAML front-matter/);
+    assert.match(research.prompt, /key: value/);
     assert.match(research.prompt, /Curate references only when they carry the work/);
 
     const engineer = resolveAgent(l, "engineer");

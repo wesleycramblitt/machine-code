@@ -44,7 +44,7 @@ test("preview surfaces an attached issue", () => {
   const root = mkdtempSync(join(tmpdir(), "mc-preview-issue-"));
   try {
     mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
-    writeFileSync(join(root, "issues", "features", "todo", "demo.md"), "---\nprompt = \"Do the thing.\"\n---\n# demo\n", "utf8");
+    writeFileSync(join(root, "issues", "features", "todo", "demo.md"), "Do the thing.\n", "utf8");
     const preview = previewContext(fakeLayout(root), "", { agent: "engineer", issues: ["issues/features/todo/demo.md"] });
     const issue = preview.sources.find((source) => source.kind === "issue");
     assert.ok(issue, "issue is part of the assembled context");

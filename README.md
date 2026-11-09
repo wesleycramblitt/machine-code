@@ -366,19 +366,17 @@ machine_code delete <slug>
 - `approve <slug>` merges the branch, moves the issue to `done/`, and commits
   the planning write on main.
 
-An issue file is TOML front-matter plus markdown:
+An issue file is plain markdown whose text is the prompt. Nothing else is
+required — a file with a single sentence is a valid issue. Optional `key:
+value` header lines at the very top set metadata (`priority`, `review`,
+`tags`, `depends`, `acceptance`), followed by a blank line:
 
 ```markdown
----
-priority = "medium"
-prompt = "Make the thing fast."
-depends = ["other-slug"]
-tags = ["tui"]
-review = "none"          # none | agent | human
-verify = ["script:test"]
----
+priority: high
+tags: tui
+acceptance: script:test
 
-# Short title
+# Make the thing fast
 
 Detail the prompt needs.
 ```

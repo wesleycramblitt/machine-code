@@ -10,13 +10,25 @@
  *     features/{todo,blocked,done}/<slug>.md
  *     bugs/{todo,blocked,done}/<slug>.md
  *
- * Each file is YAML front-matter (`priority`, `prompt`, `depends`, `tags`,
- * `review`, `verify`) plus markdown. There is no "archived": delete an issue
- * when it is no longer wanted.
+ * An issue file is plain markdown whose text IS the prompt — nothing else is
+ * required. Optional `key: value` header lines at the very top set metadata
+ * (`priority`, `review`, `tags`, `depends`, `acceptance`, `verify`), followed
+ * by a blank line:
+ *
+ *   priority: high
+ *   tags: tui, perf
+ *
+ *   # Make lookups fast
+ *
+ *   Swap the linear scan for an index.
+ *
+ * Legacy `---` TOML front-matter files still read; they are rewritten in the
+ * new form on the next touch. There is no "archived": delete an issue when it
+ * is no longer wanted.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { parse, stringify } from "smol-toml";
+import { parse } from "smol-toml";
 import type { Layout } from "../paths.js";
 import { slugify } from "./slug.js";
 
@@ -125,16 +137,44 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
   return abs === base || abs.startsWith(base + sep) ? abs : null;
 }
 
-export function parseIssueFile(text: string): { front: Record<string, unknown>; body: string } {
-  const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text);
-  if (!match) return { front: {}, body: text.trim() };
-  let front: Record<string, unknown> = {};
-  try {
-    front = parse(match[1] ?? "") as Record<string, unknown>;
-  } catch {
-    front = {};
+/** Metadata keys allowed in the condensed `key: value` header. Anything else
+ * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
+const META_KEYS = new Set(["priority", "review", "tags", "depends", "acceptance", "verify"]);
+
+function stripQuotes(value: string): string {
+  if (value.length >= 2) {
+    const first = value[0];
+    if ((first === '"' || first === "'") && value[value.length - 1] === first) return value.slice(1, -1);
   }
-  return { front, body: (match[2] ?? "").trim() };
+  return value;
+}
+
+export function parseIssueFile(text: string): { front: Record<string, unknown>; body: string } {
+  // Legacy `---` TOML front-matter: still reads, never written.
+  const legacy = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text);
+  if (legacy) {
+    let front: Record<string, unknown> = {};
+    try {
+      front = parse(legacy[1] ?? "") as Record<string, unknown>;
+    } catch {
+      front = {};
+    }
+    return { front, body: (legacy[2] ?? "").trim() };
+  }
+  // Condensed header: leading `key: value` lines for known keys, then the
+  // body. No header, no blank line, no heading required.
+  const lines = text.split("\n");
+  const front: Record<string, unknown> = {};
+  let i = 0;
+  for (; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (line.trim() === "") break;
+    const match = /^([A-Za-z]+)\s*:\s*(.*)$/.exec(line);
+    if (!match || !META_KEYS.has(match[1]!.toLowerCase())) break;
+    front[match[1]!.toLowerCase()] = stripQuotes((match[2] ?? "").trim());
+  }
+  const body = lines.slice(i).join("\n").trim();
+  return { front, body: body || text.trim() };
 }
 
 function toSlugs(value: unknown): string[] {
@@ -159,7 +199,37 @@ function toAcceptance(front: Record<string, unknown>): string[] {
 
 function titleOf(slug: string, body: string): string {
   const heading = body.split("\n").find((line) => /^#\s+/.test(line));
-  return heading ? heading.replace(/^#+\s+/, "").trim() : slug;
+  if (heading) return heading.replace(/^#+\s+/, "").trim() || slug;
+  const first = body.split("\n").find((line) => line.trim().length > 0);
+  if (first) return first.trim().slice(0, 80) || slug;
+  return slug;
+}
+
+/** The condensed writer: `key: value` header lines only for non-defaults,
+ * then the body, which is the whole prompt. No `---`, no `prompt = `. */
+function serializeIssueFile(front: Record<string, unknown>, body: string): string {
+  const list = (value: unknown): string =>
+    Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === "string").join(", ")
+      : typeof value === "string"
+        ? value
+        : "";
+  const lines: string[] = [];
+  if (typeof front.priority === "string" && front.priority && front.priority !== "medium") {
+    lines.push(`priority: ${front.priority}`);
+  }
+  if (typeof front.review === "string" && front.review && front.review !== "none") {
+    lines.push(`review: ${front.review}`);
+  }
+  for (const key of ["depends", "tags", "acceptance"] as const) {
+    const value = list(front[key]);
+    if (value) lines.push(`${key}: ${value}`);
+  }
+  // `verify` is the legacy alias for `acceptance`; normalize on write unless
+  // `acceptance` is already set.
+  if (!list(front.acceptance) && list(front.verify)) lines.push(`acceptance: ${list(front.verify)}`);
+  const text = body.trim();
+  return lines.length > 0 ? `${lines.join("\n")}\n\n${text}\n` : `${text}\n`;
 }
 
 export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, slug: string): Issue | null {
@@ -179,7 +249,9 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
     path: abs,
     rel: `${ISSUES_DIR}/${kind}/${status === "needs-research" ? "" : status === "researched" ? `${RESEARCHED_DIR}/` : `${status}/`}${slug}.md`.replace("//", "/"),
     priority: typeof front.priority === "string" ? front.priority : "medium",
-    prompt: typeof front.prompt === "string" ? front.prompt : body.split("\n\n")[0]?.trim() ?? "",
+    // The body is the prompt. `front.prompt` only exists in legacy `---` TOML
+    // files, where the body is just a title.
+    prompt: typeof front.prompt === "string" && front.prompt.trim() ? front.prompt : body,
     body,
     depends: toSlugs(front.depends),
     tags:
@@ -247,33 +319,46 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   }
   const slug = slugify(input.slug) || "untitled";
   const front: Record<string, unknown> = {
-    priority: input.priority ?? "medium",
-    prompt: input.prompt,
+    ...(input.priority && input.priority !== "medium" ? { priority: input.priority } : {}),
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
     ...(input.acceptance && input.acceptance.length > 0 ? { acceptance: input.acceptance } : {}),
     ...(input.verify && input.verify.length > 0 ? { verify: input.verify } : {}),
-    review: input.review ?? "none",
+    ...(input.review && input.review !== "none" ? { review: input.review } : {}),
   };
-  const title = input.title?.trim() ? `# ${input.title.trim()}` : `# ${slug}`;
-  const body = input.body?.trim() ? `${title}\n\n${input.body.trim()}\n` : `${title}\n`;
+  // The file is the prompt. A bare prompt needs nothing else; a title only
+  // adds a heading above it. An explicit body is used as-is.
+  const prompt = input.prompt.trim();
+  const body = input.body?.trim()
+    ? input.body.trim()
+    : input.title?.trim()
+      ? `# ${input.title.trim()}\n\n${prompt}`
+      : prompt;
   const dir = issueDir(layout, input.kind, status);
   mkdirSync(dir, { recursive: true });
   const abs = join(dir, `${slug}.md`);
-  writeFileSync(abs, `---\n${stringify(front)}---\n\n${body}`, "utf8");
+  writeFileSync(abs, serializeIssueFile(front, body || slug), "utf8");
   const issue = readIssue(layout, input.kind, status, slug);
   if (!issue) throw new Error(`failed to write issue ${slug}`);
   return issue;
 }
 
-/** Update just the review gate, preserving front-matter and body. */
+/** Update just the review gate, preserving the header and body. Legacy `---`
+ * files are rewritten in the condensed form on the way through. */
 export function updateIssueReview(layout: Layout, slug: string, review: ReviewMode): Issue | null {
   const issue = findIssue(layout, slug);
   if (!issue) return null;
   const text = readFileSync(issue.path, "utf8");
   const { front, body } = parseIssueFile(text);
+  // Migrate legacy files: their prompt lives in `front.prompt` while the body
+  // is just a title. Fold the prompt back under the title once.
+  let nextBody = body;
+  if (typeof front.prompt === "string" && front.prompt.trim() && !nextBody.includes(front.prompt.trim())) {
+    nextBody = nextBody ? `${nextBody}\n\n${front.prompt.trim()}` : front.prompt.trim();
+  }
+  delete front.prompt;
   front.review = review;
-  writeFileSync(issue.path, `---\n${stringify(front)}---\n\n${body}`, "utf8");
+  writeFileSync(issue.path, serializeIssueFile(front, nextBody), "utf8");
   return readIssue(layout, issue.kind, issue.status, slug);
 }
 

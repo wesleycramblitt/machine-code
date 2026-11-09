@@ -198,7 +198,7 @@ test("explicit issue is the highest-priority source", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx2-"));
   try {
     mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
-    writeFileSync(join(root, "issues", "features", "todo", "fix-parser.md"), "---\nprompt = \"fix parser\"\n---\n# Fix parser\n", "utf8");
+    writeFileSync(join(root, "issues", "features", "todo", "fix-parser.md"), "fix parser\n", "utf8");
     writeFileSync(join(root, "work.md"), "work\n".repeat(200), "utf8");
     const bundle = await assembleContext({
       layout: fakeLayout(root),
@@ -1050,7 +1050,7 @@ test("issue/plan recap block renders last when plan sources exist", async () => 
     mkdirSync(join(root, "plans"), { recursive: true });
     mkdirSync(join(root, "issues", "features", "todo"), { recursive: true });
     writeFileSync(join(root, "plans", "topic.md"), "# Topic plan\nShip the recap.\n", "utf8");
-    writeFileSync(join(root, "issues", "features", "todo", "recap.md"), "---\nprompt = \"recap the objective\"\n---\n# Recap\n", "utf8");
+    writeFileSync(join(root, "issues", "features", "todo", "recap.md"), "# Recap\n\nrecap the objective\n", "utf8");
     const bundle = await assembleContext({
       layout,
       machine: machine(),

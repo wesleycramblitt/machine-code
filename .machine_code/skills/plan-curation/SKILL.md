@@ -57,8 +57,9 @@ One paragraph of detail the prompt needs.
 ## Procedure
 
 1. Read `issues/` (or `machine_code plan`) to find the item.
-2. Edit the front-matter or body. Keep the prompt tight; put narrative in
-   the body.
+2. Edit the file text directly — the text is the prompt. Optional `key:
+   value` header lines at the top set priority, review, tags, depends, or
+   acceptance. Keep the prompt tight; put narrative in the body.
 3. Move the file with `machine_code issue move` or `git mv` when its status
    changes: `ideas/.researched/`, `features/todo|blocked|done/`.
 4. `plans/` is a legacy bridge only. Contracts live in `issues/packets/`;
