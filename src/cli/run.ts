@@ -64,15 +64,31 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
 
-/** Merge a feature branch into main. Brings main into the worktree branch first so
- * conflicts are resolved there, then merges into main at the top level.
- * Worktrees share refs with the main repo, so `main` resolves to the same commit everywhere. */
+/** Update the local main branch from the remote. Non-blocking: if the remote is
+ * unreachable the work continues with the local state. */
+async function syncFromRemote(topRoot: string): Promise<void> {
+  try {
+    await runProc("git", ["fetch", "origin", "main:main"], { cwd: topRoot, timeoutMs: 30_000 });
+  } catch {
+    // Remote unreachable — local main is good enough.
+  }
+}
+
+/** Merge a feature branch into main and push. Brings main into the worktree first
+ * so conflicts surface there, then merges into main, pushes, and deletes the remote
+ * branch. */
 async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string): Promise<boolean> {
   try {
-    // Bring main into the feature branch first (conflicts surface in the worktree).
+    // Fetch the latest main from the remote so the merge is based on real upstream.
+    await runProc("git", ["fetch", "origin", "main:main"], { cwd: topRoot, timeoutMs: 30_000 });
+    // Bring main into the feature branch (conflicts surface in the worktree).
     await runProc("git", ["merge", "main", "-m", `sync ${branch} with main`], { cwd: worktreeRoot, timeoutMs: 30_000 });
-    // Merge feature branch into main (now a clean fast-forward or trivial merge).
+    // Merge feature branch into main.
     await runProc("git", ["merge", branch, "--no-ff", "-m", `merge ${branch}`], { cwd: topRoot, timeoutMs: 30_000 });
+    // Push the merge to the remote.
+    await runProc("git", ["push", "origin", "main"], { cwd: topRoot, timeoutMs: 30_000 });
+    // Delete the remote branch (may fail if it was never pushed — fine).
+    try { await runProc("git", ["push", "origin", "--delete", branch], { cwd: topRoot, timeoutMs: 15_000 }); } catch {}
     await runProc("git", ["branch", "-D", branch], { cwd: topRoot, timeoutMs: 15_000 });
     await runProc("git", ["worktree", "remove", worktreeRoot], { cwd: topRoot, timeoutMs: 15_000 });
     return true;
@@ -533,6 +549,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
       process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
     } else {
       try {
+        // Fetch latest main before creating the worktree so the branch starts from
+        // the most recent upstream state.
+        await syncFromRemote(l.repoRoot);
         const worktreeProcesses = new ProcessSupervisor({
           runId: recorder.id,
           runDir: recorder.dir,
