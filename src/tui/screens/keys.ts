@@ -26,11 +26,9 @@ export interface KeyServices {
   runDetailData: () => RunDetail | null;
   pendingForRun: (run: RunSummary | undefined) => unknown;
   cycleAgent: () => void;
-  cycleVerify: () => void;
   cycleAmbiguity: () => void;
   cycleMinFit: () => void;
   cycleFloors: () => void;
-  enforceLockedSkills: (announce: boolean) => void;
   startIssuePicker: () => void;
   pickerIssues: () => Issue[];
   chooseIssue: (issue: Issue) => void;
@@ -39,7 +37,6 @@ export interface KeyServices {
   buildNewRunArgs: () => string[] | null;
   submitNewRun: () => void;
   agentIsolates: (agent: string) => boolean;
-  lockedSkills: () => string[];
   searchSeed: () => string;
   repoRoot: string;
 }

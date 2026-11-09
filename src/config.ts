@@ -139,13 +139,8 @@ export interface MachineConfig {
 /** Only the Phase 3 configuration fields; token/capability policy stays repo-side. */
 export interface AgentConfigOverrides {
   preset?: string;
-  delegate?: boolean;
-  verification?: string;
-  artifactScripts?: boolean;
-  ask?: boolean;
   approval?: string;
   ambiguity?: string;
-  worktree?: boolean;
 }
 
 export type CapabilityAxis = "reasoning" | "code" | "agentic" | "general";
@@ -182,20 +177,10 @@ export interface AgentPolicy {
   /* ---- agent configuration (Phase 3); absent = preset defaults ---- */
   /** Named preset: plan | orchestrate | implement | review | assistant | unrestricted. */
   preset?: string;
-  /** May the agent call `task` to spawn child runs. */
-  delegate?: boolean;
-  /** Verification level: direct | verified | redundant. */
-  verification?: string;
-  /** May provisioning write executable scripts (human opt-in). */
-  artifactScripts?: boolean;
-  /** May the agent use the ask tool. */
-  ask?: boolean;
   /** Default approval mode for runs it plans/delegates: human | agent. */
   approval?: string;
   /** Ambiguity mode: strict | precise | adaptive | autonomous. */
   ambiguity?: string;
-  /** Whether the run works in an isolated worktree (default on). */
-  worktree?: boolean;
 }
 
 export interface Policy {
@@ -280,13 +265,8 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     const r = (value ?? {}) as Record<string, unknown>;
     agents[role] = {
       preset: typeof r.preset === "string" ? r.preset : typeof r.config_mode === "string" ? r.config_mode : undefined,
-      delegate: typeof r.delegate === "boolean" ? r.delegate : undefined,
-      verification: typeof r.verification === "string" ? r.verification : undefined,
-      artifactScripts: typeof r.artifact_scripts === "boolean" ? r.artifact_scripts : undefined,
-      ask: typeof r.ask === "boolean" ? r.ask : undefined,
       approval: typeof r.approval === "string" ? r.approval : undefined,
       ambiguity: typeof r.ambiguity === "string" ? r.ambiguity : undefined,
-      worktree: typeof r.worktree === "boolean" ? r.worktree : undefined,
     };
   }
   const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
@@ -427,13 +407,8 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     axisWeights: mergeAxes(base.axisWeights, asAxisMap(raw.weights, `${label}.weights`)),
     toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : base.toolCall,
     preset: typeof raw.preset === "string" ? raw.preset : typeof raw.config_mode === "string" ? raw.config_mode : base.preset,
-    delegate: typeof raw.delegate === "boolean" ? raw.delegate : base.delegate,
-    verification: typeof raw.verification === "string" ? raw.verification : base.verification,
-    artifactScripts: typeof raw.artifact_scripts === "boolean" ? raw.artifact_scripts : base.artifactScripts,
-    ask: typeof raw.ask === "boolean" ? raw.ask : base.ask,
     approval: typeof raw.approval === "string" ? raw.approval : base.approval,
     ambiguity: typeof raw.ambiguity === "string" ? raw.ambiguity : base.ambiguity,
-    worktree: typeof raw.worktree === "boolean" ? raw.worktree : base.worktree,
   };
 }
 

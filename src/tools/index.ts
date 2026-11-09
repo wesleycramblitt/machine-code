@@ -1151,7 +1151,14 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
           }
         }
         const file = await outlineFile(ctx.root, outlinePath);
-        if (!file) return fail(`no outline for ${outlinePath} (binary or unreadable)`);
+        if (!file) {
+          try {
+            if (statSync(resolveWithin(ctx.root, outlinePath)).isDirectory()) {
+              return fail(`"${outlinePath}" is a directory; outline needs a file path`);
+            }
+          } catch {}
+          return fail(`no outline for "${outlinePath}" (binary, missing, or unreadable)`);
+        }
         return ok(
           [
             header,

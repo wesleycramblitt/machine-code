@@ -69,6 +69,8 @@ export interface Issue {
   tags: string[];
   review: ReviewMode;
   /** Named gate commands; empty means the runner's defaults. */
+  acceptance: string[];
+  /** Legacy alias for acceptance. */
   verify: string[];
   title: string;
 }
@@ -147,6 +149,14 @@ function toReview(value: unknown): ReviewMode {
   return value === "agent" || value === "human" ? value : "none";
 }
 
+function toAcceptance(front: Record<string, unknown>): string[] {
+  if (typeof front.acceptance === "string") return front.acceptance.split(",").map((e) => e.trim()).filter(Boolean);
+  if (Array.isArray(front.acceptance)) return front.acceptance.filter((e): e is string => typeof e === "string");
+  if (typeof front.verify === "string") return front.verify.split(",").map((e) => e.trim()).filter(Boolean);
+  if (Array.isArray(front.verify)) return front.verify.filter((e): e is string => typeof e === "string");
+  return [];
+}
+
 function titleOf(slug: string, body: string): string {
   const heading = body.split("\n").find((line) => /^#\s+/.test(line));
   return heading ? heading.replace(/^#+\s+/, "").trim() : slug;
@@ -179,11 +189,8 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
           ? front.tags.filter((entry): entry is string => typeof entry === "string")
           : [],
     review: toReview(front.review),
-    verify: typeof front.verify === "string"
-      ? front.verify.split(",").map((entry) => entry.trim()).filter(Boolean)
-      : Array.isArray(front.verify)
-        ? front.verify.filter((entry): entry is string => typeof entry === "string")
-        : [],
+    verify: toAcceptance(front),
+    acceptance: toAcceptance(front),
     title: titleOf(slug, body),
   };
 }
@@ -228,6 +235,7 @@ export interface NewIssueInput {
   depends?: string[];
   tags?: string[];
   review?: ReviewMode;
+  acceptance?: string[];
   verify?: string[];
   body?: string;
 }
@@ -243,6 +251,7 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     prompt: input.prompt,
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
+    ...(input.acceptance && input.acceptance.length > 0 ? { acceptance: input.acceptance } : {}),
     ...(input.verify && input.verify.length > 0 ? { verify: input.verify } : {}),
     review: input.review ?? "none",
   };

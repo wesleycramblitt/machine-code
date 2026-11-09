@@ -135,11 +135,6 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
       const name = key.slice("skill:".length);
       const current = s.newRunSkillShown.get(name) ?? "on-demand";
       const next: SkillMode = current === "include" ? "on-demand" : current === "on-demand" ? "exclude" : "include";
-      if (next === "exclude" && ctx.lockedSkills().includes(name)) {
-        ctx.notify("verified-testing is required by Verify; switch to Direct to exclude it");
-        ctx.draw();
-        return true;
-      }
       s.newRunSkillModes.set(name, next);
       if (next === "exclude") s.newRunContextExcluded.add(key);
       else s.newRunContextExcluded.delete(key);
@@ -171,14 +166,7 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   }
   if (data === "a") { ctx.cycleAgent(); ctx.draw(); return true; }
   if (data === "t") { s.newrun.tier = s.newrun.tier === "paid" ? "free" : "paid"; ctx.draw(); return true; }
-  if (data === "v") {
-    if (!ctx.agentIsolates(s.newrun.agent)) { ctx.notify("verify is engineer-only"); ctx.draw(); return true; }
-    ctx.cycleVerify(); ctx.draw(); return true;
-  }
-  if (data === "w") {
-    if (!ctx.agentIsolates(s.newrun.agent)) { ctx.notify("worktree is engineer-only"); ctx.draw(); return true; }
-    s.newrun.worktree = !s.newrun.worktree; ctx.draw(); return true;
-  }
+  
   if (data === "g") { ctx.cycleAmbiguity(); ctx.draw(); return true; }
   if (data === "f") { ctx.cycleMinFit(); ctx.draw(); return true; }
   if (data === "F") { ctx.cycleFloors(); ctx.draw(); return true; }

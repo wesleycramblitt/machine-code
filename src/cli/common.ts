@@ -135,9 +135,7 @@ Usage:
                                     context. Engineer runs use an isolated worktree:
                                     [--item <slug>] [--base <ref>]
                                     Agent config overrides:
-                                    [--verify direct|verified]
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
-                                    [--allow-artifact-scripts] permit executable artifact scripts
                                     [--tier free|paid] [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
                                     [--max-price $/M] [--max-input-price $/M] [--max-output-price $/M]
@@ -241,7 +239,6 @@ export function fail(message: string, code = 1): never {
 export const BOOLEAN_FLAGS = new Set([
   "all",
   "attention",
-  "allow-artifact-scripts",
   "auto-issue",
   "axes",
   "changes",

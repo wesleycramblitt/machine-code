@@ -10,7 +10,6 @@ readonly = true
 modes = []
 blurb = "read-only judge; used by verified/redundant chains"
 preset = "review"
-worktree = false
 capabilities = ["code:read", "context:inherit", "review:write"]
 
 [weights]

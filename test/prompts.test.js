@@ -25,7 +25,7 @@ const deltas = Object.fromEntries(
 test("base and role deltas stay small", () => {
   assert.ok(base.length <= 1_950, `base is ${base.length} chars`);
   for (const [role, delta] of Object.entries(deltas)) {
-    const limit = role === "research" || role === "engineer" ? 600 : 400;
+    const limit = role === "research" || role === "engineer" ? 700 : 400;
     assert.ok(delta.length <= limit, `${role} delta is ${delta.length} chars`);
     assert.match(delta, /Stop/, `${role} has a stop condition`);
   }

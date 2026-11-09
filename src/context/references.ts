@@ -141,28 +141,10 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
   return "on-demand";
 }
 
-/**
- * Mode default skills for a run: description-only by default.
- *
- * `clean-code` rides every coding run (engineer, research);
- * `verified-testing` joins it when verification is verified or
- * higher. `safe-refactor` stays opt-in via `mc:context`.
- * Review is harness-owned (independent Review run), not a skill.
- *
- * "Default" means listed in the skill index, not inlined: bodies load only
- * through an explicit include, a role preset, or a declaration, so the
- * agent pulls as much of a default skill as the task actually needs.
- */
-export function defaultSkillsFor(args: { agent: string; verification?: string }): string[] {
-  if (!["engineer", "research"].includes(args.agent)) return [];
-  // Research turns ideas into concrete plan items, so plan-curation is on by
-  // default for it (the role preset inlines the body).
+export function defaultSkillsFor(args: { agent: string }): string[] {
   if (args.agent === "research") return ["clean-code", "plan-curation"];
-  const skills = ["clean-code"];
-  if (args.verification === "verified" || args.verification === "redundant") {
-    skills.push("verified-testing");
-  }
-  return skills;
+  if (args.agent === "engineer") return ["clean-code"];
+  return [];
 }
 
 /**

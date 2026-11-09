@@ -48,15 +48,7 @@ export function buildSettings(
       editable: true,
       choices: ["paid", "free"],
     });
-    rows.push({
-      id: "selection.defaultMode",
-      section: "selection",
-      label: "Default mode",
-      value: machine.defaultMode ?? "(agent default)",
-      file: configFile,
-      editable: true,
-      choices: ["direct", "verified", "redundant"],
-    });
+    
     rows.push({
       id: "selection.maxOutput",
       section: "selection",
@@ -137,19 +129,7 @@ export function buildSettings(
       file: configFile,
       editable: false,
     });
-    const worktreeOverrides = Object.entries(machine.agents)
-      .filter(([, overrides]) => overrides.worktree !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([role, overrides]) => `${role} ${overrides.worktree ? "on" : "off"}`);
-    rows.push({
-      id: "agents.worktree",
-      section: "agents",
-      label: "Worktree",
-      value: worktreeOverrides.length > 0 ? worktreeOverrides.join("  ") : "on (default)",
-      file: configFile,
-      detail: "Isolated worktree per run (default on); sudo edits the main tree by default.",
-      editable: true,
-    });
+    
     const themeKeys = [
       "header_bg",
       "header_fg",

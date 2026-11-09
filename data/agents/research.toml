@@ -10,7 +10,6 @@ readonly = false
 modes = []
 blurb = "turns ideas into features/bugs"
 preset = "research"
-worktree = false
 capabilities = ["code:read", "context:inherit", "knowledge:write"]
 
 [weights]

@@ -23,33 +23,21 @@ import type { Layout } from "../paths.js";
 import type { CoreToolName } from "../tools/index.js";
 import { capabilitiesFor, type Capability } from "../policy/capabilities.js";
 
-export type Verification = "direct" | "verified";
 export type ApprovalMode = "human" | "agent";
 export type AmbiguityMode = "strict" | "precise" | "adaptive" | "autonomous";
 export type PresetName = string;
 
 export interface AgentConfig {
   preset: PresetName;
-  delegate: boolean;
-  verification: Verification;
-  worktree: boolean;
-  artifactScripts: boolean;
-  ask: boolean;
   approval: ApprovalMode;
   ambiguity: AmbiguityMode;
 }
 
-const VERIFICATIONS: readonly Verification[] = ["direct", "verified"];
 const AMBIGUITIES: readonly AmbiguityMode[] = ["strict", "precise", "adaptive", "autonomous"];
 
 function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig {
   return {
     preset: name,
-    delegate: raw.delegate === true,
-    verification: pick(raw.verification, VERIFICATIONS) ?? "direct",
-    worktree: raw.worktree !== false,
-    artifactScripts: raw.artifact_scripts === true,
-    ask: raw.ask !== false,
     approval: raw.approval === "agent" ? "agent" : "human",
     ambiguity: (AMBIGUITIES as readonly string[]).includes(String(raw.ambiguity))
       ? (raw.ambiguity as AmbiguityMode)
@@ -66,15 +54,6 @@ export const PRESETS: Record<string, AgentConfig> = Object.fromEntries(
 export const ROLE_PRESET: Record<string, PresetName> = Object.fromEntries(
   AGENT_NAMES.map((name) => [name, rolePreset(name)]),
 );
-
-function pick<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
-  // Legacy "redundant" verification narrows to "verified".
-  const normalized =
-    value === "redundant" && (allowed as readonly string[]).includes("verified") ? "verified" : value;
-  return typeof normalized === "string" && (allowed as readonly string[]).includes(normalized)
-    ? (normalized as T)
-    : undefined;
-}
 
 export interface ResolveInput {
   role: AgentName;
@@ -95,11 +74,6 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
   const presetName = pickPreset(input);
   const base = PRESETS[presetName] ?? PRESETS.assistant ?? {
     preset: "assistant",
-    delegate: false,
-    verification: "direct",
-    worktree: true,
-    artifactScripts: false,
-    ask: true,
     approval: "human",
     ambiguity: "precise",
   };
@@ -111,25 +85,13 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
   ];
   for (const layer of layers) {
     if (!layer) continue;
-    if (layer.delegate !== undefined) config.delegate = layer.delegate;
-    const v = pick(layer.verification, VERIFICATIONS);
-    if (v) config.verification = v;
-    if (layer.worktree !== undefined) config.worktree = layer.worktree;
-    if (layer.artifactScripts !== undefined) config.artifactScripts = layer.artifactScripts;
-    if (layer.ask !== undefined) config.ask = layer.ask;
-    if (layer.approval === "human" || layer.approval === "agent") config.approval = layer.approval;
-    const a = pick(layer.ambiguity, AMBIGUITIES);
-    if (a) config.ambiguity = a;
+    if (layer.approval === "human" || layer.approval === "agent") config.approval = layer.approval as ApprovalMode;
+    const a = layer.ambiguity as AmbiguityMode | undefined;
+    if (a && (AMBIGUITIES as readonly string[]).includes(a)) config.ambiguity = a;
   }
 
   // Run-level overrides win over everything.
   if (input.runOverrides) {
-    if (input.runOverrides.delegate !== undefined) config.delegate = input.runOverrides.delegate;
-    const rv = pick(input.runOverrides.verification, VERIFICATIONS);
-    if (rv) config.verification = rv;
-    if (input.runOverrides.worktree !== undefined) config.worktree = input.runOverrides.worktree;
-    if (input.runOverrides.artifactScripts !== undefined) config.artifactScripts = input.runOverrides.artifactScripts;
-    if (input.runOverrides.ask !== undefined) config.ask = input.runOverrides.ask;
     if (input.runOverrides.approval !== undefined) config.approval = input.runOverrides.approval;
     if (input.runOverrides.ambiguity !== undefined) config.ambiguity = input.runOverrides.ambiguity;
   }
@@ -145,13 +107,8 @@ function agentPolicyToConfig(policy: AgentPolicy | undefined): AgentConfigOverri
   if (!policy) return undefined;
   const out: AgentConfigOverrides = {};
   if (policy.preset !== undefined) out.preset = policy.preset;
-  if (policy.delegate !== undefined) out.delegate = policy.delegate;
-  if (policy.verification !== undefined) out.verification = policy.verification;
-  if (policy.artifactScripts !== undefined) out.artifactScripts = policy.artifactScripts;
-  if (policy.ask !== undefined) out.ask = policy.ask;
   if (policy.approval !== undefined) out.approval = policy.approval;
   if (policy.ambiguity !== undefined) out.ambiguity = policy.ambiguity;
-  if (policy.worktree !== undefined) out.worktree = policy.worktree;
   const hasAny = Object.values(out).some((v) => v !== undefined);
   return hasAny ? out : undefined;
 }
@@ -206,7 +163,6 @@ export function composePrompt(
   return [
     def.prompt,
     "",
-    `Config: worktree ${config.worktree ? "on" : "off"} · verification ${config.verification} · approval ${config.approval}.`,
     `Tools: ${tools.length > 0 ? tools.join(", ") : "(none)"}.`,
     ambiguityPrompt(config.ambiguity, ask),
   ].join("\n");

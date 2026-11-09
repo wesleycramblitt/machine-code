@@ -8,9 +8,6 @@ export interface ForkedRunSettings {
   agent: string;
   /** Explicit catalogue key; absent means auto-select. */
   model?: string;
-  preset: string;
-  verification: "direct" | "verified" | "redundant";
-  ask: boolean;
   approval: "human" | "agent";
   ambiguity: "strict" | "precise" | "adaptive" | "autonomous";
   tier: "free" | "paid";
@@ -22,8 +19,6 @@ export interface ForkedRunSettings {
   prompt: string;
 }
 
-const PRESETS = ["plan", "orchestrate", "implement", "review", "assistant", "unrestricted"] as const;
-const VERIFICATIONS = ["direct", "verified", "redundant"] as const;
 const APPROVALS = ["human", "agent"] as const;
 const AMBIGUITIES = ["strict", "precise", "adaptive", "autonomous"] as const;
 
@@ -93,18 +88,6 @@ export function forkSettingsFromRun(input: {
   return {
     agent: oneOf(summary.agent, AGENT_NAMES, "research"),
     ...(model ? { model } : {}),
-    preset: oneOf(summary.preset ?? cfg.preset, PRESETS, defaults.preset),
-    verification: oneOf(
-      summary.verification ?? cfg.verification,
-      VERIFICATIONS,
-      defaults.verification,
-    ),
-    ask:
-      typeof summary.ask === "boolean"
-        ? summary.ask
-        : typeof cfg.ask === "boolean"
-          ? cfg.ask
-          : defaults.ask,
     approval: oneOf(summary.approval ?? cfg.approval, APPROVALS, defaults.approval),
     ambiguity: oneOf(summary.ambiguity ?? cfg.ambiguity, AMBIGUITIES, defaults.ambiguity),
     tier,

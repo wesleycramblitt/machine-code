@@ -924,7 +924,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             layout: layoutFor(mapRoot),
             capabilities: input.agentCapabilities ?? [],
             recorder,
-            allowScripts: input.agentConfig?.artifactScripts === true,
+            allowScripts: true,
           }
         : undefined;
 

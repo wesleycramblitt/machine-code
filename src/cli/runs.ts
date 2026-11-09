@@ -579,7 +579,7 @@ export async function cmdPack(argv: string[]): Promise<number> {
     agent,
     ...(include ? { include } : {}),
     budgetChars: budget.inputChars,
-    defaultSkills: defaultSkillsFor({ agent, verification: "verified" }),
+    defaultSkills: defaultSkillsFor({ agent }),
     skillPresets: roleSkillPresets(agent),
   });
   const tokens = Math.ceil(bundle.chars / 4);

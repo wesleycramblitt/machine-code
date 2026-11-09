@@ -253,10 +253,7 @@ export interface WorktreeSpec {
 }
 
 function branchFor(kind: WorktreeKind, runId: string, slug?: string): string {
-  if (kind === "issue") {
-    if (!slug) throw new WorktreeError("slug_required", "an issue worktree needs --slug");
-    return `mc/${slug}`;
-  }
+  if (slug) return `mc/${slug}`;
   return `mc/run/${runId}`;
 }
 

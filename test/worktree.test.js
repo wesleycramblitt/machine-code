@@ -223,24 +223,14 @@ test("different tasks run concurrently on separate branches; run kind uses mc/ru
   }
 });
 
-test("dependency links: symlink when the source exists, skipped when missing", async () => {
+test("dependency links: profiles system removed — no links are loaded", async () => {
   const { dir } = tempRepo();
   try {
     const layout = fakeLayout(dir);
-    const profileDir = join(layout.repoDir, "profiles");
-    mkdirSync(profileDir, { recursive: true });
-    writeFileSync(
-      join(profileDir, "test.toml"),
-      `[worktree]\nlinks = ["node_modules", "vendor"]\n`,
-      "utf8",
-    );
     mkdirSync(join(dir, "node_modules"), { recursive: true });
-    writeFileSync(join(dir, "node_modules", "keep.txt"), "x", "utf8");
-
     const spec = await createWorktree({ layout, runId: "r-links", kind: "run" });
-    assert.deepEqual(spec.linkedDirs, ["node_modules"]);
-    assert.ok(spec.skippedLinks.includes("vendor"));
-    assert.ok(lstatSync(join(spec.path, "node_modules")).isSymbolicLink());
+    assert.deepEqual(spec.linkedDirs, []);
+    assert.deepEqual(spec.skippedLinks, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

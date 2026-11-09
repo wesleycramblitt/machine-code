@@ -240,15 +240,11 @@ export async function runTui(): Promise<void> {
     }
     return {
       agent,
-      preset: "unrestricted",
-      verification: "verified",
-      ask: true,
       approval: "human",
       ambiguity: "precise",
       tier,
       minFit: undefined,
       floors: "role",
-      worktree: true,
       prompt: "",
     };
   };
@@ -295,9 +291,6 @@ export async function runTui(): Promise<void> {
       ...(preferredAgent ? { agent: preferredAgent } : {}),
       ...(attached ? { item: attached } : {}),
     };
-    s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
-    s.newrun.worktree = true;
-    enforceLockedSkills(true);
     if (seed?.prompt) s.newrun.prompt = seed.prompt;
     else if (issue) s.newrun.prompt = issue.prompt || issue.slug || "";
     resetNewRunUi();
@@ -340,7 +333,6 @@ export async function runTui(): Promise<void> {
         defaults,
         configuredProviders: configured,
       }),
-      worktree: s.newrun.worktree,
     };
     // A legacy packet id is not an issue; do not attach a run to it.
     if (s.newrun.item && !findIssue(repoLayout, s.newrun.item)) {
@@ -362,39 +354,6 @@ export async function runTui(): Promise<void> {
     const previousAgent = s.newrun.agent;
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
     s.newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
-    // Verification and isolation follow the role: only engineer verifies and
-    // isolates in a worktree.
-    s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
-    s.newrun.worktree = true;
-    enforceLockedSkills(true);
-  };
-
-  /** Build verification mode, shown as verify[v] beside the agent row. */
-  const cycleVerify = () => {
-    const values: NewRunState["verification"][] = ["direct", "verified"];
-    s.newrun.verification = values[(values.indexOf(s.newrun.verification) + 1) % values.length]!;
-    enforceLockedSkills(true);
-  };
-
-  /**
-   * Skills the current mode requires. verified-testing carries the TDD
-   * discipline that Verify promises; excluding it would silently downgrade
-   * the mode, so the composer refuses and submit re-admits it.
-   */
-  const lockedSkills = (): string[] =>
-    s.newrun.verification === "verified" ? ["verified-testing"] : [];
-
-  /** Re-admit mode-locked skills excluded under a previous mode. */
-  const enforceLockedSkills = (announce: boolean): void => {
-    let fixed = false;
-    for (const name of lockedSkills()) {
-      if (s.newRunSkillModes.get(name) === "exclude") {
-        s.newRunSkillModes.delete(name);
-        fixed = true;
-      }
-      if (s.newRunContextExcluded.delete(`skill:${name}`)) fixed = true;
-    }
-    if (fixed && announce) notify("verified-testing is required by Verify; switch to Direct to exclude it");
   };
 
   const cycleAmbiguity = () => {
@@ -432,7 +391,7 @@ export async function runTui(): Promise<void> {
     const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
     const includedPlansKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("plan:")).sort().join(",");
     const includedIssuesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("issue:")).sort().join(",");
-    const previewKey = `${s.newRunRepo}\0${s.newrun.item ?? ""}\0${s.newrun.agent}\0${s.newrun.verification}\0${s.newrun.worktree ? "wt" : "main"}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}\0${includedIssuesKey}`;
+    const previewKey = `${s.newRunRepo}\0${s.newrun.item ?? ""}\0${s.newrun.agent}\0${skillModesKey}\0${includedFilesKey}\0${includedPlansKey}\0${includedIssuesKey}`;
     const previewTtl = s.newRunInsert ? 60_000 : 5_000;
     if (
       !s.newRunPreviewCache ||
@@ -457,7 +416,7 @@ export async function runTui(): Promise<void> {
           issues: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("issue:"))
             .map((key) => key.slice("issue:".length)),
-          defaultSkills: defaultSkillsFor({ agent: s.newrun.agent, verification: s.newrun.verification }),
+          defaultSkills: defaultSkillsFor({ agent: s.newrun.agent }),
           skillPresets: roleSkillPresets(s.newrun.agent),
           skillOverrides: Object.fromEntries(s.newRunSkillModes),
         }),
@@ -484,10 +443,6 @@ export async function runTui(): Promise<void> {
       agentPolicy: ap,
       machineOverrides: machine.agents[s.newrun.agent],
       runOverrides: {
-        preset: s.newrun.preset,
-        verification: s.newrun.verification === "redundant" ? "verified" : s.newrun.verification,
-        worktree: s.newrun.worktree,
-        ask: s.newrun.ask,
         approval: s.newrun.approval,
         ambiguity: s.newrun.ambiguity,
       },
@@ -570,10 +525,6 @@ export async function runTui(): Promise<void> {
       "--agent", s.newrun.agent,
       ...(s.newrun.model ? ["--model", s.newrun.model] : []),
       "--tier", s.newrun.tier,
-      "--preset", s.newrun.preset,
-      "--verify", s.newrun.verification,
-      "--ask", String(s.newrun.ask),
-      "--worktree", s.newrun.worktree ? "true" : "false",
       "--approval", s.newrun.approval,
       "--ambiguity", s.newrun.ambiguity,
       ...(s.newRunParentId ? ["--parent", s.newRunParentId] : []),
@@ -641,8 +592,6 @@ export async function runTui(): Promise<void> {
 
   const submitNewRun = () => {
     s.newRunColon = false;
-    // Authoritative guard: locked skills survive any path that excluded them.
-    enforceLockedSkills(false);
     const args = buildNewRunArgs();
     if (!args) return;
     if (launch(args, s.newRunRepo)) {
@@ -964,7 +913,6 @@ export async function runTui(): Promise<void> {
         },
         agentIsolates,
         mapTokens: mapStatusTokens,
-        lockedSkills,
       });
       body = frame.body;
       actions = frame.actions;
@@ -1256,9 +1204,6 @@ export async function runTui(): Promise<void> {
     const wanted = issue.kind === "ideas" ? "research" : "engineer";
     if (!hadItem && s.newrun.agent !== wanted) {
       s.newrun.agent = wanted;
-      s.newrun.verification = agentIsolates(s.newrun.agent) ? "verified" : "direct";
-      s.newrun.worktree = true;
-      enforceLockedSkills(true);
     }
     if (!s.newrun.prompt.trim() || (previousPrompt && s.newrun.prompt === previousPrompt)) {
       s.newrun.prompt = issue.prompt || issue.slug;
@@ -1356,9 +1301,9 @@ export async function runTui(): Promise<void> {
   const keyCtx: KeyServices = {
     draw, notify, launch, openEditor, startNewRun, forkRun, answerRun,
     interrupt, startCorrect, submitCorrection, runDetailData, pendingForRun,
-    cycleAgent, cycleVerify, cycleAmbiguity, cycleMinFit, cycleFloors,
-    enforceLockedSkills, startIssuePicker, pickerIssues, chooseIssue,
-    pickerModels, startModelPicker, buildNewRunArgs, submitNewRun, lockedSkills,
+    cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors,
+    startIssuePicker, pickerIssues, chooseIssue,
+    pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
     agentIsolates, searchSeed,
     repoRoot: l.repoRoot,
   };

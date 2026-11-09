@@ -26,7 +26,7 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { findIssue, moveIssue } from "../plan/issues.js";
+import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
 import { slugify } from "../plan/slug.js";
@@ -63,6 +63,25 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
+
+/** Merge a branch into main. Returns true on success. */
+async function mergeBranch(root: string, branch: string, target: string): Promise<boolean> {
+  try {
+    // Fetch latest target
+    await runProc("git", ["fetch", "origin", target], { cwd: root, timeoutMs: 30_000 });
+    // Checkout target
+    await runProc("git", ["checkout", target], { cwd: root, timeoutMs: 15_000 });
+    // Pull latest
+    await runProc("git", ["pull", "--ff-only", "origin", target], { cwd: root, timeoutMs: 30_000 });
+    // Merge the feature branch
+    await runProc("git", ["merge", "--no-ff", branch, "-m", `merge ${branch}`], { cwd: root, timeoutMs: 30_000 });
+    // Push the merge
+    await runProc("git", ["push", "origin", target], { cwd: root, timeoutMs: 30_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Commits dirty work, or accepts an existing commit on the branch. */
 async function ensureCommitted(
@@ -120,19 +139,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   // Run-level agent configuration overrides (Phase 3).
   const agentOverrides: Partial<AgentConfig> = {};
-  // (--preset was removed; if passed it is ignored.)
-  const verifyFlag = flags.get("verify");
-  if (verifyFlag !== undefined) {
-    if (verifyFlag === "redundant") {
-      process.stderr.write("warning: --verify redundant is now verified\n");
-      agentOverrides.verification = "verified";
-    } else if (verifyFlag === "direct" || verifyFlag === "verified") {
-      agentOverrides.verification = verifyFlag;
-    } else {
-      fail("--verify must be direct|verified");
-    }
-  }
-  // (--ask and --issues were removed; if passed they are ignored.)
   const approvalFlag = flags.get("approval");
   if (approvalFlag !== undefined) {
     if (approvalFlag !== "human" && approvalFlag !== "agent") fail("--approval must be human|agent");
@@ -144,12 +150,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (!valid.includes(ambiguityFlag)) fail(`--ambiguity must be one of ${valid.join(", ")}`);
     agentOverrides.ambiguity = ambiguityFlag as AgentConfig["ambiguity"];
   }
-  if (flags.has("allow-artifact-scripts")) agentOverrides.artifactScripts = true;
   // A detached delegated child runs a single agent directly (task tool spawn).
   const directExec = flags.has("direct-exec");
 
   const l = layout();
-  const itemSlug = itemFlag !== undefined ? slugify(itemFlag) : undefined;
+  let itemSlug = itemFlag !== undefined ? slugify(itemFlag) : undefined;
   if (itemSlug) {
     const issue = findIssue(l, itemSlug);
     if (!issue) fail(`no issue ${itemSlug} — create one with \`machine_code issue create features|bugs ${itemSlug} "..."\``);
@@ -159,6 +164,23 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (issue.kind === "ideas" && normalizedAgent === "review") {
       fail(`issue ${itemSlug} is an idea; ideas are researched, not reviewed`);
     }
+    if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
+  }
+  // Auto-create an issue for bare runs so every run is linked to a branch.
+  if (!itemSlug && normalizedAgent === "engineer" && request) {
+    const autoSlug = slugify(request);
+    let issue = findIssue(l, autoSlug);
+    if (!issue) {
+      issue = writeIssue(l, {
+        kind: "features",
+        slug: autoSlug,
+        prompt: request,
+        body: `Auto-created from run.\n\n${request}`,
+        tags: [],
+        review: "none",
+      });
+    }
+    itemSlug = issue.slug;
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
@@ -444,9 +466,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Build runs work in an isolated worktree. Research and review never
-  // create one: research is read-only, and review reads the worktree it
-  // inspects.
+  // Build runs work in an isolated worktree. Review reads the worktree it
+  // inspects. Research gets a temporary worktree on the main branch so the
+  // repo stays clean.
   const worktreeFlag = flags.get("worktree");
   if (worktreeFlag !== undefined && worktreeFlag !== "true" && worktreeFlag !== "false") {
     fail("--worktree must be true|false");
@@ -454,14 +476,15 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const worktreeOn = worktreeFlag !== "false";
   const forceWorktree = worktreeOn && flags.has("worktree");
   const mutating =
-    agentNameParsed === "research" || agentNameParsed === "review"
-      ? false
-      : agentNameParsed === "engineer"
-        ? worktreeOn
+    agentNameParsed === "research" || agentNameParsed === "engineer"
+      ? true
+      : agentNameParsed === "review"
+        ? false
         : forceWorktree;
   let toolRoot = l.repoRoot;
   if (mutating) {
     const issueWorktree = itemSlug && agentNameParsed === "engineer";
+    const researchWorktree = !itemSlug && agentNameParsed === "research";
     // Reuse a terminal/paused worktree that already owns this issue branch.
     // A fresh path cannot be created while mc/<slug> is checked out.
     const reuse = reusableWorktreeOwner(
@@ -495,14 +518,33 @@ export async function cmdRun(argv: string[]): Promise<number> {
           runDir: recorder.dir,
           onEvent: (type, data) => recorder.event(type, data),
         });
-        const spec = await createWorktree({
-          layout: l,
-          runId: recorder.id,
-          kind: issueWorktree ? "issue" : "run",
-          ...(issueWorktree ? { slug: itemSlug } : {}),
-          base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
-          processes: worktreeProcesses,
-        });
+        let spec;
+        if (researchWorktree) {
+          // Research worktree on the main branch (HEAD), not a feature branch.
+          const path = join(l.localDir, "worktrees", recorder.id);
+          const currentBranch = (await runProc("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: l.repoRoot, timeoutMs: 15_000 })).stdout.trim();
+          await runProc("git", ["worktree", "add", path, "HEAD"], { cwd: l.repoRoot, timeoutMs: 30_000 });
+          const baseRef = (await runProc("git", ["rev-parse", "HEAD"], { cwd: l.repoRoot, timeoutMs: 15_000 })).stdout.trim();
+          spec = {
+            path,
+            branch: currentBranch,
+            baseRef,
+            baseBranch: currentBranch,
+            linkedDirs: [],
+            skippedLinks: [],
+            createdBranches: [],
+            materialized: [],
+          };
+        } else {
+          spec = await createWorktree({
+            layout: l,
+            runId: recorder.id,
+            kind: issueWorktree ? "issue" : "run",
+            ...(issueWorktree ? { slug: itemSlug } : {}),
+            base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
+            processes: worktreeProcesses,
+          });
+        }
         recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
         if (inheritWorktree && parentRun?.worktree) {
           // Inherit the parent's uncommitted work explicitly; conflicts fail.
@@ -561,7 +603,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     ...(contextBudgetChars !== undefined ? { budgetChars: contextBudgetChars } : {}),
     exclude: contextExclude,
     include: contextInclude,
-    defaultSkills: defaultSkillsFor({ agent: agentNameParsed, verification: agentOverrides.verification }),
+    defaultSkills: defaultSkillsFor({ agent: agentNameParsed }),
     skillPresets: roleSkillPresets(agentNameParsed),
     skillOverrides: skillModeOverrides,
   });
@@ -699,6 +741,19 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
+  // Research: auto-commit findings from the temporary worktree back to main.
+  if (result.status === "completed" && agentNameParsed === "research" && toolRoot !== l.repoRoot) {
+    const currentBranch = (await runProc("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: toolRoot, timeoutMs: 15_000 })).stdout.trim();
+    const commitMessage = `research(${itemSlug ?? recorder.id}): ${request}`;
+    await runProc("git", ["add", "-A"], { cwd: toolRoot, timeoutMs: 30_000 });
+    const commitResult = await runProc("git", ["commit", "-m", commitMessage], { cwd: toolRoot, timeoutMs: 30_000 });
+    if (commitResult.code === 0) {
+      // Push back to main repo
+      await runProc("git", ["push", l.repoRoot, `HEAD:${currentBranch}`], { cwd: toolRoot, timeoutMs: 30_000 });
+      recorder.event("research_committed", { branch: currentBranch });
+    }
+  }
+
   // A review verdict is a work-item decision, not just prose. Any
   // non-approved verdict on a completed review sends the issue back to
   // blocked/ so approve cannot merge rejected work.
@@ -709,6 +764,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
         ? parseReviewVerdict(result.finalText) ?? inferReviewVerdict(result.finalText)
         : undefined;
     if (verdict) recorder.event("review_verdict", { verdict });
+    // Auto-merge when the review agent approves
+    if (verdict === "approved" && toolRoot !== l.repoRoot) {
+      const branch = recorder.current.branch;
+      if (branch) {
+        await mergeBranch(toolRoot, branch, "main");
+        recorder.event("branch_merged", { branch, verdict: "approved" });
+      }
+    }
     if (
       issue &&
       issue.status === "done" &&
@@ -731,19 +794,17 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const issue = findIssue(l, itemSlug);
     if (issue) {
       const commands = allCommands(l);
-      let gatesPassed = true;
-      if (recorder.current.verification !== "direct") {
-        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), {
+      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), {
           root: toolRoot,
           commands,
         });
-        gatesPassed = gateOutcome.passed;
+        const gatesPassed = gateOutcome.passed;
         recorder.event("gates", {
           issue: issue.slug,
-          passed: gateOutcome.passed,
+          passed: gatesPassed,
           results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
         });
-        if (!gateOutcome.passed) {
+        if (!gatesPassed) {
           moveIssue(l, issue.slug, "blocked");
           await commitPlanningFiles(l, `issues: ${issue.slug} blocked`);
           result = {
@@ -752,7 +813,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
             error: `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`,
           };
         }
-      }
       if (gatesPassed) {
         let commit: string | null = null;
         try {
@@ -775,6 +835,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
           recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
           moveIssue(l, issue.slug, "done");
           await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+          // Auto-merge: if no review required, merge the branch into main
+          if (issue.review === "none") {
+            const branch = recorder.current.branch;
+            if (branch) {
+              await mergeBranch(toolRoot, branch, "main");
+              recorder.event("branch_merged", { branch });
+            }
+          }
           if (issue.review === "agent" && !flags.has("no-review")) {
             autoReview = { slug: issue.slug, prompt: issue.prompt };
           }
@@ -1092,8 +1160,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   if (result.status === "completed" && resumeAgent === "engineer" && resumeItem) {
     const issue = findIssue(l2, resumeItem);
     if (issue) {
-      if (recorder.current.verification !== "direct") {
-        const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), { root: toolRoot, commands });
+      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), { root: toolRoot, commands });
         recorder.event("gates", {
           issue: issue.slug,
           passed: gateOutcome.passed,
@@ -1106,7 +1173,6 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
           printRunOutcome({ ...result, status: "blocked" }, recorder);
           return EXIT.blocked;
         }
-      }
       if (toolRoot !== l2.repoRoot) {
         try {
           const commit = await ensureCommitted(
@@ -1119,6 +1185,14 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
             recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
             moveIssue(l2, issue.slug, "done");
             await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+            // Auto-merge: if no review required, merge the branch into main
+            if (issue.review === "none") {
+              const branch = recorder.current.branch;
+              if (branch) {
+                await mergeBranch(toolRoot, branch, "main");
+                recorder.event("branch_merged", { branch });
+              }
+            }
             if (issue.review === "agent" && !flags.has("no-review")) {
               autoReview = { slug: issue.slug, prompt: issue.prompt };
             }
@@ -1139,6 +1213,14 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
         ? parseReviewVerdict(result.finalText) ?? inferReviewVerdict(result.finalText)
         : undefined;
     if (verdict) recorder.event("review_verdict", { verdict });
+    // Auto-merge when the review agent approves
+    if (verdict === "approved" && toolRoot !== l2.repoRoot) {
+      const branch = recorder.current.branch;
+      if (branch) {
+        await mergeBranch(toolRoot, branch, "main");
+        recorder.event("branch_merged", { branch, verdict: "approved" });
+      }
+    }
     if (
       issue &&
       issue.status === "done" &&

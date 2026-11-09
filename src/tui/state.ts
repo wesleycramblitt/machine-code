@@ -26,10 +26,7 @@ export type Screen = "list" | "run" | "newrun" | "answer" | "correct" | "model" 
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
 export type RunsRepoScope = "all" | "cwd";
 
-export type NewRunState = ForkedRunSettings & {
-  /** Isolation worktree. Shown only for engineer; other agents ignore it. */
-  worktree: boolean;
-};
+export type NewRunState = ForkedRunSettings;
 
 export interface RunDetail {
   layout: Layout;
@@ -228,15 +225,11 @@ export function createTuiState(repoRoot: string): TuiState {
     changesCache: null,
     newrun: {
       agent: "research",
-      preset: "unrestricted",
-      verification: "verified",
-      ask: true,
       approval: "human",
       ambiguity: "precise",
       tier: "free",
       minFit: undefined,
       floors: "role",
-      worktree: true,
       prompt: "",
     },
     newRunRepo: repoRoot,

@@ -12,7 +12,7 @@
 import { runLoop, type RunLoopInput, type RunLoopResult } from "./loop.js";
 import { DEFAULT_AGENT_POLICY, type MachineConfig, type Policy, type AgentPolicy } from "./config.js";
 import { type AgentDef, type AgentName } from "./agents.js";
-import { resolveAgent, type AgentConfig, type Verification } from "./agents/config.js";
+import { resolveAgent, type AgentConfig } from "./agents/config.js";
 import { type MutableModels } from "./models.js";
 import { type CatalogueRow } from "./catalogue/types.js";
 import { RunRecorder, type RunStatus } from "./state/runs.js";
@@ -24,7 +24,6 @@ import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
-import { defaultSkillsFor } from "./context/references.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
@@ -145,9 +144,6 @@ export interface ExecuteIssueInput {
   machine: MachineConfig;
   policy: Policy;
   packet: TaskPacket;
-  verification: Verification;
-  /** Run Review as an independent read-only run after gates pass. */
-  review: boolean;
   request: string;
   root: string;
   toolRoot?: string;
@@ -163,6 +159,8 @@ export interface ExecuteIssueInput {
   skipMap?: boolean;
   skipSemantic?: boolean;
   signal?: AbortSignal;
+  /** Whether to run a review agent after gates pass. */
+  review?: boolean;
 }
 
 /**
@@ -183,7 +181,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     machine,
     agent: "engineer",
     ...(input.include ? { include: input.include } : {}),
-    defaultSkills: defaultSkillsFor({ agent: "engineer", verification: input.verification }),
     skillPresets: roleSkillPresets("engineer"),
   });
   if (contextBundle.text) {
@@ -212,7 +209,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   const resolvedEngineer = resolveAgent(layout, "engineer", {
     agentPolicy: policy.agents.engineer,
     machineOverrides: machine.agents.engineer,
-    runOverrides: { ...input.agentOverrides, verification: input.verification },
+    runOverrides: input.agentOverrides,
   });
   recorder.recordConfig({ ...resolvedEngineer.config, capabilities: resolvedEngineer.capabilities });
   const engineerPolicy = policyFor(layout, "engineer", policy);
@@ -420,7 +417,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
 export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateResult> {
   const { layout, machine, policy, root, recorder } = input;
   if (input.packet) {
-    const verification: Verification = input.packet.mode === "direct" ? "direct" : "verified";
     return executeIssue({
       models: input.models,
       catalogue: input.catalogue,
@@ -429,8 +425,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       machine,
       policy,
       packet: input.packet,
-      verification,
-      review: true,
       request: input.packet.goal,
       root,
       toolRoot: input.toolRoot,
@@ -445,6 +439,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       skipMap: input.skipMap,
       skipSemantic: input.skipSemantic,
       signal: input.signal,
+      review: true,
     });
   }
 

@@ -109,7 +109,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
   if (sub === "create" || sub === "new") {
     const kindArg = positional[1];
     const slugArg = positional[2];
-    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|agent|human] [--depends a,b] [--tags a,b] [--verify a,b] [--status <dir>]');
+    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|agent|human] [--depends a,b] [--tags a,b] [--acceptance a,b] [--status <dir>]');
     const kind = parseKind(kindArg);
     if (!kind) fail(`unknown kind ${JSON.stringify(kindArg)}; use ideas|features|bugs`);
     const slug = slugify(slugArg);
@@ -127,6 +127,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       ...(flags.get("priority") ? { priority: flags.get("priority") } : {}),
       ...(flags.get("depends") ? { depends: flags.get("depends")!.split(",").map((e) => slugify(e)) } : {}),
       ...(flags.get("tags") ? { tags: flags.get("tags")!.split(",").map((e) => e.trim()) } : {}),
+      ...(flags.get("acceptance") ? { acceptance: flags.get("acceptance")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
       ...(flags.get("verify") ? { verify: flags.get("verify")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
       review: reviewFlag as "none" | "agent" | "human",
     });
@@ -300,7 +301,6 @@ export async function runIssueBuild(
       machine: runtime.machine,
       policy: runtime.policy,
       packet,
-      verification: "verified",
       review: flags.has("no-review") ? false : flags.has("with-review") || issue.review === "agent",
       include: { issues: [issue.rel] },
       request: goal,

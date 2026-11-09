@@ -27,10 +27,7 @@ export interface ContextPanelItem {
   counted?: boolean;
 }
 
-export type ComposerRun = ForkedRunSettings & {
-  /** Isolation worktree. Shown only for engineer; other agents ignore it. */
-  worktree: boolean;
-};
+export type ComposerRun = ForkedRunSettings;
 
 /** Structural preview from the composer's model/context computation. */
 export interface ComposerPreview {
@@ -77,8 +74,6 @@ export interface ComposerProps extends Viewport {
   pickers: ComposerPickers;
   /** Role predicate: only some roles isolate in a worktree. */
   agentIsolates: (agent: string) => boolean;
-  /** Mode-locked skills that cannot be excluded (verified-testing). */
-  lockedSkills: () => string[];
   mapTokens: (root: string) => string[];
 }
 

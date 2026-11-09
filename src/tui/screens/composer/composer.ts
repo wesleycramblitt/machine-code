@@ -22,7 +22,7 @@ import { layout } from "../../../paths.js";
 import { findIssue, listIssues } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
-import { defaultSkillsFor, resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
+import { resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
 import { discoverKnowledgeFiles } from "../../../context/preview.js";
 import { contextBudget } from "../../../context/budget.js";
 import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
@@ -40,7 +40,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const { insert, cursor, colon } = props;
   const { contextFiltering } = props;
   const contextFilterRaw: string = props.contextFilter;
-  const { excluded, included, skillModes, skillShown, preview, pickers, lockedSkills } = props;
+  const { excluded, included, skillModes, skillShown, preview, pickers } = props;
   let contextTab: number = props.contextTab;
   let contextItem = props.contextItem;
   let contextSectionKey = "";
@@ -75,10 +75,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     agentPolicy: ap,
     machineOverrides: preview.machine?.agents[run.agent],
     runOverrides: {
-      preset: run.preset,
-      verification: run.verification === "redundant" ? "verified" : run.verification,
-      worktree: run.worktree,
-      ask: run.ask,
       approval: run.approval,
       ambiguity: run.ambiguity,
     },
@@ -216,7 +212,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   }
   const skillSources = ctx.sources.filter((source) => source.kind === "skill");
   const aggregateSkill = skillSources.find((source) => /^\d+ skills$/.test(source.ref));
-  const skillDefaults = defaultSkillsFor({ agent: run.agent, verification: run.verification });
+  const skillDefaults = [] as string[];
   const skillPresets = roleSkillPresets(run.agent);
   const skillOverrides = Object.fromEntries(skillModes);
   const skillModeOf = (name: string): SkillMode => {
@@ -237,10 +233,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   }
   // Three modes per skill: include (description + body, marked ✓ body),
   // on-demand (description only, pulled with the skill tool), exclude (✕).
-  // Space cycles include → on-demand → exclude. Mode-locked skills show
-  // · required and cannot cycle to exclude. Tags sit right after the name
+  // Space cycles include → on-demand → exclude. Tags sit right after the name
   // so row truncation cannot hide them. Active modes sort first.
-  const locked = new Set(lockedSkills());
   const tagLocked = (text: string, tags: string[]): string => {
     if (tags.length === 0) return text;
     const insert = ` · ${tags.join(" · ")}`;
@@ -259,7 +253,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     } else if (mode === "on-demand") {
       tags.push("on-demand");
     }
-    if (locked.has(name)) tags.push("required");
     item.text = tagLocked(item.text, tags);
     bodyChars.delete(name);
   }
@@ -268,7 +261,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     skillShown.set(name, mode);
     if (mode === "exclude") continue;
     const tags: string[] = [mode === "include" ? "body" : "on-demand"];
-    if (locked.has(name)) tags.push("required");
     skillItems.push({
       text: tagLocked(name, tags),
       chars: mode === "include" ? chars : 0,
@@ -569,12 +561,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     ? ""
     : joinCommands([
         command("a", "Agent", displayAgent, agentTone(run.agent)),
-        ...(props.agentIsolates(run.agent)
-          ? [
-              command("v", "Verify", run.verification === "verified" ? "Verified" : "Direct", C),
-              command("w", "Worktree", run.worktree ? "on" : "off", run.worktree ? G : D),
-            ]
-          : []),
         command("g", "Ambiguity", run.ambiguity, M),
       ]);
   const runControls = insert

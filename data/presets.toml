@@ -1,56 +1,18 @@
-# machine_code behavior presets (shipped defaults).
+# machine_code behavior presets.
 # Machine override: ~/.machine_code/data/presets.toml
-# Run flags and repo/machine policy override these per role.
 
-[plan]
-delegate = false
-verification = "direct"
-ask = true
-approval = "human"
-ambiguity = "precise"
-
-[orchestrate]
-delegate = true
-verification = "verified"
-ask = true
-approval = "human"
-ambiguity = "precise"
-
-[implement]
-delegate = false
-verification = "verified"
-ask = true
-approval = "human"
-ambiguity = "precise"
-artifact_scripts = true
-
-[review]
-delegate = false
-verification = "direct"
-worktree = false
-ask = false
+[engineer]
 approval = "human"
 ambiguity = "precise"
 
 [research]
-delegate = false
-verification = "direct"
-worktree = false
-ask = true
 approval = "human"
 ambiguity = "strict"
 
-[assistant]
-delegate = false
-verification = "direct"
-ask = true
+[review]
 approval = "human"
 ambiguity = "precise"
 
-[unrestricted]
-delegate = true
-verification = "verified"
-ask = true
+[assistant]
 approval = "human"
 ambiguity = "precise"
-artifact_scripts = true
