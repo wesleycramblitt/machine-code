@@ -53,11 +53,11 @@ const KIND_BG: Record<string, string> = {
   bug: RED_BG,
 };
 
-/** Kind foreground colors for todo/needs-research slugs. */
+/** Kind foreground colors for todo/needs-research slugs. Keys match IssueKind. */
 const KIND_FG: Record<string, string> = {
-  idea: M,
-  feature: Y,
-  bug: RED,
+  ideas: M,
+  features: Y,
+  bugs: RED,
 };
 
 export function renderRunsList(props: RunsListProps): RunsListFrame {
@@ -86,7 +86,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
     } else if (row.kind === "issue") {
       // Todo/needs-research slugs use the kind's brand color. All other statuses use their status color.
       const style = ISSUE_STATUS_STYLE[row.effective];
-      const slugTone = (row.effective === "todo" || row.effective === "needs-research") ? KIND_FG[row.itemKind] ?? style.tone : style.tone;
+      const slugTone = (row.status === "todo" || row.status === "needs-research") ? KIND_FG[row.itemKind] ?? style.tone : style.tone;
       const folded = row.collapsible ? `${row.collapsed ? "▸" : "▾"} ` : "";
       const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
       const priorityTone = PRIORITY_TONE[row.priority] ?? D;
