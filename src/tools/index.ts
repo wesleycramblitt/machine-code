@@ -2073,7 +2073,7 @@ function skillUnavailable(): AgentTool<typeof SkillUnavailableParams> {
 
 const GlobParams = Type.Object({
   pattern: Type.String({
-    description: "Glob pattern, e.g. src/**/*.ts, **/*.test.js, or src/tui/*.tsx.",
+    description: "Glob pattern, e.g. src/**/*.ts, **/*.md, or src/tui/*.tsx.",
   }),
   path: Type.Optional(Type.String({ description: "Directory to search (default: worktree root)." })),
   limit: Type.Optional(Type.Number({ description: "Max paths (default 200)." })),
@@ -2162,23 +2162,7 @@ export function globTool(ctx: ToolContext): AgentTool<typeof GlobParams> {
           .map(rootRelative);
         const unique = [...new Set(found)].sort().slice(0, limit);
         if (unique.length === 0) {
-          const noMatch = `no files match "${params.pattern}"`;
-          // Stop a second test hunt: if the map has no test files, say so.
-          if (/test|spec/i.test(params.pattern)) {
-            try {
-              const { readCachedMap } = await import("../map/deterministic.js");
-              const map = readCachedMap(ctx.root);
-              const testFiles = map?.files.filter(
-                (file) => /(^|\/)(test|tests|__tests__)\//.test(file.path) || /\.(test|spec)\./.test(file.path),
-              ).length;
-              if (testFiles === 0) {
-                return ok(`${noMatch}\n[this repo has no test files; acceptance gates run after the run]`);
-              }
-            } catch {
-              // No map: give the plain answer.
-            }
-          }
-          return ok(noMatch);
+          return ok(`no files match "${params.pattern}"`);
         }
         return ok(unique.length > 0 ? capText(unique.join("\n"), SEARCH_CAP_BYTES).text : `no files match "${params.pattern}"`);
       } catch (error) {

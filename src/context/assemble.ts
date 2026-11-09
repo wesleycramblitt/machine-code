@@ -277,8 +277,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   const excludedSections = new Set(input.exclude?.sections ?? []);
   const excludedItems = new Set(input.exclude?.items ?? []);
 
-  // Mode default skills (clean-code on coding/planning runs, verified-testing
-  // on verified+). Missing defaults are skipped silently.
+  // Role default skills. Missing defaults are skipped silently.
   // Default skills plus explicit composer includes are candidates for body
   // inlining; the mode chain decides. Defaults resolve to on-demand
   // (description-only) unless a role preset or override says include.

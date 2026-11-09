@@ -39,7 +39,7 @@ node dist/cli.js resume <run-id>
 
 # issues: one YAML file per idea/feature/bug, status = directory
 node dist/cli.js issue list
-node dist/cli.js issue create features <slug> "do the thing" --verify script:test
+node dist/cli.js issue create features <slug> "do the thing" --verify core:check
 node dist/cli.js issue <slug>              # show the issue
 node dist/cli.js approve <slug>            # merge mc/<slug> into main
 
@@ -349,7 +349,7 @@ and merge.
 
 ```bash
 machine_code issue list
-machine_code issue create features <slug> "do the thing" --verify script:test
+machine_code issue create features <slug> "do the thing" --verify core:check
 machine_code build <slug> [--review]
 machine_code approve <slug>   # merge mc/<slug> into main
 machine_code delete <slug>
@@ -374,7 +374,7 @@ value` header lines at the very top set metadata (`priority`, `review`,
 ```markdown
 priority: high
 tags: tui
-acceptance: script:test
+acceptance: core:check
 
 # Make the thing fast
 
@@ -391,7 +391,7 @@ Two different contracts live here:
   definition; `review: human` leaves the merge decision to a person.
 
 Verification commands must be named registry commands
-(`script:typecheck`, `script:test`, and so on), because gates dispatch
+(`core:check`, `script:typecheck`, and so on), because gates dispatch
 through the command registry — never shell strings.
 
 ### Composer context and reusable tools
@@ -487,7 +487,7 @@ Each run keeps its working memory outside the transcript:
 The model sees the run state, an always-on overview (issues, repo map, module
 index), the full prior transcript, and no hidden task pack. The prompt is
 exactly the context curated in the composer plus the always-on indexes. There
-is no automatic preload, dependency expansion, inferred test list, or hidden
+is no automatic preload, dependency expansion, inferred verification list, or hidden
 note scoring: the model
 reads, searches, or expands a symbol when it needs more. Context is assembled
 in priority order. If it exceeds the

@@ -95,15 +95,13 @@ understandable.
 - Do not invent premature or unstable abstractions just to merge superficially
   similar lines. Deduplicate at the right level of meaning.
 
-### 11. Respect the project's verification
+### 11. Prefer direct code changes
 
 - The runner owns acceptance gates; the issue prompt is the definition of done.
-- Do not add a test framework, test files, or TDD ceremony the issue did not
-  ask for.
-- If the project already has tests for the area, keep them passing and follow
-  their existing style.
-- Add a regression test only when the issue or project convention calls for it.
-  Prefer one focused behavior check over broad coverage for its own sake.
+- Prefer the smallest direct change that satisfies the issue.
+- When a gate or existing check is provided, run it. With no gate, inspect the
+  changed code and stop.
+- Do not invent broader verification or turn the task into a separate plan.
 
 ### 12. Refactor while you work
 
