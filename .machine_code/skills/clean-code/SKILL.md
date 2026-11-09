@@ -23,7 +23,7 @@ when you face a non-obvious design decision.
 ### 1. Leave the code cleaner
 
 Every change must improve at least one of: clarity, naming, simplicity,
-cohesion, testability, error handling, duplication removal, or separation of
+cohesion, verifiability, error handling, duplication removal, or separation of
 concerns. Do not add code that is merely functional — add code that is
 understandable.
 
@@ -95,23 +95,21 @@ understandable.
 - Do not invent premature or unstable abstractions just to merge superficially
   similar lines. Deduplicate at the right level of meaning.
 
-### 11. Work test-first
+### 11. Respect the project's verification
 
-- Default to test-driven development. Write or update a failing test first when
-  changing behavior, fixing a bug, or adding a feature.
-- Test behavior, not incidental implementation details.
-- Tests must be readable, deterministic, independent of order, and named by the
-  expected outcome. Keep setup small and intention-revealing.
-- Add regression coverage for bugs before fixing them whenever practical.
-- If strict test-first is genuinely blocked (missing harness, legacy
-  constraints), say so explicitly and add the nearest useful coverage
-  immediately, leaving the area more testable than before.
+- The runner owns acceptance gates; the issue prompt is the definition of done.
+- Do not add a test framework, test files, or TDD ceremony the issue did not
+  ask for.
+- If the project already has tests for the area, keep them passing and follow
+  their existing style.
+- Add a regression test only when the issue or project convention calls for it.
+  Prefer one focused behavior check over broad coverage for its own sake.
 
 ### 12. Refactor while you work
 
 - Improve weak names, break up long methods, and remove dead code in the area
   you touch.
-- Keep tests passing while refactoring.
+- Keep existing checks passing while refactoring.
 - If a full cleanup is out of scope, improve the nearest meaningful boundary and
   leave a clear note.
 
@@ -133,5 +131,5 @@ A task is done only when:
 - the implementation is correct
 - the design is understandable and the names are clear
 - the touched code is cleaner than before
-- relevant tests exist and pass (test-first unless a real constraint was noted)
+- the issue's acceptance gate passes (the runner owns gates)
 - no obvious duplication or dead code remains in the changed area

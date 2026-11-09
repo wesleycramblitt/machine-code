@@ -25,15 +25,15 @@ at the end.
 
 - Never mix behavior changes with structural moves. A step that changes
   what code does is not a refactor step — split it out.
-- Prefer moves the compiler or tests verify: renames, extractions, and
-  moves over rewrites.
+- Prefer moves the compiler or existing checks verify: renames, extractions,
+  and moves over rewrites.
 - Remove dead code you uncover, but keep each removal its own green step.
-- If a move keeps failing gates, that is information: hidden coupling or
-  missing coverage. Note it and pick a smaller move.
+- If a move keeps failing gates, that is information: hidden coupling or a
+  missing check. Note it and pick a smaller move.
 
 ## Stop conditions
 
 - Gates green on the final state, same set that was green at the start.
 - No behavior change: acceptance outcomes identical before and after.
 - End with the proving command and its outcome, plus a note on any
-  coupling or coverage gaps found along the way.
+  coupling or verification gaps found along the way.

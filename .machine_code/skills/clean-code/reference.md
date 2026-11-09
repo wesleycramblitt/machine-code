@@ -19,10 +19,10 @@ Code is clean only if it is:
 - small in units of behavior
 - light on branching and incidental complexity
 - explicit about dependencies and side effects
-- easy to test in isolation
+- easy to exercise in isolation
 - resilient to change in one place without surprising breakage elsewhere
 
-If code is hard to name, hard to test, or hard to explain, that is a design
+If code is hard to name, hard to exercise, or hard to explain, that is a design
 smell, not a documentation problem.
 
 ## Naming Guidance
@@ -151,42 +151,32 @@ When one unit handles too many concerns, split it.
   boundary is warranted.
 - Isolate external systems behind adapters or dedicated integration objects.
 - Favor explicit construction and dependency injection when they improve
-  testability and clarity.
+  verifiability and clarity.
 - Avoid hidden global dependencies and minimize coupling between modules.
 
 Avoid global mutable state. If it is unavoidable, isolate it tightly and make
 its usage explicit.
 
-## Test-Driven Development
+## Verification
 
-Tests are design tools, not cleanup work.
+The runner owns acceptance gates; the issue prompt is the semantic definition
+of done.
 
-- Default to test-driven development.
-- For new behavior, bug fixes, and behavior changes, start by expressing the
-  expected behavior in a test.
-- Write the smallest failing test that proves the requirement.
-- Implement only enough code to make the test pass, then refactor once behavior
-  is protected.
-- Add regression tests for bugs before fixing them whenever practical.
-
-When strict test-first sequencing is blocked by missing harnesses, legacy
-constraints, or infrastructure gaps: say so explicitly, add the nearest useful
-automated coverage immediately, and leave the area more testable than before.
-
-Tests must be readable, deterministic, focused on behavior, named by expected
-outcome, concise in setup, and independent of execution order.
-
-Test domain behavior, edge cases, failure paths, important invariants, and
-regressions. Avoid tests that mirror implementation line by line, brittle
-snapshots without discipline, huge integration tests compensating for missing
-unit boundaries, and vague assertions that do not diagnose failure.
+- Do not introduce a test framework, test files, or TDD sequencing the issue
+  did not ask for.
+- If the project already has tests for the area, keep them passing and follow
+  their style.
+- Add a regression check only when the issue or project convention calls for
+  it.
+- Prefer one focused behavior check over broad coverage for its own sake.
+- A change is done when the gate passes and the touched area is understandable.
 
 ## Refactoring
 
 Refactoring is mandatory when code quality blocks clarity.
 
 - Make small, behavior-preserving improvements continuously.
-- Keep tests passing while refactoring.
+- Keep existing checks passing while refactoring.
 - Do not leave obvious messes in code you modify. If a full cleanup is too
   large, improve the nearest meaningful boundary.
 
@@ -213,7 +203,7 @@ protect the domain from churn.
 - Isolate external protocols behind clear boundaries.
 - Translate external data into internal representations deliberately.
 - Keep framework-specific code from leaking everywhere.
-- Write focused tests around boundary behavior.
+- Keep boundary behavior explicit and easy to exercise.
 - Avoid scattering vendor-specific knowledge across the codebase.
 
 ## Concurrency and State
@@ -223,7 +213,7 @@ If the project uses shared state, background jobs, or concurrent execution:
 - minimize shared mutable state
 - make ownership and lifecycle explicit
 - avoid hidden ordering assumptions
-- test invariants where races or retries are possible
+- make invariants around races and retries explicit
 - keep concurrent code small and well-contained
 
 ## Constants and Literals
@@ -267,7 +257,7 @@ Stop and reconsider when you see: methods with multiple phases of work, boolean
 parameters controlling branching, comments explaining confusing code, repeated
 `if`/`case`/`switch` logic across files, vague module names, hidden
 dependencies, methods that both mutate and answer, long parameter lists, broad
-catch-all error handling, sprawling test setup, or utility namespaces collecting
+catch-all error handling, sprawling setup, or utility namespaces collecting
 unrelated behavior.
 
 ## Decision Heuristics
@@ -277,7 +267,7 @@ When multiple designs are possible, prefer the one that:
 1. is easiest to explain to another engineer
 2. keeps responsibilities separated
 3. minimizes hidden state and side effects
-4. is easiest to test
+4. is easiest to verify
 5. removes duplication without inventing unstable abstractions
 6. preserves flexibility through clarity rather than indirection
 
