@@ -1163,6 +1163,79 @@ test("older transcript steps keep prose, collapse tool output to one line; newes
   assert.doesNotMatch(flat, /xxxxxxxxxx/);
 });
 
+test("tail retains the latest read per file so the model stops re-fetching it", () => {
+  const fakeState = () => ({
+    renderWorkingContext: () => "WORKING",
+    renderBlock: () => "STATE",
+  });
+  const messages = [
+    { role: "system", content: "SYSTEM-PROMPT" },
+    { role: "user", content: "hello" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "scouted x" },
+        { type: "toolCall", id: "c1", name: "read", arguments: { path: "src/a.ts" } },
+        { type: "toolCall", id: "c2", name: "grep", arguments: { pattern: "q", path: "src" } },
+      ],
+    },
+    { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "1: old a content here\n2: stale second line" }] },
+    { role: "toolResult", toolCallId: "c2", content: [{ type: "text", text: "src/a.ts: q found here" }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c3", name: "read", arguments: { path: "src/a.ts", offset: 50 } }],
+    },
+    { role: "toolResult", toolCallId: "c3", content: [{ type: "text", text: "50: newer a content" }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c4", name: "read", arguments: { path: "src/b.ts" } }],
+    },
+    { role: "toolResult", toolCallId: "c4", content: [{ type: "text", text: "1: b content" }] },
+  ];
+  const out = renderPromptMessages(messages, fakeState(), undefined, undefined, undefined, undefined, undefined).messages;
+  const flat = JSON.stringify(out);
+  // Newest step replays in full.
+  assert.match(flat, /1: b content/);
+  // Latest read of src/a.ts replays in full; the superseded read tombstones
+  // to its first line only.
+  assert.match(flat, /50: newer a content/);
+  assert.doesNotMatch(flat, /2: stale second line/);
+  assert.match(flat, /earlier read.*src\/a\.ts/);
+  // Non-read output still collapses to one line.
+  assert.match(flat, /earlier grep/);
+});
+
+test("tail never replays pre-edit reads as current content", () => {
+  const fakeState = () => ({
+    renderWorkingContext: () => "WORKING",
+    renderBlock: () => "STATE",
+  });
+  const messages = [
+    { role: "system", content: "SYSTEM-PROMPT" },
+    { role: "user", content: "hello" },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "read", arguments: { path: "src/a.ts" } }],
+    },
+    { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "1: pre-edit content\n2: pre-edit second line" }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c2", name: "edit", arguments: { path: "src/a.ts" } }],
+    },
+    { role: "toolResult", toolCallId: "c2", content: [{ type: "text", text: "edited" }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c3", name: "grep", arguments: { pattern: "q" } }],
+    },
+    { role: "toolResult", toolCallId: "c3", content: [{ type: "text", text: "no matches" }] },
+  ];
+  const out = renderPromptMessages(messages, fakeState(), undefined, undefined, undefined, undefined, undefined).messages;
+  const flat = JSON.stringify(out);
+  // Tombstoned to its first line only — never replayed as current content.
+  assert.doesNotMatch(flat, /2: pre-edit second line/);
+  assert.match(flat, /earlier read.*src\/a\.ts/);
+});
+
 test("needle-in-repo: a planted fact is retrievable from assembled context", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-needle-"));
   const needle = "NEEDLE-7f3a9q plasma-conduit calibration omega";

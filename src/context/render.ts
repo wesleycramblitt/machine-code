@@ -78,20 +78,22 @@ const TOMBSTONE_TEXT_CAP = 160;
  * bounded so a long run cannot grow without limit; newest steps win. */
 const TRANSCRIPT_BUDGET_CHARS = 48_000;
 
-function capStepText(step: MessageLike[]): MessageLike[] {
-  return step.map((message) => {
-    if (message.role !== "toolResult" || !Array.isArray(message.content)) return message;
-    const content = (message.content as unknown[]).map((block) => {
-      if (!block || typeof block !== "object") return block;
-      const b = block as Record<string, unknown>;
-      if (b.type !== "text" || typeof b.text !== "string" || b.text.length <= STEP_TEXT_CAP) return block;
-      return {
-        ...b,
-        text: `${b.text.slice(0, STEP_TEXT_CAP).replace(/\s+$/, "")}\n…[step output truncated to ${STEP_TEXT_CAP} chars; full bytes are in the run ledger — use context recall]`,
-      };
-    });
-    return { ...message, content };
+function capTextBlocks(message: MessageLike): MessageLike {
+  if (message.role !== "toolResult" || !Array.isArray(message.content)) return message;
+  const content = (message.content as unknown[]).map((block) => {
+    if (!block || typeof block !== "object") return block;
+    const b = block as Record<string, unknown>;
+    if (b.type !== "text" || typeof b.text !== "string" || b.text.length <= STEP_TEXT_CAP) return block;
+    return {
+      ...b,
+      text: `${b.text.slice(0, STEP_TEXT_CAP).replace(/\s+$/, "")}\n…[step output truncated to ${STEP_TEXT_CAP} chars; full bytes are in the run ledger — use context recall]`,
+    };
   });
+  return { ...message, content };
+}
+
+function capStepText(step: MessageLike[]): MessageLike[] {
+  return step.map(capTextBlocks);
 }
 
 /** Rough size of a message's payload; JSON escaping adds a little, which the
@@ -153,8 +155,10 @@ function firstLine(text: string, maxChars: number): string {
  * the one-line outcome. Conclusions belong in memory facts, which are kept;
  * raw step output older than the working set does not help the next action.
  * Human answers (ask) are kept whole: short, high-signal, irreplaceable.
- * Copies messages; never mutates the stored transcript. */
-function tombstoneStep(step: MessageLike[]): MessageLike[] {
+ * Read results named in `retained` replay in full (capped): re-hiding a file
+ * the model already holds forces a recovery re-read, which the loop guard
+ * then counts as stale. Copies messages; never mutates the stored transcript. */
+function tombstoneStep(step: MessageLike[], retained: ReadonlySet<string> = new Set()): MessageLike[] {
   const calls = new Map<string, { tool: string; summary: string }>();
   for (const message of step) {
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
@@ -198,6 +202,12 @@ function tombstoneStep(step: MessageLike[]): MessageLike[] {
       const call = calls.get(message.toolCallId);
       if (call?.tool === "ask") {
         out.push(message);
+        continue;
+      }
+      // A retained read replays in full: the model still holds this file and
+      // refetching it would be the identical evidence the loop guard kills.
+      if (retained.has(message.toolCallId) && call?.tool === "read") {
+        out.push(capTextBlocks(message));
         continue;
       }
       const texts = Array.isArray(message.content)
@@ -271,6 +281,60 @@ function transcriptTail(
   return picked;
 }
 
+/** Render the tail: the newest step in full (capped), older steps tombstoned
+ * except the latest read per file, which replays in full (capped). A model
+ * that loses a file it already holds re-reads it, and the loop guard counts
+ * that identical evidence as stale — retention breaks the spiral at the
+ * source. Reads at or before the last mutation (edit/write/command) never
+ * replay: pre-edit bytes must not pose as current content. The rendered tail
+ * is always a subset of the budgeted steps, so the budget still bounds it. */
+const MAX_RETAINED_FILES = 8;
+
+function stepMutates(step: MessageLike[]): boolean {
+  return step.some(
+    (message) =>
+      message.role === "assistant" &&
+      Array.isArray(message.content) &&
+      (message.content as unknown[]).some((block) => {
+        const candidate = block as Record<string, unknown>;
+        return (
+          candidate?.type === "toolCall" &&
+          (candidate.name === "edit" || candidate.name === "write" || candidate.name === "command")
+        );
+      }),
+  );
+}
+
+function renderTail(steps: MessageLike[][]): MessageLike[] {
+  if (steps.length === 0) return [];
+  let cutoff = -1;
+  steps.forEach((step, index) => {
+    if (stepMutates(step)) cutoff = index;
+  });
+  // Latest read per file, newest step first so the first occurrence wins.
+  const retained = new Set<string>();
+  const seenFiles = new Set<string>();
+  for (let s = steps.length - 2; s > cutoff && seenFiles.size < MAX_RETAINED_FILES; s -= 1) {
+    for (const message of steps[s]!) {
+      if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+      for (const block of message.content) {
+        const candidate = block as Record<string, unknown>;
+        if (candidate?.type !== "toolCall" || typeof candidate.id !== "string" || candidate.name !== "read") {
+          continue;
+        }
+        const params = (candidate.arguments ?? {}) as Record<string, unknown>;
+        const path = typeof params.path === "string" ? params.path : "";
+        if (!path || seenFiles.has(path)) continue;
+        seenFiles.add(path);
+        retained.add(candidate.id);
+      }
+    }
+  }
+  return steps.flatMap((entry, index) =>
+    index === steps.length - 1 ? capStepText(entry) : tombstoneStep(entry, retained),
+  );
+}
+
 export interface RenderedPrompt {
   messages: AgentMessage[];
   chars: number;
@@ -309,12 +373,11 @@ export function renderPromptMessages(
   };
   // The newest step is the working set: replay it in full (capped per
   // block). Older steps collapse to one line per tool call — what was tried
-  // and the one-line outcome — so the model stops paying full price for
-  // evidence it already consumed. Conclusions live in memory facts regardless.
+  // and the one-line outcome — except the latest read per file, which stays
+  // so the model stops re-fetching evidence it already holds. Conclusions
+  // live in memory facts regardless.
   const steps = transcriptTail(source, transcriptBudget);
-  const step = steps.flatMap((entry, index) =>
-    index === steps.length - 1 ? capStepText(entry) : tombstoneStep(entry),
-  );
+  const step = renderTail(steps);
   const out = [
     ...(system ? [system] : []),
     user,
