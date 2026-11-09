@@ -269,39 +269,6 @@ function completeStep(messages: readonly MessageLike[], start: number, end: numb
   return calls.every((id) => results.has(id));
 }
 
-/** The most recent complete assistant/tool steps that fit the replay budget,
- * newest first. The oldest kept step is allowed to overflow so the model
- * always sees the turn it is answering. Steps (not flat messages) so the
- * caller can render the working set in full and tombstone the rest. */
-function transcriptTail(
-  messages: readonly MessageLike[],
-  budgetChars = TRANSCRIPT_BUDGET_CHARS,
-): MessageLike[][] {
-  const starts: number[] = [];
-  for (let i = 0; i < messages.length; i += 1) {
-    if (messages[i]?.role === "assistant") starts.push(i);
-  }
-  if (starts.length === 0) {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i]?.role === "user") return [[messages[i]!]];
-    }
-    return [];
-  }
-  const picked: MessageLike[][] = [];
-  let used = 0;
-  for (let k = starts.length - 1; k >= 0; k -= 1) {
-    const start = starts[k]!;
-    const end = k + 1 < starts.length ? starts[k + 1]! : messages.length;
-    if (!completeStep(messages, start, end)) continue;
-    const step = messages.slice(start, end);
-    const size = step.reduce((total, message) => total + messageChars(message), 0);
-    if (picked.length > 0 && used + size > budgetChars) break;
-    picked.unshift(step);
-    used += size;
-  }
-  return picked;
-}
-
 /** Render the tail: the newest step in full (capped), older steps tombstoned
  * except the latest read per file, which replays in full (capped). A model
  * that loses a file it already holds re-reads it, and the loop guard counts
@@ -309,7 +276,7 @@ function transcriptTail(
  * source. Reads at or before the last mutation (edit/write/command) never
  * replay: pre-edit bytes must not pose as current content. The rendered tail
  * is always a subset of the budgeted steps, so the budget still bounds it. */
-const MAX_RETAINED_FILES = 8;
+const MAX_RETAINED_FILES = 12;
 
 function stepMutates(step: MessageLike[]): boolean {
   return step.some(
@@ -326,16 +293,39 @@ function stepMutates(step: MessageLike[]): boolean {
   );
 }
 
-function renderTail(steps: MessageLike[][]): MessageLike[] {
-  if (steps.length === 0) return [];
+/** Every complete step in the transcript, oldest first (no budget). */
+function allSteps(messages: readonly MessageLike[]): MessageLike[][] {
+  const starts: number[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role === "assistant") starts.push(i);
+  }
+  if (starts.length === 0) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === "user") return [[messages[i]!]];
+    }
+    return [];
+  }
+  const steps: MessageLike[][] = [];
+  for (let k = 0; k < starts.length; k += 1) {
+    const start = starts[k]!;
+    const end = k + 1 < starts.length ? starts[k + 1]! : messages.length;
+    if (!completeStep(messages, start, end)) continue;
+    steps.push(messages.slice(start, end));
+  }
+  return steps;
+}
+
+/** Read call ids whose result must stay in the prompt: the latest read per
+ * file, across the whole run. Scans the entire transcript, not just the
+ * budgeted tail — eviction is why a model re-reads a file it already has. */
+function retainedReads(steps: readonly MessageLike[][]): Set<string> {
   let cutoff = -1;
   steps.forEach((step, index) => {
     if (stepMutates(step)) cutoff = index;
   });
-  // Latest read per file, newest step first so the first occurrence wins.
   const retained = new Set<string>();
   const seenFiles = new Set<string>();
-  for (let s = steps.length - 2; s > cutoff && seenFiles.size < MAX_RETAINED_FILES; s -= 1) {
+  for (let s = steps.length - 1; s > cutoff && seenFiles.size < MAX_RETAINED_FILES; s -= 1) {
     for (const message of steps[s]!) {
       if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
       for (const block of message.content) {
@@ -351,9 +341,36 @@ function renderTail(steps: MessageLike[][]): MessageLike[] {
       }
     }
   }
-  return steps.flatMap((entry, index) =>
-    index === steps.length - 1 ? capStepText(entry) : tombstoneStep(entry, retained),
-  );
+  return retained;
+}
+
+/** Steps to replay: the newest steps that fit the budget, plus any older step
+ * holding a retained read. A retained step is always a complete call+result,
+ * so a gap in time is valid — and cheaper than the model re-reading the file. */
+function selectTail(
+  steps: readonly MessageLike[][],
+  budgetChars: number,
+  retained: ReadonlySet<string>,
+): MessageLike[][] {
+  const hasRetained = (step: MessageLike[]): boolean =>
+    step.some((message) => {
+      if (message.role !== "assistant" || !Array.isArray(message.content)) return false;
+      return (message.content as unknown[]).some((block) => {
+        const candidate = block as Record<string, unknown>;
+        return candidate?.type === "toolCall" && typeof candidate.id === "string" && retained.has(candidate.id);
+      });
+    });
+  const picked: MessageLike[][] = [];
+  let used = 0;
+  for (let k = steps.length - 1; k >= 0; k -= 1) {
+    const step = steps[k]!;
+    const size = step.reduce((total, message) => total + messageChars(message), 0);
+    const keep = hasRetained(step) || picked.length === 0 || used + size <= budgetChars;
+    if (!keep) continue;
+    picked.unshift(step);
+    used += size;
+  }
+  return picked;
 }
 
 export interface RenderedPrompt {
@@ -392,13 +409,16 @@ export function renderPromptMessages(
     content: block,
     timestamp: Date.now(),
   };
-  // The newest step is the working set: replay it in full (capped per
-  // block). Older steps collapse to one line per tool call — what was tried
-  // and the one-line outcome — except the latest read per file, which stays
-  // so the model stops re-fetching evidence it already holds. Conclusions
-  // live in memory facts regardless.
-  const steps = transcriptTail(source, transcriptBudget);
-  const step = renderTail(steps);
+  // Retention scans the whole transcript, not just the budget window, so a
+  // file the model already read is never evicted (eviction causes re-reads).
+  // The newest step replays in full; older steps collapse to one line per
+  // tool call except retained reads, which replay in full (capped per block).
+  const steps = allSteps(source);
+  const retained = retainedReads(steps);
+  const tail = selectTail(steps, transcriptBudget ?? TRANSCRIPT_BUDGET_CHARS, retained);
+  const step = tail.flatMap((entry, index) =>
+    index === tail.length - 1 ? capStepText(entry) : tombstoneStep(entry, retained),
+  );
   const out = [
     ...(system ? [system] : []),
     user,
