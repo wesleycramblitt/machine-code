@@ -129,22 +129,6 @@ export function missingFileHint(absPath: string): string | null {
   return matches.length === 1 ? matches[0]! : null;
 }
 
-/**
- * Resolve a requested absolute path, auto-correcting a wrong extension when
- * the directory holds exactly one same-basename alternative. Returns the
- * resolved path plus the correction note, or null when unresolvable.
- */
-export function resolveWithExtensionFallback(absPath: string): { path: string; note: string } | null {
-  try {
-    if (statSync(absPath).isFile()) return { path: absPath, note: "" };
-  } catch {
-    // fall through to the hint lookup
-  }
-  const hint = missingFileHint(absPath);
-  if (!hint) return null;
-  return { path: resolve(dirname(absPath), hint), note: `resolved ${basename(absPath)} → ${hint}` };
-}
-
 export interface Capped {
   text: string;
   truncated: boolean;
