@@ -41,7 +41,7 @@ import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
-import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
+import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
 import { isFreeRow } from "../select.js";
@@ -632,12 +632,48 @@ export async function cmdRun(argv: string[]): Promise<number> {
         toolRoot = spec.path;
         process.stderr.write(`worktree ${spec.path} (branch ${spec.branch})\n`);
       } catch (error) {
-        if (error instanceof WorktreeError) {
+        if (error instanceof WorktreeError && error.code === "branch_checked_out" && issueWorktree && itemSlug) {
+          // mc/<slug> is already checked out in another worktree: just use it.
+          const branch = `mc/${itemSlug}`;
+          const existing = await branchCheckedOutAt(l.repoRoot, branch);
+          if (!existing) {
+            recorder.finalize("blocked", `${error.code}: ${error.message}`);
+            process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
+            return EXIT.blocked;
+          }
+          const baseBranch = await defaultBaseBranch(l.repoRoot);
+          const baseRef = await resolveBaseRef(l.repoRoot, baseBranch);
+          const owner = [
+            ...parentChainRuns,
+            ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
+          ].find((run) => run.worktree === existing);
+          const ownerActive = owner !== undefined &&
+            (owner.status === "created" || owner.status === "running" || owner.status === "awaiting_input");
+          toolRoot = existing;
+          recorder.patchSummary({
+            worktree: existing,
+            ...(owner ? { worktreeOwnerRunId: owner.id } : {}),
+            branch,
+            baseBranch,
+            baseRef,
+          });
+          recorder.event("worktree_reused", {
+            ...(owner ? { parentRunId: owner.id } : {}),
+            path: existing,
+            branch,
+            shared: true,
+            ...(ownerActive ? { ownerActive: true } : {}),
+          });
+          process.stderr.write(
+            `worktree ${existing} (already checked out, branch ${branch}${ownerActive ? "; owner run still active" : ""})\n`,
+          );
+        } else if (error instanceof WorktreeError) {
           recorder.finalize("blocked", `${error.code}: ${error.message}`);
           process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
           return EXIT.blocked;
+        } else {
+          throw error;
         }
-        throw error;
       }
     }
   }
