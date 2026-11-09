@@ -120,13 +120,16 @@ export async function mainWorktreeRoot(repoRoot: string): Promise<string> {
 }
 
 /**
- * Runner-owned paths that never block a worktree: the gitignored runtime
- * state directory. Git reports an untracked `.machine_code/` as the bare
- * directory, which is also allowed — tracked files under it (e.g. a modified
+ * Runner-owned paths that never block a worktree: the durable issue and
+ * knowledge trees written by tools, plus the gitignored runtime state
+ * directory. Git reports an untracked `.machine_code/` as the bare directory,
+ * which is also allowed — tracked files under it (e.g. a modified
  * policy.toml) still appear by their own path and block.
  */
 export function allowedDirtyPath(path: string): boolean {
   if (path === ".machine_code" || path === ".machine_code/") return true;
+  if (path === "issues" || path.startsWith("issues/")) return true;
+  if (path === "knowledge" || path.startsWith("knowledge/")) return true;
   return path.startsWith(".machine_code/local/");
 }
 

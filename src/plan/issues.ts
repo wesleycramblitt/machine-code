@@ -244,6 +244,46 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
   return lines.length > 0 ? `${lines.join("\n")}\n\n${text}\n` : `${text}\n`;
 }
 
+export interface TodoItem {
+  text: string;
+  done: boolean;
+}
+
+/** Render the issue's durable checklist. The issue file is the plan's home. */
+export function renderIssueTodo(items: readonly TodoItem[]): string {
+  return [
+    "## Todo",
+    ...items.map((item) => `- [${item.done ? "x" : " "}] ${item.text.trim()}`),
+  ].join("\n");
+}
+
+/**
+ * Replace the `## Todo` section in an issue file, preserving its header and
+ * the rest of the body. Appends the section when it does not exist.
+ */
+export function updateIssueTodo(abs: string, items: readonly TodoItem[]): void {
+  const text = readFileSync(abs, "utf8");
+  const { front, body } = parseIssueFile(text);
+  const todo = renderIssueTodo(items);
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => /^## Todo\b/.test(line));
+  let nextBody: string;
+  if (start >= 0) {
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (/^## /.test(lines[i] ?? "")) {
+        end = i;
+        break;
+      }
+    }
+    lines.splice(start, end - start, ...todo.split("\n"));
+    nextBody = lines.join("\n");
+  } else {
+    nextBody = `${body.trimEnd()}\n\n${todo}`;
+  }
+  writeFileSync(abs, serializeIssueFile(front, nextBody), "utf8");
+}
+
 export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, slug: string): Issue | null {
   const abs = join(issueDir(layout, kind, status), `${slug}.md`);
   if (!existsSync(abs)) return null;

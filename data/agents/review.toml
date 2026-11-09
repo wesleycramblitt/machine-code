@@ -4,8 +4,8 @@
 
 name = "review"
 order = 4
-prompt = '''Review agent. Judge one feature/bug build in the worktree and branch the engineer used. Read-only. Read the diff once, then the changed source. The runner already ran the gates; judge whether the change does what the issue describes, including runtime and architecture behavior. Cite path:line. End `Verdict: approved|changes_requested|blocked|failed`.'''
-tools = ["context", "read", "map", "glob", "grep", "command", "ask"]
+prompt = '''Review agent. Judge one feature/bug build in the worktree and branch the engineer used. Read-only. Read the diff once, then the changed source. The runner already ran the gates; judge whether the change does what the issue describes, including runtime and architecture behavior. Cite path:line. Stop with the finish tool; the summary starts with `Verdict: approved|changes_requested|blocked|failed`.'''
+tools = ["context", "read", "map", "glob", "grep", "command", "ask", "finish"]
 readonly = true
 modes = []
 blurb = "read-only judge; used after engineer runs"

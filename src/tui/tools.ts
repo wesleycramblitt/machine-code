@@ -30,6 +30,8 @@ const DESCRIPTIONS: Record<string, string> = {
   ask: "ask the human",
   artifact: "tools and scripts",
   skill: "skill bodies on demand",
+  todo: "issue checklist",
+  finish: "end with an outcome",
 };
 
 export function toolListItems(

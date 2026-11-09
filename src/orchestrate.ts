@@ -244,7 +244,13 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     skipSemantic: input.skipSemantic,
     signal: input.signal,
   });
-  if (engineerResult.status === "failed" || engineerResult.status === "interrupted") {
+  if (
+    engineerResult.status === "failed" ||
+    engineerResult.status === "blocked" ||
+    engineerResult.status === "interrupted" ||
+    engineerResult.status === "cancelled" ||
+    engineerResult.status === "paused"
+  ) {
     return { status: engineerResult.status, finalText: engineerResult.finalText, error: engineerResult.error, packet, runId: recorder.id };
   }
   const buildOutcome = parseBuildOutcome(engineerResult.finalText);

@@ -1,8 +1,9 @@
 /**
  * machine_code — the core tools.
  *
- * Read, write, edit, map, glob, grep, command, context, ask, artifact, skill.
- * Everything else is a named typed command dispatched through `command`.
+ * Read, write, edit, map, glob, grep, command, context, ask, artifact, skill,
+ * todo, finish. Everything else is a named typed command dispatched through
+ * `command`.
  * Tools never get a shell.
  */
 import { Type, type Static } from "typebox";
@@ -48,6 +49,8 @@ import { askTool, type AskContext } from "./ask.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
 import { contextTool } from "./context.js";
+import { finishTool, FinishParams, type FinishContext } from "./finish.js";
+import { todoTool, TodoParams } from "./todo.js";
 import { loadModuleIndex, renderModuleGraph, searchModules } from "../map/modules.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
 import type { LedgerEntry, RunStateStore } from "../context/state.js";
@@ -55,6 +58,12 @@ import type { LedgerEntry, RunStateStore } from "../context/state.js";
 export interface ToolContext {
   /** Worktree root every path is bound to. */
   root: string;
+  /** Main checkout root for durable issue updates. */
+  repoRoot?: string;
+  /** Repo-relative issue file attached to this run. */
+  issuePath?: string;
+  /** Finish callback: the tool-shaped end of a run. */
+  finish?: FinishContext["onFinish"];
   /** Loaded commands (core + profiles). */
   commands: ReadonlyMap<string, import("../commands/registry.js").CommandSpec>;
   /** Tools available to this run, for role-aware errors. */
@@ -2066,6 +2075,32 @@ function skillUnavailable(): AgentTool<typeof SkillUnavailableParams> {
   };
 }
 
+/* --------------------------------------------------------- finish / todo */
+
+function finishUnavailable(): AgentTool<typeof FinishParams> {
+  return {
+    name: "finish",
+    label: "finish",
+    description: "End the run.",
+    parameters: FinishParams,
+    async execute() {
+      return fail("finish is not wired up in this run");
+    },
+  };
+}
+
+function todoUnavailable(): AgentTool<typeof TodoParams> {
+  return {
+    name: "todo",
+    label: "todo",
+    description: "Update the issue's checklist.",
+    parameters: TodoParams,
+    async execute() {
+      return fail("todo is not available without an attached issue");
+    },
+  };
+}
+
 
 /* ------------------------------------------------------------------ all */
 
@@ -2274,7 +2309,9 @@ export type CoreToolName =
   | "context"
   | "ask"
   | "artifact"
-  | "skill";
+  | "skill"
+  | "todo"
+  | "finish";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
   const all: Record<CoreToolName, AgentTool> = {
@@ -2289,6 +2326,12 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),
+    ...(ctx.finish
+      ? { finish: finishTool({ onFinish: ctx.finish }) }
+      : { finish: finishUnavailable() }),
+    todo: ctx.repoRoot && ctx.issuePath
+      ? todoTool({ repoRoot: ctx.repoRoot, issuePath: ctx.issuePath })
+      : todoUnavailable(),
   };
   // Prefer provider-side JSON-schema constrained sampling. Models that pass
   // tool-call tests in OpenCode are often much weaker without it: Beam Free is

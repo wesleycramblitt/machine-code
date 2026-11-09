@@ -158,6 +158,8 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   ask: null, // gated by askEnabled(config)
   artifact: "artifact:provision",
   skill: null, // read-only skill bodies; exclusions are enforced inside the tool
+  todo: null, // writes the issue checklist; runner-owned
+  finish: null, // terminal action
 };
 
 /**
@@ -191,6 +193,8 @@ export function resolveAgent(
   });
   // Read-only roles never hold mutating file tools regardless of capabilities.
   if (def.readonly) tools = tools.filter((t) => t !== "write" && t !== "edit");
+  // The terminal action is harness-owned and must survive old role overrides.
+  if (!tools.includes("finish")) tools = [...tools, "finish"];
   const prompt = composePrompt(def, config, tools);
   return { def: { ...def, prompt, tools }, config, capabilities, prompt };
 }

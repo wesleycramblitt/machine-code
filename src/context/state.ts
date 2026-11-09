@@ -23,7 +23,7 @@ import type { ProcessSupervisor } from "../processes/supervisor.js";
 /** Keep the model-facing state block compact; full facts remain in state.jsonl. */
 const MAX_STATE_CHARS = 10_000;
 const EDIT_NEXT = /^(?:make the first edit|make the edit)\b/i;
-const FINISH_NEXT = "Change recorded; finish remaining edits or stop with your terminal line.";
+const FINISH_NEXT = "Change recorded; finish remaining edits, then call finish.";
 
 export type FactKind = "finding" | "decision" | "change";
 export type RefKind = "read" | "search" | "edit" | "focus";
@@ -1114,7 +1114,7 @@ export class RunStateStore {
       } else if (this.state.nextAction && nextAge <= 6) {
         lines.push(`Next: ${this.state.nextAction}`);
       } else {
-        lines.push(`Next: unset — record the next action with context note kind "next".`);
+        lines.push(`Next: unset — set the next step with the todo tool.`);
       }
       if (readFacts.length > 0) {
         lines.push("Read coverage:");

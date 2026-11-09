@@ -374,7 +374,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // strip the old generated sections and attach fresh ones. The issue file is
   // left untouched.
   if (itemSlug && !autoCreatedIssue && normalizedAgent === "engineer" && request) {
-    const trimmed = request.split(/\n## (?:Context|Architecture|Skills|Verify)\b/)[0]!.trim();
+    const trimmed = request.split(/\n## (?:Context|Architecture|Skills|Verify|Todo)\b/)[0]!.trim();
     const hints = buildIssueHints(l, trimmed || request, normalizedAgent);
     if (hints.length > 0) {
       request = `${trimmed || request}\n\n${hints.join("\n\n")}`;

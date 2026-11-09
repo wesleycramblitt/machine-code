@@ -514,13 +514,17 @@ so a role never sees a tool it cannot call. When `ask` is unavailable, the
 ambiguity policy says to stop and report the question instead of asking.
 
 Research holds only `context`, `read`, `map`, `glob`, `grep`, `ask`,
-`skill`, and `write`. It reads one idea, asks until the scope is precise, and
-writes concrete features/bugs as issue files under
+`skill`, `write`, `todo`, and `finish`. It reads one idea, asks until the
+scope is precise, and writes concrete features/bugs as issue files under
 `issues/features/todo/` or `issues/bugs/todo/`. Engineer holds `context`,
 `read`, `write`, `edit`, `map`, `glob`, `grep`, `command`, `ask`,
-`artifact`, and `skill`; it plans and builds in one run in a `mc/<slug>`
-worktree. Review is read-only and judges the same worktree and commit the
-Engineer used.
+`artifact`, `skill`, `todo`, and `finish`; it plans and builds in one run in a
+`mc/<slug>` worktree. Review is read-only, holds `finish`, and judges the same
+worktree and commit the Engineer used.
+
+Every role ends by calling `finish` with an outcome and a short summary. The
+`todo` tool writes the issue's `## Todo` checklist, so a fork or a new run on
+the same branch opens the issue and sees exactly what remains.
 
 The file tools are deliberately split, close to Claude Code's model:
 
@@ -535,8 +539,8 @@ The file tools are deliberately split, close to Claude Code's model:
 - Basic filesystem work is typed commands, not a shell: `core:mkdir`,
   `core:move`, `core:copy`, and `core:delete`. `write` already creates parent
   directories; directory copies/deletes require `recursive: true`.
-When an Engineer run has an issue in a worktree, the runner owns the finish:
-it runs the issue's `verify` gates, commits the branch, moves the issue to
+When an Engineer run has an issue in a worktree, the runner owns the gates and
+merge: it runs the issue's `verify` gates, commits the branch, moves the issue to
 `done/` (or `blocked/`), and starts a Review run when `review = "agent"`, even
 if the model stops early. A review that does not approve moves the issue back
 to `blocked/`, so `approve` cannot merge rejected work.

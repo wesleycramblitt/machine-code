@@ -40,6 +40,8 @@ import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
 import { EvidenceTracker } from "./state/progress.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
+import { findIssue } from "./plan/issues.js";
+import type { FinishRequest } from "./tools/finish.js";
 
 
 /** Default turn cap. 0 means no cap; set max_turns per role or run. */
@@ -391,6 +393,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   };
 
   const mapRoot = input.toolRoot ?? input.root;
+  // The issue file is the durable home of the todo checklist. Derive it from
+  // the run's item so the todo tool works without another flag on every path.
+  const issuePath = input.layout && recorder.current.itemId
+    ? findIssue(input.layout, recorder.current.itemId)?.rel
+    : undefined;
   /** A cheap file version for the loop detector; contents are not hashed. */
   const fileVersion = (path: string): string | undefined => {
     try {
@@ -675,6 +682,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastControlSeq = 0;
   let pauseRequested = false;
   let cancelRequested = false;
+  let finishRequested: FinishRequest | null = null;
   const controlTimer = setInterval(() => {
     const controlFile = join(recorder.dir, "control");
     try {
@@ -814,6 +822,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         artifacts: artifactContext,
         skills: skillContext,
         state: memory,
+        repoRoot: input.root,
+        ...(issuePath ? { issuePath } : {}),
+        finish: (result) => {
+          finishRequested = result;
+          recorder.event("finish", { outcome: result.outcome, summary: result.summary });
+        },
         processes,
         allowMutations: (input.agentCapabilities ?? []).includes("code:write"),
       },
@@ -1245,6 +1259,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         turns += 1;
         reportedTurns += 1;
         recorder.recordTurn(reportedTurns);
+        if (finishRequested) return { action: "end" as const };
         const usage = message.usage ?? zeroUsage;
         totalTokens += usage.totalTokens;
         if (policy.budgetTokens !== undefined && totalTokens > policy.budgetTokens) {
@@ -1486,6 +1501,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       return { status: "failed", finalText: "", error: message };
     } finally {
       input.signal?.removeEventListener("abort", onExternalAbort);
+    }
+
+    const finished = finishRequested as FinishRequest | null;
+    if (finished) {
+      return { status: finished.outcome, finalText: finished.summary };
     }
 
     // Some providers (notably weak free fallbacks) return tool-call markup as
