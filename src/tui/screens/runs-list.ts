@@ -69,7 +69,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       // Kind headers: brand-color background hugging the text, bold black/white label + count.
       const kindBg = KIND_BG[row.tone];
       if (kindBg) {
-        const text = ` ${indent}${kindBg}${R}${B}\x1b[38;2;20;20;20m${row.collapsed ? "▸" : "▾"} ${row.label}  (${row.count})${R}`;
+        const text = ` ${indent}${kindBg}${B}\x1b[38;2;20;20;20m${row.collapsed ? "▸" : "▾"} ${row.label}  (${row.count})${R}`;
         rendered.push(isSelected ? selected(text, true) : text);
       } else {
         const sectionFg = `${B}${theme.sectionFg}`;
