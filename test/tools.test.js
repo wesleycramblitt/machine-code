@@ -623,16 +623,75 @@ test("read pages a large file with no skipped lines", async () => {
   }
 });
 
+test("bare read of a large file redirects to outline instead of paging", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-outline-"));
+  try {
+    const pad = Array.from({ length: 98 }, (_, i) => `  const pad${i} = ${i};`).join("\n");
+    const code = `export function alpha() {\n${pad}\n  return 1;\n}\n\nexport function beta() {\n${pad}\n  return 2;\n}\n`;
+    assert.ok(code.split("\n").length > 200, "fixture exceeds the redirect threshold");
+    writeFileSync(join(root, "big.ts"), code, "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const redirected = await tool.execute("id", { path: "big.ts" });
+    assert.equal(redirected.isError, undefined);
+    const text = redirected.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /Whole-file read redirected to outline/);
+    assert.match(text, /alpha/);
+    assert.match(text, /beta/);
+    assert.match(text, /next: read/);
+    assert.doesNotMatch(text, /pad47/, "no function bodies in the redirect");
+    // The pointed-to follow-up returns the block.
+    const block = await tool.execute("id", { path: "big.ts", symbol: "alpha" });
+    assert.match(block.content.map((c) => c.text ?? "").join("\n"), /pad47/);
+    // Explicit ranges pass through untouched.
+    const page = await tool.execute("id", { path: "big.ts", offset: 1, limit: 5 });
+    assert.match(page.content.map((c) => c.text ?? "").join("\n"), /^1: export function alpha/m);
+    // Explicit opt-out still floods on request.
+    const whole = await tool.execute("id", { path: "big.ts", allow_large: true });
+    assert.match(whole.content.map((c) => c.text ?? "").join("\n"), /pad47/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("bare read of a large prose file redirects to sections or head", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mc-read-outline-md-"));
+  try {
+    const pad = Array.from({ length: 250 }, (_, i) => `filler line ${i}`).join("\n");
+    writeFileSync(join(root, "doc.md"), `# Title\n\n${pad}\n\n## Alpha\n\ndetail alpha\n\n## Beta\n\ndetail beta\n`, "utf8");
+    const tool = readTool({ root, commands: CORE_COMMANDS });
+    const redirected = await tool.execute("id", { path: "doc.md" });
+    assert.equal(redirected.isError, undefined);
+    const text = redirected.content.map((c) => c.text ?? "").join("\n");
+    assert.match(text, /Whole-file read redirected to sections/);
+    assert.match(text, /Alpha/);
+    assert.match(text, /Beta/);
+    assert.doesNotMatch(text, /filler line 47/);
+    const section = await tool.execute("id", { path: "doc.md", section: "Alpha" });
+    assert.match(section.content.map((c) => c.text ?? "").join("\n"), /detail alpha/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("read follows Claude-style page, partial-view, and allow_large rules", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-read-claude-"));
   try {
     const partial = Array.from({ length: 12_000 }, (_, i) => `line ${i + 1} ${"x".repeat(8)}`).join("\n") + "\n";
     writeFileSync(join(root, "partial.txt"), partial, "utf8");
     const tool = readTool({ root, commands: CORE_COMMANDS });
-    const page = await tool.execute("id", { path: "partial.txt" });
+    // A bare read of a 12,000-line file redirects to the head + pointer
+    // instead of paging content.
+    const redirect = await tool.execute("id", { path: "partial.txt" });
+    const redirectText = redirect.content.map((c) => c.text ?? "").join("\n");
+    assert.equal(redirect.isError, undefined);
+    assert.match(redirectText, /Whole-file read redirected/);
+    assert.match(redirectText, /1200\d lines/);
+    assert.match(redirectText, /next: read/);
+    assert.doesNotMatch(redirectText, /PARTIAL view/);
+    const page = await tool.execute("id", { path: "partial.txt", offset: 1, limit: 2000 });
     const pageText = page.content.map((c) => c.text ?? "").join("\n");
-    assert.match(pageText, /PARTIAL view: lines 1-/);
-    assert.match(pageText, /continue with offset/);
+    assert.match(pageText, /^1: line 1 /m);
+    assert.match(pageText, /more lines; continue with offset 2001/);
     const wholePartial = await tool.execute("id", { path: "partial.txt", allow_large: true });
     assert.match(
       wholePartial.content.map((c) => c.text ?? "").join("\n"),
@@ -642,9 +701,11 @@ test("read follows Claude-style page, partial-view, and allow_large rules", asyn
 
     const tooBig = Array.from({ length: 26_000 }, (_, i) => `line ${i + 1} ${"x".repeat(10)}`).join("\n") + "\n";
     writeFileSync(join(root, "big.txt"), tooBig, "utf8");
-    const refused = await tool.execute("id", { path: "big.txt" });
-    assert.equal(refused.isError, true);
-    assert.match(refused.content.map((c) => c.text ?? "").join("\n"), /whole-file read is limited/);
+    // Even past the old 256 KB refusal, a bare read redirects instead of
+    // erroring: the head + pointer costs no turn.
+    const redirectedBig = await tool.execute("id", { path: "big.txt" });
+    assert.equal(redirectedBig.isError, undefined);
+    assert.match(redirectedBig.content.map((c) => c.text ?? "").join("\n"), /Whole-file read redirected/);
 
     const large = await tool.execute("id", { path: "big.txt", allow_large: true });
     assert.equal(large.isError, undefined);

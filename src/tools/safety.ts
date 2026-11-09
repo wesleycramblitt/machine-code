@@ -10,6 +10,13 @@ export const READ_PAGE_BYTES = 100 * 1024;
 export const READ_MAX_FILE_BYTES = 256 * 1024;
 /** allow_large ceiling; explicit whole-file reads still stop somewhere sane. */
 export const READ_LARGE_MAX_BYTES = 1024 * 1024;
+/** Bare whole-file reads above this many lines return the outline instead of
+ * content; the follow-up call targets one symbol, section, or range. */
+export const READ_FULL_MAX_LINES = 200;
+/** Head lines shown when a redirected file has no symbols or sections. */
+export const READ_OUTLINE_HEAD_LINES = 30;
+/** Symbol/heading rows shown before a [+N more] note in a redirect. */
+export const READ_OUTLINE_MAX_ROWS = 100;
 export const READ_CAP_BYTES = 24 * 1024;
 export const SEARCH_CAP_BYTES = 12 * 1024;
 export const COMMAND_CAP_BYTES = 8 * 1024;

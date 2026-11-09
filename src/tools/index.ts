@@ -12,8 +12,11 @@ import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
   READ_CAP_BYTES,
+  READ_FULL_MAX_LINES,
   READ_LARGE_MAX_BYTES,
   READ_MAX_FILE_BYTES,
+  READ_OUTLINE_HEAD_LINES,
+  READ_OUTLINE_MAX_ROWS,
   READ_PAGE_BYTES,
   SEARCH_CAP_BYTES,
   ToolError,
@@ -215,14 +218,58 @@ function cleanReadSelectors(args: unknown): unknown {
   return changed ? out : args;
 }
 
+/** Outline-first response for a bare whole-file read of a large file. The
+ * model asked for everything to learn the shape plus a few key lines; the
+ * outline plus one targeted follow-up is that request at a fraction of the
+ * bytes, and it keeps hundred-line dumps out of every subsequent turn. */
+async function wholeFileOutline(
+  root: string,
+  path: string,
+  raw: string,
+  lines: string[],
+  capBytes: number,
+): Promise<string> {
+  const head = `${path} (${lines.length} lines). Whole-file read redirected to outline — request one block instead.`;
+  const file = await outlineFile(root, path).catch(() => null);
+  const symbols = file ? renderOutline(file) : "";
+  if (symbols) {
+    const rows = symbols.split("\n");
+    const clipped =
+      rows.length > READ_OUTLINE_MAX_ROWS
+        ? [...rows.slice(0, READ_OUTLINE_MAX_ROWS), `[+${rows.length - READ_OUTLINE_MAX_ROWS} more symbols]`]
+        : rows;
+    return [
+      head,
+      clipped.join("\n"),
+      `next: read { "path": "${path}", "symbol": "<name>" } or read { "path": "${path}", "around": <line> }.`,
+    ].join("\n");
+  }
+  const headings = documentSections(raw, path);
+  if (headings.length > 0) {
+    const shown = headings
+      .slice(0, READ_OUTLINE_MAX_ROWS)
+      .map((heading) => `${heading.line}: ${sectionTitle(heading.text) || heading.text}`);
+    return [
+      `${path} (${lines.length} lines). Whole-file read redirected to sections — request one block instead.`,
+      shown.join("\n"),
+      `next: read { "path": "${path}", "section": "<heading>" } or read { "path": "${path}", "offset": <line>, "limit": <n> }.`,
+    ].join("\n");
+  }
+  return [
+    `${path} (${lines.length} lines). Whole-file read redirected — no symbols or sections to outline.`,
+    numberLinesCapped(lines, 1, READ_OUTLINE_HEAD_LINES, capBytes).text,
+    `next: read { "path": "${path}", "offset": <line>, "limit": <n> }.`,
+  ].join("\n");
+}
+
 export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
   return {
     name: "read",
     label: "read",
     description:
       "Read a text file inside the worktree. Returns numbered lines. " +
-      "The default read is one page of at most " +
-      "25k tokens (~100 KB); a whole-file read over 256 KB needs offset/limit or allow_large:true. " +
+      "A bare read of a file over 200 lines returns its outline (symbols + line numbers), not content — " +
+      "follow up with symbol/around for one block. " +
       "Use offset (1-based) and limit to page a large file, or allow_large:true for a whole-file/long-range read up to 1 MiB. " +
       "Binary and secret files are rejected. Use map for symbols/outlines/sections and grep for text. " +
       "Prefer symbol/around over offset/limit pages: read one function, class, or " +
@@ -255,6 +302,38 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const lines = raw.split("\n");
         const bytes = Buffer.byteLength(raw, "utf8");
         const capBytes = params.allow_large === true ? READ_LARGE_MAX_BYTES : READ_PAGE_BYTES;
+        const remember = (text: string, kind: LedgerEntry["kind"], label?: string) => {
+          ctx.state?.rememberRead({
+            key: cacheKey,
+            path: params.path,
+            label: label ?? readTargetLabel(params.path, params),
+            kind,
+            content: text,
+            fileSig,
+          });
+          return ok(text);
+        };
+        // A bare whole-file read of a large file is never what the next
+        // action needs: the model wants the shape plus a few key lines, and
+        // the outline is that request. Redirect before any bytes are refused
+        // or paged so hundred-line dumps never reach the transcript. Targeted
+        // reads (symbol, section, around, offset/limit) and explicit
+        // allow_large pass through untouched.
+        const bareFullRead =
+          !wantsSymbols &&
+          !wantsSections &&
+          (typeof params.symbol !== "string" || NULL_SELECTOR.has(params.symbol.trim())) &&
+          (typeof params.section !== "string" || params.section.trim() === "") &&
+          params.around == null &&
+          params.offset == null &&
+          params.limit == null;
+        if (bareFullRead && params.allow_large !== true && lines.length > READ_FULL_MAX_LINES) {
+          return remember(
+            await wholeFileOutline(ctx.root, params.path, raw, lines, capBytes),
+            "outline",
+            `${params.path}#outline`,
+          );
+        }
         if (params.allow_large !== true && bytes > READ_MAX_FILE_BYTES && params.offset == null && params.limit == null) {
           return fail(
             `${params.path} is ${bytes} bytes; a whole-file read is limited to ${READ_MAX_FILE_BYTES} bytes. ` +
@@ -271,17 +350,6 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         let limit = params.limit == null ? Math.max(1, lines.length) : Math.max(1, Math.floor(params.limit));
         let header = "";
         let symbolFallback = false;
-        const remember = (text: string, kind: LedgerEntry["kind"], label?: string) => {
-          ctx.state?.rememberRead({
-            key: cacheKey,
-            path: params.path,
-            label: label ?? readTargetLabel(params.path, params),
-            kind,
-            content: text,
-            fileSig,
-          });
-          return ok(text);
-        };
         if (raw.length === 0) {
           return remember(`${params.path} exists but is empty (0 lines)`, "outline", `${params.path}#empty`);
         }

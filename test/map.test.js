@@ -208,7 +208,7 @@ test("search outline/map/symbols and read symbol are surgical", async () => {
   }
 });
 
-test("a bare read of a large file returns a partial first page", async () => {
+test("a bare read of a large file redirects to outline instead of paging", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-map-large-"));
   try {
     const body = "export function big() {\n" + "  // filler\n".repeat(12000) + "}\n";
@@ -216,9 +216,12 @@ test("a bare read of a large file returns a partial first page", async () => {
     const read = readTool({ root, commands: CORE_COMMANDS });
     const result = await read.execute("1", { path: "big.ts" });
     const text = result.content.map((c) => c.text ?? "").join("\n");
-    assert.match(text, /PARTIAL view: lines 1-/);
-    assert.match(text, /continue with offset/);
-    assert.match(text, /1: export function big/);
+    assert.match(text, /Whole-file read redirected to outline/);
+    assert.match(text, /big/);
+    assert.match(text, /next: read/);
+    assert.doesNotMatch(text, /PARTIAL view/);
+    const block = await read.execute("2", { path: "big.ts", symbol: "big", limit: 5 });
+    assert.match(block.content.map((c) => c.text ?? "").join("\n"), /1: export function big/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
