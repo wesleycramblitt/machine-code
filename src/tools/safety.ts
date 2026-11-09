@@ -1,8 +1,8 @@
 /**
  * machine_code — tool safety: path bounds, output caps, binary rejection.
  */
-import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, resolve, sep } from "node:path";
+import { closeSync, openSync, readSync, realpathSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, extname, isAbsolute, resolve, sep } from "node:path";
 
 /** Per-call read budget (~25k tokens at 4 chars/token), like Claude Code. */
 export const READ_PAGE_BYTES = 100 * 1024;
@@ -98,9 +98,35 @@ export function assertRegularFile(path: string): void {
   try {
     st = statSync(path);
   } catch {
-    throw new ToolError(`no such file: ${path}`);
+    const hint = missingFileHint(path);
+    throw new ToolError(hint ? `no such file: ${path} (did you mean ${hint}?)` : `no such file: ${path}`);
   }
   if (!st.isFile()) throw new ToolError(`not a regular file: ${path}`);
+}
+
+/**
+ * When a path doesn't exist, look in the same directory for same-basename
+ * files with a different extension (e.g. asked .js, have .ts). Returns the
+ * single match, or null when there are zero or several candidates.
+ */
+export function missingFileHint(absPath: string): string | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(dirname(absPath));
+  } catch {
+    return null;
+  }
+  const base = basename(absPath, extname(absPath));
+  const matches = entries.filter((e) => {
+    if (e === basename(absPath)) return false;
+    if (!e.startsWith(base + ".")) return false;
+    try {
+      return statSync(resolve(dirname(absPath), e)).isFile();
+    } catch {
+      return false;
+    }
+  });
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 export interface Capped {

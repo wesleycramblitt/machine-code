@@ -41,7 +41,7 @@ import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
-import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
+import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
 import { isFreeRow } from "../select.js";
@@ -215,18 +215,23 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (!issue) {
       const hints: string[] = [];
       const keywords = request.toLowerCase().split(/\s+/).filter((w) => w.length > 3 && !["this", "that", "with", "from", "have", "been", "when", "what", "make", "just"].includes(w));
-      // Find repo files whose path or symbol names match request keywords.
+      // Suggest repo files only on strong signal: 2+ distinct request keywords
+      // in the path or symbol names, capped at 5. Weak matches mislead more
+      // than they help, so no section at all beats a wrong one.
       const cachedMap = readCachedMap(l.repoRoot);
       if (cachedMap) {
         const matched = cachedMap.files
-          .filter((f) => {
+          .map((f) => {
             const lower = f.path.toLowerCase();
             const syms = f.symbols.map((s) => s.name.toLowerCase());
-            return keywords.some((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
+            const hits = keywords.filter((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
+            return { file: f, hits: hits.length };
           })
-          .slice(0, 15);
+          .filter((entry) => entry.hits >= 2)
+          .sort((a, b) => b.hits - a.hits)
+          .slice(0, 5);
         if (matched.length > 0) {
-          hints.push(`## Context\n\nRelevant files:\n${matched.map((f) => `  - ${f.path} (${f.symbols.length} symbols)`).join("\n")}`);
+          hints.push(`## Context\n\nRelevant files:\n${matched.map((entry) => `  - ${entry.file.path} (${entry.file.symbols.length} symbols)`).join("\n")}`);
         }
       }
       // Always include architecture.md if it exists.
@@ -554,6 +559,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         ? false
         : forceWorktree;
   let toolRoot = l.repoRoot;
+  let reusedWorktree = false;
   if (mutating) {
     const issueWorktree = Boolean(itemSlug);
     // Reuse a terminal/paused worktree that already owns this issue branch.
@@ -567,6 +573,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     );
     if (reuse) {
       toolRoot = reuse.path;
+      reusedWorktree = true;
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,
@@ -632,13 +639,72 @@ export async function cmdRun(argv: string[]): Promise<number> {
         toolRoot = spec.path;
         process.stderr.write(`worktree ${spec.path} (branch ${spec.branch})\n`);
       } catch (error) {
-        if (error instanceof WorktreeError) {
+        if (error instanceof WorktreeError && error.code === "branch_checked_out" && issueWorktree && itemSlug) {
+          // mc/<slug> is already checked out in another worktree: just use it.
+          const branch = `mc/${itemSlug}`;
+          const existing = await branchCheckedOutAt(l.repoRoot, branch);
+          if (!existing) {
+            recorder.finalize("blocked", `${error.code}: ${error.message}`);
+            process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
+            return EXIT.blocked;
+          }
+          const baseBranch = await defaultBaseBranch(l.repoRoot);
+          const baseRef = await resolveBaseRef(l.repoRoot, baseBranch);
+          const owner = [
+            ...parentChainRuns,
+            ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
+          ].find((run) => run.worktree === existing);
+          const ownerActive = owner !== undefined &&
+            (owner.status === "created" || owner.status === "running" || owner.status === "awaiting_input");
+          toolRoot = existing;
+          reusedWorktree = true;
+          recorder.patchSummary({
+            worktree: existing,
+            ...(owner ? { worktreeOwnerRunId: owner.id } : {}),
+            branch,
+            baseBranch,
+            baseRef,
+          });
+          recorder.event("worktree_reused", {
+            ...(owner ? { parentRunId: owner.id } : {}),
+            path: existing,
+            branch,
+            shared: true,
+            ...(ownerActive ? { ownerActive: true } : {}),
+          });
+          process.stderr.write(
+            `worktree ${existing} (already checked out, branch ${branch}${ownerActive ? "; owner run still active" : ""})\n`,
+          );
+        } else if (error instanceof WorktreeError) {
           recorder.finalize("blocked", `${error.code}: ${error.message}`);
           process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
           return EXIT.blocked;
+        } else {
+          throw error;
         }
-        throw error;
       }
+    }
+  }
+
+  // A reused worktree may hold prior commits and uncommitted changes from an
+  // earlier run. Tell the agent what's already on the branch so it continues
+  // the work instead of starting blind.
+  if (reusedWorktree && toolRoot !== l.repoRoot) {
+    try {
+      const branch = recorder.current.branch ?? "";
+      const log = await runProc("git", ["log", "--oneline", "-8"], { cwd: toolRoot, timeoutMs: 15_000 });
+      const status = await runProc("git", ["status", "--short", "--branch"], { cwd: toolRoot, timeoutMs: 15_000 });
+      const lines = [
+        `## Existing branch state`,
+        `You are continuing work on branch ${branch || "(unknown)"}, which already exists.`,
+      ];
+      if (log.code === 0 && log.stdout.trim()) lines.push(`Recent commits:\n${log.stdout.trim()}`);
+      if (status.code === 0 && status.stdout.trim()) lines.push(`Working tree:\n${status.stdout.trim()}`);
+      lines.push(`Build on this state: keep what works, fix or extend what doesn't. Do not restart from scratch.`);
+      request = `${request}\n\n${lines.join("\n\n")}`;
+      recorder.event("branch_state_reported", { branch });
+    } catch {
+      // Best effort: the agent can inspect the tree itself with core:status.
     }
   }
 

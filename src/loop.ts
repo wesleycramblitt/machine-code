@@ -46,12 +46,6 @@ import { renderPromptMessages } from "./context/render.js";
 /** Default turn cap. 0 means no cap; set max_turns per role or run. */
 export const MAX_TURNS = 0;
 
-/** Build research allowed before a concrete change plan is required. */
-const BUILD_PLAN_RESEARCH_LIMIT = 12;
-/** Extra research allowed after a plan, so verification is not a dead end. */
-const BUILD_PLAN_POST_RESEARCH_LIMIT = 8;
-/** Plan-checkpoint blocked turns allowed before the run stops. */
-const PLAN_BLOCK_LIMIT = 3;
 /** Successes that show a run did real work, not just memory bookkeeping. */
 const SUBSTANTIVE_TOOLS = new Set(["read", "map", "search", "glob", "grep", "command", "edit", "write"]);
 
@@ -64,65 +58,10 @@ export function isQuestionRequest(text: string): boolean {
   return /^(?:what|why|how|which|when|where|who|explain|describe|list|show|tell|is|are|does|do|can|could|would|should)\b/i.test(trimmed);
 }
 
-/** Extra turns allowed when a writable role stops mid-investigation. This is
- * a malformed-termination retry, not a work quota. */
-const STALL_NUDGE_LIMIT = 2;
-
-/** A plan is a recorded decision that names concrete file changes. */
-export function hasPlanDecision(facts: ReadonlyArray<{ text: string; status: string; kind: string }>): boolean {
-  const file = /[\w./-]+\.(?:ts|tsx|js|jsx|py|rs|go|java|kt|swift|md|toml|yaml|yml)/gi;
-  const verb = /(?:edit|add|remove|delete|update|change|write|replace|move|wire|fix|test|implement|drop)\b/gi;
-  return facts.some((fact) => {
-    if (fact.kind !== "decision" || fact.status !== "active") return false;
-    const text = fact.text.trim();
-    const files = new Set(text.match(file) ?? []);
-    const verbs = text.match(verb) ?? [];
-    // A decision that merely mentions "plan" is not a change plan. Require
-    // targets and actions; otherwise a research note such as "Already have a
-    // plan" makes the harness demand an edit the role cannot make.
-    return files.size >= 2 && verbs.length >= 2;
-  });
-}
-
-/** Only the Engineer role is a code-change run with a mandatory plan gate. */
-export function needsBuildPlan(agentName: string): boolean {
-  return agentName === "engineer";
-}
-
 /** A line the role contract requires on a real finish. */
 export function hasTerminalLine(text: string): boolean {
   return /(?:^|\n)\s*(?:Result|Outcome|Changes|Verdict):/i.test(text);
 }
-
-/** A writable role that emits prose and no tool call mid-investigation has
- * stalled; the harness should ask it to continue, not call the run complete. */
-export function shouldNudgeStall(input: {
-  wantsChange: boolean;
-  hasToolCall: boolean;
-  hasChange: boolean;
-  text: string;
-}): boolean {
-  return input.wantsChange && !input.hasToolCall && !input.hasChange && !hasTerminalLine(input.text);
-}
-
-/** A command that verifies the tree (compile/test/lint). These are the
- * deterministic "definition of done" gates: a failure must be fixed, not
- * researched around. */
-export function isGateCommand(name: string): boolean {
-  return /(?:^|:)(build|test|lint|typecheck)$/.test(name);
-}
-
-/** The fastest compile gate available, for deterministic post-edit checks. */
-export function compileGateName(commands: ReadonlyMap<string, unknown>): string | undefined {
-  for (const name of commands.keys()) {
-    if (/(?:^|:)(typecheck|lint|build)$/.test(name)) return name;
-  }
-  return undefined;
-}
-
-/** Research calls before a writable role is nudged to act. Steering, not a
- * quota: the model has already read the target; the note just says so. */
-const RESEARCH_NUDGE_AFTER = 10;
 
 
 /**
@@ -318,9 +257,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     // catalogue scan failure must not block the run
   }
   const triedModels = new Set<string>();
-  /** An engineer run that cannot plan gets one plan-only model call, then a fresh attempt. */
-  let planRecovered = false;
-  let recoveryPlan = "";
 
   /**
    * First-token timeout for one provider call. Ollama is local and known to
@@ -684,13 +620,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     !isQuestionRequest(input.request);
   const hasActiveChange = (): boolean =>
     memory.getState().facts.some((fact) => fact.kind === "change" && fact.status === "active");
-  /** Set when a stalled turn was asked to continue; consumed by prepareNextTurn. */
-  let stallNudge: string | null = null;
-  let stallNudges = 0;
-  let stalledOut = false;
-  /** Tree-state verification, per run (survives a model rotation). */
-  let lastEditTurn = -1;
-  
+
 
   /**
    * When the run hits a cap or loop guard, make one tool-free call so the user
@@ -834,10 +764,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     let appliedError: { key: string; message: string } | undefined;
     let turnCapHit = false;
     let loopBlocked = false;
-    let loopBlockedReason: "repeat" | "plan-required" | "loop" | undefined;
-    let researchCalls = 0;
-    let planBlocked = 0;
-    let planBlockedTurn = -1;
+    let loopBlockedReason: "repeat" | "loop" | undefined;
     /** Tool contract health: enough failures with no work is not "completed". */
     let toolErrors = 0;
     let substantiveSuccesses = 0;
@@ -848,11 +775,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     /** Successful read-only command results for the current file state. */
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
     let changeEpoch = 0;
-    /** Research calls at the last edit, and whether the act-now nudge fired. */
-    let researchAtLastEdit = 0;
-    let researchNudged = false;
-    /** Steering text set by finishTurn, delivered by prepareNextTurn. */
-    let researchNudge: string | null = null;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -972,32 +894,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           return prepare ? prepare(repaired) : repaired;
         },
         async execute(id, params, signal, onUpdate) {
-          const planBlock = (message: string, detail: Record<string, unknown>) => {
-            const turn = memory.currentTurn();
-            if (turn !== planBlockedTurn) {
-              planBlockedTurn = turn;
-              planBlocked += 1;
-            }
-            if (planBlocked >= PLAN_BLOCK_LIMIT) {
-              if (!loopBlocked) {
-                loopBlocked = true;
-                loopBlockedReason = "plan-required";
-                recorder.event("loop_blocked", { tool: tool.name, reason: "plan-required", ...detail });
-              }
-              return {
-                content: [{ type: "text" as const, text: message }],
-                details: undefined,
-                isError: true,
-                terminate: true,
-              };
-            }
-            return {
-              content: [{ type: "text" as const, text: message }],
-              details: undefined,
-              isError: true,
-            };
-          };
-
           const killLoop = (evidenceKey: string | null, stale: number) => {
             if (!loopBlocked) {
               loopBlocked = true;
@@ -1024,77 +920,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
           const contextAction =
             tool.name === "context" ? String((params as { action?: unknown }).action ?? "") : "";
-          const contextKind =
-            tool.name === "context" ? String((params as { kind?: unknown }).kind ?? "finding") : "";
-          const planNote = tool.name === "context" && contextAction === "note" && contextKind === "decision";
-          // Memory operations (context note/focus/recall/state) are not new
-          // research. Counting them made the plan gate fire sooner and blocked
-          // cheap rehydration exactly when the model needed it.
-          const researchTool =
-            tool.name === "read" ||
-            tool.name === "map" ||
-            tool.name === "search" ||
-            tool.name === "glob" ||
-            tool.name === "grep";
-          if (researchTool) researchCalls += 1;
-          const needsPlan = needsBuildPlan(input.agent.name);
-          const planReady = needsPlan && hasPlanDecision(memory.getState().facts);
           const readPath = tool.name === "read" ? String((params as { path?: unknown }).path ?? "") : "";
-          const blocksAfterPlan =
-            tool.name === "map" ||
-            tool.name === "search" ||
-            tool.name === "read";
-          const postPlanResearchLimit = BUILD_PLAN_RESEARCH_LIMIT + BUILD_PLAN_POST_RESEARCH_LIMIT;
-          const hasChanges = memory.getState().facts.some(
-            (fact) => fact.kind === "change" && fact.status === "active",
-          );
-          const nextNote = tool.name === "context" && contextAction === "note" && contextKind === "next";
-          const nextText = nextNote ? String((params as { text?: unknown }).text ?? "").trim() : "";
-          if (
-            needsPlan &&
-            planReady &&
-            !hasChanges &&
-            nextNote &&
-            /^(?:read|search|explore|inspect|find|look|verify|check|review|map|outline)\b/i.test(nextText)
-          ) {
-            return {
-              content: [{
-                type: "text" as const,
-                text:
-                  "Plan is recorded. Next must be an edit or needs_planning. " +
-                  'Example: {"action":"note","kind":"next","text":"Edit src/tui.ts to remove the orchestrator tab."}',
-              }],
-              details: undefined,
-              isError: true,
-            };
-          }
-          if (
-            needsPlan &&
-            researchTool &&
-            !planNote &&
-            researchCalls >= BUILD_PLAN_RESEARCH_LIMIT &&
-            !planReady
-          ) {
-            return planBlock(
-              `Plan checkpoint: ${researchCalls} research calls without a concrete change plan. ` +
-                `Call context now: {"action":"note","kind":"decision","text":"1) Edit src/file.ts to ... 2) Edit src/file.ts to ... 3) Add test/file.ts ..."}. ` +
-                `Then make the first edit.`,
-              { args: capJson(params), researchCalls },
-            );
-          }
-          if (
-            needsPlan &&
-            planReady &&
-            !hasChanges &&
-            blocksAfterPlan &&
-            researchCalls >= postPlanResearchLimit
-          ) {
-            return planBlock(
-              `Plan recorded; ${researchCalls - BUILD_PLAN_RESEARCH_LIMIT} extra research calls used. ` +
-                "Make the first edit now with edit or write, or record a revised plan with context note.",
-              { args: capJson(params), plan: true, researchCalls },
-            );
-          }
 
           // Evidence keys for the loop detector. A read is one 100-line band
           // (or one symbol/section) at a file version; a search is one scope
@@ -1145,17 +971,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             };
           }
           const result = await execute(id, params, signal, onUpdate);
-          if (needsPlan && planNote && !result.isError && hasPlanDecision(memory.getState().facts)) {
-            // The plan is the next action. Do not let the old "explore" next
-            // note survive and steer the model back into reading. Only Engineer
-            // has an edit contract; a research or sudo run must not inherit it.
-            memory.note("next", "Execute the plan: make the first edit.", [], memory.currentTurn());
-          }
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
             changeEpoch += 1;
             commandCache.clear();
-            lastEditTurn = memory.currentTurn();
-            researchAtLastEdit = researchCalls;
           }
           if (!result.isError && tool.name === "command" && commandAction === "run" && !cacheableCommand) {
             // A mutating command can change files without an edit/write call.
@@ -1528,62 +1346,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             return { action: "end" as const };
           }
         }
-        // A writable role that emits prose and no tool call mid-investigation
-        // has not finished; the transcript is full of "let me check" but no
-        // work. Nothing else in the loop asks it to continue, so a weak model
-        // stops here and the run is reported as completed with no change.
-        const hasToolCall = message.content.some((block) => block.type === "toolCall");
-        if (
-          shouldNudgeStall({
-            wantsChange,
-            hasToolCall,
-            hasChange: hasActiveChange(),
-            text: assistantText(message),
-          })
-        ) {
-          if (stallNudges < STALL_NUDGE_LIMIT) {
-            stallNudges += 1;
-            stallNudge = [
-              `You have not made the requested change yet (turn ${turns}).`,
-              "Continue now. Do not summarize; take the smallest concrete step.",
-              "Call a tool: edit or write to make the change, or read/search only the one fact that decides it.",
-              `Request: ${input.request}`,
-            ].join(" ");
-            recorder.event("stall_nudge", { turn: turns, attempt: stallNudges });
-            return { action: "continue" as const };
-          }
-          stalledOut = true;
-          recorder.event("stall_exhausted", { turn: turns });
-        }
-        // Research-to-act: a writable role that has read/searched a lot without
-        // editing is circling, not converging. One steering note, not a quota.
-        if (
-          wantsChange &&
-          !researchNudged &&
-          lastEditTurn < 0 &&
-          researchCalls - researchAtLastEdit >= RESEARCH_NUDGE_AFTER
-        ) {
-          researchNudged = true;
-          researchNudge =
-            `You have made ${researchCalls} research calls and no edit. ` +
-            "You have enough evidence. State the smallest change and make the edit now.";
-          recorder.event("research_nudge", { turn: turns, researchCalls });
-          return { action: "continue" as const };
-        }
         return undefined;
-      },
-      prepareNextTurn: () => {
-        const messages: AgentMessage[] = [];
-        if (stallNudge) {
-          messages.push({ role: "user", content: stallNudge, timestamp: Date.now() } as AgentMessage);
-          stallNudge = null;
-          memory.note("next", "Make the smallest concrete edit that advances the request.", [], turns + 1);
-        }
-        if (researchNudge) {
-          messages.push({ role: "user", content: researchNudge, timestamp: Date.now() } as AgentMessage);
-          researchNudge = null;
-        }
-        return messages.length > 0 ? { messages } : undefined;
       },
     });
 
@@ -1764,12 +1527,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         // Resume: the reconstructed transcript tail is already continuable.
         await agent.continue();
       } else {
-        const promptText = [
-          input.contextText,
-          recoveryPlan ? `Change plan:\n${recoveryPlan}\n\nExecute this plan. Make the first edit now.` : "",
-          mapIndex,
-          input.request,
-        ].filter(Boolean).join("\n\n");
+        const promptText = [input.contextText, mapIndex, input.request].filter(Boolean).join("\n\n");
         await agent.prompt(promptText);
       }
       await agent.waitForIdle();
@@ -1873,23 +1631,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
     const la2 = lastAssistant as AssistantMessage | undefined;
     let finalText = assistantText(la2);
-    if (loopBlocked && loopBlockedReason === "plan-required" && !planRecovered && currentModel) {
-      planRecovered = true;
-      const plan = await finalAnswer(
-        currentModel,
-        "Return a concrete 3-line change plan. Name exact files and edits. Do not call tools.",
-        4_000,
-        "You plan a code change. Return only a 3-line change plan naming exact files and edits. Do not call tools.",
-      );
-      const trimmed = plan.trim();
-      if (trimmed) {
-        memory.note("decision", trimmed, [], turns + 1);
-        recoveryPlan = trimmed;
-        recorder.event("plan_recovered", { chars: trimmed.length });
-        // Fresh attempt with the plan in context. Per-attempt guards reset.
-        continue;
-      }
-    }
     const stop = la2?.stopReason;
     let status: RunLoopResult["status"] = "completed";
     let error: string | undefined;
@@ -1902,11 +1643,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     } else if (loopBlocked) {
       status = "blocked";
       error =
-        loopBlockedReason === "plan-required"
-          ? "build plan required before more research"
-          : loopBlockedReason === "loop"
-            ? "no new evidence; loop detected"
-            : "repeated identical tool calls detected";
+        loopBlockedReason === "loop"
+          ? "no new evidence; loop detected"
+          : "repeated identical tool calls detected";
     } else if (budgetExhausted) {
       status = "blocked";
       error = `token budget exhausted (${policy.budgetTokens})`;
@@ -1924,11 +1663,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       const reason = turnCapHit
         ? "You have reached the turn cap."
         : loopBlocked
-          ? loopBlockedReason === "plan-required"
-            ? "The harness stopped the run: no concrete build plan was recorded. Return a 3-line change plan and stop."
-            : loopBlockedReason === "loop"
-              ? "The harness stopped the run: recent actions produced no new evidence. Return the result and the blocking evidence."
-              : "The harness stopped repeated tool calls."
+          ? loopBlockedReason === "loop"
+            ? "The harness stopped the run: recent actions produced no new evidence. Return the result and the blocking evidence."
+            : "The harness stopped repeated tool calls."
           : "The token budget is exhausted.";
       finalText = await finalAnswer(currentModel, reason);
     }
@@ -1954,9 +1691,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       // mid-investigation without touching a file is blocked, not done. A
       // clear terminal answer (Result:/Outcome:) is left alone.
       status = "blocked";
-      error = stalledOut
-        ? "model produced no tool calls and no change after continuation prompts"
-        : "completed without making the requested change";
+      error = "completed without making the requested change";
     }
 
     // Retry decision: rotate to the next eligible model on a retryable error.
