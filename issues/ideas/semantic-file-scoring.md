@@ -1,5 +1,5 @@
 priority: high
-tags: context, engineer
+tags: context
 
 # Score and pre-select context files per issue
 
