@@ -594,8 +594,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
   let lastFailure: string | undefined;
   let lastAssistant: AssistantMessage | undefined;
-  /** Assistant turns produced across the whole run (survives rotation). */
-  let producedTurns = 0;
   let totalTokens = 0;
   /** Run-level loop detector; a model rotation does not erase evidence. */
   // Read-only roles (review/research) cannot make progress by editing,
@@ -609,6 +607,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let budgetExhausted = false;
   let currentRow: CatalogueRow | null = null;
   let agent: Agent | undefined;
+  /** Conversation carried into a new agent when a retry switches models. The
+   * new model must continue the same conversation, not start over. */
+  let carriedMessages: import("@earendil-works/pi-agent-core").AgentMessage[] | undefined = input.initialMessages;
   /** Prompt chars for the request being prepared; used for context accounting. */
   let lastRequestChars = initialChars;
   let lastPromptChars = 0;
@@ -1058,7 +1059,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         thinkingLevel: "low",
         systemPrompt: input.agent.prompt,
         tools,
-        ...(input.initialMessages && input.initialMessages.length > 0 ? { messages: input.initialMessages } : {}),
+        ...(carriedMessages && carriedMessages.length > 0 ? { messages: carriedMessages } : {}),
       },
       sessionId: recorder.id,
       convertToLlm,
@@ -1232,27 +1233,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const ledgerBudget = budget
             ? Math.max(0, budget.inputChars - baseOverhead - overviewEstimate)
             : 200_000;
-          // Raw ledger bytes are the fastest-growing part of the prompt and
-          // the first thing to trim: conclusions already live in run state,
-          // and the ledger's own omitted-note points at recall for the rest.
-          // The replayed transcript now carries the recent bytes; the ledger
-          // is the fallback for evidence that fell out of that window.
+          // The transcript is replayed whole; the ledger is the durable record
+          // of concluded evidence.
           const ledgerText = ledgerBudget > 0
             ? memory.renderLedger({ maxChars: Math.min(ledgerBudget, 12_000) })
             : undefined;
           lastLedgerChars = ledgerText?.length ?? 0;
-          // The transcript window is the largest block, so it takes whatever
-          // the model budget has left after the fixed overhead. Small-context
-          // models get fewer steps instead of an oversized request.
-          const transcriptBudget = budget
-            ? Math.max(
-                12_000,
-                Math.min(
-                  48_000,
-                  budget.inputChars - baseOverhead - overviewEstimate - (ledgerText?.length ?? 0),
-                ),
-              )
-            : 48_000;
           return renderPromptMessages(
             context.messages,
             memory,
@@ -1261,7 +1247,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             ledgerText,
             overviewMaxChars,
             commandIndex,
-            transcriptBudget,
           );
         };
 
@@ -1363,7 +1348,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const message = event.message as AssistantMessage;
           if (message.role === "assistant") {
             lastAssistant = message;
-            producedTurns += 1;
             const usage = message.usage ?? zeroUsage;
             const actual = usage.cost?.total;
             const actualContextTokens = usage.input + usage.cacheRead;
@@ -1710,21 +1694,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       }
       if (classified?.retryable) {
         const failedKey = currentRow?.key ?? `${la.provider}/${la.model}`;
-        // A model switch mid-run loses the plan: the new model inherits a
-        // transcript it did not produce and re-derives what is happening
-        // (observed: "the prior conversation did research… edits apparently
-        // were not made"). Rotation is safe only before the run has produced
-        // a turn. After that, report the provider failure and stop.
-        if (producedTurns > 0) {
-          recorder.event("rotation_refused", {
-            failedModel: failedKey,
-            kind: classified.kind,
-            turns: producedTurns,
-          });
-          lastFailure = la.errorMessage;
-          clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
-          return { status: "failed", finalText, error: la.errorMessage };
-        }
         if (!appliedError || appliedError.key !== failedKey || appliedError.message !== la.errorMessage) {
           try {
             applyErrorState(la.provider, failedKey, classified);
@@ -1736,12 +1705,16 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         triedModels.add(failedModel);
         relaxPin(failedModel, la.provider);
         lastFailure = la.errorMessage;
+        // Carry the whole conversation into the replacement agent: a switch
+        // is a new model on the same run, not a fresh run.
+        carriedMessages = agent?.state.messages ?? carriedMessages;
         recorder.event("retry", {
           failedModel,
           kind: classified.kind,
           attempt: triedModels.size,
+          carriedMessages: carriedMessages?.length ?? 0,
         });
-        continue; // retry with a fresh agent; the failed/cooled model is excluded
+        continue; // retry on another model, same conversation
       }
     }
 

@@ -2,11 +2,11 @@
  * machine_code — render the model prompt from run state + the current step.
  *
  * The prompt is the system prompt, the assembled task context, a compact state
- * block, current working-file content, and a budgeted window of the real
- * transcript (assistant turns plus their tool results). The window is what
- * keeps the model oriented; dropping old tool results after two turns makes it
- * re-read the same evidence in waves. Older bytes stay in the ledger and can
- * be pulled back with context recall.
+ * block, current working-file content, and the full transcript of assistant
+ * turns plus their tool results. Nothing is pruned or summarized: the model's
+ * own reads and edits are its working memory, and hiding them makes it
+ * re-fetch the same evidence. Context stays small by reading selectively
+ * (outline first, symbol/range reads), not by deleting what was read.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
@@ -62,201 +62,9 @@ export function trimContextText(text: string | undefined, maxChars?: number): st
   return `${header}\n_…${blocks.length} block(s) omitted for the model budget._${footer}`.slice(0, maxChars);
 }
 
-/** Cap on one replayed tool-result text block. The ledger keeps the full
- * bytes (with a recall pointer) and working context re-sends current file
- * content, so the replayed steps stay small without losing anything
- * recoverable. Copies blocks; never mutates the stored transcript. */
-const STEP_TEXT_CAP = 8_000;
-
-/** One-line budget for a superseded step's tombstone. Enough to say what was
- * tried and what came back; the full bytes stay in the ledger. */
-const TOMBSTONE_TEXT_CAP = 160;
-
-/** Replay a window of the real transcript, not a fixed number of steps.
- * A run's own tool results are its working memory: dropping them after two
- * turns is why weak models re-read the same file in waves. The window is
- * bounded so a long run cannot grow without limit; newest steps win. */
-const TRANSCRIPT_BUDGET_CHARS = 48_000;
-
-function capTextBlocks(message: MessageLike): MessageLike {
-  if (message.role !== "toolResult" || !Array.isArray(message.content)) return message;
-  const content = (message.content as unknown[]).map((block) => {
-    if (!block || typeof block !== "object") return block;
-    const b = block as Record<string, unknown>;
-    if (b.type !== "text" || typeof b.text !== "string" || b.text.length <= STEP_TEXT_CAP) return block;
-    return {
-      ...b,
-      text: `${b.text.slice(0, STEP_TEXT_CAP).replace(/\s+$/, "")}\n…[step output truncated to ${STEP_TEXT_CAP} chars; full bytes are in the run ledger — use context recall]`,
-    };
-  });
-  return { ...message, content };
-}
-
-function capStepText(step: MessageLike[]): MessageLike[] {
-  return step.map(capTextBlocks);
-}
-
-/** Rough size of a message's payload; JSON escaping adds a little, which the
- * budget absorbs. */
-function messageChars(message: MessageLike): number {
-  if (typeof message.content === "string") return message.content.length;
-  if (!Array.isArray(message.content)) return 0;
-  let total = 0;
-  for (const block of message.content) {
-    if (!block || typeof block !== "object") continue;
-    const b = block as Record<string, unknown>;
-    if (typeof b.text === "string") total += b.text.length;
-    if (b.type === "toolCall") total += JSON.stringify(b.arguments ?? {}).length;
-  }
-  return total;
-}
-
-/** Compact argument summary for a tombstone: just enough to recognize the
- * call that already happened, never the payload. */
-function toolArgSummary(tool: string, params: Record<string, unknown>): string {
-  const str = (value: unknown): string => (typeof value === "string" ? value : "");
-  switch (tool) {
-    case "read": {
-      const at = str(params.symbol)
-        ? ` symbol ${params.symbol}`
-        : typeof params.around === "number"
-          ? ` around ${params.around}`
-          : params.offset != null
-            ? ` offset ${params.offset}`
-            : "";
-      return `${str(params.path)}${at}`.trim();
-    }
-    case "grep":
-    case "search":
-      return `"${str(params.pattern) || str(params.query)}" ${str(params.path) || str(params.paths) || ""}`.trim();
-    case "map":
-      return `${str(params.action)} ${str(params.pattern) || str(params.path) || ""}`.trim();
-    case "glob":
-      return str(params.pattern) || str(params.path) || "";
-    case "edit":
-    case "write":
-      return str(params.path) || "";
-    case "command":
-      return str(params.name);
-    case "context":
-      return str(params.action);
-    default:
-      return JSON.stringify(params).slice(0, 80);
-  }
-}
-
-/** Argument values that are payloads, not identity: whole files, hunks, and
- * long texts never replay. Anything short stays verbatim, so the replayed
- * call keeps its id (provider pairing intact) and stays a valid call the
- * model could re-issue — and the loop guard would count. Never invent
- * pseudo-arguments: the model apes whatever shape it sees (observed: a
- * literal {"__replay": ...} sent back as arguments, failing validation). */
-const REPLAY_ARG_CHARS = 200;
-
-function replayArgs(params: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(params)) {
-    try {
-      if ((JSON.stringify(value)?.length ?? 0) > REPLAY_ARG_CHARS) continue;
-    } catch {
-      continue;
-    }
-    out[key] = value;
-  }
-  return out;
-}
-
-function firstLine(text: string, maxChars: number): string {
-  const line = text.split("\n").find((entry) => entry.trim().length > 0) ?? "";
-  const clipped = line.trim().slice(0, maxChars);
-  return line.trim().length > maxChars ? `${clipped}…` : clipped;
-}
-
-/** Collapse a superseded step to one line per tool call: what was tried and
- * the one-line outcome. Conclusions belong in memory facts, which are kept;
- * raw step output older than the working set does not help the next action.
- * Human answers (ask) are kept whole: short, high-signal, irreplaceable.
- * Read results named in `retained` replay in full (capped): re-hiding a file
- * the model already holds forces a recovery re-read, which the loop guard
- * then counts as stale. Copies messages; never mutates the stored transcript. */
-function tombstoneStep(step: MessageLike[], retained: ReadonlySet<string> = new Set()): MessageLike[] {
-  const calls = new Map<string, { tool: string; summary: string }>();
-  for (const message of step) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const block of message.content) {
-      const candidate = block as Record<string, unknown>;
-      if (candidate?.type !== "toolCall" || typeof candidate.id !== "string" || typeof candidate.name !== "string") {
-        continue;
-      }
-      calls.set(
-        candidate.id,
-        {
-          tool: candidate.name,
-          summary: toolArgSummary(candidate.name, (candidate.arguments ?? {}) as Record<string, unknown>),
-        },
-      );
-    }
-  }
-  const out: MessageLike[] = [];
-  for (const message of step) {
-    // Assistant prose (thinking, conclusions) replays intact: the transcript
-    // window is the only place reasoning survives, and prose is small next
-    // to tool output. Tool calls replay with payloads stripped (whole files
-    // passed to write/edit never re-send) but otherwise verbatim: the ids
-    // keep provider pairing intact, and there is no invented shape for the
-    // model to ape.
-    if (message.role === "assistant" && Array.isArray(message.content)) {
-      out.push({
-        ...message,
-        content: message.content.map((block) => {
-          const candidate = block as Record<string, unknown>;
-          if (candidate?.type !== "toolCall" || typeof candidate.name !== "string") return block;
-          return {
-            ...candidate,
-            arguments: replayArgs((candidate.arguments ?? {}) as Record<string, unknown>),
-          };
-        }),
-      });
-      continue;
-    }
-    if (message.role === "toolResult" && typeof message.toolCallId === "string") {
-      const call = calls.get(message.toolCallId);
-      if (call?.tool === "ask") {
-        out.push(message);
-        continue;
-      }
-      // A retained read replays in full: the model still holds this file and
-      // refetching it would be the identical evidence the loop guard kills.
-      if (retained.has(message.toolCallId) && call?.tool === "read") {
-        out.push(capTextBlocks(message));
-        continue;
-      }
-      const texts = Array.isArray(message.content)
-        ? (message.content as unknown[])
-            .filter(
-              (block): block is { type: string; text: string } =>
-                !!block &&
-                typeof block === "object" &&
-                (block as Record<string, unknown>).type === "text" &&
-                typeof (block as Record<string, unknown>).text === "string",
-            )
-            .map((block) => block.text)
-        : [];
-      const label = call ? `${call.tool}${call.summary ? ` ${call.summary}` : ""}`.trim() : "tool call";
-      out.push({
-        ...message,
-        content: [
-          { type: "text", text: `[earlier ${label} → ${firstLine(texts.join("\n"), TOMBSTONE_TEXT_CAP) || "(no output)"}]` },
-        ],
-      });
-      continue;
-    }
-    out.push(message);
-  }
-  return out;
-}
-
-/** A complete step: the assistant's calls all have results in the same step. */
+/** A complete step: the assistant's calls all have results in the same step.
+ * An incomplete trailing step is dropped so the provider never sees an orphan
+ * tool call — that is protocol validity, not compression. */
 function completeStep(messages: readonly MessageLike[], start: number, end: number): boolean {
   const calls = toolCalls(messages[start]!);
   if (calls.length === 0) return true;
@@ -269,108 +77,26 @@ function completeStep(messages: readonly MessageLike[], start: number, end: numb
   return calls.every((id) => results.has(id));
 }
 
-/** Render the tail: the newest step in full (capped), older steps tombstoned
- * except the latest read per file, which replays in full (capped). A model
- * that loses a file it already holds re-reads it, and the loop guard counts
- * that identical evidence as stale — retention breaks the spiral at the
- * source. Reads at or before the last mutation (edit/write/command) never
- * replay: pre-edit bytes must not pose as current content. The rendered tail
- * is always a subset of the budgeted steps, so the budget still bounds it. */
-const MAX_RETAINED_FILES = 12;
-
-function stepMutates(step: MessageLike[]): boolean {
-  return step.some(
-    (message) =>
-      message.role === "assistant" &&
-      Array.isArray(message.content) &&
-      (message.content as unknown[]).some((block) => {
-        const candidate = block as Record<string, unknown>;
-        return (
-          candidate?.type === "toolCall" &&
-          (candidate.name === "edit" || candidate.name === "write" || candidate.name === "command")
-        );
-      }),
-  );
-}
-
-/** Every complete step in the transcript, oldest first (no budget). */
-function allSteps(messages: readonly MessageLike[]): MessageLike[][] {
+/** Every complete assistant/tool step, oldest first, unchanged. */
+function transcriptSteps(messages: readonly MessageLike[]): MessageLike[] {
   const starts: number[] = [];
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i]?.role === "assistant") starts.push(i);
   }
   if (starts.length === 0) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i]?.role === "user") return [[messages[i]!]];
+      if (messages[i]?.role === "user") return [messages[i]!];
     }
     return [];
   }
-  const steps: MessageLike[][] = [];
+  const out: MessageLike[] = [];
   for (let k = 0; k < starts.length; k += 1) {
     const start = starts[k]!;
     const end = k + 1 < starts.length ? starts[k + 1]! : messages.length;
     if (!completeStep(messages, start, end)) continue;
-    steps.push(messages.slice(start, end));
+    out.push(...messages.slice(start, end));
   }
-  return steps;
-}
-
-/** Read call ids whose result must stay in the prompt: the latest read per
- * file, across the whole run. Scans the entire transcript, not just the
- * budgeted tail — eviction is why a model re-reads a file it already has. */
-function retainedReads(steps: readonly MessageLike[][]): Set<string> {
-  let cutoff = -1;
-  steps.forEach((step, index) => {
-    if (stepMutates(step)) cutoff = index;
-  });
-  const retained = new Set<string>();
-  const seenFiles = new Set<string>();
-  for (let s = steps.length - 1; s > cutoff && seenFiles.size < MAX_RETAINED_FILES; s -= 1) {
-    for (const message of steps[s]!) {
-      if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-      for (const block of message.content) {
-        const candidate = block as Record<string, unknown>;
-        if (candidate?.type !== "toolCall" || typeof candidate.id !== "string" || candidate.name !== "read") {
-          continue;
-        }
-        const params = (candidate.arguments ?? {}) as Record<string, unknown>;
-        const path = typeof params.path === "string" ? params.path : "";
-        if (!path || seenFiles.has(path)) continue;
-        seenFiles.add(path);
-        retained.add(candidate.id);
-      }
-    }
-  }
-  return retained;
-}
-
-/** Steps to replay: the newest steps that fit the budget, plus any older step
- * holding a retained read. A retained step is always a complete call+result,
- * so a gap in time is valid — and cheaper than the model re-reading the file. */
-function selectTail(
-  steps: readonly MessageLike[][],
-  budgetChars: number,
-  retained: ReadonlySet<string>,
-): MessageLike[][] {
-  const hasRetained = (step: MessageLike[]): boolean =>
-    step.some((message) => {
-      if (message.role !== "assistant" || !Array.isArray(message.content)) return false;
-      return (message.content as unknown[]).some((block) => {
-        const candidate = block as Record<string, unknown>;
-        return candidate?.type === "toolCall" && typeof candidate.id === "string" && retained.has(candidate.id);
-      });
-    });
-  const picked: MessageLike[][] = [];
-  let used = 0;
-  for (let k = steps.length - 1; k >= 0; k -= 1) {
-    const step = steps[k]!;
-    const size = step.reduce((total, message) => total + messageChars(message), 0);
-    const keep = hasRetained(step) || picked.length === 0 || used + size <= budgetChars;
-    if (!keep) continue;
-    picked.unshift(step);
-    used += size;
-  }
-  return picked;
+  return out;
 }
 
 export interface RenderedPrompt {
@@ -386,18 +112,15 @@ export function renderPromptMessages(
   ledgerText?: string,
   overviewMaxChars?: number,
   commandIndex?: string,
-  transcriptBudget?: number,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
   //   system → assembled context → map index → tool guide → command index
-  //     → working context → ledger tail → run state → transcript tail.
+  //     → working context → ledger tail → run state → transcript.
   // Stable content always renders before volatile per-turn content, so the
-  // shared prefix stays byte-identical across turns and only the volatile
-  // tail shifts — that is what keeps the provider prompt cache hot. Do not
-  // reorder these sections or interleave volatile content into the stable
-  // prefix without updating the prefix-stability test in test/context.test.js.
+  // shared prefix stays byte-identical across turns and only the transcript
+  // tail shifts — that is what keeps the provider prompt cache hot.
   const details = state.renderWorkingContext();
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
@@ -409,20 +132,10 @@ export function renderPromptMessages(
     content: block,
     timestamp: Date.now(),
   };
-  // Retention scans the whole transcript, not just the budget window, so a
-  // file the model already read is never evicted (eviction causes re-reads).
-  // The newest step replays in full; older steps collapse to one line per
-  // tool call except retained reads, which replay in full (capped per block).
-  const steps = allSteps(source);
-  const retained = retainedReads(steps);
-  const tail = selectTail(steps, transcriptBudget ?? TRANSCRIPT_BUDGET_CHARS, retained);
-  const step = tail.flatMap((entry, index) =>
-    index === tail.length - 1 ? capStepText(entry) : tombstoneStep(entry, retained),
-  );
   const out = [
     ...(system ? [system] : []),
     user,
-    ...step,
+    ...transcriptSteps(source),
   ] as unknown as AgentMessage[];
   return { messages: out, chars: JSON.stringify(out).length };
 }

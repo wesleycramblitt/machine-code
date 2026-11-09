@@ -70,10 +70,10 @@ import { parseAxisOverrides } from "./models.js";
  * symbol names contain 2+ distinct request keywords (capped at 5), plus the
  * architecture doc and skill index when present. Weak matches mislead more
  * than they help, so no section at all beats a wrong one. */
-/** Files worth opening first, by path word match. Deliberately simple: the
- * issue text names things ("issue details page"), and the files that do those
- * things are usually named the same. No scoring, no semantic pass — a wrong
- * hint costs more than a missing one. */
+/** Files worth opening first, ranked by how well their path and doc header
+ * match the request. Files are heavily documented, so the header is the best
+ * cheap signal; rarity weighting (IDF) stops generic words like "status" or
+ * "issue" from dominating. UI requests prefer src/tui. */
 const HINT_STOP = new Set([
   "this", "that", "with", "from", "have", "been", "when", "what", "make", "just",
   "into", "then", "they", "them", "there", "their", "same", "like", "many", "need",
@@ -81,31 +81,71 @@ const HINT_STOP = new Set([
   "also", "more", "most", "some", "such", "than", "very", "will", "would",
   "should", "could", "must", "about", "after", "before", "other", "parts",
 ]);
+const HINT_SKIP = /^(issues|plans|knowledge|data|test|tests|docs?)\//;
+const HINT_CODE = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i;
+const HINT_UI = /\b(ui|ux|screen|page|layout|colou?r|font|bold|badge|render)\b/i;
+
+function hintWords(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z][a-z0-9]+/g) ?? []).filter(
+    (word) => word.length >= 4 && !HINT_STOP.has(word),
+  );
+}
 
 export function buildIssueHints(l: ReturnType<typeof layout>, request: string): string[] {
   const hints: string[] = [];
-  const words = new Set(
-    (request.toLowerCase().match(/[a-z][a-z0-9]+/g) ?? []).filter(
-      (word) => word.length >= 4 && !HINT_STOP.has(word),
-    ),
-  );
+  const tokens = [...new Set(hintWords(request))];
+  const intent = new Set(hintWords(request.split("\n")[0] ?? ""));
+  const wantsUi = HINT_UI.test(request);
   const cachedMap = readCachedMap(l.repoRoot);
-  const files = (cachedMap?.files ?? [])
+  const candidates = (cachedMap?.files ?? [])
     .filter(
       (file) =>
-        !/^(issues|plans|knowledge|data|test|tests|docs?)\//.test(file.path) &&
+        HINT_CODE.test(file.path) &&
+        !HINT_SKIP.test(file.path) &&
         !/(^|\/)(test|tests|__tests__)\//.test(file.path) &&
         !/\.(test|spec)\.[tj]sx?$/.test(file.path),
     )
-    .map((file) => ({
-      path: file.path,
-      hits: file.path
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((word) => words.has(word)).length,
-    }))
-    .filter((entry) => entry.hits > 0)
-    .sort((a, b) => b.hits - a.hits || a.path.localeCompare(b.path))
+    .map((file) => {
+      let header = "";
+      try {
+        header = readFileSync(join(l.repoRoot, file.path), "utf8").slice(0, 1500);
+      } catch {}
+      return {
+        path: file.path,
+        pathWords: new Set(file.path.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)),
+        headerWords: new Set(hintWords(header)),
+        symbols: file.symbols.map((symbol) => symbol.name.toLowerCase()),
+      };
+    });
+  const total = Math.max(1, candidates.length);
+  const df = new Map(
+    tokens.map((token) => [
+      token,
+      candidates.filter(
+        (file) =>
+          file.pathWords.has(token) ||
+          file.headerWords.has(token) ||
+          file.symbols.some((symbol) => symbol.includes(token)),
+      ).length,
+    ]),
+  );
+  const idf = (token: string): number => Math.log((total + 1) / ((df.get(token) ?? 0) + 1));
+  const files = candidates
+    .map((file) => {
+      let score = 0;
+      for (const token of tokens) {
+        const inPath = file.pathWords.has(token);
+        const inHeader = file.headerWords.has(token);
+        const inSymbol = file.symbols.some((symbol) => symbol.includes(token));
+        if (!inPath && !inHeader && !inSymbol) continue;
+        const weight = (inPath ? 1.5 : 0) + (inHeader ? 1 : 0) + (inSymbol ? 0.2 : 0);
+        score += weight * idf(token) ** 2 * (intent.has(token) ? 2 : 1);
+      }
+      if (wantsUi && file.path.startsWith("src/tui/")) score *= 1.6;
+      return { path: file.path, score };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, 5)
     .map((entry) => entry.path);
   if (files.length > 0) {
@@ -292,17 +332,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
     itemSlug = issue.slug;
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
-  // Linked issues don't carry auto-generated hints. If the body has none,
-  // attach the same matcher output to the request so scouting starts warm.
-  // The issue file itself is left untouched.
+  // Hints are recomputed for every run. An issue body may carry hints from
+  // when it was created; those go stale as the code and the scorer change, so
+  // strip the old generated sections and attach fresh ones. The issue file is
+  // left untouched.
   if (itemSlug && !autoCreatedIssue && normalizedAgent === "engineer" && request) {
-    const linked = findIssue(l, itemSlug);
-    if (linked && !linked.body.includes("## Context")) {
-      const hints = buildIssueHints(l, request);
-      if (hints.length > 0) {
-        request += `\n\n${hints.join("\n\n")}`;
-        process.stderr.write(`issue hints attached (${hints.length} sections)\n`);
-      }
+    const trimmed = request.split(/\n## (?:Context|Architecture|Skills)\b/)[0]!.trim();
+    const hints = buildIssueHints(l, trimmed || request);
+    if (hints.length > 0) {
+      request = `${trimmed || request}\n\n${hints.join("\n\n")}`;
+      process.stderr.write(`issue hints attached (${hints.length} sections)\n`);
     }
   }
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
