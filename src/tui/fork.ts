@@ -5,6 +5,12 @@ import { isFreeRow } from "../select.js";
 import type { RunEvent, RunSummary } from "../state/runs.js";
 
 export interface ForkedRunSettings {
+  /** Issue kind: "features" or "bugs" */
+  kind?: "features" | "bugs";
+  /** Priority for new issue when created */
+  priority?: "low" | "medium" | "high";
+  /** Tags for new issue */
+  tags?: string[];
   agent: string;
   /** Explicit catalogue key; absent means auto-select. */
   model?: string;
@@ -91,6 +97,9 @@ export function forkSettingsFromRun(input: {
     approval: oneOf(summary.approval ?? cfg.approval, APPROVALS, defaults.approval),
     ambiguity: oneOf(summary.ambiguity ?? cfg.ambiguity, AMBIGUITIES, defaults.ambiguity),
     tier,
+    kind: (settings && (settings as any).kind) ? (settings as any).kind : "features",
+    priority: (settings && (settings as any).priority) ? (settings as any).priority : "medium",
+    tags: (settings && (settings as any).tags) ? (settings as any).tags : [],
     minFit: settings?.minFit,
     floors,
     ...((summary.itemId ?? summary.packetId) ? { item: summary.itemId ?? summary.packetId } : {}),

@@ -245,6 +245,9 @@ export async function runTui(): Promise<void> {
       tier,
       minFit: undefined,
       floors: "role",
+      kind: "features",
+      priority: "medium",
+      tags: [],
       prompt: "",
     };
   };
@@ -563,6 +566,15 @@ export async function runTui(): Promise<void> {
     }
     if (s.newrun.item) {
       args.push("--item", s.newrun.item);
+    }
+    if (s.newrun.kind) {
+      args.push("--kind", s.newrun.kind);
+    }
+    if (s.newrun.priority) {
+      args.push("--priority", s.newrun.priority);
+    }
+    if (s.newrun.tags && s.newrun.tags.length > 0) {
+      args.push("--tags", JSON.stringify(s.newrun.tags));
     }
     const excludedSections = [...s.newRunContextExcluded]
       .filter((key) => key.startsWith("section:"))
