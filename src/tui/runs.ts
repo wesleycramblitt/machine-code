@@ -150,10 +150,8 @@ function statusNeedsAttention(run: RunSummary): boolean {
     run.status === "running" ||
     run.status === "awaiting_input" ||
     run.status === "blocked" ||
-    run.status === "paused" ||
     run.status === "interrupted" ||
-    run.status === "failed" ||
-    run.prState === "open"
+    run.status === "failed"
   );
 }
 
