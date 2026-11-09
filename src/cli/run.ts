@@ -64,19 +64,12 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
 
-/** Merge a branch into main. Returns true on success. */
-async function mergeBranch(root: string, branch: string, target: string): Promise<boolean> {
+/** Merge a feature branch into main from the top-level repo. The main repo always has main checked out. */
+async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string): Promise<boolean> {
   try {
-    // Fetch latest target
-    await runProc("git", ["fetch", "origin", target], { cwd: root, timeoutMs: 30_000 });
-    // Checkout target
-    await runProc("git", ["checkout", target], { cwd: root, timeoutMs: 15_000 });
-    // Pull latest
-    await runProc("git", ["pull", "--ff-only", "origin", target], { cwd: root, timeoutMs: 30_000 });
-    // Merge the feature branch
-    await runProc("git", ["merge", "--no-ff", branch, "-m", `merge ${branch}`], { cwd: root, timeoutMs: 30_000 });
-    // Push the merge
-    await runProc("git", ["push", "origin", target], { cwd: root, timeoutMs: 30_000 });
+    await runProc("git", ["merge", "--no-ff", branch, "-m", `merge ${branch}`], { cwd: topRoot, timeoutMs: 30_000 });
+    await runProc("git", ["branch", "-D", branch], { cwd: topRoot, timeoutMs: 15_000 });
+    await runProc("git", ["worktree", "remove", worktreeRoot], { cwd: topRoot, timeoutMs: 15_000 });
     return true;
   } catch {
     return false;
@@ -484,10 +477,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let toolRoot = l.repoRoot;
   if (mutating) {
     const issueWorktree = itemSlug && agentNameParsed === "engineer";
-    const researchWorktree = !itemSlug && agentNameParsed === "research";
+    // Research works at the top level — no worktree.
+    const researchDirect = !itemSlug && agentNameParsed === "research";
     // Reuse a terminal/paused worktree that already owns this issue branch.
     // A fresh path cannot be created while mc/<slug> is checked out.
-    const reuse = reusableWorktreeOwner(
+    const reuse = researchDirect ? undefined : reusableWorktreeOwner(
       [
         ...parentChainRuns,
         ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
@@ -511,40 +505,21 @@ export async function cmdRun(argv: string[]): Promise<number> {
         branch: reuse.run.branch,
       });
       process.stderr.write(`worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch})\n`);
-    } else {
+    } else if (!researchDirect) {
       try {
         const worktreeProcesses = new ProcessSupervisor({
           runId: recorder.id,
           runDir: recorder.dir,
           onEvent: (type, data) => recorder.event(type, data),
         });
-        let spec;
-        if (researchWorktree) {
-          // Research worktree on the main branch (HEAD), not a feature branch.
-          const path = join(l.localDir, "worktrees", recorder.id);
-          const currentBranch = (await runProc("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: l.repoRoot, timeoutMs: 15_000 })).stdout.trim();
-          await runProc("git", ["worktree", "add", path, "HEAD"], { cwd: l.repoRoot, timeoutMs: 30_000 });
-          const baseRef = (await runProc("git", ["rev-parse", "HEAD"], { cwd: l.repoRoot, timeoutMs: 15_000 })).stdout.trim();
-          spec = {
-            path,
-            branch: currentBranch,
-            baseRef,
-            baseBranch: currentBranch,
-            linkedDirs: [],
-            skippedLinks: [],
-            createdBranches: [],
-            materialized: [],
-          };
-        } else {
-          spec = await createWorktree({
-            layout: l,
-            runId: recorder.id,
-            kind: issueWorktree ? "issue" : "run",
-            ...(issueWorktree ? { slug: itemSlug } : {}),
-            base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
-            processes: worktreeProcesses,
-          });
-        }
+        const spec = await createWorktree({
+          layout: l,
+          runId: recorder.id,
+          kind: issueWorktree ? "issue" : "run",
+          ...(issueWorktree ? { slug: itemSlug } : {}),
+          base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
+          processes: worktreeProcesses,
+        });
         recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
         if (inheritWorktree && parentRun?.worktree) {
           // Inherit the parent's uncommitted work explicitly; conflicts fail.
@@ -741,16 +716,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Research: auto-commit findings from the temporary worktree back to main.
-  if (result.status === "completed" && agentNameParsed === "research" && toolRoot !== l.repoRoot) {
-    const currentBranch = (await runProc("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: toolRoot, timeoutMs: 15_000 })).stdout.trim();
+  // Research: auto-commit findings directly to main (no worktree).
+  if (result.status === "completed" && agentNameParsed === "research" && toolRoot === l.repoRoot) {
     const commitMessage = `research(${itemSlug ?? recorder.id}): ${request}`;
     await runProc("git", ["add", "-A"], { cwd: toolRoot, timeoutMs: 30_000 });
     const commitResult = await runProc("git", ["commit", "-m", commitMessage], { cwd: toolRoot, timeoutMs: 30_000 });
     if (commitResult.code === 0) {
-      // Push back to main repo
-      await runProc("git", ["push", l.repoRoot, `HEAD:${currentBranch}`], { cwd: toolRoot, timeoutMs: 30_000 });
-      recorder.event("research_committed", { branch: currentBranch });
+      recorder.event("research_committed", {});
     }
   }
 
@@ -768,7 +740,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (verdict === "approved" && toolRoot !== l.repoRoot) {
       const branch = recorder.current.branch;
       if (branch) {
-        await mergeBranch(toolRoot, branch, "main");
+        await mergeBranch(l.repoRoot, toolRoot, branch);
         recorder.event("branch_merged", { branch, verdict: "approved" });
       }
     }
@@ -839,7 +811,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
           if (issue.review === "none") {
             const branch = recorder.current.branch;
             if (branch) {
-              await mergeBranch(toolRoot, branch, "main");
+              await mergeBranch(l.repoRoot, toolRoot, branch);
               recorder.event("branch_merged", { branch });
             }
           }
@@ -1189,7 +1161,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
             if (issue.review === "none") {
               const branch = recorder.current.branch;
               if (branch) {
-                await mergeBranch(toolRoot, branch, "main");
+                await mergeBranch(l2.repoRoot, toolRoot, branch);
                 recorder.event("branch_merged", { branch });
               }
             }
@@ -1217,7 +1189,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     if (verdict === "approved" && toolRoot !== l2.repoRoot) {
       const branch = recorder.current.branch;
       if (branch) {
-        await mergeBranch(toolRoot, branch, "main");
+        await mergeBranch(l2.repoRoot, toolRoot, branch);
         recorder.event("branch_merged", { branch, verdict: "approved" });
       }
     }
