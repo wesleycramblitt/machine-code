@@ -514,6 +514,18 @@ export async function runTui(): Promise<void> {
       notify("type a task before starting");
       return null;
     }
+    // Validate git + remote before spawning.
+    const buildRepoRoot = layout(s.newRunRepo).repoRoot;
+    const gitVersion = spawnSync("git", ["--version"], { cwd: buildRepoRoot });
+    if (gitVersion.error || gitVersion.status !== 0) {
+      notify("git is required; install git and try again");
+      return null;
+    }
+    const gitRemote = spawnSync("git", ["remote", "-v"], { cwd: buildRepoRoot });
+    if (gitRemote.error || gitRemote.status !== 0 || !gitRemote.stdout.toString().trim()) {
+      notify("no git remote; configure one with `git remote add origin <url>`");
+      return null;
+    }
     const modelState = modelPreview();
     if (modelState.error) {
       notify(`no model is ready: ${modelState.error}`);
