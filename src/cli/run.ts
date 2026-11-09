@@ -168,6 +168,24 @@ export function buildIssueHints(l: ReturnType<typeof layout>, request: string): 
     );
     hints.push(`## Context\n\nRelevant files:\n${lines.join("\n")}`);
   }
+  // Verification facts, so the model does not spend turns hunting for a test
+  // suite that does not exist. Only for repos that declare npm scripts.
+  try {
+    const pkg = JSON.parse(readFileSync(join(l.repoRoot, "package.json"), "utf8")) as {
+      scripts?: Record<string, unknown>;
+    };
+    const scripts = pkg.scripts ?? {};
+    const checks: string[] = [];
+    if (typeof scripts.build === "string") checks.push("`npm run build`");
+    if (typeof scripts.typecheck === "string") checks.push("`npm run typecheck`");
+    const hasTest = typeof scripts.test === "string" && scripts.test.trim() !== "";
+    hints.push(
+      `## Verify\n\n${hasTest ? "Tests: `npm test`. " : "No test suite in this repo. "}` +
+        `Run core:check after edits${checks.length > 0 ? `; ${checks.join(" / ")}` : ""}.`,
+    );
+  } catch {
+    // No package.json: the issue's acceptance commands are the contract.
+  }
   const skills = skillMetas(l);
   if (skills.length > 0) {
     hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
@@ -346,7 +364,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // strip the old generated sections and attach fresh ones. The issue file is
   // left untouched.
   if (itemSlug && !autoCreatedIssue && normalizedAgent === "engineer" && request) {
-    const trimmed = request.split(/\n## (?:Context|Architecture|Skills)\b/)[0]!.trim();
+    const trimmed = request.split(/\n## (?:Context|Architecture|Skills|Verify)\b/)[0]!.trim();
     const hints = buildIssueHints(l, trimmed || request);
     if (hints.length > 0) {
       request = `${trimmed || request}\n\n${hints.join("\n\n")}`;
@@ -667,7 +685,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (reuse) {
       toolRoot = reuse.path;
       reusedWorktree = true;
-      const refreshed = await refreshReusedWorktree(reuse.path);
+      const refresh = await refreshReusedWorktree(reuse.path);
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,
@@ -679,11 +697,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
         parentRunId: reuse.run.id,
         path: reuse.path,
         branch: reuse.run.branch,
-        refreshed,
+        refresh,
       });
       process.stderr.write(
         `worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch}` +
-          `${refreshed ? ", fast-forwarded to main" : ""})\n`,
+          `${refresh === "updated" ? ", merged main" : refresh === "conflict" ? ", main merge conflicted (state preserved)" : ""})\n`,
       );
     } else {
       try {

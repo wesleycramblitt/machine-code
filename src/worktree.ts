@@ -226,23 +226,41 @@ export function reusableWorktreeOwner(
 }
 
 /**
- * Bring a reused worktree up to the current base branch when it holds no work
- * of its own. Runs that failed before committing otherwise keep handing the
- * next attempt a checkout that is many commits behind main. Dirty trees and
- * branches with their own commits are left alone: that work must survive.
+ * Bring a reused worktree up to the current base branch. A run that failed
+ * before committing otherwise hands the next attempt a checkout many commits
+ * behind main — including files main has since deleted. Uncommitted work is
+ * committed first so it survives the merge; if the merge conflicts, it is
+ * aborted and the branch is left exactly as it was.
  */
-export async function refreshReusedWorktree(path: string, baseBranch = "main"): Promise<boolean> {
+export type RefreshResult = "current" | "updated" | "conflict" | "skipped";
+
+export async function refreshReusedWorktree(path: string, baseBranch = "main"): Promise<RefreshResult> {
   try {
-    const dirty = await runProc("git", ["status", "--porcelain"], { cwd: path, timeoutMs: 20_000 });
-    if (dirty.code !== 0 || dirty.stdout.trim() !== "") return false;
     const base = await runProc("git", ["rev-parse", "--verify", baseBranch], { cwd: path, timeoutMs: 20_000 });
-    if (base.code !== 0) return false;
-    const ahead = await runProc("git", ["rev-list", "--count", `${baseBranch}..HEAD`], { cwd: path, timeoutMs: 20_000 });
-    if (ahead.code !== 0 || Number(ahead.stdout.trim()) !== 0) return false;
-    const merge = await runProc("git", ["merge", "--ff-only", baseBranch], { cwd: path, timeoutMs: 60_000 });
-    return merge.code === 0;
+    if (base.code !== 0) return "skipped";
+    const behind = await runProc("git", ["rev-list", "--count", `HEAD..${baseBranch}`], { cwd: path, timeoutMs: 20_000 });
+    if (behind.code !== 0) return "skipped";
+    if (Number(behind.stdout.trim()) === 0) return "current";
+    const status = await runProc("git", ["status", "--porcelain"], { cwd: path, timeoutMs: 20_000 });
+    if (status.code !== 0) return "skipped";
+    if (status.stdout.trim() !== "") {
+      const add = await runProc("git", ["add", "-A"], { cwd: path, timeoutMs: 30_000 });
+      if (add.code !== 0) return "skipped";
+      const commit = await runProc(
+        "git",
+        ["commit", "-m", "wip: preserve work from the previous run"],
+        { cwd: path, timeoutMs: 60_000 },
+      );
+      if (commit.code !== 0) return "skipped";
+    }
+    const merge = await runProc("git", ["merge", baseBranch, "--no-edit"], { cwd: path, timeoutMs: 120_000 });
+    if (merge.code !== 0) {
+      await runProc("git", ["merge", "--abort"], { cwd: path, timeoutMs: 30_000 });
+      return "conflict";
+    }
+    return "updated";
   } catch {
-    return false;
+    return "skipped";
   }
 }
 

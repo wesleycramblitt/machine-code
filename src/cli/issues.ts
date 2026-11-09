@@ -260,7 +260,7 @@ export async function runIssueBuild(
     const reuse = reusableWorktreeOwner(listRuns(l), `mc/${slug}`);
     if (reuse) {
       toolRoot = reuse.path;
-      const refreshed = await refreshReusedWorktree(reuse.path);
+      const refresh = await refreshReusedWorktree(reuse.path);
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,
@@ -268,10 +268,10 @@ export async function runIssueBuild(
         baseBranch: reuse.run.baseBranch,
         baseRef: reuse.run.baseRef,
       });
-      recorder.event("worktree_reused", { parentRunId: reuse.run.id, path: reuse.path, branch: reuse.run.branch, refreshed });
+      recorder.event("worktree_reused", { parentRunId: reuse.run.id, path: reuse.path, branch: reuse.run.branch, refresh });
       process.stderr.write(
         `worktree ${reuse.path} (reused from ${reuse.run.id}, branch ${reuse.run.branch}` +
-          `${refreshed ? ", fast-forwarded to main" : ""})\n`,
+          `${refresh === "updated" ? ", merged main" : refresh === "conflict" ? ", main merge conflicted (state preserved)" : ""})\n`,
       );
     } else {
       const supervisor = new ProcessSupervisor({
