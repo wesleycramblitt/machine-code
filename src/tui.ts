@@ -608,7 +608,7 @@ export async function runTui(): Promise<void> {
     if (!args) return;
     if (launch(args, s.newRunRepo)) {
       notify("run started; opening it when the record appears");
-      s.screen = "list";
+      s.screen = "run";
       s.page = "runs";
       s.selectedRunId = null;
       // The 1s background tick is too coarse for run handoff. Repaint fast
@@ -1056,8 +1056,8 @@ export async function runTui(): Promise<void> {
     else if (s.page === "runs" && s.screen === "run") {
       const detail = runDetailData();
       if (!detail) {
-        body = [` ${RED}Run ${s.selectedRunId ?? "?"} no longer exists.${R}`];
-        actions = command("Esc", "Back", undefined, GR);
+        body = ["   Run starting... (awaiting record)"]; // placeholder while pending
+          actions = ""; // no actions until run appears
       } else {
         const frame = renderRunDetail({
           cols, short, bodyH, theme,
