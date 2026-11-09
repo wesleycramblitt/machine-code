@@ -1130,6 +1130,39 @@ test("reordered volatile tail does not shift the stable prompt prefix", () => {
   assert.ok(a.includes("LEDGER-VARIANT-A") && b.includes("LEDGER-VARIANT-B"));
 });
 
+test("older transcript steps keep prose, collapse tool output to one line; newest stays full", () => {
+  const fakeState = () => ({
+    renderWorkingContext: () => "WORKING",
+    renderBlock: () => "STATE",
+  });
+  const bigBody = `line1\n${"x".repeat(500)}\nline3`;
+  const messages = [
+    { role: "system", content: "SYSTEM-PROMPT" },
+    { role: "user", content: "hello" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "old thinking stays: it is the only record of why" },
+        { type: "toolCall", id: "c1", name: "grep", arguments: { pattern: "oldneedle", path: "src" } },
+      ],
+    },
+    { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: `no matches for "oldneedle"\n${bigBody}` }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c2", name: "read", arguments: { path: "src/a.ts", offset: 1, limit: 5 } }],
+    },
+    { role: "toolResult", toolCallId: "c2", content: [{ type: "text", text: "1: hello new body" }] },
+  ];
+  const out = renderPromptMessages(messages, fakeState(), undefined, undefined, undefined, undefined, undefined).messages;
+  const flat = JSON.stringify(out);
+  // Newest step replays in full.
+  assert.match(flat, /1: hello new body/);
+  // Old reasoning survives; old tool output collapses to one line naming the call.
+  assert.match(flat, /old thinking stays/);
+  assert.match(flat, /earlier grep.*oldneedle.*src/);
+  assert.doesNotMatch(flat, /xxxxxxxxxx/);
+});
+
 test("needle-in-repo: a planted fact is retrievable from assembled context", async () => {
   const root = mkdtempSync(join(tmpdir(), "mc-ctx-needle-"));
   const needle = "NEEDLE-7f3a9q plasma-conduit calibration omega";
