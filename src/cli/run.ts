@@ -29,6 +29,7 @@ import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
 import { readCachedMap } from "../map/deterministic.js";
 import { discoverKnowledgeFiles } from "../context/preview.js";
+import { skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
 import { slugify } from "../plan/slug.js";
@@ -224,7 +225,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
       if (knowledgeFiles.length > 0) {
         hints.push(`## Knowledge\n\n${knowledgeFiles.map((k) => `  - ${k}`).join("\n")}`);
       }
-      hints.push(`## Skills\n\n  - clean-code: coding conventions\n  - verified-testing: test-first discipline (when acceptance is set)`);
+      const skills = skillMetas(l);
+      if (skills.length > 0) {
+        hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
+      }
       issue = writeIssue(l, {
         kind: "features",
         slug: autoSlug,
