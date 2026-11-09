@@ -5,7 +5,7 @@
  * review mode, body, and every run attached to it. Actions move the issue
  * forward (plan/build/gate/approve/delete/orchestrate/edit).
  */
-import { B, C, D, G, GR, M, R, RED, W, Y, command, joinCommands, trunc } from "../format.js";
+import { B, C, D, G, GR, M, R, RED, W, Y, statusColor, icon, agentTone, command, joinCommands, trunc, fmtMoney, fmtRunTokens } from "../format.js";
 import { sortRuns } from "../status.js";
 import type { RunSummary } from "../../state/runs.js";
 import { runItemId } from "../../plan/lifecycle.js";
@@ -52,9 +52,11 @@ export function renderIssue(props: IssueProps): IssueFrame {
       if (issue.body.length > body.length) lines.push(`   ${D}… ${issue.body.length - body.length} more line(s)${R}`);
     }
     const attached = runs.filter((run) => runItemId(run) === slug);
-    lines.push("", ` ${B}runs${R} ${D}(${attached.length})${R}`);
+    lines.push("", ` ${B}Runs${R} ${D}(${attached.length})${R}`);
     for (const run of sortRuns(attached, "activity")) {
-      lines.push(`   ${W}${run.id.slice(-8)}${R} ${D}${run.agent}${R} ${run.status}${run.error ? ` ${Y}${trunc(run.error, 40)}${R}` : ""}`);
+      const cost = typeof (run as any).cost?.actual === "number" ? (run as any).cost.actual : 0;
+      const tokens = typeof (run as any).usage?.totalTokens === "number" ? (run as any).usage.totalTokens : 0;
+      lines.push(`   ${icon(run.status)} ${W}${run.id.slice(-8)}${R} ${agentTone(run.agent)}${run.agent}${R} ${statusColor(run.status)}${run.status.toUpperCase()}${R}${run.error ? ` ${Y}${trunc(run.error, 40)}${R}` : ""}${cost ? ` ${Y}${fmtMoney(cost)}${R}` : ""}${tokens ? ` ${M}${fmtRunTokens(tokens)}${R}` : ""}`);
     }
   }
   const w = windowedBody(lines, scroll, scroll, bodyH);
