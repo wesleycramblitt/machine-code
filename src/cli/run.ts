@@ -249,6 +249,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
         tags: [],
         review: "none",
       });
+      // Commit immediately so the main worktree is clean for worktree creation.
+      await commitPlanningFiles(l, `issues: auto-create ${autoSlug}`);
     }
     itemSlug = issue.slug;
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
