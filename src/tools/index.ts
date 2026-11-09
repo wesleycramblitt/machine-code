@@ -213,6 +213,34 @@ function cleanReadSelectors(args: unknown): unknown {
     delete out[single];
     changed = true;
   }
+  // Line-range spellings models actually use. `line_start/line_end` and
+  // `start/end` are the most common; ignoring them returned the whole file
+  // and the model re-read looking for the line it asked for.
+  const asNumber = (value: unknown): number | undefined => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const n = Number(value.trim());
+      if (Number.isFinite(n)) return n;
+    }
+    return undefined;
+  };
+  const startAlias = asNumber(out.line_start) ?? asNumber(out.start) ?? asNumber(out.from);
+  const endAlias = asNumber(out.line_end) ?? asNumber(out.end) ?? asNumber(out.to);
+  for (const key of ["line_start", "line_end", "start", "end", "from", "to"]) {
+    if (key in out) {
+      delete out[key];
+      changed = true;
+    }
+  }
+  if (startAlias !== undefined && positiveLine(startAlias) && out.offset === undefined) {
+    out.offset = startAlias;
+    changed = true;
+  }
+  if (endAlias !== undefined && positiveLine(endAlias)) {
+    const from = asNumber(out.offset) ?? startAlias ?? 1;
+    out.limit = Math.max(1, Math.floor(endAlias) - Math.floor(from) + 1);
+    changed = true;
+  }
   // Numeric selectors: absent, non-numeric, or non-positive means "not set".
   // `offset: 0`, `around: 0`, and `limit: false` must never masquerade as a
   // real range and override an explicit offset/limit.
