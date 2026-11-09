@@ -216,7 +216,6 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     label: "read",
     description:
       "Read a text file inside the worktree. Returns numbered lines. " +
-      "A wrong extension suggests the same-basename alternative when one exists. " +
       "The default read is one page of at most " +
       "25k tokens (~100 KB); a whole-file read over 256 KB needs offset/limit or allow_large:true. " +
       "Use offset (1-based) and limit to page a large file, or allow_large:true for a whole-file/long-range read up to 1 MiB. " +
