@@ -298,7 +298,7 @@ export async function runTui(): Promise<void> {
     else if (issue) s.newrun.prompt = issue.prompt || issue.slug || "";
     resetNewRunUi();
     // The issue file is the objective and is always explicit context.
-    if (issue) s.newRunContextIncluded.add(`file:${issue.rel}`);
+    if (issue) s.newRunContextIncluded.add(`issue:${issue.rel}`);
     if (seed?.plan) s.newRunContextIncluded.add(`plan:${seed.plan}`);
     for (const name of seed?.skills ?? []) s.newRunSkillModes.set(name, "include");
     s.screen = "newrun";
@@ -1231,7 +1231,7 @@ export async function runTui(): Promise<void> {
     if (!s.newrun.prompt.trim() || (previousPrompt && s.newrun.prompt === previousPrompt)) {
       s.newrun.prompt = issue.prompt || issue.slug;
     }
-    s.newRunContextIncluded.add(`file:${issue.rel}`);
+    s.newRunContextIncluded.add(`issue:${issue.rel}`);
     s.itemPick = null;
     notify(`linked ${issue.slug}; ${issue.status} · review ${issue.review}`);
   };
