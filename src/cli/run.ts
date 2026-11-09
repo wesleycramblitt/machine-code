@@ -27,6 +27,8 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
+import { readCachedMap } from "../map/deterministic.js";
+import { discoverKnowledgeFiles } from "../context/preview.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
 import { slugify } from "../plan/slug.js";
@@ -206,15 +208,28 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
   // Auto-create an issue for bare runs so every run is linked to a branch.
+  // Pull repo map, knowledge, and skills as context hints to save the agent
+  // scouting turns.
   if (!itemSlug && normalizedAgent === "engineer" && request) {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
+      const hints: string[] = [];
+      const cachedMap = readCachedMap(l.repoRoot);
+      if (cachedMap) {
+        const topFiles = cachedMap.files.slice(0, 30).map((f) => `  ${f.path} (${f.symbols} symbols)`);
+        hints.push(`## Repo map\n\nTop files:\n${topFiles.join("\n")}`);
+      }
+      const knowledgeFiles = discoverKnowledgeFiles(l);
+      if (knowledgeFiles.length > 0) {
+        hints.push(`## Knowledge\n\n${knowledgeFiles.map((k) => `  - ${k}`).join("\n")}`);
+      }
+      hints.push(`## Skills\n\n  - clean-code: coding conventions\n  - verified-testing: test-first discipline (when acceptance is set)`);
       issue = writeIssue(l, {
         kind: "features",
         slug: autoSlug,
         prompt: request,
-        body: `Auto-created from run.\n\n${request}`,
+        body: `Auto-created from run.\n\n${request}\n\n${hints.join("\n\n")}`,
         tags: [],
         review: "none",
       });
