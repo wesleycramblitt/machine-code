@@ -397,12 +397,14 @@ through the command registry — never shell strings.
 ### Composer context and reusable tools
 
 The new-run composer previews exactly which issue, files, tools, scripts,
-and knowledge the selected run will inherit before it starts. The **Issues**
-subtab lists `issues/` files; `space` includes one explicitly. The **Files**
-subtab lists repo files; press `space` on a file to include it explicitly.
-The **Tools** subtab lists every tool available to the selected agent, plus
-custom repository/machine tools. Core tool definitions are sent with every
-request, so their schema tokens are included in the estimate and cannot be
+references, and skills the selected run will inherit before it starts. The
+**Issues** subtab lists `issues/` files; `space` includes one explicitly. The
+**Files** subtab lists repo files; press `space` on a file to include it
+explicitly. The **Skills** subtab lists every installed skill; `space` cycles
+description-only, full body, and excluded. The **Tools** subtab lists every
+tool available to the selected agent, plus custom repository/machine tools.
+Core tool definitions are sent with every request, so their schema tokens are
+included in the estimate and cannot be
 excluded as context. The **Agent Prompt** subtab lists every line of the
 resolved agent system prompt being previewed; like core tools it is fixed and
 cannot be switched off. Every subtab supports `/` filtering and `j/k`
@@ -482,11 +484,11 @@ Each run keeps its working memory outside the transcript:
   artifacts/    content-addressed tool bodies
 ```
 
-The model sees the run state, an always-on overview (issues, knowledge, repo
-map, module index), the full prior transcript, and no hidden task pack. The
-prompt is exactly the context curated in the composer plus the always-on
-indexes. There is no automatic preload,
-dependency expansion, inferred test list, or knowledge-note scoring: the model
+The model sees the run state, an always-on overview (issues, repo map, module
+index), the full prior transcript, and no hidden task pack. The prompt is
+exactly the context curated in the composer plus the always-on indexes. There
+is no automatic preload, dependency expansion, inferred test list, or hidden
+note scoring: the model
 reads, searches, or expands a symbol when it needs more. Context is assembled
 in priority order. If it exceeds the
 selected model's input budget, the run records a warning and names the omitted
@@ -601,9 +603,10 @@ such as Rust, Go, Java, and C/C++ find their homes.
 ### Repository knowledge
 
 Repo facts come from the code itself: module doc headers plus the
-deterministic map (`core:map`, `map outline/locate`, `grep`). No knowledge
-directory is injected — a hand-maintained architecture note drifts from the
-code, and every run pays for the stale version.
+deterministic map (`core:map`, `map outline/locate`, `grep`). There is no
+Knowledge tab and no knowledge directory is injected — a hand-maintained
+architecture note drifts from the code, and every run pays for the stale
+version.
 
 External material belongs in the reference store
 (`~/.machine_code/references/`), read on demand through the `reference` skill.

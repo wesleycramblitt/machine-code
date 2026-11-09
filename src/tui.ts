@@ -89,7 +89,7 @@ import { loadCatalogue } from "./catalogue/load.js";
 import { loadCuration } from "./catalogue/refresh.js";
 import { filterModels, groupModels, siblingOffers, type ModelSort } from "./catalogue/query.js";
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
-import { previewContext, artifactPreview, discoverKnowledgeFiles, type ContextPreview } from "./context/preview.js";
+import { previewContext, artifactPreview, type ContextPreview } from "./context/preview.js";
 import { contextBudget } from "./context/budget.js";
 import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "./context/references.js";
 import { listReferenceEntries } from "./references/store.js";

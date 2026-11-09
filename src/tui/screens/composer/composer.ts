@@ -2,8 +2,8 @@
  * machine_code — new-run composer screen.
  *
  * Pure-ish render of the run composer: agent/preset/verify controls, the
- * issue link, context tabs (issues, knowledge, skills, scripts,
- * tools, codebase, references, prompt, files), the prompt box, and the
+ * issue link, context tabs (issues, skills, scripts, tools, codebase,
+ * references, prompt, files), the prompt box, and the
  * model/issue picker overlays. Props carry snapshots of composer state;
  * the frame returns rendered content plus updated cursor derivations.
  * The skill-mode memo map is mutated in place (render-derived, read by
@@ -22,8 +22,7 @@ import { layout } from "../../../paths.js";
 import { findIssue, listIssues, singleLine, ISSUE_KINDS } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
-import { resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
-import { discoverKnowledgeFiles } from "../../../context/preview.js";
+import { defaultSkillsFor, resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
 import { contextBudget } from "../../../context/budget.js";
 import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
 import { listReferenceEntries } from "../../../references/store.js";
@@ -144,7 +143,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const knownFiles = new Set(fileItems.map((item) => item.key));
   // Paths that belong to other context sections; exclude from the file tab.
   const excludedFilePrefixes = [
-    "issues/", "knowledge/", ".machine_code/skills/", ".machine_code/tools/",
+    "issues/", ".machine_code/skills/", ".machine_code/tools/",
     ".machine_code/scripts/", ".machine_code/references/",
     "node_modules/", ".git/",
   ];
@@ -161,7 +160,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       counted: false,
     });
   }
-  const knowledgeItems: ContextPanelItem[] = itemsFor(["knowledge"]);
   // Attached references first, then every store bundle as
   // an available row the user can search and opt into with space.
   const referenceItems: ContextPanelItem[] = itemsFor(["reference"]);
@@ -180,25 +178,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       chars: Math.min(entry.bytes, 8 * 1024),
       exists: entry.exists,
       key: `reference:${entry.citation}`,
-      available: true,
-      counted: false,
-    });
-  }
-  const knownKnowledge = new Set(knowledgeItems.map((item) => item.key));
-  for (const path of discoverKnowledgeFiles(newRunLayout)) {
-    const key = `knowledge:${path}`;
-    if (knownKnowledge.has(key)) continue;
-    let size = 0;
-    try {
-      size = statSync(join(newRunLayout.repoRoot, path)).size;
-    } catch {
-      // keep the row visible with an unknown size
-    }
-    knowledgeItems.push({
-      text: `${path} · available`,
-      chars: size,
-      exists: true,
-      key,
       available: true,
       counted: false,
     });
@@ -228,7 +207,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   }
   const skillSources = ctx.sources.filter((source) => source.kind === "skill");
   const aggregateSkill = skillSources.find((source) => /^\d+ skills$/.test(source.ref));
-  const skillDefaults = [] as string[];
+  const skillDefaults = defaultSkillsFor({ agent: run.agent });
   const skillPresets = roleSkillPresets(run.agent);
   const skillOverrides = Object.fromEntries(skillModes);
   const skillModeOf = (name: string): SkillMode => {
@@ -239,9 +218,29 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       overrides: skillOverrides,
     });
   };
-  const skillItems: ContextPanelItem[] = aggregateSkill
-    ? skillListItems(skillMetas(newRunLayout), aggregateSkill.chars)
-    : [];
+  // Every installed skill is visible so it can be opted into. Only the
+  // role's defaults and explicit includes carry description chars in the
+  // prompt; the rest are available rows at zero cost.
+  const allSkillMetas = skillMetas(newRunLayout);
+  const includeOverrides = Object.entries(skillOverrides)
+    .filter(([, mode]) => mode === "include")
+    .map(([name]) => name);
+  const visibleSkillNames = new Set([...skillDefaults, ...includeOverrides]);
+  const visibleSkillMetas = allSkillMetas.filter((skill) => visibleSkillNames.has(skill.name));
+  const skillItems: ContextPanelItem[] = skillListItems(
+    visibleSkillMetas,
+    aggregateSkill?.chars ?? 0,
+  );
+  const listedSkills = new Set(visibleSkillMetas.map((skill) => skill.name));
+  for (const skill of allSkillMetas) {
+    if (listedSkills.has(skill.name)) continue;
+    skillItems.push({
+      text: `${skill.name} · ${skill.description}`,
+      chars: 0,
+      exists: true,
+      key: `skill:${skill.name}`,
+    });
+  }
   const bodyChars = new Map<string, number>();
   for (const source of skillSources) {
     if (source === aggregateSkill) continue;
@@ -394,7 +393,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     }));
   const sections = [
     { label: "Issues", tone: contextTone("issue"), sectionKey: "section:issues", items: issueItems },
-    { label: "Knowledge", tone: contextTone("knowledge"), sectionKey: "section:knowledge", items: knowledgeItems },
     { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
     { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
     { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
@@ -408,7 +406,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const row = item as ContextPanelItem;
     return (
       row.available === true &&
-      (row.key.startsWith("file:") || row.key.startsWith("knowledge:") || row.key.startsWith("reference:") || row.key.startsWith("issue:")) &&
+      (row.key.startsWith("file:") || row.key.startsWith("reference:") || row.key.startsWith("issue:")) &&
       included.has(row.key)
     );
   };

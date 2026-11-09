@@ -96,4 +96,4 @@ export interface ComposerFrame {
   itemPickSel: number;
 }
 
-export const NEW_RUN_CONTEXT_TABS = ["Packets", "Issues", "Knowledge", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;
+export const NEW_RUN_CONTEXT_TABS = ["Issues", "Skills", "Scripts", "Tools", "Codebase", "References", "Agent Prompt", "Files"] as const;

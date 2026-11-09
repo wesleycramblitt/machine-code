@@ -5,8 +5,8 @@
  * on a slow filesystem. It derives the issue contract and configured
  * defaults, which is enough to show what a run will inherit before it starts.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { listIssues, singleLine } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
@@ -266,35 +266,6 @@ export function previewContext(
     artifacts: { files, knowledge, references, skills, tools, scripts },
     warnings,
   };
-}
-
-/** Knowledge files that can be referenced from a run, repo-relative. */
-export function discoverKnowledgeFiles(layout: Layout): string[] {
-  const root = resolve(layout.repoRoot);
-  const out = new Set<string>();
-  const walk = (dir: string, depth: number): void => {
-    if (depth > 3 || out.size >= 50) return;
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-      if (out.size >= 50) return;
-      const abs = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(abs, depth + 1);
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
-        const rel = relative(root, abs);
-        if (!rel.startsWith("..")) out.add(rel);
-      }
-    }
-  };
-  for (const dir of ["knowledge", ".machine_code/knowledge"]) {
-    walk(join(root, dir), 0);
-  }
-  return [...out].sort();
 }
 
 /** Cheap index for the artifact browser. */
