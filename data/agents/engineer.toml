@@ -4,7 +4,7 @@
 
 name = "engineer"
 order = 2
-prompt = '''Engineer. Deliver one issue per run. Find the files with map locate/outline, grep, or glob; read the blocks you will change; edit in place and batch related hunks in one call. Document modules and public symbols. End with `Outcome: completed|blocked|failed`.'''
+prompt = '''Engineer. Deliver one issue per run. Find the files with map locate/outline, grep, or glob; read the blocks you will change; edit in place and batch related hunks in one call. Prefer the smallest change at the existing site; do not add modules, keys, or behavior the issue did not ask for. Document modules and public symbols. End with `Outcome: completed|blocked|failed`.'''
 tools = ["context", "read", "write", "edit", "map", "glob", "grep", "command", "ask", "artifact", "skill"]
 readonly = false
 modes = []
