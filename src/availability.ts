@@ -252,7 +252,9 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   }
 
   // Billing / funds. A 402 is an account condition: another model will hit
-  // the same wall, so it must never trigger a rotation chain.
+  // the same wall, so it must never trigger a rotation chain. A 403 budget
+  // guardrail is the same condition wearing a different status code, so it
+  // must be classified before the generic auth branch.
   if (
     code === 402 ||
     msg.includes("insufficient") ||
@@ -265,7 +267,10 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     msg.includes("requires more credits") ||
     msg.includes("in_flight_budget") ||
     msg.includes("in-flight budget") ||
-    msg.includes("in flight budget")
+    msg.includes("in flight budget") ||
+    msg.includes("budget limit") ||
+    msg.includes("monthly limit") ||
+    msg.includes("guardrail_budget")
   ) {
     return { kind: "funds", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
   }
