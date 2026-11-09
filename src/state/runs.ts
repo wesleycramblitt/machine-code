@@ -228,10 +228,6 @@ export class RunRecorder {
       parentRunId?: string;
       rootRunId?: string;
       forkReason?: "user_interrupt" | "manual" | "resume";
-      preset?: string;
-      delegate?: boolean;
-      verification?: string;
-          ask?: boolean;
       approval?: string;
       ambiguity?: string;
       capabilities?: string[];
@@ -311,10 +307,6 @@ export class RunRecorder {
       ...(init.parentRunId ? { parentRunId: init.parentRunId } : {}),
       ...(init.rootRunId ? { rootRunId: init.rootRunId } : {}),
       ...(init.forkReason ? { forkReason: init.forkReason } : {}),
-      ...(init.preset !== undefined ? { preset: init.preset } : {}),
-      ...(init.delegate !== undefined ? { delegate: init.delegate } : {}),
-      ...(init.verification !== undefined ? { verification: init.verification } : {}),
-        ...(init.ask !== undefined ? { ask: init.ask } : {}),
       ...(init.approval !== undefined ? { approval: init.approval } : {}),
       ...(init.ambiguity !== undefined ? { ambiguity: init.ambiguity } : {}),
       ...(init.capabilities !== undefined ? { capabilities: init.capabilities } : {}),

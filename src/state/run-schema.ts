@@ -121,10 +121,6 @@ export interface RunSummary {
   agent: string;
   mode: string;
   /** Resolved agent configuration snapshot (Phase 3). */
-  preset?: string;
-  delegate?: boolean;
-  verification?: string;
-  ask?: boolean;
   approval?: string;
   ambiguity?: string;
   capabilities?: string[];
@@ -251,10 +247,6 @@ export function migrateRunSummary(raw: unknown): RunSummary | null {
     itemId: str(r.itemId),
     agent: str(r.agent) ?? "unknown",
     mode: str(r.mode) ?? "unknown",
-    preset: str(r.preset),
-    delegate: typeof r.delegate === "boolean" ? r.delegate : undefined,
-    verification: str(r.verification),
-    ask: typeof r.ask === "boolean" ? r.ask : undefined,
     approval: str(r.approval),
     ambiguity: str(r.ambiguity),
     capabilities: Array.isArray(r.capabilities)

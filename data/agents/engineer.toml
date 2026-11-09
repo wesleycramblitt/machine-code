@@ -9,7 +9,8 @@ tools = ["context", "read", "write", "edit", "map", "glob", "grep", "command", "
 readonly = false
 modes = []
 blurb = "plans + builds a feature/bug in one run"
-preset = "engineer"
+approval = "human"
+ambiguity = "precise"
 capabilities = ["code:read", "context:inherit", "code:write", "artifact:provision"]
 
 [weights]

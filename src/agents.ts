@@ -55,6 +55,8 @@ interface RoleData {
   mode?: unknown;
   blurb?: unknown;
   preset?: unknown;
+  approval?: unknown;
+  ambiguity?: unknown;
   capabilities?: unknown;
   base_prompt?: unknown;
   weights?: Record<string, unknown>;
@@ -159,6 +161,15 @@ export function roleWeights(name: AgentName): Partial<Record<"reasoning" | "code
 export function rolePreset(name: AgentName): string {
   const role = roleData(name);
   return typeof role.preset === "string" ? role.preset : "assistant";
+}
+
+/** Read raw role data for config defaults (approval, ambiguity). */
+export function roleDefaults(name: AgentName): { approval: string; ambiguity: string } {
+  const role = roleData(name);
+  return {
+    approval: role.approval === "agent" ? "agent" : "human",
+    ambiguity: typeof role.ambiguity === "string" ? role.ambiguity : "precise",
+  };
 }
 
 /**

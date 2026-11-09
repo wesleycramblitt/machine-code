@@ -8,8 +8,9 @@ prompt = '''Review agent. Judge one feature/bug build in the same worktree and b
 tools = ["context", "read", "map", "glob", "grep", "command", "ask"]
 readonly = true
 modes = []
-blurb = "read-only judge; used by verified/redundant chains"
-preset = "review"
+blurb = "read-only judge; used after engineer runs"
+approval = "human"
+ambiguity = "precise"
 capabilities = ["code:read", "context:inherit", "review:write"]
 
 [weights]

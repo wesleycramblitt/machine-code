@@ -9,7 +9,8 @@ tools = ["context", "read", "map", "glob", "grep", "ask", "skill", "write"]
 readonly = false
 modes = []
 blurb = "turns ideas into features/bugs"
-preset = "research"
+approval = "human"
+ambiguity = "strict"
 capabilities = ["code:read", "context:inherit", "knowledge:write"]
 
 [weights]

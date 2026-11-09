@@ -1,21 +1,16 @@
 /**
- * machine_code — agent configuration: presets, explicit overrides, ambiguity.
+ * machine_code — agent configuration: defaults plus overrides.
  *
- * Four separate axes (never conflated):
- *   role        — identity: research | engineer | review
- *   config      — behavior: delegate / verification / worktree / ask / approval
- *   mode        — legacy orchestration mode declared by a role
- *   ambiguity   — clarification policy; independent of everything above
- *
- * Enforcement lives in the harness (capability filtering, tool gating), not in
- * prompts. Prompts only explain the policy.
+ * Each agent role declares its own defaults (approval, ambiguity) in its TOML
+ * file. Machine config, repo policy, and run flags layer on top.
+ * Only two config fields exist: approval (human|agent) and ambiguity
+ * (strict|precise|adaptive|autonomous).
  */
-import type { AgentConfigOverrides, AgentPolicy, MachineConfig, Policy } from "../config.js";
+import type { AgentConfigOverrides, AgentPolicy } from "../config.js";
 import {
   AGENT_NAMES,
   agentDef,
-  presetData,
-  rolePreset,
+  roleDefaults as roleDefaultsData,
   type AgentDef,
   type AgentName,
 } from "../agents.js";
@@ -25,35 +20,23 @@ import { capabilitiesFor, type Capability } from "../policy/capabilities.js";
 
 export type ApprovalMode = "human" | "agent";
 export type AmbiguityMode = "strict" | "precise" | "adaptive" | "autonomous";
-export type PresetName = string;
 
 export interface AgentConfig {
-  preset: PresetName;
   approval: ApprovalMode;
   ambiguity: AmbiguityMode;
 }
 
 const AMBIGUITIES: readonly AmbiguityMode[] = ["strict", "precise", "adaptive", "autonomous"];
 
-function presetFromData(name: string, raw: Record<string, unknown>): AgentConfig {
+function roleDefaults(name: AgentName): AgentConfig {
+  const raw = roleDefaultsData(name);
   return {
-    preset: name,
     approval: raw.approval === "agent" ? "agent" : "human",
-    ambiguity: (AMBIGUITIES as readonly string[]).includes(String(raw.ambiguity))
+    ambiguity: (AMBIGUITIES as readonly string[]).includes(raw.ambiguity)
       ? (raw.ambiguity as AmbiguityMode)
       : "precise",
   };
 }
-
-/** Behavior presets from data/presets.toml. */
-export const PRESETS: Record<string, AgentConfig> = Object.fromEntries(
-  Object.entries(presetData()).map(([name, raw]) => [name, presetFromData(name, raw)]),
-);
-
-/** Role default presets from data/agents/<role>.toml. */
-export const ROLE_PRESET: Record<string, PresetName> = Object.fromEntries(
-  AGENT_NAMES.map((name) => [name, rolePreset(name)]),
-);
 
 export interface ResolveInput {
   role: AgentName;
@@ -66,18 +49,10 @@ export interface ResolveInput {
 }
 
 /**
- * Precedence: run flag → repo policy → machine config → preset → built-in.
- * Orchestration mode is not a behavior override; it is selected separately
- * from the role's `modes` list and drives the coordinator/subagent chain.
+ * Precedence: run flag → repo policy → machine config → role default.
  */
 export function resolveAgentConfig(input: ResolveInput): AgentConfig {
-  const presetName = pickPreset(input);
-  const base = PRESETS[presetName] ?? PRESETS.assistant ?? {
-    preset: "assistant",
-    approval: "human",
-    ambiguity: "precise",
-  };
-  const config: AgentConfig = { ...base };
+  const config: AgentConfig = { ...roleDefaults(input.role) };
 
   const layers: Array<AgentConfigOverrides | undefined> = [
     machineOverridesToConfig(input.machineOverrides),
@@ -98,15 +73,9 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
   return config;
 }
 
-function pickPreset(input: ResolveInput): PresetName {
-  // Presets no longer steer resolution; the role default always wins.
-  return ROLE_PRESET[input.role] ?? "assistant";
-}
-
 function agentPolicyToConfig(policy: AgentPolicy | undefined): AgentConfigOverrides | undefined {
   if (!policy) return undefined;
   const out: AgentConfigOverrides = {};
-  if (policy.preset !== undefined) out.preset = policy.preset;
   if (policy.approval !== undefined) out.approval = policy.approval;
   if (policy.ambiguity !== undefined) out.ambiguity = policy.ambiguity;
   const hasAny = Object.values(out).some((v) => v !== undefined);
@@ -192,9 +161,8 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
 };
 
 /**
- * Resolve a role into a run-ready agent: preset/override config, capability
- * matrix, capability-gated tool list, and the composed prompt. This is the
- * single place run creation turns configuration into enforcement.
+ * Resolve a role into a run-ready agent: config, capability matrix,
+ * capability-gated tool list, and composed prompt.
  */
 export function resolveAgent(
   layout: Layout,
@@ -216,9 +184,6 @@ export function resolveAgent(
   const capSet = new Set<string>(capabilities);
   let tools = def.tools.filter((t) => {
     if (t === "ask") return askEnabled(config);
-    // `write` is shared: engineer writes code (code:write), research persists
-    // findings to knowledge/plans (knowledge:write). The write tool itself
-    // restricts non-edit roles to those paths.
     if (t === "write") return capSet.has("code:write") || capSet.has("knowledge:write");
     const needed = TOOL_CAPABILITY[t];
     if (needed && !capSet.has(needed)) return false;
