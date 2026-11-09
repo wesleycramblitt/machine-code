@@ -66,6 +66,46 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
 
+/** Context hints for an issue body or run request: repo files whose path or
+ * symbol names contain 2+ distinct request keywords (capped at 5), plus the
+ * architecture doc and skill index when present. Weak matches mislead more
+ * than they help, so no section at all beats a wrong one. */
+function buildIssueHints(l: ReturnType<typeof layout>, request: string): string[] {
+  const hints: string[] = [];
+  const keywords = request.toLowerCase().split(/\s+/).filter((w) => w.length > 3 && !["this", "that", "with", "from", "have", "been", "when", "what", "make", "just"].includes(w));
+  // Suggest repo files only on strong signal: 2+ distinct request keywords
+  // in the path or symbol names, capped at 5.
+  const cachedMap = readCachedMap(l.repoRoot);
+  if (cachedMap) {
+    const matched = cachedMap.files
+      .map((f) => {
+        const lower = f.path.toLowerCase();
+        const syms = f.symbols.map((s) => s.name.toLowerCase());
+        const hits = keywords.filter((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
+        return { file: f, hits: hits.length };
+      })
+      .filter((entry) => entry.hits >= 2)
+      .sort((a, b) => b.hits - a.hits)
+      .slice(0, 5);
+    if (matched.length > 0) {
+      hints.push(`## Context\n\nRelevant files:\n${matched.map((entry) => `  - ${entry.file.path} (${entry.file.symbols.length} symbols)`).join("\n")}`);
+    }
+  }
+  // Always include architecture.md if it exists.
+  const archPath = join(l.repoRoot, "knowledge", "architecture.md");
+  try {
+    if (existsSync(archPath)) {
+      const arch = readFileSync(archPath, "utf8").split("\n").slice(0, 30).join("\n");
+      hints.push(`## Architecture\n\n${arch}`);
+    }
+  } catch {}
+  const skills = skillMetas(l);
+  if (skills.length > 0) {
+    hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
+  }
+  return hints;
+}
+
 /** Update the local main branch from the remote. Non-blocking: if the remote is
  * unreachable the work continues with the local state. */
 async function syncFromRemote(topRoot: string): Promise<void> {
@@ -209,43 +249,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   // Auto-create an issue for bare runs so every run is linked to a branch.
   // Gather context relevant to the request to save the agent scouting turns.
+  let autoCreatedIssue = false;
   if (!itemSlug && normalizedAgent === "engineer" && request) {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
-      const hints: string[] = [];
-      const keywords = request.toLowerCase().split(/\s+/).filter((w) => w.length > 3 && !["this", "that", "with", "from", "have", "been", "when", "what", "make", "just"].includes(w));
-      // Suggest repo files only on strong signal: 2+ distinct request keywords
-      // in the path or symbol names, capped at 5. Weak matches mislead more
-      // than they help, so no section at all beats a wrong one.
-      const cachedMap = readCachedMap(l.repoRoot);
-      if (cachedMap) {
-        const matched = cachedMap.files
-          .map((f) => {
-            const lower = f.path.toLowerCase();
-            const syms = f.symbols.map((s) => s.name.toLowerCase());
-            const hits = keywords.filter((kw) => lower.includes(kw) || syms.some((s) => s.includes(kw)));
-            return { file: f, hits: hits.length };
-          })
-          .filter((entry) => entry.hits >= 2)
-          .sort((a, b) => b.hits - a.hits)
-          .slice(0, 5);
-        if (matched.length > 0) {
-          hints.push(`## Context\n\nRelevant files:\n${matched.map((entry) => `  - ${entry.file.path} (${entry.file.symbols.length} symbols)`).join("\n")}`);
-        }
-      }
-      // Always include architecture.md if it exists.
-      const archPath = join(l.repoRoot, "knowledge", "architecture.md");
-      try {
-        if (existsSync(archPath)) {
-          const arch = readFileSync(archPath, "utf8").split("\n").slice(0, 30).join("\n");
-          hints.push(`## Architecture\n\n${arch}`);
-        }
-      } catch {}
-      const skills = skillMetas(l);
-      if (skills.length > 0) {
-        hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
-      }
+      const hints = buildIssueHints(l, request);
       issue = writeIssue(l, {
         kind: "features",
         slug: autoSlug,
@@ -256,9 +265,23 @@ export async function cmdRun(argv: string[]): Promise<number> {
       });
       // Commit immediately so the main worktree is clean for worktree creation.
       await commitPlanningFiles(l, `issues: auto-create ${autoSlug}`);
+      autoCreatedIssue = true;
     }
     itemSlug = issue.slug;
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
+  }
+  // Linked issues don't carry auto-generated hints. If the body has none,
+  // attach the same matcher output to the request so scouting starts warm.
+  // The issue file itself is left untouched.
+  if (itemSlug && !autoCreatedIssue && normalizedAgent === "engineer" && request) {
+    const linked = findIssue(l, itemSlug);
+    if (linked && !linked.body.includes("## Context")) {
+      const hints = buildIssueHints(l, request);
+      if (hints.length > 0) {
+        request += `\n\n${hints.join("\n\n")}`;
+        process.stderr.write(`issue hints attached (${hints.length} sections)\n`);
+      }
+    }
   }
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const tier = flags.get("tier");
