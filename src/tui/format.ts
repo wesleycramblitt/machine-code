@@ -436,9 +436,9 @@ export function commandBadge(label: string, key: string, background: string, for
 /** Stable role colors used wherever an agent name is shown. */
 export function agentTone(agent: string): string {
   switch (agent) {
-    case "research": return G;
-    case "engineer": return C;
-    case "review": return M;
+    case "research": return PURPLE_FG;
+    case "engineer": return BL;
+    case "review": return RED;
     // Legacy run records keep their old colors.
     case "planner": return BL;
     case "build": return C;
