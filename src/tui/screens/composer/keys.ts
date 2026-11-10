@@ -101,10 +101,10 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   }
   if (data === ":") { s.newRunColon = true; ctx.draw(); return true; }
   if (s.newRunContextFiltering) {
-    if (data === "\x1b") { s.newRunContextFiltering = false; s.newRunContextFilter = ""; s.newRunContextItem = 0; ctx.draw(); return true; }
-    if (data === "\r" || data === "\n") { s.newRunContextFiltering = false; s.newRunContextItem = 0; ctx.draw(); return true; }
-    if (data === "\x7f" || data === "\b") { s.newRunContextFilter = s.newRunContextFilter.slice(0, -1); s.newRunContextItem = 0; ctx.draw(); return true; }
-    if (!data.startsWith("\x1b")) { s.newRunContextFilter += printable(data); s.newRunContextItem = 0; ctx.draw(); return true; }
+    if (data === "\x1b") { s.newRunContextFiltering = false; s.newRunContextFilter = ""; s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
+    if (data === "\r" || data === "\n") { s.newRunContextFiltering = false; s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
+    if (data === "\x7f" || data === "\b") { s.newRunContextFilter = s.newRunContextFilter.slice(0, -1); s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
+    if (!data.startsWith("\x1b")) { s.newRunContextFilter += printable(data); s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
     ctx.draw();
     return true;
   }
@@ -113,12 +113,14 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "h" || data === "\x1b[D") {
     s.newRunContextTab = Math.max(0, s.newRunContextTab - 1);
     s.newRunContextItem = 0;
+    s.newRunContextItemKey = null;
     ctx.draw();
     return true;
   }
   if (data === "l" || data === "\x1b[C") {
     s.newRunContextTab = Math.min(NEW_RUN_CONTEXT_TABS.length - 1, s.newRunContextTab + 1);
     s.newRunContextItem = 0;
+    s.newRunContextItemKey = null;
     ctx.draw();
     return true;
   }

@@ -43,6 +43,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const { excluded, included, skillModes, skillShown, preview, pickers } = props;
   let contextTab: number = props.contextTab;
   let contextItem = props.contextItem;
+  const contextItemKey = props.contextItemKey;
   let contextSectionKey = "";
   let contextItemKeys: string[] = [];
   let contextItemAvailable: boolean[] = [];
@@ -303,13 +304,9 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     skillShown.set(name, skillModeOf(name));
     skillItems.push({ text: `${name} · default · missing`, chars: 0, exists: false, key: `skill:${name}` });
   }
-  const SKILL_MODE_RANK: Record<SkillMode, number> = { include: 0, "on-demand": 1, exclude: 2 };
-  skillItems.sort((a, b) => {
-    // Missing bodies always sink below installed skills of any mode.
-    const aRank = a.exists ? SKILL_MODE_RANK[skillShown.get(a.key.slice("skill:".length)) ?? "on-demand"] : 3;
-    const bRank = b.exists ? SKILL_MODE_RANK[skillShown.get(b.key.slice("skill:".length)) ?? "on-demand"] : 3;
-    return aRank - bRank;
-  });
+  // Row order stays fixed per section (build order) regardless of include/
+  // exclude/mode state: the render marks (✓ / ✕ / · / mode tags) convey state,
+  // so re-sorting would only make rows and the cursor jump on toggle.
   const roleFit = ap ? (run.tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) : undefined;
   const floorText = run.floors === "role" ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : run.floors;
   const fitText = run.minFit === undefined ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : String(run.minFit);
@@ -480,8 +477,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   ).map((line) => panelLine(line, false, true));
   const activeSection = sections[contextTab]!;
   contextSectionKey = activeSection.sectionKey;
-  // `/` narrows the active tab by substring; attached rows stay sorted
-  // first by construction (references/skills), so filtering keeps them.
+  // `/` narrows the active tab by substring; rows keep their build order.
   const contextFilter = contextFilterRaw.trim().toLowerCase();
   const shownItems = contextFilter
     ? activeSection.items.filter((item) => item.text.toLowerCase().includes(contextFilter))
@@ -490,19 +486,31 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   contextItemAvailable = shownItems.map(
     (item) => (item as { available?: boolean }).available === true,
   );
-  contextItem = Math.min(contextItem, Math.max(0, shownItems.length - 1));
+  // Anchor the cursor by row key: toggling include/exclude or cycling a skill
+  // mode changes marks, never order, so the remembered key still resolves to
+  // the same row. Fall back to the clamped index when the key is gone (a `/`
+  // filter or an exclusion that hides the row).
+  let anchoredIndex = contextItem;
+  if (contextItemKey !== null) {
+    const keyIndex = shownItems.findIndex((item) => item.key === contextItemKey);
+    if (keyIndex >= 0) anchoredIndex = keyIndex;
+  }
+  contextItem = Math.min(Math.max(0, anchoredIndex), Math.max(0, shownItems.length - 1));
   const sectionOff = excluded.has(activeSection.sectionKey);
-  const availableItems = shownItems.filter((item) => isShownAvailable(item));
-  const contextItems = shownItems.filter((item) => !isShownAvailable(item));
-  const keptItems = contextItems.filter((item) => {
+  // Rows render in stable build order; state (kept vs available) is shown by
+  // marks and counts only, never by regrouping.
+  const keptItems = shownItems.filter((item) => {
     if ((item as { fixed?: boolean }).fixed) return true;
+    if (isShownAvailable(item)) return false;
     return !sectionOff && !excluded.has(item.key);
   });
   const sectionTokens = keptItems
     .filter((item) => isCounted(item))
     .reduce((sum, item) => sum + tokensForChars(item.chars), 0);
-  const keptLabel = contextItems.length > 0 ? ` · ${keptItems.length}/${contextItems.length} kept` : "";
-  const availableLabel = availableItems.length > 0 ? ` · ${availableItems.length} available` : "";
+  const keptLabel = shownItems.length > 0 ? ` · ${keptItems.length}/${shownItems.length} kept` : "";
+  const availableLabel = shownItems.some((item) => isShownAvailable(item))
+    ? ` · ${shownItems.filter((item) => isShownAvailable(item)).length} available`
+    : "";
   const sectionHeader = panelLine(
     `${B}${activeSection.tone}${activeSection.label}${R} ${D}·${R} ${C}${fmtTokens(sectionTokens)}${R}` +
       `${D} tok${keptLabel}${availableLabel}${R}`,
@@ -747,6 +755,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     contextItemKeys,
     contextItemAvailable,
     contextItem,
+    contextItemKey: shownItems.length > 0 ? shownItems[contextItem]!.key : null,
     modelPickSel,
     itemPickSel,
   };

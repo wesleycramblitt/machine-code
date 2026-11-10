@@ -63,6 +63,8 @@ export interface ComposerProps extends Viewport {
   colon: boolean;
   contextTab: number;
   contextItem: number;
+  /** Key of the row the cursor is anchored to; the render resolves it to an index each frame so toggles cannot move the cursor to a different row. */
+  contextItemKey: string | null;
   contextFilter: string;
   contextFiltering: boolean;
   excluded: ReadonlySet<string>;
@@ -92,6 +94,8 @@ export interface ComposerFrame {
   contextItemKeys: string[];
   contextItemAvailable: boolean[];
   contextItem: number;
+  /** Key of the row the cursor resolved to this frame (null when the list is empty). */
+  contextItemKey: string | null;
   modelPickSel: number;
   itemPickSel: number;
 }

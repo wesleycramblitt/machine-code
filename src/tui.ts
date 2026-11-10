@@ -273,6 +273,7 @@ export async function runTui(): Promise<void> {
     s.newRunColon = false;
     s.newRunContextTab = 0;
     s.newRunContextItem = 0;
+    s.newRunContextItemKey = null;
     s.newRunContextFilter = "";
     s.newRunContextFiltering = false;
     s.newRunSkillModes.clear();
@@ -918,6 +919,7 @@ export async function runTui(): Promise<void> {
         colon: s.newRunColon,
         contextTab: s.newRunContextTab,
         contextItem: s.newRunContextItem,
+        contextItemKey: s.newRunContextItemKey,
         contextFilter: s.newRunContextFilter,
         contextFiltering: s.newRunContextFiltering,
         excluded: s.newRunContextExcluded,
@@ -954,6 +956,7 @@ export async function runTui(): Promise<void> {
       s.newRunContextItemKeys = frame.contextItemKeys;
       s.newRunContextItemAvailable = frame.contextItemAvailable;
       s.newRunContextItem = frame.contextItem;
+      s.newRunContextItemKey = frame.contextItemKey;
       s.modelPickSel = frame.modelPickSel;
       s.itemPickSel = frame.itemPickSel;
     }
