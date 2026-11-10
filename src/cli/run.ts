@@ -555,7 +555,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       mapFiles: builtMapFiles,
     });
   }
-  if (contextIncludeFlag === undefined) recorder.event("suggestions", { files: suggestedFiles });
   for (const result of probeResults) {
     recorder.event("availability_probe", {
       key: result.key,
@@ -772,7 +771,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
     include: contextInclude,
     defaultSkills: defaultSkillsFor({ agent: agentNameParsed, verification }),
     skillPresets: roleSkillPresets(agentNameParsed),
-    skillOverrides: skillModeOverrides,
+    skillOverrides: {
+      // Verified issues ship tests: inline the full testing brief instead of
+      // leaving it one on-demand pull away (models never pull it).
+      ...(agentNameParsed === "engineer" && verification === "verified"
+        ? { "verified-testing": "include" as const }
+        : {}),
+      ...skillModeOverrides,
+    },
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings, sections: contextBundle.sections });
@@ -836,6 +842,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       agentPolicy: policy.agents[role],
       machineOverrides: machine.agents[role],
       runOverrides: agentOverrides,
+      verification,
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
     result = await runLoop({

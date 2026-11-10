@@ -145,6 +145,19 @@ export interface ResolvedAgent {
   prompt: string;
 }
 
+/**
+ * The test contract, branched by issue verification. A static guide line
+ * cannot branch, so the run injects the exact sentence: direct runs get an
+ * unambiguous ban, verified runs get pointed at the skill whose body the
+ * harness already inlined. Only the engineer role writes tests.
+ */
+export function testPromptLine(verification: "direct" | "verified" | undefined): string | null {
+  if (verification === undefined) return null;
+  return verification === "verified"
+    ? "This issue is verified: use the verified-testing skill and practice TDD — write the tests with the change. Never run them yourself; the runner executes script:test after finish."
+    : "Do not write tests for this issue — code only. Never run test commands; the runner owns verification.";
+}
+
 /** Per-tool capability requirements (null = no capability beyond the base allowlist). */
 const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   read: "code:read",
@@ -174,6 +187,7 @@ export function resolveAgent(
     agentPolicy?: AgentPolicy;
     machineOverrides?: AgentConfigOverrides;
     runOverrides?: Partial<AgentConfig>;
+    verification?: "direct" | "verified";
   } = {},
 ): ResolvedAgent {
   const def = agentDef(layout, role);
@@ -196,6 +210,7 @@ export function resolveAgent(
   if (def.readonly) tools = tools.filter((t) => t !== "write" && t !== "edit");
   // The terminal action is harness-owned and must survive old role overrides.
   if (!tools.includes("finish")) tools = [...tools, "finish"];
-  const prompt = composePrompt(def, config, tools);
+  const testLine = role === "engineer" ? testPromptLine(opts.verification) : null;
+  const prompt = composePrompt(def, config, tools) + (testLine ? `\n${testLine}` : "");
   return { def: { ...def, prompt, tools }, config, capabilities, prompt };
 }

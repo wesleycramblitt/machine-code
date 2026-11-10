@@ -210,6 +210,9 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     ...(include ? { include } : {}),
     defaultSkills: defaultSkillsFor({ agent: "engineer", verification }),
     skillPresets: roleSkillPresets("engineer"),
+    // Verified issues ship tests: inline the full testing brief instead of
+    // leaving it one on-demand pull away (models never pull it).
+    ...(verification === "verified" ? { skillOverrides: { "verified-testing": "include" } } : {}),
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), {
@@ -238,6 +241,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     agentPolicy: policy.agents.engineer,
     machineOverrides: machine.agents.engineer,
     runOverrides: input.agentOverrides,
+    verification,
   });
   recorder.recordConfig({ ...resolvedEngineer.config, capabilities: resolvedEngineer.capabilities });
   const engineerPolicy = policyFor(layout, "engineer", policy);
