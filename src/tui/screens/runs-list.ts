@@ -6,11 +6,11 @@
  * pending-answer affordance live here; the caller supplies the prebuilt
  * index plus a pending-question lookup.
  */
-import { AMBER, B, BL, C, D, G, GR, LIME, M, PURPLE_BG, PURPLE_FG, R, RED, RED_BG, RED_FG, ROSE, SKY, SLATE, VIOLET, W, Y, YELLOW_BG, YELLOW_FG, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
+import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
-import { ISSUE_STATUS_LABELS, type DisplayStatus } from "../../plan/issues.js";
 import type { RunSummary } from "../../state/runs.js";
 import { windowedBody, type Viewport } from "./types.js";
+import { ISSUE_STATUS_STYLE, KIND_BG, KIND_FG, issueTone } from "./tones.js";
 
 export interface RunsListProps extends Viewport {
   runNarrow: boolean;
@@ -32,38 +32,7 @@ export interface RunsListFrame {
   scroll: number;
 }
 
-const DONE_STYLE = { tone: D, glyph: "✓" };
-
-/** Directory-status colors for non-terminal states; done/researched use gray. */
-const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }> = {
-  "needs-research": { tone: AMBER, glyph: "?" },
-  researched: DONE_STYLE,
-  todo: { tone: SLATE, glyph: "◆" },
-  "in-progress": { tone: SKY, glyph: "●" },
-  "needs-agent-review": { tone: SKY, glyph: "◷" },
-  "needs-human-review": { tone: AMBER, glyph: "◷" },
-  "failed-gates": { tone: RED, glyph: "✗" },
-  "failed-agent-review": { tone: RED, glyph: "✗" },
-  "failed-human-review": { tone: RED, glyph: "✗" },
-  blocked: { tone: ROSE, glyph: "⏸" },
-  done: DONE_STYLE,
-};
-
 const PRIORITY_TONE: Record<string, string> = { high: D, medium: D, low: D };
-
-/** Kind background colors: purple for ideas, yellow for features, red for bugs. */
-const KIND_BG: Record<string, string> = {
-  idea: PURPLE_BG,
-  feature: YELLOW_BG,
-  bug: RED_BG,
-};
-
-/** Kind text colors for todo/needs-research slugs: the same light colors as the kind headers' backgrounds. Keys match IssueKind. */
-const KIND_FG: Record<string, string> = {
-  ideas: PURPLE_FG,
-  features: YELLOW_FG,
-  bugs: RED_FG,
-};
 
 /** Run slug as shown on the runs page, e.g. "RUN 739-aaas". */
 function runSlugText(run: RunSummary): string {
@@ -96,7 +65,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
     } else if (row.kind === "issue") {
       // Todo/needs-research slugs use the kind's brand color. All other statuses use their status color.
       const style = ISSUE_STATUS_STYLE[row.effective];
-      const slugTone = (row.status === "todo" || row.status === "needs-research") ? KIND_FG[row.itemKind] ?? style.tone : style.tone;
+      const slugTone = issueTone(row.status, row.itemKind);
       const folded = row.collapsible ? `${row.collapsed ? "▸" : "▾"} ` : "";
       const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
       const priorityTone = PRIORITY_TONE[row.priority] ?? D;

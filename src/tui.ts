@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { findIssue, listIssues, ISSUE_STATUS_LABELS, type Issue } from "./plan/issues.js";
+import { findIssue, listIssues, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
@@ -1048,16 +1048,17 @@ export async function runTui(): Promise<void> {
         issue: issue
           ? {
               slug: issue.slug,
-              title: issue.title,
-              kindLabel: issue.kind === "ideas" ? "Idea" : issue.kind === "features" ? "Feature" : "Bug",
-              statusLabel: ISSUE_STATUS_LABELS[effectiveStatus(issue, issueRuns)],
+              kind: issue.kind,
+              status: effectiveStatus(issue, issueRuns),
               rel: issue.rel,
               priority: issue.priority,
               review: issue.review,
               verification: issue.verification,
               tags: issue.tags,
               depends: issue.depends,
-              body: issue.body.split("\n"),
+              prompt: issue.prompt,
+              acceptance: issue.acceptance,
+              todo: issue.todo,
             }
           : null,
         runs: issueRuns,

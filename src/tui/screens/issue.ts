@@ -5,24 +5,29 @@
  * review mode, body, and every run attached to it. Actions move the issue
  * forward (run/orchestrate/gate/approve/delete/edit); Back lives in the header.
  */
-import { B, C, D, G, GR, M, R, RED, W, Y, statusColor, icon, agentTone, command, joinCommands, trunc, fmtMoney, fmtRunTokens } from "../format.js";
+import { B, C, D, G, GR, M, R, RED, W, WHITE, Y, statusColor, icon, agentTone, command, joinCommands, trunc, fmtMoney, fmtRunTokens, wrapText } from "../format.js";
 import { sortRuns } from "../status.js";
 import type { RunSummary } from "../../state/runs.js";
 import { runItemId } from "../../plan/lifecycle.js";
+import { ISSUE_STATUS_LABELS, type DisplayStatus, type IssueKind, type TodoItem } from "../../plan/issues.js";
+import { issueTone, kindBadge } from "./tones.js";
 import { windowedBody, type Viewport } from "./types.js";
 
 export interface IssueHeader {
   slug: string;
-  title: string;
-  kindLabel: string;
-  statusLabel: string;
+  kind: IssueKind;
+  /** Effective status (raw directory status, or in-progress while a run is live). */
+  status: DisplayStatus;
   rel: string;
   priority: string;
   review: string;
   verification: "direct" | "verified";
   tags: string[];
   depends: string[];
-  body: string[];
+  /** The issue file's prompt: the whole body text. */
+  prompt: string;
+  acceptance: string[];
+  todo: TodoItem[];
 }
 
 export interface IssueProps extends Viewport {
@@ -39,18 +44,62 @@ export interface IssueFrame {
   scroll: number;
 }
 
+/** Branch/worktree of the newest attached run; both are optional on RunSummary. */
+function worktreeOf(runs: readonly RunSummary[], slug: string): { branch: string; worktree: string } {
+  const attached = sortRuns(runs.filter((run) => runItemId(run) === slug), "activity");
+  const newest = attached[0];
+  return {
+    branch: newest?.branch ?? `mc/${slug}`,
+    worktree: newest?.worktree ?? "—",
+  };
+}
+
+/** The prompt body: full text wrapped to the terminal, headings bold white.
+ * The leading `# Title` line is skipped — line 1 already carries the identity. */
+function promptLines(prompt: string, cols: number): string[] {
+  const lines = prompt.split("\n");
+  if (/^#\s+/.test(lines[0] ?? "")) lines.shift();
+  while ((lines[0] ?? "") === "") lines.shift();
+  const out: string[] = [];
+  for (const line of wrapText(lines.join("\n"), Math.max(20, cols))) {
+    if (line.trim() === "") { out.push(""); continue; }
+    if (/^#{1,6}\s/.test(line)) out.push(`${B}${W}${line}${R}`);
+    else out.push(`${D}${line}${R}`);
+  }
+  return out;
+}
+
 export function renderIssue(props: IssueProps): IssueFrame {
-  const { bodyH, toast, slug, issue, runs, scroll } = props;
+  const { bodyH, toast, slug, issue, runs, scroll, cols } = props;
   const lines: string[] = [];
   if (!slug) {
     lines.push("", ` ${Y}issue not found${R}`);
   } else {
-    lines.push(` ${B}${W}${slug}${R}  ${C}[${issue?.statusLabel ?? "unknown"}]${R}  ${D}${issue?.kindLabel ?? "item"} · ${issue?.rel ?? ""}${R}`);
+    // Line 1: kind badge, slug, [Status] — runs-page tones.
+    const tone = issue ? issueTone(issue.status, issue.kind) : D;
+    const badge = issue ? kindBadge(issue.kind, issue.kind === "ideas" ? "Idea" : issue.kind === "features" ? "Feature" : "Bug") : "";
+    const statusText = issue ? ISSUE_STATUS_LABELS[issue.status] : "unknown";
+    lines.push(` ${badge}  ${tone}${slug}${R}  ${tone}[${statusText}]${R}`);
     if (issue) {
-      lines.push(` ${D}priority ${issue.priority} · review ${issue.review} · ${issue.verification}${issue.tags.length ? ` · tags ${issue.tags.join(", ")}` : ""}${issue.depends.length ? ` · depends ${issue.depends.join(", ")}` : ""} · status is the directory: ${issue.rel}${R}`);
-      const body = issue.body.slice(0, 20);
-      for (const line of body) lines.push(`   ${D}${trunc(line, 110)}${R}`);
-      if (issue.body.length > body.length) lines.push(`   ${D}… ${issue.body.length - body.length} more line(s)${R}`);
+      // Line 2: branch/worktree derived from the newest attached run.
+      const work = worktreeOf(runs, slug);
+      lines.push(` ${B}${WHITE}Branch:${R} ${D}${work.branch}${R}    ${B}${WHITE}Worktree:${R} ${D}${work.worktree}${R}`);
+      // Line 3: priority and review mode (even when none).
+      lines.push(` ${B}${WHITE}Priority:${R} ${D}${issue.priority}${R}    ${B}${WHITE}Review:${R} ${D}${issue.review}${R}`);
+      // Prompt: the whole body, wrapped to the terminal width.
+      lines.push(` ${B}${W}Prompt:${R}`);
+      lines.push(...promptLines(issue.prompt, cols));
+      // Acceptance / Todo / Tags / Depends / Verification.
+      lines.push(` ${B}${WHITE}Acceptance:${R} ${D}${issue.acceptance.length > 0 ? issue.acceptance.join(", ") : "defaults"}${R}`);
+      if (issue.todo.length > 0) {
+        lines.push(` ${B}${WHITE}Todo:${R}`);
+        for (const item of issue.todo) lines.push(`   ${D}[${item.done ? "x" : " "}] ${item.text}${R}`);
+      }
+      const meta: string[] = [];
+      if (issue.tags.length > 0) meta.push(`${B}${WHITE}Tags:${R} ${D}${issue.tags.join(", ")}${R}`);
+      if (issue.depends.length > 0) meta.push(`${B}${WHITE}Depends:${R} ${D}${issue.depends.join(", ")}${R}`);
+      meta.push(`${B}${WHITE}Verification:${R} ${D}${issue.verification}${R}`);
+      if (meta.length > 0) lines.push(` ${meta.join("    ")}`);
     }
     const attached = runs.filter((run) => runItemId(run) === slug);
     lines.push("", ` ${B}Runs${R} ${D}(${attached.length})${R}`);
