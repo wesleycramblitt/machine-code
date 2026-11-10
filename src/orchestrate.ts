@@ -511,12 +511,16 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       mapFiles: researchMap.map.files.length,
     });
     const researchFiles = [...new Set([...(input.seedFiles ?? []), ...researchSuggested])];
+    // Files the caller already pinned (and inlined) need no second copy:
+    // assemble only the newly suggested ones, but pin the union.
+    const alreadyInline = new Set(input.seedFiles ?? []);
+    const freshFiles = researchFiles.filter((path) => !alreadyInline.has(path));
     const researchBundle = await assembleContext({
       layout,
       machine,
       agent: "research",
       verification: "direct",
-      ...(researchFiles.length > 0 ? { include: { files: researchFiles } } : {}),
+      ...(freshFiles.length > 0 ? { include: { files: freshFiles } } : {}),
       defaultSkills: defaultSkillsFor({ agent: "research" }),
       skillPresets: roleSkillPresets("research"),
     });

@@ -3,8 +3,10 @@
  *
  * The checklist lives in the issue file, not in run-local state. A fork or a
  * new run on the same branch opens the issue and sees exactly what remains.
- * The write goes to the main checkout so the assembled context sees it on the
- * next run; the worktree copy is updated too when present.
+ * Single-writer rule: the write goes to the run's worktree when it has one
+ * (the merge carries it to the main checkout); only runs directly on the
+ * checkout write main. Writing the same file to main mid-run and to the
+ * branch at finish guarantees a merge conflict with ourselves.
  */
 import { existsSync } from "node:fs";
 import { Type, type Static } from "typebox";
@@ -13,8 +15,10 @@ import { resolveWithin } from "./safety.js";
 import { renderIssueTodo, updateIssueTodo, type TodoItem } from "../plan/issues.js";
 
 export interface TodoContext {
-  /** Main checkout root: the durable issue tree. */
+  /** Main checkout root: the durable issue tree (fallback when no worktree). */
   repoRoot: string;
+  /** Worktree root: issue writes go here when the run has one. */
+  toolRoot?: string;
   /** Repo-relative issue file attached to this run. */
   issuePath?: string;
 }
@@ -56,7 +60,8 @@ export function todoTool(ctx: TodoContext): AgentTool<typeof TodoParams> {
         .map((item) => ({ text: item.text.trim(), done: item.done === true }));
       if (items.length === 0) return fail("todo needs at least one item");
       try {
-        const abs = resolveWithin(ctx.repoRoot, ctx.issuePath);
+        const root = ctx.toolRoot ?? ctx.repoRoot;
+        const abs = resolveWithin(root, ctx.issuePath);
         if (!existsSync(abs)) return fail(`issue not found: ${ctx.issuePath}`);
         updateIssueTodo(abs, items);
       } catch (error) {

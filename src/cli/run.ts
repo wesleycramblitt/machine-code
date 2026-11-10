@@ -79,21 +79,28 @@ async function syncFromRemote(topRoot: string): Promise<void> {
 /** Merge a feature branch into main and push. Brings main into the worktree first
  * so conflicts surface there, then merges into main, pushes, and deletes the remote
  * branch. */
-async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string): Promise<boolean> {
+async function mergeBranch(
+  topRoot: string,
+  worktreeRoot: string,
+  branch: string,
+): Promise<{ ok: boolean; detail?: string }> {
   // runProc resolves instead of throwing, so every step must check its exit
   // code explicitly. A blind sequence reports success while doing nothing
   // (and strands the branch: -D cannot run while a worktree checks the
   // branch out, so the worktree goes first).
+  let failure: string | undefined;
   const step = async (args: string[], cwd: string, what: string): Promise<boolean> => {
     const result = await runProc("git", args, { cwd, timeoutMs: 30_000 });
     if (result.outcome !== "exit" || result.code !== 0) {
-      process.stderr.write(
-        `merge ${branch}: ${what} failed (${result.outcome}${result.code === null ? "" : ` exit ${result.code}`})${result.stderr.trim() ? `: ${result.stderr.trim().split("\n")[0]}` : ""}\n`,
-      );
+      const desc =
+        `${what} failed (${result.outcome}${result.code === null ? "" : ` exit ${result.code}`})${result.stderr.trim() ? `: ${result.stderr.trim().split("\n")[0]}` : ""}`;
+      process.stderr.write(`merge ${branch}: ${desc}\n`);
+      if (!failure) failure = desc;
       return false;
     }
     return true;
   };
+  const fail = (detail?: string): { ok: boolean; detail?: string } => ({ ok: false, detail: detail ?? failure });
   try {
     // Refresh remote-tracking refs so the sync below sees real upstream.
     // Best effort only: fetching into the checked-out main is refused by
@@ -101,27 +108,46 @@ async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string
     // loudly at push time instead.
     await step(["fetch", "origin"], topRoot, "fetch");
     // Bring upstream into the feature branch (conflicts surface in the worktree).
-    if (!(await step(["merge", "origin/main", "-m", `sync ${branch} with upstream`], worktreeRoot, "sync"))) return false;
-    // Merge feature branch into main.
-    if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) return false;
+    if (!(await step(["merge", "origin/main", "-m", `sync ${branch} with upstream`], worktreeRoot, "sync"))) {
+      return fail();
+    }
+    // Merge feature branch into main. On conflict, name the paths and abort:
+    // a dirty main checkout poisons every later run, while the branch keeps
+    // all the work for a manual retry.
+    if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) {
+      try {
+        const unmerged = await runProc("git", ["diff", "--name-only", "--diff-filter=U"], { cwd: topRoot, timeoutMs: 15_000 });
+        const files = unmerged.stdout.trim();
+        if (files) failure = `conflicts in: ${files.split("\n").join(", ")}`;
+      } catch {
+        // Keep the step failure; the branch still holds the work.
+      }
+      try {
+        await runProc("git", ["merge", "--abort"], { cwd: topRoot, timeoutMs: 15_000 });
+      } catch {
+        // Main stays conflicted; the next run reports it. Nothing is lost.
+      }
+      return fail();
+    }
     // A source merge is not a working binary for a compiled project. Rebuild
     // main before declaring success; the running CLI uses dist/.
     const build = await runMainBuild(topRoot);
     if (!build.ok) {
       process.stderr.write(`main build failed after merge: ${build.text}\n`);
-      return false;
+      return fail(`main build failed after merge: ${build.text}`);
     }
     // Push the merge to the remote.
-    if (!(await step(["push", "origin", "main"], topRoot, "push"))) return false;
+    if (!(await step(["push", "origin", "main"], topRoot, "push"))) return fail();
     // Delete the remote branch (may fail if it was never pushed — fine).
     await runProc("git", ["push", "origin", "--delete", branch], { cwd: topRoot, timeoutMs: 15_000 });
     // The worktree checks the branch out, so remove it before deleting.
-    if (!(await step(["worktree", "remove", worktreeRoot], topRoot, "worktree remove"))) return false;
-    if (!(await step(["branch", "-D", branch], topRoot, "branch delete"))) return false;
-    return true;
+    if (!(await step(["worktree", "remove", worktreeRoot], topRoot, "worktree remove"))) return fail();
+    if (!(await step(["branch", "-D", branch], topRoot, "branch delete"))) return fail();
+    return { ok: true };
   } catch (error) {
-    process.stderr.write(`merge ${branch} failed: ${(error as Error).message}\n`);
-    return false;
+    const detail = `merge ${branch} failed: ${(error as Error).message}`;
+    process.stderr.write(`${detail}\n`);
+    return fail(detail);
   }
 }
 
@@ -994,14 +1020,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const branch = recorder.current.branch;
       if (branch) {
         const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
-        if (merged) {
+        if (merged.ok) {
           recorder.event("branch_merged", { branch, verdict: "approved" });
           if (issue && issue.kind !== "ideas") {
             moveIssue(l, issue.slug, "done");
             await commitPlanningFiles(l, `issues: ${issue.slug} done`);
           }
         } else {
-          result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
+          result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
         }
       }
     }
@@ -1085,7 +1111,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
             const branch = recorder.current.branch;
             if (branch) {
               const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
-              if (merged) {
+              if (merged.ok) {
                 recorder.event("branch_merged", { branch });
                 if (issue.kind !== "ideas") {
                   moveIssue(l, issue.slug, "done");
@@ -1096,7 +1122,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
                   moveIssue(l, issue.slug, "blocked");
                   await commitPlanningFiles(l, `issues: ${issue.slug} blocked`);
                 }
-                result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
+                result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
               }
             }
           } else if (issue.review === "agent") {
@@ -1469,7 +1495,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
                 const branch = recorder.current.branch;
                 if (branch) {
                   const merged = await mergeBranch(l2.repoRoot, toolRoot, branch);
-                  if (merged) {
+                  if (merged.ok) {
                     recorder.event("branch_merged", { branch });
                     moveIssue(l2, issue.slug, "done");
                     await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
@@ -1506,7 +1532,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
       const branch = recorder.current.branch;
       if (branch) {
         const merged = await mergeBranch(l2.repoRoot, toolRoot, branch);
-        if (merged) {
+        if (merged.ok) {
           recorder.event("branch_merged", { branch, verdict: "approved" });
           if (issue && issue.kind !== "ideas") {
             moveIssue(l2, issue.slug, "done");

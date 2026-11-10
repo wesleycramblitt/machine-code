@@ -2530,7 +2530,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
       ? { finish: finishTool({ onFinish: ctx.finish }) }
       : { finish: finishUnavailable() }),
     todo: ctx.repoRoot && ctx.issuePath
-      ? todoTool({ repoRoot: ctx.repoRoot, issuePath: ctx.issuePath })
+      ? todoTool({ repoRoot: ctx.repoRoot, toolRoot: ctx.root, issuePath: ctx.issuePath })
       : todoUnavailable(),
   };
   // Prefer provider-side JSON-schema constrained sampling. Models that pass
