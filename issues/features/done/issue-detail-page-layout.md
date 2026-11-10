@@ -1,11 +1,10 @@
-priority: medium
 tags: tui
 acceptance: script:build
 todo:
-  - [ ] Read renderIssue in src/tui/screens/issue.ts and the runs-page tone tables (KIND_BG / KIND_FG / ISSUE_STATUS_STYLE in src/tui/screens/runs-list.ts, badges in src/tui/format.ts)
-  - [ ] Share the runs-page kind/status tones instead of re-declaring them, and use them for the kind badge, slug, and [Status] on line 1
-  - [ ] Rebuild the body: Branch/Worktree line, Priority/Review line, bold "Prompt" plus the full wrapped prompt, then Acceptance / Todo / Tags / Depends / Verification sections, then the unchanged Runs rows
-  - [ ] Gate with script:build and eyeball the layout at ~100 cols and narrow
+  - [x] Share runs-page tone tables (KIND_BG/KIND_FG/ISSUE_STATUS_STYLE) in a shared module; update runs-list.ts to import them
+  - [x] Rewrite renderIssue in src/tui/screens/issue.ts with the new body layout
+  - [x] Pass prompt/acceptance/todo/kind/status data via IssueHeader from src/tui.ts
+  - [x] Verify no other IssueHeader consumers; keep footer actions untouched
 
 # Redesign the issue detail page body
 
