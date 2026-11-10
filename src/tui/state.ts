@@ -17,6 +17,7 @@ import type { ContextPreview } from "../context/preview.js";
 import type { SkillMode } from "../context/references.js";
 import type { ModelSort } from "../catalogue/query.js";
 import type { RunGroup } from "./runs.js";
+import type { DeleteTarget } from "./screens/delete.js";
 import type { RunSection } from "./screens/run-detail/types.js";
 import type { ForkedRunSettings } from "./fork.js";
 import type { ModelPickerEntry } from "./format.js";
@@ -86,7 +87,8 @@ export interface TuiState {
   selectedIssueSlug: string | null;
   selectedIssueRepo: string | null;
   issueScroll: number;
-  deleteRunTarget: RunSummary | undefined;
+  /** Run or issue awaiting final confirmation on the delete screen. */
+  deleteTarget: DeleteTarget | undefined;
   deleteReturn: Screen;
   deletingRuns: Set<string>;
   runSection: RunSection;
@@ -205,7 +207,7 @@ export function createTuiState(repoRoot: string): TuiState {
     selectedIssueSlug: null,
     selectedIssueRepo: null,
     issueScroll: 0,
-    deleteRunTarget: undefined,
+    deleteTarget: undefined,
     deleteReturn: "list",
     deletingRuns: new Set<string>(),
     runSection: "overview",
