@@ -1,17 +1,20 @@
 /**
  * machine_code — run detail keys.
  *
- * Section navigation (j/k, ^D/^U), timeline expand/follow/verbosity,
- * process follow/open/kill, related-run opening, answer/interrupt/
- * correct/fork, issue approval, and delete. Returns true when consumed.
+ * Section navigation, timeline expand/follow/verbosity, process
+ * follow/open/kill, related-run opening, answer/interrupt/correct/fork,
+ * issue approval, and delete. Returns true when consumed.
+ *
+ * In the timeline, j/k move between events; inside an expanded event they
+ * scroll the block body (no ^D/^U there).
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { layout } from "../../../paths.js";
 import { findIssue } from "../../../plan/issues.js";
 import { listAllRuns } from "../../../state/runs.js";
-import { isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "../../timeline.js";
 import { CTRL_D, CTRL_U, HALF_PAGE } from "../../format.js";
+import { isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "../../timeline.js";
 import { RUN_SECTIONS } from "./types.js";
 import { relatedRuns } from "../../../report/run.js";
 import { reconcileProcessRecords } from "../../../processes/reconcile.js";
@@ -19,10 +22,17 @@ import { terminateAllProcesses, terminateProcessRecord } from "../../../processe
 import type { TuiState } from "../../state.js";
 import type { KeyServices } from "../keys.js";
 
+const eventKey = (runId: string, index: number): string => `${runId}:${index}`;
+
 export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
   const detail = ctx.runDetailData();
   if (!detail) { s.screen = "list"; ctx.draw(); return true; }
   const n = detail.events.length;
+  const selected = (): boolean => {
+    while (s.eventSel < n && !isTimelineEvent(detail.events[s.eventSel], s.timelineVerbose)) s.eventSel += 1;
+    return s.eventSel < n;
+  };
+  const expanded = (): boolean => s.expanded.has(eventKey(detail.summary.id, s.eventSel));
   const stepTimeline = (direction: -1 | 1): void => {
     s.timelineFollow = false;
     const next = stepTimelineSelection(detail.events, s.eventSel, direction, s.timelineVerbose);
@@ -31,8 +41,14 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
       s.eventBodyScroll = 0;
     }
   };
+  const stepOrScroll = (direction: -1 | 1): void => {
+    if (s.runSection !== "timeline") { stepTimeline(direction); return; }
+    if (!selected()) return;
+    if (expanded()) { s.timelineFollow = false; s.eventBodyScroll = Math.max(0, s.eventBodyScroll + direction); }
+    else stepTimeline(direction);
+  };
   if (data === "j" || data === "\x1b[B") {
-    if (s.runSection === "timeline") stepTimeline(1);
+    if (s.runSection === "timeline") stepOrScroll(1);
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel++; }
     else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll++; }
     else if (s.runSection === "related") s.childSel++;
@@ -41,7 +57,7 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     return true;
   }
   if (data === "k" || data === "\x1b[A") {
-    if (s.runSection === "timeline") stepTimeline(-1);
+    if (s.runSection === "timeline") stepOrScroll(-1);
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel = Math.max(0, s.processSel - 1); }
     else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll = Math.max(0, s.thinkingScroll - 1); }
     else if (s.runSection === "related") s.childSel = Math.max(0, s.childSel - 1);
@@ -71,10 +87,9 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   const toggleEvent = () => {
     if (s.runSection !== "timeline") return true;
     s.timelineFollow = false;
-    while (s.eventSel < n && !isTimelineEvent(detail.events[s.eventSel], s.timelineVerbose)) s.eventSel += 1;
-    if (s.eventSel >= n) return true;
+    if (!selected()) return true;
     s.eventBodyScroll = 0;
-    const key = `${detail.summary.id}:${s.eventSel}`;
+    const key = eventKey(detail.summary.id, s.eventSel);
     if (s.expanded.has(key)) s.expanded.delete(key); else s.expanded.add(key);
   };
   if (data === " ") { toggleEvent(); ctx.draw(); return true; }
@@ -99,12 +114,10 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     ctx.draw();
     return true;
   }
-  if (data === CTRL_D || data === CTRL_U) {
+  // In the timeline, j/k scrolls the expanded block, so there is no ^D/^U.
+  if ((data === CTRL_D || data === CTRL_U) && s.runSection !== "timeline") {
     const direction = data === CTRL_D ? 1 : -1;
-    if (s.runSection === "timeline") {
-      s.timelineFollow = false;
-      s.eventBodyScroll = Math.max(0, s.eventBodyScroll + direction * HALF_PAGE);
-    } else if (s.runSection === "thinking") {
+    if (s.runSection === "thinking") {
       s.thinkingFollow = false;
       s.thinkingScroll = Math.max(0, s.thinkingScroll + direction * HALF_PAGE);
     } else if (s.runSection === "processes") {

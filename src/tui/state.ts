@@ -99,7 +99,7 @@ export interface TuiState {
   eventScroll: number;
   /** Line offset inside a selected timeline block (expanded inputs/outputs). */
   eventBodyScroll: number;
-  /** Follow the newest timeline event; j/k or ^D/^U turns it off. */
+  /** Follow the newest timeline event; j/k turns it off. */
   timelineFollow: boolean;
   /** Show routine internals in the timeline. */
   timelineVerbose: boolean;
