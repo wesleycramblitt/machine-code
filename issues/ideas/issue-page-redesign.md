@@ -1,10 +1,4 @@
 tags: issues
-acceptance: script:build
-todo:
-  - [ ] Read the issue detail page and the runs-page styling
-  - [ ] Apply the runs-page colors and header layout
-  - [ ] Check branch, worktree, priority, and review lines
-  - [ ] Finish
 
 # Change the ui/ux of the issue details page. 
 Move "Feature", "Bug", ...  to the far left, add the background color and font color from the runs page (Red background, black bold text for Bugs).
