@@ -299,10 +299,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     // same conversation. Persisted health is untouched, so topping up or a
     // reset takes effect without a manual re-enable.
     if (classified.kind === "funds") {
+      // A provider-level funds error is about paid credit, not free quota.
+      // Keep the provider's free offers in the rotation so a zero-balance
+      // account still gets its free models before the final Ollama fallback.
       for (const row of input.catalogue) {
-        if (row.providerID === provider) triedModels.add(row.key);
+        if (row.providerID === provider && !isFreeRow(row)) triedModels.add(row.key);
       }
-      triedModels.add(modelKey);
+      if (!isFreeKey(modelKey)) triedModels.add(modelKey);
       return;
     }
     if (classified.target === "free-models") {

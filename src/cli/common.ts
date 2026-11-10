@@ -241,6 +241,7 @@ export const BOOLEAN_FLAGS = new Set([
   "attention",
   "auto-issue",
   "axes",
+  "calls",
   "changes",
   "context",
   "events",

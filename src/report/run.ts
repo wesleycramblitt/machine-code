@@ -251,6 +251,67 @@ export function relatedRuns(runs: readonly RunSummary[], summary: RunSummary): R
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
 }
 
+/** One provider call, flattened for `show`, `eval`, and the TUI. */
+export interface ModelCallMetric {
+  /** 1-based attempt; call indices reset after a retry. */
+  attempt: number;
+  call: number | null;
+  provider: string;
+  model: string;
+  stopReason: string;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  contextChars: number;
+  contextTokens: number;
+  cost: number;
+  /** Reasoning chars observed for this call. */
+  thinkingChars: number;
+}
+
+/** Per-call timing, cache, context, and output metrics from the event log. */
+export function modelCallMetrics(events: readonly RunEvent[]): ModelCallMetric[] {
+  const number = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) ? value : 0;
+  let attempt = 0;
+  const thinking = new Map<string, number>();
+  const out: ModelCallMetric[] = [];
+  for (const event of events) {
+    // Each attempt starts with the loop's upfront call 0 selection.
+    if (event.type === "model_select" && event.call === 0) attempt += 1;
+    const call = typeof event.call === "number" ? event.call : null;
+    if (event.type === "model_delta" && event.kind === "thinking" && call !== null) {
+      const key = `${attempt}:${call}`;
+      thinking.set(key, (thinking.get(key) ?? 0) + (typeof event.text === "string" ? event.text.length : 0));
+      continue;
+    }
+    if (event.type !== "model_call_end") continue;
+    const usage = (event.usage ?? {}) as Record<string, unknown>;
+    const context = (event.context ?? {}) as Record<string, unknown>;
+    out.push({
+      attempt,
+      call,
+      provider: String(event.provider ?? ""),
+      model: String(event.model ?? ""),
+      stopReason: String(event.stopReason ?? ""),
+      durationMs: number(event.durationMs),
+      inputTokens: number(usage.input),
+      outputTokens: number(usage.output),
+      cacheReadTokens: number(usage.cacheRead),
+      cacheWriteTokens: number(usage.cacheWrite),
+      totalTokens: number(usage.totalTokens),
+      contextChars: number(context.chars),
+      contextTokens: number(context.tokens),
+      cost: number(event.cost),
+      thinkingChars: call === null ? 0 : (thinking.get(`${attempt}:${call}`) ?? 0),
+    });
+  }
+  return out;
+}
+
 export interface ThinkingChunk {
   at: string;
   /** 1-based attempt. Call indices reset after a retry, so this keeps them apart. */

@@ -532,10 +532,15 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
           const icon = record.status === "running" ? "●" : record.status === "exited" ? "✓" : "✗";
           const pid = record.pid ? `pid ${record.pid}` : "pid -";
           const ended = record.exitCode === undefined ? "" : ` exit ${record.exitCode}`;
+          const command = record.argv.length > 0 ? record.argv.join(" ") : record.name;
           const line =
             ` ${tone}${icon}${R} ${D}${record.id}${R} ${tone}${record.status.padEnd(10)}${R}` +
-            ` ${D}${record.origin.padEnd(8)}${R} ${W}${trunc(record.name, Math.max(16, cols - 48))}${R} ${D}${pid}${ended}${R}`;
+            ` ${D}${record.origin.padEnd(8)}${R} ${W}${trunc(command, Math.max(16, cols - 48))}${R} ${D}${pid}${ended}${R}`;
           lines.push(selected(line, i === processSel));
+          const shownCommand = trunc(command, Math.max(16, cols - 48));
+          if (i === processSel && shownCommand !== command) {
+            lines.push(`   ${D}${trunc(command, Math.max(16, cols - 6))}${R}`);
+          }
           const log = readLogTail(record.stdoutLog, 4_000);
           const tail = log.trim().split("\n").filter(Boolean).at(-1);
           if (tail && i === processSel) lines.push(`   ${D}${trunc(tail, Math.max(16, cols - 6))}${R}`);

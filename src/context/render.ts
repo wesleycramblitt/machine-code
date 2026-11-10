@@ -117,25 +117,21 @@ export function renderPromptMessages(
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
   //   system → assembled context → map index → tool guide → command index
-  //     → working context → run state → transcript.
-  // Stable content always renders before volatile per-turn content, so the
-  // shared prefix stays byte-identical across turns and only the transcript
-  // tail shifts — that is what keeps the provider prompt cache hot.
-  const details = state.renderWorkingContext();
+  //     → transcript → working context → run state.
+  // The stable prefix renders before the transcript so it stays byte-identical
+  // across turns. The per-turn working context and run state sit *after* the
+  // transcript: putting them before it changed the prefix every turn and the
+  // provider cache stopped at the fixed blocks (~3.5k tokens). The state is
+  // also the last thing the model reads, which is where it belongs.
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
-  const block = [startup, mapIndex, guide, commandIndex, details, state.renderBlock()]
-    .filter(Boolean)
-    .join("\n\n");
-  const user: MessageLike = {
-    role: "user",
-    content: block,
-    timestamp: Date.now(),
-  };
+  const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
+  const volatile = [state.renderWorkingContext(), state.renderBlock()].filter(Boolean).join("\n\n");
   const out = [
     ...(system ? [system] : []),
-    user,
+    ...(stable ? [{ role: "user", content: stable, timestamp: Date.now() } as MessageLike] : []),
     ...transcriptSteps(source),
+    ...(volatile ? [{ role: "user", content: volatile, timestamp: Date.now() } as MessageLike] : []),
   ] as unknown as AgentMessage[];
   return { messages: out, chars: JSON.stringify(out).length };
 }

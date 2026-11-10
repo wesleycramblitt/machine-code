@@ -50,7 +50,7 @@ import { readSpendSummary, spendDays, spendBar, type SpendBucket } from "../spen
 import { buildRunIndex, parseRunGroup, repoLabel, repoOf, type RunGroup, type RunRow } from "../tui/runs.js";
 import { listArtifacts, artifactSummary, resolveArtifact, artifactPath, artifactExists } from "../artifacts/registry.js";
 import { artifactPeek } from "../context/preview.js";
-import { changesFor, checkFaithfulness, contextUsage, diskLineExists, exceededLimits, goldRecall, readContextManifest, relatedRuns, runMetrics, sectionTokens, thinkingChunks, touchedPaths } from "../report/run.js";
+import { changesFor, checkFaithfulness, contextUsage, diskLineExists, exceededLimits, goldRecall, modelCallMetrics, readContextManifest, relatedRuns, runMetrics, sectionTokens, thinkingChunks, touchedPaths } from "../report/run.js";
 import { buildSettings, settingsFileFor } from "../tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "../data.js";
 import { runTui } from "../tui.js";
@@ -271,8 +271,10 @@ export async function cmdProcesses(argv: string[]): Promise<number> {
   for (const record of records) {
     const pid = record.pid ? `pid ${record.pid}` : "pid -";
     const exit = record.exitCode === undefined ? "" : ` exit ${record.exitCode}`;
+    const command = record.argv.length > 0 ? record.argv.join(" ") : record.name;
     process.stdout.write(
-      `${record.id}  ${record.status.padEnd(10)} ${record.origin.padEnd(8)} ${record.name.padEnd(24)} ${pid}${exit}\n`,
+      `${record.id}  ${record.status.padEnd(10)} ${record.origin.padEnd(8)} ${record.name.padEnd(24)} ${pid}${exit}\n` +
+        `   ${command}\n`,
     );
     const tail = tailFile(record.stdoutLog, 180).trim().split("\n").at(-1);
     if (tail) process.stdout.write(`   ${tail}\n`);
@@ -294,12 +296,14 @@ export function cmdShow(argv: string[]): number {
   const allRuns = listAllRuns(found.layout.home);
   const related = relatedRuns(allRuns, s);
   const thinking = thinkingChunks(run.events);
+  const calls = modelCallMetrics(run.events);
   const touched = touchedPaths(run.events);
   const changes = s.worktree ? changesFor(s.worktree) : null;
   const pending = latestUnansweredQuestion(
     run.events.filter((event) => event.type === "question") as Array<{ questionId?: string; text?: string }>,
     readInbox(runDir),
   );
+  const firstModel = run.events.find((event) => event.type === "model_select" && !event.error);
   const lastModel = [...run.events].reverse().find((event) => event.type === "model_select" && !event.error);
   const lastActivity = [...run.events].reverse().find((event) => event.type === "tool_call_start" || event.type === "model_call_end");
   const derived = s.summary
@@ -319,10 +323,12 @@ export function cmdShow(argv: string[]): number {
         summary: s,
         context,
         related,
+        calls,
         thinking,
         touched,
         changes,
         pendingQuestion: pending ?? null,
+        model: firstModel?.key ?? null,
         lastModel: lastModel?.key ?? null,
         lastActivity: lastActivity ?? null,
         outcome,
@@ -335,12 +341,32 @@ export function cmdShow(argv: string[]): number {
   process.stdout.write(`${runGlyph(s.status)} ${s.id}  ${s.status.toUpperCase()}${s.stopReason && s.stopReason !== "completed" ? ` (${s.stopReason})` : ""}  ${s.agent}${modeSuffix(s.mode)}\n`);
   process.stdout.write(`  ${s.repoRoot}\n`);
   process.stdout.write(`  request  ${s.request.replace(/\s+/g, " ")}\n`);
-  process.stdout.write(`  model    ${String(lastModel?.key ?? "(not selected yet)")}\n`);
+  const modelLine = String(firstModel?.key ?? lastModel?.key ?? "(not selected yet)");
+  process.stdout.write(
+    `  model    ${modelLine}` +
+      `${firstModel?.key && lastModel?.key && lastModel.key !== firstModel.key ? `  (last retry ${lastModel.key})` : ""}\n`,
+  );
   const ctx = contextUsage(s.usage, run.events);
   process.stdout.write(
     `  context  ${fmtRunTokens(ctx.tokens)} ctx  ${fmtRunTokens(s.usage.totalTokens)} total  ${fmtRunTokens(ctx.peakTokens)} peak\n`,
   );
   process.stdout.write(`  spend    ${s.modelCalls} calls  ${fmtTokens(s.usage.totalTokens)} tok  ${fmtMoney(s.cost.actual)} actual / ${fmtMoney(s.cost.estimated)} estimated\n`);
+  if (calls.length > 0) {
+    const shownCalls = flags.has("calls") ? calls : calls.slice(-8);
+    process.stdout.write(
+      `\ncalls${shownCalls.length < calls.length ? ` (last ${shownCalls.length} of ${calls.length}; --calls for all)` : ""}\n`,
+    );
+    for (const call of shownCalls) {
+      const id = call.call === null ? "-" : String(call.call);
+      const duration = `${(call.durationMs / 1000).toFixed(1)}s`;
+      process.stdout.write(
+        `  a${call.attempt} #${id.padStart(2)} ${(call.provider + "/" + call.model).padEnd(36)} ${duration.padStart(7)}` +
+          `  out ${fmtTokens(call.outputTokens).padStart(6)}  cache ${fmtTokens(call.cacheReadTokens)}/${fmtTokens(call.cacheWriteTokens)}` +
+          `  ctx ${fmtRunTokens(call.contextChars)}  ${call.stopReason}` +
+          `${call.thinkingChars > 0 ? `  think ${call.thinkingChars}c` : ""}\n`,
+      );
+    }
+  }
   const itemId = s.itemId ?? s.packetId;
   if (itemId) process.stdout.write(`  issue    ${itemId}${s.branch ? `  branch ${s.branch}` : ""}${s.prNumber ? `  PR #${s.prNumber} ${s.prState ?? ""}` : ""}\n`);
   if (s.parentRunId) process.stdout.write(`  parent   ${s.parentRunId}\n`);
