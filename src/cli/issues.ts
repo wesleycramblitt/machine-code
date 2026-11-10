@@ -109,7 +109,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
   if (sub === "create" || sub === "new") {
     const kindArg = positional[1];
     const slugArg = positional[2];
-    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|agent|human] [--depends a,b] [--tags a,b] [--acceptance a,b] [--status <dir>]');
+    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|agent|human] [--verification direct|verified] [--depends a,b] [--tags a,b] [--acceptance a,b] [--status <dir>]');
     const kind = parseKind(kindArg);
     if (!kind) fail(`unknown kind ${JSON.stringify(kindArg)}; use ideas|features|bugs`);
     const slug = slugify(slugArg);
@@ -119,10 +119,13 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     if (statusFlag && !legalStatus(kind, statusFlag)) fail(`invalid status ${JSON.stringify(statusFlag)} for ${kind}`);
     const reviewFlag = flags.get("review") ?? "none";
     if (!["none", "agent", "human"].includes(reviewFlag)) fail("--review must be none|agent|human");
+    const verificationFlag = flags.get("verification") ?? "direct";
+    if (!["direct", "verified"].includes(verificationFlag)) fail("--verification must be direct|verified");
     const issue = writeIssue(l, {
       kind,
       slug,
       prompt: positional.slice(3).join(" ").trim() || slug,
+      verification: verificationFlag as "direct" | "verified",
       ...(statusFlag ? { status: statusFlag as IssueStatus } : {}),
       ...(flags.get("priority") ? { priority: flags.get("priority") } : {}),
       ...(flags.get("depends") ? { depends: flags.get("depends")!.split(",").map((e) => slugify(e)) } : {}),

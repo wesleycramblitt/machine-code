@@ -25,6 +25,8 @@ import { commitWorktree } from "./worktree.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
+import { buildRepoMap } from "./map/deterministic.js";
+import { suggestTaskFiles } from "./map/suggest.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
@@ -181,12 +183,22 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   // The deterministic path must assemble the same inherited context as a
   // direct run: issues index, knowledge, skills, plus any explicit include.
   const verification = packet.verification ?? "direct";
+  await buildRepoMap(layout.repoRoot);
+  const suggestionRequest = packet.goal.split(/\n## Todo\b/)[0]!.trim();
+  const suggested = suggestTaskFiles(layout.repoRoot, suggestionRequest, 3).map((entry) => entry.path);
+  const include: ContextInclude | undefined =
+    input.include || suggested.length > 0
+      ? {
+          ...(input.include ?? {}),
+          files: [...new Set([...(input.include?.files ?? []), ...suggested])],
+        }
+      : undefined;
   const contextBundle = await assembleContext({
     layout,
     machine,
     agent: "engineer",
     verification,
-    ...(input.include ? { include: input.include } : {}),
+    ...(include ? { include } : {}),
     defaultSkills: defaultSkillsFor({ agent: "engineer", verification }),
     skillPresets: roleSkillPresets("engineer"),
   });

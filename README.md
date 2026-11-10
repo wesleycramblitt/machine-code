@@ -357,7 +357,7 @@ machine_code delete <slug>
 
 - `issue list` shows the issues tree; `issue create <kind> <slug> "<prompt>"`
   scaffolds `issues/<kind>/<status>/<slug>.md`.
-- `issue move <slug> <todo|failed-gates|failed-agent-review|failed-human-review|blocked|done|researched>` moves it between status
+- `issue move <slug> <todo|needs-agent-review|needs-human-review|failed-gates|failed-agent-review|failed-human-review|blocked|done|researched>` moves it between status
   dirs; one issue = one file-level change.
 - `build <slug>` creates
   the isolated `mc/<slug>` worktree, runs Engineer, executes the issue `verify` gates,
