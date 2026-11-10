@@ -3,7 +3,7 @@
  *
  * `n` starts the run the issue needs (research for ideas, engineer for
  * features/bugs), `e` edits the issue file, `o` orchestrates the batch, and
- * build/gate/approve act on the issue. `d` opens the delete confirmation page.
+ * gate/approve act on the issue. `d` opens the delete confirmation page.
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -45,47 +45,12 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
   if (data === "\x1b[A" || data === "k") { s.issueScroll = Math.max(0, s.issueScroll - 1); ctx.draw(); return true; }
   if (data === "\x1b[B" || data === "j") { s.issueScroll += 1; ctx.draw(); return true; }
   if (data === "n") { startForIssue(); ctx.draw(); return true; }
-  if (data === "v" && slug) {
-    const issue = findIssue(l, slug);
-    if (!issue) {
-      ctx.notify(`no issue ${slug}`);
-      ctx.draw();
-      return true;
-    }
-    if (issue.kind === "ideas") {
-      ctx.notify(`${slug} is an idea; research it first`);
-      ctx.draw();
-      return true;
-    }
-    if (activeRun()) {
-      ctx.notify(`${slug} has an active run; wait for it before reviewing`);
-      ctx.draw();
-      return true;
-    }
-    spawnCli(["run", "--agent", "review", "--item", slug, issue.prompt], `review ${slug} started`);
-    return true;
-  }
   if (data === "e" && slug) {
     const issue = findIssue(l, slug);
     if (issue) ctx.openEditor(issue.path);
     return true;
   }
   if (data === "o") { spawnCli(["batch"], "orchestration started (batch)"); return true; }
-  if (data === "b" && slug) {
-    const issue = findIssue(l, slug);
-    if (activeRun()) {
-      ctx.notify(`${slug} has an active run; wait for it before building`);
-      ctx.draw();
-      return true;
-    }
-    if (issue?.status === "done" || issue?.status === "needs-agent-review" || issue?.status === "needs-human-review") {
-      ctx.notify(`${slug} is ${issue?.status ?? "missing"}; finish review/approval before building`);
-      ctx.draw();
-      return true;
-    }
-    spawnCli(["build", slug], `build ${slug} started`);
-    return true;
-  }
   if (data === "g" && slug) {
     const issue = findIssue(l, slug);
     if (issue) {

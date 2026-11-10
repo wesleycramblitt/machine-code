@@ -3,7 +3,7 @@
  *
  * One page per issue: its status directory, prompt, dependencies, tags,
  * review mode, body, and every run attached to it. Actions move the issue
- * forward (plan/build/gate/approve/delete/orchestrate/edit).
+ * forward (run/orchestrate/gate/approve/delete/edit); Back lives in the header.
  */
 import { B, C, D, G, GR, M, R, RED, W, Y, statusColor, icon, agentTone, command, joinCommands, trunc, fmtMoney, fmtRunTokens } from "../format.js";
 import { sortRuns } from "../status.js";
@@ -65,13 +65,10 @@ export function renderIssue(props: IssueProps): IssueFrame {
     ...w,
     actions: joinCommands([
       command("n", "Run", undefined, C),
-      command("v", "Review", undefined, M),
       command("o", "Orchestrate", undefined, GR),
-      command("b", "Build", undefined, C),
       command("g", "Gate", issue?.review ?? "none", issue?.review === "agent" ? C : issue?.review === "human" ? Y : D),
       command("a", "Approve", undefined, G),
       command("d", "Delete", undefined, RED),
-      command("esc", "Back"),
     ]),
     secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",
   };
