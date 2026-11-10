@@ -95,10 +95,13 @@ async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string
     return true;
   };
   try {
-    // Fetch the latest main from the remote so the merge is based on real upstream.
-    if (!(await step(["fetch", "origin", "main:main"], topRoot, "fetch"))) return false;
-    // Bring main into the feature branch (conflicts surface in the worktree).
-    if (!(await step(["merge", "main", "-m", `sync ${branch} with main`], worktreeRoot, "sync"))) return false;
+    // Refresh remote-tracking refs so the sync below sees real upstream.
+    // Best effort only: fetching into the checked-out main is refused by
+    // git, and offline work must still merge. A real divergence fails
+    // loudly at push time instead.
+    await step(["fetch", "origin"], topRoot, "fetch");
+    // Bring upstream into the feature branch (conflicts surface in the worktree).
+    if (!(await step(["merge", "origin/main", "-m", `sync ${branch} with upstream`], worktreeRoot, "sync"))) return false;
     // Merge feature branch into main.
     if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) return false;
     // A source merge is not a working binary for a compiled project. Rebuild
