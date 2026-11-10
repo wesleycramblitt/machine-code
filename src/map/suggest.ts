@@ -102,6 +102,63 @@ export function extractAnchoredFiles(root: string, text: string, limit = 8): str
   return found;
 }
 
+/**
+ * Bare filenames with line anchors (`name.ext:123`, no directory), resolved
+ * through the repo map. Planned issues cite short names; the pathed pass
+ * above misses them. Unique basenames pin directly; a few candidates pin
+ * together (the model picks cheaper than it re-discovers); many stay
+ * skipped for the ranker.
+ */
+export function extractBareAnchors(map: RepoMap, text: string, limit = 8): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const pattern =
+    /(^|[\s(`'"])((?:[\w\-.]+)\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|cs|swift|scala|md|mdx|toml|json|yaml|yml|sh|css|html))\s*:\s*\d+/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null && found.length < limit) {
+    const name = match[2]!;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const candidates = map.files.filter((file) => {
+      const base = file.path.split("/").pop() ?? "";
+      return base === name;
+    });
+    if (candidates.length >= 1 && candidates.length <= 3) {
+      for (const candidate of candidates) {
+        if (found.length < limit && !found.includes(candidate.path)) found.push(candidate.path);
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * One call for every run kind: ranker hits plus cited evidence, deduped.
+ * Planned issues cite exact locations (`path:line` or bare `name:line`);
+ * pinning them deletes the first discovery pass for well-specified tasks.
+ * `exclude` drops already-attached files (the issue itself); `limit`
+ * bounds the ranker, cited files always ride along.
+ */
+export function suggestFilesForRequest(args: {
+  map: RepoMap;
+  request: string;
+  repoRoot: string;
+  limit?: number;
+  exclude?: readonly string[];
+}): string[] {
+  const ranker = suggestTaskFilesFromMap(args.map, args.request, args.limit ?? 3).map((entry) => entry.path);
+  const cited = [
+    ...extractAnchoredFiles(args.repoRoot, args.request),
+    ...extractBareAnchors(args.map, args.request),
+  ];
+  const excluded = new Set(args.exclude ?? []);
+  const out: string[] = [];
+  for (const path of [...ranker, ...cited]) {
+    if (!excluded.has(path) && !out.includes(path)) out.push(path);
+  }
+  return out;
+}
+
 /** Rank map files for the request using paths, symbols, sections, and docs. */
 export function suggestTaskFilesFromMap(
   map: RepoMap,

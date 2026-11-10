@@ -306,6 +306,15 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         if (cached !== null && cached !== undefined) {
           return ok(`${cached}\n[already held from earlier in this run — no new bytes]`);
         }
+        // Fully seeded files are already in context whole and numbered. Any
+        // re-read shape (bare, ranged, symbol) re-dumps held bytes, so deny
+        // them all while the signature matches; an edit lifts the denial.
+        if (params.allow_large !== true && ctx.state?.isSeededFull(params.path, fileSig)) {
+          return ok(
+            `${params.path} is already in this run's context in full with line numbers — use those bytes. ` +
+              `Read only what an edit changed (the edit quotes it), never a re-read of the whole file.`,
+          );
+        }
         const raw = readFileSync(abs, "utf8");
         const lines = raw.split("\n");
         const bytes = Buffer.byteLength(raw, "utf8");
@@ -896,25 +905,73 @@ function findCollapsed(
   return { start, end, count };
 }
 
-/** Numbered ±8-line windows around each inserted block, located sequentially
- * in the new file and capped in total — so the model sees the edit land
- * without a re-read to confirm it. */
-function quoteInsertions(next: string, inserted: readonly string[], capBytes = 2000): string {
+/** One validated change: what was there, what replaced it. */
+interface FileChange {
+  oldText: string;
+  newText: string;
+  /** 1-based start line of the new block in the final file, when known. */
+  atLine?: number;
+  /** Identical occurrences changed by one replaceAll. */
+  occurrences?: number;
+}
+
+/** Files at or under this many lines come back whole: a full numbered file
+ * is cheaper than any re-read round trip and ends all doubt. */
+const EDIT_FULL_FILE_LINES = 80;
+/** Per-side cap inside -/+ blocks; the model re-reads only what it edits. */
+const EDIT_CHANGE_LINES = 15;
+
+function capChangeLines(lines: string[]): { shown: string[]; omitted: number } {
+  if (lines.length <= EDIT_CHANGE_LINES) return { shown: lines, omitted: 0 };
+  const head = Math.ceil(EDIT_CHANGE_LINES / 2);
+  const tail = EDIT_CHANGE_LINES - head;
+  return { shown: [...lines.slice(0, head), ...lines.slice(lines.length - tail)], omitted: lines.length - EDIT_CHANGE_LINES };
+}
+
+/**
+ * Self-verifying edit output: the whole numbered file when small, otherwise
+ * -/+ blocks with new-file line ranges. A diff answers "did my edit land"
+ * completely and compactly; a full file replays the replay disease inside
+ * the result, so only small files get one.
+ */
+function renderEditResult(path: string, next: string, changes: FileChange[], capBytes = 3000): string {
   const lines = next.split("\n");
+  if (lines.length <= EDIT_FULL_FILE_LINES) {
+    return `Full file ${path} (${lines.length} lines):\n${numberLinesCapped(lines, 1, lines.length, capBytes).text}`;
+  }
   const parts: string[] = [];
   let used = 0;
   let from = 0;
-  for (const text of inserted) {
-    if (!text || used >= capBytes) continue;
-    const at = next.indexOf(text, from);
-    if (at < 0) continue;
-    from = at + text.length;
-    const line = next.slice(0, at).split("\n").length;
-    const page = numberLinesCapped(lines, Math.max(1, line - 8), 17, capBytes - used);
-    used += page.text.length;
-    parts.push(page.text);
+  for (const change of changes) {
+    if (used >= capBytes) break;
+    let startLine = change.atLine;
+    if (change.newText) {
+      const at = next.indexOf(change.newText, from);
+      if (at < 0) continue;
+      from = at + change.newText.length;
+      startLine = next.slice(0, at).split("\n").length;
+    }
+    const oldLines = change.oldText.split("\n");
+    const newLines = change.newText ? change.newText.split("\n") : [];
+    const oldCapped = capChangeLines(oldLines);
+    const newCapped = capChangeLines(newLines);
+    const range =
+      startLine !== undefined ? `:${startLine}-${startLine + Math.max(0, newLines.length - 1)}` : "";
+    const multi =
+      change.occurrences && change.occurrences > 1
+        ? ` (${change.occurrences} identical occurrences; first shown)`
+        : "";
+    const block: string[] = [`${path}${range}${multi}`];
+    for (const line of oldCapped.shown) block.push(`- ${line}`);
+    if (oldCapped.omitted > 0) block.push(`- …[${oldCapped.omitted} more removed lines]`);
+    for (const line of newCapped.shown) block.push(`+ ${line}`);
+    if (newCapped.omitted > 0) block.push(`+ …[${newCapped.omitted} more added lines]`);
+    if (block.length <= 1) continue;
+    const text = block.join("\n");
+    used += text.length;
+    parts.push(text);
   }
-  return parts.join("\n…\n");
+  return parts.join("\n");
 }
 
 /** A numbered window around the closest line, so a miss re-anchors in place. */
@@ -960,7 +1017,7 @@ interface FileEditSpec {
 interface PlannedFileEdit {
   abs: string;
   next: string;
-  inserted: string[];
+  changes: FileChange[];
   summary: string;
 }
 
@@ -1056,7 +1113,10 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
     return {
       abs,
       next,
-      inserted: replacement === "" ? [] : [replacement],
+      changes:
+        replacement === ""
+          ? [{ oldText: scoped, newText: "", atLine: scopeStart }]
+          : [{ oldText: scoped, newText: replacement, atLine: scopeStart }],
       summary:
         wholeScope === ""
           ? `deleted ${scopeLabel} in ${spec.path} (${before} lines removed)`
@@ -1065,6 +1125,7 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   }
   let working = scoped;
   let replacements = 0;
+  const changes: FileChange[] = [];
   for (const edit of edits) {
     if (edit.oldString.length === 0) return { error: "oldString must not be empty" };
     if (edit.oldString === edit.newString) return { error: "oldString and newString must differ" };
@@ -1086,6 +1147,11 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
         ? working.split(needle).join(edit.newString)
         : working.replace(needle, edit.newString);
       replacements += count;
+      changes.push({
+        oldText: needle,
+        newText: edit.newString,
+        ...(edit.replaceAll && count > 1 ? { occurrences: count } : {}),
+      });
       applied = true;
       break;
     }
@@ -1103,8 +1169,10 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
             "after ignoring whitespace; add context to make the match unique",
         };
       }
+      const fuzzyOld = working.slice(fuzzy.start, fuzzy.end);
       working = working.slice(0, fuzzy.start) + edit.newString + working.slice(fuzzy.end);
       replacements += 1;
+      changes.push({ oldText: fuzzyOld, newText: edit.newString });
       continue;
     }
     // Re-anchor every miss, scoped or not, with the closest current
@@ -1125,7 +1193,7 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   return {
     abs,
     next,
-    inserted: edits.map((hunk) => hunk.newString).filter((text) => text !== ""),
+    changes,
     summary:
       `edited ${spec.path} (${replacements} replacement${replacements === 1 ? "" : "s"})` +
       (scopeLabel ? ` in ${scopeLabel}` : ""),
@@ -1139,7 +1207,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     description:
       "Replace text in files. Two forms per file: exact hunks (oldString/newString, batched in edits, scoped with symbol/section) or whole-block replacement (symbol/section + newString with no oldString rewrites the entire block — prefer this for function-scale changes: no anchor, no drift). " +
       "Put edits to several files in files[]: every file validates first, then all write atomically. " +
-      "Results quote the changed lines with numbers, so never re-read to confirm. " +
+      "Results show the change as a -/+ diff (or the whole numbered file when small), so never re-read to confirm. " +
       "Without replaceAll each hunk must be unique in scope.",
     parameters: EditParams,
     prepareArguments: (args) => cleanEditArgs(args) as Static<typeof EditParams>,
@@ -1175,11 +1243,16 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
             out.push("(one file per call works, but batch independent files in one files[] call)");
           }
           let used = 0;
-          for (const plan of plans) {
+          for (const [planIndex, plan] of plans.entries()) {
             out.push(plan.summary);
-            const quote = quoteInsertions(plan.next, plan.inserted, Math.max(0, 3000 - used));
-            used += quote.length;
-            if (quote) out.push(quote);
+            const rendered = renderEditResult(
+              params.files[planIndex]!.path ?? plan.abs,
+              plan.next,
+              plan.changes,
+              Math.max(0, 3000 - used),
+            );
+            used += rendered.length;
+            if (rendered) out.push(rendered);
           }
           return ok(out.join("\n"));
         }
@@ -1187,8 +1260,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         if ("error" in planned) return fail(planned.error);
         writeFileSync(planned.abs, planned.next, "utf8");
         ctx.state?.noteMutation();
-        const quote = quoteInsertions(planned.next, planned.inserted);
-        return ok(planned.summary + (quote ? `\nChanged:\n${quote}` : ""));
+        const rendered = renderEditResult(params.path ?? "file", planned.next, planned.changes);
+        return ok(planned.summary + (rendered ? `\n${rendered}` : ""));
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
       }

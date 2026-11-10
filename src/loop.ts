@@ -129,6 +129,11 @@ export interface RunLoopInput {
   requireModel?: string;
   /** Repo-relative files pinned into the working set before the first model call. */
   seedFiles?: string[];
+  /**
+   * Repo-relative files inlined whole (numbered) in the assembled context.
+   * Reads of unmodified entries are answered with a pointer, not bytes.
+   */
+  seededFull?: string[];
   /** Layout + full policy: enable the task tool (delegation). */
   layout?: Layout;
   fullPolicy?: Policy;
@@ -474,6 +479,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // Working context re-reads from disk, so pins never go stale.
   if (input.seedFiles && input.seedFiles.length > 0) {
     memory.seedWorkingFiles(input.seedFiles, 0);
+  }
+  // Fully inlined context files need no re-read while unchanged; the read
+  // tool denies those with a pointer instead of re-dumping the bytes.
+  if (input.seededFull && input.seededFull.length > 0) {
+    memory.markSeededFullPaths(input.seededFull);
   }
   // The next action is the first open item in the issue's durable todo.
   const issueForTodo = input.layout && recorder.current.itemId

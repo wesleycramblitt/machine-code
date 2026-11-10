@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
-import { extractAnchoredFiles, suggestTaskFilesFromMap } from "../map/suggest.js";
+import { suggestFilesForRequest } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -383,16 +383,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const builtMap = await buildRepoMap(l.repoRoot);
       builtMapFiles = builtMap.map.files.length;
       const suggestionRequest = (attachedIssue?.prompt ?? request).split(/\n## Todo\b/)[0]!.trim();
-      suggestedFiles = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 3)
-        .map((entry) => entry.path)
-        .filter((path) => path !== attachedIssue?.rel);
-      // Planned issues cite exact evidence locations (`path:line`); pinning
-      // them deletes the first discovery pass for well-specified tasks.
-      for (const anchored of extractAnchoredFiles(l.repoRoot, suggestionRequest)) {
-        if (anchored !== attachedIssue?.rel && !suggestedFiles.includes(anchored)) {
-          suggestedFiles.push(anchored);
-        }
-      }
+      suggestedFiles = suggestFilesForRequest({
+        map: builtMap.map,
+        request: suggestionRequest,
+        repoRoot: l.repoRoot,
+        limit: 3,
+        ...(attachedIssue?.rel ? { exclude: [attachedIssue.rel] } : {}),
+      });
       if (suggestedFiles.length > 0) {
         contextInclude = contextInclude ?? {};
         contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...suggestedFiles])];
@@ -862,6 +859,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const seedFiles = contextBundle.sources
     .filter((source) => source.kind === "file" && typeof source.ref === "string")
     .map((source) => source.ref as string);
+  // Fully inlined files need no re-read: the read tool denies them with a
+  // pointer while their bytes are unchanged. Trimmed sources stay readable.
+  const seededFull = contextBundle.sources
+    .filter((source) => source.kind === "file" && typeof source.ref === "string" && !source.truncated)
+    .map((source) => source.ref as string);
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -938,6 +940,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       requireModel,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
+      ...(seededFull.length > 0 ? { seededFull } : {}),
       skipMap,
       skipSemantic,
       skillExcludes,
@@ -963,6 +966,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       requireModel,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
+      ...(seededFull.length > 0 ? { seededFull } : {}),
       skipMap,
       skipSemantic,
       signal: abort.signal,

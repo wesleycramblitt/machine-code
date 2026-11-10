@@ -286,6 +286,33 @@ export class RunStateStore {
   private gitBaseline: Map<string, GitStatusEntry> | null = null;
   /** Files that are in play; rendered as current content, not transcript. */
   private workingFiles = new Map<string, WorkingFileState>();
+  /**
+   * Files inlined whole and numbered in the assembled `## Context` block.
+   * A read of an unmodified seeded file re-dumps bytes the model holds, so
+   * the read tool answers those with a pointer instead. Keyed by file
+   * signature: any edit (or external change) lifts the denial.
+   */
+  private seededFull = new Map<string, string>();
+
+  /** Mark repo-relative paths as fully inlined; signatures read from disk now. */
+  markSeededFullPaths(paths: readonly string[]): void {
+    if (!this.repoRoot) return;
+    for (const path of paths) {
+      try {
+        const abs = isAbsolute(path) ? path : join(this.repoRoot, path);
+        const stat = statSync(abs);
+        if (stat.isFile()) this.seededFull.set(path, `${stat.mtimeMs}:${stat.size}`);
+      } catch {
+        // A missing file gets no mark; reads proceed normally.
+      }
+    }
+  }
+
+  /** True when the path is fully inlined and unchanged since assembly. */
+  isSeededFull(path: string, fileSig?: string): boolean {
+    if (!fileSig) return false;
+    return this.seededFull.get(path) === fileSig;
+  }
   /** Exact acquired bytes for the full run; a read cache and prompt evidence. */
   private ledger = new Map<string, LedgerEntry>();
   /**
@@ -616,11 +643,12 @@ export class RunStateStore {
       (nextText.includes(entry.path) || nextText.includes(basename(entry.path)) ? 500 : 0) +
       Math.min(200, entry.lastTurn);
     // Only files the model is acting on: edited (their current bytes differ
-    // from the transcript), preloaded context, or explicitly focused. Files
-    // that were merely read stay in the transcript; re-sending them every
-    // turn duplicates bytes the model already has.
+    // from the transcript), explicitly focused, or fully read outside the
+    // seeds. Seeded task files are already in the assembled context block
+    // in full, so rendering them here too re-sends the same bytes every
+    // turn; the preloaded flag stays for scoring, not rendering.
     const entries = [...this.workingFiles.values()]
-      .filter((entry) => entry.changed || entry.preloaded || focus.has(entry.path))
+      .filter((entry) => entry.changed || focus.has(entry.path) || (entry.full && !entry.preloaded))
       .sort((a, b) => score(b) - score(a) || b.lastTurn - a.lastTurn || a.path.localeCompare(b.path))
       .slice(0, maxFiles);
 

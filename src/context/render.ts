@@ -2,11 +2,12 @@
  * machine_code — render the model prompt from run state + the current step.
  *
  * The prompt is the system prompt, the assembled task context, a compact state
- * block, current working-file content, and the full transcript of assistant
- * turns plus their tool results. Nothing is pruned or summarized: the model's
- * own reads and edits are its working memory, and hiding them makes it
- * re-fetch the same evidence. Context stays small by reading selectively
- * (outline first, symbol/range reads), not by deleting what was read.
+ * block, current working-file content, and the transcript as a call ledger:
+ * recent tool payloads in full, older bulk summarized with a re-fetch path.
+ * Full bytes live in the run ledger and the assembled context, both
+ * re-readable; replaying every dump every turn is what made long runs cost
+ * millions of tokens. The last few results stay verbatim so the current
+ * step's evidence is always intact.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
@@ -80,6 +81,74 @@ function completeStep(messages: readonly MessageLike[], start: number, end: numb
 /** Every complete assistant/tool step, oldest first, unchanged. Leading user
  * messages (the task) are kept: the request must survive every turn, not just
  * the first. */
+const SUMMARIZE_AT_CHARS = 2048;
+const KEEP_FULL_RESULTS = 3;
+const KEEP_FULL_ASSISTANT = 2;
+const SUMMARY_LINES = 6;
+
+/** Total text chars in a message content payload. */
+function contentChars(content: unknown): number {
+  if (typeof content === "string") return content.length;
+  if (!Array.isArray(content)) return 0;
+  let total = 0;
+  for (const block of content) {
+    if (block && typeof block === "object" && typeof (block as Record<string, unknown>).text === "string") {
+      total += ((block as Record<string, unknown>).text as string).length;
+    }
+  }
+  return total;
+}
+
+/** Shrink one text payload to its head plus an honest marker. Never touches
+ * toolCall blocks: protocol validity depends on their exact shape. */
+function shrinkText(text: string): string {
+  const lines = text.split("\n");
+  if (lines.length <= SUMMARY_LINES + 1) return text;
+  const head = lines.slice(0, SUMMARY_LINES).join("\n").replace(/\s+$/, "");
+  return `${head}\n…[${lines.length - SUMMARY_LINES} more lines, ${text.length.toLocaleString()} chars total — earlier tool output, summarized; re-run the call for full bytes]`;
+}
+
+function summarizeContent(content: unknown): unknown {
+  if (typeof content === "string") {
+    return content.length > SUMMARIZE_AT_CHARS ? shrinkText(content) : content;
+  }
+  if (!Array.isArray(content)) return content;
+  return content.map((block) => {
+    if (!block || typeof block !== "object") return block;
+    const b = block as Record<string, unknown>;
+    if (b.type === "toolCall") return block;
+    if (typeof b.text === "string" && (b.text as string).length > SUMMARIZE_AT_CHARS) {
+      return { ...b, text: shrinkText(b.text as string) };
+    }
+    return block;
+  });
+}
+
+/**
+ * The transcript as a call ledger: the last few payloads verbatim, older
+ * bulk summarized. Assistant text keeps a longer verbatim tail than tool
+ * results (reasoning continuity matters; dumps do not). Operates on copies;
+ * stored history keeps full detail for provenance and resume.
+ */
+function summarizeOldPayloads(messages: MessageLike[]): MessageLike[] {
+  const resultIdx: number[] = [];
+  const assistantIdx: number[] = [];
+  messages.forEach((message, index) => {
+    if (message.role === "toolResult") resultIdx.push(index);
+    else if (message.role === "assistant") assistantIdx.push(index);
+  });
+  const fullResults = new Set(resultIdx.slice(-KEEP_FULL_RESULTS));
+  const fullAssistant = new Set(assistantIdx.slice(-KEEP_FULL_ASSISTANT));
+  return messages.map((message, index) => {
+    if (message.role === "toolResult" && !fullResults.has(index) && contentChars(message.content) > SUMMARIZE_AT_CHARS) {
+      return { ...message, content: summarizeContent(message.content) };
+    }
+    if (message.role === "assistant" && !fullAssistant.has(index) && contentChars(message.content) > SUMMARIZE_AT_CHARS * 2) {
+      return { ...message, content: summarizeContent(message.content) };
+    }
+    return message;
+  });
+}
 function transcriptSteps(messages: readonly MessageLike[]): MessageLike[] {
   const starts: number[] = [];
   for (let i = 0; i < messages.length; i += 1) {
@@ -130,7 +199,7 @@ export function renderPromptMessages(
   const out = [
     ...(system ? [system] : []),
     ...(stable ? [{ role: "user", content: stable, timestamp: Date.now() } as MessageLike] : []),
-    ...transcriptSteps(source),
+    ...summarizeOldPayloads(transcriptSteps(source)),
     ...(volatile ? [{ role: "user", content: volatile, timestamp: Date.now() } as MessageLike] : []),
   ] as unknown as AgentMessage[];
   return { messages: out, chars: JSON.stringify(out).length };
