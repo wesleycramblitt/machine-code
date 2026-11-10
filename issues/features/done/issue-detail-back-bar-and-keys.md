@@ -1,11 +1,10 @@
-priority: medium
 tags: tui
 acceptance: script:build
 todo:
-  - [ ] Read renderHeader in src/tui/screens/chrome.ts and handleIssueKeys in src/tui/screens/issue-keys.ts
-  - [ ] Put the issue screen on the Back[Esc] header bar (no Runs/Models/Spend/Settings tabs), leaving runDetailHeader alone
-  - [ ] Remove the footer Back badge and the build/review key bindings; keep Run, Orchestrate, Gate, Approve & Merge, Delete
-  - [ ] Gate with script:build
+  - [x] Read renderHeader in src/tui/screens/chrome.ts and handleIssueKeys in src/tui/screens/issue-keys.ts
+  - [x] Put the issue screen on the Back[Esc] header bar (no Runs/Models/Spend/Settings tabs), leaving runDetailHeader alone
+  - [x] Remove the footer Back badge and the build/review key bindings; keep Run, Orchestrate, Gate, Approve & Merge, Delete
+  - [x] Gate with script:build
 
 # Issue page: red Back bar on top, fewer key commands
 
