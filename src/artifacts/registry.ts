@@ -147,6 +147,7 @@ export function listArtifacts(layout: Layout): ArtifactDef[] {
   const repoDirs = [
     join(layout.repoDir, "tools"),
     join(layout.repoDir, "scripts"),
+    join(layout.repoRoot, "scripts"),
   ];
   for (const dir of repoDirs) {
     for (const def of discover(dir, layout, "repo", dir.endsWith("scripts") ? "script" : "tool")) {

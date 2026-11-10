@@ -33,8 +33,8 @@ export interface ArtifactToolContext {
 
 const ArtifactParams = Type.Object({
   action: Type.Union(
-    [Type.Literal("list"), Type.Literal("show"), Type.Literal("usage"), Type.Literal("create"), Type.Literal("update"), Type.Literal("run")],
-    { description: "list, show, usage, run, or a provisioning request." },
+    [Type.Literal("list"), Type.Literal("show"), Type.Literal("usage"), Type.Literal("create"), Type.Literal("update")],
+    { description: "list, show, usage, or a provisioning request." },
   ),
   name: Type.Optional(Type.String({ description: "Artifact name or repo-relative path." })),
   kind: Type.Optional(Type.Union([Type.Literal("tool"), Type.Literal("script")])),
@@ -100,24 +100,47 @@ function provisionTool(ctx: ArtifactToolContext, params: ArtifactParamsType, act
   const existingExt = existing?.path?.split(".").pop();
   const lang = (params.lang ?? existingExt ?? "sh").replace(/^\./, "");
   if (scriptKind && !/^[a-z0-9]+$/i.test(lang)) return fail("lang must be a simple extension, e.g. sh|py|js");
+  const description = params.description ?? existing?.description ?? name;
+  if (scriptKind) {
+    if (!params.script) return fail("creating a script requires script content");
+    // Scripts are repo-root commands. The file is the configuration; there is
+    // no tool manifest and no TOML.
+    const scriptPath = join(ctx.layout.repoRoot, "scripts", `${name}.${lang}`);
+    if (action === "create" && existsSync(scriptPath) && !params.force) {
+      return fail(`script already exists: ${scriptPath} (pass force=true to replace)`);
+    }
+    const body = params.script;
+    const lines = body.split("\n");
+    const first = lines[0]?.startsWith("#!") ? lines[1] : lines[0];
+    const documented = /^\s*#/.test(first ?? "");
+    mkdirSync(join(ctx.layout.repoRoot, "scripts"), { recursive: true });
+    const withDescription = documented
+      ? body
+      : body.startsWith("#!")
+        ? `${body.slice(0, body.indexOf("\n") + 1)}# ${description}\n${body.slice(body.indexOf("\n") + 1)}`
+        : `# ${description}\n${body}`;
+    writeFileSync(scriptPath, withDescription, { encoding: "utf8", mode: 0o755 });
+    const rel = relative(ctx.layout.repoRoot, scriptPath).split("\\").join("/");
+    ctx.recorder.event("artifact_provisioned", { artifact: name, action, kind: "script", path: rel });
+    recordUsage(ctx, {
+      artifact: name,
+      kind: "script",
+      scope: "task",
+      runId: ctx.recorder.id,
+      role: ctx.recorder.current.agent,
+      at: new Date().toISOString(),
+      success: true,
+      action,
+    } as ArtifactUsage);
+    return ok(`${action}d script ${rel}`);
+  }
   const file = join(ctx.layout.repoDir, "tools", `${name}.toml`);
   if (action === "create" && existsSync(file) && !params.force) {
     return fail(`tool manifest already exists: ${file} (pass force=true to replace)`);
   }
-  const description = params.description ?? existing?.description ?? name;
   const tags = params.tags ?? existing?.tags ?? [];
-  let command = params.command ?? existing?.command;
-  if (scriptKind) {
-    if (!params.script) return fail("creating a script requires script content");
-    const scriptPath = join(ctx.layout.repoDir, "scripts", `${name}.${lang}`);
-    if (action === "create" && existsSync(scriptPath) && !params.force) {
-      return fail(`script already exists: ${scriptPath} (pass force=true to replace)`);
-    }
-    mkdirSync(join(ctx.layout.repoDir, "scripts"), { recursive: true });
-    writeFileSync(scriptPath, params.script, { encoding: "utf8", mode: 0o755 });
-    command = relative(ctx.layout.repoRoot, scriptPath).split("\\").join("/");
-  }
-  const kind = scriptKind ? "script" : "tool";
+  const command = params.command ?? existing?.command;
+  const kind = "tool";
   mkdirSync(join(ctx.layout.repoDir, "tools"), { recursive: true });
   writeFileSync(
     file,
@@ -255,39 +278,6 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
         if (!name) return fail(`${params.action} requires name`);
         const artifact = resolveArtifact(ctx.layout, name);
         if (!artifact) return fail(`artifact not found: ${name}`);
-        if (params.action === "run") {
-          const invocation = runInvocation(ctx.layout, artifact, params.args ?? []);
-          if (!invocation) return fail(`artifact ${artifact.name} has no command to run`);
-          const started = Date.now();
-          const result = await runProc(invocation.binary, invocation.args, {
-            cwd: ctx.layout.repoRoot,
-            timeoutMs: 300_000,
-          });
-          const success = result.outcome === "exit" && result.code === 0;
-          recordUsage(ctx, {
-            artifact: artifact.name,
-            kind: artifact.kind === "script" ? "script" : "tool",
-            scope: "task",
-            runId: ctx.recorder.id,
-            role: ctx.recorder.current.agent,
-            at: new Date().toISOString(),
-            success,
-            action: "run",
-          } as ArtifactUsage);
-          const output = capText(
-            [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n"),
-            COMMAND_CAP_BYTES,
-          ).text;
-          const label = `${invocation.binary} ${invocation.args.join(" ")}`.trim();
-          const body = `$ ${label}\n${output || "(no output)"}`;
-          const elapsed = Math.round((Date.now() - started) / 1000);
-          if (result.outcome === "timeout") return fail(`${body}\n[timed out after ${elapsed}s]`);
-          if (result.outcome === "spawn-error") {
-            return fail(`${body}\n[spawn error: ${result.spawnError ?? "unknown"}]`);
-          }
-          if (!success) return fail(`${body}\n[exit ${result.code ?? "?"}; ${elapsed}s]`);
-          return ok(`${body}\n[exit 0; ${elapsed}s]`);
-        }
         if (params.action === "usage") {
           return ok(usageFor(ctx, artifact.name));
         }

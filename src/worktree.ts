@@ -232,7 +232,19 @@ export function reusableWorktreeOwner(
  */
 export type RefreshResult = "current" | "updated" | "conflict" | "skipped";
 
+async function ensureNodeModules(path: string): Promise<void> {
+  try {
+    const main = await mainWorktreeRoot(path);
+    const src = join(main, "node_modules");
+    const dst = join(path, "node_modules");
+    if (existsSync(src) && !existsSync(dst)) symlinkSync(src, dst, "dir");
+  } catch {
+    // Dependency sharing is a convenience; the run still has its source.
+  }
+}
+
 export async function refreshReusedWorktree(path: string, baseBranch = "main"): Promise<RefreshResult> {
+  await ensureNodeModules(path);
   try {
     const base = await runProc("git", ["rev-parse", "--verify", baseBranch], { cwd: path, timeoutMs: 20_000 });
     if (base.code !== 0) return "skipped";
@@ -294,9 +306,9 @@ function branchFor(kind: WorktreeKind, runId: string, slug?: string): string {
   return `mc/run/${runId}`;
 }
 
-/** Profile-declared dependency links — no longer loaded from profiles. */
-async function dependencyLinks(_layout: Layout): Promise<string[]> {
-  return [];
+/** Shared dependency trees needed to build/test the worktree. */
+async function dependencyLinks(layout: Layout): Promise<string[]> {
+  return existsSync(join(layout.repoRoot, "node_modules")) ? ["node_modules"] : [];
 }
 
 function validateLink(link: string): void {

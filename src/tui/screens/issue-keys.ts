@@ -33,8 +33,8 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
   const startForIssue = (): void => {
     if (!slug) return;
     const issue = findIssue(l, slug);
-    if (issue?.status === "done") {
-      ctx.notify(`${slug} is done; move it back to todo before a new run`);
+    if (issue?.status === "done" || issue?.status === "needs-agent-review" || issue?.status === "needs-human-review") {
+      ctx.notify(`${slug} is ${issue.status}; finish review/approval before a new run`);
       return;
     }
     const agent = issue?.kind === "ideas" ? "research" : "engineer";
@@ -77,8 +77,8 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
       ctx.draw();
       return true;
     }
-    if (issue?.status === "done") {
-      ctx.notify(`${slug} is done; move it back to todo before building`);
+    if (issue?.status === "done" || issue?.status === "needs-agent-review" || issue?.status === "needs-human-review") {
+      ctx.notify(`${slug} is ${issue?.status ?? "missing"}; finish review/approval before building`);
       ctx.draw();
       return true;
     }
@@ -103,12 +103,22 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
       ctx.draw();
       return true;
     }
-    if (issue?.status !== "done") {
-      ctx.notify(`${slug} is ${issue?.status ?? "missing"}; build it before approving`);
+    if (issue?.status !== "needs-human-review" && issue?.status !== "done") {
+      ctx.notify(`${slug} is ${issue?.status ?? "missing"}; approve requires needs-human-review`);
       ctx.draw();
       return true;
     }
     spawnCli(["approve", slug], `approve ${slug} queued`);
+    return true;
+  }
+  if (data === "x" && slug) {
+    const issue = findIssue(l, slug);
+    if (issue?.status !== "needs-human-review") {
+      ctx.notify(`${slug} is ${issue?.status ?? "missing"}; reject requires needs-human-review`);
+      ctx.draw();
+      return true;
+    }
+    spawnCli(["issue", "reject", slug], `reject ${slug} queued`);
     return true;
   }
   if (data === "d" && slug) {

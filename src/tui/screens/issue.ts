@@ -19,6 +19,7 @@ export interface IssueHeader {
   rel: string;
   priority: string;
   review: string;
+  verification: "direct" | "verified";
   tags: string[];
   depends: string[];
   body: string[];
@@ -46,7 +47,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
   } else {
     lines.push(` ${B}${W}${slug}${R}  ${C}[${issue?.statusLabel ?? "unknown"}]${R}  ${D}${issue?.kindLabel ?? "item"} · ${issue?.rel ?? ""}${R}`);
     if (issue) {
-      lines.push(` ${D}priority ${issue.priority} · review ${issue.review}${issue.tags.length ? ` · tags ${issue.tags.join(", ")}` : ""}${issue.depends.length ? ` · depends ${issue.depends.join(", ")}` : ""} · status is the directory: ${issue.rel}${R}`);
+      lines.push(` ${D}priority ${issue.priority} · review ${issue.review} · ${issue.verification}${issue.tags.length ? ` · tags ${issue.tags.join(", ")}` : ""}${issue.depends.length ? ` · depends ${issue.depends.join(", ")}` : ""} · status is the directory: ${issue.rel}${R}`);
       const body = issue.body.slice(0, 20);
       for (const line of body) lines.push(`   ${D}${trunc(line, 110)}${R}`);
       if (issue.body.length > body.length) lines.push(`   ${D}… ${issue.body.length - body.length} more line(s)${R}`);

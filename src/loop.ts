@@ -458,7 +458,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
   // The goal is the issue itself. Hints and the reused-branch note are task
   // framing; repeating them inside <run-state> duplicates the prompt.
-  const goal = input.request.split(/\n\n## (?:Context|Skills|Existing branch state)\b/)[0]!.trim() || input.request;
+  const goal = input.request.split(/\n\n## (?:Context|Skills|Existing branch state|Worktree)\b/)[0]!.trim() || input.request;
   const memory = new RunStateStore({
     runDir: recorder.dir,
     runId: recorder.id,
@@ -472,6 +472,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   if (input.seedFiles && input.seedFiles.length > 0) {
     memory.seedWorkingFiles(input.seedFiles, 0);
   }
+  // The next action is the first open item in the issue's durable todo.
+  const issueForTodo = input.layout && recorder.current.itemId
+    ? findIssue(input.layout, recorder.current.itemId)
+    : null;
+  const firstTodo = issueForTodo?.todo.find((item) => !item.done);
+  if (firstTodo) memory.note("next", firstTodo.text, [], 0);
   // Rebuild the map and module index after a changed turn. The map cache is
   // keyed by the exact working tree, so this is a cheap stat pass when
   // nothing changed. Coalesce a burst of edits into one rebuild.

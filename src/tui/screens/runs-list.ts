@@ -40,6 +40,11 @@ const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }>
   researched: DONE_STYLE,
   todo: { tone: SLATE, glyph: "◆" },
   "in-progress": { tone: SKY, glyph: "●" },
+  "needs-agent-review": { tone: SKY, glyph: "◷" },
+  "needs-human-review": { tone: AMBER, glyph: "◷" },
+  "failed-gates": { tone: RED, glyph: "✗" },
+  "failed-agent-review": { tone: RED, glyph: "✗" },
+  "failed-human-review": { tone: RED, glyph: "✗" },
   blocked: { tone: ROSE, glyph: "⏸" },
   done: DONE_STYLE,
 };

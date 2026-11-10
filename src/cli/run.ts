@@ -4,7 +4,7 @@
  * Split from `src/cli.ts`; behavior unchanged. See `src/cli/common.ts` for
  * shared setup (flags, runtime, formatting, run lookup).
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,8 +26,8 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { findIssue, moveIssue, writeIssue } from "../plan/issues.js";
-import { readCachedMap } from "../map/deterministic.js";
+import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
+import { suggestTaskFiles } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -38,8 +38,9 @@ import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/co
 import { runLoop, type RunLoopResult } from "../loop.js";
 import { inferReviewVerdict, parseReviewVerdict } from "../orchestrator/outcome.js";
 import { policyFor, type OrchestrateResult } from "../orchestrate.js";
-import { resolveGates, runGates } from "../verify.js";
+import { gateFailureText, resolveGates, runGates } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
+import { runMainBuild } from "../commands/build.js";
 import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
@@ -65,144 +66,6 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
 
-/** Context hints for an issue body or run request: repo files whose path or
- * symbol names contain 2+ distinct request keywords (capped at 5), plus the
- * architecture doc and skill index when present. Weak matches mislead more
- * than they help, so no section at all beats a wrong one. */
-/** Files worth opening first, ranked by how well their path and doc header
- * match the request. Files are heavily documented, so the header is the best
- * cheap signal; rarity weighting (IDF) stops generic words like "status" or
- * "issue" from dominating. UI requests prefer src/tui. */
-const HINT_STOP = new Set([
-  "this", "that", "with", "from", "have", "been", "when", "what", "make", "just",
-  "into", "then", "they", "them", "there", "their", "same", "like", "many", "need",
-  "needed", "line", "lines", "take", "taking", "next", "each", "over", "only",
-  "also", "more", "most", "some", "such", "than", "very", "will", "would",
-  "should", "could", "must", "about", "after", "before", "other", "parts",
-  // Three-letter function words. Domain terms like "min", "fit", "new", and
-  // "run" must survive: they are often the only link to a symbol name.
-  "the", "and", "for", "not", "but", "are", "was", "were", "has", "had", "its",
-  "our", "you", "your", "all", "any", "can", "may", "use", "per", "via", "out",
-  "off", "one", "two", "how", "why", "who", "its", "too", "now", "get", "got",
-]);
-const HINT_CODE = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i;
-const HINT_UI = /\b(ui|ux|screen|page|layout|colou?r|font|bold|badge|render)\b/i;
-
-function hintWords(text: string): string[] {
-  return (text.toLowerCase().match(/[a-z][a-z0-9]+/g) ?? []).filter(
-    (word) => word.length >= 3 && !HINT_STOP.has(word),
-  );
-}
-
-export function buildIssueHints(l: ReturnType<typeof layout>, request: string, agent: string): string[] {
-  const hints: string[] = [];
-  const words = hintWords(request);
-  const tokens = [...new Set(words)];
-  const intent = new Set(hintWords(request.split("\n")[0] ?? ""));
-  const wantsUi = HINT_UI.test(request);
-  // Adjacent request words in code are usually one identifier: "min fit"
-  // appears as `minFit`, "run page" as `runPage`. Phrase matches are the only
-  // way to find a local function the symbol map does not expose.
-  const phrases = new Map<string, RegExp>();
-  for (let i = 0; i + 1 < words.length; i += 1) {
-    const a = words[i]!;
-    const b = words[i + 1]!;
-    if (a.length < 3 || b.length < 3) continue;
-    phrases.set(`${a} ${b}`, new RegExp(`${a}[-_ ]?${b}`, "i"));
-  }
-  const cachedMap = readCachedMap(l.repoRoot);
-  const candidates = (cachedMap?.files ?? [])
-    .filter((file) => HINT_CODE.test(file.path))
-    .map((file) => {
-      let text = "";
-      try {
-        text = readFileSync(join(l.repoRoot, file.path), "utf8").slice(0, 512 * 1024);
-      } catch {}
-      const header = text.slice(0, 1500);
-      const lower = text.toLowerCase();
-      const bodyHits = new Set(tokens.filter((token) => lower.includes(token)));
-      const phraseHits = [...phrases].filter(([, pattern]) => pattern.test(lower)).map(([phrase]) => phrase);
-      const ordered = [...file.symbols].sort((a, b) => {
-        const aHit = tokens.some((token) => a.name.toLowerCase().includes(token)) ? 0 : 1;
-        const bHit = tokens.some((token) => b.name.toLowerCase().includes(token)) ? 0 : 1;
-        if (aHit !== bHit) return aHit - bHit;
-        const aConst = a.kind === "const" ? 1 : 0;
-        const bConst = b.kind === "const" ? 1 : 0;
-        if (aConst !== bConst) return aConst - bConst;
-        return a.line - b.line;
-      });
-      return {
-        path: file.path,
-        pathWords: new Set(file.path.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)),
-        headerWords: new Set(hintWords(header)),
-        symbols: file.symbols.map((symbol) => symbol.name.toLowerCase()),
-        bodyHits,
-        phraseHits,
-        // Up-front symbol map: the model can read { symbol } immediately
-        // instead of spending calls on map symbols/outline to learn names.
-        outline: ordered
-          .slice(0, 8)
-          .map((symbol) => `${symbol.name}:${symbol.line}`)
-          .join(", "),
-      };
-    });
-  const total = Math.max(1, candidates.length);
-  // Plural/singular should match: the prompt says "run page", the header
-  // says "runs, models". Without this, the file that owns the behavior is
-  // invisible to the ranker.
-  const wordHit = (words: Set<string>, token: string): boolean =>
-    words.has(token) || words.has(`${token}s`) || (token.endsWith("s") && words.has(token.slice(0, -1)));
-  const df = new Map(
-    tokens.map((token) => [
-      token,
-      candidates.filter(
-        (file) =>
-          wordHit(file.pathWords, token) ||
-          wordHit(file.headerWords, token) ||
-          file.symbols.some((symbol) => symbol.includes(token)) ||
-          file.bodyHits.has(token),
-      ).length,
-    ]),
-  );
-  const idf = (token: string): number => Math.log((total + 1) / ((df.get(token) ?? 0) + 1));
-  const files = candidates
-    .map((file) => {
-      let score = 0;
-      for (const token of tokens) {
-        const inPath = wordHit(file.pathWords, token);
-        const inHeader = wordHit(file.headerWords, token);
-        const inSymbol = file.symbols.some((symbol) => symbol.includes(token));
-        const inBody = file.bodyHits.has(token);
-        if (!inPath && !inHeader && !inSymbol && !inBody) continue;
-        const weight = (inPath ? 1.5 : 0) + (inHeader ? 1 : 0) + (inSymbol ? 0.2 : 0) + (inBody ? 0.5 : 0);
-        score += weight * idf(token) ** 2 * (intent.has(token) ? 2 : 1);
-      }
-      for (const phrase of file.phraseHits) {
-        const first = phrase.split(" ")[0] ?? "";
-        score += (intent.has(first) ? 20 : 10);
-      }
-      if (wantsUi && /^src\/tui(?:\.tsx?|\/)/.test(file.path)) score *= 1.6;
-      return { path: file.path, score, outline: file.outline };
-    })
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-    .slice(0, 5);
-  if (files.length > 0) {
-    const lines = files.map((file) =>
-      file.outline ? `  - ${file.path} — ${file.outline}` : `  - ${file.path}`,
-    );
-    hints.push(`## Context\n\nRelevant files:\n${lines.join("\n")}`);
-  }
-  // Only the role's own skills. Listing every installed skill spends context
-  // on procedures this run will never use.
-  const wanted = new Set(defaultSkillsFor({ agent }));
-  const skills = skillMetas(l).filter((skill) => wanted.has(skill.name));
-  if (skills.length > 0) {
-    hints.push(`## Skills\n\n${skills.map((s) => `  - ${s.name}: ${s.description}`).join("\n")}`);
-  }
-  return hints;
-}
-
 /** Update the local main branch from the remote. Non-blocking: if the remote is
  * unreachable the work continues with the local state. */
 async function syncFromRemote(topRoot: string): Promise<void> {
@@ -224,6 +87,13 @@ async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string
     await runProc("git", ["merge", "main", "-m", `sync ${branch} with main`], { cwd: worktreeRoot, timeoutMs: 30_000 });
     // Merge feature branch into main.
     await runProc("git", ["merge", branch, "--no-ff", "-m", `merge ${branch}`], { cwd: topRoot, timeoutMs: 30_000 });
+    // A source merge is not a working binary for a compiled project. Rebuild
+    // main before declaring success; the running CLI uses dist/.
+    const build = await runMainBuild(topRoot);
+    if (!build.ok) {
+      process.stderr.write(`main build failed after merge: ${build.text}\n`);
+      return false;
+    }
     // Push the merge to the remote.
     await runProc("git", ["push", "origin", "main"], { cwd: topRoot, timeoutMs: 30_000 });
     // Delete the remote branch (may fail if it was never pushed — fine).
@@ -334,9 +204,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (normalizedAgent === "review" && issue.kind === "ideas") {
       fail(`issue ${itemSlug} is an idea; ideas are researched, not reviewed`);
     }
-    // Engineer: only work on issues that are ready (todo) or blocked by review.
-    if (normalizedAgent === "engineer" && issue.status !== "todo" && issue.status !== "blocked") {
-      fail(`issue ${itemSlug} is ${issue.status}; engineer works on todo or blocked issues`);
+    // Engineer: work from todo, a failed attempt, or a legacy blocked state.
+    if (normalizedAgent === "engineer" && !(ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)) {
+      fail(`issue ${itemSlug} is ${issue.status}; engineer works from todo or a failed-gates/review state`);
     }
     // Review: only review issues that are done (agent review requested).
     if (normalizedAgent === "review" && issue.review !== "agent") {
@@ -353,12 +223,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
-      const hints = buildIssueHints(l, request, normalizedAgent);
       issue = writeIssue(l, {
         kind: normalizedAgent === "research" ? "ideas" : "features",
         slug: autoSlug,
         prompt: request,
-        body: `Auto-created from run.\n\n${request}\n\n${hints.join("\n\n")}`,
+        body: `Auto-created from run.\n\n${request}`,
         tags: [],
         review: "none",
       });
@@ -368,18 +237,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
     itemSlug = issue.slug;
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
-  }
-  // Hints are recomputed for every run. An issue body may carry hints from
-  // when it was created; those go stale as the code and the scorer change, so
-  // strip the old generated sections and attach fresh ones. The issue file is
-  // left untouched.
-  if (itemSlug && !autoCreatedIssue && normalizedAgent === "engineer" && request) {
-    const trimmed = request.split(/\n## (?:Context|Architecture|Skills|Verify|Todo)\b/)[0]!.trim();
-    const hints = buildIssueHints(l, trimmed || request, normalizedAgent);
-    if (hints.length > 0) {
-      request = `${trimmed || request}\n\n${hints.join("\n\n")}`;
-      process.stderr.write(`issue hints attached (${hints.length} sections)\n`);
-    }
   }
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const tier = flags.get("tier");
@@ -452,12 +309,31 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
   // The attached issue file is always explicit context, regardless of how the
-  // run was started.
-  if (itemSlug) {
-    const issue = findIssue(l, itemSlug);
-    if (issue) {
-      contextInclude = contextInclude ?? {};
-      contextInclude.files = [...new Set([...(contextInclude.files ?? []), issue.rel])];
+  // run was started. Seed a deterministic Todo before assembly so the model
+  // sees the plan in the issue block.
+  if (itemSlug) ensureIssueVerification(l, itemSlug);
+  const attachedIssue = itemSlug ? ensureIssueTodo(l, itemSlug) : null;
+  if (attachedIssue) {
+    contextInclude = contextInclude ?? {};
+    contextInclude.files = [...new Set([...(contextInclude.files ?? []), attachedIssue.rel])];
+  }
+  // Suggestions are context files. Attach them for CLI runs that did not
+  // supply an explicit include; the composer shows the same suggestions and
+  // lets the user choose instead. No second `## Context` prompt block.
+  if (contextIncludeFlag === undefined) {
+    try {
+      const { buildRepoMap } = await import("../map/deterministic.js");
+      await buildRepoMap(l.repoRoot);
+      const suggestionRequest = (attachedIssue?.prompt ?? request).split(/\n## Todo\b/)[0]!.trim();
+      const suggested = suggestTaskFiles(l.repoRoot, suggestionRequest, 3)
+        .map((entry) => entry.path)
+        .filter((path) => path !== attachedIssue?.rel);
+      if (suggested.length > 0) {
+        contextInclude = contextInclude ?? {};
+        contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...suggested])];
+      }
+    } catch {
+      // Suggestions are best effort; the run still has the issue.
     }
   }
   const contextBudgetFlag = flags.get("context-budget");
@@ -815,32 +691,39 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // A reused worktree may hold prior commits and uncommitted changes from an
-  // earlier run. Tell the agent what's already on the branch so it continues
-  // the work instead of starting blind.
+  // A reused worktree may hold prior work. State only facts: commits ahead,
+  // dirty paths, or clean. Never claim prior work on a reset branch; that
+  // sends the model through status/history/diff for nothing.
   if (reusedWorktree && toolRoot !== l.repoRoot) {
     try {
       const branch = recorder.current.branch ?? "";
-      const log = await runProc("git", ["log", "--oneline", "-8"], { cwd: toolRoot, timeoutMs: 15_000 });
-      const status = await runProc("git", ["status", "--short", "--branch"], { cwd: toolRoot, timeoutMs: 15_000 });
+      const base = recorder.current.baseRef ?? "main";
+      const ahead = await runProc("git", ["rev-list", "--count", `${base}..HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
+      const status = await runProc("git", ["status", "--porcelain"], { cwd: toolRoot, timeoutMs: 15_000 });
+      const aheadCount = Number(ahead.stdout.trim()) || 0;
+      const dirtyText = status.code === 0 ? status.stdout.trim() : "";
       const lines = [
-        `## Existing branch state`,
-        `You are continuing work on branch ${branch || "(unknown)"}, which already exists.`,
+        `## Worktree`,
+        `Branch ${branch || "(unknown)"} at ${base}: ${aheadCount} commit(s) ahead${dirtyText ? ", uncommitted changes" : ", clean"}.`,
       ];
-      if (log.code === 0 && log.stdout.trim()) lines.push(`Recent commits:\n${log.stdout.trim()}`);
-      if (status.code === 0 && status.stdout.trim()) lines.push(`Working tree:\n${status.stdout.trim()}`);
-      lines.push(
-        `A previous attempt left work on this branch. Inspect it. Keep only the parts that directly satisfy the issue; replace over-built code with the smallest change instead of extending it.`,
-      );
+      if (dirtyText) lines.push(`Uncommitted:\n${dirtyText}`);
+      if (aheadCount > 0 || dirtyText) {
+        lines.push(
+          `Prior work exists. The issue is the definition of done; keep only the parts that directly satisfy it, and replace over-built code with the smallest change.`,
+        );
+      } else {
+        lines.push(`Clean at ${base}; there is no prior work.`);
+      }
       request = `${request}\n\n${lines.join("\n\n")}`;
-      recorder.event("branch_state_reported", { branch });
+      recorder.event("branch_state_reported", { branch, ahead: aheadCount, dirty: Boolean(dirtyText) });
     } catch {
-      // Best effort: the agent can inspect the tree itself with core:status.
+      // Best effort: the agent can inspect the tree itself.
     }
   }
 
   // Context assembly (Phase 6): hierarchy + explicit artifacts + project
   // sources, written to context.json for provenance.
+  const verification = attachedIssue?.verification ?? "direct";
   const { assembleContext } = await import("../context/assemble.js");
   const { writeJsonAtomic } = await import("../state/run-schema.js");
   const { roleSkillPresets } = await import("../agents.js");
@@ -848,11 +731,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
     layout: l,
     machine,
     agent: agentNameParsed,
+    verification,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
     ...(contextBudgetChars !== undefined ? { budgetChars: contextBudgetChars } : {}),
     exclude: contextExclude,
     include: contextInclude,
-    defaultSkills: defaultSkillsFor({ agent: agentNameParsed }),
+    defaultSkills: defaultSkillsFor({ agent: agentNameParsed, verification }),
     skillPresets: roleSkillPresets(agentNameParsed),
     skillOverrides: skillModeOverrides,
   });
@@ -905,6 +789,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   let result: RunLoopResult | OrchestrateResult;
   let autoReview: { slug: string; prompt: string } | undefined;
+  let autoRetry: { slug: string; prompt: string } | undefined;
   if (directExec) {
     // Detached delegated child: one agent, directly. Its prompt is its spec.
     const role = (agentNameParsed ?? "engineer") as AgentName;
@@ -982,6 +867,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const written = [...new Set(touchedPaths(events))].filter((path) =>
         /^issues\/(?:features|bugs)\//.test(path),
       );
+      // Research may write a specific plan; the fallback guarantees every
+      // created issue has a Todo the next run can pick up.
+      for (const path of written) {
+        const slug = basename(path, ".md");
+        ensureIssueVerification(l, slug);
+        ensureIssueTodo(l, slug);
+      }
       const missing = written
         .map((path) => findIssue(l, basename(path, ".md")))
         .filter((created) => created !== null && created.acceptance.length === 0);
@@ -1025,6 +917,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
         const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
         if (merged) {
           recorder.event("branch_merged", { branch, verdict: "approved" });
+          if (issue && issue.kind !== "ideas") {
+            moveIssue(l, issue.slug, "done");
+            await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+          }
         } else {
           result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
         }
@@ -1032,11 +928,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
     if (
       issue &&
-      issue.status === "done" &&
+      issue.kind !== "ideas" &&
       (result.status === "blocked" || result.status === "failed" || (verdict !== undefined && verdict !== "approved"))
     ) {
-      moveIssue(l, issue.slug, "blocked");
-      await commitPlanningFiles(l, `issues: ${issue.slug} review ${verdict ?? result.status}`);
+      moveIssue(l, issue.slug, "failed-agent-review");
+      await commitPlanningFiles(l, `issues: ${issue.slug} failed-agent-review`);
     }
   }
 
@@ -1051,10 +947,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
   ) {
     const issue = findIssue(l, itemSlug);
     if (issue) {
-      const commands = allCommands(l);
-      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), {
+      const gateCommands = allCommands(l, { scriptsRoot: toolRoot });
+      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), gateCommands), {
           root: toolRoot,
-          commands,
+          commands: gateCommands,
         });
         const gatesPassed = gateOutcome.passed;
         recorder.event("gates", {
@@ -1063,8 +959,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
           results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
         });
         if (!gatesPassed) {
-          moveIssue(l, issue.slug, "blocked");
-          await commitPlanningFiles(l, `issues: ${issue.slug} blocked`);
+          const attempt = gateFailureAttempts(issue.body) + 1;
+          appendIssueGateFailure(issue.path, gateFailureText(gateOutcome.results), attempt);
+          moveIssue(l, issue.slug, "failed-gates");
+          await commitPlanningFiles(l, `issues: ${issue.slug} failed-gates`);
           result = {
             ...result,
             status: "blocked",
@@ -1092,29 +990,41 @@ export async function cmdRun(argv: string[]): Promise<number> {
           recorder.patchSummary({ commit });
           recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
           // Ideas move to researched (handled above when they produced
-          // issues); only features/bugs move to done. "done" is not a
-          // legal status for ideas.
+          // issues); only features/bugs use the review states.
           if (issue.kind !== "ideas") {
-            moveIssue(l, issue.slug, "done");
-            await commitPlanningFiles(l, `issues: ${issue.slug} done`);
-          }
-          // Auto-merge: if no review required, merge the branch into main
-          if (issue.review === "none") {
-            const branch = recorder.current.branch;
-            if (branch) {
-              const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
-              if (merged) {
-                recorder.event("branch_merged", { branch });
-              } else {
-                result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
+            if (issue.review === "none" || flags.has("no-review")) {
+              const branch = recorder.current.branch;
+              if (branch) {
+                const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
+                if (merged) {
+                  recorder.event("branch_merged", { branch });
+                  moveIssue(l, issue.slug, "done");
+                  await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+                } else {
+                  moveIssue(l, issue.slug, "blocked");
+                  await commitPlanningFiles(l, `issues: ${issue.slug} blocked`);
+                  result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
+                }
               }
+            } else if (issue.review === "agent") {
+              moveIssue(l, issue.slug, "needs-agent-review");
+              await commitPlanningFiles(l, `issues: ${issue.slug} needs-agent-review`);
+              autoReview = { slug: issue.slug, prompt: issue.prompt };
+            } else {
+              moveIssue(l, issue.slug, "needs-human-review");
+              await commitPlanningFiles(l, `issues: ${issue.slug} needs-human-review`);
             }
-          }
-          if (issue.review === "agent" && !flags.has("no-review")) {
-            autoReview = { slug: issue.slug, prompt: issue.prompt };
           }
         }
       }
+    }
+  }
+  // A gate failure gets a deterministic repair run with the issue's
+  // `## Gate failure` log. Stop after three attempts.
+  if (result.status === "blocked" && itemSlug && agentNameParsed === "engineer") {
+    const issue = findIssue(l, itemSlug);
+    if (issue?.status === "failed-gates" && gateFailureAttempts(issue.body) < 3) {
+      autoRetry = { slug: issue.slug, prompt: issue.prompt };
     }
   }
   recorder.finalize(result.status, result.error, result.finalText);
@@ -1143,7 +1053,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
   process.stderr.write(
     `\nrun ${summary.id}: ${summary.status}${summary.stopReason && summary.stopReason !== "completed" ? ` (${summary.stopReason})` : ""} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
-  if (autoReview) {
+  if (autoRetry) {
+    const child = spawn(
+      process.execPath,
+      [process.argv[1]!, "run", "--agent", "engineer", "--item", autoRetry.slug],
+      { cwd: l.repoRoot, detached: true, stdio: "ignore" },
+    );
+    child.on("error", () => undefined);
+    child.unref();
+    process.stderr.write(`gate retry ${autoRetry.slug} started with the failure log\n`);
+  } else if (autoReview) {
     const child = spawn(
       process.execPath,
       [process.argv[1]!, "run", "--agent", "review", "--item", autoReview.slug, autoReview.prompt],
@@ -1300,6 +1219,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     }
   }
 
+  const gateCommands = allCommands(l2, { scriptsRoot: toolRoot });
   const recorder = RunRecorder.reopen(l2, s);
   recorder.setStatus("running", "resume");
   recorder.patchSummary({ pid: process.pid });
@@ -1427,15 +1347,17 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   if (result.status === "completed" && resumeAgent === "engineer" && resumeItem) {
     const issue = findIssue(l2, resumeItem);
     if (issue) {
-      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue)), { root: toolRoot, commands });
+      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), gateCommands), { root: toolRoot, commands: gateCommands });
         recorder.event("gates", {
           issue: issue.slug,
           passed: gateOutcome.passed,
           results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
         });
         if (!gateOutcome.passed) {
-          moveIssue(l2, issue.slug, "blocked");
-          await commitPlanningFiles(l2, `issues: ${issue.slug} blocked`);
+          const attempt = gateFailureAttempts(issue.body) + 1;
+          appendIssueGateFailure(issue.path, gateFailureText(gateOutcome.results), attempt);
+          moveIssue(l2, issue.slug, "failed-gates");
+          await commitPlanningFiles(l2, `issues: ${issue.slug} failed-gates`);
           recorder.finalize("blocked", `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`, result.finalText);
           printRunOutcome({ ...result, status: "blocked" }, recorder);
           return EXIT.blocked;
@@ -1451,19 +1373,24 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
             recorder.patchSummary({ commit });
             recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
             if (issue.kind !== "ideas") {
-              moveIssue(l2, issue.slug, "done");
-              await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
-            }
-            // Auto-merge: if no review required, merge the branch into main
-            if (issue.review === "none") {
-              const branch = recorder.current.branch;
-              if (branch) {
-                await mergeBranch(l2.repoRoot, toolRoot, branch);
-                recorder.event("branch_merged", { branch });
+              if (issue.review === "none" || flags.has("no-review")) {
+                const branch = recorder.current.branch;
+                if (branch) {
+                  const merged = await mergeBranch(l2.repoRoot, toolRoot, branch);
+                  if (merged) {
+                    recorder.event("branch_merged", { branch });
+                    moveIssue(l2, issue.slug, "done");
+                    await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+                  }
+                }
+              } else if (issue.review === "agent") {
+                moveIssue(l2, issue.slug, "needs-agent-review");
+                await commitPlanningFiles(l2, `issues: ${issue.slug} needs-agent-review`);
+                autoReview = { slug: issue.slug, prompt: issue.prompt };
+              } else {
+                moveIssue(l2, issue.slug, "needs-human-review");
+                await commitPlanningFiles(l2, `issues: ${issue.slug} needs-human-review`);
               }
-            }
-            if (issue.review === "agent" && !flags.has("no-review")) {
-              autoReview = { slug: issue.slug, prompt: issue.prompt };
             }
           }
         } catch (error) {
@@ -1486,17 +1413,23 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     if (verdict === "approved" && toolRoot !== l2.repoRoot) {
       const branch = recorder.current.branch;
       if (branch) {
-        await mergeBranch(l2.repoRoot, toolRoot, branch);
-        recorder.event("branch_merged", { branch, verdict: "approved" });
+        const merged = await mergeBranch(l2.repoRoot, toolRoot, branch);
+        if (merged) {
+          recorder.event("branch_merged", { branch, verdict: "approved" });
+          if (issue && issue.kind !== "ideas") {
+            moveIssue(l2, issue.slug, "done");
+            await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+          }
+        }
       }
     }
     if (
       issue &&
-      issue.status === "done" &&
+      issue.kind !== "ideas" &&
       (result.status === "blocked" || result.status === "failed" || (verdict !== undefined && verdict !== "approved"))
     ) {
-      moveIssue(l2, issue.slug, "blocked");
-      await commitPlanningFiles(l2, `issues: ${issue.slug} review ${verdict ?? result.status}`);
+      moveIssue(l2, issue.slug, "failed-agent-review");
+      await commitPlanningFiles(l2, `issues: ${issue.slug} failed-agent-review`);
     }
   }
 

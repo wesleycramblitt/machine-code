@@ -13,8 +13,8 @@ export const TOOL_GUIDE = [
   "- Edit: exact-match edit scoped by symbol/section; batch all hunks in one call; write only for a new file or a full replacement; " +
     "changing a signature or option: locate the callers first.",
   "- Plan: todo replaces the issue's ## Todo; 2-4 steps; mark done only when the result exists.",
-  "- Finish: finish outcome=completed|blocked|failed; stop calling tools after it.",
-  "- Diagnostics: core:check reports errors in changed files.",
+  "- Finish: finish outcome=completed|blocked|failed; stop calling tools after it. Gates run after finish.",
+  "- Scripts: build/test/run scripts are runner-owned. Do not run them; fix the failure log the runner returns.",
   "- Repeated work: create or reuse an artifact script instead of repeating a command.",
   "</tool-policy>",
 ].join("\n");

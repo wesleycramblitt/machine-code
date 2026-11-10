@@ -17,4 +17,6 @@ export interface TaskPacket {
   context: string[];
   constraints: string[];
   acceptance: PacketAcceptance[];
+  /** direct: code only; verified: code + tests. */
+  verification?: "direct" | "verified";
 }

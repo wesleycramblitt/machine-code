@@ -19,7 +19,7 @@ import {
   wrapCommands, wrapText, wrapTokenList,
 } from "../../format.js";
 import { layout } from "../../../paths.js";
-import { findIssue, listIssues, singleLine, ISSUE_KINDS } from "../../../plan/issues.js";
+import { ENGINEER_WORK_STATUSES, findIssue, listIssues, singleLine, ISSUE_KINDS } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
 import { roleSkillPresets } from "../../../agents.js";
 import { defaultSkillsFor, resolveSkillMode, skillMetas, type SkillMode } from "../../../context/references.js";
@@ -27,6 +27,7 @@ import { contextBudget } from "../../../context/budget.js";
 import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
 import { listReferenceEntries } from "../../../references/store.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "../../../map/deterministic.js";
+import { suggestTaskFilesFromMap } from "../../../map/suggest.js";
 import { loadModuleIndex, renderModuleIndex } from "../../../map/modules.js";
 import { skillListItems, toolListItems, tokensForChars } from "../../tools.js";
 import { loadAvailability } from "../../../availability.js";
@@ -108,6 +109,13 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     referencedToolChars,
   );
   const cachedMap = readCachedMap(repoRoot);
+  const runIssue = run.item ? findIssue(newRunLayout, run.item) : null;
+  const suggestionPrompt = run.prompt.trim() || runIssue?.prompt || "";
+  const suggestedFiles = new Set(
+    cachedMap
+      ? suggestTaskFilesFromMap(cachedMap, suggestionPrompt, 3).map((entry) => entry.path)
+      : [],
+  );
   const issueItems: ContextPanelItem[] = itemsFor(["issue"]);
   // Every issue as an available row the user can search and opt into with
   // space, filtered by the selected agent. The issue file is the work item's
@@ -118,8 +126,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (run.agent === "research" && issue.kind !== "ideas") continue;
     if (run.agent !== "research" && issue.kind === "ideas") continue;
     if (run.agent === "research" && issue.kind !== "ideas") continue;
-    // Engineer: only todo or blocked issues.
-    if (run.agent === "engineer" && issue.status !== "todo" && issue.status !== "blocked") continue;
+    // Engineer: todo, failed attempts, or a legacy blocked state.
+    if (run.agent === "engineer" && !(ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)) continue;
     // Review: only done issues with agent review.
     if (run.agent === "review" && (issue.status !== "done" || issue.review !== "agent")) continue;
     const key = `issue:${issue.rel}`;
@@ -152,7 +160,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const key = `file:${file.path}`;
     if (knownFiles.has(key)) continue;
     fileItems.push({
-      text: `${file.path} · available`,
+      text: `${file.path} · ${suggestedFiles.has(file.path) ? "suggested" : "available"}`,
       chars: file.bytes,
       exists: true,
       key,
@@ -197,7 +205,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       }
     }
     scriptItems.push({
-      text: `${artifact.name} · script · available`,
+      text: `script:${artifact.name} · script · available`,
       chars: size,
       exists: true,
       key,
@@ -207,14 +215,17 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   }
   const skillSources = ctx.sources.filter((source) => source.kind === "skill");
   const aggregateSkill = skillSources.find((source) => /^\d+ skills$/.test(source.ref));
-  const skillDefaults = defaultSkillsFor({ agent: run.agent });
+  const skillDefaults = defaultSkillsFor({
+    agent: run.agent,
+    verification: runIssue?.verification ?? "direct",
+  });
   const skillPresets = roleSkillPresets(run.agent);
   const skillOverrides = Object.fromEntries(skillModes);
   const skillModeOf = (name: string): SkillMode => {
     if (excluded.has(`skill:${name}`)) return "exclude";
     return resolveSkillMode(name, {
       presets: skillPresets,
-      declared: [],
+      declared: skillDefaults,
       overrides: skillOverrides,
     });
   };

@@ -6,7 +6,7 @@
  * Commands are named, typed manifests dispatched through the command registry
  * — never shell strings.
  */
-import { runCommand, type CommandContext } from "./commands/registry.js";
+import { runCommand, type CommandContext, type CommandSpec } from "./commands/registry.js";
 import type { TaskPacket } from "./packet.js";
 
 export interface GateResult {
@@ -28,20 +28,35 @@ export interface GateSpec {
   required: boolean;
 }
 
-/** Last-resort gate when the issue has no acceptance gates. */
-const STATUS_GATE: GateSpec = { command: "core:status", args: {}, required: false };
-
 /**
- * Resolve the gate set from the issue's declared `verify` commands. An empty
- * list falls back to a non-blocking status check.
+ * Resolve the gate set from the issue's declared acceptance commands. An
+ * empty list falls back to the repository's scripts: build always, test when
+ * the issue is verified. No synthetic status gate.
  */
-export function resolveGates(packet: TaskPacket): GateSpec[] {
+export function resolveGates(
+  packet: TaskPacket,
+  commands?: ReadonlyMap<string, CommandSpec>,
+): GateSpec[] {
   const gates: GateSpec[] = [];
   for (const a of packet.acceptance) {
     gates.push({ command: a.command, args: a.args ?? {}, required: true });
   }
   if (gates.length > 0) return gates;
-  return [STATUS_GATE];
+  if (commands?.has("script:build")) {
+    gates.push({ command: "script:build", args: {}, required: true });
+  }
+  if (packet.verification === "verified" && commands?.has("script:test")) {
+    gates.push({ command: "script:test", args: {}, required: true });
+  }
+  return gates;
+}
+
+/** Capped failure log for the repair pass. Exit code is the contract. */
+export function gateFailureText(results: readonly GateResult[]): string {
+  return results
+    .filter((result) => !result.passed)
+    .map((result) => `$ ${result.command}\n${result.output.trim().slice(-3_000) || "(no output)"}`)
+    .join("\n\n");
 }
 
 export async function runGates(

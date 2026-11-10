@@ -168,7 +168,7 @@ export function previewContext(
     if (!path) continue;
     const mode = resolveSkillMode(name, {
       presets: options.skillPresets,
-      declared: [],
+      declared: options.defaultSkills ?? [],
       overrides: options.skillOverrides,
     });
     if (mode !== "include") continue;

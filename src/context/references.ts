@@ -141,8 +141,13 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
   return "on-demand";
 }
 
-export function defaultSkillsFor(args: { agent: string }): string[] {
+export function defaultSkillsFor(args: { agent: string; verification?: "direct" | "verified" }): string[] {
   if (args.agent === "research") return ["clean-code", "plan-curation"];
+  if (args.agent === "engineer") {
+    return args.verification === "verified"
+      ? ["clean-code", "verified-testing"]
+      : ["clean-code"];
+  }
   return [];
 }
 

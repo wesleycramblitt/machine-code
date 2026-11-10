@@ -9,6 +9,7 @@ import { runProc } from "../proc.js";
 import { branchExists, defaultBaseBranch, mainWorktreeRoot, removeWorktree } from "../worktree.js";
 import { listRuns, RunRecorder, type RunSummary } from "../state/runs.js";
 import { findIssue, listIssues, moveIssue, writeIssue, type Issue, type IssueKind, type IssueStatus, parseKind, legalStatus, ISSUE_KINDS, statusesForKind } from "../plan/issues.js";
+import { runMainBuild } from "../commands/build.js";
 import { slugify } from "../plan/slug.js";
 import type { TaskPacket } from "../packet.js";
 
@@ -34,6 +35,7 @@ export function issueToTaskPacket(issue: Issue): TaskPacket {
     context: [],
     constraints: issue.tags.map((tag) => `tag: ${tag}`),
     acceptance: issue.verify.map((command) => ({ command })),
+    verification: issue.verification,
   };
 }
 
@@ -80,6 +82,9 @@ export function planIssueWaves(layout: Layout, maxParallel: number): string[][] 
 export async function approveIssue(layout: Layout, slug: string): Promise<void> {
   const issue = findIssue(layout, slug);
   if (!issue) throw new Error(`no issue ${slug}`);
+  if (issue.status !== "needs-human-review" && issue.status !== "done") {
+    throw new Error(`issue ${slug} is ${issue.status}; approve requires needs-human-review`);
+  }
   const root = await mainRoot(layout);
   const baseBranch = await defaultBaseBranch(root);
   // New builds use mc/<slug>; older runs used mc/run/<id>. Fall back to the
@@ -98,6 +103,10 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
     if (merge.code !== 0) {
       throw new Error(`merge of ${branch} into ${baseBranch} failed: ${merge.stderr.trim()}; resolve it manually`);
     }
+  }
+  const build = await runMainBuild(root);
+  if (!build.ok) {
+    throw new Error(`merge succeeded but main build failed: ${build.text}`);
   }
   moveIssue(layout, slug, "done");
   await commitIssues(layout, `issues: complete ${slug}`);

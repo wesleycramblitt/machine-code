@@ -150,6 +150,22 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     return 0;
   }
 
+  if (sub === "reject") {
+    const slug = positional[1];
+    if (!slug) fail("usage: machine_code issue reject <slug>");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    if (issue.kind === "ideas") fail("ideas are researched, not reviewed");
+    if (issue.status !== "needs-human-review") {
+      fail(`issue ${cleaned} is ${issue.status}; reject requires needs-human-review`);
+    }
+    moveIssue(l, cleaned, "failed-human-review");
+    await commitPlanningFiles(l, `issues: ${cleaned} failed-human-review`);
+    process.stdout.write(`rejected ${cleaned} → failed-human-review\n`);
+    return 0;
+  }
+
   if (sub === "run") {
     const slug = positional[1];
     if (!slug) fail("usage: machine_code issue run <slug> [--agent research|engineer]");
@@ -233,7 +249,7 @@ export async function runIssueBuild(
   const runtime = await loadRuntime(l);
   const recorder = new RunRecorder(l, {
     agent: "engineer",
-    mode: "verified",
+    mode: issue.verification,
     request: goal,
     repoRoot: l.repoRoot,
     itemId: slug,
@@ -323,8 +339,14 @@ export async function runIssueBuild(
     return EXIT.failed;
   }
   recorder.finalize(result.status, result.error, result.finalText);
-  if (result.status === "completed") moveIssue(l, slug, "done");
-  else if (result.status === "blocked") moveIssue(l, slug, "blocked");
+  if (result.status === "completed") {
+    moveIssue(l, slug, issue.review === "human" ? "needs-human-review" : "done");
+  } else if (result.status === "blocked" || result.status === "failed") {
+    const verdict = result.reviewVerdict;
+    if (verdict !== undefined && verdict !== "approved") moveIssue(l, slug, "failed-agent-review");
+    else if (/acceptance gates failed/i.test(result.error ?? "")) moveIssue(l, slug, "failed-gates");
+    else moveIssue(l, slug, "blocked");
+  }
   await commitPlanningFiles(l, `issues: build ${slug} (${result.status})`);
   process.stdout.write(`build ${slug}: ${result.status}${result.error ? ` — ${result.error}` : ""}\n`);
   if (result.status === "completed") {

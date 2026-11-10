@@ -38,11 +38,28 @@ export type IssueKind = (typeof ISSUE_KINDS)[number];
 
 /** Ideas live at the root (needs research) or under `.researched/`. */
 export const IDEA_STATUSES = ["needs-research", "researched"] as const;
-/** Features and bugs use three directories. */
-export const ENGINEER_STATUSES = ["todo", "blocked", "done"] as const;
+/** Features and bugs use explicit work and failure directories. */
+export const ENGINEER_STATUSES = [
+  "todo",
+  "needs-agent-review",
+  "needs-human-review",
+  "failed-gates",
+  "failed-agent-review",
+  "failed-human-review",
+  "blocked",
+  "done",
+] as const;
 export type IdeaStatus = (typeof IDEA_STATUSES)[number];
 export type EngineerStatus = (typeof ENGINEER_STATUSES)[number];
 export type IssueStatus = IdeaStatus | EngineerStatus;
+/** Statuses a new engineer attempt may start from. */
+export const ENGINEER_WORK_STATUSES: readonly EngineerStatus[] = [
+  "todo",
+  "failed-gates",
+  "failed-agent-review",
+  "failed-human-review",
+  "blocked",
+];
 /** Display-only status for a todo item with a live run. */
 export type DisplayStatus = IssueStatus | "in-progress";
 
@@ -56,6 +73,11 @@ export const ISSUE_STATUS_LABELS: Record<DisplayStatus, string> = {
   "needs-research": "Needs Research",
   researched: "Researched",
   todo: "Todo",
+  "needs-agent-review": "Needs Agent Review",
+  "needs-human-review": "Needs Human Review",
+  "failed-gates": "Failed Gates",
+  "failed-agent-review": "Failed Agent Review",
+  "failed-human-review": "Failed Human Review",
   blocked: "Blocked",
   "in-progress": "In Progress",
   done: "Done",
@@ -80,6 +102,10 @@ export interface Issue {
   depends: string[];
   tags: string[];
   review: ReviewMode;
+  /** direct: code only; verified: code + tests. */
+  verification: "direct" | "verified";
+  /** Durable checklist parsed from the `## Todo` section. */
+  todo: TodoItem[];
   /** Named gate commands; empty means the runner's defaults. */
   acceptance: string[];
   /** Legacy alias for acceptance. */
@@ -139,7 +165,7 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
 
 /** Metadata keys allowed in the condensed `key: value` header. Anything else
  * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
-const META_KEYS = new Set(["priority", "review", "tags", "depends", "acceptance", "verify"]);
+const META_KEYS = new Set(["priority", "review", "tags", "depends", "acceptance", "verify", "verification"]);
 
 function stripQuotes(value: string): string {
   if (value.length >= 2) {
@@ -233,6 +259,7 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
   if (typeof front.review === "string" && front.review && front.review !== "none") {
     lines.push(`review: ${front.review}`);
   }
+  if (front.verification === "verified") lines.push("verification: verified");
   for (const key of ["depends", "tags", "acceptance"] as const) {
     const value = list(front[key]);
     if (value) lines.push(`${key}: ${value}`);
@@ -249,12 +276,91 @@ export interface TodoItem {
   done: boolean;
 }
 
+/** Read the checklist from an issue body. */
+export function parseIssueTodo(body: string): TodoItem[] {
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => /^## Todo\b/.test(line));
+  if (start < 0) return [];
+  const out: TodoItem[] = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (/^## /.test(line)) break;
+    const match = /^\s*-\s*\[([ xX])\]\s*(.+)$/.exec(line);
+    if (match) out.push({ text: match[2]!.trim(), done: match[1]!.toLowerCase() === "x" });
+  }
+  return out;
+}
+
 /** Render the issue's durable checklist. The issue file is the plan's home. */
 export function renderIssueTodo(items: readonly TodoItem[]): string {
   return [
     "## Todo",
     ...items.map((item) => `- [${item.done ? "x" : " "}] ${item.text.trim()}`),
   ].join("\n");
+}
+
+/** The deterministic fallback plan; research may write a more specific one. */
+export function defaultIssueTodo(kind: IssueKind, verification: "direct" | "verified"): TodoItem[] {
+  if (kind === "ideas") {
+    return [
+      { text: "Read and scope the idea", done: false },
+      { text: "Write features/bugs or curate references", done: false },
+      { text: "Finish", done: false },
+    ];
+  }
+  return [
+    { text: "Locate the change", done: false },
+    { text: "Make the smallest edit", done: false },
+    ...(verification === "verified" ? [{ text: "Write tests", done: false }] : []),
+    { text: "Finish", done: false },
+  ];
+}
+
+/** How many gate-failure repair attempts the issue has already recorded. */
+export function gateFailureAttempts(body: string): number {
+  const match = /## Gate failure\s*\nAttempt:\s*(\d+)/i.exec(body);
+  return match ? Number(match[1]) || 0 : 0;
+}
+
+/** Replace the issue's gate-failure section with the latest capped log. */
+export function appendIssueGateFailure(abs: string, failure: string, attempt: number): void {
+  const text = readFileSync(abs, "utf8");
+  const { front, body } = parseIssueFile(text);
+  const section = `## Gate failure\nAttempt: ${attempt}\n\n${failure.trim().slice(0, 4_000)}`;
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => /^## Gate failure\b/.test(line));
+  if (start < 0) {
+    writeFileSync(abs, serializeIssueFile(front, `${body.trimEnd()}\n\n${section}`), "utf8");
+    return;
+  }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^## /.test(lines[i] ?? "")) {
+      end = i;
+      break;
+    }
+  }
+  lines.splice(start, end - start, ...section.split("\n"));
+  writeFileSync(abs, serializeIssueFile(front, lines.join("\n")), "utf8");
+}
+
+/** Verified requires a test script; downgrade a stale verified marker. */
+export function ensureIssueVerification(layout: Layout, slug: string): void {
+  const issue = findIssue(layout, slug);
+  if (!issue || issue.verification !== "verified" || hasRepoScript(layout, "test")) return;
+  const text = readFileSync(issue.path, "utf8");
+  const { front, body } = parseIssueFile(text);
+  delete front.verification;
+  writeFileSync(issue.path, serializeIssueFile(front, body), "utf8");
+}
+
+/** Ensure an issue has a Todo without overwriting a research-authored plan. */
+export function ensureIssueTodo(layout: Layout, slug: string): Issue | null {
+  const issue = findIssue(layout, slug);
+  if (!issue) return null;
+  if (issue.todo.length > 0) return issue;
+  updateIssueTodo(issue.path, defaultIssueTodo(issue.kind, issue.verification));
+  return readIssue(layout, issue.kind, issue.status, issue.slug);
 }
 
 /**
@@ -313,6 +419,8 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
           ? front.tags.filter((entry): entry is string => typeof entry === "string")
           : [],
     review: toReview(front.review),
+    verification: front.verification === "verified" ? "verified" : "direct",
+    todo: parseIssueTodo(body),
     verify: toAcceptance(front),
     acceptance: toAcceptance(front),
     title: titleOf(slug, body),
@@ -359,9 +467,21 @@ export interface NewIssueInput {
   depends?: string[];
   tags?: string[];
   review?: ReviewMode;
+  verification?: "direct" | "verified";
   acceptance?: string[];
   verify?: string[];
   body?: string;
+}
+
+const SCRIPT_EXTS = [".sh", ".bash", ".py", ".js", ".mjs", ".cjs"];
+
+function hasRepoScript(layout: Layout, name: string): boolean {
+  for (const dir of [join(layout.repoRoot, "scripts"), join(layout.repoDir, "scripts")]) {
+    for (const ext of SCRIPT_EXTS) {
+      if (existsSync(join(dir, `${name}${ext}`))) return true;
+    }
+  }
+  return false;
 }
 
 export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
@@ -370,32 +490,42 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     throw new Error(`invalid status ${JSON.stringify(status)} for ${input.kind}`);
   }
   const slug = slugify(input.slug) || "untitled";
-  // Features and bugs carry an acceptance gate. If the author did not name
-  // one, default to the harness's universal check rather than leaving the
-  // engineer to guess how to verify.
-  const acceptance =
+  let verification = input.verification ?? "direct";
+  if (verification === "verified" && !hasRepoScript(layout, "test")) verification = "direct";
+  // Features and bugs carry an acceptance gate. Explicit acceptance wins;
+  // otherwise use the repository's script gates. No synthetic core:check.
+  let acceptance =
     input.acceptance && input.acceptance.length > 0
       ? input.acceptance
       : input.verify && input.verify.length > 0
         ? input.verify
         : input.kind === "ideas"
           ? []
-          : ["core:check"];
+          : hasRepoScript(layout, "build")
+            ? ["script:build"]
+            : [];
+  if (verification === "verified" && hasRepoScript(layout, "test") && !acceptance.includes("script:test")) {
+    acceptance = [...acceptance, "script:test"];
+  }
   const front: Record<string, unknown> = {
     ...(input.priority && input.priority !== "medium" ? { priority: input.priority } : {}),
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
     ...(acceptance.length > 0 ? { acceptance } : {}),
+    ...(verification === "verified" ? { verification } : {}),
     ...(input.review && input.review !== "none" ? { review: input.review } : {}),
   };
   // The file is the prompt. A bare prompt needs nothing else; a title only
   // adds a heading above it. An explicit body is used as-is.
   const prompt = input.prompt.trim();
-  const body = input.body?.trim()
+  let body = input.body?.trim()
     ? input.body.trim()
     : input.title?.trim()
       ? `# ${input.title.trim()}\n\n${prompt}`
       : prompt;
+  if (parseIssueTodo(body).length === 0) {
+    body = `${body.trimEnd()}\n\n${renderIssueTodo(defaultIssueTodo(input.kind, verification))}`;
+  }
   const dir = issueDir(layout, input.kind, status);
   mkdirSync(dir, { recursive: true });
   const abs = join(dir, `${slug}.md`);

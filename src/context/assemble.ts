@@ -64,6 +64,8 @@ export interface AssembleInput {
   machine: MachineConfig;
   /** Role name. */
   agent?: string;
+  /** direct: code only; verified: code + tests. */
+  verification?: "direct" | "verified";
   /** Parent run and its ancestors, nearest first, for selected context inheritance. */
   parentRuns?: Array<{
     id: string;
@@ -287,7 +289,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   for (const name of [...(input.defaultSkills ?? []), ...includeOverrides]) {
     const mode = resolveSkillMode(name, {
       presets: input.skillPresets,
-      declared: [],
+      declared: input.defaultSkills ?? [],
       overrides: input.skillOverrides,
     });
     if (mode !== "include") continue;
@@ -489,7 +491,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Skill descriptions: only the role's own skills plus explicit includes.
   // Listing every installed skill spends context on procedures this run will
   // never use. Bodies stay cold unless a mode resolves to include.
-  const roleSkills = new Set(defaultSkillsFor({ agent: input.agent ?? "" }));
+  const roleSkills = new Set(defaultSkillsFor({ agent: input.agent ?? "", verification: input.verification }));
   const skillIncludes = new Set(
     [...Object.entries(input.skillPresets ?? {}), ...Object.entries(input.skillOverrides ?? {})]
       .filter(([, mode]) => mode === "include")

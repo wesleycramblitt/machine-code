@@ -18,17 +18,20 @@ import { type CatalogueRow } from "./catalogue/types.js";
 import { RunRecorder, type RunStatus } from "./state/runs.js";
 import { runCommand } from "./commands/registry.js";
 import type { TaskPacket } from "./packet.js";
-import { resolveGates, runGates } from "./verify.js";
+import { gateFailureText, resolveGates, runGates } from "./verify.js";
 import { allCommands } from "./commands/registry.js";
 import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
+import { defaultSkillsFor } from "./context/references.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
 import { inferReviewVerdict, parseBuildOutcome, parseReviewVerdict } from "./orchestrator/outcome.js";
 import type { Layout } from "./paths.js";
+import { appendIssueGateFailure, findIssue, gateFailureAttempts, moveIssue } from "./plan/issues.js";
+import { commitPlanningFiles } from "./tasks/planning.js";
 
 export interface OrchestrateInput {
   models: MutableModels;
@@ -172,15 +175,19 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   const { layout, machine, policy, packet, recorder } = input;
   const root = input.root;
   const toolRoot = input.toolRoot ?? root;
-  const commands = allCommands(layout);
+  const modelCommands = allCommands(layout);
+  const gateCommands = allCommands(layout, { scriptsRoot: toolRoot });
   const availability = input.availability ?? loadAvailability(layout.home);
   // The deterministic path must assemble the same inherited context as a
   // direct run: issues index, knowledge, skills, plus any explicit include.
+  const verification = packet.verification ?? "direct";
   const contextBundle = await assembleContext({
     layout,
     machine,
     agent: "engineer",
+    verification,
     ...(input.include ? { include: input.include } : {}),
+    defaultSkills: defaultSkillsFor({ agent: "engineer", verification }),
     skillPresets: roleSkillPresets("engineer"),
   });
   if (contextBundle.text) {
@@ -233,7 +240,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     home: layout.home,
     availability,
     recorder,
-    commands,
+    commands: modelCommands,
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
     contextText,
@@ -268,13 +275,13 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     };
   }
 
-  const gates = resolveGates(packet);
+  const gates = resolveGates(packet, gateCommands);
   const gateProcesses = new ProcessSupervisor({
     runId: recorder.id,
     runDir: recorder.dir,
     onEvent: (type, data) => recorder.event(type, data),
   });
-  const gateOutcome = await runGates(gates, { root: toolRoot, commands, processes: gateProcesses });
+  const gateOutcome = await runGates(gates, { root: toolRoot, commands: gateCommands, processes: gateProcesses });
   recorder.event("gates", {
     packet: packet.id,
     passed: gateOutcome.passed,
@@ -285,6 +292,16 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     })),
   });
   if (!gateOutcome.passed) {
+    const failedIssue = findIssue(layout, packet.id);
+    if (failedIssue) {
+      appendIssueGateFailure(
+        failedIssue.path,
+        gateFailureText(gateOutcome.results),
+        gateFailureAttempts(failedIssue.body) + 1,
+      );
+    }
+    moveIssue(layout, packet.id, "failed-gates");
+    await commitPlanningFiles(layout, `issues: ${packet.id} failed-gates`);
     return {
       status: "blocked",
       finalText: engineerResult.finalText,
@@ -320,7 +337,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     const diffResult = await runCommand(
       "core:diff",
       reviewBase ? { base: reviewBase } : {},
-      { root: toolRoot, commands },
+      { root: toolRoot, commands: modelCommands },
     );
     const reviewRequest =
       `Review this issue and the committed diff. Approve or reject with concrete evidence citing paths.\n\n` +
@@ -361,7 +378,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
       home: layout.home,
       availability,
       recorder: reviewRecorder,
-      commands,
+      commands: modelCommands,
       requireProvider: input.requireProvider,
       requireModel: input.requireModel,
       contextText,
@@ -387,6 +404,8 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     recorder.event("review_verdict", { verdict, source: labelledVerdict ? "label" : "fallback", runId: reviewRecorder.id });
     recorder.event("review_finished", { runId: reviewRecorder.id, verdict });
     if (verdict !== "approved") {
+      moveIssue(layout, packet.id, "failed-agent-review");
+      await commitPlanningFiles(layout, `issues: ${packet.id} failed-agent-review`);
       return {
         status: verdict === "failed" ? "failed" : "blocked",
         finalText: reviewResult.finalText,

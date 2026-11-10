@@ -39,7 +39,7 @@ node dist/cli.js resume <run-id>
 
 # issues: one YAML file per idea/feature/bug, status = directory
 node dist/cli.js issue list
-node dist/cli.js issue create features <slug> "do the thing" --verify core:check
+node dist/cli.js issue create features <slug> "do the thing" --verify script:build
 node dist/cli.js issue <slug>              # show the issue
 node dist/cli.js approve <slug>            # merge mc/<slug> into main
 
@@ -349,7 +349,7 @@ and merge.
 
 ```bash
 machine_code issue list
-machine_code issue create features <slug> "do the thing" --verify core:check
+machine_code issue create features <slug> "do the thing" --verify script:build
 machine_code build <slug> [--review]
 machine_code approve <slug>   # merge mc/<slug> into main
 machine_code delete <slug>
@@ -357,7 +357,7 @@ machine_code delete <slug>
 
 - `issue list` shows the issues tree; `issue create <kind> <slug> "<prompt>"`
   scaffolds `issues/<kind>/<status>/<slug>.md`.
-- `issue move <slug> <todo|blocked|done|researched>` moves it between status
+- `issue move <slug> <todo|failed-gates|failed-agent-review|failed-human-review|blocked|done|researched>` moves it between status
   dirs; one issue = one file-level change.
 - `build <slug>` creates
   the isolated `mc/<slug>` worktree, runs Engineer, executes the issue `verify` gates,
@@ -374,7 +374,7 @@ value` header lines at the very top set metadata (`priority`, `review`,
 ```markdown
 priority: high
 tags: tui
-acceptance: core:check
+acceptance: script:build
 
 # Make the thing fast
 
@@ -385,19 +385,71 @@ Two different contracts live here:
 
 - **`acceptance`** is the machine gate: named commands the runner executes.
   It proves the build/check passes; it cannot prove the change is the right
-  one. Features and bugs default to `core:check` when none is named.
+  one. Features and bugs default to `script:build` when it exists; verified issues add `script:test`.
 - **The prompt** is the semantic definition of done: observable behavior and
   constraints. `review: agent` asks an independent agent to judge that
   definition; `review: human` leaves the merge decision to a person.
 
-Verification commands must be named registry commands
-(`core:check`, `script:typecheck`, and so on), because gates dispatch
-through the command registry — never shell strings.
+Acceptance commands name runner scripts (`script:build`, `script:test`, or a custom `script:<name>` from `scripts/`). They are argv vectors, never shell strings.
+
+### Scripts, gates, and verification modes
+
+`scripts/` is the command surface. No project TOML and no manifest:
+
+```text
+scripts/build.sh  -> script:build
+scripts/test.sh   -> script:test
+scripts/run.sh    -> script:run      (user command, not a gate)
+scripts/lint.sh   -> script:lint
+```
+
+Top-level executable files become commands; the filename is the command and
+the first comment is the description. `script:build` and `script:test` are
+conventional, not hardcoded: if the file exists, the command exists. A missing
+build or test script means no such gate. Build/test/run scripts are
+runner/user-owned; the model never runs them.
+
+An issue carries `verification: direct|verified`:
+
+- **direct** — the model edits code. The runner gates with `script:build` (or
+  the issue's explicit acceptance).
+- **verified** — the model edits code and writes tests. The runner gates with
+  `script:build, script:test`. Verified requires `scripts/test.sh`; without it
+  the issue is direct or a configuration error.
+
+Gate pass/fail is the script's exit code: 0 pass, non-zero fail, timeout or
+signal fail. Output is captured as the repair log. A failed gate appends a
+`## Gate failure` section to the issue and starts a repair run with that log;
+after three attempts the issue stays `failed-gates`.
+
+Engineer statuses are:
+
+```text
+todo
+needs-agent-review
+needs-human-review
+failed-gates
+failed-agent-review
+failed-human-review
+blocked
+done
+```
+
+After a successful merge, the runner rebuilds `main` with `scripts/build.sh`
+so the binary the user runs is current. The running TUI must be restarted.
+
+Direct engineer runs get the `clean-code` skill. Verified runs get
+`clean-code` plus `verified-testing`; the test skill is never injected into a
+direct run.
 
 ### Composer context and reusable tools
 
 The new-run composer previews exactly which issue, files, tools, scripts,
-references, and skills the selected run will inherit before it starts. The
+references, and skills the selected run will inherit before it starts.
+Suggested context files come from the deterministic map's file docs, symbol
+docs, and section headings; they appear in the Files tab and can be toggled.
+The CLI attaches the same suggestions when no explicit context include is
+given. The
 **Issues** subtab lists `issues/` files; `space` includes one explicitly. The
 **Files** subtab lists repo files; press `space` on a file to include it
 explicitly. The **Skills** subtab lists every installed skill; `space` cycles
@@ -485,7 +537,7 @@ Each run keeps its working memory outside the transcript:
 ```
 
 The model sees the run state, an always-on overview (issues, repo map, module
-index), the full prior transcript, and no hidden task pack. The prompt is
+index, selected context files), the full prior transcript, and no hidden task pack. The prompt is
 exactly the context curated in the composer plus the always-on indexes. There
 is no automatic preload, dependency expansion, inferred verification list, or hidden
 note scoring: the model
@@ -517,10 +569,10 @@ Research holds only `context`, `read`, `map`, `glob`, `grep`, `ask`,
 `skill`, `write`, `todo`, and `finish`. It reads one idea, asks until the
 scope is precise, and writes concrete features/bugs as issue files under
 `issues/features/todo/` or `issues/bugs/todo/`. Engineer holds `context`,
-`read`, `write`, `edit`, `map`, `glob`, `grep`, `command`, `ask`,
-`artifact`, `skill`, `todo`, and `finish`; it plans and builds in one run in a
-`mc/<slug>` worktree. Review is read-only, holds `finish`, and judges the same
-worktree and commit the Engineer used.
+`read`, `write`, `edit`, `map`, `glob`, `grep`, `ask`, `artifact`, `skill`,
+`todo`, and `finish`; it edits in one run in a `mc/<slug>` worktree and never
+runs build/test scripts. Review is read-only, holds `finish`, and judges the
+same worktree and commit the Engineer used.
 
 Every role ends by calling `finish` with an outcome and a short summary. The
 `todo` tool writes the issue's `## Todo` checklist, so a fork or a new run on
@@ -540,10 +592,11 @@ The file tools are deliberately split, close to Claude Code's model:
   `core:move`, `core:copy`, and `core:delete`. `write` already creates parent
   directories; directory copies/deletes require `recursive: true`.
 When an Engineer run has an issue in a worktree, the runner owns the gates and
-merge: it runs the issue's `verify` gates, commits the branch, moves the issue to
-`done/` (or `blocked/`), and starts a Review run when `review = "agent"`, even
-if the model stops early. A review that does not approve moves the issue back
-to `blocked/`, so `approve` cannot merge rejected work.
+merge: it runs the issue's acceptance scripts, commits the branch, moves the issue to
+`needs-agent-review` or `needs-human-review`, and starts a Review run when
+`review = "agent"`. Gate failures move to `failed-gates`; rejected reviews
+move to `failed-agent-review` or `failed-human-review`, so `approve` cannot
+merge rejected work.
 
 An issue is one deliverable: one file-level change and at most **three**
 verify commands in `issues/<kind>/todo/<slug>.md`. Split anything bigger into

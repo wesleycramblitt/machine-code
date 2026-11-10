@@ -397,6 +397,7 @@ export async function runTui(): Promise<void> {
     machine?: MachineConfig;
   } => {
     const newRunLayout = layout(s.newRunRepo);
+    const newRunIssue = s.newrun.item ? findIssue(newRunLayout, s.newrun.item) : null;
     // Everything below depends on the repo/issue, not on the text being typed.
     // Cache it for the duration of an insert session so keystrokes stay cheap.
     const skillModesKey = [...s.newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
@@ -423,7 +424,10 @@ export async function runTui(): Promise<void> {
           issues: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("issue:"))
             .map((key) => key.slice("issue:".length)),
-          defaultSkills: defaultSkillsFor({ agent: s.newrun.agent }),
+          defaultSkills: defaultSkillsFor({
+            agent: s.newrun.agent,
+            verification: newRunIssue?.verification ?? "direct",
+          }),
           skillPresets: roleSkillPresets(s.newrun.agent),
           skillOverrides: Object.fromEntries(s.newRunSkillModes),
         }),
@@ -435,7 +439,7 @@ export async function runTui(): Promise<void> {
       };
     }
     const base = s.newRunPreviewCache;
-    const previewIssue = s.newrun.item ? findIssue(newRunLayout, s.newrun.item) : null;
+    const previewIssue = newRunIssue;
     const previewPrompt =
       s.newrun.prompt.trim() ||
       (previewIssue ? previewIssue.prompt : "");
@@ -1050,6 +1054,7 @@ export async function runTui(): Promise<void> {
               rel: issue.rel,
               priority: issue.priority,
               review: issue.review,
+              verification: issue.verification,
               tags: issue.tags,
               depends: issue.depends,
               body: issue.body.split("\n"),

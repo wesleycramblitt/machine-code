@@ -332,6 +332,11 @@ export function icon(status: string): string {
     case "awaiting_input": return `${Y}!${R}`;
     case "paused": return `${Y}⏸${R}`;
     case "blocked": return `${Y}⊘${R}`;
+    case "needs-agent-review":
+    case "needs-human-review": return `${Y}◷${R}`;
+    case "failed-gates":
+    case "failed-agent-review":
+    case "failed-human-review":
     case "failed": return `${RED}✗${R}`;
     case "cancelled": return `${GR}⃠${R}`;
     case "interrupted": return `${GR}◯${R}`;
@@ -342,8 +347,8 @@ export function icon(status: string): string {
 export function statusColor(status: string): string {
   if (status === "running") return C;
   if (status === "completed" || status === "done") return G;
-  if (["awaiting_input", "paused", "blocked", "interrupted"].includes(status)) return Y;
-  if (status === "failed") return RED;
+  if (["awaiting_input", "paused", "blocked", "interrupted", "needs-agent-review", "needs-human-review"].includes(status)) return Y;
+  if (status === "failed" || status.startsWith("failed-")) return RED;
   return GR;
 }
 
