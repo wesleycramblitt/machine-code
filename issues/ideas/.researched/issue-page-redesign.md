@@ -1,4 +1,8 @@
 tags: issues
+todo:
+  - [x] Read and scope the idea (issue screen, runs-page color tables, chrome header, keys)
+  - [x] Write features: issue detail body layout + header/key changes
+  - [x] Finish with the produced slugs
 
 # Change the ui/ux of the issue details page. 
 Move "Feature", "Bug", ...  to the far left, add the background color and font color from the runs page (Red background, black bold text for Bugs).
