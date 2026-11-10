@@ -6,7 +6,7 @@
  * pending-answer affordance live here; the caller supplies the prebuilt
  * index plus a pending-question lookup.
  */
-import { AMBER, B, BL, C, D, G, GR, LIME, M, PURPLE_BG, R, RED, RED_BG, ROSE, SKY, SLATE, VIOLET, W, Y, YELLOW_BG, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
+import { AMBER, B, BL, C, D, G, GR, LIME, M, PURPLE_BG, PURPLE_FG, R, RED, RED_BG, RED_FG, ROSE, SKY, SLATE, VIOLET, W, Y, YELLOW_BG, YELLOW_FG, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
 import { ISSUE_STATUS_LABELS, type DisplayStatus } from "../../plan/issues.js";
 import type { RunSummary } from "../../state/runs.js";
@@ -58,11 +58,11 @@ const KIND_BG: Record<string, string> = {
   bug: RED_BG,
 };
 
-/** Kind foreground colors for todo/needs-research slugs. Keys match IssueKind. */
+/** Kind text colors for todo/needs-research slugs: the same light colors as the kind headers' backgrounds. Keys match IssueKind. */
 const KIND_FG: Record<string, string> = {
-  ideas: M,
-  features: Y,
-  bugs: RED,
+  ideas: PURPLE_FG,
+  features: YELLOW_FG,
+  bugs: RED_FG,
 };
 
 export function renderRunsList(props: RunsListProps): RunsListFrame {

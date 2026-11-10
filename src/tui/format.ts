@@ -48,10 +48,21 @@ export const PANEL_BG = "\x1b[48;2;18;18;18m";
 export const SUBTAB_BG = "\x1b[48;2;5;5;5m";
 /** Start action is the only destructive-red control in the composer. */
 export const START_BG = "\x1b[48;2;170;30;30m";
-/** Kind background colors for run list headers, desaturated to sit with the muted green. */
-export const PURPLE_BG = "\x1b[48;2;139;124;170m";
-export const YELLOW_BG = "\x1b[48;2;196;178;110m";
-export const RED_BG = "\x1b[48;2;190;110;110m";
+/** Kind colors for the runs page, desaturated to sit with the muted green. */
+const KIND_RGB = {
+  purple: "139;124;170",
+  yellow: "196;178;110",
+  red: "190;110;110",
+} as const;
+
+/** Kind background colors for run list headers. */
+export const PURPLE_BG = `\x1b[48;2;${KIND_RGB.purple}m`;
+export const YELLOW_BG = `\x1b[48;2;${KIND_RGB.yellow}m`;
+export const RED_BG = `\x1b[48;2;${KIND_RGB.red}m`;
+/** The same colors as text, so issue rows match their kind header. */
+export const PURPLE_FG = `\x1b[38;2;${KIND_RGB.purple}m`;
+export const YELLOW_FG = `\x1b[38;2;${KIND_RGB.yellow}m`;
+export const RED_FG = `\x1b[38;2;${KIND_RGB.red}m`;
 export const WHITE = "\x1b[97m";
 /** 256-color accents for status/category encodings on dark terminals. */
 export const SKY = "\x1b[38;5;75m";
