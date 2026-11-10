@@ -77,6 +77,8 @@ export interface ToolContext {
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
   /** False for read-only roles; blocks non-readonly typed commands. */
   allowMutations?: boolean;
+  /** Agent capabilities, for capability-scoped command access (e.g. reference writes). */
+  capabilities?: readonly string[];
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -1916,7 +1918,13 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
           return ok(describeCommand(params.name, ctx.commands));
         }
         const spec = ctx.commands.get(params.name);
-        if (spec && !spec.readonly && ctx.allowMutations === false) {
+        // Reference-store writes are curated knowledge, not worktree
+        // mutation: roles with knowledge:write may curate references even
+        // when worktree mutation is off (research curates; it never edits
+        // source). Everything else non-readonly needs code:write.
+        const referenceWrite = params.name.startsWith("reference:") &&
+          (ctx.capabilities ?? []).includes("knowledge:write");
+        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite) {
           return fail(`${params.name} mutates files; this role is read-only`);
         }
         const result: CommandRunResult = await runCommand(

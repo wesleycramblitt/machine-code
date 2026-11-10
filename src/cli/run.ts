@@ -572,6 +572,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
       ],
       issueWorktree ? `mc/${itemSlug}` : undefined,
+      agentNameParsed,
     );
     if (reuse) {
       toolRoot = reuse.path;
@@ -991,35 +992,48 @@ export async function cmdRun(argv: string[]): Promise<number> {
           };
         }
         if (!commit && result.status !== "blocked") {
-          result = { ...result, status: "blocked", error: "engineer produced no committable change" };
+          // Curated references live in the machine store and docs answers
+          // may already exist — both outside the worktree, so no commit is
+          // expected. Only researched (new issues) must leave a commit.
+          const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
+          if (agentNameParsed === "research" && (outcome === "curated" || outcome === "done")) {
+            recorder.event("research_no_commit_expected", { outcome });
+          } else {
+            result = { ...result, status: "blocked", error: `${agentNameParsed} produced no committable change` };
+          }
         } else if (commit) {
           recorder.patchSummary({ commit });
           recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
           // Ideas move to researched (handled above when they produced
-          // issues); only features/bugs use the review states.
-          if (issue.kind !== "ideas") {
-            if (issue.review === "none" || flags.has("no-review")) {
-              const branch = recorder.current.branch;
-              if (branch) {
-                const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
-                if (merged) {
-                  recorder.event("branch_merged", { branch });
+          // issues); only features/bugs use the review states. But the
+          // research output still lives on the branch, so ideas merge the
+          // same way review-free features do — otherwise the created
+          // issues strand on an unmerged branch.
+          if (issue.kind === "ideas" || issue.review === "none" || flags.has("no-review")) {
+            const branch = recorder.current.branch;
+            if (branch) {
+              const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
+              if (merged) {
+                recorder.event("branch_merged", { branch });
+                if (issue.kind !== "ideas") {
                   moveIssue(l, issue.slug, "done");
                   await commitPlanningFiles(l, `issues: ${issue.slug} done`);
-                } else {
+                }
+              } else {
+                if (issue.kind !== "ideas") {
                   moveIssue(l, issue.slug, "blocked");
                   await commitPlanningFiles(l, `issues: ${issue.slug} blocked`);
-                  result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
                 }
+                result = { ...result, status: "blocked", error: `merge failed: ${branch} into main (conflict or dirty tree)` };
               }
-            } else if (issue.review === "agent") {
-              moveIssue(l, issue.slug, "needs-agent-review");
-              await commitPlanningFiles(l, `issues: ${issue.slug} needs-agent-review`);
-              autoReview = { slug: issue.slug, prompt: issue.prompt };
-            } else {
-              moveIssue(l, issue.slug, "needs-human-review");
-              await commitPlanningFiles(l, `issues: ${issue.slug} needs-human-review`);
             }
+          } else if (issue.review === "agent") {
+            moveIssue(l, issue.slug, "needs-agent-review");
+            await commitPlanningFiles(l, `issues: ${issue.slug} needs-agent-review`);
+            autoReview = { slug: issue.slug, prompt: issue.prompt };
+          } else {
+            moveIssue(l, issue.slug, "needs-human-review");
+            await commitPlanningFiles(l, `issues: ${issue.slug} needs-human-review`);
           }
         }
       }

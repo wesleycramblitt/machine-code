@@ -200,10 +200,15 @@ export async function branchCheckedOutAt(mainRoot: string, branch: string): Prom
  * work is exactly what a fork usually wants to continue.
  */
 export function reusableWorktree(
-  parent: Pick<RunSummary, "worktree" | "branch" | "status"> | undefined,
+  parent: Pick<RunSummary, "worktree" | "branch" | "status" | "agent"> | undefined,
   branch: string | undefined,
+  agent?: string,
 ): string | undefined {
   if (!parent || typeof parent.worktree !== "string" || !branch || parent.branch !== branch) return undefined;
+  // Roles must not inherit each other's checkouts: a research run reading an
+  // engineer's unmerged WIP as ground truth scopes issues against phantom
+  // code (and vice versa). Same agent reuses; anyone else gets a fresh tree.
+  if (agent !== undefined && parent.agent !== agent) return undefined;
   if (parent.status === "created" || parent.status === "running" || parent.status === "awaiting_input") {
     return undefined;
   }
@@ -214,10 +219,11 @@ export function reusableWorktree(
 export function reusableWorktreeOwner(
   runs: readonly RunSummary[],
   branch: string | undefined,
+  agent?: string,
 ): { run: RunSummary; path: string } | undefined {
   if (!branch) return undefined;
   for (const run of runs) {
-    const path = reusableWorktree(run, branch);
+    const path = reusableWorktree(run, branch, agent);
     if (path) return { run, path };
   }
   return undefined;

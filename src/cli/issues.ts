@@ -276,7 +276,7 @@ export async function runIssueBuild(
 
   let toolRoot = l.repoRoot;
   try {
-    const reuse = reusableWorktreeOwner(listRuns(l), `mc/${slug}`);
+    const reuse = reusableWorktreeOwner(listRuns(l), `mc/${slug}`, "engineer");
     if (reuse) {
       toolRoot = reuse.path;
       const refresh = await refreshReusedWorktree(reuse.path);
