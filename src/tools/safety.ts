@@ -11,6 +11,8 @@ export const READ_MAX_FILE_BYTES = 256 * 1024;
 /** allow_large ceiling; explicit whole-file reads still stop somewhere sane. */
 export const READ_LARGE_MAX_BYTES = 1024 * 1024;
 export const READ_CAP_BYTES = 24 * 1024;
+/** Bare reads above this return the symbol outline, not bytes: a 300-line dump is never what a bare read wanted. */
+export const READ_OUTLINE_BYTES = 12 * 1024;
 export const SEARCH_CAP_BYTES = 12 * 1024;
 export const COMMAND_CAP_BYTES = 8 * 1024;
 

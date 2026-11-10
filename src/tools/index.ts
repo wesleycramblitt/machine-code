@@ -15,6 +15,7 @@ import {
   READ_CAP_BYTES,
   READ_LARGE_MAX_BYTES,
   READ_MAX_FILE_BYTES,
+  READ_OUTLINE_BYTES,
   READ_PAGE_BYTES,
   SEARCH_CAP_BYTES,
   ToolError,
@@ -276,7 +277,8 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     label: "read",
     description:
       "Read a file; returns numbered lines. A bare read returns the whole file up to the per-call page cap — " +
-      "use symbol/around/offset+limit for a targeted block, or allow_large for a bigger file.",
+      "over the cap it returns the symbol outline instead of a truncated dump. " +
+      "Use symbol/around/offset+limit for a targeted block, or allow_large for a bigger file.",
     parameters: ReadParams,
     prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
     async execute(_id, raw: Static<typeof ReadParams>) {
@@ -327,6 +329,38 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         }
         if (params.allow_large === true && bytes > READ_LARGE_MAX_BYTES) {
           return fail(`${params.path} is ${bytes} bytes; allow_large is limited to ${READ_LARGE_MAX_BYTES} bytes.`);
+        }
+        // A bare read of a file over the page cap returns its outline, not a
+        // truncated dump: one smart call (outline → read { symbol }) replaces
+        // the outline call plus the wasted full read. Explicit allow_large or
+        // any selector (symbol/section/around/offset/limit) keeps byte reads.
+        const bare =
+          !wantsSymbols &&
+          !wantsSections &&
+          !params.symbol &&
+          !params.section &&
+          params.around == null &&
+          params.offset == null &&
+          params.limit == null;
+        if (bare && params.allow_large !== true && bytes > READ_OUTLINE_BYTES) {
+          const found = extractSymbols(params.path, raw);
+          const symbolLines = found.map((symbol, index) => {
+            const nextLine = found[index + 1]?.line ?? lines.length + 1;
+            let end = nextLine - 1;
+            while (end > symbol.line && (lines[end - 1] ?? "").trim() === "") end -= 1;
+            return `  ${symbol.kind} ${symbol.name} (${symbol.line}-${Math.max(symbol.line, end)})`;
+          });
+          const headings = documentSections(raw, params.path).slice(0, 20);
+          const sectionLines = headings.map(
+            (heading) => `  # ${sectionTitle(heading.text) || heading.text} (${heading.line})`,
+          );
+          const outline = [
+            `${params.path}: ${lines.length} lines, ${bytes} bytes — outline only, no bytes returned.`,
+            ...symbolLines,
+            ...sectionLines,
+            `Read a block with read { symbol } or { offset, limit }; edit { symbol, newString } rewrites a whole block with no anchor.`,
+          ].join("\n");
+          return remember(outline, "outline", `${params.path}#outline`);
         }
         // Symbol/around wins when a model also passes offset/limit. Ignore the
         // paging arguments instead of spending a turn on a schema correction.
@@ -662,8 +696,16 @@ function cleanEditArgs(args: unknown): unknown {
     delete out.oldString;
     changed = true;
   }
-  // An empty replacement is only meaningful against a real anchor.
-  if (typeof out.newString === "string" && out.newString.trim() === "" && out.oldString === undefined) {
+  // An empty replacement is only meaningful against a real anchor. A bare
+  // symbol/section with no oldString replaces the whole scoped block, so an
+  // empty newString there is a legitimate delete-scope, not junk to drop.
+  if (
+    typeof out.newString === "string" &&
+    out.newString.trim() === "" &&
+    out.oldString === undefined &&
+    out.symbol == null &&
+    out.section == null
+  ) {
     delete out.newString;
     changed = true;
   } else if (typeof out.newString === "string" && (out.newString.trim() === "null" || out.newString.trim() === "undefined")) {
@@ -700,8 +742,8 @@ const EditParams = Type.Object({  path: Type.String({ description: "File path, r
       { description: "Several exact-match hunks applied atomically to one file." },
     ),
   ),
-  symbol: Type.Optional(Type.String({ description: "Limit the edit to one top-level symbol." })),
-  section: Type.Optional(Type.String({ description: "Limit the edit to one comment or Markdown section." })),
+  symbol: Type.Optional(Type.String({ description: "Limit the edit to one top-level symbol. With newString and no oldString, replaces the whole symbol block — no anchor needed." })),
+  section: Type.Optional(Type.String({ description: "Limit the edit to one comment or Markdown section. With newString and no oldString, replaces the whole section — no anchor needed." })),
   replaceAll: Type.Optional(
     Type.Boolean({ description: "Replace every occurrence in the scope (single-hunk form)." }),
   ),
@@ -808,7 +850,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     name: "edit",
     label: "edit",
     description:
-      "Replace exact text in a file. Batch hunks in edits; scope with symbol or section. " +
+      "Replace text in a file. Two forms: exact hunks (oldString/newString, batched in edits, scoped with symbol/section) or whole-block replacement (symbol/section + newString with no oldString rewrites the entire block — prefer this for function-scale changes: no anchor, no drift). " +
       "Without replaceAll each hunk must be unique in scope.",
     parameters: EditParams,
     prepareArguments: (args) => cleanEditArgs(args) as Static<typeof EditParams>,
@@ -829,7 +871,14 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
             ? params.edits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
             : []),
         ];
-        if (edits.length === 0) return fail("edit requires oldString/newString or a non-empty edits array");
+        // A bare symbol/section + newString with no oldString is whole-block
+        // replacement (anchor-free); everything else needs at least one hunk.
+        const wholeScope =
+          edits.length === 0 && typeof params.newString === "string" && (params.symbol || params.section)
+            ? params.newString
+            : undefined;
+        if (edits.length === 0 && wholeScope === undefined)
+          return fail("edit requires oldString/newString, a non-empty edits array, or symbol/section + newString for whole-block replacement");
 
         const abs = resolveWithin(ctx.root, params.path);
         assertRegularFile(abs);
@@ -877,6 +926,21 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         }
 
         const scoped = raw.slice(startChar, endChar);
+        // Whole-block replacement: no anchor, no drift. The scope came from
+        // the current file, so a stale working copy cannot miss.
+        if (wholeScope !== undefined) {
+          const before = lines.slice(scopeStart - 1, scopeEnd).length;
+          let replacement = wholeScope;
+          if (scoped.endsWith("\n") && !replacement.endsWith("\n")) replacement += "\n";
+          const next = raw.slice(0, startChar) + replacement + raw.slice(endChar);
+          writeFileSync(abs, next, "utf8");
+          const after = replacement === "" ? 0 : replacement.split("\n").length - (replacement.endsWith("\n") ? 1 : 0);
+          return ok(
+            wholeScope === ""
+              ? `deleted ${scopeLabel} in ${params.path} (${before} lines removed)`
+              : `replaced ${scopeLabel} in ${params.path} (${before} lines → ${after} lines)`,
+          );
+        }
         let working = scoped;
         let replacements = 0;
         for (const edit of edits) {

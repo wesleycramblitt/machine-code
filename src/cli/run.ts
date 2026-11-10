@@ -549,11 +549,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
   });
   registerProject(l.home, l.repoRoot);
   if (itemSlug) recorder.event("item_linked", { slug: itemSlug });
+  // The witness fires whether or not suggestions applied: files:[] with a
+  // real map means the ranker filtered everything, mapFiles is the map size,
+  // and skipped names why nothing was attached. Never silently empty.
   if (contextIncludeFlag === undefined) {
     recorder.event("suggestions", {
       files: suggestedFiles,
       mapFiles: builtMapFiles,
     });
+  } else {
+    recorder.event("suggestions", { files: [], skipped: "explicit-include" });
   }
   for (const result of probeResults) {
     recorder.event("availability_probe", {
