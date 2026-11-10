@@ -15,6 +15,7 @@ import {
   type AgentName,
 } from "../agents.js";
 import type { Layout } from "../paths.js";
+import { hasRepoScript } from "../plan/issues.js";
 import type { CoreToolName } from "../tools/index.js";
 import { capabilitiesFor, type Capability } from "../policy/capabilities.js";
 
@@ -146,16 +147,24 @@ export interface ResolvedAgent {
 }
 
 /**
- * The test contract, branched by issue verification. A static guide line
- * cannot branch, so the run injects the exact sentence: direct runs get an
- * unambiguous ban, verified runs get pointed at the skill whose body the
- * harness already inlined. Only the engineer role writes tests.
+ * The test contract, branched by issue verification and repo reality. A
+ * static guide line cannot branch, so the run injects the exact sentence:
+ * direct runs get an unambiguous ban, verified runs get pointed at the skill
+ * whose body the harness already inlined. The ban names the repo's test
+ * situation outright, so the model never spends calls hunting test files.
+ * Only the engineer role writes tests.
  */
-export function testPromptLine(verification: "direct" | "verified" | undefined): string | null {
+export function testPromptLine(
+  verification: "direct" | "verified" | undefined,
+  hasTests: boolean,
+): string | null {
   if (verification === undefined) return null;
-  return verification === "verified"
-    ? "This issue is verified: use the verified-testing skill and practice TDD — write the tests with the change. Never run them yourself; the runner executes script:test after finish."
-    : "Do not write tests for this issue — code only. Never run test commands; the runner owns verification.";
+  if (verification === "verified") {
+    return "This issue is verified: use the verified-testing skill and practice TDD — write the tests with the change. Never run them yourself; the runner executes script:test after finish.";
+  }
+  return hasTests
+    ? "Do not write tests for this issue — code only. Never run test commands; the runner owns verification."
+    : "Do not write tests for this issue — code only. This repo has no test runner, so never hunt for test files or test commands; there is nothing to find.";
 }
 
 /** Per-tool capability requirements (null = no capability beyond the base allowlist). */
@@ -210,7 +219,12 @@ export function resolveAgent(
   if (def.readonly) tools = tools.filter((t) => t !== "write" && t !== "edit");
   // The terminal action is harness-owned and must survive old role overrides.
   if (!tools.includes("finish")) tools = [...tools, "finish"];
-  const testLine = role === "engineer" ? testPromptLine(opts.verification) : null;
+  const testLine =
+    role === "engineer"
+      ? testPromptLine(opts.verification, hasRepoScript(layout, "test"))
+      : hasRepoScript(layout, "test")
+        ? null
+        : "This repo has no test runner, so never hunt for test files or test commands.";
   const prompt = composePrompt(def, config, tools) + (testLine ? `\n${testLine}` : "");
   return { def: { ...def, prompt, tools }, config, capabilities, prompt };
 }

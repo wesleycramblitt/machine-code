@@ -494,6 +494,54 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
   }
 
   const selectedName = input.agentName ?? "research";
+  // Research without a packet starts blind: run the same ranker + file
+  // assembly as the engineer path so discovery starts from pinned files,
+  // not fishing. (Review runs carry caller-built context and skip this.)
+  let researchContextText = input.contextText;
+  let researchSeedFiles = input.seedFiles;
+  if (selectedName === "research") {
+    const researchMap = await buildRepoMap(layout.repoRoot);
+    const researchRequest = input.request.split(/\n## Todo\b/)[0]!.trim();
+    const researchSuggested = suggestTaskFilesFromMap(researchMap.map, researchRequest, 5).map(
+      (entry) => entry.path,
+    );
+    recorder.event("suggestions", {
+      files: researchSuggested,
+      requestChars: researchRequest.length,
+      mapFiles: researchMap.map.files.length,
+    });
+    const researchFiles = [...new Set([...(input.seedFiles ?? []), ...researchSuggested])];
+    const researchBundle = await assembleContext({
+      layout,
+      machine,
+      agent: "research",
+      verification: "direct",
+      ...(researchFiles.length > 0 ? { include: { files: researchFiles } } : {}),
+      defaultSkills: defaultSkillsFor({ agent: "research" }),
+      skillPresets: roleSkillPresets("research"),
+    });
+    if (researchBundle.text) {
+      writeJsonAtomic(join(recorder.dir, "context.json"), {
+        chars: researchBundle.chars,
+        sources: researchBundle.sources,
+        warnings: researchBundle.warnings,
+        sections: researchBundle.sections,
+      });
+      recorder.event("context_assembled", {
+        chars: researchBundle.chars,
+        sources: researchBundle.sources,
+        warnings: researchBundle.warnings,
+      });
+    }
+    researchContextText =
+      [researchBundle.text, input.contextText].filter((part): part is string => Boolean(part)).join("\n\n") ||
+      undefined;
+    const bundledFiles = researchBundle.sources
+      .filter((source) => source.kind === "file" && typeof source.ref === "string")
+      .map((source) => source.ref as string);
+    const mergedSeeds = [...new Set([...(input.seedFiles ?? []), ...bundledFiles])];
+    researchSeedFiles = mergedSeeds.length > 0 ? mergedSeeds : undefined;
+  }
   const resolved = resolveAgent(layout, selectedName, {
     agentPolicy: policy.agents[selectedName],
     machineOverrides: machine.agents[selectedName],
@@ -521,8 +569,8 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     commands: allCommands(layout),
     requireProvider: input.requireProvider,
     requireModel: input.requireModel,
-    contextText: input.contextText,
-    ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
+    contextText: researchContextText,
+    ...(researchSeedFiles ? { seedFiles: researchSeedFiles } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,

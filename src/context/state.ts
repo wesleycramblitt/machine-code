@@ -288,6 +288,33 @@ export class RunStateStore {
   private workingFiles = new Map<string, WorkingFileState>();
   /** Exact acquired bytes for the full run; a read cache and prompt evidence. */
   private ledger = new Map<string, LedgerEntry>();
+  /**
+   * Repeat-call suppression for idempotent discovery tools. Marks are
+   * versioned by harness mutations: any successful edit/write invalidates
+   * every mark, so an identical repeat only suppresses when nothing the
+   * harness did could have changed the answer.
+   */
+  private repeatMarks = new Map<string, number>();
+  private mutationSeq = 0;
+
+  /** Record a harness mutation (edit/write); re-arms every repeat mark. */
+  noteMutation(): void {
+    this.mutationSeq += 1;
+  }
+
+  /** Mark an idempotent call's stable key as served. */
+  markRepeat(key: string): void {
+    this.repeatMarks.set(key, this.mutationSeq);
+    if (this.repeatMarks.size > 200) {
+      const oldest = this.repeatMarks.keys().next().value;
+      if (typeof oldest === "string") this.repeatMarks.delete(oldest);
+    }
+  }
+
+  /** True when the identical call already served at the current mutation. */
+  repeatSeen(key: string): boolean {
+    return this.repeatMarks.get(key) === this.mutationSeq;
+  }
 
   constructor(options: StateStoreOptions) {
     this.runDir = options.runDir;
@@ -554,6 +581,15 @@ export class RunStateStore {
         // A missing or unreadable preload is not a run failure.
       }
     }
+  }
+
+  /**
+   * True when the path is pinned in the working set (seeded or read). The
+   * renderer re-reads pins from disk every turn, so a pin is current by
+   * construction; a bare read would only re-dump bytes the model holds.
+   */
+  isWorkingFile(path: string): boolean {
+    return this.workingFiles.has(path);
   }
 
   /**

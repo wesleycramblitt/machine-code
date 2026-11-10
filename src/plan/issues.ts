@@ -546,7 +546,8 @@ export interface NewIssueInput {
 
 const SCRIPT_EXTS = [".sh", ".bash", ".py", ".js", ".mjs", ".cjs"];
 
-function hasRepoScript(layout: Layout, name: string): boolean {
+/** Repo scripts are `scripts/<name>.sh` (or similar); `script:test` gates verified runs. */
+export function hasRepoScript(layout: Layout, name: string): boolean {
   for (const dir of [join(layout.repoRoot, "scripts"), join(layout.repoDir, "scripts")]) {
     for (const ext of SCRIPT_EXTS) {
       if (existsSync(join(dir, `${name}${ext}`))) return true;

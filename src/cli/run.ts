@@ -754,9 +754,30 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ];
       if (dirtyText) lines.push(`Uncommitted:\n${dirtyText}`);
       if (aheadCount > 0 || dirtyText) {
-        const diff = await runProc("git", ["diff", `${base}...HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
-        const diffText = (diff.stdout || "").trim();
-        const capped = diffText.length > 12_000 ? `${diffText.slice(0, 12_000)}\n[diff truncated]` : diffText;
+        // Committed prior work (base...HEAD) and uncommitted work (HEAD)
+        // are different diffs; a reused dirty worktree usually has only the
+        // latter. Quote both so the model never re-reads to reconstruct them.
+        const diffs: string[] = [];
+        if (aheadCount > 0) {
+          const committed = await runProc("git", ["diff", `${base}...HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
+          const committedText = (committed.stdout || "").trim();
+          if (committedText) diffs.push(committedText);
+        }
+        if (dirtyText) {
+          const uncommitted = await runProc("git", ["diff", "HEAD", "--", "."], { cwd: toolRoot, timeoutMs: 15_000 });
+          const uncommittedText = (uncommitted.stdout || "").trim();
+          // Untracked files (?? in status) are not in any diff; name them so
+          // the model reads exactly those instead of re-listing the tree.
+          const untracked = dirtyText
+            .split("\n")
+            .filter((line) => line.startsWith("??"))
+            .map((line) => line.slice(3).trim())
+            .filter(Boolean);
+          if (uncommittedText) diffs.push(uncommittedText);
+          if (untracked.length > 0) diffs.push(`New files (read these directly):\n${untracked.join("\n")}`);
+        }
+        const joined = diffs.join("\n\n").trim();
+        const capped = joined.length > 12_000 ? `${joined.slice(0, 12_000)}\n[diff truncated]` : joined;
         if (capped) lines.push(`Prior work (complete — do not run history/show to re-derive it):\n${capped}`);
         lines.push(
           `The issue is the definition of done; keep only the parts of the above that directly satisfy it, and replace over-built code with the smallest change.`,

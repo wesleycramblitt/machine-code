@@ -342,6 +342,15 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
           params.around == null &&
           params.offset == null &&
           params.limit == null;
+        // A bare read of a working-set pin re-dumps bytes the model holds
+        // (seeded files render every turn, current from disk). Deny the
+        // dump, not the read: blocks stay available via symbol/offset reads.
+        if (bare && params.allow_large !== true && ctx.state?.isWorkingFile(params.path)) {
+          return ok(
+            `${params.path} is pinned in this run's working context — the bytes are already above. ` +
+              `Use them; read { symbol } or { offset, limit } only for a block outside what's shown, never a full re-read.`,
+          );
+        }
         if (bare && params.allow_large !== true && bytes > READ_OUTLINE_BYTES) {
           const found = extractSymbols(params.path, raw);
           const symbolLines = found.map((symbol, index) => {
@@ -656,6 +665,7 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
         }
         mkdirSync(dirname(abs), { recursive: true });
         writeFileSync(abs, params.content, "utf8");
+        ctx.state?.noteMutation();
         return ok(`wrote ${params.path} (${Buffer.byteLength(params.content, "utf8")} bytes)`);
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
@@ -684,6 +694,20 @@ function cleanEditArgs(args: unknown): unknown {
     delete out.path;
     changed = true;
   }
+  changed = cleanEditFields(out, isNullish) || changed;
+  if (Array.isArray(out.files)) {
+    for (const entry of out.files) {
+      if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+        changed = cleanEditFields(entry as Record<string, unknown>, isNullish) || changed;
+      }
+    }
+  }
+  return changed ? out : args;
+}
+
+/** Shared hunk/anchor cleaning for one edit form (top-level or one files[] entry). */
+function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknown) => boolean): boolean {
+  let changed = false;
   if (isNullish(out.symbol)) {
     delete out.symbol;
     changed = true;
@@ -726,8 +750,27 @@ function cleanEditArgs(args: unknown): unknown {
       changed = true;
     }
   }
-  return changed ? out : args;
+  return changed;
 }
+
+const FileEditEntry = Type.Object({
+  path: Type.String({ description: "File path, relative to the worktree root." }),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString." })),
+  edits: Type.Optional(
+    Type.Array(
+      Type.Object({
+        oldString: Type.String({ description: "Exact text to find." }),
+        newString: Type.String({ description: "Replacement text." }),
+        replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
+      }),
+      { description: "Several exact-match hunks applied atomically to this file." },
+    ),
+  ),
+  symbol: Type.Optional(Type.String({ description: "Limit the edit to one top-level symbol." })),
+  section: Type.Optional(Type.String({ description: "Limit the edit to one comment or Markdown section." })),
+  replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope (single-hunk form)." })),
+});
 
 const EditParams = Type.Object({  path: Type.String({ description: "File path, relative to the worktree root." }),
   oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
@@ -747,7 +790,43 @@ const EditParams = Type.Object({  path: Type.String({ description: "File path, r
   replaceAll: Type.Optional(
     Type.Boolean({ description: "Replace every occurrence in the scope (single-hunk form)." }),
   ),
+  files: Type.Optional(
+    Type.Array(FileEditEntry, {
+      description:
+        "Edits across several files, applied atomically: every file validates first, then all write. Prefer this for cross-file changes — one call instead of one per file. Takes either files[] or the single-file form, not both.",
+    }),
+  ),
 });
+
+/** Stable serialization for repeat-call keys: sorted keys, recursive, so
+ *  identical calls hash identically regardless of field order. */
+function stableArgs(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableArgs).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableArgs(record[key])}`)
+      .join(",")}}`;
+  }
+  const flat = JSON.stringify(value);
+  return flat === undefined ? "null" : flat;
+}
+
+/**
+ * Identical-repeat suppression for idempotent discovery calls. Returns a
+ * one-line note when the exact call already served at the current mutation;
+ * otherwise marks it and returns null so execution proceeds. Marks are
+ * versioned by harness mutations, so any edit/write re-arms every key.
+ */
+function checkRepeat(ctx: ToolContext, tool: string, params: unknown): AgentToolResult<undefined> | null {
+  const key = `${tool}:${stableArgs(params)}`;
+  if (ctx.state?.repeatSeen(key)) {
+    return ok("[already returned earlier in this run — arguments unchanged and nothing edited since; see above]");
+  }
+  ctx.state?.markRepeat(key);
+  return null;
+}
 
 /** Whitespace-collapsed view plus a map back to original offsets. Models copy
  * read output with different indentation, so an exact miss can still be a
@@ -817,6 +896,27 @@ function findCollapsed(
   return { start, end, count };
 }
 
+/** Numbered ±8-line windows around each inserted block, located sequentially
+ * in the new file and capped in total — so the model sees the edit land
+ * without a re-read to confirm it. */
+function quoteInsertions(next: string, inserted: readonly string[], capBytes = 2000): string {
+  const lines = next.split("\n");
+  const parts: string[] = [];
+  let used = 0;
+  let from = 0;
+  for (const text of inserted) {
+    if (!text || used >= capBytes) continue;
+    const at = next.indexOf(text, from);
+    if (at < 0) continue;
+    from = at + text.length;
+    const line = next.slice(0, at).split("\n").length;
+    const page = numberLinesCapped(lines, Math.max(1, line - 8), 17, capBytes - used);
+    used += page.text.length;
+    parts.push(page.text);
+  }
+  return parts.join("\n…\n");
+}
+
 /** A numbered window around the closest line, so a miss re-anchors in place. */
 function nearestRegionText(
   lines: readonly string[],
@@ -845,159 +945,242 @@ function nearestRegionText(
   return numberLinesCapped(lines, from, to - from + 1, 4_000).text;
 }
 
+/** One file's edit request, single-file form or one files[] entry. */
+interface FileEditSpec {
+  path: string;
+  oldString?: string | null;
+  newString?: string | null;
+  edits?: Array<{ oldString: string; newString: string; replaceAll?: boolean | null }> | null;
+  symbol?: string | null;
+  section?: string | null;
+  replaceAll?: boolean | null;
+}
+
+/** A validated file edit: bytes ready to write plus self-verifying output. */
+interface PlannedFileEdit {
+  abs: string;
+  next: string;
+  inserted: string[];
+  summary: string;
+}
+
+/**
+ * Validate one file's edit against current disk bytes and compute the new
+ * bytes without writing. Throws on path escapes (caught as failures by the
+ * caller); returns { error } for every anchor/scope validation failure so a
+ * multi-file call can report all failures before writing anything.
+ */
+async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<PlannedFileEdit | { error: string }> {
+  const pathText = typeof spec.path === "string" ? spec.path.trim() : "";
+  if (pathText === "" || pathText.toLowerCase() === "null" || pathText.toLowerCase() === "undefined") {
+    return { error: "entry is missing path" };
+  }
+  // A single-hunk call and an edits array are the same operation, not
+  // alternatives: apply the single hunk first, then the array, in one
+  // atomic pass. Weak models hedge by filling both forms.
+  const singleOld =
+    typeof spec.oldString === "string" && spec.oldString.trim() !== "" ? spec.oldString : undefined;
+  const single: Array<{ oldString: string; newString: string; replaceAll?: boolean | null }> =
+    singleOld !== undefined && typeof spec.newString === "string"
+      ? [{ oldString: singleOld, newString: spec.newString, replaceAll: spec.replaceAll }]
+      : [];
+  const edits = [
+    ...single,
+    ...(spec.edits && spec.edits.length > 0
+      ? spec.edits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
+      : []),
+  ];
+  // A bare symbol/section + newString with no oldString is whole-block
+  // replacement (anchor-free); everything else needs at least one hunk.
+  const wholeScope =
+    edits.length === 0 && typeof spec.newString === "string" && (spec.symbol || spec.section)
+      ? spec.newString
+      : undefined;
+  if (edits.length === 0 && wholeScope === undefined)
+    return { error: "edit requires oldString/newString, a non-empty edits array, or symbol/section + newString for whole-block replacement" };
+
+  const abs = resolveWithin(root, spec.path);
+  assertRegularFile(abs);
+  if (isSecretPath(toRelative(root, abs))) {
+    return { error: `refusing to edit a secret file: ${spec.path}` };
+  }
+  const raw = readFileSync(abs, "utf8");
+  const lines = raw.split("\n");
+  const lineOffsets = [0];
+  for (let index = 0; index < lines.length; index += 1) {
+    lineOffsets.push(lineOffsets[index]! + lines[index]!.length + 1);
+  }
+
+  let startChar = 0;
+  let endChar = raw.length;
+  let scopeLabel = "";
+  let scopeStart = 1;
+  let scopeEnd = lines.length;
+  if (spec.symbol) {
+    const file = await outlineFile(root, spec.path);
+    const range = file ? symbolRange(file, spec.symbol) : null;
+    if (!range) return { error: `no symbol "${spec.symbol}" in ${spec.path}` };
+    startChar = lineOffsets[range.start - 1] ?? 0;
+    endChar = Math.min(raw.length, lineOffsets[range.end] ?? raw.length);
+    scopeLabel = `symbol ${spec.symbol}`;
+    scopeStart = range.start;
+    scopeEnd = Math.max(range.start, range.end);
+  } else if (spec.section) {
+    const headings = documentSections(raw, spec.path);
+    const needle = spec.section.trim().toLowerCase();
+    const index = headings.findIndex((heading) => {
+      const title = sectionTitle(heading.text).toLowerCase();
+      return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
+    });
+    if (index < 0) return { error: `no section "${spec.section}" in ${spec.path}` };
+    const heading = headings[index]!;
+    const next = headings[index + 1];
+    const startLine = heading.line;
+    const endLine = next ? next.line - 1 : lines.length;
+    startChar = lineOffsets[startLine - 1] ?? 0;
+    endChar = Math.min(raw.length, lineOffsets[endLine] ?? raw.length);
+    scopeLabel = `section ${sectionTitle(heading.text) || heading.text}`;
+    scopeStart = startLine;
+    scopeEnd = Math.max(startLine, endLine);
+  }
+
+  const scoped = raw.slice(startChar, endChar);
+  // Whole-block replacement: no anchor, no drift. The scope came from
+  // the current file, so a stale working copy cannot miss.
+  if (wholeScope !== undefined) {
+    const before = lines.slice(scopeStart - 1, scopeEnd).length;
+    let replacement = wholeScope;
+    if (scoped.endsWith("\n") && !replacement.endsWith("\n")) replacement += "\n";
+    const next = raw.slice(0, startChar) + replacement + raw.slice(endChar);
+    const after = replacement === "" ? 0 : replacement.split("\n").length - (replacement.endsWith("\n") ? 1 : 0);
+    return {
+      abs,
+      next,
+      inserted: replacement === "" ? [] : [replacement],
+      summary:
+        wholeScope === ""
+          ? `deleted ${scopeLabel} in ${spec.path} (${before} lines removed)`
+          : `replaced ${scopeLabel} in ${spec.path} (${before} lines → ${after} lines)`,
+    };
+  }
+  let working = scoped;
+  let replacements = 0;
+  for (const edit of edits) {
+    if (edit.oldString.length === 0) return { error: "oldString must not be empty" };
+    if (edit.oldString === edit.newString) return { error: "oldString and newString must differ" };
+    // Try the exact hunk, then the same hunk without copied line numbers.
+    const stripped = stripLineNumbers(edit.oldString);
+    const needles = stripped === edit.oldString ? [edit.oldString] : [edit.oldString, stripped];
+    let applied = false;
+    for (const needle of needles) {
+      const count = exactCount(working, needle);
+      if (count === 0) continue;
+      if (!edit.replaceAll && count > 1) {
+        return {
+          error:
+            `${count} matches in ${spec.path}${scopeLabel ? ` (${scopeLabel})` : ""}; ` +
+            "add context to make the match unique or set replaceAll",
+        };
+      }
+      working = edit.replaceAll
+        ? working.split(needle).join(edit.newString)
+        : working.replace(needle, edit.newString);
+      replacements += count;
+      applied = true;
+      break;
+    }
+    if (applied) continue;
+    // Whitespace-insensitive fallback: the hunk is the same code with
+    // different indentation or blank-line spacing.
+    const fuzzy = findCollapsed(working, stripped);
+    if (fuzzy) {
+      // Ignoring whitespace can merge distinct hunks. Only apply when
+      // exactly one region matches; otherwise make the model narrow it.
+      if (fuzzy.count > 1) {
+        return {
+          error:
+            `${fuzzy.count} matches in ${spec.path}${scopeLabel ? ` (${scopeLabel})` : ""} ` +
+            "after ignoring whitespace; add context to make the match unique",
+        };
+      }
+      working = working.slice(0, fuzzy.start) + edit.newString + working.slice(fuzzy.end);
+      replacements += 1;
+      continue;
+    }
+    // Re-anchor every miss, scoped or not, with the closest current
+    // text. The model usually has the right idea against stale bytes;
+    // returning the fresh region costs one cheap call instead of a
+    // blind re-read and a second failed edit.
+    const miss = `no match in ${spec.path}${scopeLabel ? ` (${scopeLabel})` : ""}`;
+    const page = nearestRegionText(lines, stripped, scopeStart, scopeEnd);
+    return { error: `${miss}\nClosest current text:\n${page}` };
+  }
+
+  const next = raw.slice(0, startChar) + working + raw.slice(endChar);
+  return {
+    abs,
+    next,
+    inserted: edits.map((hunk) => hunk.newString).filter((text) => text !== ""),
+    summary:
+      `edited ${spec.path} (${replacements} replacement${replacements === 1 ? "" : "s"})` +
+      (scopeLabel ? ` in ${scopeLabel}` : ""),
+  };
+}
+
 export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
   return {
     name: "edit",
     label: "edit",
     description:
-      "Replace text in a file. Two forms: exact hunks (oldString/newString, batched in edits, scoped with symbol/section) or whole-block replacement (symbol/section + newString with no oldString rewrites the entire block — prefer this for function-scale changes: no anchor, no drift). " +
+      "Replace text in files. Two forms per file: exact hunks (oldString/newString, batched in edits, scoped with symbol/section) or whole-block replacement (symbol/section + newString with no oldString rewrites the entire block — prefer this for function-scale changes: no anchor, no drift). " +
+      "Put edits to several files in files[]: every file validates first, then all write atomically. " +
+      "Results quote the changed lines with numbers, so never re-read to confirm. " +
       "Without replaceAll each hunk must be unique in scope.",
     parameters: EditParams,
     prepareArguments: (args) => cleanEditArgs(args) as Static<typeof EditParams>,
     async execute(_id, params: Static<typeof EditParams>) {
       try {
-        // A single-hunk call and an edits array are the same operation, not
-        // alternatives: apply the single hunk first, then the array, in one
-        // atomic pass. Weak models hedge by filling both forms.
-        const singleOld =
-          typeof params.oldString === "string" && params.oldString.trim() !== "" ? params.oldString : undefined;
-        const single =
-          singleOld !== undefined && params.newString !== undefined
-            ? [{ oldString: singleOld, newString: params.newString, replaceAll: params.replaceAll }]
-            : [];
-        const edits = [
-          ...single,
-          ...(params.edits && params.edits.length > 0
-            ? params.edits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
-            : []),
-        ];
-        // A bare symbol/section + newString with no oldString is whole-block
-        // replacement (anchor-free); everything else needs at least one hunk.
-        const wholeScope =
-          edits.length === 0 && typeof params.newString === "string" && (params.symbol || params.section)
-            ? params.newString
-            : undefined;
-        if (edits.length === 0 && wholeScope === undefined)
-          return fail("edit requires oldString/newString, a non-empty edits array, or symbol/section + newString for whole-block replacement");
-
-        const abs = resolveWithin(ctx.root, params.path);
-        assertRegularFile(abs);
-        if (isSecretPath(toRelative(ctx.root, abs))) {
-          return fail(`refusing to edit a secret file: ${params.path}`);
-        }
-        const raw = readFileSync(abs, "utf8");
-        const lines = raw.split("\n");
-        const lineOffsets = [0];
-        for (let index = 0; index < lines.length; index += 1) {
-          lineOffsets.push(lineOffsets[index]! + lines[index]!.length + 1);
-        }
-
-        let startChar = 0;
-        let endChar = raw.length;
-        let scopeLabel = "";
-        let scopeStart = 1;
-        let scopeEnd = lines.length;
-        if (params.symbol) {
-          const file = await outlineFile(ctx.root, params.path);
-          const range = file ? symbolRange(file, params.symbol) : null;
-          if (!range) return fail(`no symbol "${params.symbol}" in ${params.path}`);
-          startChar = lineOffsets[range.start - 1] ?? 0;
-          endChar = Math.min(raw.length, lineOffsets[range.end] ?? raw.length);
-          scopeLabel = `symbol ${params.symbol}`;
-          scopeStart = range.start;
-          scopeEnd = Math.max(range.start, range.end);
-        } else if (params.section) {
-          const headings = documentSections(raw, params.path);
-          const needle = params.section.trim().toLowerCase();
-          const index = headings.findIndex((heading) => {
-            const title = sectionTitle(heading.text).toLowerCase();
-            return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
-          });
-          if (index < 0) return fail(`no section "${params.section}" in ${params.path}`);
-          const heading = headings[index]!;
-          const next = headings[index + 1];
-          const startLine = heading.line;
-          const endLine = next ? next.line - 1 : lines.length;
-          startChar = lineOffsets[startLine - 1] ?? 0;
-          endChar = Math.min(raw.length, lineOffsets[endLine] ?? raw.length);
-          scopeLabel = `section ${sectionTitle(heading.text) || heading.text}`;
-          scopeStart = startLine;
-          scopeEnd = Math.max(startLine, endLine);
-        }
-
-        const scoped = raw.slice(startChar, endChar);
-        // Whole-block replacement: no anchor, no drift. The scope came from
-        // the current file, so a stale working copy cannot miss.
-        if (wholeScope !== undefined) {
-          const before = lines.slice(scopeStart - 1, scopeEnd).length;
-          let replacement = wholeScope;
-          if (scoped.endsWith("\n") && !replacement.endsWith("\n")) replacement += "\n";
-          const next = raw.slice(0, startChar) + replacement + raw.slice(endChar);
-          writeFileSync(abs, next, "utf8");
-          const after = replacement === "" ? 0 : replacement.split("\n").length - (replacement.endsWith("\n") ? 1 : 0);
-          return ok(
-            wholeScope === ""
-              ? `deleted ${scopeLabel} in ${params.path} (${before} lines removed)`
-              : `replaced ${scopeLabel} in ${params.path} (${before} lines → ${after} lines)`,
-          );
-        }
-        let working = scoped;
-        let replacements = 0;
-        for (const edit of edits) {
-          if (edit.oldString.length === 0) return fail("oldString must not be empty");
-          if (edit.oldString === edit.newString) return fail("oldString and newString must differ");
-          // Try the exact hunk, then the same hunk without copied line numbers.
-          const stripped = stripLineNumbers(edit.oldString);
-          const needles = stripped === edit.oldString ? [edit.oldString] : [edit.oldString, stripped];
-          let applied = false;
-          for (const needle of needles) {
-            const count = exactCount(working, needle);
-            if (count === 0) continue;
-            if (!edit.replaceAll && count > 1) {
-              return fail(
-                `${count} matches in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}; ` +
-                  "add context to make the match unique or set replaceAll",
-              );
-            }
-            working = edit.replaceAll
-              ? working.split(needle).join(edit.newString)
-              : working.replace(needle, edit.newString);
-            replacements += count;
-            applied = true;
-            break;
+        // Cross-file form: every file validates first, then all write.
+        // Nothing is written when any file fails, so one call replaces one
+        // per file with a single all-or-nothing report.
+        if (params.files && params.files.length > 0) {
+          const singlePresent =
+            params.oldString !== undefined ||
+            params.newString !== undefined ||
+            (params.edits !== undefined && params.edits.length > 0) ||
+            params.symbol !== undefined ||
+            params.section !== undefined;
+          if (singlePresent) {
+            return fail("edit takes either files[] or the single-file form, not both");
           }
-          if (applied) continue;
-          // Whitespace-insensitive fallback: the hunk is the same code with
-          // different indentation or blank-line spacing.
-          const fuzzy = findCollapsed(working, stripped);
-          if (fuzzy) {
-            // Ignoring whitespace can merge distinct hunks. Only apply when
-            // exactly one region matches; otherwise make the model narrow it.
-            if (fuzzy.count > 1) {
-              return fail(
-                `${fuzzy.count} matches in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""} ` +
-                  "after ignoring whitespace; add context to make the match unique",
-              );
-            }
-            working = working.slice(0, fuzzy.start) + edit.newString + working.slice(fuzzy.end);
-            replacements += 1;
-            continue;
+          const plans: PlannedFileEdit[] = [];
+          const errors: string[] = [];
+          for (const file of params.files) {
+            const planned = await planSingleFileEdit(ctx.root, file);
+            if ("error" in planned) errors.push(`${file.path}: ${planned.error}`);
+            else plans.push(planned);
           }
-          // Re-anchor every miss, scoped or not, with the closest current
-          // text. The model usually has the right idea against stale bytes;
-          // returning the fresh region costs one cheap call instead of a
-          // blind re-read and a second failed edit.
-          const miss = `no match in ${params.path}${scopeLabel ? ` (${scopeLabel})` : ""}`;
-          const page = nearestRegionText(lines, stripped, scopeStart, scopeEnd);
-          return fail(`${miss}\nClosest current text:\n${page}`);
+          if (errors.length > 0) {
+            return fail(`nothing applied — ${errors.length} file(s) failed validation:\n${errors.join("\n")}`);
+          }
+          for (const plan of plans) writeFileSync(plan.abs, plan.next, "utf8");
+          ctx.state?.noteMutation();
+          const out: string[] = [`applied edits to ${plans.length} file(s):`];
+          let used = 0;
+          for (const plan of plans) {
+            out.push(plan.summary);
+            const quote = quoteInsertions(plan.next, plan.inserted, Math.max(0, 3000 - used));
+            used += quote.length;
+            if (quote) out.push(quote);
+          }
+          return ok(out.join("\n"));
         }
-
-        const next = raw.slice(0, startChar) + working + raw.slice(endChar);
-        writeFileSync(abs, next, "utf8");
-        return ok(
-          `edited ${params.path} (${replacements} replacement${replacements === 1 ? "" : "s"})` +
-            (scopeLabel ? ` in ${scopeLabel}` : ""),
-        );
+        const planned = await planSingleFileEdit(ctx.root, params);
+        if ("error" in planned) return fail(planned.error);
+        writeFileSync(planned.abs, planned.next, "utf8");
+        ctx.state?.noteMutation();
+        const quote = quoteInsertions(planned.next, planned.inserted);
+        return ok(planned.summary + (quote ? `\nChanged:\n${quote}` : ""));
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
       }
@@ -1139,6 +1322,8 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     parameters: SearchParams,
     prepareArguments: (args) => cleanSearchArgs(args) as Static<typeof SearchParams>,
     async execute(_id, params: Static<typeof SearchParams>) {
+      const repeat = checkRepeat(ctx, "search", params);
+      if (repeat) return repeat;
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
       // `mode` is intentionally absent from the model-visible schema: the
       // harness routes every query itself. It is still honored when present
@@ -1840,6 +2025,8 @@ export function mapTool(ctx: ToolContext): AgentTool<typeof MapParams> {
     parameters: MapParams,
     prepareArguments: (args) => cleanMapArgs(args) as Static<typeof MapParams>,
     async execute(id, params: Static<typeof MapParams>) {
+      const repeat = checkRepeat(ctx, "map", params);
+      if (repeat) return repeat;
       const search = searchTool(ctx);
       const mode = MAP_MODES[params.action];
       // Path-oriented actions get one routing accommodation the search tool
@@ -2224,6 +2411,8 @@ export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
     parameters: GrepParams,
     prepareArguments: (args) => cleanOptionalArgs(args) as Static<typeof GrepParams>,
     async execute(_id, params: Static<typeof GrepParams>) {
+      const repeat = checkRepeat(ctx, "grep", params);
+      if (repeat) return repeat;
       try {
         const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
         let scopeIsFile = false;
