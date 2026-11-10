@@ -1,11 +1,9 @@
-priority: medium
-review: none
-verification: direct
 tags: tui, new-runs, composer
 acceptance: script:build
 todo:
-  - [ ] Render Agent Prompt rows without the ✓ mark
-  - [ ] Finish
+  - [x] Render fixed rows (Agent Prompt, core-tools) with a neutral dim mark, no toggleable ✓
+  - [x] Drop the space command from the Agent Prompt tab footer
+  - [x] Finish (runner runs script:build)
 
 # Agent Prompt tab: drop the per-line checkmark
 
