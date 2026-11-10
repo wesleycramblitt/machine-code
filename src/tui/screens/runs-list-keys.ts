@@ -9,6 +9,7 @@ import { layout } from "../../paths.js";
 import { listAllRuns } from "../../state/runs.js";
 import { buildRunIndex, repoOf, RUN_GROUPS, type RunRow } from "../runs.js";
 import { listIssues } from "../../plan/issues.js";
+import { issueDeleteTarget } from "./delete-keys.js";
 import { runItemId } from "../../plan/lifecycle.js";
 import type { TuiState } from "../state.js";
 import type { KeyServices } from "./keys.js";
@@ -114,16 +115,23 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     const row = index.selectable[s.runsSel];
     if (!row) return true;
     if (row.kind === "run") {
-      s.deleteRunTarget = row.run;
+      s.deleteTarget = { kind: "run", run: row.run };
       s.deleteReturn = "list";
       s.screen = "delete";
       ctx.draw();
       return true;
     }
-    // Delete an issue from the runs list.
-    if ("slug" in row && typeof row.slug === "string" && row.slug) {
-      ctx.launch(["delete", row.slug], repoForRow(row));
-      ctx.notify(`delete ${row.slug} queued`);
+    // An issue delete goes through the same confirmation page as a run.
+    if (row.kind === "issue") {
+      const target = issueDeleteTarget(repoForRow(row), row.slug);
+      if (!target) {
+        ctx.notify(`no issue ${row.slug}`);
+        ctx.draw();
+        return true;
+      }
+      s.deleteTarget = target;
+      s.deleteReturn = "list";
+      s.screen = "delete";
       ctx.draw();
       return true;
     }

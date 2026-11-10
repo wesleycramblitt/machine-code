@@ -181,7 +181,7 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     return true;
   }
   if (data === "D") {
-    s.deleteRunTarget = detail.summary;
+    s.deleteTarget = { kind: "run", run: detail.summary };
     s.deleteReturn = "run";
     s.screen = "delete";
     ctx.draw();

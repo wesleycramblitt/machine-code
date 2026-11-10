@@ -896,7 +896,7 @@ export async function runTui(): Promise<void> {
 
     /* ----------------------------------------------------------- delete */
     else if (s.screen === "delete") {
-      const frame = renderDeleteConfirm(s.deleteRunTarget, bodyH);
+      const frame = renderDeleteConfirm(s.deleteTarget, bodyH);
       if (!frame) {
         s.screen = s.deleteReturn;
         return draw();

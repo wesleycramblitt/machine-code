@@ -3,7 +3,7 @@
  *
  * `n` starts the run the issue needs (research for ideas, engineer for
  * features/bugs), `e` edits the issue file, `o` orchestrates the batch, and
- * build/gate/approve/delete act on the issue.
+ * build/gate/approve act on the issue. `d` opens the delete confirmation page.
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import { layout } from "../../paths.js";
 import { commitPlanningFiles } from "../../tasks/planning.js";
 import { listRuns, reconcileRun } from "../../state/runs.js";
 import { runItemId } from "../../plan/lifecycle.js";
+import { issueDeleteTarget } from "./delete-keys.js";
 import type { TuiState } from "../state.js";
 import type { KeyServices } from "./keys.js";
 
@@ -122,12 +123,17 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
     return true;
   }
   if (data === "d" && slug) {
-    if (activeRun()) {
-      ctx.notify(`${slug} has an active run; stop it before deleting (or use --force)`);
+    // Deleting an issue is destructive: confirm on the delete page first.
+    const target = issueDeleteTarget(l.repoRoot, slug);
+    if (!target) {
+      ctx.notify(`no issue ${slug}`);
       ctx.draw();
       return true;
     }
-    spawnCli(["delete", slug], `delete ${slug} queued`);
+    s.deleteTarget = target;
+    s.deleteReturn = "issue";
+    s.screen = "delete";
+    ctx.draw();
     return true;
   }
   ctx.draw();
