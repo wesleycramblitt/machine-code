@@ -1110,10 +1110,15 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
     // Re-anchor every miss, scoped or not, with the closest current
     // text. The model usually has the right idea against stale bytes;
     // returning the fresh region costs one cheap call instead of a
-    // blind re-read and a second failed edit.
+    // blind re-read and a second failed edit. Point scoped misses at the
+    // anchor-free form: it is the escape hatch from anchor drift.
     const miss = `no match in ${spec.path}${scopeLabel ? ` (${scopeLabel})` : ""}`;
     const page = nearestRegionText(lines, stripped, scopeStart, scopeEnd);
-    return { error: `${miss}\nClosest current text:\n${page}` };
+    const tip =
+      spec.symbol || spec.section
+        ? `\nTip: skip the anchor entirely — { symbol, newString } with no oldString replaces the whole block.`
+        : "";
+    return { error: `${miss}\nClosest current text:\n${page}${tip}` };
   }
 
   const next = raw.slice(0, startChar) + working + raw.slice(endChar);
@@ -1166,6 +1171,9 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           for (const plan of plans) writeFileSync(plan.abs, plan.next, "utf8");
           ctx.state?.noteMutation();
           const out: string[] = [`applied edits to ${plans.length} file(s):`];
+          if (plans.length === 1) {
+            out.push("(one file per call works, but batch independent files in one files[] call)");
+          }
           let used = 0;
           for (const plan of plans) {
             out.push(plan.summary);

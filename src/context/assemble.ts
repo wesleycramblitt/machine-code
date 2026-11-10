@@ -590,6 +590,22 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     entries.push({ ...item, len: item.body.length });
   }
 
+  // File bodies render with the same `N: ` line numbers the read tool
+  // returns, so anchors and issue-cited lines lift straight out of context
+  // with zero reads. Number before budgeting so lengths, hashes, and trims
+  // all account the numbered text; trims cut at newlines so numbers stay
+  // 1-based. Numbers are current as assembled; after an edit, read requotes
+  // the region (or the edit miss re-anchors).
+  for (const entry of entries) {
+    if (entry.kind === "file") {
+      entry.body = entry.body
+        .split("\n")
+        .map((line, index) => `${index + 1}: ${line}`)
+        .join("\n");
+      entry.len = entry.body.length;
+    }
+  }
+
   const totalLen = (): number => entries.reduce((sum, entry) => sum + entry.len, 0);
 
   let guard = entries.length + 1;
