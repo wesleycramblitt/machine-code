@@ -310,6 +310,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   const contextIncludeFlag = flags.get("context-include");
   let contextInclude: import("../context/assemble.js").ContextInclude | undefined;
+  // An include that names no files leaves file seeding to the ranker: the
+  // composer passes an explicit (possibly empty) include on every TUI launch,
+  // and gating on the flag alone silently disabled suggestions for all of
+  // them. The attached issue is merged below and never counts as explicit.
+  let explicitFileInclude = false;
   if (contextIncludeFlag !== undefined) {
     try {
       const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; knowledge?: unknown; references?: unknown; issues?: unknown };
@@ -323,6 +328,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         references: strings(raw.references),
         issues: strings(raw.issues),
       };
+      explicitFileInclude = (contextInclude.files?.length ?? 0) > 0;
     } catch {
       fail("--context-include must be a JSON object");
     }
@@ -336,14 +342,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
     contextInclude = contextInclude ?? {};
     contextInclude.files = [...new Set([...(contextInclude.files ?? []), attachedIssue.rel])];
   }
-  // Suggestions are context files. Attach them for CLI runs that did not
-  // supply an explicit include; the composer shows the same suggestions and
-  // lets the user choose instead. No second `## Context` prompt block.
+  // Suggestions are context files. Attach them unless the run names its own
+  // files; the composer shows the same suggestions and lets the user choose
+  // instead. No second `## Context` prompt block.
   // Suggestion file list, computed up front and recorded once the recorder
   // exists below. Best effort; the run still has the issue without it.
   let suggestedFiles: string[] = [];
   let builtMapFiles = 0;
-  if (contextIncludeFlag === undefined) {
+  if (!explicitFileInclude) {
     try {
       const { buildRepoMap } = await import("../map/deterministic.js");
       // Use the freshly built map directly: re-reading it from disk re-opens
@@ -552,7 +558,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // The witness fires whether or not suggestions applied: files:[] with a
   // real map means the ranker filtered everything, mapFiles is the map size,
   // and skipped names why nothing was attached. Never silently empty.
-  if (contextIncludeFlag === undefined) {
+  if (!explicitFileInclude) {
     recorder.event("suggestions", {
       files: suggestedFiles,
       mapFiles: builtMapFiles,
@@ -731,23 +737,29 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   // A reused worktree may hold prior work. State only facts: commits ahead,
   // dirty paths, or clean. Never claim prior work on a reset branch; that
-  // sends the model through status/history/diff for nothing.
+  // sends the model through status/history/diff for nothing. Merge commits
+  // from harness syncs are not work: count only non-merge commits, and quote
+  // the diff inline so the model never inspects history to re-derive it.
   if (reusedWorktree && toolRoot !== l.repoRoot) {
     try {
       const branch = recorder.current.branch ?? "";
       const base = recorder.current.baseRef ?? "main";
-      const ahead = await runProc("git", ["rev-list", "--count", `${base}..HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
+      const ahead = await runProc("git", ["rev-list", "--no-merges", "--count", `${base}..HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
       const status = await runProc("git", ["status", "--porcelain"], { cwd: toolRoot, timeoutMs: 15_000 });
       const aheadCount = Number(ahead.stdout.trim()) || 0;
       const dirtyText = status.code === 0 ? status.stdout.trim() : "";
       const lines = [
         `## Worktree`,
-        `Branch ${branch || "(unknown)"} at ${base}: ${aheadCount} commit(s) ahead${dirtyText ? ", uncommitted changes" : ", clean"}.`,
+        `Branch ${branch || "(unknown)"} at ${base}: ${aheadCount} work commit(s) ahead${dirtyText ? ", uncommitted changes" : ", clean"}.`,
       ];
       if (dirtyText) lines.push(`Uncommitted:\n${dirtyText}`);
       if (aheadCount > 0 || dirtyText) {
+        const diff = await runProc("git", ["diff", `${base}...HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
+        const diffText = (diff.stdout || "").trim();
+        const capped = diffText.length > 12_000 ? `${diffText.slice(0, 12_000)}\n[diff truncated]` : diffText;
+        if (capped) lines.push(`Prior work (complete — do not run history/show to re-derive it):\n${capped}`);
         lines.push(
-          `Prior work exists. The issue is the definition of done; keep only the parts that directly satisfy it, and replace over-built code with the smallest change.`,
+          `The issue is the definition of done; keep only the parts of the above that directly satisfy it, and replace over-built code with the smallest change.`,
         );
       } else {
         lines.push(`Clean at ${base}; there is no prior work.`);
@@ -755,7 +767,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       request = `${request}\n\n${lines.join("\n\n")}`;
       recorder.event("branch_state_reported", { branch, ahead: aheadCount, dirty: Boolean(dirtyText) });
     } catch {
-      // Best effort: the agent can inspect the tree itself.
+      // Best effort: continue the task from the issue.
     }
   }
 
