@@ -188,7 +188,13 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   const builtMap = await buildRepoMap(layout.repoRoot);
   const suggestionRequest = packet.goal.split(/\n## Todo\b/)[0]!.trim();
   const suggested = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 3).map((entry) => entry.path);
-  recorder.event("suggestions", { files: suggested, requestChars: suggestionRequest.length });
+  // Determinism witness: files:[] with a non-empty map and request means the
+  // ranker filtered everything; mapFiles:0 means no map. Never silently empty.
+  recorder.event("suggestions", {
+    files: suggested,
+    requestChars: suggestionRequest.length,
+    mapFiles: builtMap.map.files.length,
+  });
   const include: ContextInclude | undefined =
     input.include || suggested.length > 0
       ? {

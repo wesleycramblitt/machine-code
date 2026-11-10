@@ -298,7 +298,12 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const fileSig = `${stat.mtimeMs}:${stat.size}`;
         const cacheKey = readCacheKey(params.path, params);
         const cached = ctx.state?.cachedRead(cacheKey, fileSig);
-        if (cached !== null && cached !== undefined) return ok(cached);
+        // A cache hit means these exact bytes are already in the run's
+        // working context. Say so outright: otherwise a re-read looks like
+        // progress and the model keeps paging what it holds.
+        if (cached !== null && cached !== undefined) {
+          return ok(`${cached}\n[already held from earlier in this run — no new bytes]`);
+        }
         const raw = readFileSync(abs, "utf8");
         const lines = raw.split("\n");
         const bytes = Buffer.byteLength(raw, "utf8");
