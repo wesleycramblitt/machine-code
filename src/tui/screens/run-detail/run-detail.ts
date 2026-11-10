@@ -143,10 +143,10 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     ]);
     footerMapTokens = props.mapTokens(s.worktree ?? s.repoRoot);
     const sectionBar = wrapTokenList(
-      RUN_SECTIONS.map((section) =>
-        section === section
-          ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B} ${RUN_SECTION_LABEL[section]} ${R}`
-          : `${SUBTAB_BG}${theme.sectionFg} ${RUN_SECTION_LABEL[section]} ${R}`,
+      RUN_SECTIONS.map((entry) =>
+        entry === section
+          ? `${theme.sectionActiveBg}${theme.sectionActiveFg}${B} ${RUN_SECTION_LABEL[entry]} ${R}`
+          : `${SUBTAB_BG}${theme.sectionFg} ${RUN_SECTION_LABEL[entry]} ${R}`,
       ),
       cols - 2,
       "  ",
