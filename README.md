@@ -657,7 +657,6 @@ Map actions:
   plus text references, with read anchors.
 - `map { "action": "structural", "pattern": "console.log($X)" }` runs ast-grep
   structural search.
-- `core:check` and `core:rename` infer the language from the path.
 
 Language IDs are per extension, so TSX uses `typescriptreact` and SCSS uses
 `scss`. The client passes the user's environment to the server so toolchains

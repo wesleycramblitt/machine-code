@@ -2243,6 +2243,7 @@ export type CoreToolName =
   | "write"
   | "edit"
   | "map"
+  | "search"
   | "glob"
   | "grep"
   | "command"
@@ -2259,6 +2260,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     write: writeTool(ctx),
     edit: editTool(ctx),
     map: mapTool(ctx),
+    search: searchTool(ctx),
     glob: globTool(ctx),
     grep: grepTool(ctx),
     command: commandTool(ctx),

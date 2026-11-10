@@ -80,13 +80,27 @@ async function syncFromRemote(topRoot: string): Promise<void> {
  * so conflicts surface there, then merges into main, pushes, and deletes the remote
  * branch. */
 async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string): Promise<boolean> {
+  // runProc resolves instead of throwing, so every step must check its exit
+  // code explicitly. A blind sequence reports success while doing nothing
+  // (and strands the branch: -D cannot run while a worktree checks the
+  // branch out, so the worktree goes first).
+  const step = async (args: string[], cwd: string, what: string): Promise<boolean> => {
+    const result = await runProc("git", args, { cwd, timeoutMs: 30_000 });
+    if (result.outcome !== "exit" || result.code !== 0) {
+      process.stderr.write(
+        `merge ${branch}: ${what} failed (${result.outcome}${result.code === null ? "" : ` exit ${result.code}`})${result.stderr.trim() ? `: ${result.stderr.trim().split("\n")[0]}` : ""}\n`,
+      );
+      return false;
+    }
+    return true;
+  };
   try {
     // Fetch the latest main from the remote so the merge is based on real upstream.
-    await runProc("git", ["fetch", "origin", "main:main"], { cwd: topRoot, timeoutMs: 30_000 });
+    if (!(await step(["fetch", "origin", "main:main"], topRoot, "fetch"))) return false;
     // Bring main into the feature branch (conflicts surface in the worktree).
-    await runProc("git", ["merge", "main", "-m", `sync ${branch} with main`], { cwd: worktreeRoot, timeoutMs: 30_000 });
+    if (!(await step(["merge", "main", "-m", `sync ${branch} with main`], worktreeRoot, "sync"))) return false;
     // Merge feature branch into main.
-    await runProc("git", ["merge", branch, "--no-ff", "-m", `merge ${branch}`], { cwd: topRoot, timeoutMs: 30_000 });
+    if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) return false;
     // A source merge is not a working binary for a compiled project. Rebuild
     // main before declaring success; the running CLI uses dist/.
     const build = await runMainBuild(topRoot);
@@ -95,13 +109,15 @@ async function mergeBranch(topRoot: string, worktreeRoot: string, branch: string
       return false;
     }
     // Push the merge to the remote.
-    await runProc("git", ["push", "origin", "main"], { cwd: topRoot, timeoutMs: 30_000 });
+    if (!(await step(["push", "origin", "main"], topRoot, "push"))) return false;
     // Delete the remote branch (may fail if it was never pushed — fine).
-    try { await runProc("git", ["push", "origin", "--delete", branch], { cwd: topRoot, timeoutMs: 15_000 }); } catch {}
-    await runProc("git", ["branch", "-D", branch], { cwd: topRoot, timeoutMs: 15_000 });
-    await runProc("git", ["worktree", "remove", worktreeRoot], { cwd: topRoot, timeoutMs: 15_000 });
+    await runProc("git", ["push", "origin", "--delete", branch], { cwd: topRoot, timeoutMs: 15_000 });
+    // The worktree checks the branch out, so remove it before deleting.
+    if (!(await step(["worktree", "remove", worktreeRoot], topRoot, "worktree remove"))) return false;
+    if (!(await step(["branch", "-D", branch], topRoot, "branch delete"))) return false;
     return true;
-  } catch {
+  } catch (error) {
+    process.stderr.write(`merge ${branch} failed: ${(error as Error).message}\n`);
     return false;
   }
 }
