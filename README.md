@@ -369,12 +369,18 @@ machine_code delete <slug>
 An issue file is plain markdown whose text is the prompt. Nothing else is
 required — a file with a single sentence is a valid issue. Optional `key:
 value` header lines at the very top set metadata (`priority`, `review`,
-`tags`, `depends`, `acceptance`), followed by a blank line:
+`tags`, `depends`, `acceptance`, `verification`, `todo`), followed by a blank
+line. `todo:` is a multi-line checklist: indented `- [ ]` / `- [x]` lines
+immediately follow it and belong to the header:
 
 ```markdown
 priority: high
 tags: tui
 acceptance: script:build
+todo:
+  - [ ] Locate the change
+  - [ ] Make the smallest edit
+  - [ ] Finish
 
 # Make the thing fast
 

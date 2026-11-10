@@ -12,15 +12,24 @@
  *
  * An issue file is plain markdown whose text IS the prompt — nothing else is
  * required. Optional `key: value` header lines at the very top set metadata
- * (`priority`, `review`, `tags`, `depends`, `acceptance`, `verify`), followed
- * by a blank line:
+ * (`priority`, `review`, `tags`, `depends`, `acceptance`, `verify`,
+ * `verification`, `todo`), followed by a blank line:
  *
  *   priority: high
  *   tags: tui, perf
+ *   acceptance: script:build
+ *   todo:
+ *     - [ ] Locate the change
+ *     - [ ] Make the smallest edit
+ *     - [ ] Finish
  *
  *   # Make lookups fast
  *
  *   Swap the linear scan for an index.
+ *
+ * `todo:` is a multi-line checklist: indented `- [ ]` / `- [x]` lines
+ * immediately follow it (no blank line) and belong to the header. The body
+ * stays the prompt only.
  *
  * Legacy `---` TOML front-matter files still read; they are rewritten in the
  * new form on the next touch. There is no "archived": delete an issue when it
@@ -165,7 +174,7 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
 
 /** Metadata keys allowed in the condensed `key: value` header. Anything else
  * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
-const META_KEYS = new Set(["priority", "review", "tags", "depends", "acceptance", "verify", "verification"]);
+const META_KEYS = new Set(["priority", "review", "tags", "depends", "acceptance", "verify", "verification", "todo"]);
 
 function stripQuotes(value: string): string {
   if (value.length >= 2) {
@@ -189,17 +198,51 @@ export function parseIssueFile(text: string): { front: Record<string, unknown>; 
   }
   // Condensed header: leading `key: value` lines for known keys, then the
   // body. No header, no blank line, no heading required.
+  //
+  // `todo:` may be a multi-line checklist: indented `- [ ]` / `- [x]`
+  // lines immediately follow it (no blank line) and belong to the header.
   const lines = text.split("\n");
   const front: Record<string, unknown> = {};
   let i = 0;
-  for (; i < lines.length; i += 1) {
+  while (i < lines.length) {
     const line = lines[i] ?? "";
     if (line.trim() === "") break;
     const match = /^([A-Za-z]+)\s*:\s*(.*)$/.exec(line);
     if (!match || !META_KEYS.has(match[1]!.toLowerCase())) break;
-    front[match[1]!.toLowerCase()] = stripQuotes((match[2] ?? "").trim());
+    const key = match[1]!.toLowerCase();
+    if (key === "todo") {
+      const inline = (match[2] ?? "").trim();
+      const items: TodoItem[] = [];
+      if (inline) {
+        const m = /^-\s*\[([ xX])\]\s*(.+)$/.exec(inline);
+        if (m) items.push({ text: m[2]!.trim(), done: m[1]!.toLowerCase() === "x" });
+        else items.push({ text: inline, done: false });
+      }
+      let j = i + 1;
+      while (j < lines.length && (lines[j] ?? "").trim() !== "") {
+        const l = lines[j] ?? "";
+        if (!/^\s+/.test(l)) break;
+        const m = /^\s*-\s*\[([ xX])\]\s*(.+)$/.exec(l);
+        if (m) items.push({ text: m[2]!.trim(), done: m[1]!.toLowerCase() === "x" });
+        else items.push({ text: l.trim(), done: false });
+        j += 1;
+      }
+      front.todo = items;
+      i = j;
+      if (i < lines.length && (lines[i] ?? "").trim() === "") break;
+      continue;
+    }
+    front[key] = stripQuotes((match[2] ?? "").trim());
+    i += 1;
   }
-  const body = lines.slice(i).join("\n").trim();
+  let body = lines.slice(i).join("\n").trim();
+  // A legacy `## Todo` section in the body is folded into the header Todo so
+  // the body stays the prompt only.
+  const bodyTodo = parseIssueTodo(body);
+  if (bodyTodo.length > 0 && (!Array.isArray(front.todo) || (front.todo as TodoItem[]).length === 0)) {
+    front.todo = bodyTodo;
+  }
+  body = stripTodoSection(body);
   return { front, body: body || text.trim() };
 }
 
@@ -221,6 +264,38 @@ function toAcceptance(front: Record<string, unknown>): string[] {
   if (typeof front.verify === "string") return front.verify.split(",").map((e) => e.trim()).filter(Boolean);
   if (Array.isArray(front.verify)) return front.verify.filter((e): e is string => typeof e === "string");
   return [];
+}
+
+/** Drop a legacy `## Todo` section from a body so the prompt stays clean. */
+function stripTodoSection(body: string): string {
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => /^## Todo\b/.test(line));
+  if (start < 0) return body;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^## /.test(lines[i] ?? "")) {
+      end = i;
+      break;
+    }
+  }
+  return [...lines.slice(0, start), ...lines.slice(end)].join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** Normalize a header `todo` value into TodoItems. */
+function normalizeTodo(value: unknown): TodoItem[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const out: TodoItem[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const m = /^-\s*\[([ xX])\]\s*(.+)$/.exec(entry.trim());
+      if (m) out.push({ text: m[2]!.trim(), done: m[1]!.toLowerCase() === "x" });
+      else out.push({ text: entry.trim(), done: false });
+    } else if (entry && typeof entry === "object") {
+      const obj = entry as { text?: unknown; done?: unknown };
+      if (typeof obj.text === "string") out.push({ text: obj.text.trim(), done: obj.done === true });
+    }
+  }
+  return out.length > 0 ? out : null;
 }
 
 /** One-line rendering of a prompt for picker rows and summary lists.
@@ -267,6 +342,15 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
   // `verify` is the legacy alias for `acceptance`; normalize on write unless
   // `acceptance` is already set.
   if (!list(front.acceptance) && list(front.verify)) lines.push(`acceptance: ${list(front.verify)}`);
+  const todoItems = Array.isArray(front.todo)
+    ? (front.todo as TodoItem[]).filter((item) => item && typeof item.text === "string")
+    : [];
+  if (todoItems.length > 0) {
+    lines.push("todo:");
+    for (const item of todoItems) {
+      lines.push(`  - [${item.done ? "x" : " "}] ${item.text.trim()}`);
+    }
+  }
   const text = body.trim();
   return lines.length > 0 ? `${lines.join("\n")}\n\n${text}\n` : `${text}\n`;
 }
@@ -370,23 +454,9 @@ export function ensureIssueTodo(layout: Layout, slug: string): Issue | null {
 export function updateIssueTodo(abs: string, items: readonly TodoItem[]): void {
   const text = readFileSync(abs, "utf8");
   const { front, body } = parseIssueFile(text);
-  const todo = renderIssueTodo(items);
-  const lines = body.split("\n");
-  const start = lines.findIndex((line) => /^## Todo\b/.test(line));
-  let nextBody: string;
-  if (start >= 0) {
-    let end = lines.length;
-    for (let i = start + 1; i < lines.length; i += 1) {
-      if (/^## /.test(lines[i] ?? "")) {
-        end = i;
-        break;
-      }
-    }
-    lines.splice(start, end - start, ...todo.split("\n"));
-    nextBody = lines.join("\n");
-  } else {
-    nextBody = `${body.trimEnd()}\n\n${todo}`;
-  }
+  front.todo = items.map((item) => ({ text: item.text, done: item.done }));
+  // The Todo now lives in the header; strip any legacy body section.
+  const nextBody = stripTodoSection(body);
   writeFileSync(abs, serializeIssueFile(front, nextBody), "utf8");
 }
 
@@ -420,7 +490,7 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
           : [],
     review: toReview(front.review),
     verification: front.verification === "verified" ? "verified" : "direct",
-    todo: parseIssueTodo(body),
+    todo: normalizeTodo(front.todo) ?? parseIssueTodo(body),
     verify: toAcceptance(front),
     acceptance: toAcceptance(front),
     title: titleOf(slug, body),
@@ -470,6 +540,7 @@ export interface NewIssueInput {
   verification?: "direct" | "verified";
   acceptance?: string[];
   verify?: string[];
+  todo?: TodoItem[] | string[];
   body?: string;
 }
 
@@ -523,8 +594,23 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     : input.title?.trim()
       ? `# ${input.title.trim()}\n\n${prompt}`
       : prompt;
-  if (parseIssueTodo(body).length === 0) {
-    body = `${body.trimEnd()}\n\n${renderIssueTodo(defaultIssueTodo(input.kind, verification))}`;
+  // An explicit todo input wins; otherwise fold a legacy `## Todo` body
+  // section into the header, or seed the deterministic fallback.
+  let inputTodo: TodoItem[] | null = null;
+  if (input.todo && input.todo.length > 0) {
+    inputTodo = input.todo.map((entry) =>
+      typeof entry === "string" ? { text: entry, done: false } : (entry as TodoItem),
+    );
+  }
+  const parsedTodo = parseIssueTodo(body);
+  if (inputTodo) {
+    front.todo = inputTodo;
+    body = stripTodoSection(body);
+  } else if (parsedTodo.length > 0) {
+    front.todo = parsedTodo;
+    body = stripTodoSection(body);
+  } else {
+    front.todo = defaultIssueTodo(input.kind, verification);
   }
   const dir = issueDir(layout, input.kind, status);
   mkdirSync(dir, { recursive: true });
