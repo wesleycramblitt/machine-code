@@ -1,12 +1,10 @@
 priority: high
-review: none
-verification: direct
 tags: tui, new-runs, composer, selection
 acceptance: script:build
 todo:
-  - [ ] Anchor the context-panel cursor by item key instead of raw index
-  - [ ] Stop reordering rows when a mode/include toggle changes state
-  - [ ] Finish
+  - [x] Anchor the context-panel cursor by item key instead of raw index (state + composer + tui + keys)
+  - [x] Stop reordering rows when a mode/include toggle changes state (drop skill sort, drop attached/available partition)
+  - [x] Finish — verify / filter, tab switch, ^D/^U paging still work
 
 # Keep the composer context-panel selection stable across toggles
 

@@ -129,6 +129,8 @@ export interface TuiState {
   newRunColon: boolean;
   newRunContextTab: number;
   newRunContextItem: number;
+  /** Key of the row the cursor is anchored to; the render resolves it to an index each frame so toggles cannot move the cursor to a different row. */
+  newRunContextItemKey: string | null;
   newRunContextItemKeys: string[];
   newRunContextItemAvailable: boolean[];
   newRunContextSectionKey: string;
@@ -248,6 +250,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunColon: false,
     newRunContextTab: 0,
     newRunContextItem: 0,
+    newRunContextItemKey: null,
     newRunContextItemKeys: [],
     newRunContextItemAvailable: [],
     newRunContextSectionKey: "",
