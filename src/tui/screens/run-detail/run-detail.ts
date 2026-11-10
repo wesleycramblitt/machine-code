@@ -121,9 +121,8 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         : []),
       ...(section === "timeline"
         ? [
-            hint("j/k", "events"),
+            hint("j/k", expanded.has(`${s.id}:${eventSel}`) ? "scroll" : "events", Y),
             hint("space", "expand", G),
-            hint("^D/^U", "scroll", Y),
             hint("F", `follow ${timelineFollow ? "ON" : "OFF"}`, Y),
             hint("v", timelineVerbose ? "all" : "key events"),
           ]
@@ -438,7 +437,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         if (start < eventScroll) eventScroll = start;
       } else {
         // A long block starts at the top so the first output lines are visible.
-        // ^D/^U move the line offset inside the block.
+        // j/k move the line offset inside the block.
         const maxBodyScroll = Math.max(0, end - start - visibleCount);
         eventBodyScroll = Math.max(0, Math.min(eventBodyScroll, maxBodyScroll));
         eventScroll = start + eventBodyScroll;
