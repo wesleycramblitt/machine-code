@@ -526,9 +526,24 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const fixed = (item as { fixed?: boolean }).fixed === true;
     const available = isShownAvailable(item);
     const isExcluded = !fixed && !available && (sectionOff || excluded.has(item.key));
-    const mark = isExcluded ? `${RED}✕${R}` : available ? `${D}·${R}` : item.exists ? `${G}✓${R}` : `${Y}?${R}`;
-    const count = `${D}${fmtTokens(tokensForChars(item.chars))}${available ? " avail" : ""}${R}`;
-    const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 30))}${R} ${count}`;
+    // Fixed rows (agent prompt lines, core tools) are always sent and cannot
+    // be toggled: the neutral dim dot reads as static text, not a checkbox.
+    const mark = fixed
+      ? `${D}·${R}`
+      : isExcluded
+        ? `${RED}✕${R}`
+        : available
+          ? `${D}·${R}`
+          : item.exists
+            ? `${G}✓${R}`
+            : `${Y}?${R}`;
+    // Prompt lines carry no token count: they are counted:false and their
+    // chars feed the section header total, not a per-row column.
+    const showCount = !fixed || item.key.startsWith("core-tool:");
+    const count = showCount
+      ? `${D}${fmtTokens(tokensForChars(item.chars))}${available ? " avail" : ""}${R}`
+      : "";
+    const line = `  ${mark} ${W}${trunc(item.text, Math.max(12, cols - 30))}${R}${count ? ` ${count}` : ""}`;
     itemLines.push(panelLine(line, index === contextItem));
   }
   const remainingItems = shownItems.length - (itemStart + visibleItems.length);
@@ -538,6 +553,9 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   }
   const compact = (key: string, label: string, tone: string): string =>
     `${B}${tone}${key}${R} ${D}${label}${R}`;
+  // The Agent Prompt tab is view-only: its rows are fixed and the space
+  // handler refuses them, so the footer must not advertise a toggle.
+  const isPromptTab = activeSection.sectionKey === "section:prompt";
   const contextCommands = panelLine(
     joinCommands([
       compact("h/l", "tabs", Y),
@@ -545,7 +563,9 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       compact("/", "filter", BL),
       activeSection.sectionKey === "section:skills"
         ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
-        : `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
+        : isPromptTab
+          ? ""
+          : `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
       !insert && activeSection.sectionKey === "section:issues"
         ? command("i", "Issue", issueValue, run.item ? C : GR)
         : "",
