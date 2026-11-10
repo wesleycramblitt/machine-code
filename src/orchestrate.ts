@@ -26,7 +26,7 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { buildRepoMap } from "./map/deterministic.js";
-import { suggestTaskFiles } from "./map/suggest.js";
+import { suggestTaskFilesFromMap } from "./map/suggest.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
@@ -183,9 +183,12 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   // The deterministic path must assemble the same inherited context as a
   // direct run: issues index, knowledge, skills, plus any explicit include.
   const verification = packet.verification ?? "direct";
-  await buildRepoMap(layout.repoRoot);
+  // Use the freshly built map directly: re-reading it from disk re-opens a
+  // stale/null window between the build and the suggestion pass.
+  const builtMap = await buildRepoMap(layout.repoRoot);
   const suggestionRequest = packet.goal.split(/\n## Todo\b/)[0]!.trim();
-  const suggested = suggestTaskFiles(layout.repoRoot, suggestionRequest, 3).map((entry) => entry.path);
+  const suggested = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 3).map((entry) => entry.path);
+  recorder.event("suggestions", { files: suggested, requestChars: suggestionRequest.length });
   const include: ContextInclude | undefined =
     input.include || suggested.length > 0
       ? {

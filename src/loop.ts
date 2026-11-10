@@ -726,6 +726,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     let turnCapHit = false;
     let loopBlocked = false;
     let loopBlockedReason: "repeat" | "loop" | undefined;
+    // Unknown tools (hallucinated bash/git/...) never reach the per-tool
+    // execute wrapper, so the evidence detector cannot see them. Count
+    // consecutive identical unknown calls here instead: three in a row is a
+    // stuck model, not exploration.
+    let unknownToolName: string | null = null;
+    let unknownToolStreak = 0;
     /** Tool contract health: enough failures with no work is not "completed". */
     let toolErrors = 0;
     let substantiveSuccesses = 0;
@@ -1009,6 +1015,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       } as AgentTool;
     });
     const toolChars = toolDefinitionChars(tools);
+    const knownToolNames = new Set(tools.map((tool) => tool.name));
     recorder.event("tools_registered", {
       names: tools.map((tool) => tool.name),
       constrained: tools.filter((tool) => tool.constrainedSampling).map((tool) => tool.name),
@@ -1443,6 +1450,30 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           break;
         }
         case "tool_execution_end": {
+          if (!knownToolNames.has(event.toolName)) {
+            // Hallucinated tool: pi-agent-core rejects it before the execute
+            // wrapper (and the evidence detector) ever runs. Three identical
+            // unknown calls in a row ends the run the same way a loop does.
+            if (event.toolName === unknownToolName) unknownToolStreak += 1;
+            else {
+              unknownToolName = event.toolName;
+              unknownToolStreak = 1;
+            }
+            if (unknownToolStreak >= 3 && !loopBlocked) {
+              loopBlocked = true;
+              loopBlockedReason = "loop";
+              recorder.event("loop_blocked", {
+                tool: event.toolName,
+                reason: "unknown-tool",
+                streak: unknownToolStreak,
+                key: `unknown-tool:${event.toolName}`,
+              });
+              agent?.abort();
+            }
+          } else {
+            unknownToolName = null;
+            unknownToolStreak = 0;
+          }
           if (event.isError) {
             toolErrors += 1;
           } else {

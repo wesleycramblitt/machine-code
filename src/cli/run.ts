@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
-import { suggestTaskFiles } from "../map/suggest.js";
+import { suggestTaskFilesFromMap } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -320,17 +320,22 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // Suggestions are context files. Attach them for CLI runs that did not
   // supply an explicit include; the composer shows the same suggestions and
   // lets the user choose instead. No second `## Context` prompt block.
+  // Suggestion file list, computed up front and recorded once the recorder
+  // exists below. Best effort; the run still has the issue without it.
+  let suggestedFiles: string[] = [];
   if (contextIncludeFlag === undefined) {
     try {
       const { buildRepoMap } = await import("../map/deterministic.js");
-      await buildRepoMap(l.repoRoot);
+      // Use the freshly built map directly: re-reading it from disk re-opens
+      // a stale/null window between the build and the suggestion pass.
+      const builtMap = await buildRepoMap(l.repoRoot);
       const suggestionRequest = (attachedIssue?.prompt ?? request).split(/\n## Todo\b/)[0]!.trim();
-      const suggested = suggestTaskFiles(l.repoRoot, suggestionRequest, 3)
+      suggestedFiles = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 3)
         .map((entry) => entry.path)
         .filter((path) => path !== attachedIssue?.rel);
-      if (suggested.length > 0) {
+      if (suggestedFiles.length > 0) {
         contextInclude = contextInclude ?? {};
-        contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...suggested])];
+        contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...suggestedFiles])];
       }
     } catch {
       // Suggestions are best effort; the run still has the issue.
@@ -523,6 +528,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   });
   registerProject(l.home, l.repoRoot);
   if (itemSlug) recorder.event("item_linked", { slug: itemSlug });
+  if (contextIncludeFlag === undefined) recorder.event("suggestions", { files: suggestedFiles });
   for (const result of probeResults) {
     recorder.event("availability_probe", {
       key: result.key,
