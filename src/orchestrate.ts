@@ -26,7 +26,7 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { buildRepoMap } from "./map/deterministic.js";
-import { suggestTaskFilesFromMap } from "./map/suggest.js";
+import { extractAnchoredFiles, suggestTaskFilesFromMap } from "./map/suggest.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
@@ -188,6 +188,9 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   const builtMap = await buildRepoMap(layout.repoRoot);
   const suggestionRequest = packet.goal.split(/\n## Todo\b/)[0]!.trim();
   const suggested = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 3).map((entry) => entry.path);
+  for (const anchored of extractAnchoredFiles(layout.repoRoot, suggestionRequest)) {
+    if (!suggested.includes(anchored)) suggested.push(anchored);
+  }
   // Determinism witness: files:[] with a non-empty map and request means the
   // ranker filtered everything; mapFiles:0 means no map. Never silently empty.
   recorder.event("suggestions", {
@@ -505,6 +508,9 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     const researchSuggested = suggestTaskFilesFromMap(researchMap.map, researchRequest, 5).map(
       (entry) => entry.path,
     );
+    for (const anchored of extractAnchoredFiles(layout.repoRoot, researchRequest)) {
+      if (!researchSuggested.includes(anchored)) researchSuggested.push(anchored);
+    }
     recorder.event("suggestions", {
       files: researchSuggested,
       requestChars: researchRequest.length,

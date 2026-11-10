@@ -754,7 +754,7 @@ function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknow
 }
 
 const FileEditEntry = Type.Object({
-  path: Type.String({ description: "File path, relative to the worktree root." }),
+  path: Type.Optional(Type.String({ description: "File path, relative to the worktree root." })),
   oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
   newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString." })),
   edits: Type.Optional(
@@ -772,7 +772,7 @@ const FileEditEntry = Type.Object({
   replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope (single-hunk form)." })),
 });
 
-const EditParams = Type.Object({  path: Type.String({ description: "File path, relative to the worktree root." }),
+const EditParams = Type.Object({  path: Type.Optional(Type.String({ description: "File path, relative to the worktree root (single-file form; omit when using files[])." })),
   oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
   newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form)." })),
   edits: Type.Optional(
@@ -973,7 +973,7 @@ interface PlannedFileEdit {
 async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<PlannedFileEdit | { error: string }> {
   const pathText = typeof spec.path === "string" ? spec.path.trim() : "";
   if (pathText === "" || pathText.toLowerCase() === "null" || pathText.toLowerCase() === "undefined") {
-    return { error: "entry is missing path" };
+    return { error: "edit needs a file path (single-file path, or path in each files[] entry)" };
   }
   // A single-hunk call and an edits array are the same operation, not
   // alternatives: apply the single hunk first, then the array, in one
@@ -1155,9 +1155,9 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           const plans: PlannedFileEdit[] = [];
           const errors: string[] = [];
-          for (const file of params.files) {
-            const planned = await planSingleFileEdit(ctx.root, file);
-            if ("error" in planned) errors.push(`${file.path}: ${planned.error}`);
+          for (const [index, file] of params.files.entries()) {
+            const planned = await planSingleFileEdit(ctx.root, { ...file, path: file.path ?? "" });
+            if ("error" in planned) errors.push(`files[${index}]${file.path ? ` ${file.path}` : ""}: ${planned.error}`);
             else plans.push(planned);
           }
           if (errors.length > 0) {
@@ -1175,7 +1175,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           return ok(out.join("\n"));
         }
-        const planned = await planSingleFileEdit(ctx.root, params);
+        const planned = await planSingleFileEdit(ctx.root, { ...params, path: params.path ?? "" });
         if ("error" in planned) return fail(planned.error);
         writeFileSync(planned.abs, planned.next, "utf8");
         ctx.state?.noteMutation();

@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
-import { suggestTaskFilesFromMap } from "../map/suggest.js";
+import { extractAnchoredFiles, suggestTaskFilesFromMap } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -386,6 +386,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
       suggestedFiles = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 3)
         .map((entry) => entry.path)
         .filter((path) => path !== attachedIssue?.rel);
+      // Planned issues cite exact evidence locations (`path:line`); pinning
+      // them deletes the first discovery pass for well-specified tasks.
+      for (const anchored of extractAnchoredFiles(l.repoRoot, suggestionRequest)) {
+        if (anchored !== attachedIssue?.rel && !suggestedFiles.includes(anchored)) {
+          suggestedFiles.push(anchored);
+        }
+      }
       if (suggestedFiles.length > 0) {
         contextInclude = contextInclude ?? {};
         contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...suggestedFiles])];

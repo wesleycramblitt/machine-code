@@ -7,6 +7,8 @@
  * that exists only in unrelated docs is filler, not a hint, and must not be
  * allowed to outrank a real code match.
  */
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import { readCachedMap, type RepoMap } from "./deterministic.js";
 
 const STOPWORDS = new Set([
@@ -73,6 +75,31 @@ function firstLine(text: string, max = 120): string {
 
 function normalized(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Repo files named with line anchors in free text (`path/to/file.ts:123`).
+ * Research-planned issues cite exact evidence locations; pinning them up
+ * front deletes the first discovery pass. Only paths that exist on disk
+ * count, so version numbers and prose never match.
+ */
+export function extractAnchoredFiles(root: string, text: string, limit = 8): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const pattern =
+    /([\w\-.]+(?:\/[\w\-.]+)+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|cs|swift|scala|md|mdx|toml|json|yaml|yml|sh|css|html))(?:\s*:\s*\d+(?:\s*-\s*\d+)?)?/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null && found.length < limit) {
+    const rel = match[1]!;
+    if (seen.has(rel) || rel.includes("..")) continue;
+    seen.add(rel);
+    try {
+      if (statSync(join(root, rel)).isFile()) found.push(rel);
+    } catch {
+      // Not a repo file; ignore.
+    }
+  }
+  return found;
 }
 
 /** Rank map files for the request using paths, symbols, sections, and docs. */
