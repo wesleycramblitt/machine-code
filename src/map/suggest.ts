@@ -7,7 +7,7 @@
  * that exists only in unrelated docs is filler, not a hint, and must not be
  * allowed to outrank a real code match.
  */
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readCachedMap, type MapSymbol, type RepoMap } from "./deterministic.js";
 
@@ -29,6 +29,10 @@ export interface SuggestedFile {
   score: number;
   /** Request terms and symbol/section names that matched, for hint display. */
   matched: string[];
+  /** Raw request tokens with code or prose hits on this file. */
+  keywords: string[];
+  /** Symbol name → raw tokens that surfaced it. */
+  symbolVia: Record<string, string[]>;
 }
 
 /** Lowercase words as they appear in a request. */
@@ -258,8 +262,14 @@ export function suggestTaskFilesFromMap(
     let reason = "";
     let codeHit = false;
     const matched: string[] = [];
+    const codeTokens: string[] = [];
+    const proseTokens: string[] = [];
+    const viaMap = new Map<string, string[]>();
     const match = (label: string): void => {
       if (matched.length < 6 && !matched.includes(label)) matched.push(label);
+    };
+    const noteCode = (raw: string): void => {
+      if (!codeTokens.includes(raw)) codeTokens.push(raw);
     };
     for (const token of wantedCode) {
       const weight = idf(token.stem) ** 2;
@@ -270,6 +280,7 @@ export function suggestTaskFilesFromMap(
         score += 5 * weight;
         pathScore += 5 * weight;
         codeHit = true;
+        noteCode(token.raw);
         // No reason here: the path is self-evident, and naming it would
         // shadow the distinctive evidence (a bare path as its own reason
         // says nothing). Symbols, sections, and phrases name the match;
@@ -278,10 +289,14 @@ export function suggestTaskFilesFromMap(
       if (symbolHit) {
         score += 2 * weight;
         codeHit = true;
+        noteCode(token.raw);
         const symbol = file.symbols.find((entry) => parts(entry.name).some((part) => related(stem(part), token.stem)));
         if (symbol) {
           if (!reason) reason = `${symbol.name} symbol`;
           match(symbol.name);
+          const via = viaMap.get(symbol.name) ?? [];
+          if (!via.includes(token.raw)) via.push(token.raw);
+          viaMap.set(symbol.name, via);
         } else {
           match(token.raw);
         }
@@ -289,6 +304,7 @@ export function suggestTaskFilesFromMap(
       if (sectionHit) {
         score += 1.5 * weight;
         codeHit = true;
+        noteCode(token.raw);
         const heading = (file.sections ?? []).find((section) => related(stem(section), token.stem) || includesRaw(section.toLowerCase(), token.raw));
         if (heading) {
           reason ||= `section: ${heading}`;
@@ -308,6 +324,7 @@ export function suggestTaskFilesFromMap(
       )) {
         score += 1.5 * weight;
         if (!reason) reason = firstLine(file.doc ?? "");
+        if (!proseTokens.includes(token.raw)) proseTokens.push(token.raw);
       }
     }
     // A top-level area named in the request ("tui", "cli") is a useful prior.
@@ -334,6 +351,8 @@ export function suggestTaskFilesFromMap(
       pathScore,
       codeHit,
       matched,
+      keywords: [...codeTokens, ...proseTokens.filter((raw) => !codeTokens.includes(raw))].slice(0, 8),
+      symbolVia: Object.fromEntries(viaMap),
     };
   });
 
@@ -369,9 +388,11 @@ export interface HintSymbol {
   kind: string;
   start: number;
   end: number;
+  /** Raw request tokens that surfaced this symbol. */
+  via: string[];
 }
 
-/** One suggested file: structure and matched evidence, not full text. */
+/** One suggested file: task evidence in one place — keywords, lines, bodies. */
 export interface FileHint {
   path: string;
   /** Matched symbols first, then file order. Capped. */
@@ -385,9 +406,20 @@ export interface FileHint {
   imports: string[];
   /** Files that import this one. */
   importedBy: string[];
+  /** Raw request tokens with code or prose hits on this file: the body-grep set. */
+  keywords: string[];
+  /** Keyword → body lines, populated by enrichHints (run paths only). */
+  keywordLines?: Array<{ keyword: string; lines: number[]; hits: number }>;
+  /** Numbered bodies of matched symbols, populated by enrichHints. */
+  bodies?: Array<{ symbol: string; start: number; text: string }>;
 }
 
-function hintSymbols(file: { symbols: MapSymbol[] }, matched: ReadonlySet<string>, cap: number): HintSymbol[] {
+function hintSymbols(
+  file: { symbols: MapSymbol[] },
+  matched: ReadonlySet<string>,
+  cap: number,
+  via: Readonly<Record<string, string[]>> = {},
+): HintSymbol[] {
   const ordered = [...file.symbols].sort(
     (a, b) => (matched.has(a.name) ? 0 : 1) - (matched.has(b.name) ? 0 : 1),
   );
@@ -396,6 +428,7 @@ function hintSymbols(file: { symbols: MapSymbol[] }, matched: ReadonlySet<string
     kind: symbol.kind,
     start: symbol.line,
     end: Math.max(symbol.line, symbol.end),
+    via: [...(via[symbol.name] ?? [])],
   }));
 }
 
@@ -425,10 +458,11 @@ export function suggestHints(args: {
     }
   }
   const out: FileHint[] = [];
-  const push = (path: string, reason: string, matched: string[], cited: boolean): void => {
+  const push = (entry: SuggestedFile, reason: string, matched: string[], cited: boolean): void => {
+    const path = entry.path;
     if (excluded.has(path) || out.some((hint) => hint.path === path)) return;
     const file = byPath.get(path);
-    const symbols = file ? hintSymbols(file, new Set(matched), cited ? 8 : 5) : [];
+    const symbols = file ? hintSymbols(file, new Set(matched), cited ? 8 : 5, entry.symbolVia) : [];
     out.push({
       path,
       symbols,
@@ -438,39 +472,128 @@ export function suggestHints(args: {
       small: (file?.bytes ?? Number.POSITIVE_INFINITY) < SMALL_HINT_BYTES,
       imports: [...(file?.imports ?? [])],
       importedBy: [...(importedBy.get(path) ?? [])],
+      keywords: [...entry.keywords],
     });
   };
   for (const entry of suggestTaskFilesFromMap(map, request, limit)) {
-    push(entry.path, entry.reason, entry.matched, false);
+    push(entry, entry.reason, entry.matched, false);
   }
   if (args.repoRoot) {
     for (const anchored of extractAnchoredFiles(args.repoRoot, request)) {
-      push(anchored, "cited in the request", ["cited"], true);
+      push({ path: anchored, reason: "", score: 0, matched: [], keywords: [], symbolVia: {} }, "cited in the request", ["cited"], true);
     }
   }
   for (const anchored of extractBareAnchors(map, request)) {
-    push(anchored, "cited in the request", ["cited"], true);
+    push({ path: anchored, reason: "", score: 0, matched: [], keywords: [], symbolVia: {} }, "cited in the request", ["cited"], true);
   }
   return out;
 }
 
-/** Render outline-only hints as a compact context block. Whole files travel
- * through the normal file path; only outlines render here. */
+/** Body-evidence caps: keyword lines stay a pointer, symbol bodies stay small. */
+const KEYWORD_LINES_SHOWN = 3;
+/** Keywords hitting more lines than this do not localize: omit the lines. */
+const KEYWORD_LINES_MAX_HITS = 20;
+const HINT_BODY_MAX_LINES = 200;
+const HINT_BODIES_MAX_BYTES = 12 * 1024;
+
+/**
+ * Fill in body evidence for run prompts: keyword → body line numbers, plus
+ * numbered bodies of the matched symbols (edit-ready anchors). Small files
+ * are skipped — they already travel whole through the file path. TUI rows
+ * skip this (per-frame disk reads); run prompts must not.
+ */
+export function enrichHints(hints: readonly FileHint[], root: string): FileHint[] {
+  return hints.map((hint) => {
+    if (hint.small || hint.keywords.length === 0) return hint;
+    let raw: string;
+    try {
+      raw = readFileSync(join(root, hint.path), "utf8");
+    } catch {
+      return hint;
+    }
+    const lines = raw.split("\n");
+    const keywordLines: Array<{ keyword: string; lines: number[]; hits: number }> = [];
+    for (const keyword of hint.keywords) {
+      const hits: number[] = [];
+      if (keyword.length >= 4) {
+        const needle = keyword.toLowerCase();
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i]!.toLowerCase().includes(needle)) hits.push(i + 1);
+        }
+      } else {
+        // Short tokens ("run") substring-match everywhere ("pruning");
+        // word boundaries keep them honest.
+        let pattern: RegExp;
+        try {
+          pattern = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+        } catch {
+          continue;
+        }
+        for (let i = 0; i < lines.length; i++) {
+          if (pattern.test(lines[i]!)) hits.push(i + 1);
+        }
+      }
+      if (hits.length > 0 && hits.length <= KEYWORD_LINES_MAX_HITS) {
+        keywordLines.push({ keyword, lines: hits.slice(0, KEYWORD_LINES_SHOWN), hits: hits.length });
+      }
+    }
+    const bodies: Array<{ symbol: string; start: number; text: string }> = [];
+    let used = 0;
+    for (const symbol of hint.symbols) {
+      const height = symbol.end - symbol.start + 1;
+      if (height <= 0 || height > HINT_BODY_MAX_LINES) continue;
+      const text = lines
+        .slice(symbol.start - 1, symbol.end)
+        .map((line, index) => `${symbol.start + index}: ${line}`)
+        .join("\n");
+      const cost = Buffer.byteLength(text, "utf8");
+      if (used + cost > HINT_BODIES_MAX_BYTES) continue;
+      used += cost;
+      bodies.push({ symbol: symbol.name, start: symbol.start, text });
+    }
+    return { ...hint, keywordLines, bodies };
+  });
+}
+
+/**
+ * Render hints as the task-evidence block: per file, why it matched, which
+ * keywords hit which symbols and body lines, numbered bodies of the matched
+ * symbols (edit-ready — a read can be skipped), relations, and the remaining
+ * outline. One place, everything the first prompt needs.
+ */
 export function renderHints(hints: readonly FileHint[]): string {
   const outlined = hints.filter((hint) => !hint.small);
   if (outlined.length === 0) return "";
   const blocks: string[] = [
-    "Suggested files (outlines, not full text — read { \"path\", \"symbol\": \"<name>\" } for a block; files under 4KB arrive whole):",
+    "Suggested files (evidence in one place — numbered bodies are edit-ready, read only what is missing; files under 4KB arrive whole):",
   ];
   for (const hint of outlined) {
-    const matched = hint.matched.length > 0 ? ` · matched: ${hint.matched.slice(0, 4).join(", ")}` : "";
+    blocks.push(`### ${hint.path} — ${hint.reason}`);
+    const evidence: string[] = [];
+    const evidenced = new Set<string>();
+    for (const symbol of hint.symbols) {
+      if (symbol.via.length === 0) continue;
+      evidenced.add(symbol.name);
+      evidence.push(`"${symbol.via.join('", "')}" → ${symbol.kind} ${symbol.name} (${symbol.start}-${symbol.end})`);
+    }
+    for (const entry of hint.keywordLines ?? []) {
+      if (evidence.some((line) => line.startsWith(`"${entry.keyword}"`))) continue;
+      const extra = entry.hits > entry.lines.length ? ` (+${entry.hits - entry.lines.length} more)` : "";
+      evidence.push(`"${entry.keyword}" → lines ${entry.lines.join(", ")}${extra}`);
+    }
+    if (evidence.length > 0) blocks.push(`  ${evidence.join("; ")}`);
+    for (const body of hint.bodies ?? []) {
+      blocks.push(body.text);
+    }
     const relations = [
       ...(hint.imports.length > 0 ? [`imports: ${hint.imports.slice(0, 6).join(", ")}${hint.imports.length > 6 ? ", …" : ""}`] : []),
       ...(hint.importedBy.length > 0 ? [`imported by: ${hint.importedBy.slice(0, 6).join(", ")}${hint.importedBy.length > 6 ? ", …" : ""}`] : []),
     ].join(" · ");
-    blocks.push(`${hint.path}${matched}${relations ? `\n  ${relations}` : ""}`);
-    for (const symbol of hint.symbols) {
-      blocks.push(`  ${symbol.kind} ${symbol.name} (${symbol.start}-${symbol.end})`);
+    if (relations) blocks.push(`  ${relations}`);
+    const bodied = new Set((hint.bodies ?? []).map((body) => body.symbol));
+    const rest = hint.symbols.filter((symbol) => !bodied.has(symbol.name) && !evidenced.has(symbol.name));
+    if (rest.length > 0) {
+      blocks.push(`  also: ${rest.map((symbol) => `${symbol.kind} ${symbol.name} (${symbol.start}-${symbol.end})`).join(", ")}`);
     }
   }
   return blocks.join("\n");

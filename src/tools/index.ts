@@ -304,18 +304,10 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         const cached = ctx.state?.cachedRead(cacheKey, fileSig);
         // A cache hit means these exact bytes are already in the run's
         // working context. Say so outright: otherwise a re-read looks like
-        // progress and the model keeps paging what it holds.
+        // progress and the model keeps paging what it holds. Bytes are
+        // always served — never denied — with the note as the nudge.
         if (cached !== null && cached !== undefined) {
           return ok(`${cached}\n[already held from earlier in this run — no new bytes]`);
-        }
-        // Fully seeded files are already in context whole and numbered. Any
-        // re-read shape (bare, ranged, symbol) re-dumps held bytes, so deny
-        // them all while the signature matches; an edit lifts the denial.
-        if (params.allow_large !== true && ctx.state?.isSeededFull(params.path, fileSig)) {
-          return ok(
-            `${params.path} is already in this run's context in full with line numbers — use those bytes. ` +
-              `Read only what an edit changed (the edit quotes it), never a re-read of the whole file.`,
-          );
         }
         const raw = readFileSync(abs, "utf8");
         const lines = raw.split("\n");
@@ -406,7 +398,6 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
                 capBytes,
               );
               parts.push(`### ${params.path}:${range.start}-${range.end} (${name})\n${page.text}`);
-              ctx.state?.markRepeat(symbolReadKey(params.path, name));
               continue;
             }
             const found = findSymbolLine(lines, name);
@@ -551,7 +542,6 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             limit = Math.max(1, range.end - range.start + 1);
             header = `${params.path}:${range.start}-${range.end} (${range.name})`;
             singleResolved = true;
-            if (params.symbol) ctx.state?.markRepeat(symbolReadKey(params.path, range.name));
           }
         }
 
@@ -586,14 +576,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             // request burns the transcript and fences the whole symbol.
             // Serve the window below; the window path names this block.
             if (spanBytes <= Math.min(capBytes, READ_EXPAND_MAX_BYTES)) {
-              const key = symbolReadKey(params.path, enclosing.name);
-              if (ctx.state?.repeatSeen(key)) {
-                return ok(
-                  `[${enclosing.name} in ${params.path} already returned earlier in this run — see above]`,
-                );
-              }
               const page = numberLinesCapped(lines, enclosing.start, enclosing.end - enclosing.start + 1, capBytes);
-              ctx.state?.markRepeat(key);
               return remember(
                 `### ${params.path}:${enclosing.start}-${enclosing.end} (${enclosing.name}; expanded from lines ${reqStart}-${Math.min(reqEnd, lines.length)} to the enclosing block)\n${page.text}`,
                 "symbol",
@@ -730,7 +713,6 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
         }
         mkdirSync(dirname(abs), { recursive: true });
         writeFileSync(abs, params.content, "utf8");
-        ctx.state?.noteMutation();
         return ok(`wrote ${params.path} (${Buffer.byteLength(params.content, "utf8")} bytes)`);
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
@@ -862,36 +844,6 @@ const EditParams = Type.Object({  path: Type.Optional(Type.String({ description:
     }),
   ),
 });
-
-/** Stable serialization for repeat-call keys: sorted keys, recursive, so
- *  identical calls hash identically regardless of field order. */
-function stableArgs(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableArgs).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableArgs(record[key])}`)
-      .join(",")}}`;
-  }
-  const flat = JSON.stringify(value);
-  return flat === undefined ? "null" : flat;
-}
-
-/**
- * Identical-repeat suppression for idempotent discovery calls. Returns a
- * one-line note when the exact call already served at the current mutation;
- * otherwise marks it and returns null so execution proceeds. Marks are
- * versioned by harness mutations, so any edit/write re-arms every key.
- */
-function checkRepeat(ctx: ToolContext, tool: string, params: unknown): AgentToolResult<undefined> | null {
-  const key = `${tool}:${stableArgs(params)}`;
-  if (ctx.state?.repeatSeen(key)) {
-    return ok("[already returned earlier in this run — arguments unchanged and nothing edited since; see above]");
-  }
-  ctx.state?.markRepeat(key);
-  return null;
-}
 
 /** Whitespace-collapsed view plus a map back to original offsets. Models copy
  * read output with different indentation, so an exact miss can still be a
@@ -1030,12 +982,6 @@ function renderEditResult(path: string, next: string, changes: FileChange[], cap
     parts.push(text);
   }
   return parts.join("\n");
-}
-
-/** Stable key for one symbol's block, shared by explicit symbol reads and
- *  auto-expanded windows so every form deduplicates against the same mark. */
-function symbolReadKey(path: string, name: string): string {
-  return `read:${stableArgs({ path, symbol: name })}`;
 }
 
 /**
@@ -1347,7 +1293,6 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
             return fail(`nothing applied — ${errors.length} file(s) failed validation:\n${errors.join("\n")}`);
           }
           for (const plan of plans) writeFileSync(plan.abs, plan.next, "utf8");
-          ctx.state?.noteMutation();
           for (const plan of plans) {
             for (const change of plan.changes) {
               if (change.atLine === undefined) continue;
@@ -1376,7 +1321,6 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         const planned = await planSingleFileEdit(ctx.root, { ...params, path: params.path ?? "" });
         if ("error" in planned) return fail(planned.error);
         writeFileSync(planned.abs, planned.next, "utf8");
-        ctx.state?.noteMutation();
         for (const change of planned.changes) {
           if (change.atLine === undefined) continue;
           const height = change.newText ? change.newText.split("\n").length : 1;
@@ -1525,8 +1469,6 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     parameters: SearchParams,
     prepareArguments: (args) => cleanSearchArgs(args) as Static<typeof SearchParams>,
     async execute(_id, params: Static<typeof SearchParams>) {
-      const repeat = checkRepeat(ctx, "search", params);
-      if (repeat) return repeat;
       const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
       // `mode` is intentionally absent from the model-visible schema: the
       // harness routes every query itself. It is still honored when present
@@ -2228,8 +2170,6 @@ export function mapTool(ctx: ToolContext): AgentTool<typeof MapParams> {
     parameters: MapParams,
     prepareArguments: (args) => cleanMapArgs(args) as Static<typeof MapParams>,
     async execute(id, params: Static<typeof MapParams>) {
-      const repeat = checkRepeat(ctx, "map", params);
-      if (repeat) return repeat;
       const search = searchTool(ctx);
       const mode = MAP_MODES[params.action];
       // Path-oriented actions get one routing accommodation the search tool
@@ -2614,8 +2554,6 @@ export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
     parameters: GrepParams,
     prepareArguments: (args) => cleanOptionalArgs(args) as Static<typeof GrepParams>,
     async execute(_id, params: Static<typeof GrepParams>) {
-      const repeat = checkRepeat(ctx, "grep", params);
-      if (repeat) return repeat;
       try {
         const scope = params.path ? resolveWithin(ctx.root, params.path) : ctx.root;
         let scopeIsFile = false;

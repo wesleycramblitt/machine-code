@@ -26,7 +26,7 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { buildRepoMap } from "./map/deterministic.js";
-import { renderHints, suggestHints } from "./map/suggest.js";
+import { enrichHints, renderHints, suggestHints } from "./map/suggest.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
@@ -60,8 +60,6 @@ export interface OrchestrateInput {
   contextText?: string;
   /** Repo-relative files pinned into the working set before the first model call. */
   seedFiles?: string[];
-  /** Repo-relative files inlined whole in the assembled context (read-denied while unchanged). */
-  seededFull?: string[];
   /** Rank + inline suggested files (default true). False skips suggestions; explicit includes still apply. */
   hints?: boolean;
   /** Skip the deterministic map and module index up front. */
@@ -109,8 +107,6 @@ export async function singleAgentRun(input: {
   contextText?: string;
   /** Repo-relative files pinned into the working set before the first model call. */
   seedFiles?: string[];
-  /** Repo-relative files inlined whole in the assembled context (read-denied while unchanged). */
-  seededFull?: string[];
   skipMap?: boolean;
   skipSemantic?: boolean;
   signal?: AbortSignal;
@@ -137,7 +133,6 @@ export async function singleAgentRun(input: {
     requireModel: input.requireModel,
     contextText: input.contextText,
     ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
-    ...(input.seededFull ? { seededFull: input.seededFull } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,
@@ -211,7 +206,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     });
     suggested = hints.map((hint) => hint.path);
     hintedSmall = hints.filter((hint) => hint.small).map((hint) => hint.path);
-    hintOutlines = renderHints(hints);
+    hintOutlines = renderHints(enrichHints(hints, layout.repoRoot));
   }
   // Determinism witness: files:[] with a non-empty map and request means the
   // ranker filtered everything; mapFiles:0 means no map. Never silently empty.
@@ -263,11 +258,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
       .filter((source) => source.kind === "file" && typeof source.ref === "string")
       .map((source) => source.ref as string),
   ];
-  // Fully inlined files need no re-read: the read tool denies them with a
-  // pointer while their bytes are unchanged. Trimmed sources stay readable.
-  const seededFull = contextBundle.sources
-    .filter((source) => source.kind === "file" && typeof source.ref === "string" && !source.truncated)
-    .map((source) => source.ref as string);
   const resolvedEngineer = resolveAgent(layout, "engineer", {
     agentPolicy: policy.agents.engineer,
     machineOverrides: machine.agents.engineer,
@@ -303,7 +293,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     // The issue's context files land in the working set up front, so the
     // first prompt already carries the code the deliverable names.
     ...(seedFiles.length > 0 ? { seedFiles: [...new Set(seedFiles)] } : {}),
-    ...(seededFull.length > 0 ? { seededFull: [...new Set(seededFull)] } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,
@@ -531,7 +520,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
   // not fishing. (Review runs carry caller-built context and skip this.)
   let researchContextText = input.contextText;
   let researchSeedFiles = input.seedFiles;
-  let researchSeededFull = input.seededFull;
   if (selectedName === "research" && input.hints !== false) {
     const researchMap = await buildRepoMap(layout.repoRoot);
     const researchRequest = input.request.split(/\n## Todo\b/)[0]!.trim();
@@ -548,7 +536,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       mapFiles: researchMap.map.files.length,
     });
     const researchSmall = researchHints.filter((hint) => hint.small).map((hint) => hint.path);
-    const researchOutlines = renderHints(researchHints);
+    const researchOutlines = renderHints(enrichHints(researchHints, layout.repoRoot));
     const researchFiles = [...new Set([...(input.seedFiles ?? []), ...researchSmall])];
     // Files the caller already pinned (and inlined) need no second copy:
     // assemble only the newly suggested ones, but pin the union.
@@ -584,12 +572,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       .map((source) => source.ref as string);
     const mergedSeeds = [...new Set([...(input.seedFiles ?? []), ...bundledFiles])];
     researchSeedFiles = mergedSeeds.length > 0 ? mergedSeeds : undefined;
-    // Fully inlined files (this bundle's plus the caller's) need no re-read.
-    const researchFull = researchBundle.sources
-      .filter((source) => source.kind === "file" && typeof source.ref === "string" && !source.truncated)
-      .map((source) => source.ref as string);
-    const mergedFull = [...new Set([...(input.seededFull ?? []), ...researchFull])];
-    researchSeededFull = mergedFull.length > 0 ? mergedFull : undefined;
   }
   const resolved = resolveAgent(layout, selectedName, {
     agentPolicy: policy.agents[selectedName],
@@ -620,7 +602,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     requireModel: input.requireModel,
     contextText: researchContextText,
     ...(researchSeedFiles ? { seedFiles: researchSeedFiles } : {}),
-    ...(researchSeededFull ? { seededFull: researchSeededFull } : {}),
     skipMap: input.skipMap,
     skipSemantic: input.skipSemantic,
     signal: input.signal,

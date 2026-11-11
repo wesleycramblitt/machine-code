@@ -306,76 +306,12 @@ export class RunStateStore {
     this.editSpans.set(path, mergeRanges(spans).slice(-8));
   }
   /**
-   * Files inlined whole and numbered in the assembled `## Context` block.
-   * A read of an unmodified seeded file re-dumps bytes the model holds, so
-   * the read tool answers those with a pointer instead. Keyed by file
-   * signature: any edit (or external change) lifts the denial.
+   * Files inlined whole and numbered in the assembled `## Context` block are
+   * still served from disk on re-read — a re-read means the context did not
+   * prevent it, and withholding bytes never fixes that. No denial gates.
    */
-  private seededFull = new Map<string, string>();
-
-  /** Mark repo-relative paths as fully inlined; signatures read from disk now. */
-  markSeededFullPaths(paths: readonly string[]): void {
-    if (!this.repoRoot) return;
-    for (const path of paths) {
-      try {
-        const abs = isAbsolute(path) ? path : join(this.repoRoot, path);
-        const stat = statSync(abs);
-        if (stat.isFile()) this.seededFull.set(path, `${stat.mtimeMs}:${stat.size}`);
-      } catch {
-        // A missing file gets no mark; reads proceed normally.
-      }
-    }
-  }
-
-  /** True when the path is fully inlined and unchanged since assembly. */
-  isSeededFull(path: string, fileSig?: string): boolean {
-    if (!fileSig) return false;
-    return this.seededFull.get(path) === fileSig;
-  }
   /** Exact acquired bytes for the full run; a read cache and prompt evidence. */
   private ledger = new Map<string, LedgerEntry>();
-  /**
-   * Repeat-call suppression for idempotent discovery tools. Marks are
-   * versioned by harness mutations: any successful edit/write invalidates
-   * every mark, so an identical repeat only suppresses when nothing the
-   * harness did could have changed the answer.
-   */
-  private repeatMarks = new Map<string, { seq: number; turn: number }>();
-  private mutationSeq = 0;
-  /**
-   * Tool results stay verbatim only for the last few turns; older bulk is
-   * summarized with a "re-run for full bytes" marker. A suppression mark
-   * that outlives its payload traps the model: the transcript says re-run,
-   * the tool says "see above", and "above" is a summary. Marks therefore
-   * expire a few turns after serving, so a re-read past the summary window
-   * serves bytes again instead of denying them.
-   */
-  private static readonly REPEAT_WINDOW_TURNS = 3;
-
-  /** Record a harness mutation (edit/write); re-arms every repeat mark. */
-  noteMutation(): void {
-    this.mutationSeq += 1;
-  }
-
-  /** Mark an idempotent call's stable key as served. */
-  markRepeat(key: string): void {
-    this.repeatMarks.set(key, { seq: this.mutationSeq, turn: this.currentTurn() });
-    if (this.repeatMarks.size > 200) {
-      const oldest = this.repeatMarks.keys().next().value;
-      if (typeof oldest === "string") this.repeatMarks.delete(oldest);
-    }
-  }
-
-  /**
-   * True when the identical call already served at the current mutation
-   * *and* its payload is still verbatim in the transcript window. Past the
-   * window the bytes are summarized away, so the repeat is served fresh.
-   */
-  repeatSeen(key: string): boolean {
-    const mark = this.repeatMarks.get(key);
-    if (!mark || mark.seq !== this.mutationSeq) return false;
-    return this.currentTurn() - mark.turn <= RunStateStore.REPEAT_WINDOW_TURNS;
-  }
 
   constructor(options: StateStoreOptions) {
     this.runDir = options.runDir;

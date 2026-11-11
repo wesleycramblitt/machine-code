@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
-import { renderHints, suggestHints } from "../map/suggest.js";
+import { enrichHints, renderHints, suggestHints } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -400,7 +400,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         contextInclude = contextInclude ?? {};
         contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...smallFiles])];
       }
-      hintOutlines = renderHints(hints);
+      hintOutlines = renderHints(enrichHints(hints, l.repoRoot));
     } catch {
       // Suggestions are best effort; the run still has the issue.
     }
@@ -871,11 +871,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const seedFiles = contextBundle.sources
     .filter((source) => source.kind === "file" && typeof source.ref === "string")
     .map((source) => source.ref as string);
-  // Fully inlined files need no re-read: the read tool denies them with a
-  // pointer while their bytes are unchanged. Trimmed sources stay readable.
-  const seededFull = contextBundle.sources
-    .filter((source) => source.kind === "file" && typeof source.ref === "string" && !source.truncated)
-    .map((source) => source.ref as string);
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -952,7 +947,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       requireModel,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
-      ...(seededFull.length > 0 ? { seededFull } : {}),
       skipMap,
       skipSemantic,
       skillExcludes,
@@ -978,7 +972,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       requireModel,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
-      ...(seededFull.length > 0 ? { seededFull } : {}),
       ...(hintsOn ? {} : { hints: false }),
       skipMap,
       skipSemantic,

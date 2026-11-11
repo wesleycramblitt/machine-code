@@ -754,7 +754,9 @@ export function renderRepoMap(map: RepoMap, options: RenderMapOptions = {}): str
 }
 
 export function renderOutline(file: MapFile): string {
-  return file.symbols.map((symbol) => `${symbol.line} ${symbol.kind} ${symbol.name}`).join("\n");
+  return file.symbols
+    .map((symbol) => `${symbol.line}-${Math.max(symbol.line, symbol.end)} ${symbol.kind} ${symbol.name}`)
+    .join("\n");
 }
 
 /** True when the map language is source code. */
