@@ -1,8 +1,8 @@
 acceptance: script:build
 todo:
-  - [ ] Locate the change
-  - [ ] Make the smallest edit
-  - [ ] Finish
+  - [x] Locate the j/k scroll bug in the composer keys
+  - [x] Make the smallest edit to fix j/k scrolling and remove the Issues[i] command
+  - [x] Finish
 
 Auto-created from run.
 
