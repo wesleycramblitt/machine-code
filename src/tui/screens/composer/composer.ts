@@ -568,20 +568,25 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   }
   const compact = (key: string, label: string, tone: string): string =>
     `${B}${tone}${key}${R} ${D}${label}${R}`;
-  // The Agent Prompt tab is view-only: its rows are fixed and the space
-  // handler refuses them, so the footer must not advertise a toggle.
-  const isPromptTab = activeSection.sectionKey === "section:prompt";
+  // Advertise space only on tabs where the handler actually acts. Skills
+  // cycles include→on-demand→exclude; Issues/Files/References toggle include
+  // (their rows carry `available` the handler recognizes). Tools and Agent
+  // Prompt rows are fixed, and Codebase/Scripts rows use prefixes space
+  // ignores, so none of those advertise a toggle.
+  const sectionKey = activeSection.sectionKey;
+  const togglesInclude = ["section:issues", "section:files", "section:references"].includes(sectionKey);
+  const spaceCommand = sectionKey === "section:skills"
+    ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
+    : togglesInclude
+      ? `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`
+      : "";
   const contextCommands = panelLine(
     joinCommands([
       compact("h/l", "tabs", Y),
       compact("j/k", "sel", M),
       compact("/", "filter", BL),
       compact("H", props.hintsEnabled ? "hints on" : "hints off", props.hintsEnabled ? C : GR),
-      activeSection.sectionKey === "section:skills"
-        ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
-        : isPromptTab
-          ? ""
-          : `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
+      spaceCommand,
     ]),
     false,
     true,
