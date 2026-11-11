@@ -8,7 +8,7 @@
  * allowed to outrank a real code match.
  */
 import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { readCachedMap, type MapSymbol, type RepoMap } from "./deterministic.js";
 
 const STOPWORDS = new Set([
@@ -96,18 +96,32 @@ function includesRaw(haystack: string, raw: string): boolean {
  * front deletes the first discovery pass. Only paths that exist on disk
  * count, so version numbers and prose never match.
  */
-export function extractAnchoredFiles(root: string, text: string, limit = 8): string[] {
-  const found: string[] = [];
+/** A cited file plus the exact lines the request names (`path:123` / `:123-456`). */
+export interface CitedRef {
+  path: string;
+  start?: number;
+  end?: number;
+}
+
+export function extractAnchoredFiles(root: string, text: string, limit = 8): CitedRef[] {
+  const found: CitedRef[] = [];
   const seen = new Set<string>();
   const pattern =
-    /([\w\-.]+(?:\/[\w\-.]+)+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|cs|swift|scala|md|mdx|toml|json|yaml|yml|sh|css|html))(?:\s*:\s*\d+(?:\s*-\s*\d+)?)?/g;
+    /([\w\-.]+(?:\/[\w\-.]+)+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|cs|swift|scala|md|mdx|toml|json|yaml|yml|sh|css|html))(?:\s*:\s*(\d+)(?:\s*-\s*(\d+))?)?/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null && found.length < limit) {
     const rel = match[1]!;
     if (seen.has(rel) || rel.includes("..")) continue;
     seen.add(rel);
     try {
-      if (statSync(join(root, rel)).isFile()) found.push(rel);
+      if (!statSync(join(root, rel)).isFile()) continue;
+      const start = match[2] !== undefined ? Number(match[2]) : undefined;
+      const end = match[3] !== undefined ? Number(match[3]) : undefined;
+      found.push({
+        path: rel,
+        ...(start !== undefined ? { start } : {}),
+        ...(end !== undefined && end >= start! ? { end } : {}),
+      });
     } catch {
       // Not a repo file; ignore.
     }
@@ -161,7 +175,7 @@ export function suggestFilesForRequest(args: {
 }): string[] {
   const ranker = suggestTaskFilesFromMap(args.map, args.request, args.limit ?? 3).map((entry) => entry.path);
   const cited = [
-    ...extractAnchoredFiles(args.repoRoot, args.request),
+    ...extractAnchoredFiles(args.repoRoot, args.request).map((ref) => ref.path),
     ...extractBareAnchors(args.map, args.request),
   ];
   const excluded = new Set(args.exclude ?? []);
@@ -412,6 +426,8 @@ export interface FileHint {
   keywordLines?: Array<{ keyword: string; lines: number[]; hits: number }>;
   /** Numbered bodies of matched symbols, populated by enrichHints. */
   bodies?: Array<{ symbol: string; start: number; text: string }>;
+  /** Exact line ranges the request cites (`path:123-145`). */
+  citedRanges?: Array<{ start: number; end: number }>;
 }
 
 function hintSymbols(
@@ -472,11 +488,24 @@ export function suggestHints(args: {
     }
   }
   const out: FileHint[] = [];
-  const push = (entry: SuggestedFile, reason: string, matched: string[], cited: boolean): void => {
-    const path = entry.path;
+  // Rank index for every file with code hits: cited paths reuse the ranker's
+  // own keyword/symbol linkage instead of arriving keyword-less (and
+  // therefore body-less). Ranking is full-table anyway; only slicing differs.
+  const rankIndex = new Map(
+    suggestTaskFilesFromMap(map, request, map.files.length).map((entry) => [entry.path, entry] as const),
+  );
+  const push = (
+    path: string,
+    reason: string,
+    matched: string[],
+    keywords: string[],
+    symbolVia: Record<string, string[]>,
+    cited: boolean,
+    citedRanges: Array<{ start: number; end: number }> = [],
+  ): void => {
     if (excluded.has(path) || out.some((hint) => hint.path === path)) return;
     const file = byPath.get(path);
-    const symbols = file ? hintSymbols(file, new Set(matched), cited ? 8 : 5, entry.symbolVia) : [];
+    const symbols = file ? hintSymbols(file, new Set(matched), cited ? 8 : 5, symbolVia) : [];
     out.push({
       path,
       symbols,
@@ -486,19 +515,44 @@ export function suggestHints(args: {
       small: (file?.bytes ?? Number.POSITIVE_INFINITY) < SMALL_HINT_BYTES,
       imports: [...(file?.imports ?? [])],
       importedBy: [...(importedBy.get(path) ?? [])],
-      keywords: [...entry.keywords],
+      keywords: [...keywords],
+      ...(citedRanges.length > 0 ? { citedRanges } : {}),
     });
   };
-  for (const entry of suggestTaskFilesFromMap(map, request, limit)) {
-    push(entry, entry.reason, entry.matched, false);
+  const pushRanked = (entry: SuggestedFile): void => {
+    push(entry.path, entry.reason, entry.matched, entry.keywords, entry.symbolVia, false);
+  };
+  const pushCited = (ref: CitedRef, reason: string): void => {
+    const ranked = rankIndex.get(ref.path);
+    push(
+      ref.path,
+      reason,
+      ["cited"],
+      ranked ? [...ranked.keywords] : [],
+      ranked ? { ...ranked.symbolVia } : {},
+      true,
+      ref.start !== undefined ? [{ start: ref.start, end: ref.end ?? ref.start }] : [],
+    );
+  };
+  // Explicit citations first: a request that names `path:line` outranks any
+  // lexical guess. The ranker only tops up when the request is vague (fewer
+  // than two full-path citations); otherwise its lexical hits are noise with
+  // inlined bodies attached.
+  const citedFull = args.repoRoot ? extractAnchoredFiles(args.repoRoot, request) : [];
+  for (const ref of citedFull) pushCited(ref, "cited in the request");
+  for (const bare of extractBareAnchors(map, request)) {
+    // A bare `name:line` that collides with an already-hinted file's
+    // basename belongs to that file (push dedupes exact paths, not names):
+    // without this, `keys.ts:149` also pins the unrelated screens/keys.ts
+    // and run-detail/keys.ts as separate hints.
+    if (out.some((hint) => basename(hint.path) === basename(bare))) continue;
+    pushCited({ path: bare }, "cited in the request");
   }
-  if (args.repoRoot) {
-    for (const anchored of extractAnchoredFiles(args.repoRoot, request)) {
-      push({ path: anchored, reason: "", score: 0, matched: [], keywords: [], symbolVia: {} }, "cited in the request", ["cited"], true);
+  if (citedFull.length < 2) {
+    for (const entry of suggestTaskFilesFromMap(map, request, limit)) {
+      if (out.length >= limit) break;
+      pushRanked(entry);
     }
-  }
-  for (const anchored of extractBareAnchors(map, request)) {
-    push({ path: anchored, reason: "", score: 0, matched: [], keywords: [], symbolVia: {} }, "cited in the request", ["cited"], true);
   }
   return out;
 }
@@ -509,6 +563,8 @@ const KEYWORD_LINES_SHOWN = 3;
 const KEYWORD_LINES_MAX_HITS = 20;
 const HINT_BODY_MAX_LINES = 200;
 const HINT_BODIES_MAX_BYTES = 12 * 1024;
+/** Cited `path:start-end` ranges inline whole up to this height. */
+const HINT_CITED_MAX_LINES = 100;
 
 /**
  * Fill in body evidence for run prompts: keyword → body line numbers, plus
@@ -518,7 +574,7 @@ const HINT_BODIES_MAX_BYTES = 12 * 1024;
  */
 export function enrichHints(hints: readonly FileHint[], root: string): FileHint[] {
   return hints.map((hint) => {
-    if (hint.small || hint.keywords.length === 0) return hint;
+    if (hint.small) return hint;
     let raw: string;
     try {
       raw = readFileSync(join(root, hint.path), "utf8");
@@ -526,6 +582,38 @@ export function enrichHints(hints: readonly FileHint[], root: string): FileHint[
       return hint;
     }
     const lines = raw.split("\n");
+    // Cited ranges first: the request names exact lines, so they ride along
+    // verbatim (edit-ready). A symbol body that covers a cited range makes
+    // the range redundant — the body (with context) wins.
+    const bodies: Array<{ symbol: string; start: number; text: string }> = [];
+    let used = 0;
+    const takeBody = (symbol: string, start: number, end: number): void => {
+      const height = end - start + 1;
+      if (height <= 0) return;
+      const text = lines
+        .slice(start - 1, end)
+        .map((line, index) => `${start + index}: ${line}`)
+        .join("\n");
+      const cost = Buffer.byteLength(text, "utf8");
+      if (used + cost > HINT_BODIES_MAX_BYTES) return;
+      used += cost;
+      bodies.push({ symbol, start, text });
+    };
+    const covered = (start: number, end: number): boolean =>
+      bodies.some((body) => {
+        const bodyEnd = body.start + body.text.split("\n").length - 1;
+        return body.start <= start && bodyEnd >= end;
+      });
+    for (const symbol of hint.symbols) {
+      if (symbol.end - symbol.start + 1 > HINT_BODY_MAX_LINES) continue;
+      takeBody(symbol.name, symbol.start, symbol.end);
+    }
+    for (const range of hint.citedRanges ?? []) {
+      if (range.end - range.start + 1 > HINT_CITED_MAX_LINES) continue;
+      if (covered(range.start, range.end)) continue;
+      takeBody("", range.start, range.end);
+    }
+    if (hint.keywords.length === 0) return { ...hint, bodies };
     const keywordLines: Array<{ keyword: string; lines: number[]; hits: number }> = [];
     for (const keyword of hint.keywords) {
       const hits: number[] = [];
@@ -557,20 +645,6 @@ export function enrichHints(hints: readonly FileHint[], root: string): FileHint[
         keywordLines.push({ keyword, lines: shown, hits: hits.length });
       }
     }
-    const bodies: Array<{ symbol: string; start: number; text: string }> = [];
-    let used = 0;
-    for (const symbol of hint.symbols) {
-      const height = symbol.end - symbol.start + 1;
-      if (height <= 0 || height > HINT_BODY_MAX_LINES) continue;
-      const text = lines
-        .slice(symbol.start - 1, symbol.end)
-        .map((line, index) => `${symbol.start + index}: ${line}`)
-        .join("\n");
-      const cost = Buffer.byteLength(text, "utf8");
-      if (used + cost > HINT_BODIES_MAX_BYTES) continue;
-      used += cost;
-      bodies.push({ symbol: symbol.name, start: symbol.start, text });
-    }
     return { ...hint, keywordLines, bodies };
   });
 }
@@ -585,7 +659,7 @@ export function renderHints(hints: readonly FileHint[]): string {
   const outlined = hints.filter((hint) => !hint.small);
   if (outlined.length === 0) return "";
   const blocks: string[] = [
-    "Suggested files (evidence in one place — numbered bodies are edit-ready, read only what is missing; files under 4KB arrive whole):",
+    "Suggested files (evidence in one place — numbered bodies are edit-ready. Missing a block? read { \"path\": \"...\", \"symbol\": \"...\" } pulls one symbol in one call — never page with offset/limit. Files under 4KB arrive whole):",
   ];
   for (const hint of outlined) {
     blocks.push(`### ${hint.path} — ${hint.reason}`);

@@ -596,6 +596,14 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // Four identical evidence keys with no mutation is a loop. A single-line
   // fix should not spend half its turns re-running the same search.
   const evidence = new EvidenceTracker(4);
+  /**
+   * Consecutive discovery calls (read/grep/search/map/glob) with no
+   * edit, decision, or question in between. Advisory only — unlike the loop
+   * detector it never terminates: after a run of pure re-reading, the model
+   * gets a nudge pointing at the bytes it already holds instead of another
+   * silent serve. Resets on any non-discovery call.
+   */
+  let discoveryStreak = 0;
   let turns = 0;
   /** Cumulative turns across resumes, for the run summary. */
   let reportedTurns = recorder.current.turns;
@@ -1050,6 +1058,36 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             }
             const check = evidence.observe(evidenceKey, isProgress);
             if (check.loop) return killLoop(evidenceKey, check.stale);
+            if (
+              tool.name === "edit" ||
+              tool.name === "write" ||
+              tool.name === "todo" ||
+              tool.name === "finish" ||
+              tool.name === "ask"
+            ) {
+              discoveryStreak = 0;
+            } else if (
+              tool.name === "read" ||
+              tool.name === "grep" ||
+              tool.name === "search" ||
+              tool.name === "map" ||
+              tool.name === "glob"
+            ) {
+              discoveryStreak += 1;
+              if (discoveryStreak === 6 || (discoveryStreak > 6 && (discoveryStreak - 6) % 4 === 0)) {
+                const nudge =
+                  `[reader note: ${discoveryStreak} discovery calls without an edit, decision, or question. ` +
+                  `Everything served so far is in <working-context> above and the hint block — re-reading the same bands will not add what you need. ` +
+                  `Make the edit now, or state the single missing fact with the todo tool.]`;
+                return {
+                  ...result,
+                  content: [
+                    ...result.content,
+                    { type: "text" as const, text: nudge },
+                  ],
+                };
+              }
+            }
           }
           return result;
         },
