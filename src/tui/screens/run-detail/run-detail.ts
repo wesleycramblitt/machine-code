@@ -95,7 +95,12 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         case "child":
           return ` ${M}◌${R} ${B}waiting on ${label}${R}${M}${waitingDots}${R}${age}`;
         case "starting":
+          // Prolonged "starting" with no progress is a stuck handoff: the
+          // worktree / supervisor / orchestrator never advanced past the
+          // created state. After a configurable window, name it actionable.
           return ` ${C}◌${R} ${B}starting${R}${C}${waitingDots}${R}${age}`;
+        case "failed":
+          return ` ${R}✗${R} ${R}${B}${waiting.label}${R}${age} ${D}view logs: ${B}logs${R}${D} / retry: ${B}retry${R}${D} / cancel: ${B}cancel${R}`;
         case "working":
           return ` ${C}◌${R} ${B}working${R}${C}${waitingDots}${R}${age}`;
       }

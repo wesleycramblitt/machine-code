@@ -3,9 +3,15 @@ tags: tui,runs,logging
 acceptance: script:build
 keywords: New Run, Run Details, waiting on the run to start, starting
 todo:
+<<<<<<< HEAD:issues/bugs/blocked/new-runs-hang-diagnostics.md
   - [ ] Locate the change
   - [ ] Make the smallest edit
   - [ ] Finish
+=======
+  - [x] Emit start_requested / worktree_failed / start_failed / run_started events + RUN slug log line in src/cli/run.ts
+  - [x] Surface start_failed + timeout/retry/cancel affordance in TUI timeline + run-detail waiting page
+  - [x] Finish
+>>>>>>> mc/new-runs-hang-diagnostics:issues/bugs/todo/new-runs-hang-diagnostics.md
 
 todo:
   - [ ] Reproduce and collect 2-3 sample stuck runs (events.jsonl + run.json)
