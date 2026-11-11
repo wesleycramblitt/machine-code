@@ -748,7 +748,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     // the top fit line. The bottom footer has no command row.
     actions = " ";
     secondaryStyled = true;
-    secondary = toast ? `${D}· ${Y}${toast}${R}` : "";
+    if (props.confirm) secondary = `${Y}discard unsaved prompt? y to discard and exit, esc to stay${R}`;
+    else secondary = toast ? `${D}· ${Y}${toast}${R}` : "";
   }
 
   return {
