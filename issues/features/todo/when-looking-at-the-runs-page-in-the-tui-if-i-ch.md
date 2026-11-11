@@ -1,8 +1,7 @@
 acceptance: script:build
 todo:
-  - [ ] Locate the change
-  - [ ] Make the smallest edit
-  - [ ] Finish
+  - [x] Expose per-repo issues in buildRunIndex and apply the issue tree to every repo
+  - [x] Pass a per-repo issues map from the runs-list caller
 
 Auto-created from run.
 

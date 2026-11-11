@@ -97,8 +97,8 @@ export interface RunOptions {
   runs: readonly RunSummary[];
   /** Repo root the issues tree belongs to (the cwd/preferred repo). */
   issueRepo?: string;
-  /** Issues for the work tree (one repo). */
-  issues?: readonly Issue[];
+  /** Issues by repo root; the expandable issue tree is built per repo. */
+  issuesByRepo?: Readonly<Record<string, readonly Issue[]>>;
   group?: RunGroup;
   collapsed?: ReadonlySet<string>;
   /** Case-insensitive substring over run fields and repository paths. */
@@ -248,7 +248,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   };
 
   const pushWorkTree = (repoRoot: string, repoRuns: readonly RunSummary[], depth: number): void => {
-    const issues = options.issues ?? [];
+    const issues = options.issuesByRepo?.[repoRoot] ?? [];
     const runsByItem = new Map<string, RunSummary[]>();
     for (const run of repoRuns) {
       const itemId = runItemId(run);
@@ -372,18 +372,11 @@ export function buildRunIndex(options: RunOptions): RunIndex {
 
   for (const repoRoot of repoNames) {
       const repoRuns = baseRuns.filter((run) => repoOf(run) === repoRoot && visibleRun(run));
-      const issueRepo = workGroup && options.issueRepo === repoRoot;
-      if (repoRuns.length === 0 && !issueRepo) continue;
+      if (repoRuns.length === 0 && !(workGroup && options.issueRepo === repoRoot)) continue;
       if (!pushRepo(repoRoot, repoRuns.length)) continue;
-      if (issueRepo) {
-        pushWorkTree(repoRoot, repoRuns, 1);
-      } else {
-        const free = repoRuns.filter((run) => !runItemId(run));
-        const untrackedId = `untracked:${repoRoot}`;
-        if (pushSection(untrackedId, "Untracked runs", free.length, 1, "untracked")) {
-          pushRuns(free, 2, untrackedId);
-        }
-      }
+      // Every repo gets the expandable issue tree; pushWorkTree also renders
+      // untracked runs beneath it.
+      pushWorkTree(repoRoot, repoRuns, 1);
     }
 
   return {

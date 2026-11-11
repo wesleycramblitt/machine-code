@@ -8,7 +8,7 @@
 import { layout } from "../../paths.js";
 import { listAllRuns } from "../../state/runs.js";
 import { buildRunIndex, repoOf, RUN_GROUPS, type RunRow } from "../runs.js";
-import { listIssues } from "../../plan/issues.js";
+import { listIssues, type Issue } from "../../plan/issues.js";
 import { issueDeleteTarget } from "./delete-keys.js";
 import { runItemId } from "../../plan/lifecycle.js";
 import type { TuiState } from "../state.js";
@@ -18,6 +18,11 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   const l = layout(ctx.repoRoot);
   const allRuns = listAllRuns(l.home).filter((run) => !s.deletingRuns.has(run.id));
   const scopeFiltered = s.runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
+  const workGroup = s.runsGroup === "all" || s.runsGroup === "category";
+  const issuesByRepo: Record<string, readonly Issue[]> = {};
+  for (const root of new Set([l.repoRoot, ...scopeFiltered.map((run) => run.repoRoot)])) {
+    issuesByRepo[root] = listIssues(layout(root));
+  }
   const index = buildRunIndex({
     runs: scopeFiltered,
     group: s.runsGroup,
@@ -25,9 +30,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     text: s.runsText,
     attentionOnly: s.runsAttention,
     preferredRepo: l.repoRoot,
-    ...(s.runsGroup === "all" || s.runsGroup === "category"
-      ? { issueRepo: l.repoRoot, issues: listIssues(l) }
-      : {}),
+    ...(workGroup ? { issueRepo: l.repoRoot, issuesByRepo } : {}),
   });
   const repoForRow = (row: RunRow | undefined): string => {
     if (!row) return l.repoRoot;
