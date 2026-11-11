@@ -207,9 +207,17 @@ export function describeTimelineEvent(event: TimelineEventLike): string {
   }
 }
 
+/**
+ * Time a run may sit in the "created"/"starting" state before the run-details
+ * page treats it as a stuck handoff (worktree, supervisor, or orchestrator).
+ * The CLI normally transitions to `run_started` within seconds; 45s is a safe
+ * window for slow worktree creation on large repositories.
+ */
+export const RUN_START_TIMEOUT_MS = 45_000;
+
 /** What an active run is currently waiting on, for the run-details header. */
 export interface WaitingState {
-  kind: "model" | "tool" | "process" | "child" | "input" | "paused" | "starting" | "working";
+  kind: "model" | "tool" | "process" | "child" | "input" | "paused" | "starting" | "working" | "failed";
   /** Human noun: "model p/m", "tool search …", "process …", "working", … */
   label: string;
   /** ISO timestamp the wait started (the causing event, or last activity). */
@@ -257,6 +265,21 @@ export function waitingForRun(
   }
   if (status === "paused" || status === "interrupted") {
     return { kind: "paused", label: status, since: fallbackSince };
+  }
+
+  // A start_failed event is the CLI's diagnostic anchor: the run requested a
+  // start but the worktree / supervisor / handoff never completed. Surface it
+  // immediately so a run stuck on the "waiting" page is actionable instead of
+  // silently hanging, even before the status flush lands.
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    if (String(events[i]?.type) === "start_failed") {
+      const msg = text((events[i] as { error?: unknown }).error);
+      return {
+        kind: "failed",
+        label: msg ? `didn't start — ${msg}` : "didn't start",
+        since: eventTime(events[i]?.t) || fallbackSince,
+      };
+    }
   }
 
   const completedTools = new Set<string>();
@@ -358,6 +381,18 @@ export function waitingForRun(
   if (open) return { kind: open.kind, label: open.label, since: open.since, streaming: open.streaming };
 
   if (events.length === 0 || status === "created") {
+    // A run that has been in "created"/"starting" past the start window with
+    // no run_started event has a stuck handoff (worktree, supervisor, or
+    // orchestrator never advanced). Surface the timeout as actionable instead
+    // of waiting forever.
+    const stuck = !events.some((event) => String(event?.type) === "run_started");
+    if (stuck && RUN_START_TIMEOUT_MS > 0 && Date.now() - Date.parse(fallbackSince) > RUN_START_TIMEOUT_MS) {
+      return {
+        kind: "failed",
+        label: "didn't start in time — view logs / retry / cancel",
+        since: fallbackSince,
+      };
+    }
     return { kind: "starting", label: "starting", since: fallbackSince };
   }
   let last: TimelineEventLike | null = null;

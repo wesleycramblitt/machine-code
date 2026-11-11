@@ -1,9 +1,11 @@
 priority: high
-review: none
-verification: direct
 tags: tui,runs,logging
-keywords: New Run, Run Details, waiting on the run to start, starting
 acceptance: script:build
+keywords: New Run, Run Details, waiting on the run to start, starting
+todo:
+  - [x] Emit start_requested / worktree_failed / start_failed / run_started events + RUN slug log line in src/cli/run.ts
+  - [x] Surface start_failed + timeout/retry/cancel affordance in TUI timeline + run-detail waiting page
+  - [x] Finish
 
 todo:
   - [ ] Reproduce and collect 2-3 sample stuck runs (events.jsonl + run.json)

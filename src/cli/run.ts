@@ -592,6 +592,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
   });
   registerProject(l.home, l.repoRoot);
   if (itemSlug) recorder.event("item_linked", { slug: itemSlug });
+  // Diagnostic anchor: the run exists on disk as "created" but has not hand
+  // off into execution yet. The TUI reads this event to distinguish a queued
+  // run from a stuck one when the waiting page shows no progress.
+  recorder.event("start_requested", {
+    agent: agentNameParsed,
+    ...(itemSlug ? { item: itemSlug } : {}),
+    ...(flags.has("debug") || flags.has("verbose") ? { debug: true } : {}),
+  });
   // The witness fires whether or not suggestions applied: files:[] with a
   // real map means the ranker filtered everything, mapFiles is the map size,
   // and skipped names why nothing was attached. Never silently empty.
@@ -702,6 +710,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
             recorder.event("fork_inherited", { parentRunId: parentRun.id, patchBytes: patch.bytes });
           } catch (error) {
             if (error instanceof WorktreeError) {
+              recorder.event("worktree_failed", { error: error.message, code: error.code });
+              recorder.event("start_failed", { error: error.message, code: error.code, stage: "fork_inherit" });
               recorder.finalize("blocked", `${error.code}: ${error.message}`);
               process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
               return EXIT.blocked;
@@ -765,6 +775,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
             `worktree ${existing} (already checked out, branch ${branch}${ownerActive ? "; owner run still active" : ""})\n`,
           );
         } else if (error instanceof WorktreeError) {
+          recorder.event("worktree_failed", { error: error.message, code: error.code });
+          recorder.event("start_failed", { error: error.message, code: error.code, stage: "worktree" });
           recorder.finalize("blocked", `${error.code}: ${error.message}`);
           process.stderr.write(`machine_code: ${error.code}: ${error.message}\n`);
           return EXIT.blocked;
@@ -906,6 +918,17 @@ export async function cmdRun(argv: string[]): Promise<number> {
       process.stderr.write(`warning: review target ${reviewOf} has no worktree; reviewing the main tree\n`);
     }
   }
+
+  // The run has a worktree (or reused one) and is about to hand off into the
+  // agent loop. Emit run_started so the TUI distinguishes "actively starting
+  // then executing" from a run stranded in the created state.
+  recorder.event("run_started", {
+    agent: agentNameParsed,
+    toolRoot,
+    ...(itemSlug ? { item: itemSlug } : {}),
+  });
+  // Non-verbose default log line with a slug to open run details.
+  process.stderr.write(`RUN ${recorder.id} — ${itemSlug ?? recorder.id.slice(-8)}\n`);
 
   let result: RunLoopResult | OrchestrateResult;
   let autoReview: { slug: string; prompt: string } | undefined;
