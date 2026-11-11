@@ -1,9 +1,11 @@
 priority: high
-review: none
-verification: direct
 tags: tui,runs,logging
-keywords: New Run, Run Details, waiting on the run to start, starting
 acceptance: script:build
+keywords: New Run, Run Details, waiting on the run to start, starting
+todo:
+  - [ ] Locate the change
+  - [ ] Make the smallest edit
+  - [ ] Finish
 
 todo:
   - [ ] Reproduce and collect 2-3 sample stuck runs (events.jsonl + run.json)
