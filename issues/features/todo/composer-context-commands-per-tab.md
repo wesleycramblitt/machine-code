@@ -1,12 +1,10 @@
 priority: high
-review: none
-verification: direct
 tags: tui, new-runs, composer, keys
 acceptance: script:build
 todo:
-  - [ ] Make the context-panel footer command row per-section
-  - [ ] Suppress space on rows where it does nothing
-  - [ ] Finish
+  - [x] Make the context-panel footer command row per-section
+  - [x] Suppress space on rows where it does nothing
+  - [x] Finish
 
 # Composer context tabs: show only the commands that work on that tab
 
