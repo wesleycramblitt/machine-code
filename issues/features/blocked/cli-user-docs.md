@@ -1,6 +1,10 @@
 tags: docs, cli
 acceptance: script:build
 keywords: CLI, docs, machine_code
+todo:
+  - [ ] Locate the change
+  - [ ] Make the smallest edit
+  - [ ] Finish
 
 todo:
   - [ ] Inventory existing CLI commands and examples (src/cli, src/commands, scripts/)
