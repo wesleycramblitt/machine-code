@@ -1,6 +1,10 @@
 tags: docs, cli
 acceptance: script:build
 keywords: CLI, docs, machine_code
+todo:
+  - [x] Inventory existing CLI commands and examples (src/cli, src/commands, scripts/)
+  - [x] Draft a user-facing CLI guide (getting started, common workflows, examples)
+  - [x] Add docs/cli.md, link from README, and finalize examples
 
 todo:
   - [ ] Inventory existing CLI commands and examples (src/cli, src/commands, scripts/)

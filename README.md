@@ -1,6 +1,17 @@
 # machine_code
 A simple, Linux-first coding-agent tool.
 
+> New here? Start with [docs/cli.md](docs/cli.md), a practical, example-driven
+> CLI guide — quick start, core workflows, command reference, and troubleshooting.
+> For example:
+>
+> ```bash
+> machine_code run --agent research "summarize README.md"   # one-off question
+> machine_code issue run <idea-slug>                         # idea → issues
+> machine_code build <slug>                                  # engineer one issue
+> machine_code show <run-id> --changes                       # inspect a run
+> ```
+
 ## Requirements
 Node 22+ and the six-CLI base palette (`git`, `rg`, `ast-grep`, `jq`, `yq`, `sd`).
 Provider keys come from environment variables only (e.g. `OPENROUTER_API_KEY`,
