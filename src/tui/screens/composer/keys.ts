@@ -125,10 +125,10 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     ctx.draw();
     return true;
   }
-  if (data === "j") { s.newRunContextItem += 1; ctx.draw(); return true; }
-  if (data === "k") { s.newRunContextItem = Math.max(0, s.newRunContextItem - 1); ctx.draw(); return true; }
-  if (data === CTRL_U) { s.newRunContextItem = Math.max(0, s.newRunContextItem - 5); ctx.draw(); return true; }
-  if (data === CTRL_D) { s.newRunContextItem += 5; ctx.draw(); return true; }
+  if (data === "j") { s.newRunContextItem += 1; s.newRunContextItemKey = s.newRunContextItemKeys[s.newRunContextItem] ?? null; ctx.draw(); return true; }
+  if (data === "k") { s.newRunContextItem = Math.max(0, s.newRunContextItem - 1); s.newRunContextItemKey = s.newRunContextItemKeys[s.newRunContextItem] ?? null; ctx.draw(); return true; }
+  if (data === CTRL_U) { s.newRunContextItem = Math.max(0, s.newRunContextItem - 5); s.newRunContextItemKey = s.newRunContextItemKeys[s.newRunContextItem] ?? null; ctx.draw(); return true; }
+  if (data === CTRL_D) { s.newRunContextItem += 5; s.newRunContextItemKey = s.newRunContextItemKeys[s.newRunContextItem] ?? null; ctx.draw(); return true; }
   if (data === " ") {
     const key = s.newRunContextItemKeys[s.newRunContextItem];
     const available = s.newRunContextItemAvailable[s.newRunContextItem] === true;
