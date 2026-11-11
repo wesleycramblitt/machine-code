@@ -29,6 +29,7 @@ review: none
 verification: direct
 tags: tui
 depends: other-slug
+keywords: Run Details, Timeline
 acceptance: script:build
 todo:
   - [ ] Step 1
@@ -46,6 +47,9 @@ One paragraph of detail the prompt needs.
 - **verification**: `direct` / `verified` (default direct; only written when
   verified — verified requires `scripts/test.sh` and adds the testing skill).
 - **tags** / **depends**: comma lists (optional).
+- **keywords**: comma-separated phrases naming the exact UI strings, page
+  names, or commands involved (optional; the runner matches these exactly
+  to find files).
 - **acceptance**: comma list of runner commands (`script:build`,
   `script:test`, ...). Every created issue needs one.
 - **todo**: multi-line checklist; indented `- [ ]` / `- [x]` lines. 2-4
@@ -91,8 +95,8 @@ answered), say so plainly with `Outcome: done` and do not write filler.
 
 1. Read `issues/` (or `machine_code plan`) to find the item.
 2. Edit the file text directly — the text is the prompt. Optional `key:
-   value` header lines at the top set priority, review, tags, depends, or
-   acceptance. Keep the prompt tight; put narrative in the body.
+   value` header lines at the top set priority, review, tags, depends,
+   keywords, or acceptance. Keep the prompt tight; put narrative in the body.
    `acceptance` is the machine gate (named commands); the prompt is the
    semantic definition of done. A review mode decides who judges it.
 3. Nobody moves files by hand inside a run: status moves (`ideas/` →
