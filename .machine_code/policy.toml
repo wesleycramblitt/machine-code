@@ -36,6 +36,11 @@ general = 5.0
 
 [agents.engineer]
 min_fit = 6.0
+[agents.engineer.weights]
+code = 0.7
+agentic = 0.10
+reasoning = 0.15
+general = 0.05
 [agents.engineer.axes]
 code = 5.5
 agentic = 5.0
