@@ -28,7 +28,7 @@ import {
 import { sectionHeadings, sectionTitle } from "./sections.js";
 
 export const MAP_SCHEMA = 1 as const;
-export const MAP_VERSION = 4 as const;
+export const MAP_VERSION = 5 as const;
 export const MAP_CAP_BYTES = 32 * 1024;
 /** Files larger than this are listed but not scanned for symbols. */
 const SYMBOL_SCAN_BYTES = 1024 * 1024;
@@ -55,6 +55,13 @@ export interface MapFile {
   doc?: string;
   /** Comment banners in large files; used by the module index. */
   sections?: string[];
+  /**
+   * Distinctive string literals in the file body (UI labels, command names,
+   * error text), normalized lowercase, capped. Lets task phrases match the
+   * exact strings the code renders — no keyword list, just the project's
+   * own vocabulary.
+   */
+  literals?: string[];
 }
 
 /** Comment section names for large files, or undefined for small files. */
@@ -376,6 +383,32 @@ function fileDoc(lines: readonly string[], lang: string): string | undefined {
   return cleanDoc(collected.join("\n"), DOC_CAP) || undefined;
 }
 
+/**
+ * UI labels, command names, and error text as they appear in string
+ * literals — the exact strings a task description names. Normalized
+ * lowercase, deduped, capped; multi-word literals first, then longer
+ * singles. Interpolated templates and non-words never qualify.
+ */
+const LITERAL_PATTERN = /([`'"])((?:\\\1|(?!\1)[^\\])*?)\1/g;
+
+export function extractLiterals(text: string, limit = 40): string[] {
+  const scored: Array<{ norm: string; words: number }> = [];
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  LITERAL_PATTERN.lastIndex = 0;
+  while ((match = LITERAL_PATTERN.exec(text)) !== null && scored.length < limit * 2) {
+    const raw = match[2] ?? "";
+    if (raw.length < 4 || raw.length > 120 || raw.includes("${")) continue;
+    if (!/[a-zA-Z]/.test(raw)) continue;
+    const norm = raw.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (norm.length < 4 || seen.has(norm)) continue;
+    seen.add(norm);
+    scored.push({ norm, words: norm.split(" ").length });
+  }
+  scored.sort((a, b) => b.words - a.words || b.norm.length - a.norm.length);
+  return scored.slice(0, limit).map((entry) => entry.norm);
+}
+
 /** Regex baseline. It is deliberately top-level only and machine-stable. */
 export function extractSymbols(path: string, text: string): MapSymbol[] {
   const lang = language(path);
@@ -687,6 +720,7 @@ export async function buildRepoMap(root: string, options: BuildMapOptions = {}):
     const lines = lineList.length;
     const doc = text && !binary ? fileDoc(lineList, language(stat.path)) : undefined;
     const sections = text && !binary ? sectionsFor(text, lines, stat.bytes) : undefined;
+    const literals = text && !binary && isCodeLang(language(stat.path)) ? extractLiterals(text) : undefined;
     return {
       path: stat.path,
       lang: language(stat.path),
@@ -696,6 +730,7 @@ export async function buildRepoMap(root: string, options: BuildMapOptions = {}):
       ...(imports.length > 0 ? { imports } : {}),
       ...(doc ? { doc } : {}),
       ...(sections ? { sections } : {}),
+      ...(literals && literals.length > 0 ? { literals } : {}),
     };
   });
   files.sort((a, b) => a.path.localeCompare(b.path));

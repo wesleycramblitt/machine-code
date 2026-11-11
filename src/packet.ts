@@ -19,4 +19,6 @@ export interface TaskPacket {
   acceptance: PacketAcceptance[];
   /** direct: code only; verified: code + tests. */
   verification?: "direct" | "verified";
+  /** Human-provided search phrases from the issue's `keywords:` header. */
+  keywords?: string[];
 }

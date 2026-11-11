@@ -110,6 +110,8 @@ export interface Issue {
   /** Other issue slugs this one depends on. */
   depends: string[];
   tags: string[];
+  /** Human-provided search terms (comma-separated phrases); an exact-match override for the ranker. */
+  keywords: string[];
   review: ReviewMode;
   /** direct: code only; verified: code + tests. */
   verification: "direct" | "verified";
@@ -174,7 +176,7 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
 
 /** Metadata keys allowed in the condensed `key: value` header. Anything else
  * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
-const META_KEYS = new Set(["priority", "review", "tags", "depends", "acceptance", "verify", "verification", "todo"]);
+const META_KEYS = new Set(["priority", "review", "tags", "keywords", "depends", "acceptance", "verify", "verification", "todo"]);
 
 function stripQuotes(value: string): string {
   if (value.length >= 2) {
@@ -339,6 +341,12 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
     const value = list(front[key]);
     if (value) lines.push(`${key}: ${value}`);
   }
+  if (Array.isArray(front.keywords)) {
+    const kept = front.keywords.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+    if (kept.length > 0) lines.push(`keywords: ${kept.join(", ")}`);
+  } else if (typeof front.keywords === "string" && front.keywords.trim()) {
+    lines.push(`keywords: ${front.keywords.trim()}`);
+  }
   // `verify` is the legacy alias for `acceptance`; normalize on write unless
   // `acceptance` is already set.
   if (!list(front.acceptance) && list(front.verify)) lines.push(`acceptance: ${list(front.verify)}`);
@@ -487,6 +495,14 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
         ? front.tags.split(",").map((entry) => entry.trim()).filter(Boolean)
         : Array.isArray(front.tags)
           ? front.tags.filter((entry): entry is string => typeof entry === "string")
+          : [],
+    // Keywords are phrases, not slugs: split on commas only, never on
+    // spaces, so "Run Details" stays one term.
+    keywords:
+      typeof front.keywords === "string"
+        ? front.keywords.split(",").map((entry) => entry.trim()).filter(Boolean)
+        : Array.isArray(front.keywords)
+          ? front.keywords.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean)
           : [],
     review: toReview(front.review),
     verification: front.verification === "verified" ? "verified" : "direct",

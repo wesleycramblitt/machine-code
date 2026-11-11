@@ -11,15 +11,6 @@ import { readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { readCachedMap, type MapSymbol, type RepoMap } from "./deterministic.js";
 
-const STOPWORDS = new Set([
-  "the", "and", "for", "with", "from", "that", "this", "what", "how", "why",
-  "where", "when", "are", "was", "were", "you", "your", "its", "into", "about",
-  "does", "use", "used", "using", "can", "will", "should", "would", "could",
-  "please", "one", "two", "all", "any", "not", "but", "has", "have", "had",
-  "them", "they", "their", "then", "than", "also", "just", "make", "need",
-  "there", "here", "like", "just", "only", "very", "much", "more", "most",
-]);
-
 /** Common suffixes stripped so "deletion" and "delete" compare equal. */
 const SUFFIXES = ["ations", "ation", "ments", "ment", "ings", "ing", "ions", "ion", "ed"];
 
@@ -41,7 +32,7 @@ function tokens(text: string): string[] {
     text
       .toLowerCase()
       .split(/[^a-z0-9]+/)
-      .filter((token) => token.length >= 3 && !STOPWORDS.has(token)),
+      .filter((token) => token.length >= 3),
   )];
 }
 
@@ -205,7 +196,11 @@ export function suggestTaskFilesFromMap(
     });
   if (wanted.length === 0) return [];
   const words = normalized(request).split(" ").filter(Boolean);
-  const vocab = new Set(words.filter((word) => word.length >= 3 && !STOPWORDS.has(word)));
+  // Phrases are compositions of request terms, not prose accidents: without
+  // the vocab gate, "from the" and "on the" matched file docs, added junk
+  // points, and filled the matched-evidence slots with noise. Length-gated
+  // (no stopword list): short glue words never form phrases.
+  const vocab = new Set(words.filter((word) => word.length >= 4));
   const phrases = new Set<string>();
   // Phrases are compositions of request terms, not prose accidents: without
   // the vocab gate, "from the" and "on the" matched file docs, added junk
@@ -245,7 +240,14 @@ export function suggestTaskFilesFromMap(
   }
   const wantedCode = wanted.filter((token) => (df.get(token.stem) ?? 0) > 0);
   if (wantedCode.length === 0) return [];
+  // A request with no term specific to this repo cannot rank anything.
+  // The gate needs only ONE discriminating stem (present but in few files);
+  // the rest still vote, weighted by idf. This kills degenerate requests
+  // ("the and for") with no word list: "the"/"and" match nothing, "for"
+  // only matches everywhere-ish camel glue, so nothing qualifies as specific.
   const total = Math.max(1, code.length);
+  const specificCap = Math.max(3, Math.floor(total * 0.15));
+  if (!wantedCode.some((token) => (df.get(token.stem) ?? 0) <= specificCap)) return [];
   const idf = (token: string): number => Math.log((total + 1) / ((df.get(token) ?? 0) + 1));
   const topLevel = new Set(
     code.flatMap((file) => {
@@ -375,12 +377,15 @@ export function suggestTaskFilesFromMap(
   // in a module usually concerns the module (the render, its keys, and its
   // types ship together). Keyed on total score, not path score — path-score
   // aim locked onto a data script whose filename happened to hold two
-  // request words, boosting the wrong directory.
+  // request words, boosting the wrong directory. Gated on small
+  // directories: a 40-file subtree is not a module, and boosting all of
+  // src/tui/* by 35% drowns the file that actually matched.
   const topHit = [...ranked]
     .filter((entry) => entry.codeHit && entry.score > 0)
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))[0];
   const moduleDir = topHit?.path.includes("/") ? topHit.path.split("/").slice(0, -1).join("/") : undefined;
-  if (topHit && moduleDir && moduleDir.split("/").length >= 2) {
+  const moduleSize = moduleDir ? code.filter((file) => file.path.startsWith(`${moduleDir}/`)).length : 0;
+  if (topHit && moduleDir && moduleDir.split("/").length >= 2 && moduleSize <= 6) {
     const bonus = topHit.score * 0.35;
     for (const entry of ranked) {
       if (entry !== topHit && entry.codeHit && entry.path.startsWith(`${moduleDir}/`)) entry.score += bonus;
@@ -393,7 +398,6 @@ export function suggestTaskFilesFromMap(
     .slice(0, Math.max(1, limit))
     .map(({ codeHit: _codeHit, pathScore: _pathScore, ...entry }) => entry);
 }
-
 /** Whole files at or under this size inline whole; larger hints send outlines. */
 export const SMALL_HINT_BYTES = 4 * 1024;
 
@@ -467,6 +471,61 @@ export function suggestionText(request: string): string {
  * (see `small`); the rest travel as symbol outlines with their matched
  * evidence, so the model reads one block instead of paging a dump.
  */
+/**
+ * Append human-provided keywords as quoted terms. Quoted text flows through
+ * phrase extraction as exact-match pins, so a `keywords: Blue Widget` header
+ * behaves like the request itself naming that phrase — no separate
+ * plumbing, no extraction from prose.
+ */
+export function withKeywordTerms(text: string, keywords: readonly string[] | undefined): string {
+  const terms = (keywords ?? []).map((keyword) => keyword.trim()).filter(Boolean);
+  return terms.length > 0 ? `${text}\n${terms.map((term) => `"${term}"`).join(" ")}` : text;
+}
+
+/**
+ * Exact-match phrases in a request: "quoted strings", `code spans`, and
+ * Title Case runs ("Blue Widget", "Agent Prompt" via bigrams). Normalized
+ * lowercase; matched against file literals and never tokenized, so
+ * multi-word names stay whole.
+ */
+export function extractPhrases(text: string, limit = 24): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string): void => {
+    const norm = normalized(raw);
+    if (!norm || seen.has(norm)) return;
+    seen.add(norm);
+    if (out.length < limit) out.push(norm);
+  };
+  for (const match of text.matchAll(/"([^"]+)"|`([^`]+)`|'([^']*\s[^']*)'/g)) {
+    push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  // Title Case runs ("Blue Widget"; bigrams of longer runs). Split on quotes
+  // as well as whitespace: adjacent quoted keywords ("Blue Widget" "Timeline")
+  // must not fuse into a phantom phrase.
+  const words = text
+    .split(/[\s_\"`']+/)
+    .map((word) => word.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""));
+  let run: string[] = [];
+  const flush = (): void => {
+    if (run.length >= 2) {
+      push(run.join(" "));
+      for (let i = 0; i + 1 < run.length; i += 1) push(`${run[i]} ${run[i + 1]}`);
+    }
+    run = [];
+  };
+  for (const word of words) {
+    if (/^[A-Z][a-z0-9]*$/.test(word)) run.push(word);
+    else flush();
+  }
+  flush();
+  return out;
+}
+
+/** Directory portion of a repo-relative path. */
+const dirnameOf = (path: string): string =>
+  path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
+
 export function suggestHints(args: {
   map: RepoMap;
   request: string;
@@ -534,10 +593,35 @@ export function suggestHints(args: {
       ref.start !== undefined ? [{ start: ref.start, end: ref.end ?? ref.start }] : [],
     );
   };
+  // Pins: exact evidence, never ranked. Citations name files; symbol
+  // mentions name definitions; literal phrases name rendered strings. Each
+  // is decisive on its own — no score can outrank a direct name.
+  const codeFiles = map.files.filter((file) =>
+    /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i.test(file.path),
+  );
+  const symbolIndex = new Map<string, string[]>();
+  for (const file of codeFiles) {
+    for (const symbol of file.symbols) {
+      const key = symbol.name.toLowerCase();
+      const list = symbolIndex.get(key) ?? [];
+      if (!list.includes(file.path)) list.push(file.path);
+      symbolIndex.set(key, list);
+    }
+  }
+  const MAX_HINTS = 10;
+  const pin = (
+    path: string,
+    reason: string,
+    matched: string[],
+    keywords: string[],
+    symbolVia: Record<string, string[]>,
+    citedRanges: Array<{ start: number; end: number }> = [],
+  ): void => {
+    if (out.length >= MAX_HINTS) return;
+    push(path, reason, matched, keywords, symbolVia, true, citedRanges);
+  };
   // Explicit citations first: a request that names `path:line` outranks any
-  // lexical guess. The ranker only tops up when the request is vague (fewer
-  // than two full-path citations); otherwise its lexical hits are noise with
-  // inlined bodies attached.
+  // lexical guess.
   const citedFull = args.repoRoot ? extractAnchoredFiles(args.repoRoot, request) : [];
   for (const ref of citedFull) pushCited(ref, "cited in the request");
   for (const bare of extractBareAnchors(map, request)) {
@@ -548,7 +632,85 @@ export function suggestHints(args: {
     if (out.some((hint) => basename(hint.path) === basename(bare))) continue;
     pushCited({ path: bare }, "cited in the request");
   }
-  if (citedFull.length < 2) {
+  // Exact symbol mentions: only code-shaped tokens pin (`handleComposerKeys`,
+  // `frame.x`, `NEW_RUN` — camel humps, dots, underscores). Plain words
+  // ("command", "Finish", "Issues") are prose until proven otherwise: Title
+  // Case alone is not code shape, and one bad pin used to suppress the
+  // entire fill stage.
+  const codeShaped = (word: string): boolean =>
+    /[a-z][A-Z]/.test(word) || word.includes("_") || word.includes(".");
+  for (const word of request.split(/[\s]+/)) {
+    const cleaned = word.replace(/^[^A-Za-z0-9_]+|[^A-Za-z0-9_]+$/g, "");
+    if (!codeShaped(cleaned)) continue;
+    // `frame.x` names x: try the full token, then the part after the dot.
+    const candidates = cleaned.includes(".")
+      ? [cleaned, cleaned.split(".").pop()!]
+      : [cleaned];
+    for (const candidate of candidates) {
+      const key = candidate.toLowerCase();
+      const paths = symbolIndex.get(key);
+      if (!paths) continue;
+      for (const path of paths) {
+        const file = byPath.get(path);
+        const symbol = file?.symbols.find((entry) => entry.name.toLowerCase() === key);
+        pin(
+          path,
+          `names symbol ${symbol?.name ?? candidate}`,
+          [symbol?.name ?? candidate],
+          [candidate],
+          symbol ? { [symbol.name]: [candidate] } : {},
+        );
+      }
+    }
+  }
+  // Exact literal phrases: a file pins only when one of its literals contains
+  // the whole phrase. The reverse (a phrase containing a short literal like
+  // "details") fires on coincidence, not evidence.
+  for (const phrase of extractPhrases(request)) {
+    const matching = codeFiles.filter((file) =>
+      (file.literals ?? []).some((literal) => literal.includes(phrase)),
+    );
+    if (matching.length === 0 || matching.length > 2) continue;
+    for (const file of matching) {
+      pin(file.path, `matches "${phrase}"`, [`"${phrase}"`], phrase.split(" "), {});
+    }
+  }
+  // Sibling corroboration: same-directory files (plus one level of children —
+  // a screen's sub-tabs live below it) sharing the pin's NAME evidence.
+  // Name evidence only: sharing a body keyword like "run" is true of half
+  // the repo and floods the block. A shared path/symbol stem corroborates;
+  // a shared prose word does not.
+  const nameHit = (file: { path: string; symbols: { name: string }[] }, raw: string): boolean => {
+    const target = stem(raw);
+    if (target.length < 3) return false;
+    return (
+      parts(file.path).some((part) => related(stem(part), target)) ||
+      file.symbols.some((symbol) => parts(symbol.name).some((part) => related(stem(part), target)))
+    );
+  };
+  if (out.length > 0) {
+    for (const pinHint of [...out]) {
+      const dir = pinHint.path.includes("/") ? pinHint.path.split("/").slice(0, -1).join("/") : "";
+      if (dir.split("/").length < 2) continue;
+      for (const [path, ranked] of rankIndex) {
+        if (out.length >= MAX_HINTS) break;
+        const candidateDir = dirnameOf(path);
+        const sameDir = candidateDir === dir;
+        const childDir = candidateDir.startsWith(`${dir}/`) && candidateDir.split("/").length === dir.split("/").length + 1;
+        if ((!sameDir && !childDir) || out.some((hint) => hint.path === path)) continue;
+        const candidate = byPath.get(path);
+        if (!candidate) continue;
+        const shared = pinHint.keywords.filter((keyword) => nameHit(candidate, keyword));
+        if (shared.length === 0) continue;
+        pushRanked({ ...ranked, reason: `same area as ${basename(pinHint.path)}` });
+      }
+      if (out.length >= MAX_HINTS) break;
+    }
+  }
+  // Ranked fill only when nothing pinned: with strong evidence, ranked
+  // guesses are noise with inlined bodies attached. Without it, fill is the
+  // honest worst case — aimed guesses, each carrying its evidence.
+  if (out.length === 0) {
     for (const entry of suggestTaskFilesFromMap(map, request, limit)) {
       if (out.length >= limit) break;
       pushRanked(entry);
