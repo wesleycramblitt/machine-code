@@ -173,7 +173,6 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "g") { ctx.cycleAmbiguity(); ctx.draw(); return true; }
   if (data === "f") { ctx.cycleMinFit(); ctx.draw(); return true; }
   if (data === "F") { ctx.cycleFloors(); ctx.draw(); return true; }
-  if (data === "i" && s.newRunContextSectionKey === "section:issues") { ctx.startIssuePicker(); ctx.draw(); return true; }
   if (data === "m") { ctx.startModelPicker(); ctx.draw(); return true; }
   if (data === "e" || data === "p") { s.newRunInsert = true; ctx.draw(); return true; }
   if (data === "X" && s.newrun.item) { s.newrun.item = undefined; ctx.draw(); return true; }

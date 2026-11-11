@@ -70,7 +70,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const ctx = preview.context;
   const ap = preview.policy?.agents[run.agent];
   const newRunIssue = run.item ? findIssue(layout(repoRoot), run.item) : undefined;
-  const issueValue = run.item ?? "NA";
   const displayAgent = run.agent ? `${run.agent[0]!.toUpperCase()}${run.agent.slice(1)}` : run.agent;
   const resolvedAgent = resolveAgent(layout(repoRoot), run.agent, {
     agentPolicy: ap,
@@ -583,9 +582,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
         : isPromptTab
           ? ""
           : `${B}${G}space${R} ${G}✓${R}${D}/${R}${RED}✕${R}`,
-      !insert && activeSection.sectionKey === "section:issues"
-        ? command("i", "Issue", issueValue, run.item ? C : GR)
-        : "",
     ]),
     false,
     true,
