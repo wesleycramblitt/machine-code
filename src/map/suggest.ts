@@ -9,7 +9,7 @@
  */
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { readCachedMap, type RepoMap } from "./deterministic.js";
+import { readCachedMap, type MapSymbol, type RepoMap } from "./deterministic.js";
 
 const STOPWORDS = new Set([
   "the", "and", "for", "with", "from", "that", "this", "what", "how", "why",
@@ -27,6 +27,8 @@ export interface SuggestedFile {
   path: string;
   reason: string;
   score: number;
+  /** Request terms and symbol/section names that matched, for hint display. */
+  matched: string[];
 }
 
 /** Lowercase words as they appear in a request. */
@@ -231,6 +233,10 @@ export function suggestTaskFilesFromMap(
     let pathScore = 0;
     let reason = "";
     let codeHit = false;
+    const matched: string[] = [];
+    const match = (label: string): void => {
+      if (matched.length < 6 && !matched.includes(label)) matched.push(label);
+    };
     for (const token of wantedCode) {
       const weight = idf(token.stem) ** 2;
       const pathHit = filePathParts.some((part) => related(part, token.stem)) || path.includes(token.raw);
@@ -241,20 +247,30 @@ export function suggestTaskFilesFromMap(
         pathScore += 5 * weight;
         codeHit = true;
         reason ||= file.path;
+        // Path parts are self-evident from the path; matched terms name the
+        // distinctive evidence: symbols, sections, phrases.
       }
       if (symbolHit) {
         score += 2 * weight;
         codeHit = true;
-        if (!reason) {
-          const symbol = file.symbols.find((entry) => parts(entry.name).some((part) => related(stem(part), token.stem)));
-          if (symbol) reason = `${symbol.name} symbol`;
+        const symbol = file.symbols.find((entry) => parts(entry.name).some((part) => related(stem(part), token.stem)));
+        if (symbol) {
+          if (!reason) reason = `${symbol.name} symbol`;
+          match(symbol.name);
+        } else {
+          match(token.raw);
         }
       }
       if (sectionHit) {
         score += 1.5 * weight;
         codeHit = true;
         const heading = (file.sections ?? []).find((section) => related(stem(section), token.stem) || section.toLowerCase().includes(token.raw));
-        if (heading) reason ||= `section: ${heading}`;
+        if (heading) {
+          reason ||= `section: ${heading}`;
+          match(heading);
+        } else {
+          match(token.raw);
+        }
       }
       // Prose is only a tie-breaker, and only for files already anchored by
       // code evidence. This is what keeps "twice"/"pops" out of the ranking.
@@ -279,6 +295,7 @@ export function suggestTaskFilesFromMap(
         score += 4;
         codeHit = true;
         if (!reason) reason = `doc: ${phrase}`;
+        match(`"${phrase}"`);
       } else if (codeHit && docText.includes(phrase)) {
         score += 1;
       }
@@ -289,6 +306,7 @@ export function suggestTaskFilesFromMap(
       score,
       pathScore,
       codeHit,
+      matched,
     };
   });
 
@@ -313,6 +331,102 @@ export function suggestTaskFilesFromMap(
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, Math.max(1, limit))
     .map(({ codeHit: _codeHit, pathScore: _pathScore, ...entry }) => entry);
+}
+
+/** Whole files at or under this size inline whole; larger hints send outlines. */
+export const SMALL_HINT_BYTES = 4 * 1024;
+
+export interface HintSymbol {
+  name: string;
+  kind: string;
+  start: number;
+  end: number;
+}
+
+/** One suggested file: structure and matched evidence, not full text. */
+export interface FileHint {
+  path: string;
+  /** Matched symbols first, then file order. Capped. */
+  symbols: HintSymbol[];
+  /** Request terms (or `cited`) that surfaced the file. */
+  matched: string[];
+  reason: string;
+  bytes: number;
+  small: boolean;
+}
+
+function hintSymbols(file: { symbols: MapSymbol[] }, matched: ReadonlySet<string>, cap: number): HintSymbol[] {
+  const ordered = [...file.symbols].sort(
+    (a, b) => (matched.has(a.name) ? 0 : 1) - (matched.has(b.name) ? 0 : 1),
+  );
+  return ordered.slice(0, cap).map((symbol) => ({
+    name: symbol.name,
+    kind: symbol.kind,
+    start: symbol.line,
+    end: Math.max(symbol.line, symbol.end),
+  }));
+}
+
+/**
+ * Ranked files plus cited anchors as hint objects. Small files inline whole
+ * (see `small`); the rest travel as symbol outlines with their matched
+ * evidence, so the model reads one block instead of paging a dump.
+ */
+export function suggestHints(args: {
+  map: RepoMap;
+  request: string;
+  repoRoot?: string;
+  limit?: number;
+  exclude?: readonly string[];
+}): FileHint[] {
+  const { map, request } = args;
+  const limit = args.limit ?? 3;
+  const excluded = new Set(args.exclude ?? []);
+  const byPath = new Map(map.files.map((file) => [file.path, file]));
+  const out: FileHint[] = [];
+  const push = (path: string, reason: string, matched: string[], cited: boolean): void => {
+    if (excluded.has(path) || out.some((hint) => hint.path === path)) return;
+    const file = byPath.get(path);
+    const symbols = file ? hintSymbols(file, new Set(matched), cited ? 8 : 5) : [];
+    out.push({
+      path,
+      symbols,
+      matched: [...matched],
+      reason,
+      bytes: file?.bytes ?? 0,
+      small: (file?.bytes ?? Number.POSITIVE_INFINITY) < SMALL_HINT_BYTES,
+    });
+  };
+  for (const entry of suggestTaskFilesFromMap(map, request, limit)) {
+    push(entry.path, entry.reason, entry.matched, false);
+  }
+  if (args.repoRoot) {
+    for (const anchored of extractAnchoredFiles(args.repoRoot, request)) {
+      push(anchored, "cited in the request", ["cited"], true);
+    }
+  }
+  for (const anchored of extractBareAnchors(map, request)) {
+    push(anchored, "cited in the request", ["cited"], true);
+  }
+  return out;
+}
+
+/** Render outline-only hints as a compact context block. Whole files travel
+ * through the normal file path; only outlines render here. */
+export function renderHints(hints: readonly FileHint[]): string {
+  const outlined = hints.filter((hint) => !hint.small);
+  if (outlined.length === 0) return "";
+  const blocks: string[] = [
+    "Suggested files (outlines, not full text — read { \"path\", \"symbol\": \"<name>\" } for a block; files under 4KB arrive whole):",
+  ];
+  for (const hint of outlined) {
+    const matched = hint.matched.length > 0 ? ` · matched: ${hint.matched.slice(0, 4).join(", ")}` : "";
+    blocks.push(`${hint.path}${matched}`);
+    for (const symbol of hint.symbols) {
+      blocks.push(`  ${symbol.kind} ${symbol.name} (${symbol.start}-${symbol.end})`);
+    }
+  }
+  return blocks.join("\n");
 }
 
 /** Convenience wrapper for callers that have the layout root. */

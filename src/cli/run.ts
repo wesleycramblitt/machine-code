@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
-import { suggestFilesForRequest } from "../map/suggest.js";
+import { renderHints, suggestHints } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -370,12 +370,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   // Suggestions are context files. Attach them unless the run names its own
   // files; the composer shows the same suggestions and lets the user choose
-  // instead. No second `## Context` prompt block.
+  // instead. Hints send structure (symbols + matched terms), not dumps:
+  // files under 4KB inline whole, the rest travel as outlines the model
+  // pulls one block at a time. No second `## Context` prompt block.
   // Suggestion file list, computed up front and recorded once the recorder
   // exists below. Best effort; the run still has the issue without it.
   let suggestedFiles: string[] = [];
   let builtMapFiles = 0;
-  if (!explicitFileInclude) {
+  let hintOutlines = "";
+  const hintsOn = flags.get("hints") !== "false";
+  if (!explicitFileInclude && hintsOn) {
     try {
       const { buildRepoMap } = await import("../map/deterministic.js");
       // Use the freshly built map directly: re-reading it from disk re-opens
@@ -383,17 +387,20 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const builtMap = await buildRepoMap(l.repoRoot);
       builtMapFiles = builtMap.map.files.length;
       const suggestionRequest = (attachedIssue?.prompt ?? request).split(/\n## Todo\b/)[0]!.trim();
-      suggestedFiles = suggestFilesForRequest({
+      const hints = suggestHints({
         map: builtMap.map,
         request: suggestionRequest,
         repoRoot: l.repoRoot,
         limit: 3,
         ...(attachedIssue?.rel ? { exclude: [attachedIssue.rel] } : {}),
       });
-      if (suggestedFiles.length > 0) {
+      suggestedFiles = hints.map((hint) => hint.path);
+      const smallFiles = hints.filter((hint) => hint.small).map((hint) => hint.path);
+      if (smallFiles.length > 0) {
         contextInclude = contextInclude ?? {};
-        contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...suggestedFiles])];
+        contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...smallFiles])];
       }
+      hintOutlines = renderHints(hints);
     } catch {
       // Suggestions are best effort; the run still has the issue.
     }
@@ -588,13 +595,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // The witness fires whether or not suggestions applied: files:[] with a
   // real map means the ranker filtered everything, mapFiles is the map size,
   // and skipped names why nothing was attached. Never silently empty.
-  if (!explicitFileInclude) {
+  if (!explicitFileInclude && hintsOn) {
     recorder.event("suggestions", {
       files: suggestedFiles,
       mapFiles: builtMapFiles,
     });
   } else {
-    recorder.event("suggestions", { files: [], skipped: "explicit-include" });
+    recorder.event("suggestions", {
+      files: [],
+      skipped: explicitFileInclude ? "explicit-include" : "disabled",
+    });
   }
   for (const result of probeResults) {
     recorder.event("availability_probe", {
@@ -852,7 +862,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings, sections: contextBundle.sections });
     recorder.event("context_assembled", { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
   }
-  const contextText = contextBundle.text || undefined;
+  const contextText =
+    [contextBundle.text, hintOutlines].filter((part): part is string => Boolean(part)).join("\n\n") ||
+    undefined;
   // Pin the assembled file sources into the working set so the first prompt
   // already carries the code the run is about, instead of the model paging
   // for it over several turns.
@@ -967,6 +979,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seededFull.length > 0 ? { seededFull } : {}),
+      ...(hintsOn ? {} : { hints: false }),
       skipMap,
       skipSemantic,
       signal: abort.signal,

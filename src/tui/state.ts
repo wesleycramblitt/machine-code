@@ -139,6 +139,8 @@ export interface TuiState {
   newRunContextFiltering: boolean;
   newRunContextExcluded: Set<string>;
   newRunContextIncluded: Set<string>;
+  /** File-hint suggestions on/off for this run (default on). */
+  newRunHints: boolean;
   /** Explicit per-skill mode choices (include | on-demand | exclude). */
   newRunSkillModes: Map<string, SkillMode>;
   /** Modes as rendered this frame (single source for space-cycling). */
@@ -258,6 +260,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunContextFiltering: false,
     newRunContextExcluded: new Set<string>(),
     newRunContextIncluded: new Set<string>(),
+    newRunHints: true,
     newRunSkillModes: new Map<string, SkillMode>(),
     newRunSkillShown: new Map<string, SkillMode>(),
     newRunPreviewCache: null,

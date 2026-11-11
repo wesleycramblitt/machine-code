@@ -26,7 +26,7 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { buildRepoMap } from "./map/deterministic.js";
-import { suggestFilesForRequest } from "./map/suggest.js";
+import { renderHints, suggestHints } from "./map/suggest.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
@@ -62,6 +62,8 @@ export interface OrchestrateInput {
   seedFiles?: string[];
   /** Repo-relative files inlined whole in the assembled context (read-denied while unchanged). */
   seededFull?: string[];
+  /** Rank + inline suggested files (default true). False skips suggestions; explicit includes still apply. */
+  hints?: boolean;
   /** Skip the deterministic map and module index up front. */
   skipMap?: boolean;
   skipSemantic?: boolean;
@@ -166,6 +168,8 @@ export interface ExecuteIssueInput {
   contextText?: string;
   /** Extra context selected by the composer/builder (the issue file, usually). */
   include?: ContextInclude;
+  /** Rank + inline suggested files (default true). False skips suggestions; explicit includes still apply. */
+  hints?: boolean;
   skipMap?: boolean;
   skipSemantic?: boolean;
   signal?: AbortSignal;
@@ -192,24 +196,36 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   // stale/null window between the build and the suggestion pass.
   const builtMap = await buildRepoMap(layout.repoRoot);
   const suggestionRequest = packet.goal.split(/\n## Todo\b/)[0]!.trim();
-  const suggested = suggestFilesForRequest({
-    map: builtMap.map,
-    request: suggestionRequest,
-    repoRoot: layout.repoRoot,
-    limit: 3,
-  });
+  // Hints send structure (symbols + matched terms), not dumps: files under
+  // 4KB inline whole through `files`, the rest travel as an outline block
+  // the model pulls one symbol at a time.
+  let suggested: string[] = [];
+  let hintOutlines = "";
+  let hintedSmall: string[] = [];
+  if (input.hints !== false) {
+    const hints = suggestHints({
+      map: builtMap.map,
+      request: suggestionRequest,
+      repoRoot: layout.repoRoot,
+      limit: 3,
+    });
+    suggested = hints.map((hint) => hint.path);
+    hintedSmall = hints.filter((hint) => hint.small).map((hint) => hint.path);
+    hintOutlines = renderHints(hints);
+  }
   // Determinism witness: files:[] with a non-empty map and request means the
   // ranker filtered everything; mapFiles:0 means no map. Never silently empty.
   recorder.event("suggestions", {
     files: suggested,
     requestChars: suggestionRequest.length,
     mapFiles: builtMap.map.files.length,
+    ...(input.hints === false ? { skipped: "disabled" } : {}),
   });
   const include: ContextInclude | undefined =
-    input.include || suggested.length > 0
+    input.include || hintedSmall.length > 0
       ? {
           ...(input.include ?? {}),
-          files: [...new Set([...(input.include?.files ?? []), ...suggested])],
+          files: [...new Set([...(input.include?.files ?? []), ...hintedSmall])],
         }
       : undefined;
   const contextBundle = await assembleContext({
@@ -238,7 +254,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     });
   }
   const contextText =
-    [contextBundle.text, input.contextText].filter((part): part is string => Boolean(part)).join("\n\n") ||
+    [contextBundle.text, hintOutlines, input.contextText].filter((part): part is string => Boolean(part)).join("\n\n") ||
     undefined;
   const seedFiles = [
     ...packet.context,
@@ -516,21 +532,24 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
   let researchContextText = input.contextText;
   let researchSeedFiles = input.seedFiles;
   let researchSeededFull = input.seededFull;
-  if (selectedName === "research") {
+  if (selectedName === "research" && input.hints !== false) {
     const researchMap = await buildRepoMap(layout.repoRoot);
     const researchRequest = input.request.split(/\n## Todo\b/)[0]!.trim();
-    const researchSuggested = suggestFilesForRequest({
+    const researchHints = suggestHints({
       map: researchMap.map,
       request: researchRequest,
       repoRoot: layout.repoRoot,
       limit: 5,
     });
+    const researchSuggested = researchHints.map((hint) => hint.path);
     recorder.event("suggestions", {
       files: researchSuggested,
       requestChars: researchRequest.length,
       mapFiles: researchMap.map.files.length,
     });
-    const researchFiles = [...new Set([...(input.seedFiles ?? []), ...researchSuggested])];
+    const researchSmall = researchHints.filter((hint) => hint.small).map((hint) => hint.path);
+    const researchOutlines = renderHints(researchHints);
+    const researchFiles = [...new Set([...(input.seedFiles ?? []), ...researchSmall])];
     // Files the caller already pinned (and inlined) need no second copy:
     // assemble only the newly suggested ones, but pin the union.
     const alreadyInline = new Set(input.seedFiles ?? []);
@@ -558,7 +577,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       });
     }
     researchContextText =
-      [researchBundle.text, input.contextText].filter((part): part is string => Boolean(part)).join("\n\n") ||
+      [researchBundle.text, researchOutlines, input.contextText].filter((part): part is string => Boolean(part)).join("\n\n") ||
       undefined;
     const bundledFiles = researchBundle.sources
       .filter((source) => source.kind === "file" && typeof source.ref === "string")

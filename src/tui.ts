@@ -279,6 +279,7 @@ export async function runTui(): Promise<void> {
     s.newRunSkillModes.clear();
     s.newRunContextExcluded.clear();
     s.newRunContextIncluded.clear();
+    s.newRunHints = true;
     s.newRunPreviewCache = null;
     s.newRunParentId = null;
     s.modelPick = null;
@@ -615,6 +616,9 @@ export async function runTui(): Promise<void> {
     if (s.newRunSkillModes.size > 0) {
       args.push("--skill-modes", JSON.stringify(Object.fromEntries(s.newRunSkillModes)));
     }
+    if (!s.newRunHints) {
+      args.push("--hints", "false");
+    }
     if (s.newrun.prompt.trim().length > 0) args.push(s.newrun.prompt);
     return args;
   };
@@ -924,6 +928,7 @@ export async function runTui(): Promise<void> {
         contextFiltering: s.newRunContextFiltering,
         excluded: s.newRunContextExcluded,
         included: s.newRunContextIncluded,
+        hintsEnabled: s.newRunHints,
         skillModes: s.newRunSkillModes,
         skillShown: s.newRunSkillShown,
         preview: modelPreview(),

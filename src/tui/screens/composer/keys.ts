@@ -109,6 +109,7 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     return true;
   }
   if (data === "/") { s.newRunContextFiltering = true; ctx.draw(); return true; }
+  if (data === "H") { s.newRunHints = !s.newRunHints; ctx.draw(); return true; }
   if (data === "\x1b") { s.screen = "list"; ctx.draw(); return true; }
   if (data === "h" || data === "\x1b[D") {
     s.newRunContextTab = Math.max(0, s.newRunContextTab - 1);

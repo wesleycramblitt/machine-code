@@ -27,7 +27,7 @@ import { contextBudget } from "../../../context/budget.js";
 import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
 import { listReferenceEntries } from "../../../references/store.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "../../../map/deterministic.js";
-import { suggestTaskFilesFromMap } from "../../../map/suggest.js";
+import { suggestHints, type FileHint } from "../../../map/suggest.js";
 import { loadModuleIndex, renderModuleIndex } from "../../../map/modules.js";
 import { skillListItems, toolListItems, tokensForChars } from "../../tools.js";
 import { loadAvailability } from "../../../availability.js";
@@ -112,11 +112,13 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const cachedMap = readCachedMap(repoRoot);
   const runIssue = run.item ? findIssue(newRunLayout, run.item) : null;
   const suggestionPrompt = run.prompt.trim() || runIssue?.prompt || "";
-  const suggestedFiles = new Set(
-    cachedMap
-      ? suggestTaskFilesFromMap(cachedMap, suggestionPrompt, 3).map((entry) => entry.path)
-      : [],
-  );
+  // Hints refresh from the prompt every frame: matched terms and the top
+  // symbols per file, so the row already tells the model where to read.
+  // Off means no suggested marks and no auto-seeding for this run.
+  const fileHints: FileHint[] = cachedMap && props.hintsEnabled
+    ? suggestHints({ map: cachedMap, request: suggestionPrompt, repoRoot, limit: 3 })
+    : [];
+  const suggestedFiles = new Map(fileHints.map((hint) => [hint.path, hint]));
   const issueItems: ContextPanelItem[] = itemsFor(["issue"]);
   // Every issue as an available row the user can search and opt into with
   // space, filtered by the selected agent. The issue file is the work item's
@@ -160,8 +162,14 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (excludedFilePrefixes.some((prefix) => file.path.startsWith(prefix))) continue;
     const key = `file:${file.path}`;
     if (knownFiles.has(key)) continue;
+    const hint = suggestedFiles.get(file.path);
+    const hintLabel = !hint
+      ? "available"
+      : hint.matched.length > 0
+        ? `suggested: ${hint.matched.slice(0, 3).join(", ")}`
+        : "suggested";
     fileItems.push({
-      text: `${file.path} · ${suggestedFiles.has(file.path) ? "suggested" : "available"}`,
+      text: `${file.path} · ${hintLabel}`,
       chars: file.bytes,
       exists: true,
       key,
@@ -569,6 +577,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       compact("h/l", "tabs", Y),
       compact("j/k", "sel", M),
       compact("/", "filter", BL),
+      compact("H", props.hintsEnabled ? "hints on" : "hints off", props.hintsEnabled ? C : GR),
       activeSection.sectionKey === "section:skills"
         ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
         : isPromptTab

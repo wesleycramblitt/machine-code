@@ -145,6 +145,8 @@ Usage:
                                     sections or sources from a run
                                     [--context-include '<json>'] add issue/knowledge/plan files
                                     selected in the composer
+                                    [--hints false] turn off file-hint suggestions
+                                    (on by default; explicit includes still apply)
                                     [--skill-modes '<json>'] per-skill include|on-demand|exclude
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
@@ -278,6 +280,7 @@ export const BOOLEAN_FLAGS = new Set([
   "cascade",
   "yes",
   "keep-runs",
+  "hints",
 ]);
 
 export function parseFlags(argv: string[]): { flags: Map<string, string>; positional: string[] } {

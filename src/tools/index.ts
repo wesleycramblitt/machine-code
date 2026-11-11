@@ -278,6 +278,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     description:
       "Read a file; returns numbered lines. A bare read returns the whole file up to the per-call page cap — " +
       "over the cap it returns the symbol outline instead of a truncated dump. " +
+      "An offset/limit window inside one code block auto-expands to the enclosing symbol when it fits. " +
       "Use symbol/around/offset+limit for a targeted block, or allow_large for a bigger file.",
     parameters: ReadParams,
     prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
@@ -404,6 +405,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
                 capBytes,
               );
               parts.push(`### ${params.path}:${range.start}-${range.end} (${name})\n${page.text}`);
+              ctx.state?.markRepeat(symbolReadKey(params.path, name));
               continue;
             }
             const found = findSymbolLine(lines, name);
@@ -548,12 +550,53 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
             limit = Math.max(1, range.end - range.start + 1);
             header = `${params.path}:${range.start}-${range.end} (${range.name})`;
             singleResolved = true;
+            if (params.symbol) ctx.state?.markRepeat(symbolReadKey(params.path, range.name));
           }
         }
 
         const pageParts: string[] = [];
         let pageNextOffset: number | undefined;
         const wantPage = singleResolved || params.offset != null || params.limit != null || parts.length === 0;
+        // Plain range read inside one code block: return the enclosing
+        // symbol, not the arbitrary window. The model pages because windows
+        // are all it can hold; handing it the unit kills the next three
+        // paging calls. Skipped when the window already covers the block,
+        // spans blocks, or the block exceeds the byte cap.
+        if (
+          wantPage &&
+          !singleResolved &&
+          !wantsSymbols &&
+          !wantsSections &&
+          !params.symbol &&
+          !params.section &&
+          params.around == null &&
+          (params.offset != null || params.limit != null)
+        ) {
+          const reqStart = Math.max(1, Math.floor(params.offset ?? 1));
+          const reqEnd = reqStart + Math.max(1, Math.floor(params.limit ?? lines.length)) - 1;
+          const enclosing = enclosingSymbol(params.path, raw, lines, reqStart, Math.min(reqEnd, lines.length));
+          if (enclosing) {
+            const spanBytes = Buffer.byteLength(
+              lines.slice(enclosing.start - 1, enclosing.end).join("\n"),
+              "utf8",
+            );
+            if (spanBytes <= capBytes) {
+              const key = symbolReadKey(params.path, enclosing.name);
+              if (ctx.state?.repeatSeen(key)) {
+                return ok(
+                  `[${enclosing.name} in ${params.path} already returned earlier in this run — see above]`,
+                );
+              }
+              const page = numberLinesCapped(lines, enclosing.start, enclosing.end - enclosing.start + 1, capBytes);
+              ctx.state?.markRepeat(key);
+              return remember(
+                `### ${params.path}:${enclosing.start}-${enclosing.end} (${enclosing.name}; expanded from lines ${reqStart}-${Math.min(reqEnd, lines.length)} to the enclosing block)\n${page.text}`,
+                "symbol",
+                `${params.path}#symbol:${enclosing.name}`,
+              );
+            }
+          }
+        }
         if (wantPage) {
           if (offset > lines.length) {
             const pastEnd = `offset ${offset} is past the end of ${params.path} (${lines.length} lines).`;
@@ -972,6 +1015,38 @@ function renderEditResult(path: string, next: string, changes: FileChange[], cap
     parts.push(text);
   }
   return parts.join("\n");
+}
+
+/** Stable key for one symbol's block, shared by explicit symbol reads and
+ *  auto-expanded windows so every form deduplicates against the same mark. */
+function symbolReadKey(path: string, name: string): string {
+  return `read:${stableArgs({ path, symbol: name })}`;
+}
+
+/**
+ * Innermost top-level symbol fully containing [reqStart, reqEnd], with
+ * deterministic end lines (next symbol minus one, blank-trimmed). Null when
+ * the request spans symbols, sits outside them, or already covers the whole
+ * block — expansion must add value, not bytes.
+ */
+function enclosingSymbol(
+  path: string,
+  raw: string,
+  lines: readonly string[],
+  reqStart: number,
+  reqEnd: number,
+): { name: string; kind: string; start: number; end: number } | null {
+  const found = extractSymbols(path, raw);
+  for (const [index, symbol] of found.entries()) {
+    const nextLine = found[index + 1]?.line ?? lines.length + 1;
+    let end = nextLine - 1;
+    while (end > symbol.line && (lines[end - 1] ?? "").trim() === "") end -= 1;
+    end = Math.max(symbol.line, end);
+    if (symbol.line <= reqStart && end >= reqEnd && end - symbol.line + 1 > reqEnd - reqStart + 1) {
+      return { name: symbol.name, kind: symbol.kind, start: symbol.line, end };
+    }
+  }
+  return null;
 }
 
 /** A numbered window around the closest line, so a miss re-anchors in place. */

@@ -69,6 +69,8 @@ export interface ComposerProps extends Viewport {
   contextFiltering: boolean;
   excluded: ReadonlySet<string>;
   included: ReadonlySet<string>;
+  /** File-hint suggestions on/off; when off, no row is marked suggested. */
+  hintsEnabled: boolean;
   skillModes: ReadonlyMap<string, SkillMode>;
   /** Render memo: modes shown per skill this frame (mutated in place). */
   skillShown: Map<string, SkillMode>;
