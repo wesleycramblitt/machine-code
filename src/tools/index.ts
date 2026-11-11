@@ -948,11 +948,11 @@ function findCollapsed(
   return { start, end, count };
 }
 
-/** One validated change: what was there, what replaced it. */
+/** One validated change: what was there, what replaced it, where it landed. */
 interface FileChange {
   oldText: string;
   newText: string;
-  /** 1-based start line of the new block in the final file, when known. */
+  /** 1-based start line of the new block in the final file. */
   atLine?: number;
   /** Identical occurrences changed by one replaceAll. */
   occurrences?: number;
@@ -987,8 +987,10 @@ function renderEditResult(path: string, next: string, changes: FileChange[], cap
   let from = 0;
   for (const change of changes) {
     if (used >= capBytes) break;
+    // The planner locates insertions; fall back to a search only if the
+    // location is missing.
     let startLine = change.atLine;
-    if (change.newText) {
+    if (startLine === undefined && change.newText) {
       const at = next.indexOf(change.newText, from);
       if (at < 0) continue;
       from = at + change.newText.length;
@@ -1091,6 +1093,7 @@ interface FileEditSpec {
 /** A validated file edit: bytes ready to write plus self-verifying output. */
 interface PlannedFileEdit {
   abs: string;
+  rel: string;
   next: string;
   changes: FileChange[];
   summary: string;
@@ -1187,6 +1190,7 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
     const after = replacement === "" ? 0 : replacement.split("\n").length - (replacement.endsWith("\n") ? 1 : 0);
     return {
       abs,
+      rel: pathText,
       next,
       changes:
         replacement === ""
@@ -1265,8 +1269,26 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   }
 
   const next = raw.slice(0, startChar) + working + raw.slice(endChar);
+  // Locate every insertion in the final file: results and the working set
+  // point at exact lines instead of re-searching. Deletions anchor at their
+  // pre-image line (close enough under a render margin).
+  {
+    let from = 0;
+    for (const change of changes) {
+      if (!change.newText) {
+        const atOld = raw.indexOf(change.oldText);
+        change.atLine = atOld < 0 ? scopeStart : raw.slice(0, atOld).split("\n").length;
+        continue;
+      }
+      const at = next.indexOf(change.newText, from);
+      if (at < 0) continue;
+      from = at + change.newText.length;
+      change.atLine = next.slice(0, at).split("\n").length;
+    }
+  }
   return {
     abs,
+    rel: pathText,
     next,
     changes,
     summary:
@@ -1313,6 +1335,13 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           for (const plan of plans) writeFileSync(plan.abs, plan.next, "utf8");
           ctx.state?.noteMutation();
+          for (const plan of plans) {
+            for (const change of plan.changes) {
+              if (change.atLine === undefined) continue;
+              const height = change.newText ? change.newText.split("\n").length : 1;
+              ctx.state?.noteEditSpan(plan.rel, change.atLine, change.atLine + height - 1);
+            }
+          }
           const out: string[] = [`applied edits to ${plans.length} file(s):`];
           if (plans.length === 1) {
             out.push("(one file per call works, but batch independent files in one files[] call)");
@@ -1335,6 +1364,11 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         if ("error" in planned) return fail(planned.error);
         writeFileSync(planned.abs, planned.next, "utf8");
         ctx.state?.noteMutation();
+        for (const change of planned.changes) {
+          if (change.atLine === undefined) continue;
+          const height = change.newText ? change.newText.split("\n").length : 1;
+          ctx.state?.noteEditSpan(planned.rel, change.atLine, change.atLine + height - 1);
+        }
         const rendered = renderEditResult(params.path ?? "file", planned.next, planned.changes);
         return ok(planned.summary + (rendered ? `\n${rendered}` : ""));
       } catch (error) {

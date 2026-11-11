@@ -287,6 +287,25 @@ export class RunStateStore {
   /** Files that are in play; rendered as current content, not transcript. */
   private workingFiles = new Map<string, WorkingFileState>();
   /**
+   * Precise changed spans per file (new-file coordinates), recorded by the
+   * edit tool. entry.ranges mixes in read windows, which is fine for legacy
+   * rendering but too coarse for "show what changed": spans render instead.
+   */
+  private editSpans = new Map<string, Array<[number, number]>>();
+  /**
+   * Record a changed line span (1-based, inclusive, new-file coordinates).
+   * Marks the working file changed and tracks the precise span separately
+   * from read windows, so the render shows what changed — not everywhere
+   * the model looked while finding it.
+   */
+  noteEditSpan(path: string, start: number, end: number): void {
+    if (!path || start < 1) return;
+    this.noteWorkingFile(path, [start, Math.max(start, end)], this.currentTurn(), true);
+    const spans = this.editSpans.get(path) ?? [];
+    spans.push([start, Math.max(start, end)]);
+    this.editSpans.set(path, mergeRanges(spans).slice(-8));
+  }
+  /**
    * Files inlined whole and numbered in the assembled `## Context` block.
    * A read of an unmodified seeded file re-dumps bytes the model holds, so
    * the read tool answers those with a pointer instead. Keyed by file
@@ -667,12 +686,29 @@ export class RunStateStore {
       let ranges: Array<[number, number]>;
       if (raw.length <= perFileChars) {
         ranges = [[1, total]];
+      } else if (entry.changed && entry.ranges.length > 0) {
+        // Changed files render their edit spans plus a margin, re-read from
+        // disk: the model sees what it changed in current form. Read windows
+        // that led to the edit stay in the transcript. No head/tail padding.
+        const spans = this.editSpans.get(entry.path) ?? [];
+        const base = spans.length > 0 ? spans : entry.ranges;
+        if (base.length === 0) {
+          // Changed by something outside the run (shared tree): location
+          // unknown, fall back to the head of the file.
+          ranges = [[1, Math.min(40, total)]];
+        } else {
+          ranges = mergeRanges(
+            base.map(
+              ([start, end]) => [Math.max(1, start - 10), Math.min(total, end + 10)] as [number, number],
+            ),
+          );
+        }
       } else {
         ranges = entry.ranges.length > 0 ? mergeRanges(entry.ranges) : [];
         ranges.push([1, Math.min(40, total)]);
-        // A preloaded or fully read file is usually edited at the end. Keep the
-        // tail visible so the model does not need a re-read just to append.
-        if (entry.preloaded || entry.full) {
+        // A fully read file is usually edited at the end. Keep the tail
+        // visible so the model does not need a re-read just to append.
+        if (entry.full) {
           ranges.push([Math.max(1, total - 39), total]);
         }
         ranges = mergeRanges(ranges);

@@ -353,6 +353,10 @@ export interface FileHint {
   reason: string;
   bytes: number;
   small: boolean;
+  /** Direct imports (repo-relative paths). */
+  imports: string[];
+  /** Files that import this one. */
+  importedBy: string[];
 }
 
 function hintSymbols(file: { symbols: MapSymbol[] }, matched: ReadonlySet<string>, cap: number): HintSymbol[] {
@@ -383,6 +387,15 @@ export function suggestHints(args: {
   const limit = args.limit ?? 3;
   const excluded = new Set(args.exclude ?? []);
   const byPath = new Map(map.files.map((file) => [file.path, file]));
+  // Reverse imports once: who depends on each file.
+  const importedBy = new Map<string, string[]>();
+  for (const file of map.files) {
+    for (const imported of file.imports ?? []) {
+      const list = importedBy.get(imported) ?? [];
+      if (!list.includes(file.path)) list.push(file.path);
+      importedBy.set(imported, list);
+    }
+  }
   const out: FileHint[] = [];
   const push = (path: string, reason: string, matched: string[], cited: boolean): void => {
     if (excluded.has(path) || out.some((hint) => hint.path === path)) return;
@@ -395,6 +408,8 @@ export function suggestHints(args: {
       reason,
       bytes: file?.bytes ?? 0,
       small: (file?.bytes ?? Number.POSITIVE_INFINITY) < SMALL_HINT_BYTES,
+      imports: [...(file?.imports ?? [])],
+      importedBy: [...(importedBy.get(path) ?? [])],
     });
   };
   for (const entry of suggestTaskFilesFromMap(map, request, limit)) {
@@ -421,7 +436,11 @@ export function renderHints(hints: readonly FileHint[]): string {
   ];
   for (const hint of outlined) {
     const matched = hint.matched.length > 0 ? ` · matched: ${hint.matched.slice(0, 4).join(", ")}` : "";
-    blocks.push(`${hint.path}${matched}`);
+    const relations = [
+      ...(hint.imports.length > 0 ? [`imports: ${hint.imports.slice(0, 6).join(", ")}${hint.imports.length > 6 ? ", …" : ""}`] : []),
+      ...(hint.importedBy.length > 0 ? [`imported by: ${hint.importedBy.slice(0, 6).join(", ")}${hint.importedBy.length > 6 ? ", …" : ""}`] : []),
+    ].join(" · ");
+    blocks.push(`${hint.path}${matched}${relations ? `\n  ${relations}` : ""}`);
     for (const symbol of hint.symbols) {
       blocks.push(`  ${symbol.kind} ${symbol.name} (${symbol.start}-${symbol.end})`);
     }
