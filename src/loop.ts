@@ -239,11 +239,27 @@ function assistantText(message: AssistantMessage | undefined): string {
  * A model-rotation retry carries the failed attempt's messages, which already
  * end with the request user message that prompt() is about to add. Without
  * stripping, the request is sent twice as two identical adjacent user
- * messages. Fresh starts never hit this: their carried list is empty.
+ * messages (observed: [system, user, assistant-empty, user]). The failed
+ * attempt typically ends with an empty assistant message (the model returned
+ * nothing), so pop those first, then the duplicated request underneath.
+ * Fresh starts never hit this: their carried list is empty.
  */
-function stripTrailingPrompt(messages: AgentMessage[], request: string): AgentMessage[] {
-  if (messages.length === 0) return messages;
-  const last = messages[messages.length - 1] as { role?: string; content?: unknown } | undefined;
+export function stripTrailingPrompt(messages: AgentMessage[], request: string): AgentMessage[] {
+  let end = messages.length;
+  const isEmptyAssistant = (message: AgentMessage): boolean => {
+    if ((message as { role?: string }).role !== "assistant") return false;
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content) || content.length === 0) return true;
+    return content.every(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: string }).type === "text" &&
+        !((block as { text?: unknown }).text ?? ""),
+    );
+  };
+  while (end > 0 && isEmptyAssistant(messages[end - 1]!)) end -= 1;
+  const last = messages[end - 1] as { role?: string; content?: unknown } | undefined;
   const content = last?.content;
   const text =
     typeof content === "string"
@@ -255,8 +271,8 @@ function stripTrailingPrompt(messages: AgentMessage[], request: string): AgentMe
             .map((block) => String(block.text ?? ""))
             .join("")
         : "";
-  if (last?.role === "user" && text === request) return messages.slice(0, -1);
-  return messages;
+  if (last?.role === "user" && text === request) end -= 1;
+  return end === messages.length ? messages : messages.slice(0, end);
 }
 
 export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {

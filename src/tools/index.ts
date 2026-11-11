@@ -840,7 +840,7 @@ const EditParams = Type.Object({  path: Type.Optional(Type.String({ description:
   files: Type.Optional(
     Type.Array(FileEditEntry, {
       description:
-        "Edits across several files, applied atomically: every file validates first, then all write. Prefer this for cross-file changes — one call instead of one per file. Takes either files[] or the single-file form, not both.",
+        "Edits across several files, applied atomically: every file validates first, then all write. Prefer this for cross-file changes — one call instead of one per file. When files[] and single-file fields are both present, files[] wins.",
     }),
   ),
 });
@@ -1271,17 +1271,11 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
       try {
         // Cross-file form: every file validates first, then all write.
         // Nothing is written when any file fails, so one call replaces one
-        // per file with a single all-or-nothing report.
+        // per file with a single all-or-nothing report. When both forms are
+        // present (hedging models fill every field), files[] wins and the
+        // single-file fields are ignored — failing here costs a call to
+        // learn what ignoring them teaches for free.
         if (params.files && params.files.length > 0) {
-          const singlePresent =
-            params.oldString !== undefined ||
-            params.newString !== undefined ||
-            (params.edits !== undefined && params.edits.length > 0) ||
-            params.symbol !== undefined ||
-            params.section !== undefined;
-          if (singlePresent) {
-            return fail("edit takes either files[] or the single-file form, not both");
-          }
           const plans: PlannedFileEdit[] = [];
           const errors: string[] = [];
           for (const [index, file] of params.files.entries()) {

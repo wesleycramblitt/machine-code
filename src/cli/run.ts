@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
-import { enrichHints, renderHints, suggestHints } from "../map/suggest.js";
+import { enrichHints, renderHints, suggestHints, suggestionText } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -386,7 +386,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // a stale/null window between the build and the suggestion pass.
       const builtMap = await buildRepoMap(l.repoRoot);
       builtMapFiles = builtMap.map.files.length;
-      const suggestionRequest = (attachedIssue?.prompt ?? request).split(/\n## Todo\b/)[0]!.trim();
+      const suggestionRequest = suggestionText(attachedIssue?.prompt ?? request);
       const hints = suggestHints({
         map: builtMap.map,
         request: suggestionRequest,

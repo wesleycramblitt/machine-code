@@ -141,7 +141,10 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               ? [hint("j/k", "select"), hint("^D/^U", "page", Y)]
               : []),
     ]);
-    footerMapTokens = props.mapTokens(s.worktree ?? s.repoRoot);
+    // Index health is about the repo the user operates, not the run's
+    // ephemeral worktree (which never carries a map cache, so this always
+    // read MAP✗ MOD- and implied something was broken).
+    footerMapTokens = props.mapTokens(s.repoRoot);
     const sectionBar = wrapTokenList(
       RUN_SECTIONS.map((entry) =>
         entry === section

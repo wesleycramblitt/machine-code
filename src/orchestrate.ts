@@ -26,7 +26,7 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { buildRepoMap } from "./map/deterministic.js";
-import { enrichHints, renderHints, suggestHints } from "./map/suggest.js";
+import { enrichHints, renderHints, suggestHints, suggestionText } from "./map/suggest.js";
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
@@ -190,7 +190,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   // Use the freshly built map directly: re-reading it from disk re-opens a
   // stale/null window between the build and the suggestion pass.
   const builtMap = await buildRepoMap(layout.repoRoot);
-  const suggestionRequest = packet.goal.split(/\n## Todo\b/)[0]!.trim();
+  const suggestionRequest = suggestionText(packet.goal);
   // Hints send structure (symbols + matched terms), not dumps: files under
   // 4KB inline whole through `files`, the rest travel as an outline block
   // the model pulls one symbol at a time.
@@ -522,7 +522,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
   let researchSeedFiles = input.seedFiles;
   if (selectedName === "research" && input.hints !== false) {
     const researchMap = await buildRepoMap(layout.repoRoot);
-    const researchRequest = input.request.split(/\n## Todo\b/)[0]!.trim();
+    const researchRequest = suggestionText(input.request);
     const researchHints = suggestHints({
       map: researchMap.map,
       request: researchRequest,

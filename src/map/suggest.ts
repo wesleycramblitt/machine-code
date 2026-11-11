@@ -433,6 +433,20 @@ function hintSymbols(
 }
 
 /**
+ * Ranker input: the task's words, not the harness wrapper. Harness boilerplate
+ * ("Auto-created from run." on auto-filed issues, the ## Todo plan section)
+ * is provenance and planning state, not task vocabulary — ranking on it lets
+ * wrapper words ("created", "run") outvote the actual topic and hijack the
+ * top hints with unrelated files. Strip it at every suggestion site.
+ */
+export function suggestionText(request: string): string {
+  return request
+    .replace(/^Auto-created from run\.\s*/i, "")
+    .split(/\n## Todo\b/)[0]!
+    .trim();
+}
+
+/**
  * Ranked files plus cited anchors as hint objects. Small files inline whole
  * (see `small`); the rest travel as symbol outlines with their matched
  * evidence, so the model reads one block instead of paging a dump.
@@ -534,7 +548,13 @@ export function enrichHints(hints: readonly FileHint[], root: string): FileHint[
         }
       }
       if (hits.length > 0 && hits.length <= KEYWORD_LINES_MAX_HITS) {
-        keywordLines.push({ keyword, lines: hits.slice(0, KEYWORD_LINES_SHOWN), hits: hits.length });
+        // First hits cluster in the doc head; the fix-relevant hit is often
+        // the last one (code tail). Show both ends instead of head only.
+        const shown = hits.slice(0, KEYWORD_LINES_SHOWN);
+        if (hits.length > KEYWORD_LINES_SHOWN && !shown.includes(hits[hits.length - 1]!)) {
+          shown.push(hits[hits.length - 1]!);
+        }
+        keywordLines.push({ keyword, lines: shown, hits: hits.length });
       }
     }
     const bodies: Array<{ symbol: string; start: number; text: string }> = [];
@@ -578,8 +598,12 @@ export function renderHints(hints: readonly FileHint[]): string {
     }
     for (const entry of hint.keywordLines ?? []) {
       if (evidence.some((line) => line.startsWith(`"${entry.keyword}"`))) continue;
-      const extra = entry.hits > entry.lines.length ? ` (+${entry.hits - entry.lines.length} more)` : "";
-      evidence.push(`"${entry.keyword}" → lines ${entry.lines.join(", ")}${extra}`);
+      const omitted = entry.hits - entry.lines.length;
+      const shown = omitted > 0 && entry.lines.length > 1
+        ? `${entry.lines.slice(0, -1).join(", ")} … ${entry.lines[entry.lines.length - 1]}`
+        : entry.lines.join(", ");
+      const extra = omitted > 0 ? ` (+${omitted} more)` : "";
+      evidence.push(`"${entry.keyword}" → lines ${shown}${extra}`);
     }
     if (evidence.length > 0) blocks.push(`  ${evidence.join("; ")}`);
     for (const body of hint.bodies ?? []) {
