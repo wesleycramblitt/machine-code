@@ -1,8 +1,8 @@
 acceptance: script:build
 todo:
-  - [ ] Locate the change
-  - [ ] Make the smallest edit
-  - [ ] Finish
+  - [x] Locate the change
+  - [x] Make the smallest edit
+  - [x] Finish
 
 Auto-created from run.
 
