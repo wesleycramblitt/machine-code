@@ -2,9 +2,15 @@ tags: docs, cli
 acceptance: script:build
 keywords: CLI, docs, machine_code
 todo:
+<<<<<<< HEAD:issues/features/blocked/cli-user-docs.md
   - [ ] Locate the change
   - [ ] Make the smallest edit
   - [ ] Finish
+=======
+  - [x] Inventory existing CLI commands and examples (src/cli, src/commands, scripts/)
+  - [x] Draft a user-facing CLI guide (getting started, common workflows, examples)
+  - [x] Add docs/cli.md, link from README, and finalize examples
+>>>>>>> mc/cli-user-docs:issues/features/todo/cli-user-docs.md
 
 todo:
   - [ ] Inventory existing CLI commands and examples (src/cli, src/commands, scripts/)
