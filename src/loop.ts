@@ -971,7 +971,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const cached = cacheableCommand ? commandCache.get(key) : undefined;
           if (cached && cached.epoch === changeEpoch) {
             const check = evidence.observe(`command:${commandName}:cached`, false);
-            if (check.loop) return killLoop(`command:${commandName}:cached`, check.stale);
+            // if (check.loop) return killLoop(`command:${commandName}:cached`, check.stale);
             return {
               content: [{
                 type: "text" as const,
@@ -1024,7 +1024,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           if (result.isError) {
             const errorKey = `error:${tool.name}:${resultHash}`;
             const check = evidence.observeError(errorKey, memory.currentTurn());
-            if (check.loop) return killLoop(errorKey, check.stale);
+            // if (check.loop) return killLoop(errorKey, check.stale);
           } else {
             const isProgress =
               tool.name === "edit" ||
@@ -1049,7 +1049,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               evidenceKey = `recall:${resultHash}`;
             }
             const check = evidence.observe(evidenceKey, isProgress);
-            if (check.loop) return killLoop(evidenceKey, check.stale);
+            // if (check.loop) return killLoop(evidenceKey, check.stale);
           }
           return result;
         },
@@ -1500,7 +1500,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               unknownToolName = event.toolName;
               unknownToolStreak = 1;
             }
-            if (unknownToolStreak >= 3 && !loopBlocked) {
+            if (unknownToolStreak >= 10 && !loopBlocked) {
               loopBlocked = true;
               loopBlockedReason = "loop";
               recorder.event("loop_blocked", {
