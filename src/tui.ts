@@ -922,6 +922,7 @@ export async function runTui(): Promise<void> {
         repoRoot: s.newRunRepo,
         home: l.home,
         insert: s.newRunInsert,
+        confirm: s.newRunConfirm,
         cursor: s.newRunCursor,
         colon: s.newRunColon,
         contextTab: s.newRunContextTab,

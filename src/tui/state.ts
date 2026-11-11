@@ -123,6 +123,8 @@ export interface TuiState {
   modelPickEntries: ModelPickerEntry[];
   /** New-run prompt is modal: navigation keys are disabled while true. */
   newRunInsert: boolean;
+  /** Esc is armed to leave with an unsaved prompt; modal confirm before `screen = "list"`. */
+  newRunConfirm: boolean;
   /** Cursor column (code units) inside the new-run prompt for insert mode. */
   newRunCursor: number;
   /** `:` starts the two-key `:!` start command. */
@@ -248,6 +250,7 @@ export function createTuiState(repoRoot: string): TuiState {
     modelPickSort: "fit",
     modelPickEntries: [],
     newRunInsert: false,
+    newRunConfirm: false,
     newRunCursor: 0,
     newRunColon: false,
     newRunContextTab: 0,

@@ -99,6 +99,20 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     ctx.draw();
     return true;
   }
+  if (s.newRunConfirm) {
+    if (data === "y" || data === "Y" || data === "\r" || data === "\n") {
+      s.newRunConfirm = false;
+      s.screen = "list";
+      ctx.draw();
+      return true;
+    }
+    if (data === "\x1b" || data === "n" || data === "N") {
+      s.newRunConfirm = false;
+      ctx.notify("discard cancelled");
+    }
+    ctx.draw();
+    return true;
+  }
   if (data === ":") { s.newRunColon = true; ctx.draw(); return true; }
   if (s.newRunContextFiltering) {
     if (data === "\x1b") { s.newRunContextFiltering = false; s.newRunContextFilter = ""; s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
@@ -110,7 +124,16 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   }
   if (data === "/") { s.newRunContextFiltering = true; ctx.draw(); return true; }
   if (data === "H") { s.newRunHints = !s.newRunHints; ctx.draw(); return true; }
-  if (data === "\x1b") { s.screen = "list"; ctx.draw(); return true; }
+  if (data === "\x1b") {
+    if (s.newrun.prompt.trim()) {
+      s.newRunConfirm = true;
+      ctx.notify("discard unsaved prompt? press y to discard and exit, esc to stay");
+    } else {
+      s.screen = "list";
+    }
+    ctx.draw();
+    return true;
+  }
   if (data === "h" || data === "\x1b[D") {
     s.newRunContextTab = Math.max(0, s.newRunContextTab - 1);
     s.newRunContextItem = 0;

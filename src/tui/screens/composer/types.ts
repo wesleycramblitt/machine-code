@@ -61,6 +61,8 @@ export interface ComposerProps extends Viewport {
   insert: boolean;
   cursor: number;
   colon: boolean;
+  /** Esc-confirm armed: ask to discard the unsaved prompt before leaving. */
+  confirm: boolean;
   contextTab: number;
   contextItem: number;
   /** Key of the row the cursor is anchored to; the render resolves it to an index each frame so toggles cannot move the cursor to a different row. */
