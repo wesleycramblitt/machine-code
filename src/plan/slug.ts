@@ -5,15 +5,18 @@
  * writer (which imports plan-item rendering back).
  */
 
-/** Lowercase, hyphen-separated, trimmed slug from free text. */
+/** Lowercase, hyphen-separated, trimmed slug from free text.
+ * Always yields a valid (non-empty) slug so symbol/punctuation-only text
+ * can never produce an empty identifier that breaks run/lookup paths. */
 export function slugify(text: string): string {
-  return text
+  const slug = text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-{2,}/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48)
     .replace(/-+$/g, "");
+  return slug || "untitled";
 }
 
 /** True when the string is already a safe issue slug. */
