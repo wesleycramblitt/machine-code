@@ -13,6 +13,11 @@ export const READ_LARGE_MAX_BYTES = 1024 * 1024;
 export const READ_CAP_BYTES = 24 * 1024;
 /** Bare reads above this return the symbol outline, not bytes: a 300-line dump is never what a bare read wanted. */
 export const READ_OUTLINE_BYTES = 12 * 1024;
+/** Auto-expansion ceiling: a 120-line window inside a 734-line function must not
+ * come back as a 36KB dump that is summarized away in three turns and poisons
+ * repeat suppression for the whole symbol. Past this, serve the window and
+ * name the block so the model can target it. */
+export const READ_EXPAND_MAX_BYTES = 12 * 1024;
 export const SEARCH_CAP_BYTES = 12 * 1024;
 export const COMMAND_CAP_BYTES = 8 * 1024;
 

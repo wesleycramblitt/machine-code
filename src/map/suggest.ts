@@ -79,6 +79,13 @@ function normalized(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+/** Raw substring fallback for compound names ("newrun" holds "run"). Gated on
+ * length: 3-letter request words ("new", "run", "sub") match inside unrelated
+ * names ("pruning" holds "run") and those ghosts outscored real evidence. */
+function includesRaw(haystack: string, raw: string): boolean {
+  return raw.length >= 4 && haystack.includes(raw);
+}
+
 /**
  * Repo files named with line anchors in free text (`path/to/file.ts:123`).
  * Research-planned issues cite exact evidence locations; pinning them up
@@ -167,11 +174,28 @@ export function suggestTaskFilesFromMap(
   request: string,
   limit = 3,
 ): SuggestedFile[] {
-  const wanted = tokens(request).map((token) => ({ raw: token, stem: stem(token) }));
+  // One stem, one vote: "commands" and "command" in the same request must not
+  // pay the same evidence twice (observed: scripts.ts path hit paid double,
+  // outscoring the true location).
+  const seenStems = new Set<string>();
+  const wanted = tokens(request)
+    .map((token) => ({ raw: token, stem: stem(token) }))
+    .filter((token) => {
+      if (seenStems.has(token.stem)) return false;
+      seenStems.add(token.stem);
+      return true;
+    });
   if (wanted.length === 0) return [];
   const words = normalized(request).split(" ").filter(Boolean);
+  const vocab = new Set(words.filter((word) => word.length >= 3 && !STOPWORDS.has(word)));
   const phrases = new Set<string>();
-  for (let i = 0; i + 1 < words.length; i += 1) phrases.add(`${words[i]} ${words[i + 1]}`);
+  // Phrases are compositions of request terms, not prose accidents: without
+  // the vocab gate, "from the" and "on the" matched file docs, added junk
+  // points, and filled the matched-evidence slots with noise.
+  for (let i = 0; i + 1 < words.length; i += 1) {
+    const pair = `${words[i]} ${words[i + 1]}`;
+    if (vocab.has(words[i]!) && vocab.has(words[i + 1]!)) phrases.add(pair);
+  }
   const code = map.files.filter((file) =>
     /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i.test(file.path),
   );
@@ -224,9 +248,9 @@ export function suggestTaskFilesFromMap(
     const docParts = parts(doc).map(stem);
     const symbolDocParts = parts(symbolDocs).map(stem);
     const anchored = wantedCode.some((token) => {
-      const pathHit = filePathParts.some((part) => related(part, token.stem)) || path.includes(token.raw);
-      const symbolHit = fileSymbolParts.some((part) => related(part, token.stem)) || names.includes(token.raw);
-      const sectionHit = fileSectionParts.some((part) => related(part, token.stem)) || sections.includes(token.raw);
+      const pathHit = filePathParts.some((part) => related(part, token.stem)) || includesRaw(path, token.raw);
+      const symbolHit = fileSymbolParts.some((part) => related(part, token.stem)) || includesRaw(names, token.raw);
+      const sectionHit = fileSectionParts.some((part) => related(part, token.stem)) || includesRaw(sections, token.raw);
       return pathHit || symbolHit || sectionHit;
     });
     let score = 0;
@@ -239,16 +263,17 @@ export function suggestTaskFilesFromMap(
     };
     for (const token of wantedCode) {
       const weight = idf(token.stem) ** 2;
-      const pathHit = filePathParts.some((part) => related(part, token.stem)) || path.includes(token.raw);
-      const symbolHit = fileSymbolParts.some((part) => related(part, token.stem)) || names.includes(token.raw);
-      const sectionHit = fileSectionParts.some((part) => related(part, token.stem)) || sections.includes(token.raw);
+      const pathHit = filePathParts.some((part) => related(part, token.stem)) || includesRaw(path, token.raw);
+      const symbolHit = fileSymbolParts.some((part) => related(part, token.stem)) || includesRaw(names, token.raw);
+      const sectionHit = fileSectionParts.some((part) => related(part, token.stem)) || includesRaw(sections, token.raw);
       if (pathHit) {
         score += 5 * weight;
         pathScore += 5 * weight;
         codeHit = true;
-        reason ||= file.path;
-        // Path parts are self-evident from the path; matched terms name the
-        // distinctive evidence: symbols, sections, phrases.
+        // No reason here: the path is self-evident, and naming it would
+        // shadow the distinctive evidence (a bare path as its own reason
+        // says nothing). Symbols, sections, and phrases name the match;
+        // the return falls back to the doc, then the path.
       }
       if (symbolHit) {
         score += 2 * weight;
@@ -264,7 +289,7 @@ export function suggestTaskFilesFromMap(
       if (sectionHit) {
         score += 1.5 * weight;
         codeHit = true;
-        const heading = (file.sections ?? []).find((section) => related(stem(section), token.stem) || section.toLowerCase().includes(token.raw));
+        const heading = (file.sections ?? []).find((section) => related(stem(section), token.stem) || includesRaw(section.toLowerCase(), token.raw));
         if (heading) {
           reason ||= `section: ${heading}`;
           match(heading);
@@ -272,14 +297,16 @@ export function suggestTaskFilesFromMap(
           match(token.raw);
         }
       }
-      // Prose is only a tie-breaker, and only for files already anchored by
-      // code evidence. This is what keeps "twice"/"pops" out of the ranking.
-      // Stem the prose too, so "delete" in a doc matches "deletion" in a task.
+      // The file's own summary names what it is about (composer.ts's doc
+      // enumerates its tabs); that is section-grade evidence, not a
+      // tie-breaker. Still gated on code anchoring — this is what keeps
+      // "twice"/"pops" out of the ranking — and stemmed, so "delete" in a
+      // doc matches "deletion" in a task.
       if (anchored && (
         docParts.some((part) => related(part, token.stem)) ||
         symbolDocParts.some((part) => related(part, token.stem))
       )) {
-        score += 0.8 * weight;
+        score += 1.5 * weight;
         if (!reason) reason = firstLine(file.doc ?? "");
       }
     }
@@ -310,19 +337,20 @@ export function suggestTaskFilesFromMap(
     };
   });
 
-  // The strongest path match names the area the task lives in (for example
-  // src/tui for a TUI request). Prefer its siblings over a same-word symbol in
-  // an unrelated module, but only when the match is deep enough to name a
-  // module rather than the whole src tree.
-  const topPath = [...ranked]
-    .filter((entry) => entry.pathScore > 0)
-    .sort((a, b) => b.pathScore - a.pathScore || a.path.localeCompare(b.path))[0];
-  const pathSegments = topPath?.path.split("/") ?? [];
-  const modulePrefix = pathSegments.length >= 3 ? pathSegments.slice(0, 2).join("/") : undefined;
-  if (topPath && modulePrefix) {
-    const bonus = topPath.pathScore * 0.35;
+  // The top hit names the module the task lives in. Prefer its directory
+  // siblings over same-word matches elsewhere: a request matching one file
+  // in a module usually concerns the module (the render, its keys, and its
+  // types ship together). Keyed on total score, not path score — path-score
+  // aim locked onto a data script whose filename happened to hold two
+  // request words, boosting the wrong directory.
+  const topHit = [...ranked]
+    .filter((entry) => entry.codeHit && entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))[0];
+  const moduleDir = topHit?.path.includes("/") ? topHit.path.split("/").slice(0, -1).join("/") : undefined;
+  if (topHit && moduleDir && moduleDir.split("/").length >= 2) {
+    const bonus = topHit.score * 0.35;
     for (const entry of ranked) {
-      if (entry.codeHit && entry.path.startsWith(`${modulePrefix}/`)) entry.score += bonus;
+      if (entry !== topHit && entry.codeHit && entry.path.startsWith(`${moduleDir}/`)) entry.score += bonus;
     }
   }
 

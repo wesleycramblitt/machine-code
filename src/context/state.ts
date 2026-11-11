@@ -340,8 +340,17 @@ export class RunStateStore {
    * every mark, so an identical repeat only suppresses when nothing the
    * harness did could have changed the answer.
    */
-  private repeatMarks = new Map<string, number>();
+  private repeatMarks = new Map<string, { seq: number; turn: number }>();
   private mutationSeq = 0;
+  /**
+   * Tool results stay verbatim only for the last few turns; older bulk is
+   * summarized with a "re-run for full bytes" marker. A suppression mark
+   * that outlives its payload traps the model: the transcript says re-run,
+   * the tool says "see above", and "above" is a summary. Marks therefore
+   * expire a few turns after serving, so a re-read past the summary window
+   * serves bytes again instead of denying them.
+   */
+  private static readonly REPEAT_WINDOW_TURNS = 3;
 
   /** Record a harness mutation (edit/write); re-arms every repeat mark. */
   noteMutation(): void {
@@ -350,16 +359,22 @@ export class RunStateStore {
 
   /** Mark an idempotent call's stable key as served. */
   markRepeat(key: string): void {
-    this.repeatMarks.set(key, this.mutationSeq);
+    this.repeatMarks.set(key, { seq: this.mutationSeq, turn: this.currentTurn() });
     if (this.repeatMarks.size > 200) {
       const oldest = this.repeatMarks.keys().next().value;
       if (typeof oldest === "string") this.repeatMarks.delete(oldest);
     }
   }
 
-  /** True when the identical call already served at the current mutation. */
+  /**
+   * True when the identical call already served at the current mutation
+   * *and* its payload is still verbatim in the transcript window. Past the
+   * window the bytes are summarized away, so the repeat is served fresh.
+   */
   repeatSeen(key: string): boolean {
-    return this.repeatMarks.get(key) === this.mutationSeq;
+    const mark = this.repeatMarks.get(key);
+    if (!mark || mark.seq !== this.mutationSeq) return false;
+    return this.currentTurn() - mark.turn <= RunStateStore.REPEAT_WINDOW_TURNS;
   }
 
   constructor(options: StateStoreOptions) {
@@ -1053,6 +1068,13 @@ export class RunStateStore {
         const header = /^([^:\n]+):(\d+)-(\d+)(?: \(([^)]+)\))?/.exec(resultText.trimStart());
         const symbol = header?.[4] ?? str(args.symbol);
         const numbered = [...resultText.matchAll(/^(\d+): /gm)].map((match) => Number(match[1]));
+        if (!header && numbered.length === 0) {
+          // A harness note (repeat suppression, seeded pointer) carries no
+          // bytes. Never invent a range from the request args for one: the
+          // denial would masquerade as coverage of lines never served, and
+          // its note text would pollute the working set as a "finding".
+          continue;
+        }
         let range: [number, number] | undefined;
         if (header) {
           range = [Number(header[2]), Number(header[3])];

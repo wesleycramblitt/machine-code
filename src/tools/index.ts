@@ -13,6 +13,7 @@ import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
   READ_CAP_BYTES,
+  READ_EXPAND_MAX_BYTES,
   READ_LARGE_MAX_BYTES,
   READ_MAX_FILE_BYTES,
   READ_OUTLINE_BYTES,
@@ -562,6 +563,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
         // are all it can hold; handing it the unit kills the next three
         // paging calls. Skipped when the window already covers the block,
         // spans blocks, or the block exceeds the byte cap.
+        let skippedEnclosing: { name: string; start: number; end: number } | null = null;
         if (
           wantPage &&
           !singleResolved &&
@@ -580,7 +582,10 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
               lines.slice(enclosing.start - 1, enclosing.end).join("\n"),
               "utf8",
             );
-            if (spanBytes <= capBytes) {
+            // Oversized blocks stay windows: dumping 36KB for a 120-line
+            // request burns the transcript and fences the whole symbol.
+            // Serve the window below; the window path names this block.
+            if (spanBytes <= Math.min(capBytes, READ_EXPAND_MAX_BYTES)) {
               const key = symbolReadKey(params.path, enclosing.name);
               if (ctx.state?.repeatSeen(key)) {
                 return ok(
@@ -595,6 +600,7 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
                 `${params.path}#symbol:${enclosing.name}`,
               );
             }
+            skippedEnclosing = { name: enclosing.name, start: enclosing.start, end: enclosing.end };
           }
         }
         if (wantPage) {
@@ -605,6 +611,13 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
           } else {
             const page = numberLinesCapped(lines, offset, limit, capBytes);
             const notes: string[] = [];
+            if (skippedEnclosing) {
+              notes.push(
+                `[lines ${offset}-${page.nextOffset - 1} of ${lines.length}; ` +
+                  `this window sits inside ${skippedEnclosing.name} (${params.path}:${skippedEnclosing.start}-${skippedEnclosing.end}) — ` +
+                  `read { "path": "${params.path}", "symbol": "${skippedEnclosing.name}" } for the whole block]`,
+              );
+            }
             if (symbolFallback) {
               notes.push(`[${params.symbol} is not a top-level map symbol; showing the first match]`);
             }

@@ -240,6 +240,30 @@ function assistantText(message: AssistantMessage | undefined): string {
     .join("\n");
 }
 
+/**
+ * A model-rotation retry carries the failed attempt's messages, which already
+ * end with the request user message that prompt() is about to add. Without
+ * stripping, the request is sent twice as two identical adjacent user
+ * messages. Fresh starts never hit this: their carried list is empty.
+ */
+function stripTrailingPrompt(messages: AgentMessage[], request: string): AgentMessage[] {
+  if (messages.length === 0) return messages;
+  const last = messages[messages.length - 1] as { role?: string; content?: unknown } | undefined;
+  const content = last?.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .filter((block): block is { type: string; text?: string } => typeof block === "object" && block !== null)
+            .filter((block) => block.type === "text")
+            .map((block) => String(block.text ?? ""))
+            .join("")
+        : "";
+  if (last?.role === "user" && text === request) return messages.slice(0, -1);
+  return messages;
+}
+
 export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const { recorder } = input;
   const policy = input.policy;
@@ -1038,7 +1062,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         thinkingLevel: "low",
         systemPrompt: input.agent.prompt,
         tools,
-        ...(carriedMessages && carriedMessages.length > 0 ? { messages: carriedMessages } : {}),
+        ...(carriedMessages && carriedMessages.length > 0 ? { messages: stripTrailingPrompt(carriedMessages, input.request) } : {}),
       },
       sessionId: recorder.id,
       convertToLlm,
