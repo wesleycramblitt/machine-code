@@ -841,6 +841,11 @@ export async function runTui(): Promise<void> {
 
     const scopedRuns = s.runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
     const filteredRuns = runsListScreen ? scopedRuns : [];
+    const workGroup = s.runsGroup === "all" || s.runsGroup === "category";
+    const issuesByRepo: Record<string, readonly Issue[]> = {};
+    for (const root of new Set([l.repoRoot, ...filteredRuns.map((run) => run.repoRoot)])) {
+      issuesByRepo[root] = listIssues(layout(root));
+    }
     const runIndex = buildRunIndex({
       runs: filteredRuns,
       group: s.runsGroup,
@@ -848,9 +853,7 @@ export async function runTui(): Promise<void> {
       text: s.runsText,
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
-      ...(s.runsGroup === "all" || s.runsGroup === "category"
-        ? { issueRepo: l.repoRoot, issues: listIssues(l) }
-        : {}),
+      ...(workGroup ? { issueRepo: l.repoRoot, issuesByRepo } : {}),
     });
     if (s.runsSel >= runIndex.selectable.length) s.runsSel = Math.max(0, runIndex.selectable.length - 1);
     const selectedRow = runIndex.selectable[s.runsSel];
