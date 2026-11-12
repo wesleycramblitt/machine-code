@@ -112,3 +112,39 @@ export function renderIssue(props: IssueProps): IssueFrame {
     secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",
   };
 }
+
+/** Fresh branch state for an issue; null when the probe fails (no git root). */
+export async function probeIssueBranch(issueLayout: Layout, slug: string): Promise<IssueBranchState | null> {
+  try {
+    return await issueBranchState(issueLayout, slug);
+  } catch {
+    return null;
+  }
+}
+
+/** Probe the issue's branch state in the background and cache it on the TUI
+ * state: git queries must not block the synchronous render loop, so the next
+ * draw after the probe picks the result up. Skipped while a probe for the
+ * same slug+repo+runs signature is already cached. */
+export function refreshIssueBranch(
+  s: TuiState,
+  issueLayout: Layout,
+  slug: string | null,
+  runs: readonly RunSummary[],
+  draw: () => void,
+): void {
+  if (!slug) {
+    s.issueBranch = null;
+    return;
+  }
+  const runsSig = issueRunsSig(runs, slug);
+  const cached = s.issueBranch;
+  if (cached?.slug === slug && cached.repoRoot === issueLayout.repoRoot && cached.runsSig === runsSig) return;
+  s.issueBranch = { slug, repoRoot: issueLayout.repoRoot, runsSig, state: null };
+  void probeIssueBranch(issueLayout, slug).then((state) => {
+    // Ignore probes that land after the screen moved to another issue.
+    if (s.issueBranch?.slug !== slug) return;
+    s.issueBranch = { slug, repoRoot: issueLayout.repoRoot, runsSig, state };
+    draw();
+  });
+}

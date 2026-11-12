@@ -1176,6 +1176,7 @@ export async function runTui(): Promise<void> {
             }
           : null,
         runs: issueRuns,
+        branchState: s.issueBranch?.state ?? null,
         scroll: s.issueScroll,
       });
       s.issueScroll = frame.scroll;

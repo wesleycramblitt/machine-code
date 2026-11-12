@@ -49,7 +49,24 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
       ctx.draw();
       return true;
     }
-    spawnCli(["approve", slug], `approve ${slug} queued`);
+    // Approve only what was built: probe the issue's branch first. A missing
+    // branch or a branch without changes never reaches the CLI; the probe
+    // also refreshes the branch status shown on this screen.
+    void (async () => {
+      const state = await probeIssueBranch(l, slug);
+      if (s.issueBranch?.slug === slug && s.issueBranch.repoRoot === l.repoRoot) {
+        s.issueBranch = { ...s.issueBranch, state };
+      }
+      ctx.draw();
+      if (!state || !isApprovable(state)) {
+        const why = !state || state.state.code === "missing"
+          ? `no branch for ${slug}`
+          : `${state.branch} has no changes`;
+        ctx.notify(`nothing to approve — ${why}`);
+        return;
+      }
+      spawnCli(["approve", slug], `approve ${slug} queued`);
+    })();
     return true;
   }
 

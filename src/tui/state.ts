@@ -252,6 +252,7 @@ export function createTuiState(repoRoot: string): TuiState {
     selectedIssueSlug: null,
     selectedIssueRepo: null,
     issueScroll: 0,
+    issueBranch: null,
     deleteTarget: undefined,
     deleteReturn: "list",
     deletingRuns: new Set<string>(),

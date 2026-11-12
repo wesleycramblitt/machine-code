@@ -79,6 +79,40 @@ export function planIssueWaves(layout: Layout, maxParallel: number): string[][] 
   return waves;
 }
 
+/** The issue's feature branch: `mc/<slug>`, or the newest engineer/build run's
+ * branch for runs from before per-issue branches. Null when neither exists. */
+export async function issueBranch(root: string, layout: Layout, slug: string): Promise<string | null> {
+  const branch = `mc/${slug}`;
+  if (await branchExists(root, branch)) return branch;
+  const legacy = issueRuns(layout, slug).find(
+    (run) => (run.agent === "engineer" || run.agent === "build") && run.worktree && typeof run.branch === "string",
+  );
+  return legacy?.branch ?? null;
+}
+
+/** Branch state of an issue: which branch its work lives on and whether that
+ * branch carries changes relative to the base branch. Powers approve gating
+ * in the CLI and the branch status line on the issue screen. */
+export interface IssueBranchState {
+  /** Feature branch holding the issue's work. */
+  branch: string;
+  /** Commit state of the branch relative to the base branch. */
+  state: BranchState;
+}
+
+export async function issueBranchState(layout: Layout, slug: string): Promise<IssueBranchState> {
+  const root = await mainRoot(layout);
+  const branch = (await issueBranch(root, layout, slug)) ?? `mc/${slug}`;
+  const baseBranch = await defaultBaseBranch(root);
+  return { branch, state: await branchState(root, branch, baseBranch) };
+}
+
+/** True when approve has something to act on: unmerged commits, or commits
+ * already merged (approve then only finalizes the issue). */
+export function isApprovable(issue: IssueBranchState): boolean {
+  return issue.state.code === "ahead" || issue.state.code === "merged";
+}
+
 /** Approve: merge the issue's branch and move it to done/. */
 export async function approveIssue(layout: Layout, slug: string): Promise<void> {
   const issue = findIssue(layout, slug);
@@ -88,18 +122,15 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   }
   const root = await mainRoot(layout);
   const baseBranch = await defaultBaseBranch(root);
-  // New builds use mc/<slug>; older runs used mc/run/<id>. Fall back to the
-  // newest engineer worktree branch so those runs remain approvable.
-  let branch = `mc/${slug}`;
-  if (!(await branchExists(root, branch))) {
-    const legacy = issueRuns(layout, slug).find(
-      (run) => (run.agent === "engineer" || run.agent === "build") && run.worktree && typeof run.branch === "string",
-    );
-    if (!legacy?.branch) throw new Error(`no branch ${branch} to approve`);
-    branch = legacy.branch;
+  const branch = await issueBranch(root, layout, slug);
+  if (!branch) throw new Error(`no branch mc/${slug} to approve`);
+  // Only approve built work: a branch identical to base has nothing to merge,
+  // and an already-merged branch only needs the status move below.
+  const state = await branchState(root, branch, baseBranch);
+  if (state.code === "unchanged") {
+    throw new Error(`branch ${branch} has no changes to approve`);
   }
-  const isAncestor = (await git(root, ["merge-base", "--is-ancestor", branch, baseBranch])).code === 0;
-  if (!isAncestor) {
+  if (state.code === "ahead") {
     const merge = await git(root, ["merge", "--no-ff", branch, "-m", `Merge ${branch} (${slug})`]);
     if (merge.code !== 0) {
       throw new Error(`merge of ${branch} into ${baseBranch} failed: ${merge.stderr.trim()}; resolve it manually`);
