@@ -1,6 +1,4 @@
-priority: medium
-review: none
-verification: direct
+review: human
 tags: run-details
 acceptance: script:build
 
@@ -33,5 +31,3 @@ For all tools, make it human readable in this way.
 
 4.) timing
 Currently it seems like calls are split between several timestamps. I think it makes more sense to group all commands per call together somehow visually.
-
-
