@@ -665,6 +665,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
   }, 500);
 
+  /** Gate retries persist across provider rotations since the same run owns them. */
+  let gateAttempts = 0;
+
   while (true) {
     // Reset per-attempt state. Turn and token budgets are per run, not per
     // provider attempt: a rate-limit rotation must not refill them.
@@ -1521,27 +1524,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const gates = input.gates;
     const maxGateAttempts = input.maxGateAttempts ?? MAX_GATE_ATTEMPTS;
     if (status === "completed" && gates && gates.length > 0) {
-      // Track gate attempts on the recorder so they survive a model rotation.
-      const gateAttempts = (recorder as any)._gateAttempts ?? 0;
-      const attempt = gateAttempts + 1;
-      (recorder as any)._gateAttempts = attempt;
+      gateAttempts += 1;
 
       const gateRoot = input.toolRoot ?? input.root;
       const gateResult = await runGates(gates, { root: gateRoot, commands: input.commands });
       recorder.event("gates", {
-        attempt,
+        attempt: gateAttempts,
         passed: gateResult.passed,
         results: gateResult.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
       });
 
       if (gateResult.passed) {
         // Gates passed — fall through to the final return.
-      } else if (attempt < maxGateAttempts) {
+      } else if (gateAttempts < maxGateAttempts) {
         // Gates failed but we have retries left. Feed the failure output
         // back to the model as a new user message and continue the loop.
         const failure = gateFailureText(gateResult.results);
         const gateMsg =
-          `## Acceptance gates failed (attempt ${attempt}/${maxGateAttempts})\n\n` +
+          `## Acceptance gates failed (attempt ${gateAttempts}/${maxGateAttempts})\n\n` +
           `The following gates did not pass. Fix the code so they pass.\n\n` +
           `${failure}\n\n` +
           `Do not mark the issue as done until all acceptance gates pass.`;
@@ -1552,8 +1552,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           ...msgs,
           { role: "user", content: gateMsg, timestamp: Date.now() },
         ];
-        lastFailure = `gates failed (attempt ${attempt})`;
-        recorder.event("gate_retry", { attempt, maxAttempts: maxGateAttempts, failure: failure.slice(0, 500) });
+        lastFailure = `gates failed (attempt ${gateAttempts})`;
+        recorder.event("gate_retry", { attempt: gateAttempts, maxAttempts: maxGateAttempts, failure: failure.slice(0, 500) });
         continue;
       } else {
         // Gates exhausted — block the run with the last failure.

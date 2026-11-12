@@ -38,7 +38,7 @@ import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/co
 import { runLoop, type RunLoopResult } from "../loop.js";
 import { type OrchestrateResult } from "../orchestrate.js";
 import { AGENT_NAMES } from "../agents.js";
-import { gateFailureText, resolveGates, runGates, type GateSpec } from "../verify.js";
+import { gateFailureText, resolveGates, type GateSpec } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
 import { runMainBuild } from "../commands/build.js";
 import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
@@ -1317,6 +1317,12 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     }
   }
 
+  // Resolve gates upfront and pass them into the loop so resume runs them inline.
+  const resumeItem = s.itemId ?? s.packetId;
+  const resumeIssue = resumeItem ? findIssue(l2, resumeItem) : null;
+  const resumeGates: GateSpec[] | undefined =
+    resumeIssue ? resolveGates(issueToTaskPacket(resumeIssue), gateCommands) : undefined;
+
   const resolved = resolveAgent(l2, resumeAgent, {
     machineOverrides: machine.agents[resumeAgent],
   });
@@ -1340,61 +1346,52 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     signal: abort.signal,
     initialMessages,
     startMode,
+    ...(resumeGates && resumeGates.length > 0 ? { gates: resumeGates } : {}),
   });
 
   // A resumed Engineer phase still owes the runner its gates, commit, and move.
-  const resumeItem = s.itemId ?? s.packetId;
-  if (result.status === "completed" && resumeAgent === "engineer" && resumeItem) {
-    const issue = findIssue(l2, resumeItem);
-    if (issue) {
-      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), gateCommands), { root: toolRoot, commands: gateCommands });
-        recorder.event("gates", {
-          issue: issue.slug,
-          passed: gateOutcome.passed,
-          results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
-        });
-        if (!gateOutcome.passed) {
-          const attempt = gateFailureAttempts(issue.body) + 1;
-          appendIssueGateFailure(issue.path, gateFailureText(gateOutcome.results), attempt);
-          moveIssue(l2, issue.slug, "failed-gates");
-          await commitPlanningFiles(l2, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
-          recorder.finalize("blocked", `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`, result.finalText);
-          printRunOutcome({ ...result, status: "blocked" }, recorder);
-          return EXIT.blocked;
-        }
-      if (toolRoot !== l2.repoRoot) {
-        try {
-          const commit = await ensureCommitted(
-            toolRoot,
-            recorder.current.baseRef,
-            `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
-          );
-          if (commit) {
-            recorder.patchSummary({ commit });
-            recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
-            if (issue.kind !== "ideas") {
-              if (issue.review === "none" || flags.has("no-review")) {
-                const branch = recorder.current.branch;
-                if (branch) {
-                  const merged = await mergeBranch(l2.repoRoot, toolRoot, branch);
-                  if (merged.ok) {
-                    recorder.event("branch_merged", { branch });
-                    moveIssue(l2, issue.slug, "done");
-                    await commitPlanningFiles(l2, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
-                  }
+  // Gates now run inside the loop. Handle completion or block from exhaustion.
+  if (result.status === "completed" && resumeAgent === "engineer" && resumeIssue) {
+    if (toolRoot !== l2.repoRoot) {
+      try {
+        const commit = await ensureCommitted(
+          toolRoot,
+          recorder.current.baseRef,
+          `mc(${resumeIssue.slug}): ${resumeIssue.prompt}\n\nrun: ${recorder.id}\nissue: ${resumeIssue.slug}`,
+        );
+        if (commit) {
+          recorder.patchSummary({ commit });
+          recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: resumeIssue.slug });
+          if (resumeIssue.kind !== "ideas") {
+            if (resumeIssue.review === "none" || flags.has("no-review")) {
+              const branch = recorder.current.branch;
+              if (branch) {
+                const merged = await mergeBranch(l2.repoRoot, toolRoot, branch);
+                if (merged.ok) {
+                  recorder.event("branch_merged", { branch });
+                  moveIssue(l2, resumeIssue.slug, "done");
+                  await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} DONE] ${resumeIssue.slug}`);
                 }
-              } else {
-                moveIssue(l2, issue.slug, "needs-human-review");
-                await commitPlanningFiles(l2, `[${kindTag(issue.kind)} NEEDS HUMAN REVIEW] ${issue.slug}`);
               }
+            } else {
+              moveIssue(l2, resumeIssue.slug, "needs-human-review");
+              await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} NEEDS HUMAN REVIEW] ${resumeIssue.slug}`);
             }
           }
-        } catch (error) {
-          recorder.finalize("blocked", `commit failed: ${error instanceof Error ? error.message : String(error)}`, result.finalText);
-          printRunOutcome({ ...result, status: "blocked" }, recorder);
-          return EXIT.blocked;
         }
+      } catch (error) {
+        recorder.finalize("blocked", `commit failed: ${error instanceof Error ? error.message : String(error)}`, result.finalText);
+        printRunOutcome({ ...result, status: "blocked" }, recorder);
+        return EXIT.blocked;
       }
+    }
+  } else if (result.status === "blocked" && resumeIssue) {
+    // Gate exhaustion: write the last failure to the issue file.
+    const gateFail = (result as RunLoopResult).lastGateFailure;
+    if (gateFail) {
+      appendIssueGateFailure(resumeIssue.path, gateFail, gateFailureAttempts(resumeIssue.body) + 1);
+      moveIssue(l2, resumeIssue.slug, "failed-gates");
+      await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} FAILED GATES] ${resumeIssue.slug}`);
     }
   }
 
