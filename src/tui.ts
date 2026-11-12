@@ -544,6 +544,7 @@ export async function runTui(): Promise<void> {
       "run",
       "--agent", s.newrun.agent,
       ...(s.newrun.model ? ["--model", s.newrun.model] : []),
+      "--tier", s.newrun.tier,
       "--approval", s.newrun.approval,
       "--ambiguity", s.newrun.ambiguity,
       ...(s.newRunParentId ? ["--parent", s.newRunParentId] : []),
