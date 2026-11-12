@@ -1,4 +1,3 @@
-review: human
 tags: run-details
 acceptance: script:build
 
