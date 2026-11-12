@@ -14,6 +14,7 @@ import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 import type { AvailabilityState } from "../availability.js";
 import type { MachineConfig, Policy } from "../config.js";
 import type { ContextPreview } from "../context/preview.js";
+import type { IssueBranchState } from "../tasks/issue.js";
 import type { SkillMode } from "../context/references.js";
 import type { ModelSort } from "../catalogue/query.js";
 import type { RunGroup } from "./runs.js";
@@ -108,6 +109,8 @@ export interface TuiState {
   selectedIssueSlug: string | null;
   selectedIssueRepo: string | null;
   issueScroll: number;
+  /** Cached branch probe for the open issue screen (null when none is open). */
+  issueBranch: { slug: string; repoRoot: string; runsSig: string; state: IssueBranchState | null } | null;
   /** Run or issue awaiting final confirmation on the delete screen. */
   deleteTarget: DeleteTarget | undefined;
   deleteReturn: Screen;
@@ -252,6 +255,7 @@ export function createTuiState(repoRoot: string): TuiState {
     selectedIssueSlug: null,
     selectedIssueRepo: null,
     issueScroll: 0,
+    issueBranch: null,
     deleteTarget: undefined,
     deleteReturn: "list",
     deletingRuns: new Set<string>(),

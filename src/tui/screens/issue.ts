@@ -10,6 +10,9 @@ import { sortRuns } from "../status.js";
 import type { RunSummary } from "../../state/runs.js";
 import { runItemId } from "../../plan/lifecycle.js";
 import { ISSUE_STATUS_LABELS, type DisplayStatus, type IssueKind } from "../../plan/issues.js";
+import { isApprovable, issueBranchState, type IssueBranchState } from "../../tasks/issue.js";
+import type { Layout } from "../../paths.js";
+import type { TuiState } from "../state.js";
 import { issueTone, kindBadge } from "./tones.js";
 import { windowedBody, type Viewport } from "./types.js";
 
@@ -31,6 +34,8 @@ export interface IssueProps extends Viewport {
   slug: string | null;
   issue: IssueHeader | null;
   runs: readonly RunSummary[];
+  /** Probe result for the issue's feature branch; null while pending or failed. */
+  branchState: IssueBranchState | null;
   scroll: number;
 }
 
@@ -66,8 +71,20 @@ function promptLines(prompt: string, cols: number): string[] {
   return out;
 }
 
+/** Suffix for the Branch line: green when the branch carries work or is merged,
+ * yellow with no changes, red when the branch is missing, dim while unknown. */
+function branchNote(state: IssueBranchState | null): string {
+  if (!state) return ` ${D}?${R}`;
+  switch (state.state.code) {
+    case "ahead": return ` ${G}${state.state.ahead} ahead${R}`;
+    case "merged": return ` ${G}merged${R}`;
+    case "unchanged": return ` ${Y}no changes${R}`;
+    case "missing": return ` ${RED}no branch${R}`;
+  }
+}
+
 export function renderIssue(props: IssueProps): IssueFrame {
-  const { bodyH, toast, slug, issue, runs, scroll, cols } = props;
+  const { bodyH, toast, slug, issue, runs, branchState, scroll, cols } = props;
   const lines: string[] = [];
   if (!slug) {
     lines.push("", ` ${Y}issue not found${R}`);
@@ -78,9 +95,9 @@ export function renderIssue(props: IssueProps): IssueFrame {
     const statusText = issue ? ISSUE_STATUS_LABELS[issue.status] : "unknown";
     lines.push(` ${badge}  ${tone}${slug}${R}  ${tone}[${statusText}]${R}`);
     if (issue) {
-      // Line 2: branch/worktree derived from the newest attached run.
+      // Line 2: branch/worktree with a color-encoded probe of the branch state.
       const work = worktreeOf(runs, slug);
-      lines.push(` ${B}${WHITE}Branch:${R} ${D}${work.branch}${R}    ${B}${WHITE}Worktree:${R} ${D}${work.worktree}${R}`);
+      lines.push(` ${B}${WHITE}Branch:${R} ${D}${branchState?.branch ?? work.branch}${R}${branchNote(branchState)}    ${B}${WHITE}Worktree:${R} ${D}${work.worktree}${R}`);
       // Line 3: priority.
       lines.push(` ${B}${WHITE}Priority:${R} ${D}${issue.priority}${R}`);
       // Prompt: the whole body, wrapped to the terminal width.
@@ -106,9 +123,58 @@ export function renderIssue(props: IssueProps): IssueFrame {
     ...w,
     actions: joinCommands([
       command("n", "Run", undefined, C),
-      command("a", "Approve", undefined, G),
+      // Approve is only offered for built work: the issue is in a reviewable
+      // status and the branch probe found changes worth merging.
+      ...(issue && (issue.status === "needs-human-review" || issue.status === "done")
+        && branchState !== null && isApprovable(branchState)
+        ? [command("a", "Approve", undefined, G)]
+        : []),
       command("d", "Delete", undefined, RED),
     ]),
     secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",
   };
+}
+
+/** Fresh branch state for an issue; null when the probe fails (no git root). */
+export async function probeIssueBranch(issueLayout: Layout, slug: string): Promise<IssueBranchState | null> {
+  try {
+    return await issueBranchState(issueLayout, slug);
+  } catch {
+    return null;
+  }
+}
+
+/** Cache key for the branch probe: the ids + statuses of the runs attached to
+ * the issue, so a status change (a run finishing) triggers a fresh probe. */
+function issueRunsSig(runs: readonly RunSummary[], slug: string): string {
+  return sortRuns(runs.filter((run) => runItemId(run) === slug), "activity")
+    .map((run) => `${run.id}:${run.status}`)
+    .join("|");
+}
+
+/** Probe the issue's branch state in the background and cache it on the TUI
+ * state: git queries must not block the synchronous render loop, so the next
+ * draw after the probe picks the result up. Skipped while a probe for the
+ * same slug+repo+runs signature is already cached. */
+export function refreshIssueBranch(
+  s: TuiState,
+  issueLayout: Layout,
+  slug: string | null,
+  runs: readonly RunSummary[],
+  draw: () => void,
+): void {
+  if (!slug) {
+    s.issueBranch = null;
+    return;
+  }
+  const runsSig = issueRunsSig(runs, slug);
+  const cached = s.issueBranch;
+  if (cached?.slug === slug && cached.repoRoot === issueLayout.repoRoot && cached.runsSig === runsSig) return;
+  s.issueBranch = { slug, repoRoot: issueLayout.repoRoot, runsSig, state: null };
+  void probeIssueBranch(issueLayout, slug).then((state) => {
+    // Ignore probes that land after the screen moved to another issue.
+    if (s.issueBranch?.slug !== slug) return;
+    s.issueBranch = { slug, repoRoot: issueLayout.repoRoot, runsSig, state };
+    draw();
+  });
 }

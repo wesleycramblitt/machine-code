@@ -163,6 +163,26 @@ export async function branchExists(mainRoot: string, branch: string): Promise<bo
   return result.code === 0;
 }
 
+/** Commit state of `branch` relative to `baseBranch`: whether the branch
+ * exists and how many commits it carries that the base does not have.
+ * "missing" and "unchanged" branches have nothing to approve; "merged"
+ * branches are already in the base and only need the issue status move. */
+export type BranchState =
+  | { code: "missing" }
+  | { code: "unchanged" }
+  | { code: "merged"; ahead: number }
+  | { code: "ahead"; ahead: number };
+
+/** Compare a branch to its base with two cheap git queries. */
+export async function branchState(mainRoot: string, branch: string, baseBranch: string): Promise<BranchState> {
+  if (!(await branchExists(mainRoot, branch))) return { code: "missing" };
+  const count = await git(mainRoot, ["rev-list", "--count", `${baseBranch}..${branch}`]);
+  const ahead = count.code === 0 ? Number.parseInt(count.stdout.trim(), 10) || 0 : 0;
+  if (ahead === 0) return { code: "unchanged" };
+  const merged = (await git(mainRoot, ["merge-base", "--is-ancestor", branch, baseBranch])).code === 0;
+  return merged ? { code: "merged", ahead } : { code: "ahead", ahead };
+}
+
 /** Resolve the default base branch: configured, origin HEAD, main, master, current. */
 export async function defaultBaseBranch(mainRoot: string): Promise<string> {
   const remote = await git(mainRoot, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
