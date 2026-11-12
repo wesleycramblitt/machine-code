@@ -16,7 +16,7 @@ import { refreshCatalogue } from "../catalogue/refresh.js";
 import { loadCatalogue } from "../catalogue/load.js";
 import { filterModels, siblingOffers, type ModelSort } from "../catalogue/query.js";
 import { snapshotFiles } from "../catalogue/snapshot.js";
-import { pick, matchesModel, axisWeights } from "../select.js";
+import { resolveSelectionContext, pickWithContext, pinViability } from "../select.js";
 
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
@@ -500,62 +500,59 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
   const agentDefObj = agentDef(l, agentNameParsed === "" ? "engineer" : agentNameParsed);
-  if (floorOverrides) {
-    if (floorOverrides.minFit !== undefined) agentDefObj.minFit = floorOverrides.minFit;
-    if (floorOverrides.minCapability !== undefined) agentDefObj.minCapability = floorOverrides.minCapability;
-    if (floorOverrides.minAxes) agentDefObj.minAxes = { ...(agentDefObj.minAxes ?? {}), ...floorOverrides.minAxes };
-  }
-  const preflightInput = {
+  // Every pick on this path goes through one selection context so preflight,
+  // the loop, the TUI preview, and the models dry-run enforce the same
+  // floors, tier, pin, and runtime filter.
+  const selection = resolveSelectionContext({
+    role: agentNameParsed,
+    layout: l,
+    machine,
+    def: agentDefObj,
+    floors: floorOverrides,
+    ...(tierFlag ? { tier: tierFlag } : {}),
+    pin: {
+      ...(requireModel ? { model: requireModel } : {}),
+      ...(requireProvider ? { provider: requireProvider } : {}),
+    },
+    hasRuntimeModel: (providerID: string, id: string) => models.getModel(providerID, id) !== undefined,
+  });
+  let preflight = pickWithContext(selection, {
     agent: agentNameParsed,
-    agentDef: agentDefObj,
     machine,
     catalogue: catalogueDoc.models,
     configuredProviders,
     availability: availabilityState,
     fundedProviders: fundedProviderIds(machine.providers),
-    // Stale catalogue rows (retired upstream, models.json not yet refreshed)
-    // must not cost a failed first call: filter to what the runtime has.
-    hasRuntimeModel: (providerID: string, id: string) => models.getModel(providerID, id) !== undefined,
     contextChars: request.length,
-    requireProvider,
-    requireModel,
-    ...(tierFlag ? { tier: tierFlag } : {}),
-  };
-  let preflight = pick(preflightInput);
+  });
   if ("error" in preflight && (requireModel || requireProvider)) {
     // A pin that can never work is a user error, not a preference: silently
     // falling back to auto-selection has picked paid models the user never
-    // asked for. Scope the catalogue to the pin and ask why those rows fail;
-    // only hard scoping failures (wrong tier, unconfigured provider, stale
-    // catalogue row) fail loudly. Transient states (cooling, floors,
-    // funding) keep the old fallback.
-    const pinRows = catalogueDoc.models.filter(
-      (row) =>
-        (!requireModel || matchesModel(row, requireModel)) &&
-        (!requireProvider || row.providerID === requireProvider),
-    );
-    if (pinRows.length === 0) {
-      fail(
-        `model pin matches nothing (${requireModel ?? requireProvider}); check the key with: machine_code models --all`,
-      );
-    }
-    const pinOnly = pick({ ...preflightInput, catalogue: pinRows });
-    if ("error" in pinOnly) {
-      const reasons = new Set(Object.keys(pinOnly.rejectedByReason));
-      const hard = new Set(["local-model", "free-model", "provider-not-configured", "not-in-runtime-catalog"]);
-      if (reasons.size > 0 && [...reasons].every((reason) => hard.has(reason))) {
-        const hints = [
-          reasons.has("local-model") ? "ollama needs --tier local" : "",
-          reasons.has("free-model") ? "free offers need --tier local" : "",
-          reasons.has("provider-not-configured") ? "provider is not configured" : "",
-          reasons.has("not-in-runtime-catalog") ? "catalogue is stale; run: machine_code catalogue refresh" : "",
-        ].filter(Boolean);
-        fail(`model pin unusable (${requireModel ?? requireProvider}): ${[...reasons].join(", ")} (${hints.join("; ")})`);
-      }
+    // asked for. Transient states (cooling, floors, funding) keep the old
+    // fallback below.
+    const viability = pinViability(selection, {
+      agent: agentNameParsed,
+      machine,
+      catalogue: catalogueDoc.models,
+      configuredProviders,
+      availability: availabilityState,
+      fundedProviders: fundedProviderIds(machine.providers),
+      contextChars: request.length,
+    });
+    if (!viability.ok) {
+      fail(`model pin unusable (${requireModel ?? requireProvider}): ${viability.reasons.join(", ")} (${viability.hint})`);
     }
     // A pin is a preference: if the pinned model is not ready before start,
     // fall back to auto-selection instead of refusing to start the run.
-    const relaxed = pick({ ...preflightInput, requireProvider: undefined, requireModel: undefined });
+    const relaxed = pickWithContext({ ...selection, requireModel: undefined, requireProvider: undefined }, {
+      agent: agentNameParsed,
+      machine,
+      catalogue: catalogueDoc.models,
+      configuredProviders,
+      availability: availabilityState,
+      fundedProviders: fundedProviderIds(machine.providers),
+      contextChars: request.length,
+    });
     if (!("error" in relaxed)) {
       process.stderr.write(
         `model pin unavailable (${requireModel ?? requireProvider}); falling back to auto-selection\n`,

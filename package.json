@@ -13,6 +13,8 @@
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
+    "pretest": "npm run build",
     "machine_code": "node --no-warnings dist/cli.js",
     "install:global": "ln -sf \"$(pwd)/dist/cli.js\" \"$(npm prefix -g 2>/dev/null || echo $HOME/.local)/bin/machine_code\" && chmod +x \"$(pwd)/dist/cli.js\""
   },

@@ -73,7 +73,7 @@ import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineI
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, CAPABILITY_AXES, SELECTION_TIERS, type MachineConfig } from "./config.js";
-import { axisWeights, capabilityFit, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pick } from "./select.js";
+import { axisWeights, capabilityFit, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pickWithContext, resolveSelectionContext } from "./select.js";
 
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
@@ -503,19 +503,29 @@ export async function runTui(): Promise<void> {
     if (!ap) return { context, error: `unknown agent ${s.newrun.agent}`, machine };
     s.newRunRequiredSkills = [...resolved.def.requiredSkills];
     const toolChars = toolSchemaChars(resolved.def.tools);
-    const effective = effectiveDefForRun(agentDefFor(s.newRunRepo));
-    const select = (requireModel?: string) => pick({
-      agent: s.newrun.agent,
-      agentDef: effective,
-      machine,
-      catalogue: catalogue.models,
-      configuredProviders: base.configured,
-      availability: base.availability,
-      fundedProviders: fundedProviderIds(machine.providers),
-      contextChars: context.chars + context.promptChars + toolChars,
-      requireModel,
-      tier: s.newrun.tier,
-    });
+    // One selection context for preview: same builder the run uses, so the
+    // picker shows exactly what the run will enforce (floors, tier, pin).
+    // No runtime filter here — the preview must not veto rows the refreshed
+    // run collection may still instantiate; the run enforces staleness.
+    const select = (requireModel?: string) => {
+      const ctx = resolveSelectionContext({
+        role: s.newrun.agent,
+        layout: newRunLayout,
+        machine,
+        def: effectiveDefForRun(agentDefFor(s.newRunRepo)),
+        ...(s.newrun.tier ? { tier: s.newrun.tier } : {}),
+        ...(requireModel ? { pin: { model: requireModel } } : {}),
+      });
+      return pickWithContext(ctx, {
+        agent: s.newrun.agent,
+        machine,
+        catalogue: catalogue.models,
+        configuredProviders: base.configured,
+        availability: base.availability,
+        fundedProviders: fundedProviderIds(machine.providers),
+        contextChars: context.chars + context.promptChars + toolChars,
+      });
+    };
     let result = select(s.newrun.model);
     if ("error" in result && s.newrun.model) {
       // A fork or an earlier pick can leave a pin that is now cooling,

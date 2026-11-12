@@ -14,13 +14,13 @@
  * for the fit display, but the selection order is purely cost-based.
  */
 import type { CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
-import type { AgentDef } from "./agents.js";
+import { agentDef, roleWeights, type AgentDef, type AgentName } from "./agents.js";
 import { CAPABILITY_AXES } from "./config.js";
 import { estimateCallCost, type AxisScores } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AvailabilityState } from "./availability.js";
 import { isProviderDisabled, isProviderCooling, isModelCooling, providerNeedsAuth } from "./availability.js";
-import { roleWeights } from "./agents.js";
+import type { Layout } from "./paths.js";
 import { loadProviderDefinitions } from "./data.js";
 
 type AxisWeights = Record<CapabilityAxis, number>;
@@ -326,4 +326,157 @@ export function pick(input: PickInput): PickResult | PickFailure {
     rejected,
     tier: input.tier,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Single selection context: one builder for every pick site.          */
+/*                                                                     */
+/* Floors, tier, pins, and the runtime filter used to live in four     */
+/* places (TUI preview, models dry-run, run preflight, in-loop        */
+/* selector), each assembling PickInput by hand — which is how the TUI */
+/* preview and the dry-run enforced --min-fit while runs silently      */
+/* used role defaults. Every pick site below must go through this      */
+/* builder, so preview and runtime can never disagree again.           */
+/* ------------------------------------------------------------------ */
+
+export interface SelectionFloors {
+  minFit?: number;
+  minCapability?: number;
+  minAxes?: Partial<Record<CapabilityAxis, number>>;
+}
+
+export interface SelectionPin {
+  model?: string;
+  provider?: string;
+}
+
+export interface SelectionRequest {
+  role: AgentName;
+  /** Repo layout for resolving the role def; unneeded when def is given. */
+  layout?: Layout;
+  machine: MachineConfig;
+  /** Pre-resolved def (loop passes its agent to preserve prompt/tools). */
+  def?: AgentDef;
+  floors?: SelectionFloors;
+  tier?: SelectionTier;
+  pin?: SelectionPin;
+  hasRuntimeModel?: (providerID: string, id: string) => boolean;
+}
+
+export interface SelectionContext {
+  /** Role def with floors applied. */
+  def: AgentDef;
+  floors: SelectionFloors;
+  tier?: SelectionTier;
+  requireModel?: string;
+  requireProvider?: string;
+  hasRuntimeModel?: (providerID: string, id: string) => boolean;
+}
+
+export function resolveSelectionContext(request: SelectionRequest): SelectionContext {
+  const base = request.def ?? (request.layout ? agentDef(request.layout, request.role) : undefined);
+  if (!base) throw new Error("resolveSelectionContext needs def or layout");
+  const floors = request.floors ?? {};
+  const def =
+    floors.minFit !== undefined || floors.minCapability !== undefined || floors.minAxes
+      ? {
+          ...base,
+          ...(floors.minFit !== undefined ? { minFit: floors.minFit } : {}),
+          ...(floors.minCapability !== undefined ? { minCapability: floors.minCapability } : {}),
+          ...(floors.minAxes ? { minAxes: { ...(base.minAxes ?? {}), ...floors.minAxes } } : {}),
+        }
+      : base;
+  return {
+    def,
+    floors,
+    ...(request.tier ? { tier: request.tier } : {}),
+    ...(request.pin?.model ? { requireModel: request.pin.model } : {}),
+    ...(request.pin?.provider ? { requireProvider: request.pin.provider } : {}),
+    ...(request.hasRuntimeModel ? { hasRuntimeModel: request.hasRuntimeModel } : {}),
+  };
+}
+
+export interface SelectionParts {
+  agent: string;
+  machine: MachineConfig;
+  catalogue: readonly CatalogueRow[];
+  configuredProviders: ReadonlySet<string>;
+  availability?: AvailabilityState;
+  fundedProviders?: ReadonlySet<string>;
+  contextChars: number;
+}
+
+export function toPickInput(ctx: SelectionContext, parts: SelectionParts): PickInput {
+  return {
+    agent: parts.agent,
+    agentDef: ctx.def,
+    machine: parts.machine,
+    catalogue: parts.catalogue,
+    configuredProviders: parts.configuredProviders,
+    ...(parts.availability ? { availability: parts.availability } : {}),
+    ...(parts.fundedProviders ? { fundedProviders: parts.fundedProviders } : {}),
+    contextChars: parts.contextChars,
+    ...(ctx.requireModel ? { requireModel: ctx.requireModel } : {}),
+    ...(ctx.requireProvider ? { requireProvider: ctx.requireProvider } : {}),
+    ...(ctx.tier ? { tier: ctx.tier } : {}),
+    ...(ctx.hasRuntimeModel ? { hasRuntimeModel: ctx.hasRuntimeModel } : {}),
+  };
+}
+
+export function pickWithContext(
+  ctx: SelectionContext,
+  parts: SelectionParts,
+): PickResult | PickFailure {
+  return pick(toPickInput(ctx, parts));
+}
+
+/** Rejection reasons that mean the pin itself can never work (vs transient states like cooling or funding). */
+const HARD_PIN_REASONS = new Set([
+  "model-filtered",
+  "provider-filtered",
+  "local-model",
+  "free-model",
+  "vetoed",
+  "provider-not-configured",
+  "not-in-runtime-catalog",
+]);
+
+/**
+ * Is a pin viable, or dead on arrival? Scopes the catalogue to the pin and
+ * picks: a pin whose rows all fail on hard scoping reasons should fail
+ * loudly instead of relaxing into an auto-pick the user never asked for.
+ * Pins failing on transient/policy reasons (cooling, floors, funding)
+ * return ok:true so the caller keeps the relax-and-fallback path.
+ */
+export function pinViability(
+  ctx: SelectionContext,
+  parts: SelectionParts,
+): { ok: true } | { ok: false; reasons: string[]; hint: string } {
+  if (!ctx.requireModel && !ctx.requireProvider) return { ok: true };
+  const pinRows = parts.catalogue.filter(
+    (row) =>
+      (!ctx.requireModel || matchesModel(row, ctx.requireModel)) &&
+      (!ctx.requireProvider || row.providerID === ctx.requireProvider),
+  );
+  if (pinRows.length === 0) {
+    return {
+      ok: false,
+      reasons: ["no-match"],
+      hint: "no catalogue row matches the pin; check the key with: machine_code models --all",
+    };
+  }
+  const trial = pick(toPickInput(ctx, { ...parts, catalogue: pinRows }));
+  if (!("error" in trial)) return { ok: true };
+  const reasons = Object.keys(trial.rejectedByReason);
+  if (reasons.length === 0 || !reasons.every((reason) => HARD_PIN_REASONS.has(reason))) {
+    return { ok: true };
+  }
+  const hints = [
+    reasons.includes("local-model") ? "ollama needs --tier local" : "",
+    reasons.includes("free-model") ? "free offers need --tier local" : "",
+    reasons.includes("vetoed") ? "model is vetoed (machine curation.toml)" : "",
+    reasons.includes("provider-not-configured") ? "provider is not configured" : "",
+    reasons.includes("not-in-runtime-catalog") ? "catalogue is stale; run: machine_code catalogue refresh" : "",
+  ].filter(Boolean);
+  return { ok: false, reasons, hint: hints.join("; ") || reasons.join(", ") };
 }

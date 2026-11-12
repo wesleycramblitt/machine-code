@@ -18,7 +18,7 @@ import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-age
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
-import { estimateTokens, pick, providerMultiplier, relaxPinForFailure } from "./select.js";
+import { estimateTokens, pickWithContext, providerMultiplier, relaxPinForFailure, resolveSelectionContext } from "./select.js";
 import { applyClassification, classifyError, loadAvailability, resetModelTier, resetProviderTier, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
@@ -343,13 +343,23 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
   // A `--model`/`--provider` pin starts as a hard filter but relaxes to a
   // preference the moment the pinned model fails (see relaxPin below).
-  let pinModel = input.requireModel;
-  let pinProvider = input.requireProvider;
+  // The pin lives on the selection context so every pick uses it.
+  const selection = resolveSelectionContext({
+    role: input.agent.name,
+    layout: input.layout ?? layoutFor(input.root),
+    machine: input.machine,
+    def: input.agent,
+    ...(input.tier ? { tier: input.tier } : {}),
+    pin: {
+      ...(input.requireModel ? { model: input.requireModel } : {}),
+      ...(input.requireProvider ? { provider: input.requireProvider } : {}),
+    },
+    hasRuntimeModel: (providerID: string, id: string) => input.models.getModel(providerID, id) !== undefined,
+  });
 
   const selectFor = (chars: number) =>
-    pick({
+    pickWithContext(selection, {
       agent: input.agent.name,
-      agentDef: input.agent,
       machine: input.machine,
       catalogue:
         triedModels.size === 0
@@ -359,10 +369,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       availability,
       fundedProviders,
       contextChars: chars,
-      requireProvider: pinProvider,
-      requireModel: pinModel,
-      ...(input.tier ? { tier: input.tier } : {}),
-      hasRuntimeModel: (providerID: string, id: string) => input.models.getModel(providerID, id) !== undefined,
     });
 
   /**
@@ -372,7 +378,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * Drop the pin so the retry falls back to auto-selection.
    */
   const relaxPin = (failedKey: string, providerID: string): void => {
-    const next = relaxPinForFailure({ model: pinModel, provider: pinProvider }, failedKey, providerID);
+    const next = relaxPinForFailure(
+      { model: selection.requireModel, provider: selection.requireProvider },
+      failedKey,
+      providerID,
+    );
     if (next.dropped.length > 0) {
       recorder.event("model_pin_relaxed", {
         failedModel: failedKey,
@@ -380,8 +390,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         attempt: triedModels.size,
       });
     }
-    pinModel = next.pin.model;
-    pinProvider = next.pin.provider;
+    selection.requireModel = next.pin.model;
+    selection.requireProvider = next.pin.provider;
   };
 
   const mapRoot = input.toolRoot ?? input.root;

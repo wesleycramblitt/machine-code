@@ -16,7 +16,7 @@ import { refreshCatalogue } from "../catalogue/refresh.js";
 import { loadCatalogue } from "../catalogue/load.js";
 import { filterModels, siblingOffers, type ModelSort } from "../catalogue/query.js";
 import { snapshotFiles } from "../catalogue/snapshot.js";
-import { pick, axisWeights } from "../select.js";
+import { pickWithContext, resolveSelectionContext, axisWeights } from "../select.js";
 import { CAPABILITY_AXES } from "../config.js";
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
@@ -25,7 +25,6 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { runProc } from "../proc.js";
-import { agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
 import { resolveGates, runGates } from "../verify.js";
@@ -144,21 +143,34 @@ export function cmdModels(argv: string[]): number {
 
   const agent = flags.get("agent");
   if (agent) {
-    const def = agentDef(l, agent);
     const contextChars = flags.has("context-chars") ? Number(flags.get("context-chars")) : 16_000;
     if (!Number.isFinite(contextChars) || contextChars <= 0) fail("--context-chars needs a positive number");
     const fitOverride = flags.has("min-fit") ? Number(flags.get("min-fit")) : undefined;
     if (fitOverride !== undefined && (!Number.isFinite(fitOverride) || fitOverride < 0 || fitOverride > 10)) {
       fail("--min-fit needs a number in 0-10");
     }
-    def.minFit = fitOverride ?? def.minFit;
     const override = flags.has("min-capability") ? Number(flags.get("min-capability")) : undefined;
     if (override !== undefined && (!Number.isFinite(override) || override < 0 || override > 10)) {
       fail("--min-capability needs a number in 0-10");
     }
-    def.minCapability = override ?? def.minCapability;
     const axesOverride = flags.get("min-axes");
-    if (axesOverride) def.minAxes = { ...(def.minAxes ?? {}), ...parseAxisOverrides(axesOverride) };
+    // Same builder the runs use, so the dry-run shows what a run enforces.
+    // No runtime filter here: this is a catalogue question, and the
+    // collection below is unrefreshed — the run enforces staleness.
+    const selection = resolveSelectionContext({
+      role: agent,
+      layout: l,
+      machine,
+      floors: {
+        ...(fitOverride !== undefined ? { minFit: fitOverride } : {}),
+        ...(override !== undefined ? { minCapability: override } : {}),
+        ...(axesOverride ? { minAxes: parseAxisOverrides(axesOverride) } : {}),
+      },
+      pin: {
+        ...(flags.get("model") ? { model: flags.get("model")! } : {}),
+        ...(provider ? { provider } : {}),
+      },
+    });
     const dryPrice = (name: string): number | undefined => {
       const raw = flags.get(name);
       if (raw === undefined) return undefined;
@@ -171,17 +183,14 @@ export function cmdModels(argv: string[]): number {
     const dryMaxOut = dryPrice("max-output-price") ?? dryMax;
     if (dryMaxIn !== undefined) machine.priceCaps.input = dryMaxIn;
     if (dryMaxOut !== undefined) machine.priceCaps.output = dryMaxOut;
-    const result = pick({
+    const result = pickWithContext(selection, {
       agent,
-      agentDef: def,
       machine,
       catalogue: doc.models,
       configuredProviders: configured,
       availability: loadAvailability(l.home),
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars,
-      requireProvider: provider,
-      requireModel: flags.get("model"),
     });
     if ("error" in result) {
       process.stdout.write(`${result.error}\n`);
@@ -195,12 +204,12 @@ export function cmdModels(argv: string[]): number {
       }
       return 1;
     }
-    const weights = axisWeights(agent, def);
-    const floors = CAPABILITY_AXES.filter((axis) => (def.minAxes?.[axis] ?? 0) > 0)
-      .map((axis) => `${axis}>=${def.minAxes![axis]}`)
+    const weights = axisWeights(agent, selection.def);
+    const floors = CAPABILITY_AXES.filter((axis) => (selection.def.minAxes?.[axis] ?? 0) > 0)
+      .map((axis) => `${axis}>=${selection.def.minAxes![axis]}`)
       .join(" ");
     process.stdout.write(
-      `agent ${agent}  tier ${machine.selection.tier}  min_context ${def.minContext}  min_fit ${def.minFit}  min_capability ${def.minCapability}  tool_call ${def.toolCall}\n`,
+      `agent ${agent}  tier ${machine.selection.tier}  min_context ${selection.def.minContext}  min_fit ${selection.def.minFit}  min_capability ${selection.def.minCapability}  tool_call ${selection.def.toolCall}\n`,
     );
     process.stdout.write(
       `axes ${floors || "(no axis floors)"}\n` +
