@@ -79,8 +79,8 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     name: "context",
     label: "context",
     description:
-      "Run state and context. note (text; kind finding|decision|open|next), focus (refs), recall (id), forget (id|text), " +
-      "state, expand (target path or path#symbol), parent (run id).",
+      "Run state and context. note (text; kind finding|decision|open), recall (id), forget (id|text), " +
+      "state, parent (run id).",
     parameters: ContextParams,
     async execute(_id, params: Static<typeof ContextParams>) {
       const memory = ctx.state;
@@ -95,14 +95,9 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
         switch (params.action) {
           case "note": {
             if (!params.text || params.text.trim().length === 0) return fail("note requires text");
-            const kind = (params.kind ?? "finding") as "finding" | "decision" | "open" | "next";
+            const kind = (params.kind ?? "finding") as "finding" | "decision" | "open";
             memory.note(kind, params.text, params.refs ?? []);
             return ok(`noted ${kind}`);
-          }
-          case "focus": {
-            if (!params.refs || params.refs.length === 0) return fail("focus requires refs");
-            memory.focus(params.refs);
-            return ok(`focused ${params.refs.length} ref(s)`);
           }
           case "recall": {
             if (!params.id) return fail("recall requires id");
