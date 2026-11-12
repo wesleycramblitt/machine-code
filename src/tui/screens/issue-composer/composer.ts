@@ -14,6 +14,7 @@
  */
 import {
   B, C, D, G, GR, M, R, RED, W, Y, START_BG, WHITE,
+  PURPLE_FG, YELLOW_FG, RED_FG,
   command, commandBadge, dim, fit, joinCommands, trunc, visible, wrapText,
 } from "../../format.js";
 import { clipLines } from "../types.js";
@@ -35,6 +36,10 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const inner = Math.max(12, boxWidth - 2);
 
   // ── Editable text fields — always visible ──
+  // Kind line with colored value matching runs-page style
+  const kindDisplay = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
+  const kindValueColor = settings.kind === "ideas" ? PURPLE_FG : settings.kind === "features" ? YELLOW_FG : RED_FG;
+  body.push(` ${B}Kind${R}[${C}k${R}]: ${kindValueColor}${kindDisplay}${R}`);
   body.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
   body.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
   body.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
@@ -72,7 +77,7 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   );
 
   // ── Bottom bar: Kind + Priority + Verify + Review (left) · Create[:!] (right) ──
-  const kindColor = settings.kind === "ideas" ? C : settings.kind === "features" ? G : RED;
+  const kindColor = settings.kind === "ideas" ? PURPLE_FG : settings.kind === "features" ? YELLOW_FG : RED_FG;
   const kindLabel = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
   const kindToken = command("k", "Kind", kindLabel, kindColor);
 
