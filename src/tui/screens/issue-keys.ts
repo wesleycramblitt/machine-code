@@ -7,7 +7,7 @@
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { findIssue, updateIssueReview } from "../../plan/issues.js";
+import { findIssue, kindTag, updateIssueReview } from "../../plan/issues.js";
 import { layout } from "../../paths.js";
 import { commitPlanningFiles } from "../../tasks/planning.js";
 import { listRuns, reconcileRun } from "../../state/runs.js";
@@ -56,7 +56,7 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
     if (issue) {
       const next = issue.review === "none" ? "human" : "none";
       updateIssueReview(l, slug, next);
-      void commitPlanningFiles(l, `issues: ${slug} review ${next}`);
+      void commitPlanningFiles(l, `[${kindTag(issue.kind)} REVIEW] ${slug} ${next}`);
       ctx.notify(`review ${next}`);
     }
     ctx.draw();

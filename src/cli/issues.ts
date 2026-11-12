@@ -167,7 +167,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       fail(`issue ${cleaned} is ${issue.status}; reject requires needs-human-review`);
     }
     moveIssue(l, cleaned, "failed-human-review");
-    await commitPlanningFiles(l, `issues: ${cleaned} failed-human-review`);
+    await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED HUMAN REVIEW] ${cleaned}`);
     process.stdout.write(`rejected ${cleaned} → failed-human-review\n`);
     return 0;
   }
@@ -294,7 +294,7 @@ export async function runIssueBuild(
     if (error instanceof WorktreeError) {
       recorder.finalize("blocked", `${error.code}: ${error.message}`);
       moveIssue(l, slug, "blocked");
-      await commitPlanningFiles(l, `issues: ${slug} blocked`);
+      await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${slug}`);
       return EXIT["blocked"];
     }
     throw error;
@@ -322,7 +322,7 @@ export async function runIssueBuild(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     recorder.finalize("failed", message);
-    await commitPlanningFiles(l, `issues: build ${slug} (failed)`);
+    await commitPlanningFiles(l, `[${kindTag(issue.kind)} BUILD] ${slug} (failed)`);
     process.stderr.write(`build ${slug} failed: ${message}\n`);
     return EXIT.failed;
   }
@@ -333,7 +333,7 @@ export async function runIssueBuild(
     if (/acceptance gates failed/i.test(result.error ?? "")) moveIssue(l, slug, "failed-gates");
     else moveIssue(l, slug, "blocked");
   }
-  await commitPlanningFiles(l, `issues: build ${slug} (${result.status})`);
+  await commitPlanningFiles(l, `[${kindTag(issue.kind)} BUILD] ${slug} (${result.status})`);
   process.stdout.write(`build ${slug}: ${result.status}${result.error ? ` — ${result.error}` : ""}\n`);
   if (result.status === "completed") {
     process.stdout.write(`  commit ${result.commit ?? "(none)"}\n  next: machine_code approve ${slug}\n`);
@@ -369,7 +369,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
   let issue = findIssue(l, slug);
   if (!issue) {
     issue = writeIssue(l, { kind: "features", slug, prompt: joined });
-    await commitPlanningFiles(l, `issues: add ${slug}`);
+    await commitPlanningFiles(l, `[NEW FEATURE] ${slug}`);
     process.stderr.write(`self-scoped as ${slug} → issues/features/todo/${slug}.md\n`);
   } else {
     if (issue.kind === "ideas") fail(`ideas are researched first: machine_code issue run ${slug}`);

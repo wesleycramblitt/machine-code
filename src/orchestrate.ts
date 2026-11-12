@@ -32,7 +32,7 @@ import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
 import { parseBuildOutcome } from "./orchestrator/outcome.js";
 import type { Layout } from "./paths.js";
-import { appendIssueGateFailure, findIssue, gateFailureAttempts, moveIssue } from "./plan/issues.js";
+import { appendIssueGateFailure, findIssue, gateFailureAttempts, kindTag, moveIssue } from "./plan/issues.js";
 import { commitPlanningFiles } from "./tasks/planning.js";
 
 export interface OrchestrateInput {
@@ -324,9 +324,11 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
         gateFailureText(gateOutcome.results),
         gateFailureAttempts(failedIssue.body) + 1,
       );
+      moveIssue(layout, packet.id, "failed-gates");
+      await commitPlanningFiles(layout, `[${kindTag(failedIssue.kind)} FAILED GATES] ${packet.id}`);
+    } else {
+      moveIssue(layout, packet.id, "failed-gates");
     }
-    moveIssue(layout, packet.id, "failed-gates");
-    await commitPlanningFiles(layout, `issues: ${packet.id} failed-gates`);
     return {
       status: "blocked",
       finalText: engineerResult.finalText,

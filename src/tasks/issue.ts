@@ -110,7 +110,7 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
     throw new Error(`merge succeeded but main build failed: ${build.text}`);
   }
   moveIssue(layout, slug, "done");
-  await commitIssues(layout, `issues: complete ${slug}`);
+  await commitIssues(layout, `[COMPLETE] ${slug}`);
 }
 
 /** Delete an issue file, branch, and worktree. */
@@ -128,7 +128,7 @@ export async function deleteIssue(layout: Layout, slug: string, opts: { force?: 
       await git(root, ["branch", flag, branch]).catch(() => undefined);
     }
   }
-  await commitIssues(layout, `issues: delete ${slug}`);
+  await commitIssues(layout, `[DELETE] ${slug}`);
 }
 
 export { parseKind, legalStatus };

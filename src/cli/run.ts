@@ -26,7 +26,7 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
+import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueVerification, findIssue, gateFailureAttempts, kindTag, moveIssue, writeIssue } from "../plan/issues.js";
 import { enrichHints, renderHints, suggestHints, suggestionText, withKeywordTerms } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
@@ -273,7 +273,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // Commit (and push) immediately so the new issue lives on origin/main
       // before the branch is created — otherwise it exists only in the local
       // main, and the post-run merge back upstream diverges and refuses.
-      await commitPlanningFiles(l, `issues: auto-create ${autoSlug}`, true);
+      await commitPlanningFiles(l, `[NEW FEATURE] ${autoSlug}`, true);
       autoCreatedIssue = true;
     }
     itemSlug = issue.slug;
@@ -963,7 +963,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       );
       if (outcome) {
         moveIssue(l, issue.slug, "researched");
-        await commitPlanningFiles(l, `issues: ${issue.slug} researched`);
+        await commitPlanningFiles(l, `[${kindTag(issue.kind)} RESEARCHED] ${issue.slug}`);
         recorder.event("idea_researched", { slug: issue.slug, created: written.length });
       } else {
         recorder.event("research_incomplete", { slug: issue.slug });
@@ -998,7 +998,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
           const attempt = gateFailureAttempts(issue.body) + 1;
           appendIssueGateFailure(issue.path, gateFailureText(gateOutcome.results), attempt);
           moveIssue(l, issue.slug, "failed-gates");
-          await commitPlanningFiles(l, `issues: ${issue.slug} failed-gates`);
+          await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
           result = {
             ...result,
             status: "blocked",
@@ -1046,19 +1046,19 @@ export async function cmdRun(argv: string[]): Promise<number> {
                 recorder.event("branch_merged", { branch });
                 if (issue.kind !== "ideas") {
                   moveIssue(l, issue.slug, "done");
-                  await commitPlanningFiles(l, `issues: ${issue.slug} done`);
+                  await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
                 }
               } else {
                 if (issue.kind !== "ideas") {
                   moveIssue(l, issue.slug, "blocked");
-                  await commitPlanningFiles(l, `issues: ${issue.slug} blocked`);
+                  await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${issue.slug}`);
                 }
                 result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
               }
             }
           } else {
             moveIssue(l, issue.slug, "needs-human-review");
-            await commitPlanningFiles(l, `issues: ${issue.slug} needs-human-review`);
+            await commitPlanningFiles(l, `[${kindTag(issue.kind)} NEEDS HUMAN REVIEW] ${issue.slug}`);
           }
         }
       }
@@ -1076,7 +1076,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (agentNameParsed === "research") {
     // Research writes issues//knowledge in the main tree; commit
     // them so the map stays the committed source of truth.
-    await commitPlanningFiles(l, `issues: ${agentNameParsed} run ${recorder.id.slice(-8)}`);
+    await commitPlanningFiles(l, `[RESEARCH RUN] ${recorder.id.slice(-8)}`);
   }
   printRunOutcome(result, recorder);
   // One-way notification on terminal state (M4).
@@ -1389,7 +1389,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
           const attempt = gateFailureAttempts(issue.body) + 1;
           appendIssueGateFailure(issue.path, gateFailureText(gateOutcome.results), attempt);
           moveIssue(l2, issue.slug, "failed-gates");
-          await commitPlanningFiles(l2, `issues: ${issue.slug} failed-gates`);
+          await commitPlanningFiles(l2, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
           recorder.finalize("blocked", `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`, result.finalText);
           printRunOutcome({ ...result, status: "blocked" }, recorder);
           return EXIT.blocked;
@@ -1412,12 +1412,12 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
                   if (merged.ok) {
                     recorder.event("branch_merged", { branch });
                     moveIssue(l2, issue.slug, "done");
-                    await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
+                    await commitPlanningFiles(l2, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
                   }
                 }
               } else {
                 moveIssue(l2, issue.slug, "needs-human-review");
-                await commitPlanningFiles(l2, `issues: ${issue.slug} needs-human-review`);
+                await commitPlanningFiles(l2, `[${kindTag(issue.kind)} NEEDS HUMAN REVIEW] ${issue.slug}`);
               }
             }
           }
