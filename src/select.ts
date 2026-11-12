@@ -171,6 +171,25 @@ export function isFreeRow(row: CatalogueRow): boolean {
   return row.free === true || (row.pricing.input === 0 && row.pricing.output === 0);
 }
 
+/** Merge shared and free-specific per-axis floors, taking the stricter floor
+ *  per axis so a free offer cannot dodge a raised shared floor (see
+ *  rejectReason). A configured shared floor is still allowed to be *lower*
+ *  than the free floor, letting the free tier pick its own quality in quiet
+ *  configuration while a raised shared bar always applies. */
+function mergeAxisFloors(
+  shared: Partial<Record<CapabilityAxis, number>> | undefined,
+  free: Partial<Record<CapabilityAxis, number>> | undefined,
+): Partial<Record<CapabilityAxis, number>> | undefined {
+  if (!shared && !free) return undefined;
+  const merged: Partial<Record<CapabilityAxis, number>> = {};
+  for (const axis of CAPABILITY_AXES) {
+    const a = shared?.[axis];
+    const b = free?.[axis];
+    if (a !== undefined || b !== undefined) merged[axis] = Math.max(a ?? 0, b ?? 0);
+  }
+  return merged;
+}
+
 /**
  * Meta routers (OpenRouter "auto"/jev-router and similar) forward to unknown
  * upstream models, so their catalogue scores and capabilities are guesses.
@@ -267,16 +286,18 @@ function rejectReason(
   if (tier === "paid" && !freeRow) {
     if (input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
   }
-  // Free offers use the free floor in both tiers. Paid offers keep the paid
-  // floor, so a cheap model cannot bypass the quality bar just by existing.
-  const minFit = freeRow ? (input.policy.freeMinFit ?? input.policy.minFit) : input.policy.minFit;
+  // Free offers use the free floor in both tiers. But an explicit raise of the
+  // shared floors — e.g. fit[f] (minFit) up in the run page — must gate free
+  // rows too, or a `:free` model stays selectable no matter how high the bar
+  // goes. Each gate takes whichever floor is stricter: the free-specific one
+  // OR the shared one for the current tier.
+  const minFit = freeRow
+    ? Math.max(input.policy.freeMinFit ?? input.policy.minFit, input.policy.minFit)
+    : input.policy.minFit;
   const minCapability = freeRow
-    ? (input.policy.freeMinCapability ?? input.policy.minCapability)
+    ? Math.max(input.policy.freeMinCapability ?? input.policy.minCapability, input.policy.minCapability)
     : input.policy.minCapability;
-  const minAxes =
-    freeRow && input.policy.freeMinAxes
-      ? { ...(input.policy.minAxes ?? {}), ...input.policy.freeMinAxes }
-      : input.policy.minAxes;
+  const minAxes = freeRow ? mergeAxisFloors(input.policy.minAxes, input.policy.freeMinAxes) : input.policy.minAxes;
   if (minFit > 0 && capabilityFit(row.scores, weights) < minFit) {
     return "below-min-fit";
   }
