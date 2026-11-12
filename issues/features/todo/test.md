@@ -1,3 +1,0 @@
-acceptance: script:build
-
-Test
