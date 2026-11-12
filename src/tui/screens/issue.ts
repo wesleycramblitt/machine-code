@@ -106,6 +106,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
     ...w,
     actions: joinCommands([
       command("n", "Run", undefined, C),
+      command("a", "Approve", undefined, G),
       command("d", "Delete", undefined, RED),
     ]),
     secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",

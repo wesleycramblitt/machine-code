@@ -2,8 +2,11 @@
  * machine_code — issue detail keys.
  *
  * `n` starts the run the issue needs (research for ideas, engineer for
- * features/bugs), `e` edits the issue file, `d` opens the delete confirmation page.
+ * features/bugs), `e` edits the issue file, `a` approves and merges,
+ * `d` opens the delete confirmation page.
  */
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { findIssue } from "../../plan/issues.js";
 import { layout } from "../../paths.js";
 import { issueDeleteTarget } from "./delete-keys.js";
@@ -13,11 +16,17 @@ import type { KeyServices } from "./keys.js";
 export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
   const slug = s.selectedIssueSlug;
   const l = layout(s.selectedIssueRepo ?? ctx.repoRoot);
+  const spawnCli = (args: string[], note: string): void => {
+    const cliPath = fileURLToPath(new URL("../../cli.js", import.meta.url));
+    spawn(process.execPath, [cliPath, ...args], { cwd: l.repoRoot, detached: true, stdio: "ignore" }).unref();
+    ctx.notify(note);
+    ctx.draw();
+  };
   const startForIssue = (): void => {
     if (!slug) return;
     const issue = findIssue(l, slug);
-    if (issue?.status === "done") {
-      ctx.notify(`${slug} is done`);
+    if (issue?.status === "done" || issue?.status === "needs-human-review") {
+      ctx.notify(`${slug} is ${issue.status}; approve it with a`);
       return;
     }
     const agent = issue?.kind === "ideas" ? "research" : "engineer";
@@ -30,6 +39,17 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
   if (data === "e" && slug) {
     const issue = findIssue(l, slug);
     if (issue) ctx.openEditor(issue.path);
+    return true;
+  }
+  if (data === "a" && slug) {
+    const issue = findIssue(l, slug);
+    if (!issue) { ctx.draw(); return true; }
+    if (issue.status !== "needs-human-review" && issue.status !== "done") {
+      ctx.notify(`${slug} is ${issue.status}; build it before approving`);
+      ctx.draw();
+      return true;
+    }
+    spawnCli(["approve", slug], `approve ${slug} queued`);
     return true;
   }
 

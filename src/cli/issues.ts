@@ -65,7 +65,9 @@ export async function cmdApprove(argv: string[]): Promise<number> {
   const issue = findIssue(l, slug);
   if (!issue) fail(`no issue ${slug}`);
   if (issue.kind === "ideas") fail(`ideas are researched, not approved: ${slug}`);
-  if (issue.status !== "done") fail(`${slug} is ${issue.status}; build it before approving`);
+  if (issue.status !== "needs-human-review" && issue.status !== "done") {
+    fail(`${slug} is ${issue.status}; build it before approving`);
+  }
   assertNoActiveRun(l, slug, "approve");
   if (issue.review === "human") {
     process.stderr.write(`note: ${slug} has review = human (never auto-merged by batch)\n`);
@@ -338,7 +340,7 @@ export async function runIssueBuild(
   });
   recorder.finalize(result.status, result.error, result.finalText);
   if (result.status === "completed") {
-    moveIssue(l, slug, "done");
+    moveIssue(l, slug, issue.review === "human" ? "needs-human-review" : "done");
   } else if (result.status === "blocked" || result.status === "failed") {
     if (result.lastGateFailure) {
       moveIssue(l, slug, "failed-gates");
