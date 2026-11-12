@@ -115,7 +115,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
     actions: joinCommands([
       command("n", "Run", undefined, C),
       command("o", "Orchestrate", undefined, GR),
-      command("g", "Gate", issue?.review ?? "none", issue?.review === "agent" ? C : issue?.review === "human" ? Y : D),
+      command("g", "Gate", issue?.review ?? "none", issue?.review === "human" ? Y : D),
       command("a", "Approve", undefined, G),
       command("d", "Delete", undefined, RED),
     ]),

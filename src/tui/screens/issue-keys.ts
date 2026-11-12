@@ -34,7 +34,7 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
   const startForIssue = (): void => {
     if (!slug) return;
     const issue = findIssue(l, slug);
-    if (issue?.status === "done" || issue?.status === "needs-agent-review" || issue?.status === "needs-human-review") {
+    if (issue?.status === "done" || issue?.status === "needs-human-review") {
       ctx.notify(`${slug} is ${issue.status}; finish review/approval before a new run`);
       return;
     }
@@ -54,7 +54,7 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
   if (data === "g" && slug) {
     const issue = findIssue(l, slug);
     if (issue) {
-      const next = issue.review === "none" ? "agent" : issue.review === "agent" ? "human" : "none";
+      const next = issue.review === "none" ? "human" : "none";
       updateIssueReview(l, slug, next);
       void commitPlanningFiles(l, `issues: ${slug} review ${next}`);
       ctx.notify(`review ${next}`);

@@ -118,7 +118,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const statusFlag = flags.get("issue-status");
     if (statusFlag && !legalStatus(kind, statusFlag)) fail(`invalid status ${JSON.stringify(statusFlag)} for ${kind}`);
     const reviewFlag = flags.get("review") ?? "none";
-    if (!["none", "agent", "human"].includes(reviewFlag)) fail("--review must be none|agent|human");
+    if (!["none", "human"].includes(reviewFlag)) fail("--review must be none|human");
     const verificationFlag = flags.get("verification") ?? "direct";
     if (!["direct", "verified"].includes(verificationFlag)) fail("--verification must be direct|verified");
     const issue = writeIssue(l, {
@@ -132,7 +132,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       ...(flags.get("tags") ? { tags: flags.get("tags")!.split(",").map((e) => e.trim()) } : {}),
       ...(flags.get("acceptance") ? { acceptance: flags.get("acceptance")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
       ...(flags.get("verify") ? { verify: flags.get("verify")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
-      review: reviewFlag as "none" | "agent" | "human",
+      review: reviewFlag as "none" | "human",
     });
     await commitPlanningFiles(l, `issues: add ${slug}`);
     process.stdout.write(`created ${issue.rel}\n`);
@@ -193,22 +193,6 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const child = spawn(process.execPath, [process.argv[1]!, ...args], { stdio: "inherit" });
     const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
     return code;
-  }
-
-  if (sub === "review") {
-    const slug = positional[1];
-    if (!slug) fail("usage: machine_code issue review <slug>");
-    const cleaned = slugify(slug);
-    const issue = findIssue(l, cleaned);
-    if (!issue) fail(`no issue ${cleaned}`);
-    if (issue.kind === "ideas") fail(`ideas are researched, not reviewed: ${cleaned}`);
-    assertNoActiveRun(l, cleaned, "review");
-    const args = ["run", "--agent", "review", "--item", cleaned];
-    const model = flags.get("model");
-    if (model) args.push("--model", model);
-    args.push(issue.prompt);
-    const child = spawn(process.execPath, [process.argv[1]!, ...args], { stdio: "inherit" });
-    return new Promise<number>((resolve) => child.on("exit", (code) => resolve(code ?? 1)));
   }
 
   if (sub === "list" || sub === "ls" || sub === undefined) {
@@ -324,7 +308,6 @@ export async function runIssueBuild(
       machine: runtime.machine,
       policy: runtime.policy,
       packet,
-      review: flags.has("no-review") ? false : flags.has("with-review") || issue.review === "agent",
       include: { issues: [issue.rel] },
       request: goal,
       root: l.repoRoot,
@@ -345,9 +328,7 @@ export async function runIssueBuild(
   if (result.status === "completed") {
     moveIssue(l, slug, issue.review === "human" ? "needs-human-review" : "done");
   } else if (result.status === "blocked" || result.status === "failed") {
-    const verdict = result.reviewVerdict;
-    if (verdict !== undefined && verdict !== "approved") moveIssue(l, slug, "failed-agent-review");
-    else if (/acceptance gates failed/i.test(result.error ?? "")) moveIssue(l, slug, "failed-gates");
+    if (/acceptance gates failed/i.test(result.error ?? "")) moveIssue(l, slug, "failed-gates");
     else moveIssue(l, slug, "blocked");
   }
   await commitPlanningFiles(l, `issues: build ${slug} (${result.status})`);

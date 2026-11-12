@@ -15,7 +15,7 @@ import {
   B, BL, C, D, G, GR, M, R, RED, W, Y, PANEL_BG, START_BG, WHITE,
   agentTone, background, command, commandBadge, contextTone, fit,
   fmtContext, fmtMoney, fmtTokens, joinCommands, modelPriceText, modelReasonLabel,
-  modelReasonRank, modelReasonText, selected, tierTone, trunc, visible,
+  modelReasonRank, modelReasonText, selected, trunc, visible,
   wrapCommands, wrapText, wrapTokenList,
 } from "../../format.js";
 import { layout } from "../../../paths.js";
@@ -86,7 +86,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     }
     return "no issue · run is untracked";
   })();
-  const displayTier = run.tier === "free" ? "Free" : "Paid";
+  
   const itemsFor = (kinds: readonly string[]) =>
     ctx.sources
       .filter((source) => kinds.includes(source.kind))
@@ -130,8 +130,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (run.agent === "research" && issue.kind !== "ideas") continue;
     // Engineer: todo, failed attempts, or a legacy blocked state.
     if (run.agent === "engineer" && !(ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)) continue;
-    // Review: only done issues with agent review.
-    if (run.agent === "review" && (issue.status !== "done" || issue.review !== "agent")) continue;
     const key = `issue:${issue.rel}`;
     if (knownIssues.has(key)) continue;
     let size = 0;
@@ -314,9 +312,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // Row order stays fixed per section (build order) regardless of include/
   // exclude/mode state: the render marks (✓ / ✕ / · / mode tags) convey state,
   // so re-sorting would only make rows and the cursor jump on toggle.
-  const roleFit = ap ? (run.tier === "free" ? ap.freeMinFit ?? ap.minFit : ap.minFit) : undefined;
-  const floorText = run.floors === "role" ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : run.floors;
-  const fitText = run.minFit === undefined ? `role${roleFit !== undefined ? ` ${roleFit}` : ""}` : String(run.minFit);
+  const floorText = run.floors === "role" ? `role${ap ? ` ${ap.minFit}` : ""}` : run.floors;
+  const fitText = run.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(run.minFit);
   const estimateCost = preview.estimate
     ? fmtMoney(
         ((preview.estimate as { inputTokens: number }).inputTokens * (preview.model?.pricing.input ?? 0) +
@@ -331,18 +328,15 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     ? command("m", "Model", preview.error, RED)
     : command("m", "Model", preview.model?.key ?? "?", C);
   const fitPart = fitScore === undefined ? "" : `${D}fit${R} ${fitTone}${fitScore.toFixed(2)}${R}`;
-  const isFree = Boolean(
-    preview.model && (preview.model.free || (preview.model.pricing.input === 0 && preview.model.pricing.output === 0)),
-  );
-  const costPart = isFree ? `${G}free${R}` : `${D}cost${R} ${costTone}${estimateCost}${R}`;
+  const costPart = `${D}cost${R} ${costTone}${estimateCost}${R}`;
   const detailParts = preview.model
     ? [
         `${D}${preview.model.kind}${R}`,
         `${D}ctx${R} ${C}${fmtContext(preview.model.context)}${R}`,
-        ...(!isFree && preview.model.pricing.input > 0
+        ...(preview.model.pricing.input > 0
           ? [`${D}in${R} ${Y}$${preview.model.pricing.input}/M${R}`]
           : []),
-        ...(!isFree && preview.model.pricing.output > 0
+        ...(preview.model.pricing.output > 0
           ? [`${D}out${R} ${Y}$${preview.model.pricing.output}/M${R}`]
           : []),
       ]
@@ -360,7 +354,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     return run.floors;
   })();
   const minimumsText = trunc(
-    `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}  ${command("t", "Tier", displayTier, tierTone(run.tier))}${R}`,
+    `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}${R}`,
     Math.max(10, cols - 1),
   );
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;

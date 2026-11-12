@@ -151,8 +151,7 @@ const MODEL_REASON_RANK: Record<string, number> = {
   "provider-cooling": 1,
   "provider-disabled": 2,
   "provider-needs-auth": 3,
-  "not-free": 4,
-  "unfunded-provider": 5,
+  "unfunded-provider": 4,
   "no-tool-support": 6,
   "below-min-fit": 7,
   "below-min-capability": 8,
@@ -343,10 +342,8 @@ export function icon(status: string): string {
     case "awaiting_input": return `${Y}!${R}`;
     case "paused": return `${Y}⏸${R}`;
     case "blocked": return `${Y}⊘${R}`;
-    case "needs-agent-review":
     case "needs-human-review": return `${Y}◷${R}`;
     case "failed-gates":
-    case "failed-agent-review":
     case "failed-human-review":
     case "failed": return `${RED}✗${R}`;
     case "cancelled": return `${GR}⃠${R}`;
@@ -358,7 +355,7 @@ export function icon(status: string): string {
 export function statusColor(status: string): string {
   if (status === "running") return C;
   if (status === "completed" || status === "done") return G;
-  if (["awaiting_input", "paused", "blocked", "interrupted", "needs-agent-review", "needs-human-review"].includes(status)) return Y;
+  if (["awaiting_input", "paused", "blocked", "interrupted", "needs-human-review"].includes(status)) return Y;
   if (status === "failed" || status.startsWith("failed-")) return RED;
   return GR;
 }
@@ -444,11 +441,6 @@ export function agentTone(agent: string): string {
     case "build": return C;
     default: return C;
   }
-}
-
-/** Free is the safe default; paid is the yellow caution path. */
-export function tierTone(tier: string): string {
-  return tier === "free" ? G : Y;
 }
 
 export function joinCommands(items: Array<string | false | undefined | null>): string {

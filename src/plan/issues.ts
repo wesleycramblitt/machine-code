@@ -50,10 +50,8 @@ export const IDEA_STATUSES = ["needs-research", "researched"] as const;
 /** Features and bugs use explicit work and failure directories. */
 export const ENGINEER_STATUSES = [
   "todo",
-  "needs-agent-review",
   "needs-human-review",
   "failed-gates",
-  "failed-agent-review",
   "failed-human-review",
   "blocked",
   "done",
@@ -65,7 +63,6 @@ export type IssueStatus = IdeaStatus | EngineerStatus;
 export const ENGINEER_WORK_STATUSES: readonly EngineerStatus[] = [
   "todo",
   "failed-gates",
-  "failed-agent-review",
   "failed-human-review",
   "blocked",
 ];
@@ -82,17 +79,15 @@ export const ISSUE_STATUS_LABELS: Record<DisplayStatus, string> = {
   "needs-research": "Needs Research",
   researched: "Researched",
   todo: "Todo",
-  "needs-agent-review": "Needs Agent Review",
   "needs-human-review": "Needs Human Review",
   "failed-gates": "Failed Gates",
-  "failed-agent-review": "Failed Agent Review",
   "failed-human-review": "Failed Human Review",
   blocked: "Blocked",
   "in-progress": "In Progress",
   done: "Done",
 };
 
-export type ReviewMode = "none" | "agent" | "human";
+export type ReviewMode = "none" | "human";
 
 export interface Issue {
   kind: IssueKind;
@@ -257,7 +252,7 @@ function toSlugs(value: unknown): string[] {
 }
 
 function toReview(value: unknown): ReviewMode {
-  return value === "agent" || value === "human" ? value : "none";
+  return value === "human" ? "human" : "none";
 }
 
 function toAcceptance(front: Record<string, unknown>): string[] {

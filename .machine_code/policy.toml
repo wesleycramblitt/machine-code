@@ -18,13 +18,8 @@
 # Floors are deliberately permissive enough that every DeepSeek V4/V4.1 Flash
 # offer and many other mid-tier models remain selectable: ~166 / 179 / 174 /
 # 166 / 168 candidates survive for general / architect / build / review / sudo
-# in the paid tier (~8-13 in the free tier) against the 2026-11-01 catalogue.
+# against the 2026-11-01 catalogue.
 # Tune with: machine_code models --agent <role> [--min-fit N]
-#
-# Free offers get their own, looser floor in both tiers (built-in default:
-# min_fit 5.5, axes 5/5/5/3). This keeps a zero-price model that trades one
-# weak axis for cost in play while paid offers still use the paid floors above.
-# Override per role with [agents.<role>.free] / [agents.<role>.free.axes].
 
 [agents.general]
 min_fit = 6.0
@@ -47,24 +42,7 @@ agentic = 5.0
 reasoning = 6.0
 general = 5.0
 
-# Free engineer offers: allow a weak general/reasoning axis when the model is
-# otherwise capable and free. The paid floors above still govern paid offers.
-[agents.engineer.free]
-min_fit = 5.5
-[agents.engineer.free.axes]
-reasoning = 5.0
-code = 5.0
-agentic = 5.0
-general = 3.0
 
-[agents.review]
-# Review is the last gate; require a stronger fit than general.
-min_fit = 7.0
-[agents.review.axes]
-reasoning = 6.0
-code = 5.0
-agentic = 6.0
-general = 5.0
 
 # Research free offers: keep a weak fallback from burning the turn budget on
 # orientation. If no free model clears this bar, the paid tier may pick a
@@ -72,8 +50,3 @@ general = 5.0
 [agents.research]
 # No default turn or token cap. Set max_turns/budget_tokens here only when this
 # repository needs a bound. The repeat and read guards still stop loops.
-[agents.research.free]
-min_fit = 5.5
-[agents.research.free.axes]
-reasoning = 5.5
-agentic = 5.0

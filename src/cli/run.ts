@@ -36,15 +36,14 @@ import { runProc } from "../proc.js";
 import { agentDef, normalizeAgentName, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { inferReviewVerdict, parseReviewVerdict } from "../orchestrator/outcome.js";
 import { policyFor, type OrchestrateResult } from "../orchestrate.js";
 import { gateFailureText, resolveGates, runGates } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
 import { runMainBuild } from "../commands/build.js";
 import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
-import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
+import { loadAvailability, saveAvailability } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
-import { isFreeRow } from "../select.js";
+
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
@@ -246,16 +245,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (normalizedAgent === "engineer" && issue.kind === "ideas") {
       fail(`issue ${itemSlug} is an idea; research it first (machine_code issue run ${itemSlug})`);
     }
-    if (normalizedAgent === "review" && issue.kind === "ideas") {
-      fail(`issue ${itemSlug} is an idea; ideas are researched, not reviewed`);
-    }
     // Engineer: work from todo, a failed attempt, or a legacy blocked state.
     if (normalizedAgent === "engineer" && !(ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)) {
       fail(`issue ${itemSlug} is ${issue.status}; engineer works from todo or a failed-gates/review state`);
-    }
-    // Review: only review issues that are done (agent review requested).
-    if (normalizedAgent === "review" && issue.review !== "agent") {
-      fail(`issue ${itemSlug} review is ${issue.review}; review only runs for agent review`);
     }
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
@@ -286,11 +278,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
   const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
-  const tier = flags.get("tier");
-  if (tier !== undefined) {
-    if (tier !== "free" && tier !== "paid") fail("--tier must be free|paid");
-    machine.selection.tier = tier;
-  }
   const minFit = flags.get("min-fit");
   if (minFit !== undefined) {
     const n = Number(minFit);
@@ -447,29 +434,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   const agentNameParsed = normalizedAgent ?? "research";
 
-  // Review binds to the engineer's worktree/commit automatically when the run
-  // is attached to an issue. Explicit --review-of still wins.
-  let reviewOf = flags.get("review-of");
-  if (agentNameParsed === "review" && itemFlag !== undefined && reviewOf === undefined) {
-    const item = slugify(itemFlag);
-    const active = new Set(["created", "running", "awaiting_input"]);
-    const candidate = listRuns(layout())
-      .filter(
-        (run) =>
-          (run.itemId ?? run.packetId) === item &&
-          (run.agent === "engineer" || run.agent === "build") &&
-          Boolean(run.worktree) &&
-          !active.has(run.status),
-      )
-      .sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1))[0];
-    if (candidate) {
-      reviewOf = candidate.id;
-      process.stderr.write(`review bound to engineer run ${candidate.id.slice(-8)} (${candidate.branch ?? "worktree"})\n`);
-    } else {
-      process.stderr.write(`warning: no engineer worktree for ${item}; review runs against the main tree\n`);
-    }
-  }
-
   if (request.length === 0) {
     fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
   }
@@ -477,18 +441,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // Probe cooling models with free metadata before a run record exists. A
   // recovered model can rejoin selection; if nothing is ready, block here
   // instead of starting a run that cannot make its first call.
-  // Free-model cooldowns are per run: drop persisted free cooldowns first so
-  // a free run always starts by looping best fit to worst across every listed
-  // free model. Paid cooldowns are still honored here.
   const availabilityState = loadAvailability(l.home);
-  try {
-    clearFreeModelCooldowns(
-      availabilityState,
-      catalogueDoc.models.filter((row) => isFreeRow(row)).map((row) => row.key),
-    );
-  } catch {
-    // catalogue scan failure must not block the run
-  }
   const probeResults = await probeCoolingModels({
     rows: catalogueDoc.models,
     state: availabilityState,
@@ -512,7 +465,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     availability: availabilityState,
     fundedProviders: fundedProviderIds(machine.providers),
     contextChars: request.length,
-    tier: machine.selection.tier,
     requireProvider,
     requireModel,
   };
@@ -534,7 +486,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     fail(`no model is ready before run start: ${preflight.error}${preflight.rejected[0] ? ` (${preflight.rejected[0].key}: ${preflight.rejected[0].reason})` : ""}`);
   }
   const runSettings: import("../state/run-schema.js").RunSettingsSnapshot = {
-    tier: machine.selection.tier,
     ...(requireModel ? { model: preflight.selected.key } : {}),
     ...(minFit !== undefined ? { minFit: Number(minFit) } : {}),
     ...(minAxesSnapshot ? { minAxes: minAxesSnapshot } : {}),
@@ -644,9 +595,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const mutating =
     agentNameParsed === "research" || agentNameParsed === "engineer"
       ? true
-      : agentNameParsed === "review"
-        ? false
-        : forceWorktree;
+      : forceWorktree;
   let toolRoot = l.repoRoot;
   let reusedWorktree = false;
   if (mutating) {
@@ -902,25 +851,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   process.stderr.write(`run ${recorder.id} (${recorder.dir})\n`);
 
-  // A review always judges the worktree/commit the engineer used. This must
-  // happen for normal runs too, not only --direct-exec children.
-  if (agentNameParsed === "review" && reviewOf) {
-    const target = readRun(l, reviewOf);
-    if (target?.summary.worktree && existsSync(target.summary.worktree)) {
-      toolRoot = target.summary.worktree;
-      recorder.patchSummary({
-        worktree: target.summary.worktree,
-        worktreeOwnerRunId: reviewOf,
-        branch: target.summary.branch,
-        baseBranch: target.summary.baseBranch,
-        ...(target.summary.baseRef ? { baseRef: target.summary.baseRef } : {}),
-      });
-      recorder.event("review_of", { runId: reviewOf, worktree: target.summary.worktree });
-    } else {
-      process.stderr.write(`warning: review target ${reviewOf} has no worktree; reviewing the main tree\n`);
-    }
-  }
-
   // The run has a worktree (or reused one) and is about to hand off into the
   // agent loop. Emit run_started so the TUI distinguishes "actively starting
   // then executing" from a run stranded in the created state.
@@ -933,14 +863,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
   process.stderr.write(`RUN ${recorder.id} — ${itemSlug ?? recorder.id.slice(-8)}\n`);
 
   let result: RunLoopResult | OrchestrateResult;
-  let autoReview: { slug: string; prompt: string } | undefined;
   let autoRetry: { slug: string; prompt: string } | undefined;
   if (directExec) {
     // Detached delegated child: one agent, directly. Its prompt is its spec.
     const role = (agentNameParsed ?? "engineer") as AgentName;
-    if (role !== "engineer" && role !== "review") {
-      recorder.finalize("failed", "--direct-exec requires --agent engineer|review");
-      process.stderr.write("machine_code: --direct-exec requires --agent engineer|review\n");
+    if (role !== "engineer") {
+      recorder.finalize("failed", "--direct-exec requires --agent engineer");
+      process.stderr.write("machine_code: --direct-exec requires --agent engineer\n");
       return EXIT.failed;
     }
     const resolved = resolveAgent(l, role, {
@@ -1047,42 +976,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // A review verdict is a work-item decision, not just prose. Any
-  // non-approved verdict on a completed review sends the issue back to
-  // blocked/ so approve cannot merge rejected work.
-  if (itemSlug && agentNameParsed === "review") {
-    const issue = findIssue(l, itemSlug);
-    const verdict =
-      result.status === "completed"
-        ? parseReviewVerdict(result.finalText) ?? inferReviewVerdict(result.finalText)
-        : undefined;
-    if (verdict) recorder.event("review_verdict", { verdict });
-    // Auto-merge when the review agent approves
-    if (verdict === "approved" && toolRoot !== l.repoRoot) {
-      const branch = recorder.current.branch;
-      if (branch) {
-        const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
-        if (merged.ok) {
-          recorder.event("branch_merged", { branch, verdict: "approved" });
-          if (issue && issue.kind !== "ideas") {
-            moveIssue(l, issue.slug, "done");
-            await commitPlanningFiles(l, `issues: ${issue.slug} done`);
-          }
-        } else {
-          result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
-        }
-      }
-    }
-    if (
-      issue &&
-      issue.kind !== "ideas" &&
-      (result.status === "blocked" || result.status === "failed" || (verdict !== undefined && verdict !== "approved"))
-    ) {
-      moveIssue(l, issue.slug, "failed-agent-review");
-      await commitPlanningFiles(l, `issues: ${issue.slug} failed-agent-review`);
-    }
-  }
-
   // Engineer runs are the finish line for an issue: gates, commit, and the
   // directory move happen in the runner, not in the prompt. Without this a
   // "completed" run could leave uncommitted work and the issue in todo/.
@@ -1167,10 +1060,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
                 result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
               }
             }
-          } else if (issue.review === "agent") {
-            moveIssue(l, issue.slug, "needs-agent-review");
-            await commitPlanningFiles(l, `issues: ${issue.slug} needs-agent-review`);
-            autoReview = { slug: issue.slug, prompt: issue.prompt };
           } else {
             moveIssue(l, issue.slug, "needs-human-review");
             await commitPlanningFiles(l, `issues: ${issue.slug} needs-human-review`);
@@ -1222,15 +1111,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     child.on("error", () => undefined);
     child.unref();
     process.stderr.write(`gate retry ${autoRetry.slug} started with the failure log\n`);
-  } else if (autoReview) {
-    const child = spawn(
-      process.execPath,
-      [process.argv[1]!, "run", "--agent", "review", "--item", autoReview.slug, autoReview.prompt],
-      { cwd: l.repoRoot, detached: true, stdio: "ignore" },
-    );
-    child.on("error", () => undefined);
-    child.unref();
-    process.stderr.write(`review ${autoReview.slug} started (review=agent)\n`);
   }
   return EXIT[result.status];
 }
@@ -1502,7 +1382,6 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   });
 
   // A resumed Engineer phase still owes the runner its gates, commit, and move.
-  let autoReview: { slug: string; prompt: string } | undefined;
   const resumeItem = s.itemId ?? s.packetId;
   if (result.status === "completed" && resumeAgent === "engineer" && resumeItem) {
     const issue = findIssue(l2, resumeItem);
@@ -1543,10 +1422,6 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
                     await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
                   }
                 }
-              } else if (issue.review === "agent") {
-                moveIssue(l2, issue.slug, "needs-agent-review");
-                await commitPlanningFiles(l2, `issues: ${issue.slug} needs-agent-review`);
-                autoReview = { slug: issue.slug, prompt: issue.prompt };
               } else {
                 moveIssue(l2, issue.slug, "needs-human-review");
                 await commitPlanningFiles(l2, `issues: ${issue.slug} needs-human-review`);
@@ -1562,53 +1437,12 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     }
   }
 
-  if (resumeAgent === "review" && resumeItem) {
-    const issue = findIssue(l2, resumeItem);
-    const verdict =
-      result.status === "completed"
-        ? parseReviewVerdict(result.finalText) ?? inferReviewVerdict(result.finalText)
-        : undefined;
-    if (verdict) recorder.event("review_verdict", { verdict });
-    // Auto-merge when the review agent approves
-    if (verdict === "approved" && toolRoot !== l2.repoRoot) {
-      const branch = recorder.current.branch;
-      if (branch) {
-        const merged = await mergeBranch(l2.repoRoot, toolRoot, branch);
-        if (merged.ok) {
-          recorder.event("branch_merged", { branch, verdict: "approved" });
-          if (issue && issue.kind !== "ideas") {
-            moveIssue(l2, issue.slug, "done");
-            await commitPlanningFiles(l2, `issues: ${issue.slug} done`);
-          }
-        }
-      }
-    }
-    if (
-      issue &&
-      issue.kind !== "ideas" &&
-      (result.status === "blocked" || result.status === "failed" || (verdict !== undefined && verdict !== "approved"))
-    ) {
-      moveIssue(l2, issue.slug, "failed-agent-review");
-      await commitPlanningFiles(l2, `issues: ${issue.slug} failed-agent-review`);
-    }
-  }
-
   recorder.finalize(result.status, result.error, result.finalText);
   printRunOutcome(result, recorder);
   const summary = recorder.current;
   process.stderr.write(
     `\nrun ${summary.id}: ${summary.status}${summary.stopReason && summary.stopReason !== "completed" ? ` (${summary.stopReason})` : ""} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
-  if (autoReview) {
-    const child = spawn(
-      process.execPath,
-      [process.argv[1]!, "run", "--agent", "review", "--item", autoReview.slug, autoReview.prompt],
-      { cwd: l2.repoRoot, detached: true, stdio: "ignore" },
-    );
-    child.on("error", () => undefined);
-    child.unref();
-    process.stderr.write(`review ${autoReview.slug} started (review=agent)\n`);
-  }
   return EXIT[result.status];
 }
 

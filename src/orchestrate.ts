@@ -30,7 +30,7 @@ import { enrichHints, renderHints, suggestHints, suggestionText, withKeywordTerm
 import { roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
-import { inferReviewVerdict, parseBuildOutcome, parseReviewVerdict } from "./orchestrator/outcome.js";
+import { parseBuildOutcome } from "./orchestrator/outcome.js";
 import type { Layout } from "./paths.js";
 import { appendIssueGateFailure, findIssue, gateFailureAttempts, moveIssue } from "./plan/issues.js";
 import { commitPlanningFiles } from "./tasks/planning.js";
@@ -77,7 +77,6 @@ export interface OrchestrateResult {
   packet?: TaskPacket;
   runId: string;
   commit?: string;
-  reviewVerdict?: string;
   prNumber?: number;
   prUrl?: string;
   prState?: "none" | "open" | "merged" | "closed";
@@ -168,9 +167,7 @@ export interface ExecuteIssueInput {
   skipMap?: boolean;
   skipSemantic?: boolean;
   signal?: AbortSignal;
-  /** Whether to run a review agent after gates pass. */
-  review?: boolean;
-}
+  }
 
 /**
  * Execute one issue: Engineer → gates → independent Review → commit. The
@@ -371,98 +368,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     }
   }
 
-  let reviewVerdict: string | undefined;
-  if (input.review) {
-    const resolvedReview = resolveAgent(layout, "review", {
-      agentPolicy: policy.agents.review,
-      machineOverrides: machine.agents.review,
-      runOverrides: input.agentOverrides,
-    });
-    const reviewPolicy = policyFor(layout, "review", policy);
-    const reviewBase = recorder.current.baseBranch ?? recorder.current.baseRef;
-    const diffResult = await runCommand(
-      "core:diff",
-      reviewBase ? { base: reviewBase } : {},
-      { root: toolRoot, commands: modelCommands },
-    );
-    const reviewRequest =
-      `Review this issue and the committed diff. Approve or reject with concrete evidence citing paths.\n\n` +
-      `COMMIT: ${commit ?? "(no commit created)"}\n` +
-      `BASE: ${reviewBase ?? "(unknown)"}\n\n` +
-      `ISSUE:\n${JSON.stringify(packet, null, 2)}\n\nDIFF:\n${diffResult.text}`;
-    const reviewRecorder = new RunRecorder(layout, {
-      agent: "review",
-      mode: "",
-      request: reviewRequest,
-      repoRoot: layout.repoRoot,
-      itemId: packet.id,
-      phase: "review",
-    });
-    reviewRecorder.patchSummary({
-      worktree: toolRoot,
-      worktreeOwnerRunId: recorder.id,
-      ...(recorder.current.branch ? { branch: recorder.current.branch } : {}),
-      ...(recorder.current.baseBranch ? { baseBranch: recorder.current.baseBranch } : {}),
-      ...(commit ? { commit } : {}),
-    });
-    reviewRecorder.event("review_of", { runId: recorder.id, ...(commit ? { commit } : {}) });
-    recorder.event("review_started", { runId: reviewRecorder.id, ...(commit ? { commit } : {}) });
-    const reviewResult = await singleAgentRun({
-      models: input.models,
-      catalogue: input.catalogue,
-      configuredProviders: input.configuredProviders,
-      agent: resolvedReview.def,
-      agentConfig: resolvedReview.config,
-      agentCapabilities: resolvedReview.capabilities,
-      policy: reviewPolicy,
-      fullPolicy: policy,
-      layout,
-      machine,
-      request: reviewRequest,
-      root,
-      toolRoot,
-      home: layout.home,
-      availability,
-      recorder: reviewRecorder,
-      commands: modelCommands,
-      requireProvider: input.requireProvider,
-      requireModel: input.requireModel,
-      contextText,
-      skipMap: input.skipMap,
-      skipSemantic: input.skipSemantic,
-      signal: input.signal,
-    });
-    reviewRecorder.finalize(reviewResult.status, reviewResult.error, reviewResult.finalText);
-    if (reviewResult.status !== "completed") {
-      recorder.event("review_finished", { runId: reviewRecorder.id, verdict: "failed" });
-      return {
-        status: reviewResult.status,
-        finalText: reviewResult.finalText,
-        error: reviewResult.error ?? "Review did not complete",
-        packet,
-        runId: recorder.id,
-        ...(commit ? { commit } : {}),
-      };
-    }
-    const labelledVerdict = parseReviewVerdict(reviewResult.finalText);
-    const verdict = labelledVerdict ?? inferReviewVerdict(reviewResult.finalText);
-    reviewVerdict = verdict;
-    recorder.event("review_verdict", { verdict, source: labelledVerdict ? "label" : "fallback", runId: reviewRecorder.id });
-    recorder.event("review_finished", { runId: reviewRecorder.id, verdict });
-    if (verdict !== "approved") {
-      moveIssue(layout, packet.id, "failed-agent-review");
-      await commitPlanningFiles(layout, `issues: ${packet.id} failed-agent-review`);
-      return {
-        status: verdict === "failed" ? "failed" : "blocked",
-        finalText: reviewResult.finalText,
-        error: `Review verdict: ${verdict}`,
-        packet,
-        runId: recorder.id,
-        ...(commit ? { commit } : {}),
-        reviewVerdict: verdict,
-      };
-    }
-  }
+  
 
   // No PR step: the feature branch merges directly on human/agent approval
   // (feature approve). The run record keeps merge fields unset.
@@ -477,7 +383,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     packet,
     runId: recorder.id,
     ...(commit ? { commit } : {}),
-    ...(reviewVerdict ? { reviewVerdict } : {}),
     ...(mergeState ? { mergeState } : {}),
     ...(prNumber ? { prNumber } : {}),
     ...(prUrl ? { prUrl } : {}),
@@ -510,8 +415,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       skipMap: input.skipMap,
       skipSemantic: input.skipSemantic,
       signal: input.signal,
-      review: true,
-    });
+      });
   }
 
   const selectedName = input.agentName ?? "research";
