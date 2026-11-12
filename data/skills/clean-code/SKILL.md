@@ -1,27 +1,17 @@
 ---
 name: clean-code
-description: Use when changing code. Keep modules small, cohesive, and easy to change.
+description: Write clean, modular, semantically expressive, well-documented code.
 ---
 
 # Clean Code
 
-Apply these when you change code. They are design constraints for the code you
-touch, not a mandate to refactor the repository.
+- Organize code into small, cohesive modules with clear, singular responsibilities.
+- Define explicit interfaces and minimize coupling between modules.
+- Use meaningful, domain-specific names that communicate intent.
+- Keep implementation straightforward. Avoid unnecessary abstractions, indirection, duplication, and complexity.
+- Document public interfaces, domain concepts, architectural decisions, invariants, assumptions, constraints, and non-obvious behavior.
+- Write documentation that explains **why, what, and how components relate**, not line-by-line descriptions of implementation.
+- Keep documentation accurate and update it when behavior or interfaces change.
+- Follow established conventions and architecture within the existing codebase.
+- Prefer extending existing abstractions over introducing competing ones.
 
-- **Single responsibility.** One reason to change per function, class, or module.
-- **Open for extension, closed for modification.** Add behavior by composing
-  new pieces; do not edit stable code for every variant.
-- **Liskov substitution.** A subtype must honor the contract of its supertype.
-- **Interface segregation.** Keep interfaces small and specific to their caller.
-- **Dependency inversion.** Depend on abstractions at boundaries; keep volatile
-  details behind them.
-
-Also:
-
-- Keep functions small and names concrete.
-- Make side effects and failures explicit.
-- Prefer composition over inheritance.
-- Remove dead code only in the area you are already changing.
-- Add in code documentation where helpful to make semantic lookups efficient
-
-The runner owns acceptance gates; the issue prompt is the definition of done.

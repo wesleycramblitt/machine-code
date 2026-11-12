@@ -218,7 +218,10 @@ function agentPrompt(layout: Layout, name: AgentName): string {
       : "";
   if (role.base_prompt === false) return rolePrompt.trim();
   const base = basePrompt(name).trim();
-  return [base, rolePrompt.trim()].filter(Boolean).join("\n\n");
+  const roleText = rolePrompt.trim();
+  if (!base) return roleText;
+  if (!roleText) return base;
+  return [base, roleText].filter(Boolean).join("\n\n");
 }
 
 function modeConfigs(role: RoleData, modes: readonly string[]): Record<string, AgentModeConfig> {

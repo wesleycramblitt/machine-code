@@ -66,7 +66,9 @@ export function capabilityFit(scores: AxisScores, weights: AxisWeights): number 
       return 0;
     }
   }
-  return Math.pow(numerator / activeWeight, 1 / p);
+  if (!(activeWeight > 0)) return 0;
+  const result = Math.pow(numerator / activeWeight, 1 / p);
+  return Number.isFinite(result) ? result : 0;
 }
 
 export interface PickEstimate {

@@ -433,6 +433,7 @@ export async function runTui(): Promise<void> {
     estimate?: { inputTokens: number; outputTokens: number };
     error?: string;
     machine?: MachineConfig;
+    policy?: any;
   } => {
     const newRunLayout = layout(s.newRunRepo);
     const newRunIssue = s.newrun.item ? findIssue(newRunLayout, s.newrun.item) : null;
@@ -541,6 +542,7 @@ export async function runTui(): Promise<void> {
         context,
         error: reasons ? `${result.error} (${reasons})${pin}` : `${result.error}${pin}`,
         machine,
+        policy: base.policy,
       };
     }
     return {
@@ -549,6 +551,7 @@ export async function runTui(): Promise<void> {
       fit: result.candidates.find((candidate) => candidate.key === result.selected.key)?.fit,
       estimate: result.estimate,
       machine,
+      policy: base.policy,
     };
   };
 
@@ -1413,7 +1416,10 @@ export async function runTui(): Promise<void> {
         const status = modelStatus(row, input);
         return {
           row,
-          fit: weights ? capabilityFit(row.scores, weights) : row.scores.capability,
+          fit: (() => {
+            const raw = weights ? capabilityFit(row.scores, weights) : row.scores.capability;
+            return Number.isFinite(raw) ? raw : 0;
+          })(),
           eligible: status.eligible,
           ...(status.eligible ? {} : { reason: status.reason }),
         };
