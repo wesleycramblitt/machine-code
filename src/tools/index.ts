@@ -536,7 +536,19 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   if (spec.symbol) {
     const file = await outlineFile(root, spec.path);
     const range = file ? symbolRange(file, spec.symbol) : null;
-    if (!range) return { error: `no symbol "${spec.symbol}" in ${spec.path}` };
+    if (!range) {
+      // Exact-only misses burn a turn. Auto-resolve an unambiguous
+      // case-insensitive match; otherwise name the closest candidates.
+      const names = file?.symbols.map((symbol) => symbol.name) ?? [];
+      const folded = names.filter((name) => name.toLowerCase() === spec.symbol!.toLowerCase());
+      if (folded.length === 1) {
+        return planSingleFileEdit(root, { ...spec, symbol: folded[0]! });
+      }
+      const { suggestCommand } = await import("../commands/registry.js");
+      const hint = suggestCommand(spec.symbol, names);
+      const available = names.length > 0 ? ` Available: ${names.slice(0, 12).join(", ")}${names.length > 12 ? ", …" : ""}` : "";
+      return { error: `no symbol "${spec.symbol}" in ${spec.path}.${hint ? ` Did you mean ${hint}?` : ""}${available}` };
+    }
     startChar = lineOffsets[range.start - 1] ?? 0;
     endChar = Math.min(raw.length, lineOffsets[range.end] ?? raw.length);
     scopeLabel = `symbol ${spec.symbol}`;

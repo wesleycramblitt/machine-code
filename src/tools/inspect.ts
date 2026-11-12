@@ -301,11 +301,13 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           return ok(artifact ? `${capped.text}\n\n[artifact: ${artifact.id}]` : capped.text);
         }
 
-        // Mode 3 — directory listing.
-        if (scope && !queryIsFile) {
+        // Mode 3 — directory listing, by query or by path scope.
+        const dirCandidate = scope ?? (!queryIsFile && !anchor ? query : undefined);
+        if (dirCandidate) {
           try {
-            if (statSync(resolveWithin(ctx.root, scope)).isDirectory() && map.files.every((f) => f.path !== query)) {
-              const prefix = scope.endsWith("/") ? scope : `${scope}/`;
+            if (statSync(resolveWithin(ctx.root, dirCandidate)).isDirectory() && map.files.every((f) => f.path !== query)) {
+              const shown = scope ?? dirCandidate;
+              const prefix = shown.endsWith("/") ? shown : `${shown}/`;
               const children = map.files.filter((f) => f.path.startsWith(prefix) && !f.path.slice(prefix.length).includes("/")).sort((a, b) => a.path.localeCompare(b.path));
               const dirs = new Set<string>();
               for (const f of map.files) {
@@ -314,7 +316,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
                 const slash = rest.indexOf("/");
                 if (slash >= 0) dirs.add(rest.slice(0, slash));
               }
-              const lines = [`directory: ${scope} [match: path]`, `subdirectories: ${[...dirs].sort().join(", ") || "(none)"}`];
+              const lines = [`directory: ${shown} [match: path]`, `subdirectories: ${[...dirs].sort().join(", ") || "(none)"}`];
               for (const child of children.slice(0, 40)) lines.push(`  ${child.path} (${child.symbols.length} symbols, ${child.lines} lines)`);
               const envelope = `<inspect query="${query}" mode="directory" match="path">\n${lines.join("\n")}\n</inspect>`;
               const artifact = ctx.state?.putArtifact(envelope);
