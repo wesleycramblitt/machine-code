@@ -20,18 +20,18 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
-const CONTEXT_ACTIONS = new Set(["note", "focus", "recall", "forget", "state", "expand", "parent"]);
-const CONTEXT_KINDS = new Set(["finding", "decision", "open", "next"]);
+const CONTEXT_ACTIONS = new Set(["note", "recall", "forget", "state", "parent"]);
+const CONTEXT_KINDS = new Set(["finding", "decision", "open"]);
 
 const ContextParams = Type.Object({
   action: Type.String({
-    enum: ["note", "focus", "recall", "forget", "state", "expand", "parent"],
-    description: "Memory or context operation: note | focus | recall | forget | state | expand | parent.",
+    enum: ["note", "recall", "forget", "state", "parent"],
+    description: "Memory or context operation: note | recall | forget | state | parent.",
   }),
   kind: Type.Optional(
     Type.String({
-      enum: ["finding", "decision", "open", "next"],
-      description: "Note kind: finding | decision | open | next (default finding).",
+      enum: ["finding", "decision", "open"],
+      description: "Note kind: finding | decision | open (default finding).",
     }),
   ),
   text: Type.Optional(Type.String({ description: "Note text (one short sentence)." })),
@@ -39,9 +39,6 @@ const ContextParams = Type.Object({
     Type.Array(Type.String(), { description: "References: path, path:line, or path:start-end." }),
   ),
   id: Type.Optional(Type.String({ description: "Artifact id for recall, fact/question id for forget, or run id for parent." })),
-  target: Type.Optional(
-    Type.String({ description: "For expand: a path or path#symbol, e.g. src/loop.ts#runLoop." }),
-  ),
 });
 
 /**

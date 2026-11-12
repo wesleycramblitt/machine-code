@@ -1297,7 +1297,7 @@ export async function runTui(): Promise<void> {
     const contextChars = (s.newRunPreviewCache?.context.chars ?? 0) + s.newrun.prompt.length + 2_000;
     const input = {
       agent: s.newrun.agent,
-      policy: ap,
+      policy: effective,
       machine,
       catalogue: rows,
       configuredProviders: configured,
