@@ -1542,9 +1542,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         const failure = gateFailureText(gateResult.results);
         const gateMsg =
           `## Acceptance gates failed (attempt ${gateAttempts}/${maxGateAttempts})\n\n` +
-          `The following gates did not pass. Fix the code so they pass.\n\n` +
+          `Your previous \`finish\` call is superseded — the run continues. Fix the code so the gates pass, then call \`finish\` again.\n\n` +
           `${failure}\n\n` +
-          `Do not mark the issue as done until all acceptance gates pass.`;
+          `Do not call \`finish\` with outcome=completed until all acceptance gates pass.`;
+        // The previous finish is superseded: clear it so the next attempt
+        // does not end on its first turn via finishTurn. The gate message
+        // above re-arms the model to keep fixing and finish again.
+        finishRequested = null;
         // Save the conversation and append the gate failure as a user message
         // so the next iteration sees the context.
         const msgs = agent?.state.messages ?? carriedMessages ?? [];

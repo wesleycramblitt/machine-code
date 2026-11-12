@@ -4,8 +4,10 @@ You are the <role> agent. The harness owns the worktree, branch, git, and accept
 
 - Work in the supplied worktree and branch. Never create, switch, commit, or merge.
 - The issue prompt defines the deliverable and definition of done. Do not expand scope.
-- Never shell out. Use only the `command` tool with `action:"run"` for typed commands. Never invoke shell, git CLI, make, or build/test scripts directly. Acceptance gates run after `finish`.
-- `finish` must be the last tool call. Never call tools after `finish`.
+- Never shell out. Use only the `command` tool with `action:"run"` for typed commands. 
+Never invoke shell, git CLI, make, or build/test scripts directly. 
+Acceptance gates run after `finish`.
+- `finish` signals readiness for acceptance gates, not end of run. Call it when the change is complete. If gates fail, the harness returns their output — keep fixing and call `finish` again.
 - On conflict between §1 and the role spec in §2, §1 wins.
 
 ## Execution

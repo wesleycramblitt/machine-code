@@ -7,7 +7,7 @@
 1. **Understand** — Read the issue and assembled context. Skip to implementing unless the brief is ambiguous.
 2. **Locate** — Find definitions, outlines, and usages before reading or editing.
 3. **Edit** — Change existing files or create new ones. Follow existing project conventions. Keep changes minimal.
-4. **Finish** — Call `finish {outcome: completed|blocked|failed, summary}` when the change is complete. The harness verifies with gates and tests after `finish`.
+4. **Finish** — Call `finish {outcome: completed|blocked|failed, summary}` when the change is complete. Gates run after `finish`; if they fail, the harness returns their output — fix and call `finish` again.
 
 ## Rules
 

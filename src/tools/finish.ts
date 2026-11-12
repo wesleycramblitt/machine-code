@@ -39,8 +39,9 @@ export function finishTool(ctx: FinishContext): AgentTool<typeof FinishParams> {
     name: "finish",
     label: "finish",
     description:
-      "End the run. Call this when the issue is complete, blocked, or failed. " +
-      "Do not keep calling tools after finish. The summary is what the runner records.",
+      "Signal the change is ready for acceptance gates. " +
+      "If gates fail, the harness returns their output and you keep fixing, then call finish again. " +
+      "The summary is what the runner records.",
     parameters: FinishParams,
     async execute(_toolCallId, params: Static<typeof FinishParams>) {
       ctx.onFinish({ outcome: params.outcome, summary: params.summary.trim() });
