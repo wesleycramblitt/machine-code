@@ -23,11 +23,31 @@ import type { ForkedRunSettings } from "./fork.js";
 import type { ModelPickerEntry } from "./format.js";
 
 export type Page = "runs" | "models" | "spend" | "settings";
-export type Screen = "list" | "run" | "newrun" | "answer" | "correct" | "model" | "delete" | "issue";
+export type Screen = "list" | "run" | "newrun" | "newissue" | "answer" | "correct" | "model" | "delete" | "issue";
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
 export type RunsRepoScope = "all" | "cwd";
 
 export type NewRunState = ForkedRunSettings;
+
+export const ISSUE_KIND_CYCLE = ["ideas", "features", "bugs"] as const;
+export const ISSUE_PRIORITY_CYCLE = ["low", "medium", "high"] as const;
+export const ISSUE_VERIFICATION_CYCLE = ["direct", "verified"] as const;
+
+export interface NewIssueSettings {
+  kind: "ideas" | "features" | "bugs";
+  priority: "low" | "medium" | "high";
+  /** Comma-separated acceptance gates — only for features/bugs. */
+  acceptance: string;
+  /** Comma-separated tags. */
+  tags: string;
+  /** Comma-separated depends slugs. */
+  depends: string;
+  /** Comma-separated keywords. */
+  keywords: string;
+  verification: "direct" | "verified";
+  /** Prompt text (issue body). */
+  prompt: string;
+}
 
 export interface RunDetail {
   layout: Layout;
@@ -164,6 +184,22 @@ export interface TuiState {
     configured: Set<string>;
     availability: AvailabilityState;
   } | null;
+  /** New-issue composer settings. */
+  newIssue: NewIssueSettings;
+  /** Repo root for the new issue. */
+  newIssueRepo: string;
+  /** Prompt insert mode. */
+  newIssueInsert: boolean;
+  /** Esc confirm before leaving unsaved prompt. */
+  newIssueConfirm: boolean;
+  /** Cursor column in prompt (reserved for future use). */
+  newIssueCursor: number;
+  /** `:` starts the `:!` create command. */
+  newIssueColon: boolean;
+  /** Name of the field being edited inline (null = not editing). */
+  newIssueFieldEdit: string | null;
+  /** Original value of the field being edited, for cancel. */
+  newIssueFieldUndo: string | undefined;
   answerText: string;
   answerQuestionId: string;
   answerOptions: string[];
@@ -270,6 +306,23 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunSkillShown: new Map<string, SkillMode>(),
     newRunRequiredSkills: [],
     newRunPreviewCache: null,
+    newIssue: {
+      kind: "features",
+      priority: "medium",
+      acceptance: "",
+      tags: "",
+      depends: "",
+      keywords: "",
+      verification: "direct",
+      prompt: "",
+    },
+    newIssueRepo: repoRoot,
+    newIssueInsert: false,
+    newIssueConfirm: false,
+    newIssueCursor: 0,
+    newIssueColon: false,
+    newIssueFieldEdit: null,
+    newIssueFieldUndo: undefined,
     answerText: "",
     answerQuestionId: "",
     answerOptions: [],

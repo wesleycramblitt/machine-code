@@ -415,6 +415,7 @@ export interface NewIssueInput {
   verification?: "direct" | "verified";
   acceptance?: string[];
   verify?: string[];
+  keywords?: string[];
   body?: string;
 }
 
@@ -457,6 +458,7 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     ...(input.priority && input.priority !== "medium" ? { priority: input.priority } : {}),
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
+    ...(input.keywords && input.keywords.length > 0 ? { keywords: input.keywords } : {}),
     ...(acceptance.length > 0 ? { acceptance } : {}),
     ...(verification === "verified" ? { verification } : {}),
     ...(input.review && input.review !== "none" ? { review: input.review } : {}),
@@ -515,4 +517,14 @@ export function moveIssue(layout: Layout, slug: string, to: IssueStatus): Issue 
 /** Whether `to` is a legal status for the item's kind. */
 export function legalStatus(kind: IssueKind, to: string): to is IssueStatus {
   return (statusesForKind(kind) as readonly string[]).includes(to);
+}
+
+/** Upper-case tag for an issue kind, e.g. "IDEA", "FEATURE", "BUG". */
+export function kindTag(kind: IssueKind): string {
+  return kind === "ideas" ? "IDEA" : kind === "features" ? "FEATURE" : "BUG";
+}
+
+/** Normalize a status string into a commit-message tag: "failed-gates" → "FAILED GATES". */
+export function statusTag(status: string): string {
+  return status.replace(/-/g, " ").toUpperCase();
 }

@@ -114,6 +114,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     return true;
   }
   if (data === "N") { ctx.startNewRun(undefined, l.repoRoot); ctx.draw(); return true; }
+  if (data === "I") { ctx.startNewIssue(l.repoRoot); ctx.draw(); return true; }
   if (data === "D") {
     const row = index.selectable[s.runsSel];
     if (!row) return true;

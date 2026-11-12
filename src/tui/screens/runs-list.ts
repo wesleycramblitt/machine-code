@@ -120,6 +120,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
     actions: narrow
       ? joinCommands([
           command("n", "New", undefined, C),
+          command("I", "Issue", undefined, RED),
           command("Enter", "Open", undefined, G),
           ...answerAction,
           command("space", "Fold", undefined, Y),
@@ -128,6 +129,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
         ])
       : joinCommands([
           command("n", "New run", undefined, C),
+          command("I", "New issue", undefined, RED),
           command("Enter", "Open", undefined, G),
           ...answerAction,
           command("space", "Fold", undefined, Y),

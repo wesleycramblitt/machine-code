@@ -21,6 +21,8 @@ import {
   moveIssue,
   parseKind,
   legalStatus,
+  kindTag,
+  statusTag,
   ISSUE_KIND_LABELS,
   ISSUE_KINDS,
   ISSUE_STATUS_LABELS,
@@ -134,7 +136,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       ...(flags.get("verify") ? { verify: flags.get("verify")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
       review: reviewFlag as "none" | "human",
     });
-    await commitPlanningFiles(l, `issues: add ${slug}`);
+    await commitPlanningFiles(l, `[NEW ${kindTag(kind)}] ${slug}`);
     process.stdout.write(`created ${issue.rel}\n`);
     return 0;
   }
@@ -148,7 +150,8 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     if (!issue) fail(`no issue ${cleaned}`);
     if (!legalStatus(issue.kind, to)) fail(`invalid status ${JSON.stringify(to)} for ${issue.kind}`);
     const moved = moveIssue(l, cleaned, to as IssueStatus);
-    await commitPlanningFiles(l, `issues: ${cleaned} → ${to}`);
+    const status = to as IssueStatus;
+    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(status)}] ${cleaned}`);
     process.stdout.write(`moved ${cleaned} → ${moved?.rel ?? ""}\n`);
     return 0;
   }

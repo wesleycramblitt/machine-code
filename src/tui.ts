@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { findIssue, listIssues, type Issue } from "./plan/issues.js";
+import { findIssue, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
@@ -48,6 +48,8 @@ import type { KeyServices } from "./tui/screens/keys.js";
 import { handleModelKeys, handleModelsListKeys } from "./tui/screens/models-keys.js";
 import { handleRunsListKeys } from "./tui/screens/runs-list-keys.js";
 import { handleComposerKeys } from "./tui/screens/composer/keys.js";
+import { renderIssueComposer } from "./tui/screens/issue-composer/composer.js";
+import { handleIssueComposerKeys } from "./tui/screens/issue-composer/keys.js";
 import { handleRunKeys } from "./tui/screens/run-detail/keys.js";
 import { renderCorrect } from "./tui/screens/correct.js";
 import { renderRunDetail } from "./tui/screens/run-detail/run-detail.js";
@@ -301,6 +303,27 @@ export async function runTui(): Promise<void> {
     if (issue) s.newRunContextIncluded.add(`issue:${issue.rel}`);
     for (const name of seed?.skills ?? []) s.newRunSkillModes.set(name, "include");
     s.screen = "newrun";
+  };
+
+  const startNewIssue = (repoRoot = l.repoRoot) => {
+    s.newIssueRepo = repoRoot;
+    s.newIssue = {
+      kind: "features",
+      priority: "medium",
+      acceptance: "",
+      tags: "",
+      depends: "",
+      keywords: "",
+      verification: "direct",
+      prompt: "",
+    };
+    s.newIssueInsert = false;
+    s.newIssueConfirm = false;
+    s.newIssueCursor = 0;
+    s.newIssueColon = false;
+    s.newIssueFieldEdit = null;
+    s.newIssueFieldUndo = undefined;
+    s.screen = "newissue";
   };
 
   const forkRun = (detail: RunDetail) => {
@@ -657,6 +680,60 @@ export async function runTui(): Promise<void> {
     }
   };
 
+  const submitNewIssue = () => {
+    s.newIssueColon = false;
+    const prompt = s.newIssue.prompt.trim();
+    if (!prompt) {
+      notify("type an issue body before creating");
+      return;
+    }
+    const issueLayout = layout(s.newIssueRepo);
+    // Slug from first line of prompt, lowercased and hyphenated.
+    const firstLine = prompt.split("\n")[0]!.trim();
+    const slug = firstLine
+      .replace(/[^a-z0-9-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase()
+      .slice(0, 60) || "untitled";
+
+    const parseCsv = (text: string): string[] =>
+      text.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+
+    const acceptance = s.newIssue.kind === "ideas" ? [] : parseCsv(s.newIssue.acceptance);
+    const tags = parseCsv(s.newIssue.tags);
+    const depends = parseCsv(s.newIssue.depends);
+    const keywords = parseCsv(s.newIssue.keywords);
+
+    try {
+      writeIssue(issueLayout, {
+        kind: s.newIssue.kind,
+        slug,
+        prompt,
+        priority: s.newIssue.priority,
+        ...(tags.length > 0 ? { tags } : {}),
+        ...(depends.length > 0 ? { depends } : {}),
+        ...(acceptance.length > 0 ? { acceptance } : {}),
+        ...(keywords.length > 0 ? { keywords } : {}),
+        verification: s.newIssue.verification,
+      });
+      // Commit happens in the background; screen closes immediately.
+      s.screen = "list";
+      void commitPlanningFiles(issueLayout, `[NEW ${kindTag(s.newIssue.kind)}] ${slug}`, true).then((committed) => {
+        if (committed) {
+          notify(`issue ${slug} created and pushed`);
+          draw();
+        } else {
+          notify(`issue ${slug} created (no changes to commit)`);
+          draw();
+        }
+      }).catch(() => {
+        // Commit failure is not critical — the issue file exists.
+      });
+    } catch (error) {
+      notify(`failed to create issue: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
   const pendingForRun = (run: RunSummary | undefined) => {
     if (!run) return null;
     const detail = findRunDetail(run.id);
@@ -973,6 +1050,23 @@ export async function runTui(): Promise<void> {
       s.newRunContextItemKey = frame.contextItemKey;
       s.modelPickSel = frame.modelPickSel;
       s.itemPickSel = frame.itemPickSel;
+    }
+
+    /* ------------------------------------------------------- new issue */
+    else if (s.screen === "newissue") {
+      const frame = renderIssueComposer({
+        cols, narrow, bodyH, theme, toast: s.toast,
+        settings: s.newIssue,
+        repoRoot: s.newIssueRepo,
+        insert: s.newIssueInsert,
+        cursor: s.newIssueCursor,
+        colon: s.newIssueColon,
+        confirm: s.newIssueConfirm,
+        fieldEdit: s.newIssueFieldEdit,
+      });
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
     }
 
     /* ------------------------------------------------------------ model */
@@ -1353,6 +1447,7 @@ export async function runTui(): Promise<void> {
     cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier,
     startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
+    startNewIssue, submitNewIssue,
     agentIsolates, searchSeed,
     repoRoot: l.repoRoot,
   };
@@ -1367,6 +1462,7 @@ export async function runTui(): Promise<void> {
     if (s.screen === "delete") return handleDeleteKeys(s, keyCtx, data);
     if (s.screen === "answer") return handleAnswerKeys(s, keyCtx, data);
     if (s.screen === "correct") return handleCorrectKeys(s, keyCtx, data);
+    if (s.screen === "newissue") return handleIssueComposerKeys(s, keyCtx, data);
     if (s.screen === "newrun") return handleComposerKeys(s, keyCtx, data);
 
     if (s.searchMode) {
@@ -1435,7 +1531,8 @@ export async function runTui(): Promise<void> {
       s.screen === "answer" ||
       s.screen === "correct" ||
       s.searchMode ||
-      (s.screen === "newrun" && s.newRunInsert);
+      (s.screen === "newrun" && s.newRunInsert) ||
+      (s.screen === "newissue" && (s.newIssueInsert || s.newIssueFieldEdit));
     if (textEntry && !chunk.includes("\x1b")) handleKey(chunk);
     else for (const key of splitKeys(chunk)) handleKey(key);
   });

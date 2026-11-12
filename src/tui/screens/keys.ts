@@ -37,6 +37,10 @@ export interface KeyServices {
   startModelPicker: () => void;
   buildNewRunArgs: () => string[] | null;
   submitNewRun: () => void;
+  /** Open the issue composer for a new issue. */
+  startNewIssue: (repoRoot?: string) => void;
+  /** Create the issue, commit, and push. */
+  submitNewIssue: () => void;
   agentIsolates: (agent: string) => boolean;
   searchSeed: () => string;
   repoRoot: string;
