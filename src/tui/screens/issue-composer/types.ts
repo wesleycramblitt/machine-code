@@ -16,6 +16,7 @@ export interface IssueComposerProps extends Viewport {
     depends: string;
     keywords: string;
     verification: "direct" | "verified";
+    review: "none" | "human";
     prompt: string;
   };
   repoRoot: string;

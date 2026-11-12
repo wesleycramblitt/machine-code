@@ -45,6 +45,7 @@ export interface NewIssueSettings {
   /** Comma-separated keywords. */
   keywords: string;
   verification: "direct" | "verified";
+  review: "none" | "human";
   /** Prompt text (issue body). */
   prompt: string;
 }
@@ -314,6 +315,7 @@ export function createTuiState(repoRoot: string): TuiState {
       depends: "",
       keywords: "",
       verification: "direct",
+      review: "none",
       prompt: "",
     },
     newIssueRepo: repoRoot,

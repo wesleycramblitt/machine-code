@@ -315,6 +315,7 @@ export async function runTui(): Promise<void> {
       depends: "",
       keywords: "",
       verification: "direct",
+      review: "none",
       prompt: "",
     };
     s.newIssueInsert = false;
@@ -715,6 +716,7 @@ export async function runTui(): Promise<void> {
         ...(acceptance.length > 0 ? { acceptance } : {}),
         ...(keywords.length > 0 ? { keywords } : {}),
         verification: s.newIssue.verification,
+        ...(s.newIssue.review === "human" ? { review: "human" as const } : {}),
       });
       // Commit happens in the background; screen closes immediately.
       s.screen = "list";

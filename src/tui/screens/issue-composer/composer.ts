@@ -66,7 +66,7 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
     ` ${D}└${"─".repeat(inner)}┘${R}`,
   );
 
-  // ── Bottom bar: Kind + Priority + Verify (left) · Create[:!] (right) ──
+  // ── Bottom bar: Kind + Priority + Verify + Review (left) · Create[:!] (right) ──
   const kindColor = settings.kind === "ideas" ? C : settings.kind === "features" ? G : RED;
   const kindLabel = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
   const kindToken = command("k", "Kind", kindLabel, kindColor);
@@ -82,6 +82,9 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
     const verColor = settings.verification === "verified" ? G : D;
     leftTokens.push(command("v", "Verify", verLabel, verColor));
   }
+
+  const reviewColor = settings.review === "human" ? RED : D;
+  leftTokens.push(command("r", "Review", settings.review === "human" ? "Human" : "None", reviewColor));
 
   const leftSide = joinCommands(leftTokens);
   const createBadge = commandBadge("Create", ":!", START_BG, WHITE);

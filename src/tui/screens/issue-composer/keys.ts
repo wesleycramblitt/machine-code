@@ -166,6 +166,20 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
+  if (data === "v" && s.newIssue.kind !== "ideas") {
+    const cycle = ["direct", "verified"] as const;
+    const idx = cycle.indexOf(s.newIssue.verification);
+    s.newIssue.verification = cycle[(idx + 1) % cycle.length]!;
+    ctx.notify(`verification: ${s.newIssue.verification}`);
+    ctx.draw();
+    return true;
+  }
+  if (data === "r") {
+    s.newIssue.review = s.newIssue.review === "human" ? "none" : "human";
+    ctx.notify(`review: ${s.newIssue.review}`);
+    ctx.draw();
+    return true;
+  }
 
   ctx.draw();
   return true;
