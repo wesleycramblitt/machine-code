@@ -48,6 +48,7 @@ import { askTool, type AskContext } from "./ask.js";
 import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
 import { contextTool } from "./context.js";
+import { inspectTool } from "./inspect.js";
 import { finishTool, FinishParams, type FinishContext } from "./finish.js";
 import { todoTool, TodoParams } from "./todo.js";
 import { renderModuleGraph } from "../map/modules.js";
@@ -2635,6 +2636,7 @@ export type CoreToolName =
   | "grep"
   | "command"
   | "context"
+  | "inspect"
   | "ask"
   | "artifact"
   | "skill"
@@ -2652,6 +2654,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     grep: grepTool(ctx),
     command: commandTool(ctx),
     context: contextTool(ctx),
+    inspect: inspectTool(ctx),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),

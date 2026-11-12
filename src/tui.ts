@@ -382,6 +382,26 @@ export async function runTui(): Promise<void> {
     try { return loadPolicy(layout(repoRoot)); } catch { return undefined; }
   };
 
+  /**
+   * Apply minFit and floors overrides to a copy of the agent policy, so the
+   * preview, picker, and CLI-args builder all use the same effective thresholds.
+   */
+  const effectivePolicyForRun = (ap: AgentPolicy): AgentPolicy => {
+    const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
+    if (s.newrun.minFit !== undefined) effective.minFit = s.newrun.minFit ?? 0;
+    if (s.newrun.floors === "off") {
+      effective.minFit = 0;
+      for (const axis of CAPABILITY_AXES) effective.minAxes[axis] = 0;
+    }
+    if (s.newrun.floors === "strict") {
+      for (const axis of CAPABILITY_AXES) {
+        const current = effective.minAxes[axis] ?? ap.minFit;
+        effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
+      }
+    }
+    return effective;
+  };
+
   const modelPreview = (): {
     context: ContextPreview;
     model?: CatalogueRow;
@@ -453,19 +473,9 @@ export async function runTui(): Promise<void> {
         ambiguity: s.newrun.ambiguity,
       },
     });
+    s.newRunRequiredSkills = [...resolved.def.requiredSkills];
     const toolChars = toolSchemaChars(resolved.def.tools);
-    const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
-    if (s.newrun.minFit !== undefined) effective.minFit = s.newrun.minFit ?? 0;
-    if (s.newrun.floors === "off") {
-      effective.minFit = 0;
-      for (const axis of CAPABILITY_AXES) effective.minAxes[axis] = 0;
-    }
-    if (s.newrun.floors === "strict") {
-      for (const axis of CAPABILITY_AXES) {
-        const current = effective.minAxes[axis] ?? ap.minFit;
-        effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
-      }
-    }
+    const effective = effectivePolicyForRun(ap);
     const select = (requireModel?: string) => pick({
       agent: s.newrun.agent,
       policy: effective,
@@ -1269,6 +1279,7 @@ export async function runTui(): Promise<void> {
       }
     })();
     if (!ap || !machine) return [];
+    const effective = effectivePolicyForRun(ap);
     const availability = loadAvailability(l.home);
     const funded = fundedProviderIds(machine.providers);
     const weights = newRunWeights();

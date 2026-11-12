@@ -103,6 +103,8 @@ export interface AssembleInput {
   skillPresets?: Record<string, string>;
   /** Composer per-skill mode overrides (highest precedence). */
   skillOverrides?: Record<string, SkillMode>;
+  /** Skills required at minimum "on-demand" (cannot be excluded by user). */
+  requiredSkills?: readonly string[];
 }
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
@@ -291,6 +293,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       presets: input.skillPresets,
       declared: input.defaultSkills ?? [],
       overrides: input.skillOverrides,
+      required: input.requiredSkills,
     });
     if (mode !== "include") continue;
     const skill = skillBody(layout, name);

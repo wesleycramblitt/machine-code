@@ -121,6 +121,8 @@ export interface SkillModeInput {
   declared?: string[];
   /** Composer/explicit per-skill overrides (highest precedence). */
   overrides?: Record<string, SkillMode>;
+  /** Skills required at minimum "on-demand" (cannot be excluded). */
+  required?: readonly string[];
 }
 
 /**
@@ -134,7 +136,11 @@ export interface SkillModeInput {
  */
 export function resolveSkillMode(name: string, input: SkillModeInput = {}): SkillMode {
   const override = input.overrides?.[name];
-  if (override !== undefined) return override;
+  if (override !== undefined) {
+    // Required skills cannot be excluded regardless of overrides.
+    if (override === "exclude" && input.required?.includes(name)) return "on-demand";
+    return override;
+  }
   const preset = input.presets?.[name];
   if (isSkillMode(preset)) return preset;
   if (input.declared?.includes(name)) return "include";

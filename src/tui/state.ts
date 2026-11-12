@@ -147,6 +147,8 @@ export interface TuiState {
   newRunSkillModes: Map<string, SkillMode>;
   /** Modes as rendered this frame (single source for space-cycling). */
   newRunSkillShown: Map<string, SkillMode>;
+  /** Skills the selected agent requires at minimum "on-demand" (cannot be excluded). */
+  newRunRequiredSkills: string[];
   /**
    * Static inputs to the new-run preview (policy, catalogue, provider status,
    * context files) are expensive to reload on every keystroke, so they are
@@ -266,6 +268,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunHints: true,
     newRunSkillModes: new Map<string, SkillMode>(),
     newRunSkillShown: new Map<string, SkillMode>(),
+    newRunRequiredSkills: [],
     newRunPreviewCache: null,
     answerText: "",
     answerQuestionId: "",

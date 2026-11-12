@@ -160,7 +160,11 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
       // (description only, pulled with the skill tool) → exclude.
       const name = key.slice("skill:".length);
       const current = s.newRunSkillShown.get(name) ?? "on-demand";
-      const next: SkillMode = current === "include" ? "on-demand" : current === "on-demand" ? "exclude" : "include";
+      let next: SkillMode = current === "include" ? "on-demand" : current === "on-demand" ? "exclude" : "include";
+      // Required skills cannot be set below "on-demand".
+      if (next === "exclude" && s.newRunRequiredSkills.includes(name)) {
+        next = "include";
+      }
       s.newRunSkillModes.set(name, next);
       if (next === "exclude") s.newRunContextExcluded.add(key);
       else s.newRunContextExcluded.delete(key);

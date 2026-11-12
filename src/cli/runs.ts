@@ -597,6 +597,7 @@ export async function cmdPack(argv: string[]): Promise<number> {
   const { assembleContext } = await import("../context/assemble.js");
   const { contextBudget, inputCost } = await import("../context/budget.js");
   const { roleSkillPresets } = await import("../agents.js");
+  const { agentDef } = await import("../agents.js");
   const budget = contextBudget(row.context || row.capabilities.contextWindow, agentPolicy.expectedOutputTokens);
   const bundle = await assembleContext({
     layout: l,
@@ -606,6 +607,7 @@ export async function cmdPack(argv: string[]): Promise<number> {
     budgetChars: budget.inputChars,
     defaultSkills: defaultSkillsFor({ agent }),
     skillPresets: roleSkillPresets(agent),
+    requiredSkills: agentDef(l, agent).requiredSkills,
   });
   const tokens = Math.ceil(bundle.chars / 4);
   const cost = inputCost(tokens, row.pricing.input);

@@ -45,6 +45,8 @@ export interface AgentDef {
   /** Paths the agent is allowed to write/edit (relative to worktree root).
    *  Empty or undefined means all paths are allowed. */
   allowedPaths?: readonly string[];
+  /** Skills the agent requires at minimum "on-demand" mode (cannot be excluded). */
+  requiredSkills: readonly string[];
 }
 
 interface RoleData {
@@ -63,6 +65,7 @@ interface RoleData {
   capabilities?: unknown;
   base_prompt?: unknown;
   allowed_paths?: unknown;
+  required_skills?: unknown;
   weights?: Record<string, unknown>;
   /** Per-skill context-mode preset table: `[skills] clean-code = "include"`. */
   skills?: Record<string, unknown>;
@@ -250,6 +253,7 @@ export function agentDef(layout: Layout, name: AgentName): AgentDef {
     blurb: typeof role.blurb === "string" ? role.blurb : "",
     preset: typeof role.preset === "string" ? role.preset : "assistant",
     allowedPaths: strings(role.allowed_paths),
+    requiredSkills: strings(role.required_skills),
   };
 }
 

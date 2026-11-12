@@ -27,7 +27,7 @@ import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { buildRepoMap } from "./map/deterministic.js";
 import { enrichHints, renderHints, suggestHints, suggestionText, withKeywordTerms } from "./map/suggest.js";
-import { roleSkillPresets } from "./agents.js";
+import { agentDef, roleSkillPresets } from "./agents.js";
 import { writeJsonAtomic } from "./state/run-schema.js";
 import { join } from "node:path";
 import { parseBuildOutcome } from "./orchestrator/outcome.js";
@@ -227,6 +227,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     // Verified issues ship tests: inline the full testing brief instead of
     // leaving it one on-demand pull away (models never pull it).
     ...(verification === "verified" ? { skillOverrides: { "verified-testing": "include" } } : {}),
+    requiredSkills: agentDef(layout, "engineer").requiredSkills,
   });
   if (contextBundle.text) {
     writeJsonAtomic(join(recorder.dir, "context.json"), {
@@ -446,6 +447,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       ...(freshFiles.length > 0 ? { include: { files: freshFiles } } : {}),
       defaultSkills: defaultSkillsFor({ agent: "research" }),
       skillPresets: roleSkillPresets("research"),
+      requiredSkills: agentDef(layout, "research").requiredSkills,
     });
     if (researchBundle.text) {
       writeJsonAtomic(join(recorder.dir, "context.json"), {
