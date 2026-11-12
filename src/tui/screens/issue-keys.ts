@@ -9,7 +9,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { findIssue } from "../../plan/issues.js";
 import { layout } from "../../paths.js";
+import { isApprovable } from "../../tasks/issue.js";
 import { issueDeleteTarget } from "./delete-keys.js";
+import { probeIssueBranch } from "./issue.js";
 import type { TuiState } from "../state.js";
 import type { KeyServices } from "./keys.js";
 

@@ -33,7 +33,7 @@ import {
 import { scrollLines, selectableLines } from "./tui/scroll.js";
 import { createTuiState, type NewRunSeed, type NewRunState, type Page, type RunDetail, type RunsRepoScope, type Screen, type TuiState } from "./tui/state.js";
 import { renderDeleteConfirm } from "./tui/screens/delete.js";
-import { renderIssue } from "./tui/screens/issue.js";
+import { refreshIssueBranch, renderIssue } from "./tui/screens/issue.js";
 import { policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
 import { renderAnswer } from "./tui/screens/answer.js";
 import { TABS, renderFooterRows, renderHeader, rightHeaderPath } from "./tui/screens/chrome.js";
@@ -1159,6 +1159,7 @@ export async function runTui(): Promise<void> {
       const issueLayout = layout(s.selectedIssueRepo ?? l.repoRoot);
       const issue = itemSlug ? findIssue(issueLayout, itemSlug) : undefined;
       const issueRuns = allRuns.filter((run) => run.repoRoot === issueLayout.repoRoot);
+      refreshIssueBranch(s, issueLayout, itemSlug, issueRuns, draw);
       const frame = renderIssue({
         cols, narrow, bodyH, theme, toast: s.toast,
         slug: itemSlug,

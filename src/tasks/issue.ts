@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import { runProc } from "../proc.js";
-import { branchExists, defaultBaseBranch, mainWorktreeRoot, removeWorktree } from "../worktree.js";
+import { branchExists, branchState, defaultBaseBranch, mainWorktreeRoot, removeWorktree, type BranchState } from "../worktree.js";
 import { listRuns, RunRecorder, type RunSummary } from "../state/runs.js";
 import { findIssue, listIssues, moveIssue, writeIssue, type Issue, type IssueKind, type IssueStatus, parseKind, legalStatus, ISSUE_KINDS, statusesForKind } from "../plan/issues.js";
 import { runMainBuild } from "../commands/build.js";
