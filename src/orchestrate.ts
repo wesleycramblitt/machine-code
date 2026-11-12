@@ -62,9 +62,8 @@ export interface OrchestrateInput {
   seedFiles?: string[];
   /** Rank + inline suggested files (default true). False skips suggestions; explicit includes still apply. */
   hints?: boolean;
-  /** Skip the deterministic map and module index up front. */
+  /** Skip the deterministic map up front. */
   skipMap?: boolean;
-  skipSemantic?: boolean;
   signal?: AbortSignal;
 }
 
@@ -107,7 +106,6 @@ export async function singleAgentRun(input: {
   /** Repo-relative files pinned into the working set before the first model call. */
   seedFiles?: string[];
   skipMap?: boolean;
-  skipSemantic?: boolean;
   signal?: AbortSignal;
 }): Promise<RunLoopResult> {
   return runLoop({
@@ -133,7 +131,6 @@ export async function singleAgentRun(input: {
     contextText: input.contextText,
     ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
     skipMap: input.skipMap,
-    skipSemantic: input.skipSemantic,
     signal: input.signal,
   });
 }
@@ -165,7 +162,6 @@ export interface ExecuteIssueInput {
   /** Rank + inline suggested files (default true). False skips suggestions; explicit includes still apply. */
   hints?: boolean;
   skipMap?: boolean;
-  skipSemantic?: boolean;
   signal?: AbortSignal;
   }
 
@@ -291,7 +287,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     // first prompt already carries the code the deliverable names.
     ...(seedFiles.length > 0 ? { seedFiles: [...new Set(seedFiles)] } : {}),
     skipMap: input.skipMap,
-    skipSemantic: input.skipSemantic,
     signal: input.signal,
   });
   if (
@@ -411,7 +406,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       contextText: input.contextText,
       ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
       skipMap: input.skipMap,
-      skipSemantic: input.skipSemantic,
       signal: input.signal,
     });
   }
@@ -505,7 +499,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     contextText: researchContextText,
     ...(researchSeedFiles ? { seedFiles: researchSeedFiles } : {}),
     skipMap: input.skipMap,
-    skipSemantic: input.skipSemantic,
     signal: input.signal,
   });
   return { ...result, runId: recorder.id };

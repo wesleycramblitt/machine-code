@@ -95,7 +95,6 @@ import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "
 import { listReferenceEntries } from "./references/store.js";
 import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
-import { loadModuleIndex } from "./map/modules.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
 import { commitPlanningFiles } from "./tasks/planning.js";
@@ -108,13 +107,14 @@ import { commitPlanningFiles } from "./tasks/planning.js";
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
 /**
- * Min-fit ladder for `f` on the new-run page: role policy, then an explicit
- * floor from 4 to 8.5 in 0.25 steps, then 0 (no floor). Quarter points so a
- * borderline model can be included or excluded precisely.
+ * Min-fit ladder for `f` on the new-run page: role policy, then explicit
+ * floors from 6 down to 4 in 0.25 steps, then up from 4.25 to 8.5, then 0.
+ * Quarter points so a borderline model can be included or excluded precisely.
  */
 const NEW_RUN_MIN_FITS: Array<number | null | undefined> = [
   undefined,
-  ...Array.from({ length: 19 }, (_, i) => 4 + i * 0.25),
+  6, 5.75, 5.5, 5.25, 5, 4.75, 4.5, 4.25, 4,
+  4.25, 4.5, 4.75, 5, 5.25, 5.5, 5.75, 6.25, 6.5, 6.75, 7, 7.25, 7.5, 7.75, 8, 8.25, 8.5,
   0,
 ];
 
@@ -132,11 +132,9 @@ interface ChangesCache {
 /** Compact codebase-index health tokens for bottom footers. */
 function mapStatusTokens(root: string): string[] {
   const mapCached = existsSync(join(root, ".machine_code", "local", "cache", "map.json"));
-  const modules = loadModuleIndex(root);
   const lspReady = serverAvailable("typescript");
   return [
     `${mapCached ? G : Y}MAP${mapCached ? "✓" : "✗"}${R}`,
-    `${modules ? G : GR}MOD${modules ? "✓" : "-"}${R}`,
     `${lspReady ? G : GR}LSP${lspReady ? "✓" : "✗"}${R}`,
   ];
 }

@@ -28,7 +28,7 @@ import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
 import { listReferenceEntries } from "../../../references/store.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "../../../map/deterministic.js";
 import { suggestHints, type FileHint } from "../../../map/suggest.js";
-import { loadModuleIndex, renderModuleIndex } from "../../../map/modules.js";
+
 import { skillListItems, toolListItems, tokensForChars } from "../../tools.js";
 import { loadAvailability } from "../../../availability.js";
 import { clipLines } from "../types.js";
@@ -361,10 +361,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   );
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
   const mapEnabled = preview.machine?.map.enabled !== false;
-  const modulesEnabled = mapEnabled && preview.machine?.map.semantic !== false;
-  const modules = loadModuleIndex(repoRoot);
   const mapChars = mapEnabled ? (cachedMap ? renderMapIndex(cachedMap).length : 1024) : 0;
-  const moduleChars = modulesEnabled ? (modules ? renderModuleIndex(modules).length : 1024) : 0;
   const codebaseItems = [
     {
       text: mapEnabled
@@ -376,17 +373,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       exists: mapEnabled && Boolean(cachedMap),
       key: "map:index",
     },
-    {
-      text: modulesEnabled
-        ? modules
-          ? `module index · ${Object.values(modules.modules).filter((entry) => !entry.file).length} modules`
-          : "module index · builds when available"
-        : "module index · disabled",
-      chars: moduleChars,
-      exists: modulesEnabled && Boolean(modules),
-      key: "semantic:index",
-    },
-  ];
+    ];
   // The resolved agent prompt is context too: every line the run will
   // send, listed read-only. Fixed rows are always in context and cannot
   // be switched off, mirroring the core-tool rows.

@@ -228,16 +228,21 @@ function rejectReason(
   if (row.coding === false) return "non-coding-model";
   if (isMetaRouter(row)) return "router-model";
   if (input.policy.toolCall && !row.toolCall) return "no-tool-support";
-  if (input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
+  // Local tier models (Ollama) are zero-cost and don't need a funded provider.
+  if (input.tier !== "local" && input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
   if (input.policy.minFit > 0 && capabilityFit(row.scores, weights) < input.policy.minFit) {
     return "below-min-fit";
   }
   if (input.policy.minCapability > 0 && row.scores.capability < input.policy.minCapability) {
     return "below-min-capability";
   }
-  for (const axis of CAPABILITY_AXES) {
-    const floor = input.policy.minAxes?.[axis];
-    if (floor !== undefined && floor > 0 && row.scores[axis] < floor) return `below-min-${axis}`;
+  // Per-axis floors are for paid tier only; local models use metadata-based
+  // scores in the 3-6 range and would almost always fail the paid-tier floors.
+  if (input.tier !== "local") {
+    for (const axis of CAPABILITY_AXES) {
+      const floor = input.policy.minAxes?.[axis];
+      if (floor !== undefined && floor > 0 && row.scores[axis] < floor) return `below-min-${axis}`;
+    }
   }
   if (row.context < input.policy.minContext) return "below-min-context";
   return null;

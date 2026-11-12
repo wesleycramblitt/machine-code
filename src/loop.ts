@@ -31,7 +31,6 @@ import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
 import { buildRepoMap, mapBytes, renderMapIndex, symbolCount, type RepoMap } from "./map/deterministic.js";
-import { buildModuleIndex, renderModuleIndex, type ModuleIndex } from "./map/modules.js";
 import { RunStateStore } from "./context/state.js";
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
@@ -127,8 +126,7 @@ export interface RunLoopInput {
   contextText?: string;
   /** Skip the deterministic repo map index in the model's up-front context. */
   skipMap?: boolean;
-  /** Skip the deterministic module index in the up-front context. */
-  skipSemantic?: boolean;
+  
   /** Composer-excluded skill names the skill tool must refuse. */
   skillExcludes?: string[];
 }
@@ -370,11 +368,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     onEvent: (type, data) => recorder.event(type, data),
   });
   const wantMap = input.skipMap !== true;
-  const wantModules = input.skipSemantic !== true;
+  
   // Up-front context stays small and stable so the provider cache absorbs
-  // it once: the one-line map index, the query-biased module index, and
-  // full file/symbol detail on demand (map outline, read symbol, map slice).
-  // The full per-file map is never re-sent.
+  // it once: the one-line map index and full file/symbol detail on demand
+  // (map outline, read symbol, map slice). The full per-file map is never
+  // re-sent.
   let mapIndex = "";
   // Names only. The model must know a command exists before it can ask for
   // its schema; guessing core:run/typescript:check was a wasted call in every
@@ -388,23 +386,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           "</commands>",
         ].join("\n")
       : "";
-  let moduleIndex: ModuleIndex | null = null;
-  const renderIndex = (map: RepoMap, index: ModuleIndex | null): string =>
-    [
-      wantMap ? renderMapIndex(map) : "",
-      wantModules ? renderModuleIndex(index, 3_072, input.request) : "",
-    ].filter(Boolean).join("\n");
-  if (wantMap || wantModules) try {
+  if (wantMap) try {
     const built = await buildRepoMap(mapRoot, { processes });
-    moduleIndex = wantModules ? buildModuleIndex(built.map) : null;
-    mapIndex = renderIndex(built.map, moduleIndex);
+    mapIndex = renderMapIndex(built.map);
     recorder.event("map_built", {
       files: built.map.files.length,
       symbols: symbolCount(built.map),
       bytes: mapBytes(built.map),
       cached: built.cached,
       head: built.map.head,
-      modules: moduleIndex ? Object.keys(moduleIndex.modules).length : 0,
     });
   } catch (error) {
     recorder.event("map_built", {

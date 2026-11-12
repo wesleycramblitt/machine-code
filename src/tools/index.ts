@@ -50,7 +50,7 @@ import { skillTool, type SkillToolContext } from "./skill.js";
 import { contextTool } from "./context.js";
 import { finishTool, FinishParams, type FinishContext } from "./finish.js";
 import { todoTool, TodoParams } from "./todo.js";
-import { loadModuleIndex, renderModuleGraph, searchModules } from "../map/modules.js";
+import { renderModuleGraph } from "../map/modules.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
 import type { LedgerEntry, RunStateStore } from "../context/state.js";
 
@@ -1825,37 +1825,10 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
               }) || "no files",
             );
           }
-          case "semantic": {
-            if (!params.pattern) return fail("semantic mode requires a query");
-            const index = loadModuleIndex(ctx.root);
-            if (!index) {
-              return fail(
-                "module index is not available; use map, outline, or text search, or run `machine_code map` first",
-              );
-            }
-            const matches = searchModules(index, params.pattern, limit);
-            if (matches.length === 0) {
-              return ok(`no module matches for "${params.pattern}"; try grep or map { "action": "outline" }`);
-            }
-            return ok(
-              matches
-                .map((match) => {
-                  const files = match.entry.keyFiles?.length
-                    ? `\n  files: ${match.entry.keyFiles.join(", ")}`
-                    : "";
-                  const deps = match.entry.deps?.length
-                    ? `\n  deps: ${match.entry.deps.join(", ")}`
-                    : "";
-                  return `${match.module} (score ${match.score})\n  ${match.entry.summary}${files}${deps}`;
-                })
-                .join("\n\n"),
-            );
-          }
           case "graph": {
             const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
-            const index = loadModuleIndex(ctx.root);
             return ok(
-              renderModuleGraph(built.map, index, params.pattern ?? params.path ?? "", 16 * 1024),
+              renderModuleGraph(built.map, params.pattern ?? params.path ?? "", 16 * 1024),
             );
           }
           case "sections": {

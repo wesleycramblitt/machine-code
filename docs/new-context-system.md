@@ -1,291 +1,193 @@
-# Simplify and Consolidate the Context System
+# Context System — Simplification Plan
 
-## Objective
+Replace the existing context system with a smaller, more disciplined one built on
+Git, filesystem primitives, and (optionally) LSP for semantic code intelligence.
+Drop redundant representations, duplicated tracking, and agent-facing operations
+that the harness can do automatically.
 
-Simplify the existing context engine into a small, efficient system that gives agents accurate, relevant codebase information with minimal tool calls and context overhead.
+---
 
-Preserve existing functionality where useful, but eliminate redundant representations, duplicated tracking, and unnecessary agent-facing operations.
+## Design
 
-Do not introduce an LLM-powered research or inspection agent. Codebase retrieval must be deterministic.
+| Layer | Purpose | Tool / Source |
+|---|---|---|
+| **Brief** | What am I supposed to do? | Assembled context (curated, stable prefix) |
+| **Codebase Index** | What exists? | Filesystem + Git + LSP (no structured index) |
+| **Inspect** | Show me the relevant code | `inspect` tool (symbol/file/directory/references) |
+| **Workspace** | What have I inspected, and what changed? | Git diff baseline + tracked file-versions |
+| **Memory** | What did I learn that isn't in the source? | Agent-recorded decisions, findings, questions |
+| **Artifacts** | Retrieve exact previous evidence | Content-addressed artifact store |
 
-## 1. Brief — Task Context
+The harness manages retrieval, freshness, storage, and context assembly.  The
+agent focuses on understanding the problem and engineering the solution.
 
-**Purpose:** Give the agent everything it needs to understand its assignment and constraints.
+---
 
-Retain and refine the existing assembled context system.
+## Phase 1 — Remove Dead Weight
 
-Include:
-- Issue and task description.
-- Explicitly supplied files and references.
-- Relevant knowledge and architecture documentation.
-- Mode instructions and required skills.
-- Relevant starting hints where available.
+Internal cleanups.  No changes to the model's prompt or tool surface.
 
-Keep the stable prompt prefix optimized for prompt caching.
+1. **Remove the module index** (`src/map/modules.ts`)
+   - Nothing depends on it.  The map outline tool and `inspect` cover the same
+     ground without the overhead of a query-biased index per turn.
+   - `skipSemantic` / `wantModules` throughout the codebase → delete.
+   - Saves ~3 KB per turn from the stable prefix.
 
-Do not automatically inject the entire repository map or module index into the prompt.
+2. **Simplify the git status safety net**
+   - Replace per-file fingerprint tracking (`mtimeMs` + `size`) with a simple
+     comparison of `git status --porcelain` output strings across turns.
+   - Removes the `GitStatusEntry` type, the `Map` data structure, and the stat
+     calls per file.
+   - Internal only — the change facts in the run state look identical.
 
-## 2. Codebase Index — Repository Structure
+3. **Remove the `nextAction` / `nextActionTurn` state** (optional, low-risk)
+   - The harness already infers the next step.  The "first edit → finish"
+     transition in `settleNextAfterChange` proves the model ignores it.
+   - Removes the `todo` seeding at run start and the `Next:` line from the
+     `<run-state>` block.
+   - Model saves ~200 B per turn.
 
-**Purpose:** Provide a reusable, repository-level structural index.
+---
 
-Retain the deterministic repo map as an internal retrieval resource.
+## Phase 2 — New Tool Surface
 
-Use existing capabilities to provide:
-- File paths and metadata.
-- Languages and directory structure.
-- Symbols, definitions, and line ranges.
-- Imports and dependency relationships.
-- Documentation and section headings.
+Consolidate the overlapping retrieval tools.
 
-Use existing LSP, Ctags, and CLI capabilities where available rather than implementing duplicate indexing.
+| Tool | Retained? | Change |
+|---|---|---|
+| `map` (overview/outline/sections) | **Keep** | Lightweight directory + file outline via CLI |
+| `read` (path/symbol/section/around) | **Keep** | Raw file content |
+| `search` (text/files/symbol) | **Keep** | Text/pattern search |
+| `inspect` | **Add** | Deterministic code retrieval using LSP + filesystem |
+| `context expand` | **Remove** | Folded into `inspect` |
+| `context focus` | **Remove** | Harness auto-tracks working set from tool calls |
+| `context recall` | **Rename** → `recall` | Cleaner name |
 
-Keep the index deterministic, refreshable, and independent of individual runs.
+### `inspect` tool
 
-Evaluate whether the separate module index provides enough value to justify retaining it. Prefer removing it if its functionality can be covered by the repo map and inspection operations.
-
-## 3. Inspect — Deterministic Code Retrieval
-
-**Purpose:** Give the agent one efficient, structured interface for understanding code.
-
-Implement a deterministic `inspect` tool that combines existing map, symbol, LSP, search, and file-reading capabilities.
-
-No natural-language questions, LLM calls, or autonomous research.
-
-Use explicit targets, for example:
-
-- `symbol`: Inspect a symbol and its structural relationships.
-- `file`: Inspect a file's outline, imports, documentation, and source.
-- `directory`: Inspect directory contents and structure.
-- `references`: Find definitions, usages, callers, and implementations.
-
-Support a compact summary by default and full source retrieval when requested.
-
-Return predictable, structured results containing:
-- Resolved target and location.
-- Relevant symbols and signatures.
-- Definitions and relationships.
-- Dependencies and references where available.
-- Source excerpts or full source when requested.
-- Clear indications when information is unavailable.
-- Artifact reference for retrieving the complete result.
-
-Use the best available source for each query:
-- Repo map / Ctags for structural lookup.
-- LSP for semantic information.
-- Existing search tools for textual discovery.
-- Filesystem reads for actual source.
-- Git where historical information is relevant.
-
-Do not invent relationships or claim semantic completeness when the underlying tools cannot establish it.
-
-Automatically store complete inspection results in the existing content-addressed artifact store.
-
-## 4. Workspace — Current Run Evidence
-
-**Purpose:** Track what the agent has inspected and what has changed during the run.
-
-Keep workspace information separate from the repository-level codebase index.
-
-Track:
-- Initial worktree baseline.
-- Current cumulative Git changes against that baseline.
-- Added, modified, deleted, and renamed files.
-- Inspection targets and source versions.
-- Artifact references for previously inspected content.
-- Whether inspected source is still current.
-
-Use Git diff as the authoritative source of changes. Include untracked files separately.
-
-Do not build a custom change journal or duplicate Git's change tracking.
-
-Retain inspection evidence as compact metadata, not duplicated source content.
-
-When source changes, mark corresponding inspection evidence stale. Preserve the historical artifact for reference, but never present stale source as current.
-
-Do not automatically inject entire changed files into the prompt.
-
-## 5. Memory — Durable Run Knowledge
-
-**Purpose:** Preserve information that cannot reliably be reconstructed from the codebase.
-
-Refine the existing RunStateStore.
-
-Keep:
-- Findings.
-- Decisions.
-- Unresolved questions.
-
-Do not require agents to manually record:
-- Files they read.
-- Searches they performed.
-- Symbols they inspected.
-- Changes that Git can detect.
-- Routine progress or next actions that the harness can infer.
-
-The harness should automatically track inspection coverage and workspace changes.
-
-Memory should contain conclusions, not copies of tool output.
-
-## 6. Artifacts — Exact Retrieval
-
-Retain the existing content-addressed artifact store.
-
-Use it for:
-- Complete inspection results.
-- Source reads and other substantial tool results.
-- Exact historical evidence that may need to be recalled.
-
-Keep `recall` available for retrieving previously stored results.
-
-Avoid maintaining separate caches or duplicated copies of the same information in working context and ledger.
-
-## 7. Prompt Rendering
-
-Consolidate the prompt into a stable prefix and a dynamic tail.
-
-**Stable prefix:**
-- System and mode contract.
-- Brief / assembled context.
-- Tool guide.
-
-**Dynamic tail:**
-- Workspace changes.
-- Compact inspection evidence and freshness.
-- Run memory.
-- Recent transcript and tool results.
-
-Keep the stable prefix byte-identical across turns where possible.
-
-Remove automatic full-file working-context injection and separate ledger rendering if artifact retrieval and inspection evidence make them redundant.
-
-Keep recent tool results available through the transcript.
-
-## 8. Agent-Facing Tool Surface
-
-Converge on four primary operations:
-
-1. `inspect` — Deterministic codebase retrieval.
-2. `remember` — Record findings, decisions, and open questions.
-3. `context` — View current task, workspace changes, inspection evidence, and memory.
-4. `recall` — Retrieve exact artifact contents.
-
-Remove or internalize redundant operations such as `focus` and `expand`. Lower-level map, search, read, and LSP operations may remain available internally to `inspect`.
-
-### Inspect tool implementation example
-Just an example, wouldn't have to work just like this.
-
+```
 inspect({
-  symbol?: string,
-  file?: string,
-  directory?: string,
-  detail?: "summary" | "full"
+  target: "symbol" | "file" | "directory" | "references",
+  path?: string,           // file or directory path
+  name?: string,           // symbol name
+  detail: "summary" | "full"  // result depth
 })
+```
 
-#### Symbol
-symbol: MeshGenerator
-definition:
-  file: src/geometry/mesh.cpp
-  lines: [42, 108]
-  signature: "Mesh generate(const Geometry&, const MeshOptions&)"
-  documentation: "..."
+- Uses LSP for symbol definitions, references, hover (when running).
+- Falls back to regex heuristics (from the current map symbol extractor).
+- Uses filesystem commands for file/directory queries.
+- First-class Git-aware staleness: the result includes a file version hash; if
+  the file changed since the inspect call, the artifact is stale.
+- Result auto-stored as an artifact so `recall` can re-fetch it without a new
+  query.
 
-containing:
-  symbol: GeometryPipeline
-  file: src/geometry/pipeline.cpp
+### Open question
 
-dependencies:
-  - symbol: Geometry
-    file: src/geometry/geometry.hpp
-  - symbol: MeshOptions
-    file: src/geometry/mesh.hpp
+Do we keep `search` as a separate tool, or fold it into `inspect` as
+`inspect target=references` / `inspect target=text`?  A dedicated text-search
+tool has a simpler schema and is easier for the model to reach for.  Decision
+deferred until Phase 2 implementation.
 
-references:
-  count: 7
-  locations:
-    - file: src/geometry/pipeline.cpp
-      lines: [82, 82]
+---
 
-artifact: art_123
+## Phase 3 — Workspace + Memory
 
-#### File
-file: src/geometry/mesh.cpp
+Replace three parallel tracking systems (edit facts, git status fingerprints,
+working-file ranges) with one authoritative source: Git diff.
 
-outline:
-  - name: MeshGenerator
-    kind: class
-    lines: [20, 108]
-  - name: generate
-    kind: function
-    lines: [42, 108]
+### Workspace
 
-imports:
-  - src/geometry/geometry.hpp
-  - src/geometry/mesh.hpp
+- At run start, capture `git diff --stat` + `git ls-files --others --exclude-standard` as the baseline.
+- After each turn, re-capture and diff the output.
+- Render a compact workspace block in the dynamic tail:
 
-documentation: "..."
+```
+<workspace>
+  changed: 3 files
+    M src/geometry/mesh.cpp
+    A src/engine/render.rs
+    D src/old/legacy.rs
+  untracked: 2 files
+    TODO.md
+    notes.md
+</workspace>
+```
 
-artifact: art_456
+- File-version tracking: each `inspect`/`read` result records the file's current
+  mtime+size hash.  Re-capturing the diff cross-references staleness: "your
+  inspect of mesh.cpp is stale — re-run inspect".
 
-#### Directory
-directory: src/geometry
+### Memory
 
-files:
-  - path: mesh.cpp
-    language: cpp
-    symbols: 12
-  - path: geometry.hpp
-    language: cpp
-    symbols: 8
+Simplify `RunStateStore`:
 
-dependencies:
-  incoming: [...]
-  outgoing: [...]
-  
-#### References
-references: MeshGenerator
+**Agent-recorded (manual):**
+- `remember kind=decision "use quadtree for spatial index"`
+- `remember kind=finding "MeshGenerator is hot on large inputs"`
+- `remember kind=question "does the library support SIMD?"`
 
-definitions:
-  - file: src/geometry/mesh.cpp
-    lines: [20, 108]
+**Auto-tracked (harness, no agent calls needed):**
+- What files were inspected / read (from tool call logs).
+- What file versions were current at inspection time.
+- What changed (from the workspace diff).
 
-references:
-  - file: src/geometry/pipeline.cpp
-    lines: [82, 82]
+**Removed:**
+- Read facts (automatically derivable from tool history).
+- Search facts (automatically derivable from tool history).
+- Change facts (replaced by workspace diff).
+- Git change facts (same).
+- Command facts (replaced by workspace diff for mutations).
+- Open question answering / forgetting (low usage, high complexity).
 
-callers:
-  - symbol: GeometryPipeline::build
-    file: src/geometry/pipeline.cpp
+---
 
-inspect({ "symbol": "MeshGenerator" })
+## Phase 4 — Prompt Slimming
 
-inspect({ "file": "src/geometry/mesh.cpp" })
+**Stable prefix (byte-identical across turns):**
+```
+[system prompt]
+[assembled context]     ← curated brief
+[tool guide]            ← tool policy
+```
 
-inspect({ directory: "src/geometry" })
+No map index, no module index — the model requests what it needs via `inspect`,
+`map overview`, `search`, or `read`.
 
-inspect({ references: "MeshGenerator" })
+**Dynamic tail (changes every turn):**
+```
+[workspace]             ← git diff summary (compact)
+[memory]                ← decisions + findings + questions
+[transcript]            ← summarized tool call history
+```
 
-## Implementation Requirements
+No working-context block, no ledger block.  If the model needs current file
+content it calls `read` or `inspect file {path} source=full`.
 
-- Inspect the existing codebase and identify reusable components before modifying anything.
-- Prefer refactoring and consolidating existing functionality over creating new subsystems.
-- Avoid introducing new databases, indexing frameworks, or unnecessary abstractions.
-- Preserve artifact provenance and source-version tracking.
-- Ensure stale inspection results are never represented as current.
-- Keep retrieval deterministic and independently testable.
-- Maintain prompt-cache stability.
-- Minimize agent-facing tool calls and manual context management.
-- Update relevant tests, types, documentation, and tool contracts.
+---
 
-## Desired Outcome
+## Phase 5 — LSP Integration (optional, ongoing)
 
-A small context system with clear responsibilities:
+The `inspect` tool uses LSP for symbol-level queries when available:
 
-- **Brief:** What am I supposed to do?
-- **Codebase Index:** What exists?
-- **Inspect:** Show me the relevant code and relationships.
-- **Workspace:** What have I inspected, and what has changed?
-- **Memory:** What have I learned that isn't obvious from the source?
-- **Artifacts:** Where can I retrieve exact previous evidence?
+```
+inspect target=symbol name=MeshGenerator
+  → LSP definition + references (primary)
+  → regex fallback if LSP unavailable
+```
 
-The harness manages retrieval, freshness, storage, and context assembly. The agent focuses on understanding the problem and engineering the solution.
+For file/directory queries, `inspect` uses CLI commands — no LSP dependency.
+
+The system works without LSP installed.  LSP is a precision enhancement, not a
+hard requirement.
+
+---
+
+## Non-Goals
+
+- No LLM-powered research or inspection agent.  Every retrieval path is
+  deterministic.
+- No new databases, indexing frameworks, or heavyweight abstractions.
+- No natural-language queries against the codebase.
+- No per-file size rules in the assembled context — priority-based dropping is
+  the only budget mechanism.

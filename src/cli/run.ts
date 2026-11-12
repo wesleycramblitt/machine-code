@@ -425,7 +425,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     .filter((key) => key.startsWith("skill:"))
     .map((key) => key.slice("skill:".length));
   const skipMap = excludedSections.has("codebase") || excludedItems.has("map:index");
-  const skipSemantic = excludedSections.has("codebase") || excludedItems.has("semantic:index");
   if (requireProvider && !configuredProviders.has(requireProvider)) {
     fail(`provider "${requireProvider}" is not configured`);
   }
@@ -904,7 +903,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       skipMap,
-      skipSemantic,
       skillExcludes,
       signal: abort.signal,
     });
@@ -930,7 +928,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(hintsOn ? {} : { hints: false }),
       skipMap,
-      skipSemantic,
       signal: abort.signal,
     });
   }

@@ -5,7 +5,6 @@
  * status first and appends map/LSP health so the model can see what is fresh.
  */
 import { buildRepoMap, mapBytes, renderRepoMap, symbolCount } from "../map/deterministic.js";
-import { buildModuleIndex, renderModuleIndex } from "../map/modules.js";
 import { formatLspStatus, lspStatusForPaths } from "../lsp/index.js";
 import { runProc } from "../proc.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
@@ -26,7 +25,6 @@ export async function runMapCommand(
   const symbols = args.symbols !== false;
   try {
     const built = await buildRepoMap(root, { refresh, processes });
-    const modules = buildModuleIndex(built.map);
     if (action === "status") {
       return {
         text: [
@@ -37,19 +35,17 @@ export async function runMapCommand(
           `bytes: ${mapBytes(built.map)}`,
           `cache: ${built.cachePath}`,
           `cache: ${built.cached ? "fresh" : "rebuilt"}`,
-          `modules: ${Object.keys(modules.modules).length}`,
           formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path))),
         ].join("\n"),
         isError: false,
       };
     }
     if (args.json === true) {
-      return { text: JSON.stringify({ map: built.map, modules }, null, 2), isError: false };
+      return { text: JSON.stringify({ map: built.map }, null, 2), isError: false };
     }
     const deterministicText = renderRepoMap(built.map, { path, symbols }) || "no files";
-    const moduleText = args.semantic === true ? renderModuleIndex(modules, 16 * 1024, path ?? "") : "";
     return {
-      text: [deterministicText, moduleText].filter(Boolean).join("\n\n"),
+      text: deterministicText,
       isError: false,
     };
   } catch (error) {
@@ -80,11 +76,9 @@ export async function runStatusCommand(root: string, processes?: ProcessSupervis
     const mapLine =
       `map ${built.cached ? "fresh" : "rebuilt"} · ${built.map.files.length} files · ` +
       `${symbolCount(built.map)} symbols · ${mapBytes(built.map)} bytes`;
-    const modules = buildModuleIndex(built.map);
-    const moduleLine = `modules: ${Object.keys(modules.modules).length}`;
     const lspLine = formatLspStatus(lspStatusForPaths(built.map.files.map((file) => file.path)));
     return {
-      text: [gitText, "", mapLine, moduleLine, lspLine].filter(Boolean).join("\n"),
+      text: [gitText, "", mapLine, lspLine].filter(Boolean).join("\n"),
       isError: git.outcome !== "exit" || git.code !== 0,
     };
   } catch (error) {
