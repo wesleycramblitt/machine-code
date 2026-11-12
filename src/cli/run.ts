@@ -38,7 +38,7 @@ import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/co
 import { runLoop, type RunLoopResult } from "../loop.js";
 import { type OrchestrateResult } from "../orchestrate.js";
 import { AGENT_NAMES } from "../agents.js";
-import { gateFailureText, resolveGates, runGates } from "../verify.js";
+import { gateFailureText, resolveGates, runGates, type GateSpec } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
 import { runMainBuild } from "../commands/build.js";
 import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
@@ -866,7 +866,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
   process.stderr.write(`RUN ${recorder.id} — ${itemSlug ?? recorder.id.slice(-8)}\n`);
 
   let result: RunLoopResult | OrchestrateResult;
-  let autoRetry: { slug: string; prompt: string } | undefined;
+  // Resolve gates from the issue so they run inside the loop for the
+  // direct-exec path. The orchestrate path resolves them inside executeIssue.
+  const directGates: GateSpec[] | undefined =
+    directExec && itemSlug
+      ? resolveGates(issueToTaskPacket(findIssue(l, itemSlug)!), allCommands(l, { scriptsRoot: toolRoot }))
+      : undefined;
   if (directExec) {
     // Detached delegated child: one agent, directly. Its prompt is its spec.
     const role = (agentNameParsed ?? "engineer") as AgentName;
@@ -904,6 +909,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       skipMap,
       skillExcludes,
       signal: abort.signal,
+      ...(directGates ? { gates: directGates } : {}),
     });
   } else {
     result = await orchestrate({
@@ -972,9 +978,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Engineer runs are the finish line for an issue: gates, commit, and the
-  // directory move happen in the runner, not in the prompt. Without this a
-  // "completed" run could leave uncommitted work and the issue in todo/.
+  // Gates ran inside the loop (or inside executeIssue for the orchestrate
+  // path). If the result is "completed" the gates passed. Commit, merge, and
+  // move the issue through its lifecycle. If the direct-exec loop returned
+  // "blocked" with lastGateFailure, write it to the issue file here.
   if (
     result.status === "completed" &&
     itemSlug &&
@@ -983,103 +990,74 @@ export async function cmdRun(argv: string[]): Promise<number> {
   ) {
     const issue = findIssue(l, itemSlug);
     if (issue) {
-      const gateCommands = allCommands(l, { scriptsRoot: toolRoot });
-      const gateOutcome = await runGates(resolveGates(issueToTaskPacket(issue), gateCommands), {
-          root: toolRoot,
-          commands: gateCommands,
-        });
-        const gatesPassed = gateOutcome.passed;
-        recorder.event("gates", {
-          issue: issue.slug,
-          passed: gatesPassed,
-          results: gateOutcome.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
-        });
-        if (!gatesPassed) {
-          const attempt = gateFailureAttempts(issue.body) + 1;
-          appendIssueGateFailure(issue.path, gateFailureText(gateOutcome.results), attempt);
-          moveIssue(l, issue.slug, "failed-gates");
-          await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
-          result = {
-            ...result,
-            status: "blocked",
-            error: `acceptance gates failed: ${gateOutcome.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`,
-          };
+      let commit: string | null = null;
+      try {
+        commit = await ensureCommitted(
+          toolRoot,
+          recorder.current.baseRef,
+          `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
+        );
+      } catch (error) {
+        result = {
+          ...result,
+          status: "blocked",
+          error: `commit failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      if (!commit && result.status !== "blocked") {
+        const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
+        if (agentNameParsed === "research" && (outcome === "curated" || outcome === "done")) {
+          recorder.event("research_no_commit_expected", { outcome });
+        } else {
+          result = { ...result, status: "blocked", error: `${agentNameParsed} produced no committable change` };
         }
-      if (gatesPassed) {
-        let commit: string | null = null;
-        try {
-          commit = await ensureCommitted(
-            toolRoot,
-            recorder.current.baseRef,
-            `mc(${issue.slug}): ${issue.prompt}\n\nrun: ${recorder.id}\nissue: ${issue.slug}`,
-          );
-        } catch (error) {
-          result = {
-            ...result,
-            status: "blocked",
-            error: `commit failed: ${error instanceof Error ? error.message : String(error)}`,
-          };
-        }
-        if (!commit && result.status !== "blocked") {
-          // Curated references live in the machine store and docs answers
-          // may already exist — both outside the worktree, so no commit is
-          // expected. Only researched (new issues) must leave a commit.
-          const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
-          if (agentNameParsed === "research" && (outcome === "curated" || outcome === "done")) {
-            recorder.event("research_no_commit_expected", { outcome });
-          } else {
-            result = { ...result, status: "blocked", error: `${agentNameParsed} produced no committable change` };
-          }
-        } else if (commit) {
-          recorder.patchSummary({ commit });
-          recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
-          // Ideas move to researched (handled above when they produced
-          // issues); only features/bugs use the review states. But the
-          // research output still lives on the branch, so ideas merge the
-          // same way review-free features do — otherwise the created
-          // issues strand on an unmerged branch.
-          if (issue.kind === "ideas" || issue.review === "none" || flags.has("no-review")) {
-            const branch = recorder.current.branch;
-            if (branch) {
-              const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
-              if (merged.ok) {
-                recorder.event("branch_merged", { branch });
-                if (issue.kind !== "ideas") {
-                  moveIssue(l, issue.slug, "done");
-                  await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
-                }
-              } else {
-                if (issue.kind !== "ideas") {
-                  moveIssue(l, issue.slug, "blocked");
-                  await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${issue.slug}`);
-                }
-                result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
+      } else if (commit) {
+        recorder.patchSummary({ commit });
+        recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
+        if (issue.kind === "ideas" || issue.review === "none" || flags.has("no-review")) {
+          const branch = recorder.current.branch;
+          if (branch) {
+            const merged = await mergeBranch(l.repoRoot, toolRoot, branch);
+            if (merged.ok) {
+              recorder.event("branch_merged", { branch });
+              if (issue.kind !== "ideas") {
+                moveIssue(l, issue.slug, "done");
+                await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
               }
+            } else {
+              if (issue.kind !== "ideas") {
+                moveIssue(l, issue.slug, "blocked");
+                await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${issue.slug}`);
+              }
+              result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
             }
-          } else {
-            moveIssue(l, issue.slug, "needs-human-review");
-            await commitPlanningFiles(l, `[${kindTag(issue.kind)} NEEDS HUMAN REVIEW] ${issue.slug}`);
           }
+        } else {
+          moveIssue(l, issue.slug, "needs-human-review");
+          await commitPlanningFiles(l, `[${kindTag(issue.kind)} NEEDS HUMAN REVIEW] ${issue.slug}`);
         }
       }
     }
   }
-  // A gate failure gets a deterministic repair run with the issue's
-  // `## Gate failure` log. Stop after three attempts.
-  if (result.status === "blocked" && itemSlug && agentNameParsed === "engineer") {
-    const issue = findIssue(l, itemSlug);
-    if (issue?.status === "failed-gates" && gateFailureAttempts(issue.body) < 3) {
-      autoRetry = { slug: issue.slug, prompt: issue.prompt };
+  // Direct-exec loop with gate failure that exhausted its attempts. Write the
+  // failure to the issue file and move it to failed-gates. The orchestrate
+  // path handles this inside executeIssue.
+  if (result.status === "blocked" && itemSlug) {
+    const gateFail = (result as RunLoopResult).lastGateFailure;
+    if (gateFail && gateFail.length > 0) {
+      const issue = findIssue(l, itemSlug);
+      if (issue) {
+        appendIssueGateFailure(issue.path, gateFail, gateFailureAttempts(issue.body) + 1);
+        moveIssue(l, issue.slug, "failed-gates");
+        await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
+      }
     }
   }
   recorder.finalize(result.status, result.error, result.finalText);
   if (agentNameParsed === "research") {
-    // Research writes issues//knowledge in the main tree; commit
-    // them so the map stays the committed source of truth.
     await commitPlanningFiles(l, `[RESEARCH RUN] ${recorder.id.slice(-8)}`);
   }
   printRunOutcome(result, recorder);
-  // One-way notification on terminal state (M4).
   if (machine.notify.webhookUrl || machine.notify.command) {
     const { notify } = await import("../notify.js");
     await notify(machine.notify, {
@@ -1098,16 +1076,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
   process.stderr.write(
     `\nrun ${summary.id}: ${summary.status}${summary.stopReason && summary.stopReason !== "completed" ? ` (${summary.stopReason})` : ""} — ${summary.modelCalls} call(s), ${summary.usage.totalTokens} tokens, $${summary.cost.actual.toFixed(6)} actual\n`,
   );
-  if (autoRetry) {
-    const child = spawn(
-      process.execPath,
-      [process.argv[1]!, "run", "--agent", "engineer", "--item", autoRetry.slug],
-      { cwd: l.repoRoot, detached: true, stdio: "ignore" },
-    );
-    child.on("error", () => undefined);
-    child.unref();
-    process.stderr.write(`gate retry ${autoRetry.slug} started with the failure log\n`);
-  }
   return EXIT[result.status];
 }
 

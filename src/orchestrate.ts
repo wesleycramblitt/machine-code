@@ -18,11 +18,10 @@ import { type CatalogueRow } from "./catalogue/types.js";
 import { RunRecorder, type RunStatus } from "./state/runs.js";
 import { runCommand } from "./commands/registry.js";
 import type { TaskPacket } from "./packet.js";
-import { gateFailureText, resolveGates, runGates } from "./verify.js";
+import { resolveGates } from "./verify.js";
 import { allCommands } from "./commands/registry.js";
 import { loadAvailability } from "./availability.js";
 import { commitWorktree } from "./worktree.js";
-import { ProcessSupervisor } from "./processes/supervisor.js";
 import { assembleContext, type ContextInclude } from "./context/assemble.js";
 import { defaultSkillsFor } from "./context/references.js";
 import { buildRepoMap } from "./map/deterministic.js";
@@ -104,6 +103,8 @@ export async function singleAgentRun(input: {
   seedFiles?: string[];
   skipMap?: boolean;
   signal?: AbortSignal;
+  /** Gates to run inline after the agent finishes (loop-owned retry). */
+  gates?: import("./verify.js").GateSpec[];
 }): Promise<RunLoopResult> {
   return runLoop({
     models: input.models,
@@ -127,6 +128,7 @@ export async function singleAgentRun(input: {
     ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
     skipMap: input.skipMap,
     signal: input.signal,
+    ...(input.gates ? { gates: input.gates } : {}),
   });
 }
 
@@ -251,6 +253,12 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
   const buildRequest =
     `Implement this issue exactly:\n\n${JSON.stringify(packet, null, 2)}\n\n` +
     "Acceptance commands must pass. If the issue is wrong or a gate cannot run, report blocked with evidence.";
+
+  // Resolve gates upfront and pass them into the loop so they run inline:
+  // the agent finishes → loop runs gates → if they fail the output is fed
+  // back to the model for repair — all within the same run.
+  const gates = resolveGates(packet, gateCommands);
+
   const engineerResult = await singleAgentRun({
     models: input.models,
     catalogue: input.catalogue,
@@ -275,16 +283,42 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     ...(seedFiles.length > 0 ? { seedFiles: [...new Set(seedFiles)] } : {}),
     skipMap: input.skipMap,
     signal: input.signal,
+    gates,
   });
   if (
     engineerResult.status === "failed" ||
-    engineerResult.status === "blocked" ||
     engineerResult.status === "interrupted" ||
     engineerResult.status === "cancelled" ||
     engineerResult.status === "paused"
   ) {
     return { status: engineerResult.status, finalText: engineerResult.finalText, error: engineerResult.error, packet, runId: recorder.id };
   }
+  // Blocked from gates or other non-retryable reasons. When gates exhausted,
+  // the loop returns the last failure text for the caller to append.
+  if (engineerResult.status === "blocked") {
+    if (engineerResult.lastGateFailure) {
+      const failedIssue = findIssue(layout, packet.id);
+      if (failedIssue) {
+        appendIssueGateFailure(
+          failedIssue.path,
+          engineerResult.lastGateFailure,
+          gateFailureAttempts(failedIssue.body) + 1,
+        );
+        moveIssue(layout, packet.id, "failed-gates");
+        await commitPlanningFiles(layout, `[${kindTag(failedIssue.kind)} FAILED GATES] ${packet.id}`);
+      } else {
+        moveIssue(layout, packet.id, "failed-gates");
+      }
+    }
+    return {
+      status: "blocked",
+      finalText: engineerResult.finalText,
+      error: engineerResult.error,
+      packet,
+      runId: recorder.id,
+    };
+  }
+  // engineerResult.status is "completed" — gates passed inside the loop.
   const buildOutcome = parseBuildOutcome(engineerResult.finalText);
   recorder.event("build_outcome", {
     outcome: buildOutcome ?? "completed",
@@ -300,51 +334,13 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     };
   }
 
-  const gates = resolveGates(packet, gateCommands);
-  const gateProcesses = new ProcessSupervisor({
-    runId: recorder.id,
-    runDir: recorder.dir,
-    onEvent: (type, data) => recorder.event(type, data),
-  });
-  const gateOutcome = await runGates(gates, { root: toolRoot, commands: gateCommands, processes: gateProcesses });
-  recorder.event("gates", {
-    packet: packet.id,
-    passed: gateOutcome.passed,
-    results: gateOutcome.results.map((result) => ({
-      command: result.command,
-      passed: result.passed,
-      durationMs: result.durationMs,
-    })),
-  });
-  if (!gateOutcome.passed) {
-    const failedIssue = findIssue(layout, packet.id);
-    if (failedIssue) {
-      appendIssueGateFailure(
-        failedIssue.path,
-        gateFailureText(gateOutcome.results),
-        gateFailureAttempts(failedIssue.body) + 1,
-      );
-      moveIssue(layout, packet.id, "failed-gates");
-      await commitPlanningFiles(layout, `[${kindTag(failedIssue.kind)} FAILED GATES] ${packet.id}`);
-    } else {
-      moveIssue(layout, packet.id, "failed-gates");
-    }
-    return {
-      status: "blocked",
-      finalText: engineerResult.finalText,
-      error: `acceptance gates failed: ${gateOutcome.results.filter((result) => !result.passed).map((result) => result.command).join(", ")}`,
-      packet,
-      runId: recorder.id,
-    };
-  }
-
   let commit: string | undefined;
   if (toolRoot !== root) {
     const message =
       `mc(${packet.id}): ${packet.goal}\n\n` +
       `run: ${recorder.id}\n` +
       `issue: ${packet.id}`;
-    const committed = await commitWorktree({ path: toolRoot, message, processes: gateProcesses });
+    const committed = await commitWorktree({ path: toolRoot, message });
     if (committed.sha) {
       commit = committed.sha;
       recorder.patchSummary({ commit });

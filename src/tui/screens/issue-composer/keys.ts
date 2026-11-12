@@ -121,7 +121,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
-  if (data === "e" || data === "p") { s.newIssueInsert = true; ctx.draw(); return true; }
+  if (data === "e") { s.newIssueInsert = true; ctx.draw(); return true; }
   if (data === "k") {
     const idx = KIND_CYCLE.indexOf(s.newIssue.kind);
     s.newIssue.kind = KIND_CYCLE[(idx + 1) % KIND_CYCLE.length]!;
