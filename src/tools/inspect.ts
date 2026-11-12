@@ -301,7 +301,24 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           return ok(artifact ? `${capped.text}\n\n[artifact: ${artifact.id}]` : capped.text);
         }
 
-        // Mode 3 — directory listing, by query or by path scope.
+        // Mode 3 — glob pattern: query contains glob characters.
+        const GLOB_RE = /[*?{}\[\]]/;
+        if (!anchor && !queryIsFile && GLOB_RE.test(query) && query.length >= 3) {
+          const { runProc } = await import("../proc.js");
+          const { excludeGlobs, globToRegExp, expandGlobBraces } = await import("./safety.js");
+          const matchers = expandGlobBraces(query).map((g) => globToRegExp(g));
+          const rgResult = await runProc("rg", ["--files", ...excludeGlobs()], { cwd: ctx.root, timeoutMs: 30_000 });
+          if (rgResult.outcome === "exit" && (rgResult.code === 0 || rgResult.code === 1)) {
+            const allFiles = rgResult.stdout.trim().split("\n").filter(Boolean);
+            const matched = allFiles.filter((file) => matchers.some((m) => m.test(file)));
+            const text = matched.length > 0 ? matched.join("\n") : `no files match "${query}"`;
+            const envelope = `<inspect query="${query}" mode="find" match="path">\n${text}\n</inspect>`;
+            const artifact = ctx.state?.putArtifact(envelope);
+            return ok(artifact ? `${envelope}\n\n[artifact: ${artifact.id}]` : envelope);
+          }
+        }
+
+        // Mode 4 — directory listing, by query or by path scope.
         const dirCandidate = scope ?? (!queryIsFile && !anchor ? query : undefined);
         if (dirCandidate) {
           try {

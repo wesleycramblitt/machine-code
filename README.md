@@ -582,11 +582,11 @@ availability, and approval mode. The tools line is the exact post-filter list,
 so a role never sees a tool it cannot call. When `ask` is unavailable, the
 ambiguity policy says to stop and report the question instead of asking.
 
-Research holds only `context`, `inspect`, `map`, `glob`, `ask`,
+Research holds only `context`, `inspect`, `glob`, `ask`,
 `skill`, `write`, `todo`, and `finish`. It reads one idea, asks until the
 scope is precise, and writes concrete features/bugs as issue files under
 `issues/features/todo/` or `issues/bugs/todo/`. Engineer holds `context`,
-`inspect`, `write`, `edit`, `map`, `glob`, `ask`, `artifact`, `skill`,
+`inspect`, `write`, `edit`, `glob`, `ask`, `artifact`, `skill`,
 `todo`, and `finish`; it edits in one run in a `mc/<slug>` worktree and never
 runs build/test scripts. Review is read-only, holds `finish`, and judges the
 same worktree and commit the Engineer used.
@@ -602,7 +602,7 @@ The file tools are deliberately split, close to Claude Code's model:
   `allow_large: true`. Use `offset`/`limit` to page.
 - `glob { "pattern": "src/**/*.ts" }` lists paths.
 - `inspect { query: "GRAY", regex: true }` is plain ripgrep through the inspect tool (regex mode).
-- `map` is code-structure search: `overview`, `outline`, `symbols`, `locate`,
+- `inspect` is code query: file reads, symbol search, keywords, glob patterns, and regex (use `regex: true` for ripgrep). `glob` lists files by pattern for discovery. `inspect {query: "src/"}` gives a directory overview; `inspect {query: "src/file.ts", detail: "outline"}` gives its symbols.
   `references`, `definition`, `info`, `semantic`, `graph`, `sections`, and
   `structural`. Use it for where code lives and how it connects, not raw text.
 - Basic filesystem work is typed commands, not a shell: `core:mkdir`,

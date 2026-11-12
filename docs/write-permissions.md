@@ -75,7 +75,7 @@ capabilities = ["code:read", "context:inherit", "code:write", "artifact:provisio
 
 ## Read access
 
-There is no per-agent read-path restriction. The `read`, `map`, `search`,
+There is no per-agent read-path restriction. The `inspect`, `glob`,
 `glob` and `inspect` tools are controlled by capabilities (`code:read`), not by
 path allowlists. An agent with `code:read` can read any file in the worktree
 (except secrets). If you need read-scoped agents, add it.

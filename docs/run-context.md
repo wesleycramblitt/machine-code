@@ -69,11 +69,8 @@ A deterministic cache of structural facts about the repo: file paths, languages,
 line counts, top-level symbols with line ranges, import edges, and doc headers.
 
 The map is a **back-end index**, not rendered in the prompt. It powers:
-- `inspect {query}` — one call for path, `path:line` anchor, symbol name, or
-  free keywords; match kind (symbol | path | keyword | regex) named per file
-- `map overview` — directory listing with symbol counts
-- `map outline` — one file's top-level symbols
-- `map sections` — comment banners inside large files
+- `inspect {query}` — one call for path, `path:line` anchor, symbol name,
+  free keywords, glob pattern, or regex; match kind named per file
 
 The map rebuilds asynchronously after each changed turn with coalescing.
 
