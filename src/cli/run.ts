@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueVerification, findIssue, gateFailureAttempts, kindTag, moveIssue, writeIssue } from "../plan/issues.js";
-import { enrichHints, renderHints, suggestHints, suggestionText, withKeywordTerms } from "../map/suggest.js";
+import { suggestHints, suggestTaskFilesFromMap, suggestionText, withKeywordTerms } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket } from "../tasks/issue.js";
@@ -358,16 +358,17 @@ export async function cmdRun(argv: string[]): Promise<number> {
     contextInclude = contextInclude ?? {};
     contextInclude.files = [...new Set([...(contextInclude.files ?? []), attachedIssue.rel])];
   }
-  // Suggestions are context files. Attach them unless the run names its own
-  // files; the composer shows the same suggestions and lets the user choose
-  // instead. Hints send structure (symbols + matched terms), not dumps:
-  // files under 4KB inline whole, the rest travel as outlines the model
-  // pulls one block at a time. No second `## Context` prompt block.
+  // Suggestions are context files. Small ones inline whole into the run's
+  // file set (and become seeded holdings); everything else stays on demand —
+  // one inspect call runs the same ranker and returns the evidence denser,
+  // stored as artifacts. Outlines are not baked into the prompt: the model
+  // would hold bytes the holdings tracker never saw, and every turn would
+  // re-send them. No second `## Context` prompt block.
   // Suggestion file list, computed up front and recorded once the recorder
   // exists below. Best effort; the run still has the issue without it.
   let suggestedFiles: string[] = [];
+  let hintRanges: Array<{ path: string; start: number; end: number }> = [];
   let builtMapFiles = 0;
-  let hintOutlines = "";
   const hintsOn = flags.get("hints") !== "false";
   if (!explicitFileInclude && hintsOn) {
     try {
@@ -381,16 +382,43 @@ export async function cmdRun(argv: string[]): Promise<number> {
         map: builtMap.map,
         request: suggestionRequest,
         repoRoot: l.repoRoot,
-        limit: 3,
+        limit: 5,
         ...(attachedIssue?.rel ? { exclude: [attachedIssue.rel] } : {}),
       });
       suggestedFiles = hints.map((hint) => hint.path);
+      // Hint symbols pre-fill the living map: their ranges register as
+      // unsent holdings, so turn 1 carries their bodies as deltas.
+      for (const hint of hints) {
+        for (const symbol of hint.symbols.slice(0, 3)) {
+          if (symbol.start >= 1 && symbol.end >= symbol.start && hintRanges.length < 12) {
+            hintRanges.push({ path: hint.path, start: symbol.start, end: symbol.end });
+          }
+        }
+      }
       const smallFiles = hints.filter((hint) => hint.small).map((hint) => hint.path);
+      // Small high-rank files just below the outline cut still inline whole:
+      // a keys/types sibling (often <4KB) rides along instead of costing a
+      // discovery pass. Ranked once, capped, exclusion-aware.
+      try {
+        const { statSync } = await import("node:fs");
+        const ranked = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 10);
+        for (const entry of ranked) {
+          if (smallFiles.includes(entry.path) || suggestedFiles.includes(entry.path)) continue;
+          if (attachedIssue?.rel && entry.path === attachedIssue.rel) continue;
+          try {
+            if (statSync(join(l.repoRoot, entry.path)).size < 4 * 1024) smallFiles.push(entry.path);
+          } catch {
+            // missing — skip
+          }
+          if (smallFiles.length >= 5) break;
+        }
+      } catch {
+        // Best effort; the inlined small files above still apply.
+      }
       if (smallFiles.length > 0) {
         contextInclude = contextInclude ?? {};
         contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...smallFiles])];
       }
-      hintOutlines = renderHints(enrichHints(hints, l.repoRoot));
     } catch {
       // Suggestions are best effort; the run still has the issue.
     }
@@ -401,6 +429,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
     contextBudgetChars = Number(contextBudgetFlag);
     if (!Number.isFinite(contextBudgetChars) || contextBudgetChars <= 0) {
       fail("--context-budget needs a positive character count");
+    }
+  }
+  const holdingsBudgetFlag = flags.get("holdings-budget");
+  let holdingsMaxChars: number | undefined;
+  if (holdingsBudgetFlag !== undefined) {
+    holdingsMaxChars = Number(holdingsBudgetFlag);
+    if (!Number.isFinite(holdingsMaxChars) || holdingsMaxChars <= 0) {
+      fail("--holdings-budget needs a positive character count");
     }
   }
   // Composer per-skill mode overrides: {"clean-code":"include",...}.
@@ -827,15 +863,16 @@ export async function cmdRun(argv: string[]): Promise<number> {
     writeJsonAtomic(join(recorder.dir, "context.json"), { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings, sections: contextBundle.sections });
     recorder.event("context_assembled", { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
   }
-  const contextText =
-    [contextBundle.text, hintOutlines].filter((part): part is string => Boolean(part)).join("\n\n") ||
-    undefined;
-  // Pin the assembled file sources into the working set so the first prompt
+  const contextText = contextBundle.text || undefined;
+  // Pin the assembled file sources as seeded holdings so the first prompt
   // already carries the code the run is about, instead of the model paging
   // for it over several turns.
   const seedFiles = contextBundle.sources
     .filter((source) => source.kind === "file" && typeof source.ref === "string")
     .map((source) => source.ref as string);
+  const seedRanges = hintRanges
+    .filter((entry) => !seedFiles.includes(entry.path))
+    .map((entry) => ({ path: entry.path, range: [entry.start, entry.end] as [number, number] }));
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -926,11 +963,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
       home: l.home,
       availability: loadAvailability(l.home),
       recorder,
-      commands: allCommands(l),
+      commands: allCommands(l, { scriptsRoot: toolRoot }),
       requireProvider,
       requireModel,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
+      ...(seedRanges.length > 0 ? { seedRanges } : {}),
+      ...(holdingsMaxChars !== undefined ? { holdingsMaxChars } : {}),
       skipMap,
       skillExcludes,
       signal: abort.signal,
@@ -960,11 +999,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
       home: l.home,
       availability: loadAvailability(l.home),
       recorder,
-      commands: allCommands(l),
+      commands: allCommands(l, { scriptsRoot: toolRoot }),
       requireProvider,
       requireModel,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
+      ...(seedRanges.length > 0 ? { seedRanges } : {}),
+      ...(holdingsMaxChars !== undefined ? { holdingsMaxChars } : {}),
       skipMap,
       skillExcludes,
       signal: abort.signal,
@@ -1241,7 +1282,6 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
 
   const runtime = await loadRuntime(l2);
   const { machine, models, catalogue, configuredProviders } = runtime;
-  const commands = allCommands(l2);
 
   // Worktree: reuse, recreate from branch, or (with --recreate) start fresh.
   let toolRoot = l2.repoRoot;
@@ -1261,6 +1301,8 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   }
 
   const gateCommands = allCommands(l2, { scriptsRoot: toolRoot });
+  // The agent and the gates share one map so script:* resolves for both.
+  const commands = allCommands(l2, { scriptsRoot: toolRoot });
   const recorder = RunRecorder.reopen(l2, s);
   recorder.setStatus("running", "resume");
   recorder.patchSummary({ pid: process.pid });

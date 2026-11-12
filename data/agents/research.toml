@@ -4,7 +4,7 @@
 
 name = "research"
 order = 1
-tools = ["context", "inspect", "read", "map", "glob", "grep", "search", "command", "ask", "skill", "write", "finish"]
+tools = ["context", "inspect", "map", "glob", "grep", "command", "ask", "skill", "write", "finish"]
 readonly = false
 modes = []
 blurb = "Turn ideas into curated references, documents, and/or features/bugs"

@@ -11,6 +11,7 @@ import { dirname, resolve } from "node:path";
 import { runProc } from "../proc.js";
 import { COMMAND_CAP_BYTES, capText, isSecretPath, resolveWithin, toRelative } from "../tools/safety.js";
 import { referenceCommands } from "./reference.js";
+import { runCommands } from "./runs.js";
 import { scriptCommands } from "./scripts.js";
 import type { Layout } from "../paths.js";
 
@@ -425,6 +426,7 @@ export function allCommands(
 ): Map<string, CommandSpec> {
   const out = new Map<string, CommandSpec>(CORE_COMMANDS);
   for (const [k, v] of referenceCommands(layout)) out.set(k, v);
+  for (const [k, v] of runCommands(layout)) out.set(k, v);
   if (options.scriptsRoot) {
     for (const [k, v] of scriptCommands(options.scriptsRoot)) out.set(k, v);
   }

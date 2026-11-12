@@ -2,12 +2,13 @@
  * machine_code — render the model prompt from run state + the current step.
  *
  * The prompt is the system prompt, the assembled task context, a compact state
- * block, current working-file content, and the transcript as a call ledger:
- * recent tool payloads in full, older bulk summarized with a re-fetch path.
- * Full bytes live in the run ledger and the assembled context, both
- * re-readable; replaying every dump every turn is what made long runs cost
- * millions of tokens. The last few results stay verbatim so the current
- * step's evidence is always intact.
+ * block, current holdings (inventory always, new/changed bytes only), and the
+ * transcript as a call ledger: recent tool payloads in full, older bulk
+ * summarized with a re-fetch path.
+ * Full bytes live in artifacts, holdings re-read them from disk when they
+ * change, and the assembled context carries the seeds; replaying every dump
+ * every turn is what made long runs cost millions of tokens. The last few
+ * results stay verbatim so the current step's evidence is always intact.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
@@ -181,21 +182,26 @@ export function renderPromptMessages(
   startupContext?: string,
   overviewMaxChars?: number,
   commandIndex?: string,
+  holdingsMaxChars = 12_000,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
-  //   system → assembled context → tool guide → command index
-  //     → transcript → workspace → run state.
+  //   system → assembled context → map index → tool guide → command index
+  //     → transcript → workspace → holdings → run state.
   // The stable prefix renders before the transcript so it stays byte-identical
-  // across turns. The map index was removed from the stable prefix in Phase 4;
-  // the model requests what it needs via inspect, map overview, or read.
-  // The per-turn workspace and run state sit *after* the transcript so they
+  // across turns. The ~1KB map index names every directory with file counts;
+  // deeper structure pulls via inspect or map overview.
+  // The per-turn holdings and run state sit *after* the transcript so they
   // never shift the cache prefix.
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
-  const stable = [startup, guide, commandIndex].filter(Boolean).join("\n\n");
-  const volatile = [state.renderWorkspace(), state.renderBlock()].filter(Boolean).join("\n\n");
+  const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
+  const volatile = [
+    state.renderWorkspace(),
+    state.renderHoldings(holdingsMaxChars),
+    state.renderBlock(),
+  ].filter(Boolean).join("\n\n");
   const out = [
     ...(system ? [system] : []),
     ...(stable ? [{ role: "user", content: stable, timestamp: Date.now() } as MessageLike] : []),
