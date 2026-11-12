@@ -2,14 +2,16 @@
  * machine_code — issue composer render.
  *
  * Layout (top to bottom):
- *   Tags[t]:       (editable line, only when content or editing)
- *   Keywords[w]:   (editable line, only when content or editing)
- *   Depends[d]:    (editable line, only when content or editing)
+ *   Tags[t]:           (editable line, only when content or editing)
+ *   Keywords[w]:       (editable line, only when content or editing)
+ *   Depends[d]:        (editable line, only when content or editing)
+ *   Acceptance Gates[a]: (editable line, only when content or editing, features/bugs only)
  *   ┌─ bordered prompt box ─┐  (first line: "e Edit body" placeholder)
  *   └───────────────────────┘
  *   k Kind  p Priority                                 Create[:!]
  *
- * Back[Esc] is in the chrome header (red background).
+ * The content is pushed near the bottom of the screen. Back[Esc] is in
+ * the chrome header (red background).
  */
 import {
   B, C, D, G, GR, M, R, RED, W, Y, START_BG, WHITE,
@@ -32,15 +34,20 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const boxWidth = Math.max(20, cols - 2);
   const inner = Math.max(12, boxWidth - 2);
 
+  // Estimate total content height so we can push it near the bottom
+  const contentLines: string[] = [];
+
   // ── Editable text fields above the prompt ──
   const showTags = settings.tags.trim() || fieldEdit === "tags";
   const showKeywords = settings.keywords.trim() || fieldEdit === "keywords";
   const showDepends = settings.depends.trim() || fieldEdit === "depends";
+  const showAcceptance = (settings.acceptance.trim() || fieldEdit === "acceptance") && settings.kind !== "ideas";
 
-  if (showTags) body.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
-  if (showKeywords) body.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
-  if (showDepends) body.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
-  if (showTags || showKeywords || showDepends) body.push("");
+  if (showTags) contentLines.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
+  if (showKeywords) contentLines.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
+  if (showDepends) contentLines.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
+  if (showAcceptance) contentLines.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance", cols));
+  if (showTags || showKeywords || showDepends || showAcceptance) contentLines.push("");
 
   // ── Prompt box ──
   const promptText = settings.prompt;
@@ -58,15 +65,14 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const promptHeight = Math.max(3, Math.min(12, Math.floor(bodyH * 0.45)));
   const shownPrompt = displayLines.slice(-promptHeight);
 
-  const promptBox = [
+  contentLines.push(
     ` ${D}┌${"─".repeat(inner)}┐${R}`,
     ...shownPrompt.map((line) => ` ${D}│${R} ${W}${fit(line, inner - 2)}${R} ${D}│${R}`),
     ...Array.from({ length: Math.max(0, promptHeight - shownPrompt.length) }, () => ` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`),
     ` ${D}└${"─".repeat(inner)}┘${R}`,
-  ];
-  body.push(...promptBox);
+  );
 
-  // ── Kind + Priority (left) · Create (right) — on the same line below the box ──
+  // ── Bottom bar: Kind + Priority (left) · Create[:!] (right) ──
   const kindColor = settings.kind === "ideas" ? C : settings.kind === "features" ? G : RED;
   const kindLabel = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
   const kindToken = command("k", "Kind", kindLabel, kindColor);
@@ -75,14 +81,9 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const priorityLabel = settings.priority.charAt(0).toUpperCase() + settings.priority.slice(1);
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
-  // Build the left side: kind + priority + acceptance + verification
   const leftTokens = [kindToken, priorityToken];
 
   if (settings.kind !== "ideas") {
-    const accLabel = settings.acceptance.trim() ? trunc(settings.acceptance, 28) : "none";
-    const accToken = command("a", "Accept", accLabel, M);
-    leftTokens.push(accToken);
-
     const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
     const verColor = settings.verification === "verified" ? G : D;
     leftTokens.push(command("v", "Verify", verLabel, verColor));
@@ -91,13 +92,19 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const leftSide = joinCommands(leftTokens);
   const createBadge = commandBadge("Create", ":!", START_BG, WHITE);
   const padWidth = Math.max(1, boxWidth - visible(leftSide) - visible(createBadge) - 2);
-  body.push(` ${leftSide}${" ".repeat(padWidth)}${createBadge}`);
+  contentLines.push(` ${leftSide}${" ".repeat(padWidth)}${createBadge}`);
 
-  // Fill to bodyH
+  // ── Push content near the bottom ──
+  const contentHeight = contentLines.length;
+  const padLines = Math.max(0, bodyH - contentHeight - 1); // -1 for breathing room
+  for (let i = 0; i < padLines; i++) body.push("");
+  body.push(...contentLines);
+
+  // Fill rest
   while (body.length < bodyH) body.push("");
 
-  // ── Footer is minimal — Back[Esc] is in the header bar ──
-  const actions = "";
+  // ── Footer: space to suppress default actions (1-4, q) ──
+  const actions = " ";
 
   return {
     body: clipLines(body, bodyH),
