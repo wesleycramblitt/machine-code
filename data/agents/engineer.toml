@@ -13,11 +13,7 @@ ambiguity = "precise"
 capabilities = ["code:read", "context:inherit", "code:write", "artifact:provision"]
 
 [weights]
-# Code ability dominates: ling-3.1-flash (code=5.64, agentic=8.51) fits
-# 7.08 under these defaults but produces zero edits in practice, while
-# DeepSeek V4 Flash (code=7.21) finishes the same task in 2 calls.
-# Higher code weight picks models that can actually write code.
-code = 0.7
-agentic = 0.10
-reasoning = 0.15
-general = 0.05
+code = 0.4
+agentic = 0.2
+reasoning = 0.2
+general = 0.2
