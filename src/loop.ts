@@ -1139,6 +1139,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             return { action: "end" as const };
           }
         }
+        // Model call cap: prevent runaway costs. Check after the turn cap so
+        // the more specific limit fires first. The cap is against the
+        // recorder's cumulative count so it spans provider retries too.
+        const maxCalls = input.maxCalls ?? MAX_CALLS;
+        if (maxCalls > 0 && recorder.current.modelCalls >= maxCalls) {
+          const wantsMore = message.content.some((block) => block.type === "toolCall");
+          if (wantsMore) {
+            modelCallCapHit = true;
+            recorder.event("model_call_cap", { calls: recorder.current.modelCalls, maxCalls });
+            return { action: "end" as const };
+          }
+        }
         return undefined;
       },
     });
@@ -1363,127 +1375,197 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       input.signal?.removeEventListener("abort", onExternalAbort);
     }
 
+    // --- Determine the agent's reported status ---
+    // The finish-tool path and the natural-stop path converge into a single
+    // status variable so that gates (below) can intercept "completed" and
+    // either drive a repair iteration or fall through to the final return.
+
     const finished = finishRequested as FinishRequest | null;
-    if (finished) {
-      return { status: finished.outcome, finalText: finished.summary };
-    }
-
-    // Some providers (notably weak free fallbacks) return tool-call markup as
-    // ordinary text. The agent sees no toolCall block and stops. Do not treat
-    // that as a final answer: cool the model and rotate to another one.
-    const malformed = lastAssistant as AssistantMessage | undefined;
-    const malformedText = assistantText(malformed);
-    const toolArgText = (malformed?.content ?? [])
-      .map((block) =>
-        block.type === "toolCall"
-          ? JSON.stringify((block as { arguments?: unknown }).arguments ?? {})
-          : "",
-      )
-      .filter(Boolean)
-      .join("\n");
-    const hasNativeToolCall = malformed?.content.some((block) => block.type === "toolCall") ?? false;
-    const badArgs = toolArgText.length > 0 && hasToolCallMarkup(toolArgText);
-    // A serialized-args defect that was repaired and executed is not a failed
-    // response. Only an unresolved one rotates the model.
-    const unrepairedSerialized = [...serializedArgCalls].some((id) => !successfulToolCalls.has(id));
-    if (
-      malformed &&
-      malformed.stopReason !== "error" &&
-      malformed.stopReason !== "aborted" &&
-      (badArgs || unrepairedSerialized || (!hasNativeToolCall && hasToolCallMarkup(malformedText)))
-    ) {
-      const provider = currentRow?.providerID ?? malformed.provider;
-      const failedKey = currentRow?.key ?? `${malformed.provider}/${malformed.model}`;
-      const message = unrepairedSerialized
-        ? `model ${failedKey} returned malformed tool arguments`
-        : badArgs
-          ? `model ${failedKey} returned provider markup inside tool arguments`
-          : `model ${failedKey} returned tool-call markup as plain text`;
-      triedModels.add(failedKey);
-      relaxPin(failedKey, provider);
-      lastFailure = message;
-      try {
-        const classified = classifyError(new Error(`malformed response: ${message}`));
-        applyErrorState(provider, failedKey, classified);
-        recorder.event("error_classified", {
-          kind: classified.kind,
-          target: classified.target,
-          retryable: classified.retryable,
-          disableProvider: classified.disableProvider,
-          needsAuth: classified.needsAuth,
-        });
-      } catch {
-        // availability update failure must not stop rotation
-      }
-      recorder.event("malformed_tool_call", {
-        provider,
-        model: failedKey,
-        text: `${malformedText}\n${toolArgText}`.trim().slice(0, 1_000),
-      });
-      recorder.event("retry", {
-        failedModel: failedKey,
-        kind: "malformed",
-        attempt: triedModels.size,
-      });
-      continue;
-    }
-
-    const la2 = lastAssistant as AssistantMessage | undefined;
-    let finalText = assistantText(la2);
-    const stop = la2?.stopReason;
-    let status: RunLoopResult["status"] = "completed";
+    let finalText: string;
+    let status: RunLoopResult["status"];
     let error: string | undefined;
-    if (cancelRequested) {
-      status = "cancelled";
-    } else if (pauseRequested) {
-      status = "paused";
-    } else if (input.signal?.aborted) {
-      status = "interrupted";
-    } else if (budgetExhausted) {
-      status = "blocked";
-      error = `token budget exhausted (${(input.fullPolicy?.agents?.[input.agent.name])?.budgetTokens ?? "unknown"})`;
-    } else if (turnCapHit) {
-      status = "blocked";
-      error = `turn cap reached (${maxTurns}) before the run finished`;
-    } else if (stop === "aborted") {
-      status = "interrupted";
-    } else if (stop === "error") {
-      status = "failed";
-      error = la2?.errorMessage ?? "provider error";
+    // lastGateFailure is set below when gate attempts exhaust; the caller
+    // uses it to write the failure log into the issue file.
+    let lastGateFailure: string | undefined;
+
+    if (finished) {
+      // The finish tool reported an outcome directly.
+      status = finished.outcome;
+      finalText = finished.summary;
+      // Do not return yet — gates may intercept "completed".
+    } else {
+      // Some providers (notably weak free fallbacks) return tool-call markup as
+      // ordinary text. The agent sees no toolCall block and stops. Do not treat
+      // that as a final answer: cool the model and rotate to another one.
+      const malformed = lastAssistant as AssistantMessage | undefined;
+      const malformedText = assistantText(malformed);
+      const toolArgText = (malformed?.content ?? [])
+        .map((block) =>
+          block.type === "toolCall"
+            ? JSON.stringify((block as { arguments?: unknown }).arguments ?? {})
+            : "",
+        )
+        .filter(Boolean)
+        .join("\n");
+      const hasNativeToolCall = malformed?.content.some((block) => block.type === "toolCall") ?? false;
+      const badArgs = toolArgText.length > 0 && hasToolCallMarkup(toolArgText);
+      // A serialized-args defect that was repaired and executed is not a failed
+      // response. Only an unresolved one rotates the model.
+      const unrepairedSerialized = [...serializedArgCalls].some((id) => !successfulToolCalls.has(id));
+      if (
+        malformed &&
+        malformed.stopReason !== "error" &&
+        malformed.stopReason !== "aborted" &&
+        (badArgs || unrepairedSerialized || (!hasNativeToolCall && hasToolCallMarkup(malformedText)))
+      ) {
+        const provider = currentRow?.providerID ?? malformed.provider;
+        const failedKey = currentRow?.key ?? `${malformed.provider}/${malformed.model}`;
+        const message = unrepairedSerialized
+          ? `model ${failedKey} returned malformed tool arguments`
+          : badArgs
+            ? `model ${failedKey} returned provider markup inside tool arguments`
+            : `model ${failedKey} returned tool-call markup as plain text`;
+        triedModels.add(failedKey);
+        relaxPin(failedKey, provider);
+        lastFailure = message;
+        try {
+          const classified = classifyError(new Error(`malformed response: ${message}`));
+          applyErrorState(provider, failedKey, classified);
+          recorder.event("error_classified", {
+            kind: classified.kind,
+            target: classified.target,
+            retryable: classified.retryable,
+            disableProvider: classified.disableProvider,
+            needsAuth: classified.needsAuth,
+          });
+        } catch {
+          // availability update failure must not stop rotation
+        }
+        recorder.event("malformed_tool_call", {
+          provider,
+          model: failedKey,
+          text: `${malformedText}\n${toolArgText}`.trim().slice(0, 1_000),
+        });
+        recorder.event("retry", {
+          failedModel: failedKey,
+          kind: "malformed",
+          attempt: triedModels.size,
+        });
+        continue;
+      }
+
+      const la2 = lastAssistant as AssistantMessage | undefined;
+      finalText = assistantText(la2);
+      const stop = la2?.stopReason;
+      status = "completed";
+      if (cancelRequested) {
+        status = "cancelled";
+      } else if (pauseRequested) {
+        status = "paused";
+      } else if (input.signal?.aborted) {
+        status = "interrupted";
+      } else if (budgetExhausted) {
+        status = "blocked";
+        error = `token budget exhausted (${(input.fullPolicy?.agents?.[input.agent.name])?.budgetTokens ?? "unknown"})`;
+      } else if (turnCapHit) {
+        status = "blocked";
+        error = `turn cap reached (${maxTurns}) before the run finished`;
+      } else if (modelCallCapHit) {
+        status = "blocked";
+        error = `model call cap reached (${input.maxCalls ?? MAX_CALLS}) before the run finished`;
+      } else if (stop === "aborted") {
+        status = "interrupted";
+      } else if (stop === "error") {
+        status = "failed";
+        error = la2?.errorMessage ?? "provider error";
+      }
+
+      if (!finalText.trim() && currentModel && (turnCapHit || budgetExhausted || modelCallCapHit)) {
+        const reason = modelCallCapHit
+          ? "You have reached the model call cap."
+          : turnCapHit
+            ? "You have reached the turn cap."
+            : "The token budget is exhausted.";
+        finalText = await finalAnswer(currentModel, reason);
+      }
+
+      // An empty stop is not a completed run. This happens when a provider
+      // returns an empty assistant message after tool errors; the old loop
+      // marked it `completed` with no answer.
+      if (status === "completed" && !finalText.trim()) {
+        status = "blocked";
+        error = "model returned an empty final response";
+      } else if (status === "completed" && toolErrors >= 2 && substantiveSuccesses === 0) {
+        // Schema errors and memory-only reads are not work. Do not report a
+        // completed outcome when every substantive call was rejected.
+        status = "blocked";
+        error = "tool calls were rejected; no work completed";
+      } else if (
+        status === "completed" &&
+        wantsChange &&
+        !hasActiveChange() &&
+        !hasTerminalLine(finalText)
+      ) {
+        // Prose is not a deliverable. A writable role that stopped
+        // mid-investigation without touching a file is blocked, not done. A
+        // clear terminal answer (Result:/Outcome:) is left alone.
+        status = "blocked";
+        error = "completed without making the requested change";
+      }
     }
 
-    if (!finalText.trim() && currentModel && (turnCapHit || budgetExhausted)) {
-      const reason = turnCapHit
-        ? "You have reached the turn cap."
-        : "The token budget is exhausted.";
-      finalText = await finalAnswer(currentModel, reason);
-    }
+    // ---- Acceptance gates: run when the agent thinks it is done ----
+    // If the gates pass the run completes normally. If they fail, the gate
+    // output is fed back to the model as a new context message and the loop
+    // continues — all in the same run, with the same conversation.
+    const gates = input.gates;
+    const maxGateAttempts = input.maxGateAttempts ?? MAX_GATE_ATTEMPTS;
+    if (status === "completed" && gates && gates.length > 0) {
+      // Track gate attempts on the recorder so they survive a model rotation.
+      const gateAttempts = (recorder as any)._gateAttempts ?? 0;
+      const attempt = gateAttempts + 1;
+      (recorder as any)._gateAttempts = attempt;
 
-    // An empty stop is not a completed run. This happens when a provider
-    // returns an empty assistant message after tool errors; the old loop
-    // marked it `completed` with no answer.
-    if (status === "completed" && !finalText.trim()) {
-      status = "blocked";
-      error = "model returned an empty final response";
-    } else if (status === "completed" && toolErrors >= 2 && substantiveSuccesses === 0) {
-      // Schema errors and memory-only reads are not work. Do not report a
-      // completed outcome when every substantive call was rejected.
-      status = "blocked";
-      error = "tool calls were rejected; no work completed";
-    } else if (
-      status === "completed" &&
-      wantsChange &&
-      !hasActiveChange() &&
-      !hasTerminalLine(finalText)
-    ) {
-      // Prose is not a deliverable. A writable role that stopped
-      // mid-investigation without touching a file is blocked, not done. A
-      // clear terminal answer (Result:/Outcome:) is left alone.
-      status = "blocked";
-      error = "completed without making the requested change";
+      const gateRoot = input.toolRoot ?? input.root;
+      const gateResult = await runGates(gates, { root: gateRoot, commands: input.commands });
+      recorder.event("gates", {
+        attempt,
+        passed: gateResult.passed,
+        results: gateResult.results.map((r) => ({ command: r.command, passed: r.passed, durationMs: r.durationMs })),
+      });
+
+      if (gateResult.passed) {
+        // Gates passed — fall through to the final return.
+      } else if (attempt < maxGateAttempts) {
+        // Gates failed but we have retries left. Feed the failure output
+        // back to the model as a new user message and continue the loop.
+        const failure = gateFailureText(gateResult.results);
+        const gateMsg =
+          `## Acceptance gates failed (attempt ${attempt}/${maxGateAttempts})\n\n` +
+          `The following gates did not pass. Fix the code so they pass.\n\n` +
+          `${failure}\n\n` +
+          `Do not mark the issue as done until all acceptance gates pass.`;
+        // Save the conversation and append the gate failure as a user message
+        // so the next iteration sees the context.
+        const msgs = agent?.state.messages ?? carriedMessages ?? [];
+        carriedMessages = [
+          ...msgs,
+          { role: "user", content: gateMsg, timestamp: Date.now() },
+        ];
+        lastFailure = `gates failed (attempt ${attempt})`;
+        recorder.event("gate_retry", { attempt, maxAttempts: maxGateAttempts, failure: failure.slice(0, 500) });
+        continue;
+      } else {
+        // Gates exhausted — block the run with the last failure.
+        lastGateFailure = gateFailureText(gateResult.results);
+        status = "blocked";
+        error = `acceptance gates failed after ${maxGateAttempts} attempts: ${gateResult.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`;
+        finalText = finalText || "";
+      }
     }
 
     // Retry decision: rotate to the next eligible model on a retryable error.
+    // Only reached when gates are not applicable or have already been handled.
     const la = lastAssistant as AssistantMessage | undefined;
     if (status === "failed" && la?.errorMessage) {
       let classified: ReturnType<typeof classifyError> | undefined;
@@ -1519,6 +1601,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
 
     clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
-    return { status, finalText, error };
+    return { status, finalText, error, ...(lastGateFailure ? { lastGateFailure } : {}) };
   }
 }
