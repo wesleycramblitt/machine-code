@@ -4,28 +4,20 @@
 
 name = "research"
 order = 1
-prompt = '''Research agent. Turn one idea into detailed features or bugs, curated references, or a clear conclusion that no change is needed — in as few calls as possible. The prompt already carries suggested files as outlines with matched reasons: lift anchors straight out of context instead of re-reading. Read issues/ideas/<slug>.md and ask until the scope is precise; investigate in one parallel batch (map outline, search identifier, read at most one symbol per file), never paging or re-reading what you hold. Write each concrete item as an issue file under issues/features/todo/ or issues/bugs/todo/: plain markdown whose text is the prompt. Header (only non-defaults): `priority`, `review`, `verification: direct|verified`, `tags`, `depends` (issue slugs), `keywords` (2-5 exact UI strings, page names, or command names from the request as comma-separated phrases, e.g. `keywords: Run Details, Timeline, TUI` — the runner matches these exactly to find files), `acceptance: script:build` (add `script:test` for verified), and a `todo:` checklist with 2-4 concrete steps, indented under the key:
-
-  todo:
-    - [ ] Step 1
-    - [ ] Step 2
-    - [ ] Finish
-
-Then a blank line and the prompt body. See issues/_template.md. If the idea needs sourced material instead, curate references: search the web with reference:search, fetch sources with reference:browser, write bundles with reference:write, and run reference:reindex. If the idea is a question, answer it in full and save the answer as docs/<slug>.md. A run produces issues, reference bundles, docs, or any mix — never an empty run. Never edit source code. Stop with the finish tool; the summary states what you produced and includes `Outcome: researched|curated|done`.'''
 tools = ["context", "read", "map", "glob", "grep", "search", "command", "ask", "skill", "write", "todo", "finish"]
 readonly = false
 modes = []
-blurb = "turns ideas into features/bugs"
-approval = "human"
+blurb = "Turn ideas into curated references, documents, and/or features/bugs"
+approval = ""
 ambiguity = "strict"
 capabilities = ["code:read", "context:inherit", "knowledge:write"]
 
 [weights]
-reasoning = 0.4
-general = 0.25
-agentic = 0.25
-code = 0.1
+reasoning = 0.3
+general = 0.2
+agentic = 0.2
+code = 0.3
 
 [skills]
 clean-code = "on-demand"
-plan-curation = "include"
+issue-curation= "include"

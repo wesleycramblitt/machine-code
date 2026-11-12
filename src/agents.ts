@@ -196,7 +196,8 @@ function basePrompt(name: AgentName): string {
 
 function agentPrompt(layout: Layout, name: AgentName): string {
   const role = roleData(name);
-  const override = join(layout.repoDir, "agents", `${name}.md`);
+  // const override = join(layout.repoDir, "agents", `${name}.md`);
+  const override = dataPath(`agents/${name}.md`);
   const rolePrompt = existsSync(override)
     ? readFileSync(override, "utf8")
     : typeof role.prompt === "string"
@@ -204,6 +205,7 @@ function agentPrompt(layout: Layout, name: AgentName): string {
       : "";
   if (role.base_prompt === false) return rolePrompt.trim();
   const base = basePrompt(name).trim();
+  // return base.replaceAll("<agent-prompt>", rolePrompt.trim());
   return [base, rolePrompt.trim()].filter(Boolean).join("\n\n");
 }
 
