@@ -173,10 +173,7 @@ Converge on four primary operations:
 Remove or internalize redundant operations such as `focus` and `expand`. Lower-level map, search, read, and LSP operations may remain available internally to `inspect`.
 
 ### Inspect tool implementation example
-
-inspect
-Primary
-Find, understand, and retrieve code. Uses map, LSP, search, and reads internally. Automatically saves results as artifacts and tracks inspection evidence.
+Just an example, wouldn't have to work just like this.
 
 inspect({
   symbol?: string,
@@ -185,8 +182,8 @@ inspect({
   detail?: "summary" | "full"
 })
 
-target: symbol
-name: MeshGenerator
+#### Symbol
+symbol: MeshGenerator
 definition:
   file: src/geometry/mesh.cpp
   lines: [42, 108]
@@ -211,9 +208,8 @@ references:
 
 artifact: art_123
 
-
-target: file
-path: src/geometry/mesh.cpp
+#### File
+file: src/geometry/mesh.cpp
 
 outline:
   - name: MeshGenerator
@@ -231,9 +227,8 @@ documentation: "..."
 
 artifact: art_456
 
-
-target: directory
-path: src/geometry
+#### Directory
+directory: src/geometry
 
 files:
   - path: mesh.cpp
@@ -247,9 +242,8 @@ dependencies:
   incoming: [...]
   outgoing: [...]
   
-  
-  target: references
-symbol: MeshGenerator
+#### References
+references: MeshGenerator
 
 definitions:
   - file: src/geometry/mesh.cpp
@@ -269,7 +263,7 @@ inspect({ "file": "src/geometry/mesh.cpp" })
 
 inspect({ directory: "src/geometry" })
 
-inspect({ reference: "MeshGenerator" })
+inspect({ references: "MeshGenerator" })
 
 ## Implementation Requirements
 
