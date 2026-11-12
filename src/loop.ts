@@ -9,6 +9,10 @@
  * timeout, malformed) cool the failed target and rotate to the next eligible
  * model until one succeeds or none remain. Insufficient funds, auth failures,
  * and refusals do not retry.
+ *
+ * Acceptance gates: when the agent finishes, the run runs gates inline. If
+ * they fail, the gate output is fed back to the model and it retries — all
+ * within the same run. A gate attempt cap prevents infinite loops.
  */
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
@@ -39,10 +43,17 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
 import { findIssue } from "./plan/issues.js";
 import type { FinishRequest } from "./tools/finish.js";
+import { gateFailureText, runGates, type GateResult, type GateSpec } from "./verify.js";
 
 
 /** Default turn cap. 0 means no cap; set max_turns per role or run. */
 export const MAX_TURNS = 0;
+
+/** Default model call cap for a single run. Prevents runaway costs. */
+const MAX_CALLS = 50;
+
+/** Default maximum number of gate retry attempts within a run. */
+const MAX_GATE_ATTEMPTS = 5;
 
 /** Successes that show a run did real work, not just memory bookkeeping. */
 const SUBSTANTIVE_TOOLS = new Set(["read", "map", "search", "glob", "grep", "command", "edit", "write"]);
@@ -128,12 +139,23 @@ export interface RunLoopInput {
   
   /** Composer-excluded skill names the skill tool must refuse. */
   skillExcludes?: string[];
+
+  /** Acceptance gates to run after the agent finishes. If they fail, the
+   * output is fed back to the model for repair — all in the same run. */
+  gates?: GateSpec[];
+  /** Maximum model calls before the run is blocked (default: 50). */
+  maxCalls?: number;
+  /** Maximum gate-retry iterations within a run (default: 5). */
+  maxGateAttempts?: number;
 }
 
 export interface RunLoopResult {
   status: "completed" | "blocked" | "failed" | "interrupted" | "paused" | "cancelled";
   finalText: string;
   error?: string;
+  /** When gates fail after exhausting attempts, the last gate failure text so
+   * the caller can append it to the issue file. */
+  lastGateFailure?: string;
 }
 
 function convertToLlm(messages: AgentMessage[]): Message[] {
@@ -650,6 +672,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     budgetExhausted = false;
     let appliedError: { key: string; message: string } | undefined;
     let turnCapHit = false;
+    let modelCallCapHit = false;
 
     /** Tool contract health: enough failures with no work is not "completed". */
     let toolErrors = 0;

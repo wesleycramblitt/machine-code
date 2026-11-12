@@ -20,6 +20,7 @@ Blocked:
     - other issue level blocked statuses like merge failures.
 
 No per issue orchestration mode since starting a run orchestrates anyway (we now just use acceptance gates for merging and looping)
+    => Need to review current per issue logic, and probably replace with a simpler system. The idea of the orchestrator is just to queue up new runs across issues, and continually fire on completion events.
 
 We need the ability to view orchestration status, stop all orchestration processes, and so on. Probably in the same page as starting an orchestration.
 
