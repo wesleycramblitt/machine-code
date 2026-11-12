@@ -36,10 +36,6 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const inner = Math.max(12, boxWidth - 2);
 
   // ── Editable text fields — always visible ──
-  // Kind line with colored value matching runs-page style
-  const kindDisplay = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
-  const kindValueColor = settings.kind === "ideas" ? PURPLE_FG : settings.kind === "features" ? YELLOW_FG : RED_FG;
-  body.push(` ${B}Kind${R}[${C}k${R}]: ${kindValueColor}${kindDisplay}${R}`);
   body.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
   body.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
   body.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
@@ -86,9 +82,6 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
   const leftTokens = [kindToken, priorityToken];
-
-  const reviewColor = settings.review === "human" ? RED : D;
-  leftTokens.push(command("r", "Review", settings.review === "human" ? "Human" : "None", reviewColor));
 
   const leftSide = joinCommands(leftTokens);
   const createBadge = commandBadge("Create", ":!", START_BG, WHITE);
