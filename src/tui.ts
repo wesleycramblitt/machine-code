@@ -569,7 +569,7 @@ export async function runTui(): Promise<void> {
       notify(`no model is ready: ${modelState.error}`);
       return null;
     }
-    const policy = agentDefFor(s.newRunRepo);
+    const previewPolicy: any = agentDefFor(s.newRunRepo);
     const args = [
       "run",
       "--agent", s.newrun.agent,
@@ -579,7 +579,6 @@ export async function runTui(): Promise<void> {
       "--ambiguity", s.newrun.ambiguity,
       ...(s.newRunParentId ? ["--parent", s.newRunParentId] : []),
     ];
-    const previewPolicy = policy?.agents[s.newrun.agent];
     if (modelState.model && previewPolicy) {
       const budget = contextBudget(modelState.model.context, previewPolicy.expectedOutputTokens);
       args.push("--context-budget", String(budget.inputChars));
@@ -592,7 +591,7 @@ export async function runTui(): Promise<void> {
     if (s.newrun.floors === "off") {
       args.push("--min-axes", "reasoning=0,code=0,agentic=0,general=0");
     } else if (s.newrun.floors === "strict") {
-      const ap = policy?.agents[s.newrun.agent];
+      const ap: any = previewPolicy;
       const floors = CAPABILITY_AXES.map((axis) => {
         const current = ap?.minAxes?.[axis] ?? ap?.minFit ?? 6;
         return `${axis}=${Math.min(10, Math.round((current + 0.5) * 10) / 10)}`;
@@ -1352,8 +1351,7 @@ export async function runTui(): Promise<void> {
   };
 
   const newRunWeights = () => {
-    const policy = agentDefFor(s.newRunRepo);
-    const ap = policy?.agents[s.newrun.agent];
+    const ap: any = agentDefFor(s.newRunRepo);
     return ap ? axisWeights(s.newrun.agent, ap) : undefined;
   };
 
@@ -1365,8 +1363,7 @@ export async function runTui(): Promise<void> {
         .filter((status) => status.configured)
         .map((status) => status.id),
     );
-    const policy = agentDefFor(s.newRunRepo);
-    const ap = policy?.agents[s.newrun.agent];
+    const ap: any = agentDefFor(s.newRunRepo);
     const machine = (() => {
       try {
         return loadMachineConfig(layout(s.newRunRepo));
