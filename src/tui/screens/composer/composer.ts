@@ -152,7 +152,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const excludedFilePrefixes = [
     "issues/", ".machine_code/skills/", ".machine_code/tools/",
     ".machine_code/scripts/", ".machine_code/references/",
-    "node_modules/", ".git/",
+    "docs/", "node_modules/", ".git/",
   ];
   for (const file of cachedMap?.files ?? []) {
     if (excludedFilePrefixes.some((prefix) => file.path.startsWith(prefix))) continue;
@@ -212,6 +212,21 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     scriptItems.push({
       text: `script:${artifact.name} · script · available`,
       chars: size,
+      exists: true,
+      key,
+      available: true,
+      counted: false,
+    });
+  }
+  const docItems: ContextPanelItem[] = itemsFor(["docs"]);
+  const knownDocs = new Set(docItems.map((item) => item.key));
+  for (const file of cachedMap?.files ?? []) {
+    if (!file.path.startsWith("docs/")) continue;
+    const key = `docs:${file.path}`;
+    if (knownDocs.has(key)) continue;
+    docItems.push({
+      text: `${file.path} · available`,
+      chars: file.bytes,
       exists: true,
       key,
       available: true,
@@ -395,6 +410,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
     { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
     { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
+    { label: "Docs", tone: contextTone("docs"), sectionKey: "section:docs", items: docItems },
     { label: "Agent Prompt", tone: W, sectionKey: "section:prompt", items: promptItems },
     { label: "Files", tone: C, sectionKey: "section:files", items: fileItems },
   ];

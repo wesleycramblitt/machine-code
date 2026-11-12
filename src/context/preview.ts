@@ -36,7 +36,7 @@ export interface ContextPreview {
   issueChain: [];
   artifacts: {
     files: string[];
-    knowledge: string[];
+    docs: string[];
     references: string[];
     skills: string[];
     tools: ArtifactDef[];
@@ -64,7 +64,7 @@ function skillPath(layout: Layout, name: string): string | null {
 export interface PreviewContextOptions {
   /** Role name. */
   agent?: string;
-  knowledgeIndex?: string;
+  docsIndex?: string;
   /** Explicit repo-relative files selected in the composer. */
   files?: string[];
   /** Explicit repo-relative issue files selected in the composer. */
@@ -93,7 +93,7 @@ export function previewContext(
   const sources: PreviewSource[] = [];
   const warnings: string[] = [];
   const files: string[] = [];
-  const knowledge: string[] = [];
+  const docs: string[] = [];
   const references: string[] = [];
   const skills: string[] = [];
   const tools: ArtifactDef[] = [];
@@ -177,14 +177,14 @@ export function previewContext(
     const size = capFor(path, Number.MAX_SAFE_INTEGER);
     sources.push({ kind: "skill", ref: name, origin: "explicit", depth: 0, chars: size, exists: true });
   }
-  if (options.knowledgeIndex) {
+  if (options.docsIndex) {
     const root = resolve(layout.repoRoot);
-    const abs = resolve(root, options.knowledgeIndex);
+    const abs = resolve(root, options.docsIndex);
     const inside = abs === root || abs.startsWith(root + sep);
     const exists = inside && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
-    sources.push({ kind: "knowledge", ref: options.knowledgeIndex, origin: "inherited", depth: 3, chars: size, exists });
-    if (!exists) warnings.push(`knowledge ${options.knowledgeIndex} is missing`);
+    sources.push({ kind: "docs", ref: options.docsIndex, origin: "inherited", depth: 3, chars: size, exists });
+    if (!exists) warnings.push(`docs ${options.docsIndex} is missing`);
   }
   // Parent chain renders as the same one-line index the assembler emits
   // (depth cap 4, same bodies so measured chars match assembled chars).
@@ -231,7 +231,7 @@ export function previewContext(
 
   const sections: ContextSections = {
     issues: 0,
-    knowledge: 0,
+    docs: 0,
     skills: 0,
     scripts: 0,
     tools: 0,
@@ -263,7 +263,7 @@ export function previewContext(
     sources,
     sections,
     issueChain: [],
-    artifacts: { files, knowledge, references, skills, tools, scripts },
+    artifacts: { files, docs, references, skills, tools, scripts },
     warnings,
   };
 }

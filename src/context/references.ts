@@ -22,7 +22,7 @@ import { packageDataDir } from "../data.js";
 
 export interface ArtifactReferences {
   files: string[];
-  knowledge: string[];
+  docs: string[];
   /** Exact central-store citations: `product/version/content/file.md#anchor`. */
   references: string[];
   skills: string[];
@@ -32,7 +32,7 @@ export interface ArtifactReferences {
 
 const EMPTY: ArtifactReferences = {
   files: [],
-  knowledge: [],
+  docs: [],
   references: [],
   skills: [],
   tools: [],
@@ -50,7 +50,7 @@ export function parseArtifactReferences(body: string): ArtifactReferences {
     const raw = JSON.parse(match[1]!.trim()) as Record<string, unknown>;
     return {
       files: strings(raw.files),
-      knowledge: strings(raw.knowledge),
+      docs: strings(raw.docs ?? raw.knowledge),
       references: strings(raw.references ?? raw.reference),
       skills: strings(raw.skills),
       tools: strings(raw.tools),

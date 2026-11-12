@@ -117,7 +117,7 @@ export interface MachineConfig {
   /** Context assembly ([context]). */
   context: {
     maxChars: number;
-    knowledgeIndex?: string;
+    docsIndex?: string;
   };
   /** Repository map ([map]). */
   map: {
@@ -288,10 +288,10 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     agents,
     context: {
       maxChars: asNumber(contextRaw.max_chars) ?? 64_000,
-      // No knowledge directory is injected by default. Repo facts come from
+      // No docs index is injected by default. Repo facts come from
       // code doc headers and the live map; external material lives in the
-      // reference store. An explicit knowledge_index still wins.
-      knowledgeIndex: typeof contextRaw.knowledge_index === "string" ? contextRaw.knowledge_index : undefined,
+      // reference store. An explicit docs_index still wins.
+      docsIndex: typeof contextRaw.docs_index === "string" ? contextRaw.docs_index : undefined,
     },
     map: {
       enabled: mapRaw.enabled !== false,
