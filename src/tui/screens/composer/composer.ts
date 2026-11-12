@@ -323,7 +323,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     : "?";
   const fitScore = preview.fit;
   const fitTone = fitScore === undefined ? D : fitScore >= 7.5 ? G : fitScore >= 6 ? Y : RED;
-  const costTone = preview.model?.free ? G : RED;
+  const costTone = preview.model?.free && run.tier === "local" ? G : RED;
   const modelIdentity = preview.error
     ? command("m", "Model", preview.error, RED)
     : command("m", "Model", preview.model?.key ?? "?", C);
@@ -651,7 +651,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       const entry = list[i]!;
       const row = entry.row;
       const chosen = row.key === run.model;
-      const free = row.free ? ` ${G}FREE${R}` : "";
+      const free = row.free && run.tier === "local" ? ` ${G}FREE${R}` : "";
       const status = entry.eligible
         ? `${G}✓${R}`
         : entry.reason === "model-cooling" || entry.reason === "provider-cooling"

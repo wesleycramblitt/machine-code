@@ -109,12 +109,12 @@ const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
 /**
  * Min-fit ladder for `f` on the new-run page: role policy, then an explicit
- * floor from 6 to 8.5 in 0.25 steps, then 0 (no floor). Quarter points so a
+ * floor from 4 to 8.5 in 0.25 steps, then 0 (no floor). Quarter points so a
  * borderline model can be included or excluded precisely.
  */
 const NEW_RUN_MIN_FITS: Array<number | null | undefined> = [
   undefined,
-  ...Array.from({ length: 11 }, (_, i) => 6 + i * 0.25),
+  ...Array.from({ length: 19 }, (_, i) => 4 + i * 0.25),
   0,
 ];
 

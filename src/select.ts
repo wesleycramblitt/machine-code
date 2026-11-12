@@ -295,7 +295,7 @@ export function pick(input: PickInput): PickResult | PickFailure {
 
   if (candidates.length === 0) {
     return {
-      error: `no eligible model (${rejections.size} rejected: ${[...rejections.entries()].map(([r, n]) => `${r}×${n}`).join(", ")})`,
+      error: `no eligible model`,
       rejected,
       rejectedCount: rejections.size,
       rejectedByReason: Object.fromEntries(rejections),
