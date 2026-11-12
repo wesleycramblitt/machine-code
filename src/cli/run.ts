@@ -276,8 +276,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
         tags: [],
         review: "none",
       });
-      // Commit immediately so the main worktree is clean for worktree creation.
-      await commitPlanningFiles(l, `issues: auto-create ${autoSlug}`);
+      // Commit (and push) immediately so the new issue lives on origin/main
+      // before the branch is created — otherwise it exists only in the local
+      // main, and the post-run merge back upstream diverges and refuses.
+      await commitPlanningFiles(l, `issues: auto-create ${autoSlug}`, true);
       autoCreatedIssue = true;
     }
     itemSlug = issue.slug;

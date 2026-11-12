@@ -23,14 +23,22 @@ async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<{ c
   return runProc("git", args, { cwd, timeoutMs });
 }
 
-export async function commitPlanningFiles(layout: Layout, message: string): Promise<boolean> {
+export async function commitPlanningFiles(
+  layout: Layout,
+  message: string,
+  push = false,
+): Promise<boolean> {
   try {
     const root = await mainRoot(layout);
     const dirs = ["issues", "knowledge"].filter((dir) => existsSync(join(root, dir)));
     if (dirs.length === 0) return false;
     await git(root, ["add", "-A", "--", ...dirs]);
     const status = await git(root, ["status", "--porcelain", "--", ...dirs]);
-    if (status.stdout.trim() === "") return false;
+    if (status.stdout.trim() === "") {
+      // Nothing new to commit; still catch main up with the remote for a push.
+      if (push) await git(root, ["push", "origin", "main"], 30_000);
+      return false;
+    }
     let commit = await git(root, ["commit", "-m", message], 60_000);
     if (commit.code !== 0) {
       commit = await git(
@@ -39,6 +47,9 @@ export async function commitPlanningFiles(layout: Layout, message: string): Prom
         60_000,
       );
     }
+    // Only push when asked (a planned manual-prompt run). Best-effort: a push
+    // failure leaves the commit locally, which the post-run merge still needs.
+    if (push && commit.code === 0) await git(root, ["push", "origin", "main"], 60_000);
     return commit.code === 0;
   } catch {
     return false;
