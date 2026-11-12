@@ -15,7 +15,7 @@
  */
 import type { AgentPolicy, CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
 import { CAPABILITY_AXES } from "./config.js";
-import { estimateCallCost, pricingAt, type AxisScores } from "./catalogue/scoring.js";
+import { estimateCallCost, type AxisScores } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AvailabilityState } from "./availability.js";
 import { isProviderDisabled, isProviderCooling, isModelCooling, providerNeedsAuth } from "./availability.js";
@@ -42,13 +42,6 @@ export const WEIGHTS: ScoreWeights = {
 
 type AxisWeights = Record<CapabilityAxis, number>;
 
-const BALANCED_AXIS_WEIGHTS: AxisWeights = {
-  reasoning: 0.25,
-  code: 0.25,
-  agentic: 0.25,
-  general: 0.25,
-};
-
 /** Resolve and normalize the axis mix for an agent (policy overrides role defaults). */
 export function axisWeights(agent: string, policy: AgentPolicy): AxisWeights {
   const dataWeights = roleWeights(agent);
@@ -69,15 +62,35 @@ export function axisWeights(agent: string, policy: AgentPolicy): AxisWeights {
   return merged;
 }
 
-/** Role-weighted axis mix; the "capability" the selector actually trades against cost. */
+/**
+ * Role-weighted axis mix; the "capability" the selector actually trades against
+ * cost. Uses a weighted generalized mean with p = -2 so low axis scores are
+ * penalized aggressively: a model with one strong axis (e.g. Ling-3.1-Flash:
+ * strong reasoning, weak code/general) cannot clear the minFit gate on its
+ * strengths alone.
+ *
+ * S_p = (sum(w_i * x_i^p) / sum(w_i)) ^ (1/p)
+ */
 export function capabilityFit(scores: AxisScores, weights: AxisWeights): number {
-  return CAPABILITY_AXES.reduce((total, axis) => total + scores[axis] * weights[axis], 0);
+  const p = -2;
+  let numerator = 0;
+  let activeWeight = 0;
+  for (const axis of CAPABILITY_AXES) {
+    const w = weights[axis];
+    const x = scores[axis];
+    if (w > 0 && x > 0) {
+      numerator += w * Math.pow(x, p);
+      activeWeight += w;
+    } else if (w > 0) {
+      // A zero measured axis makes the mean zero — unconditional rejection.
+      return 0;
+    }
+  }
+  return Math.pow(numerator / activeWeight, 1 / p);
 }
 
 /** Estimated-call-cost normalization band, in dollars. */
 const COST_BAND = [1e-5, 1] as const;
-/** tokens/sec normalization band for curated speed hints. */
-const SPEED_BAND = [10, 250] as const;
 
 export interface PickEstimate {
   inputTokens: number;
@@ -275,130 +288,79 @@ function rejectReason(
     if (floor !== undefined && floor > 0 && row.scores[axis] < floor) return `below-min-${axis}`;
   }
   if (row.context < input.policy.minContext) return "below-min-context";
-  const needed = estimate.inputTokens + estimate.outputTokens;
-  if (row.context > 0 && row.context < needed) return "context-too-small";
-  if (row.maxOutput > 0 && row.maxOutput < estimate.outputTokens) return "output-too-small";
-  const caps = input.machine.priceCaps;
-  if (caps.input !== undefined || caps.output !== undefined) {
-    const rates = pricingAt(row.pricing, estimate.inputTokens);
-    if (caps.input !== undefined && rates.input > caps.input) return "over-input-price-cap";
-    if (caps.output !== undefined && rates.output > caps.output) return "over-output-price-cap";
-  }
-  if (vetoed(row, input.machine.vetoes)) return "vetoed";
   return null;
 }
 
-export function scoreCandidate(
-  row: CatalogueRow,
-  input: PickInput,
-  estimate: PickEstimate,
-  roleWeightsInput?: AxisWeights,
-): CandidateScore {
-  const estimatedCost = effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, input.machine);
-  const weights = roleWeightsInput ?? axisWeights(input.agent, input.policy);
-  const fit = capabilityFit(row.scores, weights);
-  // Metadata priors are a guess about an unmeasured model. Keep them eligible
-  // (especially for the free tier) but do not let a guessed fit outrank a
-  // benchmark-backed row by a hair. Rows with any reported benchmark keep their
-  // measured fit; only fully estimated rows take the penalty.
-  const confidenceTerm = row.provenance?.estimated === true ? 1 : 0;
-  // Lower is better: a role-fit of 10 scores 0, a fit of 6 scores 0.4. This
-  // keeps a gradient above the floor instead of treating every eligible model
-  // as equally capable.
-  const quality = Math.max(0, Math.min(1, (10 - fit) / 10));
-  const costTerm = Math.max(0, Math.min(1, normalizeCost(estimatedCost)));
-  const speedTerm = 1 - normalize(row.tokensPerSecond ?? Number.NaN, SPEED_BAND);
-  const needed = estimate.inputTokens + estimate.outputTokens;
-  const headroomNorm = row.context > 0 ? Math.max(0, Math.min(1, (row.context - needed) / row.context)) : 0;
-  const headroomTerm = 1 - headroomNorm;
-  const score =
-    WEIGHTS.capability * quality +
-    WEIGHTS.cost * costTerm +
-    WEIGHTS.speed * speedTerm +
-    WEIGHTS.headroom * headroomTerm +
-    WEIGHTS.confidence * confidenceTerm;
-  return {
-    key: row.key,
-    score: Math.round(score * 1e6) / 1e6,
-    fit: Math.round(fit * 1e4) / 1e4,
-    terms: {
-      capability: Math.round(quality * 1e4) / 1e4,
-      cost: Math.round(costTerm * 1e4) / 1e4,
-      speed: Math.round(speedTerm * 1e4) / 1e4,
-      headroom: Math.round(headroomTerm * 1e4) / 1e4,
-      confidence: Math.round(confidenceTerm * 1e4) / 1e4,
-    },
-    estimatedCost: Math.round(estimatedCost * 1e8) / 1e8,
-  };
+
+
+export interface PickFailure {
+  error: string;
+  rejected: RejectedCandidate[];
+  rejectedCount: number;
+  rejectedByReason: Record<string, number>;
 }
 
-/** Why one catalogue row is not eligible, or eligible with no reason. */
+/** Per-row eligibility status for the model picker UI (does not pick). */
 export function modelStatus(
   row: CatalogueRow,
   input: PickInput,
 ): { eligible: true } | { eligible: false; reason: string } {
-  const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens);
   const weights = axisWeights(input.agent, input.policy);
+  const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens ?? 32);
   const reason = rejectReason(row, input, estimate, weights);
   return reason ? { eligible: false, reason } : { eligible: true };
 }
 
-export function pick(
-  input: PickInput,
-): PickResult | { error: string; rejected: RejectedCandidate[]; rejectedCount: number; rejectedByReason: Record<string, number> } {
-  const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens);
+export function pick(input: PickInput): PickResult | PickFailure {
   const weights = axisWeights(input.agent, input.policy);
-  const candidates: Array<{ row: CatalogueRow; scored: CandidateScore }> = [];
+  const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens ?? 32);
+  const vetoes = input.machine.vetoes;
+  const rejections = new Map<string, number>();
   const rejected: RejectedCandidate[] = [];
-  const rejectedByReason: Record<string, number> = {};
+  const candidates: CandidateScore[] = [];
 
   for (const row of input.catalogue) {
-    const reason = rejectReason(row, input, estimate, weights);
+    const reason = vetoed(row, vetoes)
+      ? "vetoed"
+      : rejectReason(row, input, estimate, weights);
     if (reason) {
-      rejected.push({ key: row.key, reason });
-      rejectedByReason[reason] = (rejectedByReason[reason] ?? 0) + 1;
+      rejections.set(reason, (rejections.get(reason) ?? 0) + 1);
+      if (rejected.length < 3) rejected.push({ key: row.key, reason });
       continue;
     }
-    candidates.push({ row, scored: scoreCandidate(row, input, estimate, weights) });
+    const fit = capabilityFit(row.scores, weights);
+    const cost = normalizeCost(effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, input.machine));
+    const capability = normalize(fit, [2, 9]);
+    const score = WEIGHTS.capability * capability + WEIGHTS.cost * (1 - cost);
+    candidates.push({ key: row.key, score, fit, estimatedCost: cost, terms: {
+      capability,
+      cost,
+      speed: 0,
+      headroom: 0,
+      confidence: 0,
+    } });
   }
+
+  candidates.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  const top = candidates.slice(0, 5);
 
   if (candidates.length === 0) {
     return {
-      error: `no eligible model for agent "${input.agent}"`,
-      rejected: rejected.slice(0, 10),
-      rejectedCount: rejected.length,
-      rejectedByReason,
+      error: `no eligible model (${rejections.size} rejected: ${[...rejections.entries()].map(([r, n]) => `${r}×${n}`).join(", ")})`,
+      rejected,
+      rejectedCount: rejections.size,
+      rejectedByReason: Object.fromEntries(rejections),
     };
   }
 
-  // Ascending score; exact ties go to the lexicographically smaller key.
-  // Paid tier prefers paid rows: zero-price rows are a fallback when no paid
-  // row is eligible, not the default pick. Ollama is the final fallback: local
-  // models do not hide a cloud model that is still eligible. Within each
-  // group, the normal score order applies.
-  const paidFirst = selectionTier(input) === "paid";
-  candidates.sort((a, b) => {
-    const aLocal = a.row.providerID === "ollama" ? 1 : 0;
-    const bLocal = b.row.providerID === "ollama" ? 1 : 0;
-    if (aLocal !== bLocal) return aLocal - bLocal;
-    if (paidFirst) {
-      const aFree = isFreeRow(a.row) ? 1 : 0;
-      const bFree = isFreeRow(b.row) ? 1 : 0;
-      if (aFree !== bFree) return aFree - bFree;
-    }
-    if (a.scored.score !== b.scored.score) return a.scored.score - b.scored.score;
-    return a.row.key < b.row.key ? -1 : 1;
-  });
-
-  const best = candidates[0]!;
   return {
-    selected: best.row,
+    selected: input.catalogue.find((row) => row.key === top[0]!.key)!,
     estimate,
-    eligibleCount: candidates.length,
-    candidates: candidates.slice(0, 5).map((c) => c.scored),
     tier: selectionTier(input),
-    rejectedCount: rejected.length,
-    rejectedByReason,
-    rejected: rejected.slice(0, 10),
+    eligibleCount: candidates.length,
+    candidates: top,
+    rejectedCount: rejections.size,
+    rejectedByReason: Object.fromEntries(rejections),
+    rejected,
   };
 }
