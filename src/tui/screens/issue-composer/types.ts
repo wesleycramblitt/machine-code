@@ -32,4 +32,6 @@ export interface IssueComposerFrame {
   body: string[];
   actions: string;
   secondary: string;
+  /** Pin the prompt and controls to the bottom of the body area. */
+  bottomAlign: { above: string[]; block: string[]; filler?: string } | null;
 }

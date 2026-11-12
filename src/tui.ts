@@ -403,7 +403,6 @@ export async function runTui(): Promise<void> {
   };
 
   const agentDefFor = (repoRoot = l.repoRoot): any => {
-    const { agentDef } = require("./agents.js");
     return agentDef(layout(repoRoot), s.newrun.agent);
   };
 
@@ -1069,6 +1068,7 @@ export async function runTui(): Promise<void> {
       body = frame.body;
       actions = frame.actions;
       secondary = frame.secondary;
+      bottomAlign = frame.bottomAlign;
     }
 
     /* ------------------------------------------------------------ model */

@@ -6,18 +6,20 @@
  *   Keywords[w]:      (always visible)
  *   Depends[d]:       (always visible)
  *   Acceptance Gates[a]: (always visible, features/bugs only)
+ *   Verification[v]:  (always visible, features/bugs only)
+ *   Review[r]:        (always visible)
  *   ┌─ bordered prompt box ─┐
  *   └───────────────────────┘
- *   k Kind  p Priority  v Verify          Create[:!]
+ *   k Kind  p Priority                     Create[:!]
  *
+ * The prompt and bottom bar are pinned to the bottom of the body area.
  * Back[Esc] is in the chrome header (red background).
  */
 import {
   B, C, D, G, GR, M, R, RED, W, Y, START_BG, WHITE,
   PURPLE_FG, YELLOW_FG, RED_FG,
-  command, commandBadge, dim, fit, joinCommands, trunc, visible, wrapText,
+  command, commandBadge, fit, joinCommands, trunc, visible, wrapText,
 } from "../../format.js";
-import { clipLines } from "../types.js";
 import type { IssueComposerFrame, IssueComposerProps } from "./types.js";
 
 /** Render an inline editable field line: `Label[key]: value` */
@@ -31,25 +33,27 @@ function fieldLine(key: string, label: string, value: string, isEditing: boolean
 
 export function renderIssueComposer(props: IssueComposerProps): IssueComposerFrame {
   const { cols, bodyH, theme, toast, settings, insert, confirm, fieldEdit } = props;
-  const body: string[] = [];
   const boxWidth = Math.max(20, cols - 2);
   const inner = Math.max(12, boxWidth - 2);
 
-  // ── Editable text fields — always visible ──
-  body.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
-  body.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
-  body.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
+  // ── Above (field lines — scroll away when terminal is short) ──
+  const above: string[] = [];
+  above.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
+  above.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
+  above.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
   if (settings.kind !== "ideas") {
-    body.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance", cols));
+    above.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance", cols));
   }
   if (settings.kind !== "ideas") {
     const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
-    body.push(fieldLine("v", "Verification", verLabel, fieldEdit === "verification", cols));
+    above.push(fieldLine("v", "Verification", verLabel, fieldEdit === "verification", cols));
   }
-  body.push(fieldLine("r", "Review", settings.review === "human" ? "Human" : "None", fieldEdit === "review", cols));
-  body.push("");
+  above.push(fieldLine("r", "Review", settings.review === "human" ? "Human" : "None", fieldEdit === "review", cols));
 
-  // ── Prompt box ──
+  // ── Block (pinned to bottom: prompt box + bottom bar) ──
+  const block: string[] = [];
+
+  // Prompt box
   const promptText = settings.prompt;
   const emptyPrompt = !promptText.trim() && !insert;
 
@@ -65,14 +69,14 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const promptHeight = Math.max(3, Math.min(14, Math.floor(bodyH * 0.5)));
   const shownPrompt = displayLines.slice(-promptHeight);
 
-  body.push(
+  block.push(
     ` ${D}┌${"─".repeat(inner)}┐${R}`,
     ...shownPrompt.map((line) => ` ${D}│${R} ${W}${fit(line, inner - 2)}${R} ${D}│${R}`),
     ...Array.from({ length: Math.max(0, promptHeight - shownPrompt.length) }, () => ` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`),
     ` ${D}└${"─".repeat(inner)}┘${R}`,
   );
 
-  // ── Bottom bar: Kind + Priority + Verify + Review (left) · Create[:!] (right) ──
+  // Bottom bar: Kind + Priority (left) · Create[:!] (right)
   const kindColor = settings.kind === "ideas" ? PURPLE_FG : settings.kind === "features" ? YELLOW_FG : RED_FG;
   const kindLabel = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
   const kindToken = command("k", "Kind", kindLabel, kindColor);
@@ -81,20 +85,19 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const priorityLabel = settings.priority.charAt(0).toUpperCase() + settings.priority.slice(1);
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
-  const leftTokens = [kindToken, priorityToken];
-
-  const leftSide = joinCommands(leftTokens);
+  const leftSide = joinCommands([kindToken, priorityToken]);
   const createBadge = commandBadge("Create", ":!", START_BG, WHITE);
   const padWidth = Math.max(1, boxWidth - visible(leftSide) - visible(createBadge) - 2);
-  body.push(` ${leftSide}${" ".repeat(padWidth)}${createBadge}`);
-
-  while (body.length < bodyH) body.push("");
+  block.push(` ${leftSide}${" ".repeat(padWidth)}${createBadge}`);
+  // One extra blank line below for breathing room
+  block.push("");
 
   return {
-    body: clipLines(body, bodyH),
+    body: [],
     actions: " ",
     secondary: toast ? `${Y}${toast}${R}` : confirm
       ? `${Y}discard unsaved issue? press y to discard and exit, esc to stay${R}`
       : "",
+    bottomAlign: { above, block, filler: "" },
   };
 }
