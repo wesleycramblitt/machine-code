@@ -1,8 +1,16 @@
 tags: runs
+<<<<<<< HEAD
 todo:
   - [ ] Read and scope the idea
   - [ ] Write features/bugs or curate references
   - [ ] Finish
+=======
+
+todo:
+  - [x] Read and scope the idea
+  - [x] Write features/bugs or curate references
+  - [x] Finish
+>>>>>>> mc/better-efficiency
 
 We need to investigate how to have maximum efficiency with our runs from a perspective of exactly what context to keep, what tools to give models,
 what prompts to use, and so on. We've already investigated this quite a bit, and converged on a design, but I still notice a lot of runs
