@@ -11,7 +11,7 @@ export type ContextKind =
   | "feature"
   /** Legacy manifests used "task" for the current issue block. */
   | "task"
-  | "knowledge"
+  | "docs"
   | "reference"
   | "issue"
   | "file"
@@ -25,7 +25,7 @@ export type ContextOrigin = "inherited" | "explicit" | "discovered";
 /** Budget section for per-section chars (context.json + composer preview). Keys mirror the composer exclusion sections 1:1, so accounting matches what the TUI shows; `files` counts only `kind:file`. Render-side sections (system) record 0 in assemble. */
 export type ContextSection =
   | "issues"
-  | "knowledge"
+  | "docs"
   | "skills"
   | "scripts"
   | "tools"

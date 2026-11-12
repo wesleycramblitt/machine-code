@@ -109,12 +109,12 @@ const NEW_RUN_AGENTS = [...AGENT_NAMES];
 /**
  * Min-fit ladder for `f` on the new-run page. No duplicates — `findIndex`
  * always hits the first match, so repeated values create infinite loops.
- * Sequence: role → 6 → step down by 0.25 to 4 → step up from 6.25 to 8.5 → 0.
+ * Sequence: role → 6.5 → step down by 0.25 to 4 → step up from 6.75 to 8.5 → 0.
  */
 const NEW_RUN_MIN_FITS: Array<number | null | undefined> = [
   undefined,
-  6, 5.75, 5.5, 5.25, 5, 4.75, 4.5, 4.25, 4,
-  6.25, 6.5, 6.75, 7, 7.25, 7.5, 7.75, 8, 8.25, 8.5,
+  6.5, 6.25, 6, 5.75, 5.5, 5.25, 5, 4.75, 4.5, 4.25, 4,
+  6.75, 7, 7.25, 7.5, 7.75, 8, 8.25, 8.5,
   0,
 ];
 
@@ -242,7 +242,7 @@ export async function runTui(): Promise<void> {
       approval: "human",
       ambiguity: "precise",
       tier: "paid",
-      minFit: undefined,
+      minFit: 6.5,
       floors: "role",
       kind: "features",
       priority: "medium",
@@ -375,6 +375,7 @@ export async function runTui(): Promise<void> {
   const cycleTier = () => {
     const tiers: NewRunState["tier"][] = ["paid", "local"];
     s.newrun.tier = tiers[(tiers.indexOf(s.newrun.tier) + 1) % tiers.length]!;
+    s.newrun.minFit = s.newrun.tier === "paid" ? 6.5 : 5;
   };
 
   const agentDefFor = (repoRoot = l.repoRoot): any => {

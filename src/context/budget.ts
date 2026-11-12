@@ -65,8 +65,8 @@ export function sectionForKind(kind: ContextKind | string): ContextSection {
   switch (kind) {
     case "issue":
       return "issues";
-    case "knowledge":
-      return "knowledge";
+    case "docs":
+      return "docs";
     case "reference":
       return "references";
     case "skill":

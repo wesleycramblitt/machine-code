@@ -18,7 +18,7 @@ import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
 
 export interface PreviewSource {
-  kind: "file" | "knowledge" | "reference" | "skill" | "tool" | "script" | "issue" | "parent-run";
+  kind: "file" | "docs" | "reference" | "skill" | "tool" | "script" | "issue" | "parent-run";
   ref: string;
   origin: "explicit" | "inherited";
   depth: number;

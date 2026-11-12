@@ -43,7 +43,7 @@ interface Pending {
 }
 
 export interface ContextExclusion {
-  /** Whole composer sections: files, issues, knowledge, skills, tools, scripts. */
+  /** Whole composer sections: files, issues, docs, skills, tools, scripts. */
   sections?: string[];
   /** Per-source keys shaped as `kind:ref`. */
   items?: string[];
@@ -52,8 +52,8 @@ export interface ContextExclusion {
 export interface ContextInclude {
   /** Repo-relative source files to add explicitly from the composer. */
   files?: string[];
-  /** Repo-relative knowledge files to add explicitly from the composer. */
-  knowledge?: string[];
+  /** Repo-relative docs files to add explicitly from the composer. */
+  docs?: string[];
   /** Repo-relative issue files to add explicitly from the composer. */
   issues?: string[];
   /** Reference citations to add explicitly from the composer. */
@@ -110,7 +110,7 @@ export interface AssembleInput {
 
 const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
   files: ["file"],
-  knowledge: ["knowledge"],
+  docs: ["docs"],
   references: ["reference"],
   skills: ["skill"],
   tools: ["tool"],
@@ -127,7 +127,7 @@ function sha1(text: string): string {
  * layout, prompt-cache stable).
  *
  * Section order is fixed and documented: the issue first (highest
- * relevance), then retrieved files by relevance (file, knowledge,
+ * relevance), then retrieved files by relevance (file, docs,
  * reference), then tools/skills/scripts aggregates, then the parent-run
  * chain last (most volatile). Within a section, band/depth priority order
  * (relevance) is preserved. Volatile per-turn content (working context,
@@ -138,7 +138,7 @@ function sha1(text: string): string {
 export const CONTEXT_RENDER_ORDER: Record<string, number> = {
   issue: 1,
   file: 2,
-  knowledge: 3,
+  docs: 3,
   reference: 4,
   skill: 5,
   script: 6,
@@ -300,7 +300,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     pending.push({ kind: "skill", origin: "explicit", ref: name, depth: 0, body: skill.text, band: 2 });
   }
 
-  // Explicit composer includes. These are user-selected knowledge files that
+  // Explicit composer includes. These are user-selected docs files that
   // no composer file or configured index references; they are still ordinary
   // provenance-tracked context blocks.
   for (const path of input.include?.issues ?? []) {
@@ -365,22 +365,22 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     const read = readFileText(abs);
     if (read) pending.push({ kind: "file", origin: "explicit", ref: entry, depth: 0, body: read.text, band: 1 });
   }
-  for (const path of input.include?.knowledge ?? []) {
+  for (const path of input.include?.docs ?? []) {
     const abs = withinRepo(layout.repoRoot, path);
     if (!abs || !existsSync(abs)) {
       pending.push({
-        kind: "knowledge",
+        kind: "docs",
         origin: "explicit",
         ref: path,
         body: "",
         band: 1,
-        warning: "included knowledge is missing or outside the repo",
+        warning: "included docs file is missing or outside the repo",
       });
       continue;
     }
     const read = readFileText(abs);
     if (read) {
-      pending.push({ kind: "knowledge", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
+      pending.push({ kind: "docs", origin: "explicit", ref: path, depth: 0, body: read.text, band: 1 });
     }
   }
   for (const citation of input.include?.references ?? []) {
@@ -455,15 +455,15 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       pending.push({ kind: "issue", origin: "inherited", ref: "issues/", depth: 3, body, band: 7 });
     }
   }
-  if (machine.context.knowledgeIndex) {
-    const abs = withinRepo(layout.repoRoot, machine.context.knowledgeIndex);
+  if (machine.context.docsIndex) {
+    const abs = withinRepo(layout.repoRoot, machine.context.docsIndex);
     if (abs && existsSync(abs)) {
       const read = readFileText(abs);
       if (read) {
         pending.push({
-          kind: "knowledge",
+          kind: "docs",
           origin: "inherited",
-          ref: machine.context.knowledgeIndex,
+          ref: machine.context.docsIndex,
           depth: 3,
           body: read.text,
           band: 7,
@@ -546,7 +546,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // are dropped lowest-priority-first with a named omission; a kept block is
   // never sliced mid-content. Priority is role-aware: engineer/review keep
   // the issue first and working files above docs; research keeps
-  // knowledge/references above files. The issue is never dropped while
+  // docs/references above files. The issue is never dropped while
   // anything else remains.
   const { budget: usable } = sectionBudgets(budget);
 
@@ -560,7 +560,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (item.kind === "parent-run") return 50;
     if (item.kind === "skill" || item.kind === "script") return 40;
     if (item.kind === "issue") return item.origin === "explicit" ? 8 : 22;
-    if (item.kind === "knowledge") {
+    if (item.kind === "docs") {
       if (role === "research") return 20;
       return role === "research" ? 25 : 30;
     }
@@ -687,7 +687,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   }
   const sections: ContextSections = {
     issues: 0,
-    knowledge: 0,
+    docs: 0,
     skills: 0,
     scripts: 0,
     tools: 0,
