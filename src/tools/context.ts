@@ -75,8 +75,10 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     name: "context",
     label: "context",
     description:
-      "Run state and context. note (text; kind finding|decision|open), recall (id), forget (id|text), " +
-      "state, parent (run id).",
+      "Run state and memory. note (kind finding|decision|open) records conclusions; " +
+      "recall (id) fetches stored artifacts; forget resolves facts; state dumps everything; " +
+      "parent loads a parent run's record. " +
+      "For codebase queries (definitions, references, file outlines) use inspect instead.",
     parameters: ContextParams,
     async execute(_id, params: Static<typeof ContextParams>) {
       const memory = ctx.state;

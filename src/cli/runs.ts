@@ -10,14 +10,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout } from "../paths.js";
 import { loadEnvFiles } from "../env.js";
-import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY, AGENT_NAMES, SELECTION_TIERS } from "../config.js";
+
 import { createModelsCollection, availableChatModels, providerStatuses } from "../models.js";
 import { refreshCatalogue } from "../catalogue/refresh.js";
 import { loadCatalogue } from "../catalogue/load.js";
 import { filterModels, siblingOffers, type ModelSort } from "../catalogue/query.js";
 import { snapshotFiles } from "../catalogue/snapshot.js";
 import { pick, axisWeights } from "../select.js";
-import { CAPABILITY_AXES } from "../config.js";
+
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
 import { orchestrate, executeIssue } from "../orchestrate.js";
@@ -27,10 +27,10 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { runProc } from "../proc.js";
-import { agentDef, type AgentName } from "../agents.js";
+import { AGENT_NAMES, agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { policyFor, type OrchestrateResult } from "../orchestrate.js";
+import { type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
@@ -555,10 +555,9 @@ export async function cmdEval(argv: string[]): Promise<number> {
 export async function cmdPack(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv);
   const l = layout();
-  const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
+  const { machine, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const agent = flags.get("agent") ?? "engineer";
-  const agentPolicy = policy.agents[agent];
-  if (!agentPolicy) fail(`unknown agent "${agent}"; choose one of ${Object.keys(policy.agents).join(", ")}`);
+  const agentDefObj = agentDef(l, agent);
 
   let include: import("../context/assemble.js").ContextInclude | undefined;
   const includeFlag = flags.get("context-include");
@@ -582,7 +581,7 @@ export async function cmdPack(argv: string[]): Promise<number> {
   if (!row) {
     const result = pick({
       agent,
-      policy: agentPolicy,
+      agentDef: agentDefObj,
       machine,
       catalogue: catalogueDoc.models,
       configuredProviders,
@@ -597,8 +596,8 @@ export async function cmdPack(argv: string[]): Promise<number> {
   const { assembleContext } = await import("../context/assemble.js");
   const { contextBudget, inputCost } = await import("../context/budget.js");
   const { roleSkillPresets } = await import("../agents.js");
-  const { agentDef } = await import("../agents.js");
-  const budget = contextBudget(row.context || row.capabilities.contextWindow, agentPolicy.expectedOutputTokens);
+  const { agentDef: agentDefLoader } = await import("../agents.js");
+  const budget = contextBudget(row.context || row.capabilities.contextWindow, agentDefObj.expectedOutputTokens);
   const bundle = await assembleContext({
     layout: l,
     machine,
@@ -607,7 +606,7 @@ export async function cmdPack(argv: string[]): Promise<number> {
     budgetChars: budget.inputChars,
     defaultSkills: defaultSkillsFor({ agent }),
     skillPresets: roleSkillPresets(agent),
-    requiredSkills: agentDef(l, agent).requiredSkills,
+    requiredSkills: agentDefLoader(l, agent).requiredSkills,
   });
   const tokens = Math.ceil(bundle.chars / 4);
   const cost = inputCost(tokens, row.pricing.input);

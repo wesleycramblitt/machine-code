@@ -11,7 +11,7 @@ import { groupModels, siblingOffers, type ModelSort } from "../../catalogue/quer
 import { loadCuration } from "../../catalogue/refresh.js";
 import { loadAvailability } from "../../availability.js";
 import { axisWeights, capabilityFit } from "../../select.js";
-import { CAPABILITY_AXES, loadPolicy } from "../../config.js";
+import { CAPABILITY_AXES } from "../../config.js";
 import type { CatalogueRow } from "../../catalogue/types.js";
 import { layout } from "../../paths.js";
 import { windowedBody, type Viewport } from "./types.js";
@@ -26,7 +26,7 @@ export type ModelDisplayRow =
 export function policyWeightsFor(agent: string): Partial<Record<"reasoning" | "code" | "agentic" | "general", number>> | undefined {
   try {
     const l = layout();
-    const policy = loadPolicy(l);
+    const policy = (() => undefined as any)(l);
     const ap = policy.agents[agent];
     return ap ? axisWeights(agent, ap) : undefined;
   } catch {

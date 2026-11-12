@@ -13,7 +13,8 @@
  * and optional per-axis floors. It then uses the same role-weighted axis mix
  * for the fit display, but the selection order is purely cost-based.
  */
-import type { AgentPolicy, CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
+import type { CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
+import type { AgentDef } from "./agents.js";
 import { CAPABILITY_AXES } from "./config.js";
 import { estimateCallCost, type AxisScores } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
@@ -24,8 +25,9 @@ import { loadProviderDefinitions } from "./data.js";
 
 type AxisWeights = Record<CapabilityAxis, number>;
 
-/** Resolve and normalize the axis mix for an agent (policy overrides role defaults). */
-export function axisWeights(agent: string, policy: AgentPolicy): AxisWeights {
+/** Resolve and normalize the axis mix for an agent. Weights come from the
+ * agent TOML's [weights] table via roleWeights(). */
+export function axisWeights(agent: string, _def: AgentDef): AxisWeights {
   const dataWeights = roleWeights(agent);
   const base: AxisWeights = {
     reasoning: dataWeights.reasoning ?? 0.25,
@@ -34,10 +36,6 @@ export function axisWeights(agent: string, policy: AgentPolicy): AxisWeights {
     general: dataWeights.general ?? 0.25,
   };
   const merged: AxisWeights = { ...base };
-  for (const axis of CAPABILITY_AXES) {
-    const value = policy.axisWeights?.[axis];
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) merged[axis] = value;
-  }
   const sum = CAPABILITY_AXES.reduce((total, axis) => total + merged[axis], 0);
   if (!(sum > 0)) return { ...base };
   for (const axis of CAPABILITY_AXES) merged[axis] = merged[axis] / sum;
@@ -105,7 +103,7 @@ export interface PickResult {
 
 export interface PickInput {
   agent: string;
-  policy: AgentPolicy;
+  agentDef: AgentDef;
   machine: MachineConfig;
   catalogue: readonly CatalogueRow[];
   /** Providers with complete credentials. */
@@ -209,6 +207,7 @@ function rejectReason(
   estimate: PickEstimate,
   weights: AxisWeights,
 ): string | null {
+  const def = input.agentDef;
   if (input.tier === "local" && row.providerID !== "ollama") return "paid-model";
   if (input.tier === "paid" && row.providerID === "ollama") return "local-model";
   // Free (zero-cost) offers are for the local tier only; the paid tier should
@@ -227,24 +226,24 @@ function rejectReason(
   }
   if (row.coding === false) return "non-coding-model";
   if (isMetaRouter(row)) return "router-model";
-  if (input.policy.toolCall && !row.toolCall) return "no-tool-support";
+  if (def.toolCall && !row.toolCall) return "no-tool-support";
   // Local tier models (Ollama) are zero-cost and don't need a funded provider.
   if (input.tier !== "local" && input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
-  if (input.policy.minFit > 0 && capabilityFit(row.scores, weights) < input.policy.minFit) {
+  if (def.minFit > 0 && capabilityFit(row.scores, weights) < def.minFit) {
     return "below-min-fit";
   }
-  if (input.policy.minCapability > 0 && row.scores.capability < input.policy.minCapability) {
+  if (def.minCapability > 0 && row.scores.capability < def.minCapability) {
     return "below-min-capability";
   }
   // Per-axis floors are for paid tier only; local models use metadata-based
   // scores in the 3-6 range and would almost always fail the paid-tier floors.
   if (input.tier !== "local") {
     for (const axis of CAPABILITY_AXES) {
-      const floor = input.policy.minAxes?.[axis];
+      const floor = def.minAxes?.[axis];
       if (floor !== undefined && floor > 0 && row.scores[axis] < floor) return `below-min-${axis}`;
     }
   }
-  if (row.context < input.policy.minContext) return "below-min-context";
+  if (row.context < def.minContext) return "below-min-context";
   return null;
 }
 
@@ -262,15 +261,17 @@ export function modelStatus(
   row: CatalogueRow,
   input: PickInput,
 ): { eligible: true } | { eligible: false; reason: string } {
-  const weights = axisWeights(input.agent, input.policy);
-  const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens ?? 32);
+  const def = input.agentDef;
+  const weights = axisWeights(input.agent, def);
+  const estimate = estimateTokens(input.contextChars, def.expectedOutputTokens ?? 32);
   const reason = rejectReason(row, input, estimate, weights);
   return reason ? { eligible: false, reason } : { eligible: true };
 }
 
 export function pick(input: PickInput): PickResult | PickFailure {
-  const weights = axisWeights(input.agent, input.policy);
-  const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens ?? 32);
+  const def = input.agentDef;
+  const weights = axisWeights(input.agent, def);
+  const estimate = estimateTokens(input.contextChars, def.expectedOutputTokens ?? 32);
   const vetoes = input.machine.vetoes;
   const rejections = new Map<string, number>();
   const rejected: RejectedCandidate[] = [];

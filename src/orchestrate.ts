@@ -10,7 +10,7 @@
  * `runLoop` (M0) runs a single agent; this layer chains phases per mode.
  */
 import { runLoop, type RunLoopInput, type RunLoopResult } from "./loop.js";
-import { DEFAULT_AGENT_POLICY, type MachineConfig, type Policy, type AgentPolicy } from "./config.js";
+import type { MachineConfig } from "./config.js";
 import { type AgentDef, type AgentName } from "./agents.js";
 import { resolveAgent, type AgentConfig } from "./agents/config.js";
 import { type MutableModels } from "./models.js";
@@ -41,7 +41,6 @@ export interface OrchestrateInput {
   configuredProviders: ReadonlySet<string>;
   layout: Layout;
   machine: MachineConfig;
-  policy: Policy;
   agentName: AgentName | undefined;
   request: string;
   /** Main repository root: run state, spend, instances. */
@@ -89,8 +88,6 @@ export async function singleAgentRun(input: {
   agent: AgentDef;
   agentConfig?: AgentConfig;
   agentCapabilities?: string[];
-  policy: AgentPolicy;
-  fullPolicy: Policy;
   layout: Layout;
   machine: MachineConfig;
   request: string;
@@ -115,9 +112,7 @@ export async function singleAgentRun(input: {
     agent: input.agent,
     agentConfig: input.agentConfig,
     agentCapabilities: input.agentCapabilities,
-    policy: input.policy,
     layout: input.layout,
-    fullPolicy: input.fullPolicy,
     machine: input.machine,
     request: input.request,
     root: input.root,
@@ -135,17 +130,12 @@ export async function singleAgentRun(input: {
   });
 }
 
-export function policyFor(layout: Layout, name: AgentName, policy: Policy): AgentPolicy {
-  return policy.agents[name] ?? { ...DEFAULT_AGENT_POLICY, toolCall: name !== "research" };
-}
-
 export interface ExecuteIssueInput {
   models: MutableModels;
   catalogue: readonly CatalogueRow[];
   configuredProviders: ReadonlySet<string>;
   layout: Layout;
   machine: MachineConfig;
-  policy: Policy;
   packet: TaskPacket;
   request: string;
   root: string;
@@ -171,7 +161,7 @@ export interface ExecuteIssueInput {
  * This is the deterministic path: Engineer → gates → Review → commit.
  */
 export async function executeIssue(input: ExecuteIssueInput): Promise<OrchestrateResult> {
-  const { layout, machine, policy, packet, recorder } = input;
+  const { layout, machine, packet, recorder } = input;
   const root = input.root;
   const toolRoot = input.toolRoot ?? root;
   const modelCommands = allCommands(layout);
@@ -253,13 +243,11 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
       .map((source) => source.ref as string),
   ];
   const resolvedEngineer = resolveAgent(layout, "engineer", {
-    agentPolicy: policy.agents.engineer,
     machineOverrides: machine.agents.engineer,
     runOverrides: input.agentOverrides,
     verification,
   });
   recorder.recordConfig({ ...resolvedEngineer.config, capabilities: resolvedEngineer.capabilities });
-  const engineerPolicy = policyFor(layout, "engineer", policy);
   const buildRequest =
     `Implement this issue exactly:\n\n${JSON.stringify(packet, null, 2)}\n\n` +
     "Acceptance commands must pass. If the issue is wrong or a gate cannot run, report blocked with evidence.";
@@ -270,8 +258,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     agent: resolvedEngineer.def,
     agentConfig: resolvedEngineer.config,
     agentCapabilities: resolvedEngineer.capabilities,
-    policy: engineerPolicy,
-    fullPolicy: policy,
     layout,
     machine,
     request: buildRequest,
@@ -385,7 +371,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
 }
 
 export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateResult> {
-  const { layout, machine, policy, root, recorder } = input;
+  const { layout, machine, root, recorder } = input;
   if (input.packet) {
     return executeIssue({
       models: input.models,
@@ -393,7 +379,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       configuredProviders: input.configuredProviders,
       layout,
       machine,
-      policy,
       packet: input.packet,
       request: input.packet.goal,
       root,
@@ -472,7 +457,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     researchSeedFiles = mergedSeeds.length > 0 ? mergedSeeds : undefined;
   }
   const resolved = resolveAgent(layout, selectedName, {
-    agentPolicy: policy.agents[selectedName],
     machineOverrides: machine.agents[selectedName],
     runOverrides: input.agentOverrides,
   });
@@ -485,8 +469,6 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     agent: resolved.def,
     agentConfig: resolved.config,
     agentCapabilities: resolved.capabilities,
-    policy: policyFor(layout, selectedName, policy),
-    fullPolicy: policy,
     layout,
     machine,
     request: input.request,

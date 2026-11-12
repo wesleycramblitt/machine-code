@@ -42,6 +42,25 @@ export interface AgentDef {
   allowedPaths?: readonly string[];
   /** Skills the agent requires at minimum "on-demand" mode (cannot be excluded). */
   requiredSkills: readonly string[];
+  /* ---- model selection thresholds ---- */
+  /** Role-weighted capability floor (0-10); the primary per-role quality gate. */
+  minFit: number;
+  /** Hard per-axis floors (0-10); omitted axes have no floor. */
+  minAxes?: Partial<Record<import("./config.js").CapabilityAxis, number>>;
+  /** Minimum context window in tokens; models below this are rejected. */
+  minContext: number;
+  /** Fixed per-agent output estimate used by the selector. */
+  expectedOutputTokens: number;
+  /** Per-agent output-token ceiling override. */
+  maxOutputTokens?: number;
+  /** Total token budget for one run. */
+  budgetTokens?: number;
+  /** Hard cap on assistant turns for one run. */
+  maxTurns?: number;
+  /** Neutral composite capability floor (0-10); broad safety only. */
+  minCapability: number;
+  /** Whether the agent calls tools (drives the tool-support hard filter). */
+  toolCall: boolean;
 }
 
 interface RoleData {
@@ -61,6 +80,7 @@ interface RoleData {
   base_prompt?: unknown;
   allowed_paths?: unknown;
   required_skills?: unknown;
+  selection?: unknown;  /* TOML table: min_fit, axes, etc. */
   weights?: Record<string, unknown>;
   /** Per-skill context-mode preset table: `[skills] clean-code = "include"`. */
   skills?: Record<string, unknown>;
@@ -103,6 +123,25 @@ function roleData(name: string): RoleData {
 function roleOrder(role: RoleData): number {
   const n = Number(role.order);
   return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+function asNum(obj: unknown, key: string): number | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const v = (obj as Record<string, unknown>)[key];
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function asAxisMap(obj: unknown, key: string): Record<string, number> | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const v = (obj as Record<string, unknown>)[key];
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    const n = typeof val === "number" ? val : Number(val);
+    if (Number.isFinite(n) && n >= 0) out[k] = n;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export const AGENT_NAMES: readonly string[] = Object.entries(agentsData().roles)
@@ -220,6 +259,19 @@ export function agentDef(layout: Layout, name: AgentName): AgentDef {
     preset: typeof role.preset === "string" ? role.preset : "assistant",
     allowedPaths: strings(role.allowed_paths),
     requiredSkills: strings(role.required_skills),
+    /* ---- model selection (from role TOML [selection], with defaults) ---- */
+    minFit: asNum(role.selection, "min_fit") ?? 6.0,
+    minAxes: asAxisMap(role.selection, "axes"),
+    minContext: asNum(role.selection, "min_context") ?? 32000,
+    expectedOutputTokens: asNum(role.selection, "expected_output_tokens") ?? 2000,
+    maxOutputTokens: asNum(role.selection, "max_output_tokens"),
+    budgetTokens: asNum(role.selection, "budget_tokens"),
+    maxTurns: asNum(role.selection, "max_turns"),
+    minCapability: asNum(role.selection, "min_capability") ?? 0,
+    toolCall: (() => {
+      const sel = role.selection as Record<string, unknown> | undefined;
+      return typeof sel?.tool_call === "boolean" ? sel.tool_call : true;
+    })(),
   };
 }
 

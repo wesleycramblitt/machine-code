@@ -10,14 +10,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout } from "../paths.js";
 import { loadEnvFiles } from "../env.js";
-import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY, AGENT_NAMES, SELECTION_TIERS } from "../config.js";
+
 import { createModelsCollection, availableChatModels, providerStatuses } from "../models.js";
 import { refreshCatalogue } from "../catalogue/refresh.js";
 import { loadCatalogue } from "../catalogue/load.js";
 import { filterModels, siblingOffers, type ModelSort } from "../catalogue/query.js";
 import { snapshotFiles } from "../catalogue/snapshot.js";
 import { pick, axisWeights } from "../select.js";
-import { CAPABILITY_AXES } from "../config.js";
+
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
 import { orchestrate, executeIssue } from "../orchestrate.js";
@@ -28,9 +28,10 @@ import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
+import { loadMachineConfig, ConfigError, AGENT_NAMES, SELECTION_TIERS } from "../config.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { policyFor, type OrchestrateResult } from "../orchestrate.js";
+import { type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
@@ -59,7 +60,6 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 
 export interface Runtime {
   machine: ReturnType<typeof loadMachineConfig>;
-  policy: ReturnType<typeof loadPolicy>;
   models: ReturnType<typeof createModelsCollection>;
   catalogue: NonNullable<ReturnType<typeof loadCatalogue>>;
   configuredProviders: Set<string>;
@@ -68,10 +68,8 @@ export interface Runtime {
 /** Shared setup for run/resume: config, providers, catalogue. */
 export async function loadRuntime(l: ReturnType<typeof layout>): Promise<Runtime> {
   let machine;
-  let policy;
   try {
     machine = loadMachineConfig(l);
-    policy = loadPolicy(l);
   } catch (error) {
     if (error instanceof ConfigError) fail(error.message);
     throw error;
@@ -120,7 +118,7 @@ export async function loadRuntime(l: ReturnType<typeof layout>): Promise<Runtime
       process.stderr.write(`warning: catalogue reconcile failed (${(error as Error).message}); using cached catalogue\n`);
     }
   }
-  return { machine, policy, models, catalogue, configuredProviders };
+  return { machine, models, catalogue, configuredProviders };
 }
 
 export const VERSION = "0.0.0";

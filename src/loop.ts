@@ -12,7 +12,7 @@
  */
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
-import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
+import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
 import { estimateTokens, pick, providerMultiplier, relaxPinForFailure } from "./select.js";
 import { applyClassification, classifyError, loadAvailability, resetModelTier, resetProviderTier, saveAvailability } from "./availability.js";
@@ -95,7 +95,6 @@ export interface RunLoopInput {
   catalogue: readonly CatalogueRow[];
   configuredProviders: ReadonlySet<string>;
   agent: AgentDef;
-  policy: AgentPolicy;
   machine: MachineConfig;
   request: string;
   /** Main repository root: run state, spend, instances. */
@@ -258,10 +257,9 @@ export function stripTrailingPrompt(messages: AgentMessage[], request: string): 
 
 export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const { recorder } = input;
-  const policy = input.policy;
   const maxTurns =
-    policy.maxTurns === undefined ? MAX_TURNS : Math.max(0, Math.floor(policy.maxTurns));
-  const ceiling = effectiveOutputCeiling(policy, input.machine);
+    input.agent.maxTurns === undefined ? MAX_TURNS : Math.max(0, Math.floor(input.agent.maxTurns));
+  const ceiling = effectiveOutputCeiling(input.agent, input.machine);
   const configuredProviders = input.configuredProviders;
   const fundedProviders = fundedProviderIds(input.machine.providers);
   // Callers normally load this, but a direct run must still respect persisted

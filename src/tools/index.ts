@@ -281,10 +281,11 @@ export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
     name: "read",
     label: "read",
     description:
-      "Read a file; returns numbered lines. A bare read returns the whole file up to the per-call page cap — " +
-      "over the cap it returns the symbol outline instead of a truncated dump. " +
-      "An offset/limit window inside one code block auto-expands to the enclosing symbol when it fits. " +
-      "Use symbol/around/offset+limit for a targeted block, or allow_large for a bigger file.",
+      "Read a file; returns numbered lines. A bare read of a large file returns its outline " +
+      "(symbols + doc) instead of a truncated dump — use {allow_large: true} for the full body. " +
+      "Use {symbol} or {around} for a targeted block; an offset window inside one symbol " +
+      "auto-expands to the enclosing block. " +
+      "For symbol definitions + callers + source in one call, use inspect instead.",
     parameters: ReadParams,
     prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
     async execute(_id, raw: Static<typeof ReadParams>) {
@@ -1480,8 +1481,9 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
     name: "search",
     label: "search",
     description:
-      "Find code. Pass an identifier, a file path, or a regex; the harness returns definitions, " +
-      "an outline, or text matches. Scope with path or paths.",
+      "Find code by identifier, file path, or regex. Smart dispatch: identifier → symbol lookup " +
+      "(definition + references + read anchors); file path → outline; regex → grep-like text matches. " +
+      "Use inspect for one-shot symbol+references+source. grep for raw text search scoped to a path.",
     parameters: SearchParams,
     prepareArguments: (args) => cleanSearchArgs(args) as Static<typeof SearchParams>,
     async execute(_id, params: Static<typeof SearchParams>) {
@@ -2153,9 +2155,10 @@ export function mapTool(ctx: ToolContext): AgentTool<typeof MapParams> {
     name: "map",
     label: "map",
     description:
-      "Understand code structure. overview: files and symbols; outline: one file's symbols; " +
-      "symbols: find by name; locate: definitions and references; semantic: module concept search. " +
-      "Use grep for raw text, glob for paths, read for contents.",
+      "Understand code structure: overview (directory listing with symbol counts), outline (one file's " +
+      "top-level symbols), sections (comment banners in a large file), render (full repo map dump). " +
+      "Prefer inspect for symbol definitions, references, and file outlines — map is lighter weight " +
+      "for quick directory/file overviews. Use grep for raw text, glob for paths.",
     parameters: MapParams,
     prepareArguments: (args) => cleanMapArgs(args) as Static<typeof MapParams>,
     async execute(id, params: Static<typeof MapParams>) {

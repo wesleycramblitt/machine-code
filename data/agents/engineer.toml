@@ -12,6 +12,15 @@ approval = "human"
 ambiguity = "precise"
 capabilities = ["code:read", "context:inherit", "code:write", "artifact:provision"]
 
+[selection]
+min_fit = 6.0
+
+[selection.axes]
+code = 5.5
+agentic = 5.0
+reasoning = 6.0
+general = 5.0
+
 [weights]
 code = 0.4
 agentic = 0.2

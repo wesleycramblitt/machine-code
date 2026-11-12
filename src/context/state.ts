@@ -22,8 +22,6 @@ import type { ProcessSupervisor } from "../processes/supervisor.js";
 
 /** Keep the model-facing state block compact; full facts remain in state.jsonl. */
 const MAX_STATE_CHARS = 10_000;
-const EDIT_NEXT = /^(?:make the first edit|make the edit)\b/i;
-const FINISH_NEXT = "Change recorded; finish remaining edits, then call finish.";
 
 export type FactKind = "finding" | "decision" | "change";
 export type RefKind = "read" | "search" | "edit" | "focus";
@@ -59,9 +57,6 @@ export interface RunState {
   runId: string;
   goal: string;
   phase: "orient" | "target" | "act" | "verify" | "done";
-  nextAction?: string;
-  /** Turn that recorded the current next action. */
-  nextActionTurn?: number;
   facts: Fact[];
   workingSet: Ref[];
   open: OpenQuestion[];
@@ -436,10 +431,6 @@ export class RunStateStore {
         if (open) open.status = "answered";
         break;
       }
-      case "next":
-        this.state.nextAction = entry.text.trim() || undefined;
-        this.state.nextActionTurn = entry.turn ?? this.state.counters.turn;
-        break;
       case "focus":
         this.state.workingSet = entry.refs.slice();
         break;
@@ -456,7 +447,7 @@ export class RunStateStore {
     }
   }
 
-  note(kind: "finding" | "decision" | "open" | "next", text: string, refs: string[] = [], turn?: number): void {
+  private note(kind: "finding" | "decision" | "open", text: string, refs: string[] = [], turn?: number): void {
     const clean = text.replace(/\s+/g, " ").trim();
     if (!clean) return;
     const at = turn ?? this.currentTurn();
@@ -596,18 +587,16 @@ export class RunStateStore {
     const maxChars = options.maxChars ?? 8_000;
     const perFileChars = options.perFileChars ?? 6_000;
     const maxFiles = options.maxFiles ?? 6;
-    const nextText = [
-      this.state.nextAction ?? "",
-      ...this.state.facts
-        .filter((fact) => fact.kind === "decision" && fact.status === "active")
-        .map((fact) => fact.text),
-    ].join("\n");
+    const decisionText = this.state.facts
+      .filter((fact) => fact.kind === "decision" && fact.status === "active")
+      .map((fact) => fact.text)
+      .join("\n");
     const focus = new Set(this.state.workingSet.map((ref) => ref.path));
     const score = (entry: WorkingFileState): number =>
       (entry.changed ? 1_000 : 0) +
       (entry.preloaded ? 300 : 0) +
       (focus.has(entry.path) ? 200 : 0) +
-      (nextText.includes(entry.path) || nextText.includes(basename(entry.path)) ? 500 : 0) +
+      (decisionText.includes(entry.path) || decisionText.includes(basename(entry.path)) ? 500 : 0) +
       Math.min(200, entry.lastTurn);
     // Only files the model is acting on: edited (their current bytes differ
     // from the transcript), explicitly focused, or fully read outside the
@@ -876,14 +865,6 @@ export class RunStateStore {
 
 
 
-  /** Replace a "first edit" next action once a change exists. */
-  private settleNextAfterChange(turn: number): void {
-    if (!this.state.nextAction || EDIT_NEXT.test(this.state.nextAction)) {
-      this.append({ type: "next", text: FINISH_NEXT, turn });
-    }
-  }
-
-
 
   addChangeFact(
     path: string,
@@ -905,7 +886,6 @@ export class RunStateStore {
         key: `change:${path}`,
       },
     });
-    this.settleNextAfterChange(turn);
   }
 
   /** Ingest the assistant message and its tool results once per completed turn. */

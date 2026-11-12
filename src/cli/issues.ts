@@ -306,7 +306,6 @@ export async function runIssueBuild(
       availability: loadAvailability(l.home),
       layout: l,
       machine: runtime.machine,
-      policy: runtime.policy,
       packet,
       include: { issues: [issue.rel] },
       request: goal,

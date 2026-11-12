@@ -155,20 +155,36 @@ Over 20 turns: ~260-740 KB of tokens saved.
 
 ---
 
-## Phase 5 — LSP Integration (not started)
+## Phase 5 — LSP Integration ✅
 
-The `inspect` tool will use LSP for symbol-level queries when available:
+The `inspect` tool uses LSP for symbol-level queries when a language server is
+available:
 
 ```
 inspect target=symbol name=MeshGenerator
-  → LSP definition + references (primary)
-  → regex fallback if LSP unavailable
+  → LSP workspace symbols (primary)
+  → repo map regex fallback if LSP unavailable
+
+inspect target=references name=MeshGenerator
+  → LSP references (primary)
+  → import-based reference detection as fallback
+
+inspect target=file path=src/mesh.ts
+  → LSP document symbols for outline (summary)
+  → repo map file outline as fallback
 ```
 
-For file/directory queries, `inspect` uses CLI commands — no LSP dependency.
+Three lazy-loaded LSP helpers were added to `src/tools/inspect.ts`:
+- **`lspSymbolLookup`** — `workspaceSymbols()` to locate a symbol across all
+  open languages, with definition location appended.
+- **`lspReferencesLookup`** — `workspaceSymbols()` + `references()` for
+  precise reference locations (file:line:col).
+- **`lspFileOutline`** — `documentSymbols()` for nested container-aware
+  outlines (classes, methods, interfaces with children).
 
-The system works without LSP installed.  LSP is a precision enhancement, not a
-hard requirement.
+The system works without LSP installed — every LSP call is wrapped in a
+`try/catch` and falls back to the deterministic map.  LSP is a precision
+enhancement, not a hard requirement.
 
 ---
 

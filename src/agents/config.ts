@@ -6,7 +6,7 @@
  * Only two config fields exist: approval (human|agent) and ambiguity
  * (strict|precise|adaptive|autonomous).
  */
-import type { AgentConfigOverrides, AgentPolicy } from "../config.js";
+import type { AgentConfigOverrides } from "../config.js";
 import {
   AGENT_NAMES,
   agentDef,
@@ -41,8 +41,6 @@ function roleDefaults(name: AgentName): AgentConfig {
 
 export interface ResolveInput {
   role: AgentName;
-  /** Repo policy [agents.<role>] (may carry both token policy and config). */
-  agentPolicy?: AgentPolicy;
   /** Machine config [agents.<role>] overrides. */
   machineOverrides?: AgentConfigOverrides;
   /** Run-level explicit overrides (CLI flags). */
@@ -57,7 +55,6 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
 
   const layers: Array<AgentConfigOverrides | undefined> = [
     machineOverridesToConfig(input.machineOverrides),
-    agentPolicyToConfig(input.agentPolicy),
   ];
   for (const layer of layers) {
     if (!layer) continue;
@@ -72,15 +69,6 @@ export function resolveAgentConfig(input: ResolveInput): AgentConfig {
     if (input.runOverrides.ambiguity !== undefined) config.ambiguity = input.runOverrides.ambiguity;
   }
   return config;
-}
-
-function agentPolicyToConfig(policy: AgentPolicy | undefined): AgentConfigOverrides | undefined {
-  if (!policy) return undefined;
-  const out: AgentConfigOverrides = {};
-  if (policy.approval !== undefined) out.approval = policy.approval;
-  if (policy.ambiguity !== undefined) out.ambiguity = policy.ambiguity;
-  const hasAny = Object.values(out).some((v) => v !== undefined);
-  return hasAny ? out : undefined;
 }
 
 function machineOverridesToConfig(o: AgentConfigOverrides | undefined): AgentConfigOverrides | undefined {
@@ -194,7 +182,6 @@ export function resolveAgent(
   layout: Layout,
   role: AgentName,
   opts: {
-    agentPolicy?: AgentPolicy;
     machineOverrides?: AgentConfigOverrides;
     runOverrides?: Partial<AgentConfig>;
     verification?: "direct" | "verified";
@@ -203,7 +190,6 @@ export function resolveAgent(
   const def = agentDef(layout, role);
   const config = resolveAgentConfig({
     role,
-    agentPolicy: opts.agentPolicy,
     machineOverrides: opts.machineOverrides,
     runOverrides: opts.runOverrides,
   });

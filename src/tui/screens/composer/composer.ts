@@ -72,7 +72,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const newRunIssue = run.item ? findIssue(layout(repoRoot), run.item) : undefined;
   const displayAgent = run.agent ? `${run.agent[0]!.toUpperCase()}${run.agent.slice(1)}` : run.agent;
   const resolvedAgent = resolveAgent(layout(repoRoot), run.agent, {
-    agentPolicy: ap,
     machineOverrides: preview.machine?.agents[run.agent],
     runOverrides: {
       approval: run.approval,

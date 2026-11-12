@@ -1,10 +1,10 @@
 /**
- * machine_code — config.toml and policy.toml loaders.
+ * machine_code — config.toml loader.
  *
  * config.toml (machine): rate caps, vetoes, default output-token ceiling,
  * default run mode. Only the machine may set money.
- * policy.toml (repo, committed): per-agent requirements; may override the
- * output-token ceiling per agent. Unknown keys are ignored (forward-compat).
+ * Selection thresholds live in data/agents/*.toml [selection]; defaults in
+ * data/defaults.toml. Unknown keys are ignored (forward-compat).
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -168,10 +168,6 @@ export interface AgentPolicy {
   ambiguity?: string;
 }
 
-export interface Policy {
-  agents: Record<string, AgentPolicy>;
-}
-
 export class ConfigError extends Error {}
 
 function asNumber(value: unknown): number | undefined {
@@ -307,14 +303,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
 
 const policyDefaults = loadTomlData<{ policy?: Record<string, unknown> }>("defaults.toml").policy ?? {};
 
-export const DEFAULT_AGENT_POLICY: AgentPolicy = {
-  minContext: asNumber(policyDefaults.min_context) ?? 32_000,
-  expectedOutputTokens: asNumber(policyDefaults.expected_output_tokens) ?? 2_000,
-  minCapability: asNumber(policyDefaults.min_capability) ?? 0,
-  minFit: asNumber(policyDefaults.min_fit) ?? 6,
-  toolCall: typeof policyDefaults.tool_call === "boolean" ? policyDefaults.tool_call : true,
-};
-
 function asAxisMap(value: unknown, label: string): Partial<Record<CapabilityAxis, number>> | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -347,41 +335,35 @@ function mergeAxes<T extends Partial<Record<CapabilityAxis, number>> | undefined
   return { ...(base ?? {}), ...override } as T;
 }
 
-function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_AGENT_POLICY): AgentPolicy {
-  const raw = (value ?? {}) as Record<string, unknown>;
-  return {
-    minContext: asNumber(raw.min_context) ?? base.minContext,
-    expectedOutputTokens: asNumber(raw.expected_output_tokens) ?? base.expectedOutputTokens,
-    maxOutputTokens: asNumber(raw.max_output_tokens) ?? base.maxOutputTokens,
-    budgetTokens: asNumber(raw.budget_tokens) ?? base.budgetTokens,
-    maxTurns: asNumber(raw.max_turns) ?? base.maxTurns,
-    minCapability: asNumber(raw.min_capability) ?? base.minCapability,
-    minFit: asNumber(raw.min_fit) ?? base.minFit,
-    minAxes: mergeAxes(base.minAxes, asAxisMap(raw.axes, `${label}.axes`)),
-    axisWeights: mergeAxes(base.axisWeights, asAxisMap(raw.weights, `${label}.weights`)),
-    toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : base.toolCall,
-    preset: typeof raw.preset === "string" ? raw.preset : typeof raw.config_mode === "string" ? raw.config_mode : base.preset,
-    approval: typeof raw.approval === "string" ? raw.approval : base.approval,
-    ambiguity: typeof raw.ambiguity === "string" ? raw.ambiguity : base.ambiguity,
-  };
-}
 
 export { AGENT_NAMES };
 
-export function loadPolicy(layout: Layout): Policy {
-  const machineRaw = readToml(layout.machineConfig, "machine config");
-  const selectionRaw = (machineRaw.selection ?? {}) as Record<string, unknown>;
-  const machineAgents = (machineRaw.agents ?? {}) as Record<string, unknown>;
-  const repoRaw = readToml(layout.policyFile, "repo policy");
-  const repoAgents = (repoRaw.agents ?? {}) as Record<string, unknown>;
+/**
+ * Minimal policy stub for CLI commands that display model selection settings.
+ * Returns per-agent thresholds from the shipped agent definitions, with no
+ * filesystem overrides. For real selection, selectFor() reads from agentDef
+ * directly.
+ */
+export interface Policy {
+  agents: Record<string, AgentPolicy>;
+}
 
-  const agents: Record<string, AgentPolicy> = {};
-  for (const name of AGENT_NAMES) {
-    const global = agentPolicy(selectionRaw, "selection");
-    const machine = agentPolicy(machineAgents[name], `agents.${name}`, global);
-    agents[name] = agentPolicy(repoAgents[name], `agents.${name}`, machine);
-  }
-  return { agents };
+export const DEFAULT_AGENT_POLICY: AgentPolicy = {
+  minContext: 0,
+  expectedOutputTokens: 0,
+  minCapability: 0,
+  minFit: 0,
+  toolCall: false,
+};
+
+/**
+ * Minimal policy stub for CLI commands that display model selection settings.
+ * Returns per-agent thresholds from the shipped agent definitions, with no
+ * filesystem overrides. For real selection, selectFor() reads from agentDef
+ * directly.
+ */
+export function loadPolicy(layout: Layout): Policy {
+  return { agents: {} as Record<string, AgentPolicy> };
 }
 
 /**

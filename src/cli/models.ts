@@ -30,7 +30,7 @@ import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { policyFor, type OrchestrateResult } from "../orchestrate.js";
+import { type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
@@ -147,22 +147,21 @@ export function cmdModels(argv: string[]): number {
 
   const agent = flags.get("agent");
   if (agent) {
-    const ap = policy.agents[agent];
-    if (!ap) fail(`unknown agent "${agent}"; choose one of ${Object.keys(policy.agents).join(", ")}`);
+    const def = agentDef(l, agent);
     const contextChars = flags.has("context-chars") ? Number(flags.get("context-chars")) : 16_000;
     if (!Number.isFinite(contextChars) || contextChars <= 0) fail("--context-chars needs a positive number");
     const fitOverride = flags.has("min-fit") ? Number(flags.get("min-fit")) : undefined;
     if (fitOverride !== undefined && (!Number.isFinite(fitOverride) || fitOverride < 0 || fitOverride > 10)) {
       fail("--min-fit needs a number in 0-10");
     }
-    if (fitOverride !== undefined) ap.minFit = fitOverride;
+    def.minFit = fitOverride ?? def.minFit;
     const override = flags.has("min-capability") ? Number(flags.get("min-capability")) : undefined;
     if (override !== undefined && (!Number.isFinite(override) || override < 0 || override > 10)) {
       fail("--min-capability needs a number in 0-10");
     }
-    if (override !== undefined) ap.minCapability = override;
+    def.minCapability = override ?? def.minCapability;
     const axesOverride = flags.get("min-axes");
-    if (axesOverride) ap.minAxes = { ...(ap.minAxes ?? {}), ...parseAxisOverrides(axesOverride) };
+    if (axesOverride) def.minAxes = { ...(def.minAxes ?? {}), ...parseAxisOverrides(axesOverride) };
     const dryPrice = (name: string): number | undefined => {
       const raw = flags.get(name);
       if (raw === undefined) return undefined;
@@ -177,7 +176,7 @@ export function cmdModels(argv: string[]): number {
     if (dryMaxOut !== undefined) machine.priceCaps.output = dryMaxOut;
     const result = pick({
       agent,
-      policy: ap,
+      agentDef: def,
       machine,
       catalogue: doc.models,
       configuredProviders: configured,
@@ -199,12 +198,12 @@ export function cmdModels(argv: string[]): number {
       }
       return 1;
     }
-    const weights = axisWeights(agent, ap);
-    const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
-      .map((axis) => `${axis}>=${ap.minAxes![axis]}`)
+    const weights = axisWeights(agent, def);
+    const floors = CAPABILITY_AXES.filter((axis) => (def.minAxes?.[axis] ?? 0) > 0)
+      .map((axis) => `${axis}>=${def.minAxes![axis]}`)
       .join(" ");
     process.stdout.write(
-      `agent ${agent}  tier ${machine.selection.tier}  min_context ${ap.minContext}  min_fit ${ap.minFit}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
+      `agent ${agent}  tier ${machine.selection.tier}  min_context ${def.minContext}  min_fit ${def.minFit}  min_capability ${def.minCapability}  tool_call ${def.toolCall}\n`,
     );
     process.stdout.write(
       `axes ${floors || "(no axis floors)"}\n` +

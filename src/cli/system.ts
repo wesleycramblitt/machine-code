@@ -10,14 +10,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout } from "../paths.js";
 import { loadEnvFiles } from "../env.js";
-import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY, AGENT_NAMES, SELECTION_TIERS } from "../config.js";
+
 import { createModelsCollection, availableChatModels, providerStatuses } from "../models.js";
 import { refreshCatalogue } from "../catalogue/refresh.js";
 import { loadCatalogue } from "../catalogue/load.js";
 import { filterModels, siblingOffers, type ModelSort } from "../catalogue/query.js";
 import { snapshotFiles } from "../catalogue/snapshot.js";
 import { pick, axisWeights } from "../select.js";
-import { CAPABILITY_AXES } from "../config.js";
+import { loadMachineConfig, ConfigError, AGENT_NAMES, SELECTION_TIERS, CAPABILITY_AXES } from "../config.js";
+
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
 import { orchestrate, executeIssue } from "../orchestrate.js";
@@ -30,7 +31,7 @@ import { runProc } from "../proc.js";
 import { agentDef, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { policyFor, type OrchestrateResult } from "../orchestrate.js";
+import { type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
@@ -132,7 +133,6 @@ export function cmdInit(): number {
 
   try {
     loadMachineConfig(l);
-    loadPolicy(l);
   } catch (error) {
     if (error instanceof ConfigError) fail(error.message);
     throw error;
@@ -275,7 +275,6 @@ export function cmdPolicy(argv: string[]): number {
   }
 
   const machine = loadMachineConfig(l);
-  const policy = loadPolicy(l);
 
   if (flags.has("json")) {
     process.stdout.write(
@@ -283,12 +282,6 @@ export function cmdPolicy(argv: string[]): number {
         {
           tier: machine.selection.tier,
           providers: machine.providers,
-          builtIn: DEFAULT_AGENT_POLICY,
-          agents: policy.agents,
-          modes: Object.fromEntries(AGENT_NAMES.map((name) => {
-            const def = agentDef(l, name);
-            return [name, { modes: def.modes, default: def.defaultMode ?? null, config: def.modeConfig }];
-          })),
           files: { machine: l.machineConfig, repo: l.policyFile },
         },
         null,
@@ -312,24 +305,22 @@ export function cmdPolicy(argv: string[]): number {
       `provider multipliers: ${multipliers.map(([id, v]) => `${id} ×${v.costMultiplier}`).join("  ")}\n`,
     );
   }
-  process.stdout.write(`machine defaults: ${l.machineConfig}  [selection] / [agents.<role>]\n`);
-  process.stdout.write(`repo overrides:   ${l.policyFile}  [agents.<role>]\n`);
-  process.stdout.write(`built-in:         min_fit ${DEFAULT_AGENT_POLICY.minFit}  min_capability ${DEFAULT_AGENT_POLICY.minCapability}  min_context ${DEFAULT_AGENT_POLICY.minContext}  expected_out ${DEFAULT_AGENT_POLICY.expectedOutputTokens}\n`);
+  process.stdout.write(`machine config:    ${l.machineConfig}\n`);
+  process.stdout.write(`repo policy file:  ${l.policyFile}\n`);
 
   const names = role ? [role] : [...AGENT_NAMES];
   for (const name of names) {
-    const ap = policy.agents[name]!;
-    const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
-      .map((axis) => `${axis}≥${ap.minAxes![axis]}`)
+    const def = agentDef(l, name);
+    const floors = CAPABILITY_AXES.filter((axis) => (def.minAxes?.[axis] ?? 0) > 0)
+      .map((axis) => `${axis}≥${def.minAxes![axis]}`)
       .join(" ");
-    const effectiveWeights = axisWeights(name, ap);
+    const effectiveWeights = axisWeights(name, def);
     const weights = CAPABILITY_AXES.map((axis) => `${axis} ${effectiveWeights[axis].toFixed(2)}`).join("  ");
     process.stdout.write(`\n[${name}]\n`);
-    process.stdout.write(`  min_fit ${ap.minFit}   min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
-    const def = agentDef(l, name);
+    process.stdout.write(`  min_fit ${def.minFit}   min_capability ${def.minCapability}   min_context ${def.minContext}   expected_out ${def.expectedOutputTokens}   tool_call ${def.toolCall}\n`);
     process.stdout.write(`  modes ${def.modes.length ? `${def.modes.join(", ")}${def.defaultMode ? ` (default ${def.defaultMode})` : ""}` : "single-agent"}\n`);
     process.stdout.write(`  axes ${floors || "(none)"}\n`);
-    process.stdout.write(`  weights ${weights}${ap.axisWeights ? "" : " (role defaults)"}\n`);
+    process.stdout.write(`  weights ${weights}\n`);
   }
   process.stdout.write("\nedit: machine_code policy edit [--repo]\n");
   return 0;
@@ -569,7 +560,6 @@ export function cmdConfig(argv: string[]): number {
   let machine;
   let policy;
   try { machine = loadMachineConfig(l); } catch { machine = undefined; }
-  try { policy = loadPolicy(l); } catch { policy = undefined; }
   const rows = buildSettings(l, machine, policy);
   if (sub === "paths") {
     for (const row of rows.filter((entry) => entry.section === "paths")) process.stdout.write(`${row.label.padEnd(18)} ${row.value}\n`);

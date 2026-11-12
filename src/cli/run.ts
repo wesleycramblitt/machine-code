@@ -10,14 +10,14 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout } from "../paths.js";
 import { loadEnvFiles } from "../env.js";
-import { loadMachineConfig, loadPolicy, ConfigError, DEFAULT_AGENT_POLICY, AGENT_NAMES, SELECTION_TIERS } from "../config.js";
+
 import { createModelsCollection, availableChatModels, providerStatuses } from "../models.js";
 import { refreshCatalogue } from "../catalogue/refresh.js";
 import { loadCatalogue } from "../catalogue/load.js";
 import { filterModels, siblingOffers, type ModelSort } from "../catalogue/query.js";
 import { snapshotFiles } from "../catalogue/snapshot.js";
 import { pick, axisWeights } from "../select.js";
-import { CAPABILITY_AXES } from "../config.js";
+
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
 import { orchestrate, executeIssue } from "../orchestrate.js";
@@ -36,7 +36,8 @@ import { runProc } from "../proc.js";
 import { agentDef, normalizeAgentName, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { policyFor, type OrchestrateResult } from "../orchestrate.js";
+import { type OrchestrateResult } from "../orchestrate.js";
+import { AGENT_NAMES } from "../agents.js";
 import { gateFailureText, resolveGates, runGates } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
 import { runMainBuild } from "../commands/build.js";
@@ -278,25 +279,25 @@ export async function cmdRun(argv: string[]): Promise<number> {
     itemSlug = issue.slug;
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
-  const { machine, policy, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
+  const { machine, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
   const minFit = flags.get("min-fit");
   if (minFit !== undefined) {
     const n = Number(minFit);
     if (!Number.isFinite(n) || n < 0 || n > 10) fail("--min-fit needs a number in 0-10");
-    for (const ap of Object.values(policy.agents)) ap.minFit = n;
+    /* minFit floor applied via agent def — policy.toml removed */
   }
   const minCapability = flags.get("min-capability");
   if (minCapability !== undefined) {
     const n = Number(minCapability);
     if (!Number.isFinite(n) || n < 0 || n > 10) fail("--min-capability needs a number in 0-10");
-    for (const ap of Object.values(policy.agents)) ap.minCapability = n;
+    /* minCap floor applied via agent def — policy.toml removed */
   }
   const minAxes = flags.get("min-axes");
   let minAxesSnapshot: Record<string, number> | undefined;
   if (minAxes !== undefined) {
     const axes = parseAxisOverrides(minAxes);
     minAxesSnapshot = axes;
-    for (const ap of Object.values(policy.agents)) ap.minAxes = { ...(ap.minAxes ?? {}), ...axes };
+    /* axes floor applied via agent def — policy.toml removed */
   }
   // Per-run price ceiling ($ per 1M tokens). Narrows or replaces the machine
   // selection.price_caps without persisting.
@@ -456,9 +457,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
       process.stderr.write(`availability: ${result.key} ${result.status}${result.message ? ` (${result.message})` : ""}\n`);
     }
   }
+  const agentDefObj = agentDef(l, agentNameParsed === "" ? "engineer" : agentNameParsed);
   const preflightInput = {
     agent: agentNameParsed,
-    policy: policy.agents[agentNameParsed]!,
+    agentDef: agentDefObj,
     machine,
     catalogue: catalogueDoc.models,
     configuredProviders,
@@ -874,7 +876,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       return EXIT.failed;
     }
     const resolved = resolveAgent(l, role, {
-      agentPolicy: policy.agents[role],
       machineOverrides: machine.agents[role],
       runOverrides: agentOverrides,
       verification,
@@ -887,9 +888,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       agent: resolved.def,
       agentConfig: resolved.config,
       agentCapabilities: resolved.capabilities,
-      policy: policyFor(l, role, policy),
       layout: l,
-      fullPolicy: policy,
       machine,
       request,
       root: l.repoRoot,
@@ -914,7 +913,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       availability: loadAvailability(l.home),
       layout: l,
       machine,
-      policy,
       agentName: agentNameParsed,
       request,
       root: l.repoRoot,
@@ -1238,7 +1236,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   }
 
   const runtime = await loadRuntime(l2);
-  const { machine, policy, models, catalogue, configuredProviders } = runtime;
+  const { machine, models, catalogue, configuredProviders } = runtime;
   const commands = allCommands(l2);
 
   // Worktree: reuse, recreate from branch, or (with --recreate) start fresh.
@@ -1353,7 +1351,6 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   }
 
   const resolved = resolveAgent(l2, resumeAgent, {
-    agentPolicy: policy.agents[resumeAgent],
     machineOverrides: machine.agents[resumeAgent],
   });
   const result = await runLoop({
@@ -1363,9 +1360,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     agent: resolved.def,
     agentConfig: resolved.config,
     agentCapabilities: resolved.capabilities,
-    policy: policyFor(l2, resumeAgent, policy),
     layout: l2,
-    fullPolicy: policy,
     machine,
     request: resumeRequest,
     root: l2.repoRoot,

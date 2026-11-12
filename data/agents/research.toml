@@ -13,6 +13,15 @@ ambiguity = "strict"
 capabilities = ["code:read", "context:inherit", "knowledge:write"]
 allowed_paths = ["issues/", "docs/", ".machine_code/"]
 
+[selection]
+min_fit = 6.0
+
+[selection.axes]
+reasoning = 5.0
+code = 4.0
+agentic = 5.0
+general = 4.0
+
 [weights]
 reasoning = 0.3
 general = 0.2
@@ -22,3 +31,4 @@ code = 0.3
 [skills]
 clean-code = "on-demand"
 issue-curation= "include"
+reference = "on-demand"

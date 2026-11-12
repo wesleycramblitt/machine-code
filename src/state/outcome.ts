@@ -33,7 +33,6 @@ export interface StateFactView {
 
 export interface StateView {
   phase?: string;
-  nextAction?: string;
   facts?: StateFactView[];
   open?: Array<{ text: string; status: string }>;
 }
@@ -358,7 +357,6 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
       lines.push(`Last thinking: ${clip(thinkingBuffer.trim().slice(-600), 600)}`);
     }
   }
-  if (input.state?.nextAction) lines.push(`Next: ${clip(input.state.nextAction, 240)}`);
 
   const textOut = lines.join("\n");
   return {
@@ -387,8 +385,7 @@ export function readStateView(runDir: string): StateView | null {
         continue;
       }
       const type = text(entry.type);
-      if (type === "next") view.nextAction = text(entry.text).trim() || undefined;
-      else if (type === "phase") view.phase = text(entry.phase);
+      if (type === "phase") view.phase = text(entry.phase);
       else if (type === "fact" && entry.fact && typeof entry.fact === "object") {
         const fact = entry.fact as Record<string, unknown>;
         const id = text(fact.id) || `fact_${factOrder.length}`;

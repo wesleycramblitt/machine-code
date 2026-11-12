@@ -70,7 +70,7 @@ import {
 import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineIndex, stepTimelineSelection, waitingForRun } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
-import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, type AgentPolicy, type MachineConfig, type Policy } from "./config.js";
+import { loadMachineConfig, CAPABILITY_AXES, SELECTION_TIERS, type MachineConfig } from "./config.js";
 import { axisWeights, capabilityFit, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pick } from "./select.js";
 
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
@@ -312,13 +312,12 @@ export async function runTui(): Promise<void> {
     const repoLayout = layout(summary.repoRoot);
     const candidate = normalizeAgentName(summary.agent);
     const agent = AGENT_NAMES.includes(candidate) ? candidate : "research";
-    const policy = effectivePolicy(summary.repoRoot);
+    const policy = agentDefFor(summary.repoRoot);
     const machine = (() => {
       try { return loadMachineConfig(repoLayout); } catch { return undefined; }
     })();
     const defaults = resolveAgentConfig({
       role: agent,
-      agentPolicy: policy?.agents[agent],
       machineOverrides: machine?.agents[agent],
     });
     const configured = new Set(
@@ -378,16 +377,17 @@ export async function runTui(): Promise<void> {
     s.newrun.tier = tiers[(tiers.indexOf(s.newrun.tier) + 1) % tiers.length]!;
   };
 
-  const effectivePolicy = (repoRoot = l.repoRoot): Policy | undefined => {
-    try { return loadPolicy(layout(repoRoot)); } catch { return undefined; }
+  const agentDefFor = (repoRoot = l.repoRoot): any => {
+    const { agentDef } = require("./agents.js");
+    return agentDef(layout(repoRoot), s.newrun.agent);
   };
 
   /**
-   * Apply minFit and floors overrides to a copy of the agent policy, so the
+   * Apply minFit and floors overrides to a copy of the agent def, so the
    * preview, picker, and CLI-args builder all use the same effective thresholds.
    */
-  const effectivePolicyForRun = (ap: AgentPolicy): AgentPolicy => {
-    const effective = { ...ap, minAxes: { ...(ap.minAxes ?? {}) } };
+  const effectiveDefForRun = (def: any) => {
+    const effective = { ...def, minAxes: { ...(def.minAxes ?? {}) } };
     if (s.newrun.minFit !== undefined) effective.minFit = s.newrun.minFit ?? 0;
     if (s.newrun.floors === "off") {
       effective.minFit = 0;
@@ -395,7 +395,7 @@ export async function runTui(): Promise<void> {
     }
     if (s.newrun.floors === "strict") {
       for (const axis of CAPABILITY_AXES) {
-        const current = effective.minAxes[axis] ?? ap.minFit;
+        const current = effective.minAxes[axis] ?? def.minFit;
         effective.minAxes[axis] = Math.min(10, Math.round((current + 0.5) * 10) / 10);
       }
     }
@@ -408,7 +408,6 @@ export async function runTui(): Promise<void> {
     fit?: number;
     estimate?: { inputTokens: number; outputTokens: number };
     error?: string;
-    policy?: Policy;
     machine?: MachineConfig;
   } => {
     const newRunLayout = layout(s.newRunRepo);
@@ -446,7 +445,7 @@ export async function runTui(): Promise<void> {
           skillPresets: roleSkillPresets(s.newrun.agent),
           skillOverrides: Object.fromEntries(s.newRunSkillModes),
         }),
-        policy: effectivePolicy(s.newRunRepo),
+        policy: agentDefFor(s.newRunRepo),
         machine,
         catalogue: loadCatalogue(newRunLayout.catalogueFile),
         configured: new Set(statuses.filter((status) => status.configured).map((status) => status.id)),
@@ -459,14 +458,12 @@ export async function runTui(): Promise<void> {
       s.newrun.prompt.trim() ||
       (previewIssue ? previewIssue.prompt : "");
     const context: ContextPreview = { ...base.context, promptChars: previewPrompt.length };
-    const policy = base.policy;
     const machine = base.machine;
     const catalogue = base.catalogue;
-    if (!policy || !machine || !catalogue) return { context, error: "configuration/catalogue unavailable", machine };
-    const ap = policy.agents[s.newrun.agent];
+    if (!machine || !catalogue) return { context, error: "configuration/catalogue unavailable", machine };
+    const ap = machine.agents[s.newrun.agent];
     if (!ap) return { context, error: `unknown agent ${s.newrun.agent}`, machine };
     const resolved = resolveAgent(newRunLayout, s.newrun.agent, {
-      agentPolicy: ap,
       machineOverrides: machine.agents[s.newrun.agent],
       runOverrides: {
         approval: s.newrun.approval,
@@ -475,10 +472,10 @@ export async function runTui(): Promise<void> {
     });
     s.newRunRequiredSkills = [...resolved.def.requiredSkills];
     const toolChars = toolSchemaChars(resolved.def.tools);
-    const effective = effectivePolicyForRun(ap);
+    const effective = effectiveDefForRun(agentDefFor(s.newRunRepo));
     const select = (requireModel?: string) => pick({
       agent: s.newrun.agent,
-      policy: effective,
+      agentDef: effective,
       machine,
       catalogue: catalogue.models,
       configuredProviders: base.configured,
@@ -511,7 +508,6 @@ export async function runTui(): Promise<void> {
       return {
         context,
         error: reasons ? `${result.error} (${reasons})${pin}` : `${result.error}${pin}`,
-        policy,
         machine,
       };
     }
@@ -520,7 +516,6 @@ export async function runTui(): Promise<void> {
       model: result.selected,
       fit: result.candidates.find((candidate) => candidate.key === result.selected.key)?.fit,
       estimate: result.estimate,
-      policy,
       machine,
     };
   };
@@ -547,7 +542,7 @@ export async function runTui(): Promise<void> {
       notify(`no model is ready: ${modelState.error}`);
       return null;
     }
-    const policy = effectivePolicy(s.newRunRepo);
+    const policy = agentDefFor(s.newRunRepo);
     const args = [
       "run",
       "--agent", s.newrun.agent,
@@ -820,7 +815,7 @@ export async function runTui(): Promise<void> {
     if (s.modelSel >= modelRows.length) s.modelSel = Math.max(0, modelRows.length - 1);
     const selectedModel = modelRows[s.modelSel];
 
-    const settingsPolicy = s.page === "settings" ? effectivePolicy() : undefined;
+    const settingsPolicy = s.page === "settings" ? agentDefFor() : undefined;
     const settingsRows = s.page === "settings" ? buildSettings(l, settingsMachine, settingsPolicy) : [];
     if (s.settingsSel >= settingsRows.length) s.settingsSel = Math.max(0, settingsRows.length - 1);
 
@@ -1256,7 +1251,7 @@ export async function runTui(): Promise<void> {
   };
 
   const newRunWeights = () => {
-    const policy = effectivePolicy(s.newRunRepo);
+    const policy = agentDefFor(s.newRunRepo);
     const ap = policy?.agents[s.newrun.agent];
     return ap ? axisWeights(s.newrun.agent, ap) : undefined;
   };
@@ -1269,7 +1264,7 @@ export async function runTui(): Promise<void> {
         .filter((status) => status.configured)
         .map((status) => status.id),
     );
-    const policy = effectivePolicy(s.newRunRepo);
+    const policy = agentDefFor(s.newRunRepo);
     const ap = policy?.agents[s.newrun.agent];
     const machine = (() => {
       try {
@@ -1279,7 +1274,7 @@ export async function runTui(): Promise<void> {
       }
     })();
     if (!ap || !machine) return [];
-    const effective = effectivePolicyForRun(ap);
+    const effective = effectiveDefForRun(agentDefFor(s.newRunRepo));
     const availability = loadAvailability(l.home);
     const funded = fundedProviderIds(machine.providers);
     const weights = newRunWeights();
@@ -1297,7 +1292,7 @@ export async function runTui(): Promise<void> {
     const contextChars = (s.newRunPreviewCache?.context.chars ?? 0) + s.newrun.prompt.length + 2_000;
     const input = {
       agent: s.newrun.agent,
-      policy: effective,
+      agentDef: effective,
       machine,
       catalogue: rows,
       configuredProviders: configured,

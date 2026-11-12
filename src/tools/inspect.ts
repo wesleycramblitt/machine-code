@@ -113,14 +113,134 @@ function directoryListing(root: string, path: string, map: RepoMap): string[] {
   return lines;
 }
 
+/** Try to locate a symbol via LSP. Returns formatted lines or null. */
+async function lspSymbolLookup(
+  root: string,
+  name: string,
+  processes: import("../processes/supervisor.js").ProcessSupervisor | undefined,
+): Promise<string[] | null> {
+  if (!processes) return null;
+  try {
+    const { lspClientFor, serverAvailable, formatSymbols } = await import("../lsp/index.js");
+    // Try each language that has a server configured
+    for (const lang of ["typescript", "javascript", "python", "rust", "go", "csharp", "java"]) {
+      if (!serverAvailable(lang)) continue;
+      const client = lspClientFor(root, lang, processes);
+      if (!client) continue;
+      const symbols = await client.workspaceSymbols(name);
+      if (!symbols || symbols.length === 0) continue;
+      // Filter to exact matches first
+      const exact = symbols.filter((s: { name?: string }) => (s.name ?? "") === name);
+      const matched = exact.length > 0 ? exact : symbols.slice(0, 16);
+      const lines = formatSymbols(matched);
+      if (lines.length > 0) {
+        const result: string[] = [`symbol: ${name} (LSP)`];
+        result.push(...lines);
+        // Try to get the definition location for source
+        const first = matched[0] as
+          { location?: { uri?: string; range?: { start?: { line?: number } } } } | undefined;
+        if (first?.location?.uri) {
+          const filePath = first.location.uri.replace(/^file:\/\//, "");
+          const pos = {
+            line: (first.location.range?.start?.line ?? 0),
+            character: 0,
+          };
+          const defs = await client.definition(filePath, pos);
+          if (defs && defs.length > 0) {
+            const def = defs[0] as { uri?: string; range?: { start?: { line?: number; character?: number } } } | undefined;
+            if (def?.uri) {
+              const defPath = def.uri.replace(/^file:\/\//, "");
+              const defLine = (def.range?.start?.line ?? 0) + 1;
+              result.push(`definition: ${defPath}:${defLine}`);
+            }
+          }
+        }
+        return result;
+      }
+    }
+  } catch {
+    // LSP unavailable, fall through to map
+  }
+  return null;
+}
+
+/** Try to get references via LSP. Returns formatted lines or null. */
+async function lspReferencesLookup(
+  root: string,
+  name: string,
+  processes: import("../processes/supervisor.js").ProcessSupervisor | undefined,
+): Promise<string[] | null> {
+  if (!processes) return null;
+  try {
+    const { lspClientFor, serverAvailable } = await import("../lsp/index.js");
+    for (const lang of ["typescript", "javascript", "python", "rust", "go", "csharp", "java"]) {
+      if (!serverAvailable(lang)) continue;
+      const client = lspClientFor(root, lang, processes);
+      if (!client) continue;
+      const symbols = await client.workspaceSymbols(name);
+      if (!symbols || symbols.length === 0) continue;
+      const matched = symbols.filter((s: { name?: string }) => (s.name ?? "") === name);
+      if (matched.length === 0) continue;
+      // Find the definition file + line for the first match
+      const first = matched[0] as
+        { location?: { uri?: string; range?: { start?: { line?: number } } } } | undefined;
+      if (!first?.location?.uri) continue;
+      const filePath = first.location.uri.replace(/^file:\/\//, "");
+      const pos = {
+        line: (first.location.range?.start?.line ?? 0),
+        character: 0,
+      };
+      const refs = await client.references(filePath, pos);
+      if (!refs || refs.length === 0) return null;
+      const result: string[] = [`symbol: ${name} (LSP references)`];
+      for (const ref of refs) {
+        const r = ref as { uri?: string; range?: { start?: { line?: number; character?: number } } } | undefined;
+        if (!r?.uri) continue;
+        const refPath = r.uri.replace(/^file:\/\//, "");
+        const refLine = (r.range?.start?.line ?? 0) + 1;
+        const refChar = (r.range?.start?.character ?? 0) + 1;
+        result.push(`  ${refPath}:${refLine}:${refChar}`);
+      }
+      if (result.length > 1) return result;
+    }
+  } catch {
+    // LSP unavailable, fall through to map
+  }
+  return null;
+}
+
+/** Try to get document symbols via LSP. Returns formatted lines or null. */
+async function lspFileOutline(
+  root: string,
+  path: string,
+  processes: import("../processes/supervisor.js").ProcessSupervisor | undefined,
+): Promise<string[] | null> {
+  if (!processes) return null;
+  try {
+    const { lspClientFor, serverAvailable, languageForPath, formatDocumentSymbols } = await import("../lsp/index.js");
+    const lang = languageForPath(path);
+    if (!lang || !serverAvailable(lang)) return null;
+    const client = lspClientFor(root, lang, processes);
+    if (!client) return null;
+    const symbols = await client.documentSymbols(resolveWithin(root, path));
+    if (!symbols || symbols.length === 0) return null;
+    const formatted = formatDocumentSymbols(symbols, path);
+    if (formatted.length === 0) return null;
+    return [`outline (LSP symbols):`, ...formatted];
+  } catch {
+    return null;
+  }
+}
+
 export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
   return {
     name: "inspect",
     label: "inspect",
     description:
-      "Deterministic codebase retrieval. Inspect a symbol, file, directory, or references. " +
-      "Uses the repo map for structure and filesystem for source. " +
-      "Results are auto-stored as artifacts.",
+      "Deterministic codebase retrieval: inspect a symbol, file, directory, or references. " +
+      "Prefer inspect over read/search/map for symbol definitions, references, file outlines, " +
+      "and directory listings — it combines definitions, callers, imports, and source in one call. " +
+      "Results auto-stored as artifacts.",
     parameters: InspectParams,
     async execute(_id, params: Static<typeof InspectParams>) {
       const target = params.target;
@@ -147,6 +267,13 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
 
         switch (target) {
           case "symbol": {
+            // Try LSP first for precise resolution
+            const lspResult = await lspSymbolLookup(ctx.root, name, ctx.processes);
+            if (lspResult) {
+              parts = lspResult;
+              break;
+            }
+            // Fall back to the deterministic map
             const file = map.files.find((f) => f.symbols.some((s) => s.name === name));
             if (!file) {
               const candidates = map.files
@@ -179,12 +306,22 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           }
 
           case "file": {
-            const file = map.files.find((f) => f.path === path);
             const abs = resolveWithin(ctx.root, path);
             if (!abs || !existsSync(abs)) return fail(`file not found: ${path}`);
-            const source = readFileSync(abs, "utf8");
             const absPath = join(ctx.root, path);
             if (isBinaryFile(absPath)) return fail(`refusing to read binary file: ${path}`);
+
+            // Try LSP for a richer outline when detail=summary
+            if (!full) {
+              const lspOutline = await lspFileOutline(ctx.root, path, ctx.processes);
+              if (lspOutline) {
+                parts = lspOutline;
+                break;
+              }
+            }
+            // Fall back to the deterministic map
+            const source = readFileSync(abs, "utf8");
+            const file = map.files.find((f) => f.path === path);
             if (file) {
               parts = fileOutline(file, source, full);
             } else {
@@ -212,6 +349,13 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           }
 
           case "references": {
+            // Try LSP first for precise reference locations
+            const lspResult = await lspReferencesLookup(ctx.root, name, ctx.processes);
+            if (lspResult) {
+              parts = lspResult;
+              break;
+            }
+            // Fall back to the deterministic map
             const defFiles = map.files.filter((f) => f.symbols.some((s) => s.name === name));
             if (defFiles.length === 0) {
               return ok(`no definitions found for "${name}". Use search text to find usages.`);
