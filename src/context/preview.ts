@@ -8,6 +8,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
+import { packageDataDir } from "../data.js";
 import { listIssues, singleLine } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
@@ -54,11 +55,10 @@ function capFor(file: string, cap: number): number {
 
 function skillPath(layout: Layout, name: string): string | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;
-  for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
-    const file = join(dir, "SKILL.md");
-    if (existsSync(file)) return file;
-  }
-  return null;
+  const dir = join(packageDataDir(), "skills", name);
+  const file = join(dir, "SKILL.md");
+  if (!existsSync(file)) return null;
+  return file;
 }
 
 export interface PreviewContextOptions {

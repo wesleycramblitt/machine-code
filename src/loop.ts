@@ -431,19 +431,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let mapRefreshInFlight = false;
   let mapRefreshQueued = false;
   const refreshMapIndex = async (turn: number): Promise<void> => {
-    if (!wantMap && !wantModules) return;
+    if (!wantMap) return;
     const built = await buildRepoMap(mapRoot, { processes });
-    moduleIndex = wantModules ? buildModuleIndex(built.map) : null;
-    mapIndex = renderIndex(built.map, moduleIndex);
+    mapIndex = renderMapIndex(built.map);
     recorder.event("map_refresh", {
       turn,
       ok: true,
       cached: built.cached,
-      modules: moduleIndex ? Object.keys(moduleIndex.modules).length : 0,
     });
   };
   const scheduleMapRefresh = (turn: number): void => {
-    if (!input.machine.map.enabled || (!wantMap && !wantModules)) return;
+    if (!input.machine.map.enabled || !wantMap) return;
     if (mapRefreshInFlight) {
       mapRefreshQueued = true;
       return;
@@ -478,8 +476,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     input.agent.prompt.length +
     input.request.length +
     (input.contextText?.length ?? 0) +
-    mapIndex.length +
-    memory.renderWorkingContext().length +
     memory.renderBlock().length +
     4_000 +
     toolSchemaChars(input.agent.tools) +

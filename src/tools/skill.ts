@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
+import { packageDataDir } from "../data.js";
 import type { RunRecorder } from "../state/runs.js";
 import { skillMetas } from "../context/references.js";
 
@@ -38,16 +39,14 @@ function fail(text: string): AgentToolResult<undefined> {
 
 function skillBody(layout: Layout, name: string): string | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;
-  for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
-    const file = join(dir, "SKILL.md");
-    if (!existsSync(file)) continue;
-    try {
-      return readFileSync(file, "utf8");
-    } catch {
-      return null;
-    }
+  const dir = join(packageDataDir(), "skills", name);
+  const file = join(dir, "SKILL.md");
+  if (!existsSync(file)) return null;
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return null;
   }
-  return null;
 }
 
 const SHOW_CAP = 8 * 1024;

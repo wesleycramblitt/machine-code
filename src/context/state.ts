@@ -5,6 +5,7 @@
  * this state plus the current step; the raw transcript is never replayed.
  */
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -17,7 +18,6 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
-import { readGitStatus, type GitStatusEntry } from "./git-status.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
 
 /** Keep the model-facing state block compact; full facts remain in state.jsonl. */
@@ -282,8 +282,6 @@ export class RunStateStore {
   private readonly processes?: ProcessSupervisor;
   private state: RunState;
   private sequence = 0;
-  /** Git status at run construction; only deltas belong to this run. */
-  private gitBaseline: Map<string, GitStatusEntry> | null = null;
   /** Files that are in play; rendered as current content, not transcript. */
   private workingFiles = new Map<string, WorkingFileState>();
   /**
@@ -330,7 +328,6 @@ export class RunStateStore {
       counters: { turn: 0, steps: 0, artifacts: 0 },
     };
     this.load();
-    if (this.repoRoot) this.gitBaseline = readGitStatus(this.repoRoot, this.processes);
   }
 
   get path(): string {
@@ -877,24 +874,7 @@ export class RunStateStore {
     return path === runPrefix || path.startsWith(`${runPrefix}/`);
   }
 
-  /** New or changed status entries since the last snapshot. */
-  private syncGitChanges(known: ReadonlySet<string>): Array<{ path: string; code: string }> {
-    if (!this.repoRoot || !this.gitBaseline) return [];
-    const current = readGitStatus(this.repoRoot, this.processes);
-    if (!current) return [];
-    const changed: Array<{ path: string; code: string }> = [];
-    for (const [path, entry] of current) {
-      if (this.ignoredStatusPath(path)) continue;
-      if (known.has(path)) continue;
-      const prior = this.gitBaseline.get(path);
-      if (prior && prior.code === entry.code && prior.mtimeMs === entry.mtimeMs && prior.size === entry.size) {
-        continue;
-      }
-      changed.push({ path, code: entry.code });
-    }
-    this.gitBaseline = current;
-    return changed;
-  }
+
 
   /** Replace a "first edit" next action once a change exists. */
   private settleNextAfterChange(turn: number): void {
@@ -903,30 +883,7 @@ export class RunStateStore {
     }
   }
 
-  private addGitChangeFact(
-    items: ReadonlyArray<{ path: string; code: string }>,
-    turn: number,
-    actor?: { agent?: string; model?: string },
-    commandName?: string,
-  ): void {
-    if (!this.repoRoot || items.length === 0) return;
-    const paths = [...new Set(items.map((item) => item.path))].sort();
-    const shown = paths.slice(0, 8).join(", ");
-    this.append({
-      type: "fact",
-      fact: {
-        id: this.id(),
-        kind: "change",
-        text: `git status changed ${paths.length} path(s): ${shown}${paths.length > 8 ? " …" : ""}`,
-        refs: paths.slice(0, 10).map((path) => ({ path })),
-        turn,
-        status: "active",
-        key: `change:git:${sha1(paths.join("\0"))}`,
-      },
-    });
-    // Git status is a safety net, not proof this run made an edit. A concurrent
-    // process or a pre-existing dirty tree must not push the run into verify.
-  }
+
 
   addChangeFact(
     path: string,
@@ -1120,16 +1077,8 @@ export class RunStateStore {
       }
     }
 
-    // Git status is the safety net for deletes, renames, formatters, and
-    // command-side writes. Edit/write keep the precise intent.
-    if (changed || commandRan) {
-      const gitChanges = this.syncGitChanges(changedPaths);
-      if (gitChanges.length > 0) {
-        this.addGitChangeFact(gitChanges, turn, actor, commandName);
-        for (const item of gitChanges) changedPaths.add(item.path);
-        changed = true;
-      }
-    }
+    // Workspace changes are rendered by the workspace block from git diff
+    // at prompt time. No parallel git change fact tracking needed.
 
     if (refs.length > 0 && !explicitFocus) this.append({ type: "focus", refs });
     if (changed) this.setPhase("act");
@@ -1145,76 +1094,68 @@ export class RunStateStore {
     return { changed };
   }
 
-  /** Compact model-facing state block, capped by dropping body findings first. */
+  /** Current git diff summary as a compact workspace block. */
+  renderWorkspace(): string {
+    if (!this.repoRoot) return "";
+    try {
+      const diffArgs = ["-C", this.repoRoot, "diff", "--stat"];
+      const untrackedArgs = ["-C", this.repoRoot, "ls-files", "--others", "--exclude-standard"];
+
+      let diffOutput: string;
+      let untrackedOutput: string;
+      if (this.processes) {
+        const diff = this.processes.runSync("git", diffArgs,
+          { cwd: this.repoRoot, timeoutMs: 3_000, origin: "tool", name: "git:workspace-diff" });
+        diffOutput = diff.status === 0 ? diff.stdout : "";
+        const untracked = this.processes.runSync("git", untrackedArgs,
+          { cwd: this.repoRoot, timeoutMs: 3_000, origin: "tool", name: "git:workspace-untracked" });
+        untrackedOutput = untracked.status === 0 ? untracked.stdout : "";
+      } else {
+        diffOutput = execFileSync("git", diffArgs, { encoding: "utf8", timeout: 3_000 });
+        untrackedOutput = execFileSync("git", untrackedArgs, { encoding: "utf8", timeout: 3_000 });
+      }
+
+      const changes = diffOutput.trim().split("\n").filter(Boolean);
+      const untracked = untrackedOutput.trim().split("\n").filter(Boolean);
+      if (changes.length === 0 && untracked.length === 0) return "";
+
+      // Parse diff --stat lines: "src/file.ts | 10 +++++-----" -> just the path
+      const changedPaths = changes
+        .map((line) => (line.split("|")[0] ?? "").trim())
+        .filter((p) => p.length > 0 && !p.includes("file changed") && !p.includes("files changed"));
+
+      const lines: string[] = ["<workspace>"];
+      if (changedPaths.length > 0) {
+        lines.push(`modified: ${changedPaths.length} file(s)`);
+        for (const path of changedPaths) lines.push(`  M ${path}`);
+      }
+      if (untracked.length > 0) {
+        lines.push(`untracked: ${untracked.length} file(s)`);
+        for (const path of untracked) lines.push(`  ? ${path}`);
+      }
+      lines.push("</workspace>");
+      return lines.join("\n");
+    } catch {
+      return "";
+    }
+  }
+
+    /** Compact model-facing state block: decisions, findings, and open questions. */
   renderBlock(): string {
     let active = this.state.facts.filter((fact) => fact.status === "active");
     const build = (): string => {
       const decisions = active.filter((fact) => fact.kind === "decision");
-      const findings = active.filter((fact) => fact.kind === "finding");
-      const readFacts = findings.filter((fact) => fact.key.startsWith("read:") && fact.refs.length > 0);
-      const otherFindings = findings.filter((fact) => !fact.key.startsWith("read:"));
+      const findings = active.filter((fact) => fact.kind === "finding" && !fact.key.startsWith("read:") && !fact.key.startsWith("search:") && !fact.key.startsWith("command:"));
       const changes = active.filter((fact) => fact.kind === "change");
-      // Git status changes can come from another process sharing the tree.
-      // Only edit/write facts prove this run changed something.
       const runChanges = changes.filter((fact) => !fact.key.startsWith("change:git:"));
       const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`];
       if (decisions.length > 0) {
         lines.push("Decisions:");
         for (const fact of decisions) lines.push(`- ${fact.text}`);
       }
-      // A next action that has not changed for several turns is stale. Once
-      // a change exists, the next action is to finish, not to keep reading.
-      const nextTurn = this.state.nextActionTurn;
-      const nextAge = nextTurn === undefined ? 0 : this.currentTurn() - nextTurn;
-      const editNext = EDIT_NEXT.test(this.state.nextAction ?? "");
-      if (runChanges.length > 0 && (editNext || !this.state.nextAction || nextAge > 6)) {
-        lines.push(`Next: ${FINISH_NEXT}`);
-      } else if (this.state.nextAction && nextAge <= 6) {
-        lines.push(`Next: ${this.state.nextAction}`);
-      } else {
-        lines.push(`Next: unset — set the next step with the todo tool.`);
-      }
-      if (readFacts.length > 0) {
-        lines.push("Read coverage:");
-        const coverage = new Map<
-          string,
-          { ranges: Array<[number, number]>; symbols: Set<string>; all: boolean; artifacts: string[] }
-        >();
-        for (const fact of readFacts) {
-          const ref = fact.refs[0]!;
-          const entry = coverage.get(ref.path) ?? { ranges: [], symbols: new Set<string>(), all: false, artifacts: [] };
-          if (ref.range) entry.ranges.push([ref.range[0], ref.range[1]]);
-          else if (ref.symbol) entry.symbols.add(ref.symbol);
-          else entry.all = true;
-          if (ref.artifact) entry.artifacts.push(ref.artifact);
-          coverage.set(ref.path, entry);
-        }
-        let shownPaths = 0;
-        for (const [path, entry] of coverage) {
-          if (shownPaths >= 12) {
-            lines.push(`- … ${coverage.size - shownPaths} more file(s) read`);
-            break;
-          }
-          shownPaths += 1;
-          const merged = mergeRanges(entry.ranges);
-          const parts = [
-            ...(entry.all ? ["all"] : []),
-            ...merged.slice(-10).map(([start, end]) => `${start}-${end}`),
-            ...[...entry.symbols].slice(0, 4).map((symbol) => `symbol ${symbol}`),
-          ];
-          const older = merged.length > 10 ? ` (+${merged.length - 10} earlier range(s))` : "";
-          const artifacts = [...new Set(entry.artifacts)].slice(-2);
-          const recall = artifacts.length > 0 ? ` · ${artifacts.join(", ")}` : "";
-          lines.push(`- ${path}: ${parts.join(", ") || "seen"}${older}${recall}`);
-        }
-      }
-      if (otherFindings.length > 0) {
+      if (findings.length > 0) {
         lines.push("Findings:");
-        for (const fact of otherFindings) lines.push(`- t${fact.turn}: ${fact.text}`);
-      }
-      if (this.state.workingSet.length > 0) {
-        lines.push("Working set:");
-        for (const ref of this.state.workingSet) lines.push(`- ${refLabel(ref)}`);
+        for (const fact of findings) lines.push(`- ${fact.text}`);
       }
       if (runChanges.length > 0) {
         lines.push("Changes:");

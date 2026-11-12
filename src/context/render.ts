@@ -185,17 +185,17 @@ export function renderPromptMessages(
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
-  //   system → assembled context → map index → tool guide → command index
-  //     → transcript → working context → run state.
+  //   system → assembled context → tool guide → command index
+  //     → transcript → workspace → run state.
   // The stable prefix renders before the transcript so it stays byte-identical
-  // across turns. The per-turn working context and run state sit *after* the
-  // transcript: putting them before it changed the prefix every turn and the
-  // provider cache stopped at the fixed blocks (~3.5k tokens). The state is
-  // also the last thing the model reads, which is where it belongs.
+  // across turns. The map index was removed from the stable prefix in Phase 4;
+  // the model requests what it needs via inspect, map overview, or read.
+  // The per-turn workspace and run state sit *after* the transcript so they
+  // never shift the cache prefix.
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
-  const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
-  const volatile = [state.renderWorkingContext(), state.renderBlock()].filter(Boolean).join("\n\n");
+  const stable = [startup, guide, commandIndex].filter(Boolean).join("\n\n");
+  const volatile = [state.renderWorkspace(), state.renderBlock()].filter(Boolean).join("\n\n");
   const out = [
     ...(system ? [system] : []),
     ...(stable ? [{ role: "user", content: stable, timestamp: Date.now() } as MessageLike] : []),

@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
+import { packageDataDir } from "../data.js";
 import { listIssues, singleLine } from "../plan/issues.js";
 import type { MachineConfig } from "../config.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
@@ -263,12 +264,10 @@ export function isParentStopped(status?: string): boolean {
 
 function skillBody(layout: Layout, name: string): { path: string; text: string } | null {
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name)) return null;
-  for (const dir of [join(layout.repoDir, "skills", name), join(layout.home, "skills", name)]) {
-    const file = join(dir, "SKILL.md");
-    if (!existsSync(file)) continue;
-    return { path: file, text: readFileSync(file, "utf8") };
-  }
-  return null;
+  const dir = join(packageDataDir(), "skills", name);
+  const file = join(dir, "SKILL.md");
+  if (!existsSync(file)) return null;
+  return { path: file, text: readFileSync(file, "utf8") };
 }
 
 export async function assembleContext(input: AssembleInput): Promise<ContextBundle> {

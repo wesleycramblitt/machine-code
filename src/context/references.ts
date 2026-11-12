@@ -18,6 +18,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
+import { packageDataDir } from "../data.js";
 
 export interface ArtifactReferences {
   files: string[];
@@ -82,22 +83,21 @@ export function parseSkillFrontMatter(text: string, path: string): SkillMeta | n
 /** Skill descriptions that are visible on every run (body loading is separate). */
 export function skillMetas(layout: Layout): Array<{ name: string; description: string }> {
   const out = new Map<string, { name: string; description: string }>();
-  for (const dir of [join(layout.home, "skills"), join(layout.repoDir, "skills")]) {
-    if (!existsSync(dir)) continue;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name);
-    } catch {
-      continue;
-    }
-    for (const name of entries) {
-      const file = join(dir, name, "SKILL.md");
-      if (!existsSync(file)) continue;
-      const meta = parseSkillFrontMatter(readFileSync(file, "utf8"), file);
-      if (meta && !out.has(meta.name)) out.set(meta.name, { name: meta.name, description: meta.description });
-    }
+  const dir = join(packageDataDir(), "skills");
+  if (!existsSync(dir)) return [];
+  let entries: string[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  for (const name of entries) {
+    const file = join(dir, name, "SKILL.md");
+    if (!existsSync(file)) continue;
+    const meta = parseSkillFrontMatter(readFileSync(file, "utf8"), file);
+    if (meta && !out.has(meta.name)) out.set(meta.name, { name: meta.name, description: meta.description });
   }
   return [...out.values()];
 }

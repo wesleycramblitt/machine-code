@@ -2,20 +2,15 @@
  * machine_code — agent definitions loaded from data/agents/*.toml.
  *
  * Each role is one file (role metadata, weights, capabilities, and prompt).
- * Presets live in data/presets.toml. A repo can still override one prompt with
- * .machine_code/agents/<name>.md; a machine can replace one role with
- * ~/.machine_code/data/agents/<name>.toml. Legacy single-table
- * ~/.machine_code/data/agents.toml is still read for compatibility.
+ * Presets live in data/presets.toml. Core settings ship with machine code
+ * and are not overridable. Custom agents can be added as new roles.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { CoreToolName } from "./tools/index.js";
 import type { Layout } from "./paths.js";
 import {
-  dataPath,
   listTomlFiles,
-  machineDataDir,
-  machineDataSubdir,
   packageDataDir,
   readTomlFile,
   shippedDataDir,
@@ -71,10 +66,6 @@ interface RoleData {
   skills?: Record<string, unknown>;
 }
 
-interface AgentsData {
-  roles: Record<string, RoleData>;
-  presets: Record<string, Record<string, unknown>>;
-}
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
@@ -86,42 +77,20 @@ function roleFile(file: string): [string, RoleData] {
   return [name, role];
 }
 
-function legacyAgents(file: string): AgentsData | null {
-  if (!existsSync(file)) return null;
-  return readTomlFile<AgentsData>(file);
-}
-
 function loadRoles(): Record<string, RoleData> {
   const roles: Record<string, RoleData> = {};
-  const shipped = listTomlFiles(shippedDataDir("agents"));
-  if (shipped.length > 0) {
-    for (const file of shipped) {
-      const [name, role] = roleFile(file);
-      roles[name] = role;
-    }
-  } else {
-    const legacy = legacyAgents(join(packageDataDir(), "agents.toml"));
-    if (legacy) Object.assign(roles, legacy.roles ?? {});
-  }
-
-  for (const file of listTomlFiles(machineDataSubdir("agents"))) {
+  for (const file of listTomlFiles(shippedDataDir("agents"))) {
     const [name, role] = roleFile(file);
     roles[name] = role;
   }
-  const machineLegacy = legacyAgents(join(machineDataDir(), "agents.toml"));
-  if (machineLegacy) Object.assign(roles, machineLegacy.roles ?? {});
   return roles;
 }
-
 function loadPresets(): Record<string, Record<string, unknown>> {
-  const file = dataPath("presets.toml");
+  const file = join(packageDataDir(), "presets.toml");
   if (existsSync(file)) return readTomlFile<Record<string, Record<string, unknown>>>(file);
-  const machineLegacy = legacyAgents(join(machineDataDir(), "agents.toml"));
-  if (machineLegacy?.presets) return machineLegacy.presets;
-  return legacyAgents(join(packageDataDir(), "agents.toml"))?.presets ?? {};
+  return {};
 }
-
-function agentsData(): AgentsData {
+function agentsData(): { roles: Record<string, RoleData>; presets: Record<string, Record<string, unknown>> } {
   return { roles: loadRoles(), presets: loadPresets() };
 }
 
@@ -196,15 +165,13 @@ export function roleSkillPresets(name: AgentName): Record<string, string> {
 }
 
 function basePrompt(name: AgentName): string {
-  const file = dataPath("prompts/base.md");
+  const file = join(packageDataDir(), "prompts/base.md");
   if (!existsSync(file)) return "";
   return readFileSync(file, "utf8").replaceAll("<role>", name);
 }
-
 function agentPrompt(layout: Layout, name: AgentName): string {
   const role = roleData(name);
-  // const override = join(layout.repoDir, "agents", `${name}.md`);
-  const override = dataPath(`agents/${name}.md`);
+  const override = join(packageDataDir(), "agents", `${name}.md`);
   const rolePrompt = existsSync(override)
     ? readFileSync(override, "utf8")
     : typeof role.prompt === "string"
@@ -212,7 +179,6 @@ function agentPrompt(layout: Layout, name: AgentName): string {
       : "";
   if (role.base_prompt === false) return rolePrompt.trim();
   const base = basePrompt(name).trim();
-  // return base.replaceAll("<agent-prompt>", rolePrompt.trim());
   return [base, rolePrompt.trim()].filter(Boolean).join("\n\n");
 }
 
