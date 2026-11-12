@@ -865,6 +865,33 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // Non-verbose default log line with a slug to open run details.
   process.stderr.write(`RUN ${recorder.id} — ${itemSlug ?? recorder.id.slice(-8)}\n`);
 
+  // Fork context: carry the parent run's conversation forward so the child
+  // picks up where the parent left off instead of starting fresh. The parent
+  // messages are loaded from its saved transcript and the new objective is
+  // appended as a final user message so the agent sees the full history.
+  let forkMessages: import("@earendil-works/pi-agent-core").AgentMessage[] | undefined;
+  let forkStartMode: "prompt" | "continue" | undefined;
+  if (parentFlag && parentRun) {
+    const parentDir = join(layout(parentRun.repoRoot ?? l.repoRoot).runsDir, parentRun.id);
+    const transcript = loadTranscript(parentDir);
+    if (transcript && transcript.messages.length > 0) {
+      forkMessages = [
+        ...(transcript.messages as import("@earendil-works/pi-agent-core").AgentMessage[]),
+        {
+          role: "user" as const,
+          content: `**Forked from run ${parentRun.id} with a new objective:**\n\n${request}`,
+          timestamp: Date.now(),
+        },
+      ];
+      forkStartMode = "continue";
+      recorder.event("fork_context_loaded", {
+        parentRunId: parentRun.id,
+        messages: transcript.messages.length,
+        request: transcript.request,
+      });
+    }
+  }
+
   let result: RunLoopResult | OrchestrateResult;
   // Resolve gates from the issue so they run inside the loop for the
   // direct-exec path. The orchestrate path resolves them inside executeIssue.
@@ -910,6 +937,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       skillExcludes,
       signal: abort.signal,
       ...(directGates ? { gates: directGates } : {}),
+      ...(forkMessages ? { initialMessages: forkMessages, startMode: forkStartMode } : {}),
     });
   } else {
     result = await orchestrate({

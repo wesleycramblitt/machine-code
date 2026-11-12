@@ -2,10 +2,14 @@
  * machine_code — issue composer render.
  *
  * Layout (top to bottom):
- *   editable text fields (tags, depends, keywords) — per-line above prompt
- *   bordered prompt box — first line is the edit-body hint
- *   Create badge right-aligned below the box
- *   kind + priority + acceptance + verification bar
+ *   Tags[t]:       (editable line, only when content or editing)
+ *   Keywords[w]:   (editable line, only when content or editing)
+ *   Depends[d]:    (editable line, only when content or editing)
+ *   ┌─ bordered prompt box ─┐  (first line: "e Edit body" placeholder)
+ *   └───────────────────────┘
+ *   k Kind  p Priority                                 Create[:!]
+ *
+ * Back[Esc] is in the chrome header (red background).
  */
 import {
   B, C, D, G, GR, M, R, RED, W, Y, START_BG, WHITE,
@@ -18,10 +22,8 @@ import type { IssueComposerFrame, IssueComposerProps } from "./types.js";
 function fieldLine(key: string, label: string, value: string, isEditing: boolean, cols: number): string {
   const prefix = ` ${B}${label}${R}[${C}${key}${R}]:${isEditing ? `${GR}▌${R}` : " "}`;
   const display = value.trim() || (isEditing ? "" : `${D}(none)${R}`);
-  // Cap the value to avoid overflow
   const maxVal = Math.max(10, cols - visible(prefix) - 3);
-  const val = trunc(display, maxVal);
-  return `${prefix}${val}`;
+  return `${prefix}${trunc(display, maxVal)}`;
 }
 
 export function renderIssueComposer(props: IssueComposerProps): IssueComposerFrame {
@@ -31,21 +33,19 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const inner = Math.max(12, boxWidth - 2);
 
   // ── Editable text fields above the prompt ──
-  // Shown when they have content or are being edited.
   const showTags = settings.tags.trim() || fieldEdit === "tags";
-  const showDepends = settings.depends.trim() || fieldEdit === "depends";
   const showKeywords = settings.keywords.trim() || fieldEdit === "keywords";
+  const showDepends = settings.depends.trim() || fieldEdit === "depends";
 
   if (showTags) body.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
-  if (showDepends) body.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
   if (showKeywords) body.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
-  if (showTags || showDepends || showKeywords) body.push("");
+  if (showDepends) body.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
+  if (showTags || showKeywords || showDepends) body.push("");
 
   // ── Prompt box ──
   const promptText = settings.prompt;
   const emptyPrompt = !promptText.trim() && !insert;
 
-  // Build prompt lines for display (with cursor in insert mode)
   let displayLines: string[];
   if (insert) {
     displayLines = wrapText(`${promptText}${GR}▌${R}`, Math.max(8, inner - 3));
@@ -66,24 +66,7 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   ];
   body.push(...promptBox);
 
-  // ── Create[:!] right-aligned below the box ──
-  const createBadge = commandBadge("Create", ":!", START_BG, WHITE);
-  // When in insert mode, show edit keys on the left, Create on the right
-  if (insert) {
-    const editKeys = joinCommands([
-      command("Esc", "Done", undefined, Y),
-      command("Enter", "Newline", undefined, G),
-      command("Backspace", "Delete", undefined, M),
-    ]);
-    const padWidth = Math.max(1, boxWidth - visible(editKeys) - visible(createBadge) - 2);
-    body.push(` ${editKeys}${" ".repeat(padWidth)}${createBadge}`);
-  } else {
-    const padWidth = Math.max(1, boxWidth - visible(createBadge));
-    body.push(` ${" ".repeat(padWidth)}${createBadge}`);
-  }
-  body.push("");
-
-  // ── Kind + Priority + Acceptance + Verification token bar ──
+  // ── Kind + Priority (left) · Create (right) — on the same line below the box ──
   const kindColor = settings.kind === "ideas" ? C : settings.kind === "features" ? G : RED;
   const kindLabel = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
   const kindToken = command("k", "Kind", kindLabel, kindColor);
@@ -92,36 +75,29 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const priorityLabel = settings.priority.charAt(0).toUpperCase() + settings.priority.slice(1);
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
-  const tokens = [kindToken, priorityToken];
+  // Build the left side: kind + priority + acceptance + verification
+  const leftTokens = [kindToken, priorityToken];
 
   if (settings.kind !== "ideas") {
     const accLabel = settings.acceptance.trim() ? trunc(settings.acceptance, 28) : "none";
     const accToken = command("a", "Accept", accLabel, M);
-    tokens.push(accToken);
+    leftTokens.push(accToken);
 
     const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
     const verColor = settings.verification === "verified" ? G : D;
-    tokens.push(command("v", "Verify", verLabel, verColor));
+    leftTokens.push(command("v", "Verify", verLabel, verColor));
   }
 
-  body.push(` ${joinCommands(tokens)}`);
+  const leftSide = joinCommands(leftTokens);
+  const createBadge = commandBadge("Create", ":!", START_BG, WHITE);
+  const padWidth = Math.max(1, boxWidth - visible(leftSide) - visible(createBadge) - 2);
+  body.push(` ${leftSide}${" ".repeat(padWidth)}${createBadge}`);
 
-  // ── Fill ──
+  // Fill to bodyH
   while (body.length < bodyH) body.push("");
 
-  // ── Footer actions ──
-  const actions = joinCommands([
-    commandBadge("Create", ":!", START_BG, WHITE),
-    command("e", "Edit body", undefined, C),
-    command("k", "Kind", undefined, M),
-    command("p", "Priority", undefined, M),
-    command("a", "Acceptance", undefined, M),
-    command("v", "Verification", undefined, M),
-    command("t", "Tags", undefined, M),
-    command("d", "Depends", undefined, M),
-    command("w", "Keywords", undefined, M),
-    command("Esc", "Back", undefined, GR),
-  ]);
+  // ── Footer is minimal — Back[Esc] is in the header bar ──
+  const actions = "";
 
   return {
     body: clipLines(body, bodyH),

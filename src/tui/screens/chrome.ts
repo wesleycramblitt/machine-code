@@ -53,14 +53,16 @@ export function renderHeader(props: HeaderProps): HeaderFrame {
   const runDetailHeader = page === "runs" && screen === "run";
   const backHeader =
     runDetailHeader ||
-    (page === "runs" && (screen === "newrun" || screen === "answer" || screen === "correct" || screen === "issue")) ||
+    (page === "runs" && (screen === "newrun" || screen === "newissue" || screen === "answer" || screen === "correct" || screen === "issue")) ||
     (page === "models" && screen === "model");
   // Tabs stay visible on every other screen. Runs and models replace the
   // blank separator with a live summary line; other pages keep the blank.
   const backTitle =
     page === "runs" && screen === "newrun"
       ? `  ${B}${theme.headerFg}New Run${R}`
-      : runDetailHeader
+      : page === "runs" && screen === "newissue"
+        ? `  ${B}${theme.headerFg}New Issue${R}`
+        : runDetailHeader
         ? `  ${B}${theme.headerFg}Run Details${R}`
         : page === "runs" && screen === "issue"
           ? `  ${B}${theme.headerFg}Issue Details${R}`
@@ -77,7 +79,7 @@ export function renderHeader(props: HeaderProps): HeaderFrame {
     const text = trunc(path, Math.max(10, cols - 2));
     return `${" ".repeat(Math.max(0, cols - visible(text) - 1))}${GR}${text}${R}`;
   };
-  const backSubLine = page === "runs" && screen === "newrun" ? rightHeaderPath(newRunRepo) : "";
+  const backSubLine = (page === "runs" && (screen === "newrun" || screen === "newissue")) ? rightHeaderPath(newRunRepo) : "";
   const header: string[] = backHeader
     ? [backLine, backSubLine]
     : [...wrapTokenList(tabTokens, cols, " "), ...headerSubLines];
