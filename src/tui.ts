@@ -107,14 +107,14 @@ import { commitPlanningFiles } from "./tasks/planning.js";
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
 /**
- * Min-fit ladder for `f` on the new-run page: role policy, then explicit
- * floors from 6 down to 4 in 0.25 steps, then up from 4.25 to 8.5, then 0.
- * Quarter points so a borderline model can be included or excluded precisely.
+ * Min-fit ladder for `f` on the new-run page. No duplicates — `findIndex`
+ * always hits the first match, so repeated values create infinite loops.
+ * Sequence: role → 6 → step down by 0.25 to 4 → step up from 6.25 to 8.5 → 0.
  */
 const NEW_RUN_MIN_FITS: Array<number | null | undefined> = [
   undefined,
   6, 5.75, 5.5, 5.25, 5, 4.75, 4.5, 4.25, 4,
-  4.25, 4.5, 4.75, 5, 5.25, 5.5, 5.75, 6.25, 6.5, 6.75, 7, 7.25, 7.5, 7.75, 8, 8.25, 8.5,
+  6.25, 6.5, 6.75, 7, 7.25, 7.5, 7.75, 8, 8.25, 8.5,
   0,
 ];
 
