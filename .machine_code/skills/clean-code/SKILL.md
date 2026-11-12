@@ -22,6 +22,6 @@ Also:
 - Make side effects and failures explicit.
 - Prefer composition over inheritance.
 - Remove dead code only in the area you are already changing.
-- Do not refactor, document, or improve code outside the issue.
+- Add in code documentation where helpful to make semantic lookups efficient
 
 The runner owns acceptance gates; the issue prompt is the definition of done.

@@ -1,9 +1,9 @@
 ---
-name: plan-curation
+name: issue-curation
 description: Use when creating or updating issues under issues/. Issue files are markdown whose text is the prompt; status is the directory.
 ---
 
-# Plan curation
+# Issue curation
 
 `issues/` is the single work tree. Each file is one work item:
 
@@ -15,8 +15,7 @@ issues/
   bugs/{todo,blocked,done}/<slug>.md
 ```
 
-Status is a directory: the item's status is where it lives. Move work with
-`git mv` or `machine_code issue move <slug> <status>`.
+Status is a directory: the item's status is where it lives. 
 
 ## File shape
 
@@ -57,39 +56,6 @@ One paragraph of detail the prompt needs.
 - **status**: the directory. Ideas leave `ideas/` for `.researched/` when
   research finishes; features/bugs move todo → blocked ⇄ todo → done. There
   is no archived status: delete an issue you no longer want.
-
-## What a research run produces
-
-Exactly one run, one or more of these — never nothing:
-
-1. **Issues.** Feature/bug files under `features/todo/` or `bugs/todo/`
-   (shape above). The common case.
-2. **References.** When the idea needs sourced material: `reference:search`
-   the web, `reference:browser` the sources, `reference:write` the bundles
-   (`<product>/<version>/manifest.yaml`, `content/*.md` with front-matter
-   and stable `{#anchor}` headings, hand-authored `index.md`), then
-   `reference:reindex`. See the `reference` skill. Ends with
-   `Outcome: curated`.
-3. **Docs.** When the idea is a question, answer it in full in the summary
-   and save the answer as `docs/<slug>.md` so it survives the run. Ends with
-   `Outcome: done`.
-
-The harness merges and retires whatever you produced; your job ends at the
-`Outcome:` line. If you truly produced nothing new (duplicate, already
-answered), say so plainly with `Outcome: done` and do not write filler.
-
-## Which agent does what
-
-- **Research** takes an idea (`issues/ideas/<slug>.md`) into detailed
-  features or bugs. It writes issue files under `features/todo/` or
-  `bugs/todo/` and ends with an `Outcome:` line (`researched`, `curated`,
-  or `done`). It never moves files — the harness retires the idea to
-  `.researched/` and merges the created issues to main after gates pass.
-  You have no shell, no git CLI, and no move tool; do not try.
-- **Engineer** takes a feature or bug in one run: plan + build with a fast
-  keyword/semantic context lookup, commit, then move it to done/ (or blocked
-  with a reason in the body). Ideas never carry a review mode of their own;
-  the feature/bug they produce does.
 
 ## Procedure
 
