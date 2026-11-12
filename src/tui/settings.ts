@@ -44,9 +44,9 @@ export function buildSettings(
       label: "Selection tier",
       value: machine.selection.tier,
       file: configFile,
-      detail: "free admits only zero-price rows; paid admits free rows plus funded paid providers.",
+      detail: "paid: remote models (non-ollama); local: ollama models only.",
       editable: true,
-      choices: ["paid", "free"],
+      choices: ["paid", "local"],
     });
     
     rows.push({

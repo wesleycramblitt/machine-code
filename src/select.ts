@@ -2,18 +2,18 @@
  * machine_code — deterministic per-call model selection.
  *
  * Every provider call runs pick(): estimate input as context chars ÷ 4 and
- * output as the agent's fixed expected output; hard-filter; score
- * role-weighted capability, estimated cost, speed, context headroom, and score
- * confidence with fixed weights; ties go to the lexicographically smaller model
- * key. No stickiness, no learned estimates. Every pick is logged by the caller.
+ * output as the agent's fixed expected output; hard-filter; sort eligible
+ * candidates by estimated per-call cost ascending (cheapest first), with ties
+ * broken by fit descending. No stickiness, no learned estimates.
+ * Every pick is logged by the caller.
  *
  * Capability is multi-dimensional. A row carries four axis scores
  * (reasoning, code, agentic, general); `pick` hard-filters on the role-weighted
  * `minFit` (the primary gate), an optional neutral `minCapability` safety floor,
- * and optional per-axis floors. It then scores the same role-weighted axis mix
- * so a better model beats a cheaper worse one when the gap is large enough.
+ * and optional per-axis floors. It then uses the same role-weighted axis mix
+ * for the fit display, but the selection order is purely cost-based.
  */
-import type { AgentPolicy, CapabilityAxis, MachineConfig } from "./config.js";
+import type { AgentPolicy, CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
 import { CAPABILITY_AXES } from "./config.js";
 import { estimateCallCost, type AxisScores } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
@@ -21,24 +21,6 @@ import type { AvailabilityState } from "./availability.js";
 import { isProviderDisabled, isProviderCooling, isModelCooling, providerNeedsAuth } from "./availability.js";
 import { roleWeights } from "./agents.js";
 import { loadProviderDefinitions } from "./data.js";
-
-export interface ScoreWeights {
-  capability: number;
-  cost: number;
-  speed: number;
-  headroom: number;
-  /** Penalty for rows whose scores are metadata priors, not measurements. */
-  confidence: number;
-}
-
-/** Fixed scoring weights, tuned on evals. */
-export const WEIGHTS: ScoreWeights = {
-  capability: 0.5,
-  cost: 0.25,
-  speed: 0.1,
-  headroom: 0.15,
-  confidence: 0.1,
-};
 
 type AxisWeights = Record<CapabilityAxis, number>;
 
@@ -89,9 +71,6 @@ export function capabilityFit(scores: AxisScores, weights: AxisWeights): number 
   return Math.pow(numerator / activeWeight, 1 / p);
 }
 
-/** Estimated-call-cost normalization band, in dollars. */
-const COST_BAND = [1e-5, 1] as const;
-
 export interface PickEstimate {
   inputTokens: number;
   outputTokens: number;
@@ -99,10 +78,7 @@ export interface PickEstimate {
 
 export interface CandidateScore {
   key: string;
-  score: number;
-  /** Role-weighted axis mix used for this candidate. */
   fit: number;
-  terms: { capability: number; cost: number; speed: number; headroom: number; confidence: number };
   estimatedCost: number;
 }
 
@@ -116,13 +92,15 @@ export interface PickResult {
   estimate: PickEstimate;
   /** All eligible candidates after filtering, before the display cap. */
   eligibleCount: number;
-  /** Top candidates after filtering, ascending score (best first), max 5. */
+  /** Top candidates after filtering, ascending cost (cheapest first), max 5. */
   candidates: CandidateScore[];
   rejectedCount: number;
   /** Rejection counts by reason, across the whole catalogue. */
   rejectedByReason: Record<string, number>;
   /** First few rejection reasons, for debugging. */
   rejected: RejectedCandidate[];
+  /** Selection tier used for this pick. */
+  tier?: SelectionTier;
 }
 
 export interface PickInput {
@@ -142,20 +120,11 @@ export interface PickInput {
   requireModel?: string;
   /** Provider/model availability state (M2). */
   availability?: AvailabilityState;
+  /** Selection tier: "paid" filters out ollama; "local" only allows ollama. */
+  tier?: SelectionTier;
 }
 
-function normalize(value: number, [low, high]: readonly [number, number]): number {
-  if (!Number.isFinite(value)) return 0.5;
-  if (value <= low) return 0;
-  if (value >= high) return 1;
-  return (value - low) / (high - low);
-}
 
-function normalizeCost(dollars: number): number {
-  if (dollars <= 0) return 0;
-  const [low, high] = COST_BAND;
-  return (Math.log(dollars) - Math.log(low)) / (Math.log(high) - Math.log(low));
-}
 
 export function estimateTokens(contextChars: number, expectedOutputTokens: number): PickEstimate {
   return {
@@ -240,6 +209,8 @@ function rejectReason(
   estimate: PickEstimate,
   weights: AxisWeights,
 ): string | null {
+  if (input.tier === "local" && row.providerID !== "ollama") return "paid-model";
+  if (input.tier === "paid" && row.providerID === "ollama") return "local-model";
   if (!input.configuredProviders.has(row.providerID)) return "provider-not-configured";
   if (input.requireProvider && row.providerID !== input.requireProvider) return "provider-filtered";
   if (input.requireModel && !matchesModel(row, input.requireModel)) return "model-filtered";
@@ -307,19 +278,16 @@ export function pick(input: PickInput): PickResult | PickFailure {
       continue;
     }
     const fit = capabilityFit(row.scores, weights);
-    const cost = normalizeCost(effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, input.machine));
-    const capability = normalize(fit, [2, 9]);
-    const score = WEIGHTS.capability * capability + WEIGHTS.cost * (1 - cost);
-    candidates.push({ key: row.key, score, fit, estimatedCost: cost, terms: {
-      capability,
-      cost,
-      speed: 0,
-      headroom: 0,
-      confidence: 0,
-    } });
+    const cost = effectiveCallCost(row, estimate.inputTokens, estimate.outputTokens, input.machine);
+    candidates.push({ key: row.key, fit, estimatedCost: cost });
   }
 
-  candidates.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  // Sort by cost ascending, ties broken by fit descending, then key ascending.
+  candidates.sort((a, b) => {
+    if (a.estimatedCost !== b.estimatedCost) return a.estimatedCost - b.estimatedCost;
+    if (b.fit !== a.fit) return b.fit - a.fit;
+    return a.key.localeCompare(b.key);
+  });
   const top = candidates.slice(0, 5);
 
   if (candidates.length === 0) {
@@ -339,5 +307,6 @@ export function pick(input: PickInput): PickResult | PickFailure {
     rejectedCount: rejections.size,
     rejectedByReason: Object.fromEntries(rejections),
     rejected,
+    tier: input.tier,
   };
 }

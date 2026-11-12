@@ -225,7 +225,7 @@ export function policyTemplate(kind: "machine" | "repo"): string {
   if (kind === "machine") {
     return `# machine_code machine config (global defaults; repo policy wins)
 [selection]
-tier = "paid"              # free | paid
+tier = "paid"              # paid | local
 # first_token_timeout_ms = 60000   # abandon a stalled call; cool it and retry
 # ollama_first_token_timeout_ms = 300000  # local Ollama waits far longer; it may be busy
 # min_fit = 7.0            # global role-weighted capability floor
@@ -303,7 +303,7 @@ export function cmdPolicy(argv: string[]): number {
     fail(`unknown agent "${role}"; choose one of ${AGENT_NAMES.join(", ")}`);
   }
 
-  process.stdout.write(`selection tier: paid\n`);
+  process.stdout.write(`selection tier: ${machine.selection.tier}\n`);
   const funded = [...fundedProviderIds(machine.providers)].sort();
   process.stdout.write(`funded providers: ${funded.join(", ") || "(none)"}\n`);
   const multipliers = Object.entries(machine.providers).filter(([, v]) => v.costMultiplier !== undefined);

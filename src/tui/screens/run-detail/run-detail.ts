@@ -263,7 +263,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             if (expandedEvent && Array.isArray(event.candidates)) {
               for (const candidate of event.candidates.slice(0, 4)) {
                 const chosen = candidate.key === event.key ? `${C}✓${R}` : " ";
-                eventLines.push(`    ${chosen} ${D}${Number(candidate.score ?? 0).toFixed(3)}${R} ${candidate.key} ${D}fit ${Number(candidate.fit ?? 0).toFixed(2)}${R}`);
+                eventLines.push(`    ${chosen} ${candidate.key} ${D}fit ${Number(candidate.fit ?? 0).toFixed(2)}${R}`);
               }
             }
           }

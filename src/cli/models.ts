@@ -204,7 +204,7 @@ export function cmdModels(argv: string[]): number {
       .map((axis) => `${axis}>=${ap.minAxes![axis]}`)
       .join(" ");
     process.stdout.write(
-      `agent ${agent}  paid tier  min_context ${ap.minContext}  min_fit ${ap.minFit}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
+      `agent ${agent}  tier ${machine.selection.tier}  min_context ${ap.minContext}  min_fit ${ap.minFit}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
     );
     process.stdout.write(
       `axes ${floors || "(no axis floors)"}\n` +
@@ -228,12 +228,10 @@ export function cmdModels(argv: string[]): number {
       `  io        ${selected.capabilities.input.join("+")} → ${selected.capabilities.output.join("+")}   ` +
         `ctx ${fmtCtx(selected.capabilities.contextWindow)}   max out ${fmtCtx(selected.capabilities.maxOutputTokens)}\n`,
     );
-    process.stdout.write("\ntop candidates (lower is better):\n");
+    process.stdout.write("\ntop candidates (cheapest first):\n");
     for (const c of result.candidates) {
       process.stdout.write(
-        `  ${String(c.score).padEnd(9)} ${c.key.padEnd(58)} ` +
-          `fit ${c.fit.toFixed(2).padEnd(5)} pen ${String(c.terms.capability).padEnd(6)} cost ${String(c.terms.cost).padEnd(6)} ` +
-          `speed ${String(c.terms.speed).padEnd(6)} head ${String(c.terms.headroom).padEnd(6)} conf ${String(c.terms.confidence).padEnd(4)} ` +
+        `  ${c.key.padEnd(58)} fit ${c.fit.toFixed(2).padEnd(5)} ` +
           `~$${c.estimatedCost.toFixed(6)}\n`,
       );
     }

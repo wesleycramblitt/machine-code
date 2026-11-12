@@ -375,6 +375,11 @@ export async function runTui(): Promise<void> {
     s.newrun.floors = floors[(floors.indexOf(s.newrun.floors) + 1) % floors.length]!;
   };
 
+  const cycleTier = () => {
+    const tiers: NewRunState["tier"][] = ["paid", "local"];
+    s.newrun.tier = tiers[(tiers.indexOf(s.newrun.tier) + 1) % tiers.length]!;
+  };
+
   const effectivePolicy = (repoRoot = l.repoRoot): Policy | undefined => {
     try { return loadPolicy(layout(repoRoot)); } catch { return undefined; }
   };
@@ -473,6 +478,7 @@ export async function runTui(): Promise<void> {
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars: context.chars + context.promptChars + toolChars,
       requireModel,
+      tier: s.newrun.tier,
     });
     let result = select(s.newrun.model);
     if ("error" in result && s.newrun.model) {
@@ -1273,6 +1279,10 @@ export async function runTui(): Promise<void> {
       text: s.modelPickText,
       weights,
       sort: "fit",
+    }).filter((row) => {
+      if (s.newrun.tier === "local") return row.providerID === "ollama";
+      if (s.newrun.tier === "paid") return row.providerID !== "ollama";
+      return true;
     });
     const contextChars = (s.newRunPreviewCache?.context.chars ?? 0) + s.newrun.prompt.length + 2_000;
     const input = {
@@ -1328,7 +1338,7 @@ export async function runTui(): Promise<void> {
   const keyCtx: KeyServices = {
     draw, notify, launch, openEditor, startNewRun, forkRun, answerRun,
     interrupt, startCorrect, submitCorrection, runDetailData, pendingForRun,
-    cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors,
+    cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier,
     startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
     agentIsolates, searchSeed,

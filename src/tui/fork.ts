@@ -15,7 +15,7 @@ export interface ForkedRunSettings {
   model?: string;
   approval: "human" | "agent";
   ambiguity: "strict" | "precise" | "adaptive" | "autonomous";
-  tier: "paid";
+  tier: "paid" | "local";
   /** undefined = role policy; null = explicit zero. */
   minFit: number | null | undefined;
   floors: "role" | "strict" | "off";
@@ -84,7 +84,7 @@ export function forkSettingsFromRun(input: {
     row && (!configuredProviders || configuredProviders.has(row.providerID))
       ? row.key
       : undefined;
-  const tier: "paid" = "paid";
+  const tier: "paid" | "local" = "paid";
   const axes = settings?.minAxes;
   const hasAxes = Boolean(axes && Object.keys(axes).length > 0);
   const allZero = hasAxes && Object.values(axes!).every((value) => value === 0);

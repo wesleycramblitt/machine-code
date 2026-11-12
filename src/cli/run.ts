@@ -188,6 +188,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   let requireProvider = flags.get("provider");
   let requireModel = flags.get("model");
+  const tierFlag = flags.get("tier") as "paid" | "local" | undefined;
   if (flags.get("packet") !== undefined) {
     fail("--packet was removed; attach the run to an issue with --item <slug>");
   }
@@ -467,6 +468,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     contextChars: request.length,
     requireProvider,
     requireModel,
+    ...(tierFlag ? { tier: tierFlag } : {}),
   };
   let preflight = pick(preflightInput);
   if ("error" in preflight && (requireModel || requireProvider)) {

@@ -353,8 +353,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (run.floors === "off") return "off";
     return run.floors;
   })();
+  const tierTone = run.tier === "paid" ? G : BL;
+  const tierLabel = run.tier === "paid" ? "Paid" : "Local";
   const minimumsText = trunc(
-    `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}${R}`,
+    `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}  ${command("t", "tier", tierLabel, tierTone)}${R}`,
     Math.max(10, cols - 1),
   );
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;

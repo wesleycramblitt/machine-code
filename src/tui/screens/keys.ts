@@ -29,6 +29,7 @@ export interface KeyServices {
   cycleAmbiguity: () => void;
   cycleMinFit: () => void;
   cycleFloors: () => void;
+  cycleTier: () => void;
   startIssuePicker: () => void;
   pickerIssues: () => Issue[];
   chooseIssue: (issue: Issue) => void;

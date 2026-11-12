@@ -431,6 +431,11 @@ export function commandBadge(label: string, key: string, background: string, for
 }
 
 /** Stable role colors used wherever an agent name is shown. */
+/** Tone for selection tier display. */
+export function tierTone(tier: "paid" | "local"): string {
+  return tier === "paid" ? G : BL;
+}
+
 export function agentTone(agent: string): string {
   switch (agent) {
     case "research": return PURPLE_FG;

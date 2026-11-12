@@ -22,9 +22,9 @@ export interface PriceCaps {
 
 export type PacketMode = "direct" | "verified" | "redundant";
 
-/** Selection tier — always paid; free was removed. */
-export type SelectionTier = "paid";
-export const SELECTION_TIERS: readonly SelectionTier[] = ["paid"];
+/** Selection tier — paid (remote) or local (Ollama). */
+export type SelectionTier = "paid" | "local";
+export const SELECTION_TIERS: readonly SelectionTier[] = ["paid", "local"];
 
 export type AvailabilityProbeMode = "off" | "metadata";
 
