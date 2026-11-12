@@ -82,74 +82,7 @@ function completeStep(messages: readonly MessageLike[], start: number, end: numb
 /** Every complete assistant/tool step, oldest first, unchanged. Leading user
  * messages (the task) are kept: the request must survive every turn, not just
  * the first. */
-const SUMMARIZE_AT_CHARS = 2048;
-const KEEP_FULL_RESULTS = 3;
-const KEEP_FULL_ASSISTANT = 2;
-const SUMMARY_LINES = 6;
-
-/** Total text chars in a message content payload. */
-function contentChars(content: unknown): number {
-  if (typeof content === "string") return content.length;
-  if (!Array.isArray(content)) return 0;
-  let total = 0;
-  for (const block of content) {
-    if (block && typeof block === "object" && typeof (block as Record<string, unknown>).text === "string") {
-      total += ((block as Record<string, unknown>).text as string).length;
-    }
-  }
-  return total;
-}
-
-/** Shrink one text payload to its head plus an honest marker. Never touches
- * toolCall blocks: protocol validity depends on their exact shape. */
-function shrinkText(text: string): string {
-  const lines = text.split("\n");
-  if (lines.length <= SUMMARY_LINES + 1) return text;
-  const head = lines.slice(0, SUMMARY_LINES).join("\n").replace(/\s+$/, "");
-  return `${head}\n…[${lines.length - SUMMARY_LINES} more lines, ${text.length.toLocaleString()} chars total — earlier tool output, summarized; re-run the call for full bytes]`;
-}
-
-function summarizeContent(content: unknown): unknown {
-  if (typeof content === "string") {
-    return content.length > SUMMARIZE_AT_CHARS ? shrinkText(content) : content;
-  }
-  if (!Array.isArray(content)) return content;
-  return content.map((block) => {
-    if (!block || typeof block !== "object") return block;
-    const b = block as Record<string, unknown>;
-    if (b.type === "toolCall") return block;
-    if (typeof b.text === "string" && (b.text as string).length > SUMMARIZE_AT_CHARS) {
-      return { ...b, text: shrinkText(b.text as string) };
-    }
-    return block;
-  });
-}
-
-/**
- * The transcript as a call ledger: the last few payloads verbatim, older
- * bulk summarized. Assistant text keeps a longer verbatim tail than tool
- * results (reasoning continuity matters; dumps do not). Operates on copies;
- * stored history keeps full detail for provenance and resume.
- */
-function summarizeOldPayloads(messages: MessageLike[]): MessageLike[] {
-  const resultIdx: number[] = [];
-  const assistantIdx: number[] = [];
-  messages.forEach((message, index) => {
-    if (message.role === "toolResult") resultIdx.push(index);
-    else if (message.role === "assistant") assistantIdx.push(index);
-  });
-  const fullResults = new Set(resultIdx.slice(-KEEP_FULL_RESULTS));
-  const fullAssistant = new Set(assistantIdx.slice(-KEEP_FULL_ASSISTANT));
-  return messages.map((message, index) => {
-    if (message.role === "toolResult" && !fullResults.has(index) && contentChars(message.content) > SUMMARIZE_AT_CHARS) {
-      return { ...message, content: summarizeContent(message.content) };
-    }
-    if (message.role === "assistant" && !fullAssistant.has(index) && contentChars(message.content) > SUMMARIZE_AT_CHARS * 2) {
-      return { ...message, content: summarizeContent(message.content) };
-    }
-    return message;
-  });
-}
+const KEEP_FULL_STEPS = 2;
 function transcriptSteps(messages: readonly MessageLike[]): MessageLike[] {
   const starts: number[] = [];
   for (let i = 0; i < messages.length; i += 1) {
@@ -170,6 +103,63 @@ function transcriptSteps(messages: readonly MessageLike[]): MessageLike[] {
   return out;
 }
 
+function textOfMessage(message: MessageLike): string {
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((block): block is Record<string, unknown> => !!block && typeof block === "object")
+    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text as string)
+    .join("\n");
+}
+
+function artifactRef(text: string): string | undefined {
+  return /\[artifact:?\s*(art_[a-f0-9]{16})\]/.exec(text)?.[1];
+}
+
+function stepLedger(step: MessageLike[]): string[] {
+  const lines: string[] = [];
+  for (const message of step) {
+    if (message.role === "assistant") {
+      const text = textOfMessage(message).replace(/\s+/g, " ").trim();
+      if (text) lines.push(`- said: ${text.slice(0, 140)}`);
+      for (const block of Array.isArray(message.content) ? message.content : []) {
+        const b = block as Record<string, unknown>;
+        if (b?.type !== "toolCall") continue;
+        const name = typeof b.name === "string" ? b.name : "tool";
+        lines.push(`- ${name} ${JSON.stringify(b.arguments ?? {}).slice(0, 180)}`);
+      }
+    } else if (message.role === "toolResult") {
+      const text = textOfMessage(message);
+      const artifact = artifactRef(text);
+      lines.push(`  → ${text.split("\n")[0]?.trim().slice(0, 120) ?? ""}${artifact ? ` [${artifact}]` : ""}`);
+    }
+  }
+  return lines;
+}
+
+/** Keep the task, a one-line ledger of older calls, and the last two steps. */
+function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
+  const steps = transcriptSteps(source);
+  const firstAssistant = steps.findIndex((message) => message.role === "assistant");
+  if (firstAssistant < 0) return steps;
+  const groups: MessageLike[][] = [];
+  for (const message of steps.slice(firstAssistant)) {
+    if (message.role === "assistant") groups.push([message]);
+    else if (groups.length > 0) groups[groups.length - 1]!.push(message);
+  }
+  const older = groups.slice(0, Math.max(0, groups.length - KEEP_FULL_STEPS));
+  const recent = groups.slice(-KEEP_FULL_STEPS).flat();
+  const ledgerLines = older.flatMap(stepLedger);
+  const ledger: MessageLike[] = ledgerLines.length > 0
+    ? [{
+        role: "user",
+        content: `<ledger>\nEarlier calls (one line each; bytes live in holdings or artifacts):\n${ledgerLines.join("\n")}\n</ledger>`,
+      }]
+    : [];
+  return [...steps.slice(0, firstAssistant), ...ledger, ...recent];
+}
+
 export interface RenderedPrompt {
   messages: AgentMessage[];
   chars: number;
@@ -182,7 +172,7 @@ export function renderPromptMessages(
   startupContext?: string,
   overviewMaxChars?: number,
   commandIndex?: string,
-  holdingsMaxChars = 12_000,
+  holdingsMaxChars = 24_000,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
@@ -205,7 +195,7 @@ export function renderPromptMessages(
   const out = [
     ...(system ? [system] : []),
     ...(stable ? [{ role: "user", content: stable, timestamp: Date.now() } as MessageLike] : []),
-    ...summarizeOldPayloads(transcriptSteps(source)),
+    ...transcriptMessages(source),
     ...(volatile ? [{ role: "user", content: volatile, timestamp: Date.now() } as MessageLike] : []),
   ] as unknown as AgentMessage[];
   return { messages: out, chars: JSON.stringify(out).length };

@@ -30,6 +30,7 @@ import {
   type ContextSource,
 } from "./types.js";
 import { blockOverhead, sectionBudgets, sectionForKind } from "./budget.js";
+import { CONTEXT_RENDER_ORDER, SECTION_KINDS, dropRank as sourceDropRank, isSkillIndex } from "./plan.js";
 
 interface Pending {
   kind: ContextKind;
@@ -63,6 +64,12 @@ export interface ContextInclude {
 export interface AssembleInput {
   layout: Layout;
   machine: MachineConfig;
+  /**
+   * Root for repository code and docs. Defaults to `layout.repoRoot`; runs
+   * pass their worktree so the prompt never carries the main checkout's
+   * bytes while the model edits a different tree.
+   */
+  fileRoot?: string;
   /** Role name. */
   agent?: string;
   /** direct: code only; verified: code + tests. */
@@ -108,43 +115,9 @@ export interface AssembleInput {
   requiredSkills?: readonly string[];
 }
 
-const SECTION_KINDS: Record<string, readonly ContextKind[]> = {
-  files: ["file"],
-  docs: ["docs"],
-  references: ["reference"],
-  skills: ["skill"],
-  tools: ["tool"],
-  scripts: ["script"],
-  issues: ["issue"],
-};
-
 function sha1(text: string): string {
   return createHash("sha1").update(text).digest("hex");
 }
-
-/**
- * Fixed render order for assembled context blocks (lost-in-the-middle
- * layout, prompt-cache stable).
- *
- * Section order is fixed and documented: the issue first (highest
- * relevance), then retrieved files by relevance (file, docs,
- * reference), then tools/skills/scripts aggregates, then the parent-run
- * chain last (most volatile). Within a section, band/depth priority order
- * (relevance) is preserved. Volatile per-turn content (working context,
- * run state, transcript) is render-side and always renders after this block
- * in renderPromptMessages, so reordering the volatile tail never shifts this
- * stable prefix.
- */
-export const CONTEXT_RENDER_ORDER: Record<string, number> = {
-  issue: 1,
-  file: 2,
-  docs: 3,
-  reference: 4,
-  skill: 5,
-  script: 6,
-  tool: 7,
-  "parent-run": 8,
-};
 
 /**
  * Whitespace-normalized form used for near-duplicate dedupe. Exact sha1
@@ -272,6 +245,7 @@ function skillBody(layout: Layout, name: string): { path: string; text: string }
 
 export async function assembleContext(input: AssembleInput): Promise<ContextBundle> {
   const { layout, machine } = input;
+  const fileRoot = input.fileRoot ?? layout.repoRoot;
   const budget = Math.max(1024, input.budgetChars ?? machine.context.maxChars ?? DEFAULT_CONTEXT_BUDGET);
   const pending: Pending[] = [];
 
@@ -322,7 +296,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   for (const entry of input.include?.files ?? []) {
     const range = parseIncludeRange(entry);
     if (range) {
-      const abs = withinRepo(layout.repoRoot, range.file);
+      const abs = withinRepo(fileRoot, range.file);
       if (!abs || !existsSync(abs) || isSecretPath(range.file)) {
         pending.push({
           kind: "file",
@@ -350,7 +324,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       pending.push({ kind: "file", origin: "explicit", ref: entry, depth: 0, body: sliced.body, band: 1 });
       continue;
     }
-    const abs = withinRepo(layout.repoRoot, entry);
+    const abs = withinRepo(fileRoot, entry);
     if (!abs || !existsSync(abs) || isSecretPath(entry)) {
       pending.push({
         kind: "file",
@@ -366,7 +340,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     if (read) pending.push({ kind: "file", origin: "explicit", ref: entry, depth: 0, body: read.text, band: 1 });
   }
   for (const path of input.include?.docs ?? []) {
-    const abs = withinRepo(layout.repoRoot, path);
+    const abs = withinRepo(fileRoot, path);
     if (!abs || !existsSync(abs)) {
       pending.push({
         kind: "docs",
@@ -456,7 +430,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     }
   }
   if (machine.context.docsIndex) {
-    const abs = withinRepo(layout.repoRoot, machine.context.docsIndex);
+    const abs = withinRepo(fileRoot, machine.context.docsIndex);
     if (abs && existsSync(abs)) {
       const read = readFileText(abs);
       if (read) {
@@ -553,21 +527,10 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Drop rank: higher is dropped first. Aggregates (tool index, skill
   // descriptions) go first, then the parent chain, skill bodies, and the
   // working set; the issue goes last on every role.
-  const dropRank = (item: Pending): number => {
-    const role = input.agent;
-    if (item.kind === "tool") return 60;
-    if (item.kind === "skill" && /^\d+ skills$/.test(item.ref)) return 60;
-    if (item.kind === "parent-run") return 50;
-    if (item.kind === "skill" || item.kind === "script") return 40;
-    if (item.kind === "issue") return item.origin === "explicit" ? 8 : 22;
-    if (item.kind === "docs") {
-      if (role === "research") return 20;
-      return role === "research" ? 25 : 30;
-    }
-    if (item.kind === "reference") return role === "research" ? 22 : 32;
-    if (item.kind === "file") return role === "engineer" || role === "review" ? 25 : 30;
-    return 30;
-  };
+  const dropRank = (item: Pending): number =>
+    item.kind === "skill" && isSkillIndex(item.ref)
+      ? 60
+      : sourceDropRank(item.kind, item.origin, input.agent);
   const PROTECTED_RANK = 20;
 
   interface Kept extends Pending {

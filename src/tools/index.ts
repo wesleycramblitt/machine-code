@@ -263,10 +263,52 @@ const EditParams = Type.Object({  path: Type.Optional(Type.String({ description:
   files: Type.Optional(
     Type.Array(FileEditEntry, {
       description:
-        "Edits across several files, applied atomically: every file validates first, then all write. Prefer this for cross-file changes — one call instead of one per file. When files[] and single-file fields are both present, files[] wins.",
+        "Edits across several files, applied atomically: one entry per file, multiple hunks in that entry's edits[]. Every file validates first, then all write. Prefer this for cross-file changes — one call instead of one per file. When files[] and single-file fields are both present, files[] wins.",
     }),
   ),
 });
+
+type FileEditEntryValue = Static<typeof FileEditEntry>;
+
+/**
+ * One `files[]` entry per path is the contract. Models sometimes send one
+ * entry per hunk; planning each entry independently makes the last write
+ * clobber every earlier hunk for that path. Merge plain hunks so the result
+ * is still atomic. A duplicate path that uses symbol/section whole-block
+ * replacement is rejected: its ordering cannot be inferred safely.
+ */
+function mergeDuplicateFileEntries(
+  entries: readonly FileEditEntryValue[],
+): FileEditEntryValue[] | { error: string } {
+  const byPath = new Map<string, FileEditEntryValue>();
+  for (const entry of entries) {
+    const path = entry.path ?? "";
+    const existing = byPath.get(path);
+    if (!existing) {
+      byPath.set(path, { ...entry });
+      continue;
+    }
+    if (entry.symbol || entry.section || existing.symbol || existing.section) {
+      return {
+        error: `files[] has more than one entry for ${path || "(no path)"}; ` +
+          "combine them into one entry and put every hunk in edits[] " +
+          "(symbol/section whole-block forms cannot be merged)",
+      };
+    }
+    const hunks = [
+      ...(existing.edits ?? []),
+      ...(existing.oldString !== undefined
+        ? [{ oldString: existing.oldString, newString: existing.newString ?? "", ...(existing.replaceAll ? { replaceAll: true } : {}) }]
+        : []),
+      ...(entry.edits ?? []),
+      ...(entry.oldString !== undefined
+        ? [{ oldString: entry.oldString, newString: entry.newString ?? "", ...(entry.replaceAll ? { replaceAll: true } : {}) }]
+        : []),
+    ];
+    byPath.set(path, { path, edits: hunks });
+  }
+  return [...byPath.values()];
+}
 
 /** Whitespace-collapsed view plus a map back to original offsets. Models copy
  * read output with different indentation, so an exact miss can still be a
@@ -697,7 +739,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     label: "edit",
     description:
       "Replace text in files. Two forms per file: exact hunks (oldString/newString, batched in edits, scoped with symbol/section) or whole-block replacement (symbol/section + newString with no oldString rewrites the entire block — prefer this for function-scale changes: no anchor, no drift). " +
-      "Put edits to several files in files[]: every file validates first, then all write atomically. " +
+      "Put edits to several files in files[]: one entry per file, with multiple hunks in that entry's edits[]; every file validates first, then all write atomically. " +
       "Results show the change as a -/+ diff (or the whole numbered file when small), so never re-read to confirm. " +
       "Without replaceAll each hunk must be unique in scope.",
     parameters: EditParams,
@@ -732,9 +774,11 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         // single-file fields are ignored — failing here costs a call to
         // learn what ignoring them teaches for free.
         if (params.files && params.files.length > 0) {
+          const mergedFiles = mergeDuplicateFileEntries(params.files);
+          if ("error" in mergedFiles) return fail(mergedFiles.error);
           const plans: PlannedFileEdit[] = [];
           const errors: string[] = [];
-          for (const [index, file] of params.files.entries()) {
+          for (const [index, file] of mergedFiles.entries()) {
             const planned = await planSingleFileEdit(ctx.root, { ...file, path: file.path ?? "" });
             if ("error" in planned) errors.push(`files[${index}]${file.path ? ` ${file.path}` : ""}: ${planned.error}`);
             else plans.push(planned);
@@ -743,7 +787,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
             return fail(`nothing applied — ${errors.length} file(s) failed validation:\n${errors.join("\n")}`);
           }
           for (const plan of plans) writeFileSync(plan.abs, plan.next, "utf8");
-          const out: string[] = [`applied edits to ${plans.length} file(s):`];
+          const hunks = plans.reduce((sum, plan) => sum + plan.changes.length, 0);
+          const out: string[] = [`applied edits to ${plans.length} file(s), ${hunks} hunk(s):`];
           if (plans.length === 1) {
             out.push("(one file per call works, but batch independent files in one files[] call)");
           }
@@ -751,7 +796,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           for (const [planIndex, plan] of plans.entries()) {
             out.push(plan.summary);
             const rendered = renderEditResult(
-              params.files[planIndex]!.path ?? plan.abs,
+              mergedFiles[planIndex]!.path ?? plan.abs,
               plan.next,
               plan.changes,
               Math.max(0, 3000 - used),

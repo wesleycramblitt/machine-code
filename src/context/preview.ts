@@ -13,6 +13,7 @@ import { listIssues, singleLine } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
 import { resolveSkillMode, skillIndexBody, skillMetas, type SkillMode } from "./references.js";
+import { CONTEXT_RENDER_ORDER, SECTION_KINDS, dropRank, isSkillIndex } from "./plan.js";
 import { parseIncludeRange, parentIndexLine, sliceRangeBody } from "./assemble.js";
 import { blockOverhead, sectionForKind } from "./budget.js";
 import type { ContextSections } from "./types.js";
@@ -65,6 +66,12 @@ export interface PreviewContextOptions {
   /** Role name. */
   agent?: string;
   docsIndex?: string;
+  /**
+   * File root for code and docs; defaults to `layout.repoRoot`. Run previews
+   * should pass the worktree so the TUI shows the current tree, not the main
+   * checkout.
+   */
+  fileRoot?: string;
   /** Explicit repo-relative files selected in the composer. */
   files?: string[];
   /** Explicit repo-relative docs files selected in the composer. */
@@ -92,6 +99,7 @@ export function previewContext(
   prompt = "",
   options: PreviewContextOptions = {},
 ): ContextPreview {
+  const fileRoot = options.fileRoot ?? layout.repoRoot;
   const sources: PreviewSource[] = [];
   const warnings: string[] = [];
   const files: string[] = [];
@@ -107,7 +115,7 @@ export function previewContext(
       // Range includes measure the assembled snippet body, not the whole
       // file, so the composer shows the real cost. Unresolvable ranges are
       // zero-char warned sources, mirroring assembleContext.
-      const root = resolve(layout.repoRoot);
+      const root = resolve(fileRoot);
       const abs = resolve(root, range.file);
       const inside = abs === root || abs.startsWith(root + sep);
       const secret = isSecretPath(range.file);
@@ -129,7 +137,7 @@ export function previewContext(
       sources.push({ kind: "file", ref: entry, origin: "explicit", depth: 0, chars: size, exists: size > 0 });
       continue;
     }
-    const root = resolve(layout.repoRoot);
+    const root = resolve(fileRoot);
     const abs = resolve(root, entry);
     const inside = abs === root || abs.startsWith(root + sep);
     // Mirror assembleContext: secrets never inline, and missing/secret/outside
@@ -152,7 +160,7 @@ export function previewContext(
   }
 
   for (const path of options.docs ?? []) {
-    const root = resolve(layout.repoRoot);
+    const root = resolve(fileRoot);
     const abs = resolve(root, path);
     const inside = abs === root || abs.startsWith(root + sep);
     const exists = inside && existsSync(abs);
@@ -190,7 +198,7 @@ export function previewContext(
     sources.push({ kind: "skill", ref: name, origin: "explicit", depth: 0, chars: size, exists: true });
   }
   if (options.docsIndex) {
-    const root = resolve(layout.repoRoot);
+    const root = resolve(fileRoot);
     const abs = resolve(root, options.docsIndex);
     const inside = abs === root || abs.startsWith(root + sep);
     const exists = inside && existsSync(abs);

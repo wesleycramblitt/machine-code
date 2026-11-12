@@ -101,14 +101,14 @@ through the `context` tool.
 | Block | Tag | Cap | Contents |
 |---|---|---|---|
 | Run state | `<run-state>` | 10 KB | Goal, decisions, hand-written findings, changes, open questions |
-| Holdings | `<holdings>` | per-model delta cap (default 12 KB, 10% of input budget) | Living map: files held grouped by directory, with symbols, connections, inventory + new/changed bytes from disk |
+| Holdings | `<holdings>` | per-model cap (default 24 KB, 10% of input budget) | Living map: files held grouped by directory, with symbols, connections, inventory + current bytes from disk every turn |
 | Workspace | `<workspace>` | varies | git diff HEAD --stat + untracked files (empty when clean) |
 
 ### Fact lifecycle
 
 - **Read facts:** recorded automatically from `inspect` file/symbol results.
-- **Search facts:** recorded automatically from `inspect` find results, `search`/`grep`/`glob`/`map` results.
-- **Holdings:** recorded alongside read facts (path + merged ranges + symbols + connections + artifact id); hint symbols pre-fill the map so turn 1 carries their bodies as deltas; rendered per turn grouped by directory with inventory + new/changed bytes from disk.
+- **Search facts:** recorded automatically from `inspect` find results, `map` results.
+- **Holdings:** recorded alongside read facts (path + merged ranges + symbols + connections + artifact id); hints and prior-work files pre-fill the map so turn 1 carries their bodies; rendered per turn grouped by directory with inventory + current bytes from disk. Bytes are re-rendered every turn because the transcript abbreviates old results.
 - **Change facts:** recorded from `edit`/`write` tool results.
 - **Decision facts:** recorded from `context note kind=decision`.
 - **Finding facts:** recorded from `context note kind=finding`.
@@ -126,9 +126,10 @@ three-way change tracking (edit facts + git fingerprints + working file ranges).
 The raw turn-by-turn conversation (user + assistant + tool results).
 
 - **Complete steps only:** orphan tool calls are dropped.
-- **Summarized by default:** last 3 tool results and last 2 assistant messages
-  stay verbatim. Older bulk content is head-summarized (first 6 lines) with a
-  marker. The model can re-run any tool call for full bytes.
+- **Summarized by default:** the last two complete steps stay verbatim (models
+  batch 4–5 calls per step). Older bulk content is head-summarized with a marker
+  naming its artifact id. The marker never says “re-run”; full bytes come from
+  `context recall art_…`.
 - **Full transcript** is available for resume/replay via checkpoint
   (`src/state/transcript.ts`).
 
@@ -244,7 +245,7 @@ Removed actions: `focus` (deleted with the working set it scored).
 - No git patch, no repo map content, no duplicate seed bytes is sent to the
   model as source text. The model pulls what it needs via `inspect`
   (holdings deltas push what changed), `command run` (`run:list`/`run:show`,
-  `reference:find`/`reference:read`), `grep` (raw text), and `map` (structure).
+  `reference:find`/`reference:read`), and `map` (structure).
 
 ---
 

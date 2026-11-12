@@ -681,6 +681,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
       : forceWorktree;
   let toolRoot = l.repoRoot;
   let reusedWorktree = false;
+  /** Files the owning run touched; seeded whole into the first prompt. */
+  let priorWorkFiles: string[] = [];
   if (mutating) {
     const issueWorktree = Boolean(itemSlug);
     // Reuse a terminal/paused worktree that already owns this issue branch.
@@ -830,6 +832,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
     try {
       const branch = recorder.current.branch ?? "";
       const base = recorder.current.baseRef ?? "main";
+      const ownerId = recorder.current.worktreeOwnerRunId;
+      const ownerStatus = ownerId
+        ? listAllRuns(l.home).find((run) => run.id === ownerId)?.status
+        : undefined;
+      const baseBranch = recorder.current.baseBranch ?? "main";
+      const mergeBase = await runProc("git", ["merge-base", "HEAD", baseBranch], { cwd: toolRoot, timeoutMs: 15_000 });
+      const diffBase = mergeBase.code === 0 && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : base;
       const ahead = await runProc("git", ["rev-list", "--no-merges", "--count", `${base}..HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
       const status = await runProc("git", ["status", "--porcelain"], { cwd: toolRoot, timeoutMs: 15_000 });
       const aheadCount = Number(ahead.stdout.trim()) || 0;
@@ -839,13 +848,23 @@ export async function cmdRun(argv: string[]): Promise<number> {
         `Branch ${branch || "(unknown)"} at ${base}: ${aheadCount} work commit(s) ahead${dirtyText ? ", uncommitted changes" : ", clean"}.`,
       ];
       if (dirtyText) lines.push(`Uncommitted:\n${dirtyText}`);
+      const changedNames = await runProc("git", ["diff", "--name-only", `${diffBase}..HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
+      const untrackedNames = dirtyText
+        .split("\n")
+        .filter((line) => line.startsWith("??"))
+        .map((line) => line.slice(3).trim())
+        .filter(Boolean);
+      priorWorkFiles = [...new Set([
+        ...changedNames.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+        ...untrackedNames,
+      ])];
       if (aheadCount > 0 || dirtyText) {
         // Committed prior work (base...HEAD) and uncommitted work (HEAD)
         // are different diffs; a reused dirty worktree usually has only the
         // latter. Quote both so the model never re-reads to reconstruct them.
         const diffs: string[] = [];
         if (aheadCount > 0) {
-          const committed = await runProc("git", ["diff", `${base}...HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
+          const committed = await runProc("git", ["diff", `${diffBase}..HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
           const committedText = (committed.stdout || "").trim();
           if (committedText) diffs.push(committedText);
         }
@@ -863,8 +882,18 @@ export async function cmdRun(argv: string[]): Promise<number> {
           if (untracked.length > 0) diffs.push(`New files (read these directly):\n${untracked.join("\n")}`);
         }
         const joined = diffs.join("\n\n").trim();
-        const capped = joined.length > 12_000 ? `${joined.slice(0, 12_000)}\n[diff truncated]` : joined;
-        if (capped) lines.push(`Prior work (complete — do not run history/show to re-derive it):\n${capped}`);
+        const PRIOR_DIFF_CAP = 24_000;
+        let capped = joined;
+        if (joined.length > PRIOR_DIFF_CAP) {
+          const stat = await runProc("git", ["diff", "--stat", `${diffBase}..HEAD`], { cwd: toolRoot, timeoutMs: 15_000 });
+          const statText = (stat.stdout || "").trim();
+          capped = `${statText ? `${statText}\n\n` : ""}[diff truncated at ${PRIOR_DIFF_CAP.toLocaleString()} chars; read a named file directly]\n${joined.slice(0, PRIOR_DIFF_CAP)}`;
+        }
+        const complete = ownerStatus === undefined || ownerStatus === "completed";
+        const priorLabel = complete
+          ? "Prior work (complete — do not re-derive it from history)"
+          : `Prior work from ${ownerId ?? "the owning run"} (status: ${ownerStatus}; may be incomplete — verify the files you touch compile)`;
+        if (capped) lines.push(`${priorLabel}:\n${capped}`);
         lines.push(
           `The issue is the definition of done; keep only the parts of the above that directly satisfy it, and replace over-built code with the smallest change.`,
         );
@@ -887,6 +916,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const contextBundle = await assembleContext({
     layout: l,
     machine,
+    fileRoot: toolRoot,
     agent: agentNameParsed,
     verification,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
@@ -912,9 +942,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // Pin the assembled file sources as seeded holdings so the first prompt
   // already carries the code the run is about, instead of the model paging
   // for it over several turns.
-  const seedFiles = contextBundle.sources
-    .filter((source) => source.kind === "file" && typeof source.ref === "string")
-    .map((source) => source.ref as string);
+  const seedFiles = [...new Set([
+    ...contextBundle.sources
+      .filter((source) => source.kind === "file" && typeof source.ref === "string")
+      .map((source) => source.ref as string),
+    ...priorWorkFiles,
+    ...suggestedFiles.slice(0, 3),
+  ])];
   const seedRanges = hintRanges
     .filter((entry) => !seedFiles.includes(entry.path))
     .map((entry) => ({ path: entry.path, range: [entry.start, entry.end] as [number, number] }));

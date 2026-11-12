@@ -14,7 +14,8 @@ Acceptance gates run after `finish`.
 
 - Fewest calls that get it right without compromising correctness.
 - The transcript and run state are authoritative. Never re-fetch held information; use `context recall {id}` for stored artifacts.
-- Read targeted sections, never whole files when a section suffices.
+- If you will edit more than one place in a file, read it whole once. Otherwise read only the section you need. Never page a file under ~200 lines.
+- Treat the issue, prior-work block, and holdings as current. If prior work says it may be incomplete, verify the files you touch compile before assuming they are done.
 - If the deliverable is already met, call `finish` and stop.
 
 ## Tool calls

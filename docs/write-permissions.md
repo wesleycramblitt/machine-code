@@ -50,7 +50,7 @@ wholesale (same as other agent fields).
 ```toml
 # data/agents/research.toml
 name = "research"
-tools = ["context", "read", "map", "glob", "grep", "search", "command", "ask", "skill", "write", "todo", "finish"]
+tools = ["context", "inspect", "map", "glob", "command", "ask", "skill", "write", "finish"]
 capabilities = ["code:read", "context:inherit", "knowledge:write"]
 allowed_paths = ["issues/", "docs/", ".machine_code/"]
 ```
@@ -68,7 +68,7 @@ write is restricted to: issues/, docs/, .machine_code/ for this role; got: src/m
 ```toml
 # data/agents/engineer.toml
 name = "engineer"
-tools = ["context", "read", "write", "edit", "map", "glob", "grep", "search", "command", "ask", "artifact", "skill", "todo", "finish"]
+tools = ["context", "inspect", "write", "edit", "map", "glob", "command", "ask", "artifact", "skill", "finish"]
 capabilities = ["code:read", "context:inherit", "code:write", "artifact:provision"]
 # no allowed_paths — all paths are writable
 ```
@@ -76,7 +76,7 @@ capabilities = ["code:read", "context:inherit", "code:write", "artifact:provisio
 ## Read access
 
 There is no per-agent read-path restriction. The `read`, `map`, `search`,
-`glob`, and `grep` tools are controlled by capabilities (`code:read`), not by
+`glob` and `inspect` tools are controlled by capabilities (`code:read`), not by
 path allowlists. An agent with `code:read` can read any file in the worktree
 (except secrets). If you need read-scoped agents, add it.
 

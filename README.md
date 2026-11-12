@@ -582,11 +582,11 @@ availability, and approval mode. The tools line is the exact post-filter list,
 so a role never sees a tool it cannot call. When `ask` is unavailable, the
 ambiguity policy says to stop and report the question instead of asking.
 
-Research holds only `context`, `read`, `map`, `glob`, `grep`, `ask`,
+Research holds only `context`, `inspect`, `map`, `glob`, `ask`,
 `skill`, `write`, `todo`, and `finish`. It reads one idea, asks until the
 scope is precise, and writes concrete features/bugs as issue files under
 `issues/features/todo/` or `issues/bugs/todo/`. Engineer holds `context`,
-`read`, `write`, `edit`, `map`, `glob`, `grep`, `ask`, `artifact`, `skill`,
+`inspect`, `write`, `edit`, `map`, `glob`, `ask`, `artifact`, `skill`,
 `todo`, and `finish`; it edits in one run in a `mc/<slug>` worktree and never
 runs build/test scripts. Review is read-only, holds `finish`, and judges the
 same worktree and commit the Engineer used.
@@ -601,7 +601,7 @@ The file tools are deliberately split, close to Claude Code's model:
   at most 25k tokens; whole files over 256 KB need `offset`/`limit` or
   `allow_large: true`. Use `offset`/`limit` to page.
 - `glob { "pattern": "src/**/*.ts" }` lists paths.
-- `grep { "pattern": "GRAY", "ignoreCase": true }` is plain ripgrep.
+- `inspect { query: "GRAY", regex: true }` is plain ripgrep through the inspect tool (regex mode).
 - `map` is code-structure search: `overview`, `outline`, `symbols`, `locate`,
   `references`, `definition`, `info`, `semantic`, `graph`, `sections`, and
   `structural`. Use it for where code lives and how it connects, not raw text.
@@ -676,7 +676,7 @@ such as Rust, Go, Java, and C/C++ find their homes.
 ### Repository knowledge
 
 Repo facts come from the code itself: module doc headers plus the
-deterministic map (`core:map`, `map outline/locate`, `grep`). There is no
+deterministic map (`core:map`, `map outline/locate`, `inspect regex`). There is no
 Knowledge tab and no knowledge directory is injected — a hand-maintained
 architecture note drifts from the code, and every run pays for the stale
 version.

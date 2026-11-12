@@ -12,5 +12,5 @@
 ## Rules
 
 - The edit result diff is the confirmation. Do not run gates, builds, or tests yourself; do check the returned diff before finishing.
-- Do not re-read held information. The transcript and stored artifacts are authoritative.
+- Do not re-read held information. Holdings carries current bytes; artifacts cover anything older. The transcript only abbreviates old results.
 - Keep changes minimal. Follow existing project conventions.
