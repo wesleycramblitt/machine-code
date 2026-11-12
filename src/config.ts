@@ -118,6 +118,8 @@ export interface MachineConfig {
   context: {
     maxChars: number;
     docsIndex?: string;
+    /** Per-turn holdings-delta cap (before the per-model clamp). */
+    holdingsMaxChars: number;
   };
   /** Repository map ([map]). */
   map: {
@@ -292,6 +294,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       // code doc headers and the live map; external material lives in the
       // reference store. An explicit docs_index still wins.
       docsIndex: typeof contextRaw.docs_index === "string" ? contextRaw.docs_index : undefined,
+      holdingsMaxChars: asNumber(contextRaw.holdings_max_chars) ?? 12_000,
     },
     map: {
       enabled: mapRaw.enabled !== false,

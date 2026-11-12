@@ -102,7 +102,12 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
             const text = memory.getArtifact(params.id);
             if (text === null) return fail(`no artifact ${params.id}`);
             const capped = capText(text, READ_CAP_BYTES);
-            return ok(`[artifact ${params.id}]\n${capped.text}`);
+            const status = memory.artifactStatus(params.id);
+            const stale =
+              status !== null && status.stale
+                ? `\n[stale: ${status.path} changed since this artifact was stored; current bytes are in the holdings block above]`
+                : "";
+            return ok(`[artifact ${params.id}]\n${capped.text}${stale}`);
           }
           case "forget": {
             let id = params.id;

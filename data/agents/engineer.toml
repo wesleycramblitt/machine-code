@@ -4,7 +4,7 @@
 
 name = "engineer"
 order = 2
-tools = ["context", "inspect", "read", "write", "edit", "map", "glob", "grep", "search", "command", "ask", "artifact", "skill", "finish"]
+tools = ["context", "inspect", "write", "edit", "map", "glob", "grep", "command", "ask", "artifact", "skill", "finish"]
 readonly = false
 modes = []
 blurb = "plans + builds a feature/bug in one run"

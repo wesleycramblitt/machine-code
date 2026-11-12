@@ -56,7 +56,7 @@ const MAX_CALLS = 50;
 const MAX_GATE_ATTEMPTS = 5;
 
 /** Successes that show a run did real work, not just memory bookkeeping. */
-const SUBSTANTIVE_TOOLS = new Set(["read", "map", "search", "glob", "grep", "command", "edit", "write"]);
+const SUBSTANTIVE_TOOLS = new Set(["inspect", "map", "glob", "grep", "command", "edit", "write"]);
 
 /** A request that is a question, not a change. A writable role answering a
  * question is not expected to edit; everything else (imperatives, bug
@@ -121,6 +121,8 @@ export interface RunLoopInput {
   requireModel?: string;
   /** Repo-relative files pinned into the working set before the first model call. */
   seedFiles?: string[];
+  /** Hint symbol ranges pre-filling the living map (rendered as turn-1 deltas). */
+  seedRanges?: Array<{ path: string; range: [number, number] }>;
   /** Layout + full policy: enable the task tool (delegation). */
   layout?: Layout;
   fullPolicy?: import("./config.js").Policy;
@@ -136,6 +138,9 @@ export interface RunLoopInput {
   contextText?: string;
   /** Skip the deterministic repo map index in the model's up-front context. */
   skipMap?: boolean;
+  /** Per-turn holdings-delta cap override (default: machine context.holdings_max_chars,
+   * clamped per model to 10% of its input budget). */
+  holdingsMaxChars?: number;
   
   /** Composer-excluded skill names the skill tool must refuse. */
   skillExcludes?: string[];
@@ -435,9 +440,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     processes,
   });
   // Preload the task files so the first prompt already carries them.
-  // Working context re-reads from disk, so pins never go stale.
+  // Holdings re-read from disk, so pins never go stale.
   if (input.seedFiles && input.seedFiles.length > 0) {
     memory.seedWorkingFiles(input.seedFiles, 0);
+  }
+  if (input.seedRanges && input.seedRanges.length > 0) {
+    memory.seedHintRanges(input.seedRanges, 0);
   }
   // Rebuild the map and module index after a changed turn. The map cache is
   // keyed by the exact working tree, so this is a cheap stat pass when
@@ -485,6 +493,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // task pack that selects files after the user curated the context.
   let lastOverviewChars = 0;
   let lastBudget: ContextBudget | null = null;
+  let lastHoldingsChars = 0;
+  /**
+   * Per-turn holdings-delta cap: run override, else machine default,
+   * clamped per model to 10% of its input budget so deltas scale with
+   * the max context limits instead of a fixed byte count.
+   */
+  const holdingsCap = (inputChars: number | undefined): number => {
+    const base = input.holdingsMaxChars ?? input.machine.context.holdingsMaxChars;
+    if (!inputChars || inputChars <= 0) return base;
+    return Math.min(base, Math.max(2_048, Math.floor(inputChars * 0.1)));
+  };
 
   const initialChars =
     input.agent.prompt.length +
@@ -1010,6 +1029,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           input.contextText,
           undefined,
           commandIndex,
+          holdingsCap(undefined),
         ).messages;
       },
       prepareRequest: async ({ context }) => {
@@ -1017,6 +1037,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const agentPolicy = input.fullPolicy?.agents?.[input.agent.name];
           const budget = row ? contextBudget(row.context, agentPolicy?.expectedOutputTokens ?? 16_000) : null;
           lastBudget = budget;
+          const holdingsBudget = holdingsCap(budget?.inputChars);
+          lastHoldingsChars = holdingsBudget;
           const baseOverhead =
             input.agent.prompt.length +
             mapIndex.length +
@@ -1045,8 +1067,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               });
             }
           }
-          // The transcript is replayed whole; the ledger is for explicit
-          // context recall, not for re-sending bytes the model already has.
+          // The transcript is replayed whole; holdings deltas (not the ledger)
+          // carry current file bytes the model does not already hold.
           return renderPromptMessages(
             context.messages,
             memory,
@@ -1054,6 +1076,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             input.contextText,
             overviewMaxChars,
             commandIndex,
+            holdingsBudget,
           );
         };
 
@@ -1187,6 +1210,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               tokens: actualContextTokens > 0 ? actualContextTokens : Math.ceil(lastRequestChars / 4),
               stateChars: memory.renderBlock().length,
               overviewChars: lastOverviewChars,
+              holdingsChars: lastHoldingsChars,
               ...(lastBudget
                 ? {
                     contextWindow: lastBudget.contextWindowTokens,

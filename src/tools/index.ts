@@ -13,11 +13,6 @@ import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
   READ_CAP_BYTES,
-  READ_EXPAND_MAX_BYTES,
-  READ_LARGE_MAX_BYTES,
-  READ_MAX_FILE_BYTES,
-  READ_OUTLINE_BYTES,
-  READ_PAGE_BYTES,
   SEARCH_CAP_BYTES,
   ToolError,
   assertRegularFile,
@@ -52,7 +47,7 @@ import { inspectTool } from "./inspect.js";
 import { finishTool, FinishParams, type FinishContext } from "./finish.js";
 import { renderModuleGraph } from "../map/modules.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
-import type { LedgerEntry, RunStateStore } from "../context/state.js";
+import type { RunStateStore } from "../context/state.js";
 
 export interface ToolContext {
   /** Worktree root every path is bound to. */
@@ -92,579 +87,6 @@ function ok(text: string): AgentToolResult<undefined> {
 
 function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
-}
-
-/* -------------------------------------------------------------------- read */
-
-const ReadParams = Type.Object({
-  path: Type.String({ description: "File path, relative to the worktree root (or absolute inside it)." }),
-  offset: Type.Optional(Type.Number({ description: "1-based line to start at (default 1)." })),
-  limit: Type.Optional(Type.Number({ description: "Max lines to return. Omit to read through the per-call cap." })),
-  allow_large: Type.Optional(Type.Boolean({
-    description: "Read the whole file or a long range, up to 1 MiB, instead of the default 25k-token page.",
-  })),
-  symbol: Type.Optional(Type.String({
-    description: "Read one top-level symbol's block (function, class, interface) instead of line pages.",
-  })),
-  around: Type.Optional(Type.Number({
-    description: "1-based line to center a ~40-line window on. Prefer this over offset/limit.",
-  })),
-});
-
-/** Batch selectors kept for internal callers; the model-facing schema above
- * covers the single-symbol and neighborhood forms. */
-type ReadArgs = Static<typeof ReadParams> & {
-  symbols?: string[];
-  section?: string;
-  sections?: string[];
-};
-
-/** Find a nested or non-map declaration so `read { symbol }` can still help. */
-function findSymbolLine(lines: readonly string[], symbol: string): number {
-  // An empty or blank name would otherwise match the first declaration in the
-  // file and return an unrelated block labeled "(around )".
-  if (!symbol.trim()) return 0;
-  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const declaration = new RegExp(
-    `(?:^|\\s)(?:function|class|const|let|var|interface|type|enum|def|fn|func)\\s+${escaped}\\b`,
-  );
-  for (let index = 0; index < lines.length; index += 1) {
-    if (declaration.test(lines[index] ?? "")) return index + 1;
-  }
-  const word = new RegExp(`\\b${escaped}\\b`);
-  for (let index = 0; index < lines.length; index += 1) {
-    if (word.test(lines[index] ?? "")) return index + 1;
-  }
-  return 0;
-}
-
-/** Stable cache key for one read target: symbol, section, window, or full file. */
-function readCacheKey(path: string, params: { symbol?: string | null; symbols?: readonly string[] | null; section?: string | null; sections?: readonly string[] | null; around?: number | null; offset?: number | null; limit?: number | null; allow_large?: boolean | null }): string {
-  if (params.symbols && params.symbols.length > 0) return `${path}#symbols:${[...params.symbols].sort().join(",")}`;
-  if (params.sections && params.sections.length > 0) return `${path}#sections:${[...params.sections].map((item) => item.trim().toLowerCase()).sort().join(",")}`;
-  if (params.symbol) return `${path}#symbol:${params.symbol}`;
-  if (params.section) return `${path}#section:${params.section.trim().toLowerCase()}`;
-  if (params.around != null) return `${path}#around:${params.around}`;
-  if (params.offset != null || params.limit != null) {
-    return `${path}@${Math.max(1, Math.floor(params.offset ?? 1))}:${params.limit == null ? "all" : Math.max(1, Math.floor(params.limit))}${params.allow_large ? "#large" : ""}`;
-  }
-  return `${path}#full${params.allow_large ? "#large" : ""}`;
-}
-
-function readTargetLabel(path: string, params: { symbol?: string | null; symbols?: readonly string[] | null; section?: string | null; sections?: readonly string[] | null; around?: number | null; offset?: number | null; limit?: number | null }): string {
-  if (params.symbols && params.symbols.length > 0) return `${path}#${params.symbols.join(",")}`;
-  if (params.sections && params.sections.length > 0) return `${path}#${params.sections.join(",")}`;
-  if (params.symbol) return `${path}#${params.symbol}`;
-  if (params.section) return `${path}#${params.section.trim()}`;
-  if (params.around != null) return `${path}#around ${params.around}`;
-  if (params.offset != null || params.limit != null) {
-    const start = Math.max(1, Math.floor(params.offset ?? 1));
-    return `${path}:${start}-${start + Math.max(1, Math.floor(params.limit ?? 2000)) - 1}`;
-  }
-  return path;
-}
-
-/** Above this size, `read { around }` returns a page around the line instead
- * of the whole enclosing symbol. */
-const AROUND_MAX_SYMBOL_LINES = 160;
-
-/** Weak models serialize absent optionals as the string "null" or an empty
- * string. No definable symbol or section is literally named "null" or "",
- * so treat those as absent before any selector logic runs. Anything else
- * passes through untouched for schema validation to judge. */
-const NULL_SELECTOR = new Set(["null", "undefined", ""]);
-
-/** A usable 1-based line selector: a finite positive number. Weak models
- * send 0, "", false, or "null" for "not set"; treating those as real values
- * silently overrides the range the model actually asked for. */
-function positiveLine(value: unknown): boolean {
-  const n = typeof value === "string" ? Number(value.trim()) : value;
-  return typeof n === "number" && Number.isFinite(n) && n > 0;
-}
-
-function cleanReadSelectors(args: unknown): unknown {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return args;
-  const out = { ...(args as Record<string, unknown>) };
-  let changed = false;
-  const isBlank = (value: unknown): boolean =>
-    typeof value === "string" && NULL_SELECTOR.has(value.trim().toLowerCase());
-  for (const key of ["symbol", "section"] as const) {
-    if (isBlank(out[key])) {
-      delete out[key];
-      changed = true;
-    }
-  }
-  // Weak models send a scalar where the schema wants a list. Coerce it
-  // instead of spending a turn on a validation error.
-  for (const key of ["symbols", "sections"] as const) {
-    const value = out[key];
-    if (value === null || value === undefined) {
-      delete out[key];
-      changed = true;
-    } else if (typeof value === "string") {
-      if (isBlank(value)) delete out[key];
-      else out[key] = [value];
-      changed = true;
-    } else if (Array.isArray(value)) {
-      const kept = value.filter((item) => !isBlank(item));
-      if (kept.length !== value.length) {
-        if (kept.length > 0) out[key] = kept;
-        else delete out[key];
-        changed = true;
-      }
-    }
-  }
-  // A single selector and its list form are the same request. Merge so the
-  // read does not append the same symbol twice.
-  for (const [single, list] of [["symbol", "symbols"], ["section", "sections"]] as const) {
-    const value = out[single];
-    if (typeof value !== "string") continue;
-    const existing = Array.isArray(out[list]) ? (out[list] as unknown[]) : [];
-    out[list] = [...existing, value];
-    delete out[single];
-    changed = true;
-  }
-  // Line-range spellings models actually use. `line_start/line_end` and
-  // `start/end` are the most common; ignoring them returned the whole file
-  // and the model re-read looking for the line it asked for.
-  const asNumber = (value: unknown): number | undefined => {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && value.trim() !== "") {
-      const n = Number(value.trim());
-      if (Number.isFinite(n)) return n;
-    }
-    return undefined;
-  };
-  const startAlias = asNumber(out.line_start) ?? asNumber(out.start) ?? asNumber(out.from);
-  const endAlias = asNumber(out.line_end) ?? asNumber(out.end) ?? asNumber(out.to);
-  for (const key of ["line_start", "line_end", "start", "end", "from", "to"]) {
-    if (key in out) {
-      delete out[key];
-      changed = true;
-    }
-  }
-  if (startAlias !== undefined && positiveLine(startAlias) && out.offset === undefined) {
-    out.offset = startAlias;
-    changed = true;
-  }
-  if (endAlias !== undefined && positiveLine(endAlias)) {
-    const from = asNumber(out.offset) ?? startAlias ?? 1;
-    out.limit = Math.max(1, Math.floor(endAlias) - Math.floor(from) + 1);
-    changed = true;
-  }
-  // Numeric selectors: absent, non-numeric, or non-positive means "not set".
-  // `offset: 0`, `around: 0`, and `limit: false` must never masquerade as a
-  // real range and override an explicit offset/limit.
-  for (const key of ["offset", "limit", "around"] as const) {
-    const value = out[key];
-    if (value === null || value === undefined || !positiveLine(value)) {
-      delete out[key];
-      changed = true;
-      continue;
-    }
-    if (typeof value === "string") {
-      out[key] = Number(value);
-      changed = true;
-    }
-  }
-  const large = out.allow_large;
-  if (large === null || large === undefined || (typeof large === "string" && isBlank(large))) {
-    delete out.allow_large;
-    changed = true;
-  }
-  return changed ? out : args;
-}
-
-export function readTool(ctx: ToolContext): AgentTool<typeof ReadParams> {
-  return {
-    name: "read",
-    label: "read",
-    description:
-      "Read a file; returns numbered lines. A bare read of a large file returns its outline " +
-      "(symbols + doc) instead of a truncated dump — use {allow_large: true} for the full body. " +
-      "Use {symbol} or {around} for a targeted block; an offset window inside one symbol " +
-      "auto-expands to the enclosing block. " +
-      "For symbol definitions + callers + source in one call, use inspect instead.",
-    parameters: ReadParams,
-    prepareArguments: (args) => cleanReadSelectors(args) as Static<typeof ReadParams>,
-    async execute(_id, raw: Static<typeof ReadParams>) {
-      const params = raw as ReadArgs;
-      try {
-        const abs = resolveWithin(ctx.root, params.path);
-        assertRegularFile(abs);
-        if (isSecretPath(toRelative(ctx.root, abs))) {
-          return fail(`refusing to read a secret file: ${params.path}`);
-        }
-        if (isBinaryFile(abs)) return fail(`refusing to read a binary file: ${params.path}`);
-        const wantsSymbols = Boolean(params.symbols && params.symbols.length > 0);
-        const wantsSections = Boolean(params.sections && params.sections.length > 0);
-        // Selectors compose instead of excluding each other: every requested
-        // symbol, section, and range is appended to one bounded result. Weak
-        // models hedge by filling several fields at once.
-        const parts: string[] = [];
-        const stat = statSync(abs);
-        const fileSig = `${stat.mtimeMs}:${stat.size}`;
-        const cacheKey = readCacheKey(params.path, params);
-        const cached = ctx.state?.cachedRead(cacheKey, fileSig);
-        // A cache hit means these exact bytes are already in the run's
-        // working context. Say so outright: otherwise a re-read looks like
-        // progress and the model keeps paging what it holds. Bytes are
-        // always served — never denied — with the note as the nudge.
-        if (cached !== null && cached !== undefined) {
-          return ok(`${cached}\n[already held from earlier in this run — no new bytes]`);
-        }
-        const raw = readFileSync(abs, "utf8");
-        const lines = raw.split("\n");
-        const bytes = Buffer.byteLength(raw, "utf8");
-        const capBytes = params.allow_large === true ? READ_LARGE_MAX_BYTES : READ_PAGE_BYTES;
-        const remember = (text: string, kind: LedgerEntry["kind"], label?: string) => {
-          ctx.state?.rememberRead({
-            key: cacheKey,
-            path: params.path,
-            label: label ?? readTargetLabel(params.path, params),
-            kind,
-            content: text,
-            fileSig,
-          });
-          return ok(text);
-        };
-        if (params.allow_large !== true && bytes > READ_MAX_FILE_BYTES && params.offset == null && params.limit == null) {
-          return fail(
-            `${params.path} is ${bytes} bytes; a whole-file read is limited to ${READ_MAX_FILE_BYTES} bytes. ` +
-              "Read a portion with offset/limit, search it with grep, or pass allow_large:true.",
-          );
-        }
-        if (params.allow_large === true && bytes > READ_LARGE_MAX_BYTES) {
-          return fail(`${params.path} is ${bytes} bytes; allow_large is limited to ${READ_LARGE_MAX_BYTES} bytes.`);
-        }
-        // A bare read of a file over the page cap returns its outline, not a
-        // truncated dump: one smart call (outline → read { symbol }) replaces
-        // the outline call plus the wasted full read. Explicit allow_large or
-        // any selector (symbol/section/around/offset/limit) keeps byte reads.
-        const bare =
-          !wantsSymbols &&
-          !wantsSections &&
-          !params.symbol &&
-          !params.section &&
-          params.around == null &&
-          params.offset == null &&
-          params.limit == null;
-        // A bare read of a working-set pin re-dumps bytes the model holds
-        // (seeded files render every turn, current from disk). Deny the
-        // dump, not the read: blocks stay available via symbol/offset reads.
-        if (bare && params.allow_large !== true && ctx.state?.isWorkingFile(params.path)) {
-          return ok(
-            `${params.path} is pinned in this run's working context — the bytes are already above. ` +
-              `Use them; read { symbol } or { offset, limit } only for a block outside what's shown, never a full re-read.`,
-          );
-        }
-        if (bare && params.allow_large !== true && bytes > READ_OUTLINE_BYTES) {
-          const found = extractSymbols(params.path, raw);
-          const symbolLines = found.map((symbol, index) => {
-            const nextLine = found[index + 1]?.line ?? lines.length + 1;
-            let end = nextLine - 1;
-            while (end > symbol.line && (lines[end - 1] ?? "").trim() === "") end -= 1;
-            return `  ${symbol.kind} ${symbol.name} (${symbol.line}-${Math.max(symbol.line, end)})`;
-          });
-          const headings = documentSections(raw, params.path).slice(0, 20);
-          const sectionLines = headings.map(
-            (heading) => `  # ${sectionTitle(heading.text) || heading.text} (${heading.line})`,
-          );
-          const outline = [
-            `${params.path}: ${lines.length} lines, ${bytes} bytes — outline only, no bytes returned.`,
-            ...symbolLines,
-            ...sectionLines,
-            `Read a block with read { symbol } or { offset, limit }; edit { symbol, newString } rewrites a whole block with no anchor.`,
-          ].join("\n");
-          return remember(outline, "outline", `${params.path}#outline`);
-        }
-        // Symbol/around wins when a model also passes offset/limit. Ignore the
-        // paging arguments instead of spending a turn on a schema correction.
-
-        let offset = Math.max(1, Math.floor(params.offset ?? 1));
-        let limit = params.limit == null ? Math.max(1, lines.length) : Math.max(1, Math.floor(params.limit));
-        let header = "";
-        let symbolFallback = false;
-        if (raw.length === 0) {
-          return remember(`${params.path} exists but is empty (0 lines)`, "outline", `${params.path}#empty`);
-        }
-
-        if (wantsSymbols) {
-          const file = await outlineFile(ctx.root, params.path);
-          const missing: string[] = [];
-          for (const name of params.symbols!) {
-            const range = file ? symbolRange(file, name) : null;
-            if (range) {
-              const page = numberLinesCapped(
-                lines,
-                range.start,
-                Math.max(1, range.end - range.start + 1),
-                capBytes,
-              );
-              parts.push(`### ${params.path}:${range.start}-${range.end} (${name})\n${page.text}`);
-              continue;
-            }
-            const found = findSymbolLine(lines, name);
-            if (found > 0) {
-              const start = Math.max(1, found - 20);
-              const page = numberLinesCapped(lines, start, 41, capBytes);
-              parts.push(`### ${params.path}:${start}-${start + 40} (around ${name})\n${page.text}`);
-            } else {
-              missing.push(name);
-            }
-          }
-          if (missing.length > 0) parts.push(`[no symbol: ${missing.join(", ")}]`);
-        }
-
-        if (wantsSections) {
-          const headings = documentSections(raw, params.path);
-          const missing: string[] = [];
-          for (const wanted of params.sections!) {
-            const needle = wanted.trim().toLowerCase();
-            const index = headings.findIndex((heading) => {
-              const title = sectionTitle(heading.text).toLowerCase();
-              return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
-            });
-            if (index < 0) {
-              missing.push(wanted);
-              continue;
-            }
-            const heading = headings[index]!;
-            const next = headings[index + 1];
-            const start = heading.line;
-            const end = next ? next.line - 1 : lines.length;
-            const page = numberLinesCapped(lines, start, Math.max(1, end - start + 1), capBytes);
-            parts.push(`### ${params.path}:${start}-${end} (section ${sectionTitle(heading.text) || heading.text})\n${page.text}`);
-          }
-          if (missing.length > 0) parts.push(`[no section: ${missing.join(", ")}]`);
-        }
-
-        // A single section resolves to a page range appended below. A miss
-        // fails fast when nothing else succeeded, and degrades to a note
-        // when array parts already answer the call.
-        let singleResolved = false;
-        if (params.section && !wantsSymbols && !wantsSections) {
-          const headings = documentSections(raw, params.path);
-          const needle = params.section.trim().toLowerCase();
-          const index = headings.findIndex((heading) => {
-            const title = sectionTitle(heading.text).toLowerCase();
-            return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
-          });
-          if (index < 0) {
-            const known = headings.slice(0, 12).map((heading) => sectionTitle(heading.text) || heading.text);
-            const note =
-              `no section "${params.section}" in ${params.path}. ` +
-              (known.length > 0 ? `Known sections:\n${known.join("\n")}` : "This file has no section headings; use symbol or a range.");
-            if (parts.length > 0) {
-              parts.push(`[${note}]`);
-            } else {
-              return fail(note);
-            }
-          } else {
-            const heading = headings[index]!;
-            const next = headings[index + 1];
-            offset = heading.line;
-            limit = Math.max(1, (next ? next.line - 1 : lines.length) - heading.line + 1);
-            header = `${params.path}:${offset}-${offset + limit - 1} (section ${sectionTitle(heading.text) || heading.text})`;
-            singleResolved = true;
-          }
-        } else if (params.section) {
-          // Combined with arrays, a single section is just another part.
-          const headings = documentSections(raw, params.path);
-          const needle = params.section.trim().toLowerCase();
-          const index = headings.findIndex((heading) => {
-            const title = sectionTitle(heading.text).toLowerCase();
-            return title === needle || title.includes(needle) || heading.text.toLowerCase().includes(needle);
-          });
-          if (index < 0) {
-            parts.push(`[no section "${params.section}" in ${params.path}]`);
-          } else {
-            const heading = headings[index]!;
-            const next = headings[index + 1];
-            const start = heading.line;
-            const end = next ? next.line - 1 : lines.length;
-            const page = numberLinesCapped(lines, start, Math.max(1, end - start + 1), capBytes);
-            parts.push(`### ${params.path}:${start}-${end} (section ${sectionTitle(heading.text) || heading.text})\n${page.text}`);
-          }
-        }
-        if (params.symbol || params.around != null) {
-          const file = await outlineFile(ctx.root, params.path);
-          const range = file
-            ? params.symbol
-              ? symbolRange(file, params.symbol)
-              : rangeAround(file, params.around!)
-            : null;
-          if (!range) {
-            if (params.symbol) {
-              // Nested functions and local bindings are not top-level map
-              // symbols. Show the declaration's neighborhood instead of a
-              // dead end.
-              const found = findSymbolLine(lines, params.symbol);
-              if (found > 0) {
-                offset = Math.max(1, found - 20);
-                limit = 41;
-                header = `${params.path}:${offset}-${offset + 40} (around ${params.symbol})`;
-                symbolFallback = true;
-                singleResolved = true;
-              } else {
-                const suggestion = file && file.symbols.length > 0
-                  ? file.symbols.slice(0, 12).map((symbol) => `${symbol.line} ${symbol.kind} ${symbol.name}`).join("\n")
-                  : "(no symbols)";
-                const note =
-                  `no symbol "${params.symbol}" in ${params.path}. ` +
-                  `Try search text for the name, or read { around }. Known top-level symbols:\n${suggestion}`;
-                if (parts.length > 0) {
-                  parts.push(`[${note}]`);
-                } else {
-                  return fail(note);
-                }
-              }
-            } else {
-              // No symbols in the file: fall back to a small line window.
-              offset = Math.max(1, params.around! - 20);
-              limit = 41;
-              header = `${params.path}:${offset}-${offset + 40} (around ${params.around})`;
-              singleResolved = true;
-            }
-          } else if (
-            params.around != null &&
-            range.end - range.start + 1 > AROUND_MAX_SYMBOL_LINES
-          ) {
-            // `around` means "the page at this line", not "everything the
-            // enclosing symbol spans." A 4,600-line function would otherwise
-            // flood the transcript and push the actual evidence out.
-            const start = Math.max(range.start, params.around - 20);
-            const end = Math.min(range.end, start + 40);
-            offset = start;
-            limit = Math.max(1, end - start + 1);
-            header =
-              `${params.path}:${offset}-${offset + limit - 1} (around ${params.around}; ` +
-              `${range.name} is ${range.end - range.start + 1} lines)`;
-            singleResolved = true;
-          } else {
-            offset = range.start;
-            limit = Math.max(1, range.end - range.start + 1);
-            header = `${params.path}:${range.start}-${range.end} (${range.name})`;
-            singleResolved = true;
-          }
-        }
-
-        const pageParts: string[] = [];
-        let pageNextOffset: number | undefined;
-        const wantPage = singleResolved || params.offset != null || params.limit != null || parts.length === 0;
-        // Plain range read inside one code block: return the enclosing
-        // symbol, not the arbitrary window. The model pages because windows
-        // are all it can hold; handing it the unit kills the next three
-        // paging calls. Skipped when the window already covers the block,
-        // spans blocks, or the block exceeds the byte cap.
-        let skippedEnclosing: { name: string; start: number; end: number } | null = null;
-        if (
-          wantPage &&
-          !singleResolved &&
-          !wantsSymbols &&
-          !wantsSections &&
-          !params.symbol &&
-          !params.section &&
-          params.around == null &&
-          (params.offset != null || params.limit != null)
-        ) {
-          const reqStart = Math.max(1, Math.floor(params.offset ?? 1));
-          const reqEnd = reqStart + Math.max(1, Math.floor(params.limit ?? lines.length)) - 1;
-          const enclosing = enclosingSymbol(params.path, raw, lines, reqStart, Math.min(reqEnd, lines.length));
-          if (enclosing) {
-            const spanBytes = Buffer.byteLength(
-              lines.slice(enclosing.start - 1, enclosing.end).join("\n"),
-              "utf8",
-            );
-            // Oversized blocks stay windows: dumping 36KB for a 120-line
-            // request burns the transcript and fences the whole symbol.
-            // Serve the window below; the window path names this block.
-            if (spanBytes <= Math.min(capBytes, READ_EXPAND_MAX_BYTES)) {
-              const page = numberLinesCapped(lines, enclosing.start, enclosing.end - enclosing.start + 1, capBytes);
-              return remember(
-                `### ${params.path}:${enclosing.start}-${enclosing.end} (${enclosing.name}; expanded from lines ${reqStart}-${Math.min(reqEnd, lines.length)} to the enclosing block)\n${page.text}`,
-                "symbol",
-                `${params.path}#symbol:${enclosing.name}`,
-              );
-            }
-            skippedEnclosing = { name: enclosing.name, start: enclosing.start, end: enclosing.end };
-          }
-        }
-        if (wantPage) {
-          if (offset > lines.length) {
-            const pastEnd = `offset ${offset} is past the end of ${params.path} (${lines.length} lines).`;
-            if (parts.length > 0) parts.push(`[${pastEnd}]`);
-            else return remember(pastEnd, "file", `${params.path}@${offset}`);
-          } else {
-            const page = numberLinesCapped(lines, offset, limit, capBytes);
-            const notes: string[] = [];
-            if (skippedEnclosing) {
-              notes.push(
-                `[lines ${offset}-${page.nextOffset - 1} of ${lines.length}; ` +
-                  `this window sits inside ${skippedEnclosing.name} (${params.path}:${skippedEnclosing.start}-${skippedEnclosing.end}) — ` +
-                  `read { "path": "${params.path}", "symbol": "${skippedEnclosing.name}" } for the whole block]`,
-              );
-            }
-            if (symbolFallback) {
-              notes.push(`[${params.symbol} is not a top-level map symbol; showing the first match]`);
-            }
-            // Plain page read on a symbol-rich file: name the blocks once so
-            // the next read can target one instead of paging again.
-            if (!singleResolved && !wantsSymbols && !wantsSections) {
-              try {
-                const names = extractSymbols(params.path, raw).map((s) => s.name).filter((n) => n.length > 0);
-                if (names.length >= 4) {
-                  const shown = names.slice(0, 10).join(", ");
-                  const more = names.length > 10 ? ` (+${names.length - 10} more)` : "";
-                  notes.push(
-                    `[${names.length} top-level symbols: ${shown}${more} — read { "path": "${params.path}", "symbol": "<name>" } for one block]`,
-                  );
-                }
-              } catch {}
-            }
-            if (page.truncatedLine) {
-              notes.push(`[line ${page.nextOffset - 1} truncated at ${capBytes} bytes]`);
-            }
-            if (page.nextOffset <= lines.length) {
-              if (params.offset == null && params.limit == null) {
-                notes.push(
-                  `[PARTIAL view: lines ${offset}-${page.nextOffset - 1} of ${lines.length}; ` +
-                    `continue with offset ${page.nextOffset} or allow_large:true]`,
-                );
-              } else {
-                notes.push(`[${lines.length - (page.nextOffset - 1)} more lines; continue with offset ${page.nextOffset}]`);
-              }
-            }
-            if (page.nextOffset <= lines.length) pageNextOffset = page.nextOffset;
-            pageParts.push([header, page.text, ...notes].filter(Boolean).join("\n"));
-          }
-        }
-        // Parts are individually capped; cap the total only when arrays
-        // contributed, so a lone page keeps its trailing navigation note.
-        // If the cap eats that note, re-attach the offset explicitly.
-        const body = [...parts, ...pageParts].filter(Boolean).join("\n\n");
-        let text = body;
-        if (parts.length > 0) {
-          const capped = capText(body, capBytes);
-          text = capped.text;
-          if (
-            capped.truncated &&
-            pageNextOffset !== undefined &&
-            !/call read with offset/.test(text)
-          ) {
-            text += `\n[${lines.length - (pageNextOffset - 1)} more lines; continue with offset ${pageNextOffset}]`;
-          }
-        }
-        return remember(
-          text,
-          wantsSymbols ? "symbol" : wantsSections || params.section ? "section" : params.symbol ? "symbol" : "file",
-          header || readTargetLabel(params.path, params),
-        );
-      } catch (error) {
-        return fail(error instanceof Error ? error.message : String(error));
-      }
-    },
-  };
 }
 
 /* ------------------------------------------------------------------- write */
@@ -1114,7 +536,19 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   if (spec.symbol) {
     const file = await outlineFile(root, spec.path);
     const range = file ? symbolRange(file, spec.symbol) : null;
-    if (!range) return { error: `no symbol "${spec.symbol}" in ${spec.path}` };
+    if (!range) {
+      // Exact-only misses burn a turn. Auto-resolve an unambiguous
+      // case-insensitive match; otherwise name the closest candidates.
+      const names = file?.symbols.map((symbol) => symbol.name) ?? [];
+      const folded = names.filter((name) => name.toLowerCase() === spec.symbol!.toLowerCase());
+      if (folded.length === 1) {
+        return planSingleFileEdit(root, { ...spec, symbol: folded[0]! });
+      }
+      const { suggestCommand } = await import("../commands/registry.js");
+      const hint = suggestCommand(spec.symbol, names);
+      const available = names.length > 0 ? ` Available: ${names.slice(0, 12).join(", ")}${names.length > 12 ? ", …" : ""}` : "";
+      return { error: `no symbol "${spec.symbol}" in ${spec.path}.${hint ? ` Did you mean ${hint}?` : ""}${available}` };
+    }
     startChar = lineOffsets[range.start - 1] ?? 0;
     endChar = Math.min(raw.length, lineOffsets[range.end] ?? raw.length);
     scopeLabel = `symbol ${spec.symbol}`;
@@ -1309,13 +743,6 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
             return fail(`nothing applied — ${errors.length} file(s) failed validation:\n${errors.join("\n")}`);
           }
           for (const plan of plans) writeFileSync(plan.abs, plan.next, "utf8");
-          for (const plan of plans) {
-            for (const change of plan.changes) {
-              if (change.atLine === undefined) continue;
-              const height = change.newText ? change.newText.split("\n").length : 1;
-              ctx.state?.noteEditSpan(plan.rel, change.atLine, change.atLine + height - 1);
-            }
-          }
           const out: string[] = [`applied edits to ${plans.length} file(s):`];
           if (plans.length === 1) {
             out.push("(one file per call works, but batch independent files in one files[] call)");
@@ -1337,11 +764,6 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
         const planned = await planSingleFileEdit(ctx.root, { ...params, path: params.path ?? "" });
         if ("error" in planned) return fail(planned.error);
         writeFileSync(planned.abs, planned.next, "utf8");
-        for (const change of planned.changes) {
-          if (change.atLine === undefined) continue;
-          const height = change.newText ? change.newText.split("\n").length : 1;
-          ctx.state?.noteEditSpan(planned.rel, change.atLine, change.atLine + height - 1);
-        }
         const rendered = renderEditResult(params.path ?? "file", planned.next, planned.changes);
         return ok(planned.summary + (rendered ? `\n${rendered}` : ""));
       } catch (error) {
@@ -2619,11 +2041,9 @@ export function grepTool(ctx: ToolContext): AgentTool<typeof GrepParams> {
 }
 
 export type CoreToolName =
-  | "read"
   | "write"
   | "edit"
   | "map"
-  | "search"
   | "glob"
   | "grep"
   | "command"
@@ -2636,11 +2056,9 @@ export type CoreToolName =
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
   const all: Record<CoreToolName, AgentTool> = {
-    read: readTool(ctx),
     write: writeTool(ctx),
     edit: editTool(ctx),
     map: mapTool(ctx),
-    search: searchTool(ctx),
     glob: globTool(ctx),
     grep: grepTool(ctx),
     command: commandTool(ctx),

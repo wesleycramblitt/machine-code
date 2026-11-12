@@ -200,7 +200,7 @@ export function parseIncludeRange(entry: string): IncludeRange | null {
  * Slice 1-based inclusive lines out of a file body. A start past EOF is an
  * out-of-range warning (never a silent empty body); a past-EOF end clamps to
  * the last line and the header names the lines actually included. The body
- * carries the parent file so the agent can expand via the read tool.
+ * carries the parent file so the agent can expand via inspect.
  */
 export function sliceRangeBody(
   file: string,
@@ -217,7 +217,7 @@ export function sliceRangeBody(
   }
   const clamped = Math.min(end, lines.length);
   const snippet = lines.slice(start - 1, clamped).join("\n");
-  return { body: `[source: ${file}:${start}-${clamped}]\n${snippet}\n[parent: ${file}; expand with the read tool]` };
+  return { body: `[source: ${file}:${start}-${clamped}]\n${snippet}\n[parent: ${file}; expand with inspect]` };
 }
 
 /** Depth label for a parent-chain entry: parent, grandparent, then depth. */
@@ -592,8 +592,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     entries.push({ ...item, len: item.body.length });
   }
 
-  // File bodies render with the same `N: ` line numbers the read tool
-  // returns, so anchors and issue-cited lines lift straight out of context
+  // File bodies render with the same `N: ` line numbers inspect returns, so anchors and issue-cited lines lift straight out of context
   // with zero reads. Number before budgeting so lengths, hashes, and trims
   // all account the numbered text; trims cut at newlines so numbers stay
   // 1-based. Numbers are current as assembled; after an edit, read requotes

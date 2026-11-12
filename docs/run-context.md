@@ -12,18 +12,20 @@ The section order is fixed for prompt-cache stability:
 1. **System prompt** — role instructions for the agent.
 2. **Assembled context** (`<context>`) — curated sources: issues, files, knowledge,
    skills, references, parent run index lines.
-3. **Tool guide** (`<tool-policy>`) — tool selection policy.
-4. **Command index** (`<commands>`) — name-only list of available typed commands.
-5. **Transcript** — summarized tool-call history.
-6. **Workspace** (`<workspace>`) — git diff summary (only when files changed).
-7. **Run state** (`<run-state>`) — goal, decisions, findings, changes, questions.
+3. **Map index** — one line per directory with file counts (~1 KB, cache-stable).
+4. **Tool guide** (`<tool-policy>`) — tool selection policy.
+5. **Command index** (`<commands>`) — name-only list of available typed commands.
+6. **Transcript** — summarized tool-call history.
+7. **Workspace** (`<workspace>`) — git diff summary (only when files changed).
+8. **Holdings** (`<holdings>`) — living map: files held grouped by directory, with symbols, connections, inventory + new/changed bytes.
+9. **Run state** (`<run-state>`) — goal, decisions, findings, changes, questions.
 
-**Stable prefix** (2–4): byte-identical across turns for prompt caching.
-**Dynamic tail** (5–7): changes every turn after the first edit.
+**Stable prefix** (2–5): byte-identical across turns for prompt caching.
+**Dynamic tail** (6–9): changes every turn after the first edit.
 
-**Removed from the prompt per turn:** module index (~3 KB), repo map index (~1 KB),
-working context (~8 KB), cached read ledger (~0-24 KB), Next:/Read coverage/
-Working set lines (~1 KB). Total savings: ~13-37 KB per turn.
+**Removed from the prompt per turn:** module index (~3 KB). The map index
+(~1 KB) was restored: it names every directory, orienting the first
+`inspect` call without a discovery pass.
 
 ---
 
@@ -67,10 +69,8 @@ A deterministic cache of structural facts about the repo: file paths, languages,
 line counts, top-level symbols with line ranges, import edges, and doc headers.
 
 The map is a **back-end index**, not rendered in the prompt. It powers:
-- `inspect target=symbol` — symbol definitions and callers
-- `inspect target=file` — file outlines with imports and doc
-- `inspect target=directory` — directory listing with symbol counts
-- `inspect target=references` — definition locations and import-based references
+- `inspect {query}` — one call for path, `path:line` anchor, symbol name, or
+  free keywords; match kind (symbol | path | keyword | regex) named per file
 - `map overview` — directory listing with symbol counts
 - `map outline` — one file's top-level symbols
 - `map sections` — comment banners inside large files
@@ -100,13 +100,15 @@ through the `context` tool.
 
 | Block | Tag | Cap | Contents |
 |---|---|---|---|
-| Run state | `<run-state>` | 10 KB | Goal, decisions, findings, changes, open questions |
-| Workspace | `<workspace>` | varies | git diff --stat + untracked files (empty when clean) |
+| Run state | `<run-state>` | 10 KB | Goal, decisions, hand-written findings, changes, open questions |
+| Holdings | `<holdings>` | per-model delta cap (default 12 KB, 10% of input budget) | Living map: files held grouped by directory, with symbols, connections, inventory + new/changed bytes from disk |
+| Workspace | `<workspace>` | varies | git diff HEAD --stat + untracked files (empty when clean) |
 
 ### Fact lifecycle
 
-- **Read facts:** recorded automatically from `read`/`inspect` tool results.
-- **Search facts:** recorded automatically from `search`/`grep`/`glob` results.
+- **Read facts:** recorded automatically from `inspect` file/symbol results.
+- **Search facts:** recorded automatically from `inspect` find results, `search`/`grep`/`glob`/`map` results.
+- **Holdings:** recorded alongside read facts (path + merged ranges + symbols + connections + artifact id); hint symbols pre-fill the map so turn 1 carries their bodies as deltas; rendered per turn grouped by directory with inventory + new/changed bytes from disk.
 - **Change facts:** recorded from `edit`/`write` tool results.
 - **Decision facts:** recorded from `context note kind=decision`.
 - **Finding facts:** recorded from `context note kind=finding`.
@@ -136,7 +138,9 @@ The raw turn-by-turn conversation (user + assistant + tool results).
 
 **File:** `src/context/state.ts` — `renderWorkspace()`
 
-Rendered at prompt time from `git diff --stat` + `git ls-files --others
+Rendered at prompt time from `git diff HEAD --stat` (staged + unstaged vs the
+run's base ref — the branch starts there and the agent never commits, so this
+is the cumulative change since the run began) + `git ls-files --others
 --exclude-standard`:
 
 ```
@@ -173,14 +177,16 @@ Content-addressed storage of all tool outputs and read results:
 
 **File:** `src/tools/inspect.ts`
 
-Prefer over `read`/`search`/`map` for codebase queries.
+Prefer over `map` for codebase queries — one call for path, `path:line`
+anchor, symbol name, or free keywords. Replaces `read` and `search`.
 
-| Target | Returns | LSP enhanced? |
+| Query | Returns | LSP enhanced? |
 |---|---|---|
-| `symbol` | Definition location, kind, signature, source excerpt, callers | Yes — workspace symbols + definition location |
-| `file` | Path, language, lines, symbols, imports, doc + optional full source | Yes — document symbols for nested outlines |
-| `directory` | Subdirectories, child files with symbol/line counts | No |
-| `references` | Definition locations + files that reference the symbol | Yes — references (file:line:col) |
+| `path/to/file.ts` (+`detail`, `offset`/`limit`/`around`/`symbol`) | Numbered file body, paged | No — deterministic map + disk |
+| `path/to/file.ts:83-116` | Exact numbered slice | No |
+| `SymbolName` | Definition location, kind, signature, source excerpt, callers | Yes — workspace symbols + definition location |
+| free keywords | Ranked files with match kind (symbol \| path \| keyword \| regex) named per file, evidence lines, bodies | No — map ranker + disk |
+| `regex: true` | rg matches with context | No |
 
 Every LSP call is wrapped in try/catch. Falls back to the deterministic repo
 map when LSP is unavailable. Results auto-stored as artifacts.
@@ -199,8 +205,7 @@ map when LSP is unavailable. Results auto-stored as artifacts.
 | `state` | Get the full markdown state dump |
 | `parent` | Load a parent run's record |
 
-**Removed actions:** `focus` (harness auto-tracks), `expand` (folded into
-`inspect`), `next` (removed — rely on the `todo` tool).
+Removed actions: `focus` (deleted with the working set it scored).
 
 ---
 
@@ -224,8 +229,9 @@ map when LSP is unavailable. Results auto-stored as artifacts.
 | Tool Guide | `policy.ts → <tool-policy>` | Static | Tool selection instructions |
 | Command Index | `loop.ts → <commands>` | Pre-run | Command names list |
 | Transcript | `render.ts` → summarized | Per-turn | Tool call history |
-| Workspace | `state.ts → <workspace>` | Per-turn | git diff --stat, untracked files |
-| Run State | `state.ts → <run-state>` | Per-turn | Goal, decisions, findings, changes, questions |
+| Workspace | `state.ts → <workspace>` | Per-turn | git diff HEAD --stat, untracked files |
+| Holdings | `state.ts → <holdings>` | Per-turn | Living map + new/changed file bytes from disk |
+| Run State | `state.ts → <run-state>` | Per-turn | Goal, decisions, hand findings, changes, questions |
 | Artifacts | `artifacts.ts` | Per-turn | Stored raw tool results |
 | Tool Results | `state.ts` → ingestTurn | Per-turn | Content-addressed, artifact-referenced |
 
@@ -235,9 +241,10 @@ map when LSP is unavailable. Results auto-stored as artifacts.
   byte-identical across turns for prompt caching.
 - The **volatile tail** (transcript + workspace + run state) changes every turn
   and sits after the transcript so it never shifts the cache prefix.
-- No git diff, no repo map content, no working context, no ledger is sent to
-  the model as source text. The model pulls what it needs via `inspect`,
-  `read`, `search`, etc.
+- No git patch, no repo map content, no duplicate seed bytes is sent to the
+  model as source text. The model pulls what it needs via `inspect`
+  (holdings deltas push what changed), `command run` (`run:list`/`run:show`,
+  `reference:find`/`reference:read`), `grep` (raw text), and `map` (structure).
 
 ---
 
