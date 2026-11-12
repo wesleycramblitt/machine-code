@@ -41,6 +41,11 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   if (settings.kind !== "ideas") {
     body.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance", cols));
   }
+  if (settings.kind !== "ideas") {
+    const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
+    body.push(fieldLine("v", "Verification", verLabel, fieldEdit === "verification", cols));
+  }
+  body.push(fieldLine("r", "Review", settings.review === "human" ? "Human" : "None", fieldEdit === "review", cols));
   body.push("");
 
   // ── Prompt box ──
@@ -76,12 +81,6 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
   const leftTokens = [kindToken, priorityToken];
-
-  if (settings.kind !== "ideas") {
-    const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
-    const verColor = settings.verification === "verified" ? G : D;
-    leftTokens.push(command("v", "Verify", verLabel, verColor));
-  }
 
   const reviewColor = settings.review === "human" ? RED : D;
   leftTokens.push(command("r", "Review", settings.review === "human" ? "Human" : "None", reviewColor));
