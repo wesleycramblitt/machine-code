@@ -1,8 +1,11 @@
 /**
  * machine_code — issue composer render.
  *
- * Settings bar at top (Kind where Agent sits on the new-run page), bordered
- * prompt box below, action footer with red START_BG on Create.
+ * Layout (top to bottom):
+ *   editable text fields (tags, depends, keywords) — per-line above prompt
+ *   bordered prompt box — first line is the edit-body hint
+ *   Create badge right-aligned below the box
+ *   kind + priority + acceptance + verification bar
  */
 import {
   B, C, D, G, GR, M, R, RED, W, Y, START_BG, WHITE,
@@ -11,135 +14,105 @@ import {
 import { clipLines } from "../types.js";
 import type { IssueComposerFrame, IssueComposerProps } from "./types.js";
 
+/** Render an inline editable field line: `Label[key]: value▌` */
+function fieldLine(key: string, label: string, value: string, isEditing: boolean, cols: number): string {
+  const prefix = ` ${B}${label}${R}[${C}${key}${R}]:${isEditing ? `${GR}▌${R}` : " "}`;
+  const display = value.trim() || (isEditing ? "" : `${D}(none)${R}`);
+  // Cap the value to avoid overflow
+  const maxVal = Math.max(10, cols - visible(prefix) - 3);
+  const val = trunc(display, maxVal);
+  return `${prefix}${val}`;
+}
+
 export function renderIssueComposer(props: IssueComposerProps): IssueComposerFrame {
   const { cols, bodyH, theme, toast, settings, insert, confirm, fieldEdit } = props;
   const body: string[] = [];
-  const panelWidth = Math.max(20, cols - 2);
-  const inner = Math.max(12, panelWidth - 2);
+  const boxWidth = Math.max(20, cols - 2);
+  const inner = Math.max(12, boxWidth - 2);
 
-  // ── Settings bar (top) ──
-  // Kind in the same position as Agent on the new-run page
+  // ── Editable text fields above the prompt ──
+  // Shown when they have content or are being edited.
+  const showTags = settings.tags.trim() || fieldEdit === "tags";
+  const showDepends = settings.depends.trim() || fieldEdit === "depends";
+  const showKeywords = settings.keywords.trim() || fieldEdit === "keywords";
+
+  if (showTags) body.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
+  if (showDepends) body.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
+  if (showKeywords) body.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
+  if (showTags || showDepends || showKeywords) body.push("");
+
+  // ── Prompt box ──
+  const promptText = settings.prompt;
+  const emptyPrompt = !promptText.trim() && !insert;
+
+  // Build prompt lines for display (with cursor in insert mode)
+  let displayLines: string[];
+  if (insert) {
+    displayLines = wrapText(`${promptText}${GR}▌${R}`, Math.max(8, inner - 3));
+  } else if (emptyPrompt) {
+    displayLines = [` ${D}e Edit body${R}`];
+  } else {
+    displayLines = wrapText(promptText, Math.max(8, inner - 3));
+  }
+
+  const promptHeight = Math.max(3, Math.min(12, Math.floor(bodyH * 0.45)));
+  const shownPrompt = displayLines.slice(-promptHeight);
+
+  const promptBox = [
+    ` ${D}┌${"─".repeat(inner)}┐${R}`,
+    ...shownPrompt.map((line) => ` ${D}│${R} ${W}${fit(line, inner - 2)}${R} ${D}│${R}`),
+    ...Array.from({ length: Math.max(0, promptHeight - shownPrompt.length) }, () => ` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`),
+    ` ${D}└${"─".repeat(inner)}┘${R}`,
+  ];
+  body.push(...promptBox);
+
+  // ── Create[:!] right-aligned below the box ──
+  const createBadge = commandBadge("Create", ":!", START_BG, WHITE);
+  // When in insert mode, show edit keys on the left, Create on the right
+  if (insert) {
+    const editKeys = joinCommands([
+      command("Esc", "Done", undefined, Y),
+      command("Enter", "Newline", undefined, G),
+      command("Backspace", "Delete", undefined, M),
+    ]);
+    const padWidth = Math.max(1, boxWidth - visible(editKeys) - visible(createBadge) - 2);
+    body.push(` ${editKeys}${" ".repeat(padWidth)}${createBadge}`);
+  } else {
+    const padWidth = Math.max(1, boxWidth - visible(createBadge));
+    body.push(` ${" ".repeat(padWidth)}${createBadge}`);
+  }
+  body.push("");
+
+  // ── Kind + Priority + Acceptance + Verification token bar ──
   const kindColor = settings.kind === "ideas" ? C : settings.kind === "features" ? G : RED;
   const kindLabel = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
   const kindToken = command("k", "Kind", kindLabel, kindColor);
+
   const priorityColor = settings.priority === "low" ? D : settings.priority === "medium" ? G : RED;
   const priorityLabel = settings.priority.charAt(0).toUpperCase() + settings.priority.slice(1);
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
-  // Conditional tokens — only for features/bugs
-  const acceptanceToken = settings.kind !== "ideas" && settings.acceptance
-    ? command("a", "Accept", trunc(settings.acceptance, 24), M)
-    : settings.kind !== "ideas"
-      ? command("a", "Accept", "", D)
-      : "";
-  const verificationLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
-  const verificationColor = settings.verification === "verified" ? G : D;
-  const verificationToken = settings.kind !== "ideas"
-    ? command("v", "Verify", verificationLabel, verificationColor)
-    : "";
+  const tokens = [kindToken, priorityToken];
 
-  // Tags / Depends / Keywords as compact tokens
-  const tagsToken = settings.tags
-    ? command("t", "Tags", trunc(settings.tags, 20), M)
-    : "";
-  const dependsToken = settings.depends
-    ? command("d", "Depends", trunc(settings.depends, 16), M)
-    : "";
-  const keywordsToken = settings.keywords
-    ? command("w", "Keywords", trunc(settings.keywords, 20), M)
-    : "";
+  if (settings.kind !== "ideas") {
+    const accLabel = settings.acceptance.trim() ? trunc(settings.acceptance, 28) : "none";
+    const accToken = command("a", "Accept", accLabel, M);
+    tokens.push(accToken);
 
-  // Build the settings line — wrap if it overflows
-  const settingsTokens = [
-    kindToken,
-    priorityToken,
-    acceptanceToken,
-    verificationToken,
-    tagsToken,
-    dependsToken,
-    keywordsToken,
-  ].filter((t) => t !== "");
-
-  const settingsLine = settingsTokens.length > 0
-    ? ` ${joinCommands(settingsTokens)}`
-    : ` ${D}press ${C}k${D} to choose issue kind${R}`;
-
-  // When in field-edit mode, show the field hint above the box
-  if (fieldEdit) {
-    body.push(` ${GR}editing ${fieldEdit} · Enter to confirm, Esc to cancel${R}`);
-  }
-  body.push(settingsLine);
-  body.push("");
-
-  // ── Prompt box ──
-  const promptText = settings.prompt;
-  const displayPrompt = wrapText(insert ? `${promptText}${GR}▌${R}` : promptText, Math.max(8, inner - 3));
-  const emptyPrompt = !promptText.trim() && !insert;
-  let promptLines = emptyPrompt ? [""] : displayPrompt;
-  const promptHeight = Math.max(3, Math.min(12, Math.floor(bodyH * 0.5)));
-
-  const shownPrompt = promptLines.slice(-promptHeight);
-
-  let promptBox: string[] = [];
-
-  // Header badge
-  if (insert) {
-    promptBox.push(` ${D}┌${"─".repeat(inner)}┐${R}`);
-    const left = ` ${D}│${R} ${W}${fit(shownPrompt[0] ?? "", inner - 2)}${R} ${D}│${R}`;
-    if (shownPrompt.length > 1) {
-      promptBox.push(left);
-      for (let i = 1; i < shownPrompt.length; i++) {
-        promptBox.push(` ${D}│${R} ${W}${fit(shownPrompt[i]!, inner - 2)}${R} ${D}│${R}`);
-      }
-    } else {
-      promptBox.push(left);
-    }
-    const remaining = promptHeight - shownPrompt.length;
-    for (let i = 0; i < remaining; i++) {
-      promptBox.push(` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`);
-    }
-    promptBox.push(` ${D}└${"─".repeat(inner)}┘${R}`);
-  } else {
-    // Not editing — show placeholder or bordered prompt
-    promptBox.push(` ${D}┌${"─".repeat(inner)}┐${R}`);
-    if (emptyPrompt) {
-      promptBox.push(` ${D}│${R} ${D}${fit("Describe the problem or change in one paragraph...", inner - 2)}${R} ${D}│${R}`);
-      const remaining = promptHeight - 1;
-      for (let i = 0; i < remaining; i++) {
-        promptBox.push(` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`);
-      }
-    } else {
-      for (let i = 0; i < shownPrompt.length; i++) {
-        promptBox.push(` ${D}│${R} ${W}${fit(shownPrompt[i]!, inner - 2)}${R} ${D}│${R}`);
-      }
-      const remaining = promptHeight - shownPrompt.length;
-      for (let i = 0; i < remaining; i++) {
-        promptBox.push(` ${D}│${R} ${" ".repeat(inner - 2)} ${D}│${R}`);
-      }
-    }
-    promptBox.push(` ${D}└${"─".repeat(inner)}┘${R}`);
-  }
-  body.push(...promptBox);
-
-  // Inline edit actions below the box — matches new-run page Agent/Ambiguity pattern
-  if (insert) {
-    body.push(` ${joinCommands([
-      command("Esc", "Done", undefined, Y),
-      command("Enter", "Newline", undefined, G),
-      command("Backspace", "Delete", undefined, M),
-    ])}`);
-  } else {
-    body.push(` ${joinCommands([
-      command("e", "Edit body", undefined, C),
-    ])}`);
+    const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
+    const verColor = settings.verification === "verified" ? G : D;
+    tokens.push(command("v", "Verify", verLabel, verColor));
   }
 
-  // Fill to bodyH
+  body.push(` ${joinCommands(tokens)}`);
+
+  // ── Fill ──
   while (body.length < bodyH) body.push("");
 
-  // ── Actions footer ──
+  // ── Footer actions ──
   const actions = joinCommands([
     commandBadge("Create", ":!", START_BG, WHITE),
+    command("e", "Edit body", undefined, C),
     command("k", "Kind", undefined, M),
     command("p", "Priority", undefined, M),
     command("a", "Acceptance", undefined, M),
