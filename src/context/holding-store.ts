@@ -210,6 +210,9 @@ export class HoldingStore {
         continue;
       }
       if (holding.ranges.length === 0) continue;
+      // Seeded files are in the stable context block every turn; rendering
+      // their bytes again burns budget on text the model already sees.
+      if (holding.seeded) continue;
       // Held bytes render every turn: the transcript abbreviates old results,
       // so "already sent once" is not the same as "still visible to the model".
       const toSend = holding.ranges;

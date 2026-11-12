@@ -50,6 +50,23 @@ const InspectParams = Type.Object({
 
 type Params = Static<typeof InspectParams>;
 
+/** Weak models fill every optional field with the string "null". Drop them. */
+function cleanInspectArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const NULLISH = /^(null|undefined|null undefined)$/;
+  const out: Record<string, unknown> = {};
+  let changed = false;
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string" && NULLISH.test(value.trim())) { changed = true; continue; }
+    out[key] = value;
+  }
+  // Also drop empty string on fields that are never meaningful when empty.
+  if (typeof out.query === "string" && out.query.trim() === "") { delete out.query; changed = true; }
+  if (typeof out.path === "string" && out.path.trim() === "") { delete out.path; changed = true; }
+  if (typeof out.name === "string" && out.name.trim() === "") { delete out.name; changed = true; }
+  if (typeof out.target === "string" && out.target.trim() === "") { delete out.target; changed = true; }
+  return changed ? out : args;
+}
+
 /** Legacy {target, name, path} → query form. New callers pass query directly. */
 function legacyToQuery(params: Params): Params {
   if (params.query && params.query.trim()) return params;
@@ -215,9 +232,9 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
       "Use detail=outline for signatures, summary (default) for matched bodies, full for capped bodies; " +
       "offset/limit/around/symbol page a file. This replaces read and search — do not page with offset unless paging.",
     parameters: InspectParams,
-    prepareArguments: (args) => legacyToQuery(args as Params) as Static<typeof InspectParams>,
+    prepareArguments: (args) => legacyToQuery(cleanInspectArgs(args as Record<string, unknown>) as Params) as Static<typeof InspectParams>,
     async execute(_id, raw: Static<typeof InspectParams>) {
-      const params = legacyToQuery(raw as Params);
+      const params = legacyToQuery(cleanInspectArgs(raw as Record<string, unknown>) as Params);
       const query = (params.query ?? "").trim();
       if (!query) {
         return fail(

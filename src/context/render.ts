@@ -172,7 +172,7 @@ export function renderPromptMessages(
   startupContext?: string,
   overviewMaxChars?: number,
   commandIndex?: string,
-  holdingsMaxChars = 24_000,
+  holdingsMaxChars = 48_000,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
