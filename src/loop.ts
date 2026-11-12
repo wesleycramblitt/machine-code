@@ -24,9 +24,8 @@ import type { MutableModels } from "./models.js";
 import { coreTools } from "./tools/index.js";
 import { toolDefinitionChars, toolSchemaChars } from "./tools/schema.js";
 import type { AgentConfig } from "./agents/config.js";
-import { createHash } from "node:crypto";
 import { addCurationVeto } from "./catalogue/overlay.js";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
@@ -37,7 +36,6 @@ import { RunStateStore } from "./context/state.js";
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
-import { EvidenceTracker } from "./state/progress.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
 import { findIssue } from "./plan/issues.js";
@@ -64,21 +62,6 @@ export function hasTerminalLine(text: string): boolean {
   return /(?:^|\n)\s*(?:Result|Outcome|Changes|Verdict):/i.test(text);
 }
 
-
-/**
- * Coarse read key: reads that begin in the same 100-line band are the same
- * unit. The limit is deliberately ignored; changing only `limit` must not
- * defeat the repeat guard.
- */
-export function readBucket(params: Record<string, unknown>): string {
-  const path = typeof params.path === "string" ? params.path : "";
-  if (!path) return "";
-  if (typeof params.symbol === "string") return `${path}#${params.symbol}`;
-  if (typeof params.section === "string") return `${path}#section:${params.section.trim().toLowerCase()}`;
-  if (typeof params.around === "number") return `${path}@${Math.floor(params.around / 100)}`;
-  const offset = typeof params.offset === "number" && Number.isFinite(params.offset) ? Math.max(1, params.offset) : 1;
-  return `${path}@${Math.floor(offset / 100)}`;
-}
 
 /** Stable JSON key for a tool call; argument order must not defeat the guard. */
 function stableKey(value: unknown): string {
@@ -380,15 +363,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const issuePath = input.layout && recorder.current.itemId
     ? findIssue(input.layout, recorder.current.itemId)?.rel
     : undefined;
-  /** A cheap file version for the loop detector; contents are not hashed. */
-  const fileVersion = (path: string): string | undefined => {
-    try {
-      const stat = statSync(join(mapRoot, path));
-      return `${stat.mtimeMs}:${stat.size}`;
-    } catch {
-      return undefined;
-    }
-  };
+
   const processes = new ProcessSupervisor({
     runId: recorder.id,
     runDir: recorder.dir,
@@ -529,12 +504,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastFailure: string | undefined;
   let lastAssistant: AssistantMessage | undefined;
   let totalTokens = 0;
-  /** Run-level loop detector; a model rotation does not erase evidence. */
-  // Read-only roles (review/research) cannot make progress by editing,
-  // so an identical-repeat streak is a loop much sooner than for engineer.
-  // Four identical evidence keys with no mutation is a loop. A single-line
-  // fix should not spend half its turns re-running the same search.
-  const evidence = new EvidenceTracker(4);
   let turns = 0;
   /** Cumulative turns across resumes, for the run summary. */
   let reportedTurns = recorder.current.turns;
@@ -703,14 +672,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     budgetExhausted = false;
     let appliedError: { key: string; message: string } | undefined;
     let turnCapHit = false;
-    let loopBlocked = false;
-    let loopBlockedReason: "repeat" | "loop" | undefined;
-    // Unknown tools (hallucinated bash/git/...) never reach the per-tool
-    // execute wrapper, so the evidence detector cannot see them. Count
-    // consecutive identical unknown calls here instead: three in a row is a
-    // stuck model, not exploration.
-    let unknownToolName: string | null = null;
-    let unknownToolStreak = 0;
+
     /** Tool contract health: enough failures with no work is not "completed". */
     let toolErrors = 0;
     let substantiveSuccesses = 0;
@@ -846,58 +808,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           return prepare ? prepare(repaired) : repaired;
         },
         async execute(id, params, signal, onUpdate) {
-          const killLoop = (evidenceKey: string | null, stale: number) => {
-            if (!loopBlocked) {
-              loopBlocked = true;
-              loopBlockedReason = "loop";
-              recorder.event("loop_blocked", {
-                tool: tool.name,
-                reason: "loop",
-                stale,
-                key: evidenceKey,
-              });
-            }
-            return {
-              content: [{
-                type: "text" as const,
-                text:
-                  "Loop detected: recent actions produced no new evidence. " +
-                  "Stop. Report the result and what is blocked.",
-              }],
-              details: undefined,
-              isError: true,
-              terminate: true,
-            };
-          };
-
-          const contextAction =
-            tool.name === "context" ? String((params as { action?: unknown }).action ?? "") : "";
-          const readPath = tool.name === "read" ? String((params as { path?: unknown }).path ?? "") : "";
-
-          // Evidence keys for the loop detector. A read is one 100-line band
-          // (or one symbol/section) at a file version; a search is one scope
-          // with one result set. Repeated evidence is stale even if the model
-          // changes the offset or paraphrases the pattern.
-          const mapAction = tool.name === "map" ? String((params as { action?: unknown }).action ?? "overview") : "";
-          const searchMode =
-            tool.name === "map"
-              ? mapAction
-              : tool.name === "search"
-                ? String((params as { mode?: unknown }).mode ?? "text")
-                : "";
-          const searchPaths = tool.name === "search" && Array.isArray((params as { paths?: unknown }).paths)
-            ? ((params as { paths?: unknown }).paths as unknown[]).filter(
-                (item): item is string => typeof item === "string",
-              )
-            : [];
-          const searchScope =
-            tool.name === "map"
-              ? `${mapAction}:${String((params as { pattern?: unknown }).pattern ?? (params as { path?: unknown }).path ?? ".")}`
-              : tool.name === "search" && searchMode === "text"
-                ? searchPaths.length > 0
-                  ? searchPaths.slice().sort().join(",")
-                  : String((params as { path?: unknown }).path ?? ".")
-                : "";
           const key = `${tool.name}:${stableKey(params)}`;
           const commandAction =
             tool.name === "command" ? String((params as { action?: unknown }).action ?? "") : "";
@@ -909,14 +819,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             input.commands.get(commandName)?.readonly === true;
           const cached = cacheableCommand ? commandCache.get(key) : undefined;
           if (cached && cached.epoch === changeEpoch) {
-            const check = evidence.observe(`command:${commandName}:cached`, false);
-            // if (check.loop) return killLoop(`command:${commandName}:cached`, check.stale);
             return {
               content: [{
                 type: "text" as const,
                 text:
-                  `[cached ${commandName} from turn ${cached.turn}; no files changed since — ` +
-                  `repeat with different args or move on; another identical call counts toward the loop limit]\n` +
+                  `[cached ${commandName} from turn ${cached.turn}; no files changed since]
+` +
                   cached.text,
               }],
               details: undefined,
@@ -928,21 +836,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             commandCache.clear();
           }
           if (!result.isError && tool.name === "command" && commandAction === "run" && !cacheableCommand) {
-            // A mutating command can change files without an edit/write call.
             changeEpoch += 1;
             commandCache.clear();
           }
-          const preview = result.content
-            .filter((item): item is { type: "text"; text: string } => item.type === "text")
-            .map((item) => item.text)
-            .join("\n")
-            .replace(/\s+/g, " ")
-            .slice(0, 300);
           if (!result.isError && cacheableCommand) {
             const text = result.content
               .filter((item): item is { type: "text"; text: string } => item.type === "text")
               .map((item) => item.text)
               .join("\n");
+            const preview = text.replace(/\s+/g, " ").slice(0, 300);
             commandCache.set(key, {
               epoch: changeEpoch,
               turn: memory.currentTurn(),
@@ -950,58 +852,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               preview,
             });
           }
-          // Evidence novelty: repeated reads of one band at the same file
-          // version, repeated search result sets, repeated command output, and
-          // repeated identical failures are not new information. A mutation
-          // resets the stale streak.
-          const resultText = result.content
-            .filter((item): item is { type: "text"; text: string } => item.type === "text")
-            .map((item) => item.text)
-            .join("\n");
-          const resultHash = createHash("sha1").update(resultText).digest("hex").slice(0, 16);
-          
-          if (result.isError) {
-            const errorKey = `error:${tool.name}:${resultHash}`;
-            const check = evidence.observeError(errorKey, memory.currentTurn());
-            // if (check.loop) return killLoop(errorKey, check.stale);
-          } else {
-            const isProgress =
-              tool.name === "edit" ||
-              tool.name === "write" ||
-              (tool.name === "command" && commandAction === "run" && !cacheableCommand);
-            let evidenceKey: string | null = null;
-            if (tool.name === "read" && readPath) {
-              evidenceKey = `read:${readBucket(params as Record<string, unknown>)}:${fileVersion(readPath) ?? resultHash}`;
-            } else if (tool.name === "map" && searchScope) {
-              evidenceKey = `map:${searchScope}:${resultHash}`;
-            } else if (tool.name === "search" && searchScope) {
-              evidenceKey = `search:${searchScope}:${searchMode}:${resultHash}`;
-            } else if (tool.name === "glob") {
-              evidenceKey = `glob:${stableKey(params)}:${resultHash}`;
-            } else if (tool.name === "grep") {
-              evidenceKey = `grep:${stableKey(params)}:${resultHash}`;
-            } else if (tool.name === "command" && commandAction === "run") {
-              evidenceKey = cacheableCommand
-                ? `command:${commandName}:cached`
-                : `command:${commandName}:${resultHash}`;
-            } else if (tool.name === "context" && contextAction === "recall") {
-              evidenceKey = `recall:${resultHash}`;
-            }
-            const check = evidence.observe(evidenceKey, isProgress);
-            // if (check.loop) return killLoop(evidenceKey, check.stale);
-          }
           return result;
         },
       } as AgentTool;
     });
     const toolChars = toolDefinitionChars(tools);
-    const knownToolNames = new Set(tools.map((tool) => tool.name));
     recorder.event("tools_registered", {
       names: tools.map((tool) => tool.name),
       constrained: tools.filter((tool) => tool.constrainedSampling).map((tool) => tool.name),
     });
 
     agent = new Agent({
+      toolExecution: "sequential",
       initialState: {
         model: currentModel,
         thinkingLevel: "low",
@@ -1263,9 +1125,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           recorder.event("budget_exhausted", { totalTokens, budget: policy.budgetTokens });
           return { action: "end" as const };
         }
-        if (loopBlocked) {
-          return { action: "end" as const };
-        }
         if (maxTurns > 0 && turns >= maxTurns) {
           // A final answer with no tool calls is a natural completion, not a cap.
           const wantsMore = message.content.some((block) => block.type === "toolCall");
@@ -1430,30 +1289,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           break;
         }
         case "tool_execution_end": {
-          if (!knownToolNames.has(event.toolName)) {
-            // Hallucinated tool: pi-agent-core rejects it before the execute
-            // wrapper (and the evidence detector) ever runs. Three identical
-            // unknown calls in a row ends the run the same way a loop does.
-            if (event.toolName === unknownToolName) unknownToolStreak += 1;
-            else {
-              unknownToolName = event.toolName;
-              unknownToolStreak = 1;
-            }
-            if (unknownToolStreak >= 10 && !loopBlocked) {
-              loopBlocked = true;
-              loopBlockedReason = "loop";
-              recorder.event("loop_blocked", {
-                tool: event.toolName,
-                reason: "unknown-tool",
-                streak: unknownToolStreak,
-                key: `unknown-tool:${event.toolName}`,
-              });
-              agent?.abort();
-            }
-          } else {
-            unknownToolName = null;
-            unknownToolStreak = 0;
-          }
           if (event.isError) {
             toolErrors += 1;
           } else {
@@ -1599,12 +1434,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       status = "paused";
     } else if (input.signal?.aborted) {
       status = "interrupted";
-    } else if (loopBlocked) {
-      status = "blocked";
-      error =
-        loopBlockedReason === "loop"
-          ? "no new evidence; loop detected"
-          : "repeated identical tool calls detected";
     } else if (budgetExhausted) {
       status = "blocked";
       error = `token budget exhausted (${policy.budgetTokens})`;
@@ -1618,14 +1447,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       error = la2?.errorMessage ?? "provider error";
     }
 
-    if (!finalText.trim() && currentModel && (turnCapHit || loopBlocked || budgetExhausted)) {
+    if (!finalText.trim() && currentModel && (turnCapHit || budgetExhausted)) {
       const reason = turnCapHit
         ? "You have reached the turn cap."
-        : loopBlocked
-          ? loopBlockedReason === "loop"
-            ? "The harness stopped the run: recent actions produced no new evidence. Return the result and the blocking evidence."
-            : "The harness stopped repeated tool calls."
-          : "The token budget is exhausted.";
+        : "The token budget is exhausted.";
       finalText = await finalAnswer(currentModel, reason);
     }
 
