@@ -10,7 +10,7 @@ import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, comman
 import { groupModels, siblingOffers, type ModelSort } from "../../catalogue/query.js";
 import { loadCuration } from "../../catalogue/refresh.js";
 import { loadAvailability } from "../../availability.js";
-import { axisWeights } from "../../select.js";
+import { axisWeights, capabilityFit } from "../../select.js";
 import { CAPABILITY_AXES, loadPolicy } from "../../config.js";
 import type { CatalogueRow } from "../../catalogue/types.js";
 import { layout } from "../../paths.js";
@@ -193,7 +193,7 @@ export function renderModelDetail(props: ModelDetailProps): ModelDetailFrame | n
     const score = model.scores[axis];
     lines.push(`   ${axis.padEnd(10)} ${progress(score * 10, Math.min(24, Math.max(8, Math.floor(cols / 4))))} ${score.toFixed(2)}`);
   }
-  lines.push(`   ${"weighted".padEnd(10)} ${weights ? `${D}role ${R}${agentTone(agent)}${agent}${R}` : `${D}neutral${R}`} ${modelWeightedFit(model, weights).toFixed(2)}`);
+  lines.push(`   ${"weighted".padEnd(10)} ${weights ? `${D}role ${R}${agentTone(agent)}${agent}${R}` : `${D}neutral${R}`} ${(weights ? capabilityFit(model.scores, weights as any) : model.scores.capability).toFixed(2)}`);
   lines.push("", ` ${B}${C}Offer${R}`);
   lines.push(`   context ${C}${fmtContext(model.context)}${R} · max out ${C}${fmtContext(model.maxOutput)}${R} · in ${Y}$${model.pricing.input}${R}/M · out ${Y}$${model.pricing.output}${R}/M ${model.free ? `${G}free${R}` : `${RED}paid${R}`}`);
   if (model.benchmarks) {

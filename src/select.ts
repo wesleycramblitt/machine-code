@@ -72,7 +72,7 @@ export function axisWeights(agent: string, policy: AgentPolicy): AxisWeights {
  * S_p = (sum(w_i * x_i^p) / sum(w_i)) ^ (1/p)
  */
 export function capabilityFit(scores: AxisScores, weights: AxisWeights): number {
-  const p = -2;
+  const p = -1;
   let numerator = 0;
   let activeWeight = 0;
   for (const axis of CAPABILITY_AXES) {

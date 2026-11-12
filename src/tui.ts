@@ -34,7 +34,7 @@ import { scrollLines, selectableLines } from "./tui/scroll.js";
 import { createTuiState, type NewRunSeed, type NewRunState, type Page, type RunDetail, type RunsRepoScope, type Screen, type TuiState } from "./tui/state.js";
 import { renderDeleteConfirm } from "./tui/screens/delete.js";
 import { renderIssue } from "./tui/screens/issue.js";
-import { modelWeightedFit, policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
+import { policyWeightsFor, renderModelDetail, renderModelsList } from "./tui/screens/models.js";
 import { renderAnswer } from "./tui/screens/answer.js";
 import { TABS, renderFooterRows, renderHeader, rightHeaderPath } from "./tui/screens/chrome.js";
 import { renderComposer } from "./tui/screens/composer/composer.js";
@@ -71,7 +71,7 @@ import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineI
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, loadPolicy, CAPABILITY_AXES, SELECTION_TIERS, type AgentPolicy, type MachineConfig, type Policy } from "./config.js";
-import { axisWeights, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pick } from "./select.js";
+import { axisWeights, capabilityFit, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pick } from "./select.js";
 
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
@@ -1309,7 +1309,7 @@ export async function runTui(): Promise<void> {
         const status = modelStatus(row, input);
         return {
           row,
-          fit: modelWeightedFit(row, weights),
+          fit: weights ? capabilityFit(row.scores, weights) : row.scores.capability,
           eligible: status.eligible,
           ...(status.eligible ? {} : { reason: status.reason }),
         };
