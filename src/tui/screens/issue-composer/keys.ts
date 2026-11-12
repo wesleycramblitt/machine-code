@@ -110,7 +110,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   // ── Normal mode ──
   if (data === ":") { s.newIssueColon = true; ctx.draw(); return true; }
   if (data === "\x1b") {
-    if (s.newIssue.prompt.trim()) {
+    if (s.newIssue.prompt.trim() || s.newIssue.tags.trim() || s.newIssue.keywords.trim() || s.newIssue.depends.trim() || s.newIssue.acceptance.trim()) {
       s.newIssueConfirm = true;
       ctx.notify("discard unsaved issue? press y to discard and exit, esc to stay");
     } else {

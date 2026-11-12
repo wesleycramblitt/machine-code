@@ -51,7 +51,7 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   if (insert) {
     displayLines = wrapText(`${promptText}${GR}▌${R}`, Math.max(8, inner - 3));
   } else if (emptyPrompt) {
-    displayLines = [` ${D}e Edit body${R}`];
+    displayLines = [` ${D}Edit body${R}[${C}e${R}]`];
   } else {
     displayLines = wrapText(promptText, Math.max(8, inner - 3));
   }
