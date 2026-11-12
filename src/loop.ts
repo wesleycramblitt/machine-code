@@ -112,7 +112,7 @@ export interface RunLoopInput {
   seedFiles?: string[];
   /** Layout + full policy: enable the task tool (delegation). */
   layout?: Layout;
-  fullPolicy?: Policy;
+  fullPolicy?: import("./config.js").Policy;
   /** The resolved agent config for this run (snapshot for children). */
   agentConfig?: AgentConfig;
   /** The resolved capability list for this run. */
@@ -320,7 +320,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const selectFor = (chars: number) =>
     pick({
       agent: input.agent.name,
-      policy,
+      agentDef: input.agent,
       machine: input.machine,
       catalogue:
         triedModels.size === 0
@@ -418,11 +418,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     memory.seedWorkingFiles(input.seedFiles, 0);
   }
   // The next action is the first open item in the issue's durable todo.
+  // The next action is seeded from the first todo item when available.
   const issueForTodo = input.layout && recorder.current.itemId
     ? findIssue(input.layout, recorder.current.itemId)
     : null;
-  const firstTodo = issueForTodo?.todo.find((item) => !item.done);
-  if (firstTodo) memory.note("next", firstTodo.text, [], 0);
+  const firstTodoText = issueForTodo?.todo.find((item) => !item.done)?.text;
+
   // Rebuild the map and module index after a changed turn. The map cache is
   // keyed by the exact working tree, so this is a cheap stat pass when
   // nothing changed. Coalesce a burst of edits into one rebuild.
@@ -994,7 +995,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       },
       prepareRequest: async ({ context }) => {
         const renderFor = (row: CatalogueRow | null) => {
-          const budget = row ? contextBudget(row.context, policy.expectedOutputTokens) : null;
+          const agentPolicy = input.fullPolicy?.agents?.[input.agent.name];
+          const budget = row ? contextBudget(row.context, agentPolicy?.expectedOutputTokens ?? 16_000) : null;
           lastBudget = budget;
           const baseOverhead =
             input.agent.prompt.length +
@@ -1042,7 +1044,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         let chars = rendered.chars + toolChars;
         lastRequestChars = chars;
         recorder.recordContext(chars);
-        const estimate = estimateTokens(chars, policy.expectedOutputTokens);
+        const agentPolicy = input.fullPolicy?.agents?.[input.agent.name];
+        const estimate = estimateTokens(chars, agentPolicy?.expectedOutputTokens ?? 16_000);
         let repickReason: "initial" | "retry" | "context" | "model-missing" | undefined =
           !currentRow
             ? "initial"
@@ -1087,7 +1090,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         recorder.event("model_select", {
           call: callIndex,
           key: currentRow.key,
-          estimate: estimateTokens(chars, policy.expectedOutputTokens),
+          estimate: estimateTokens(chars, (input.fullPolicy?.agents?.[input.agent.name])?.expectedOutputTokens ?? 16_000),
           eligibleCount: result.eligibleCount,
           candidates: result.candidates,
           rejectedCount: result.rejectedCount,
@@ -1105,9 +1108,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         if (finishRequested) return { action: "end" as const };
         const usage = message.usage ?? zeroUsage;
         totalTokens += usage.totalTokens;
-        if (policy.budgetTokens !== undefined && totalTokens > policy.budgetTokens) {
+        const agentPol = input.fullPolicy?.agents?.[input.agent.name];
+        if (agentPol?.budgetTokens !== undefined && totalTokens > agentPol.budgetTokens) {
           budgetExhausted = true;
-          recorder.event("budget_exhausted", { totalTokens, budget: policy.budgetTokens });
+          recorder.event("budget_exhausted", { totalTokens, budget: agentPol.budgetTokens });
           return { action: "end" as const };
         }
         if (maxTurns > 0 && turns >= maxTurns) {
@@ -1187,7 +1191,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               ...(turnText ? { text: turnText.length > MODEL_IO_CAP ? turnText.slice(0, MODEL_IO_CAP) + "\n…[truncated]" : turnText } : {}),
             });
             const estimatedCost =
-              estimateCallCost(currentRow!.pricing, usage.input, Math.max(usage.output, policy.expectedOutputTokens)) *
+              estimateCallCost(currentRow!.pricing, usage.input, Math.max(usage.output, (input.fullPolicy?.agents?.[input.agent.name])?.expectedOutputTokens ?? 16_000)) *
               providerMultiplier(input.machine, currentRow!.providerID);
             recorder.recordCall(
               {
@@ -1421,7 +1425,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       status = "interrupted";
     } else if (budgetExhausted) {
       status = "blocked";
-      error = `token budget exhausted (${policy.budgetTokens})`;
+      error = `token budget exhausted (${(input.fullPolicy?.agents?.[input.agent.name])?.budgetTokens ?? "unknown"})`;
     } else if (turnCapHit) {
       status = "blocked";
       error = `turn cap reached (${maxTurns}) before the run finished`;

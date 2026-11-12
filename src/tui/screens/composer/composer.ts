@@ -572,7 +572,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // Prompt rows are fixed, and Codebase/Scripts rows use prefixes space
   // ignores, so none of those advertise a toggle.
   const sectionKey = activeSection.sectionKey;
-  const togglesInclude = ["section:issues", "section:files", "section:references"].includes(sectionKey);
+  const togglesInclude = ["section:issues", "section:docs", "section:files", "section:references"].includes(sectionKey);
   const spaceCommand = sectionKey === "section:skills"
     ? `${B}${G}space${R} ${D}include→on-demand→exclude${R}`
     : togglesInclude

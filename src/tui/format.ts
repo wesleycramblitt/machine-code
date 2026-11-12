@@ -394,6 +394,7 @@ export function eventTone(type: string, isError = false): string {
 export function contextTone(kind: string): string {
   switch (kind) {
     case "packet": return M; // legacy context provenance
+    case "docs":
     case "knowledge": return C;
     case "reference": return M;
     case "file": return W;

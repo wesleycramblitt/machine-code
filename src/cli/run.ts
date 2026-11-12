@@ -334,14 +334,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let explicitFileInclude = false;
   if (contextIncludeFlag !== undefined) {
     try {
-      const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; knowledge?: unknown; references?: unknown; issues?: unknown };
+      const raw = JSON.parse(contextIncludeFlag) as { files?: unknown; docs?: unknown; knowledge?: unknown; references?: unknown; issues?: unknown };
       const strings = (value: unknown): string[] | undefined =>
         Array.isArray(value)
           ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
           : undefined;
       contextInclude = {
         files: strings(raw.files),
-        knowledge: strings(raw.knowledge),
+        docs: strings(raw.docs ?? raw.knowledge),
         references: strings(raw.references),
         issues: strings(raw.issues),
       };

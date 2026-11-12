@@ -2,8 +2,6 @@ node_modules
 dist/
 
 # machine_code runtime state (never commit generated/local state)
-.machine_code/local/
+.machine_code/
 
-# opencode runtime dir
-.opencode/
 .env

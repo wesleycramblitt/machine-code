@@ -39,7 +39,7 @@ export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
 /** Parse a `--group` value, accepting the pre-restructure names. */
 export function parseRunGroup(value: string | undefined): RunGroup | undefined {
   if (!value) return undefined;
-  if (value === "packets" || value === "plan" || value === "type") return "all";
+  if (value === "packets" || value === "plan" || value === "type" || value === "issues") return "all";
   if (value === "tag" || value === "tags") return "category";
   return (["all", "category"] as const).find((group) => group === value);
 }

@@ -447,15 +447,10 @@ export class RunStateStore {
     }
   }
 
-  private note(kind: "finding" | "decision" | "open", text: string, refs: string[] = [], turn?: number): void {
+  note(kind: "finding" | "decision" | "open", text: string, refs: string[] = [], turn?: number): void {
     const clean = text.replace(/\s+/g, " ").trim();
     if (!clean) return;
     const at = turn ?? this.currentTurn();
-    if (kind === "next") {
-      this.append({ type: "next", text: clean.slice(0, 240), turn: at });
-      this.saveMarkdown();
-      return;
-    }
     if (kind === "open") {
       this.append({
         type: "open",

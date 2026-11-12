@@ -130,6 +130,7 @@ async function main(): Promise<void> {
       code = await cmdAvailability(rest);
       break;
     case "plan":
+    case "issues":
       code = cmdPlan(rest);
       break;
     case "build":

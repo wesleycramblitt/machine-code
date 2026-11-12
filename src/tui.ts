@@ -432,13 +432,16 @@ export async function runTui(): Promise<void> {
         at: Date.now(),
         context: previewContext(newRunLayout, "", {
           agent: s.newrun.agent,
-          knowledgeIndex: machine?.context.knowledgeIndex,
+          docsIndex: machine?.context.docsIndex,
           files: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("file:"))
             .map((key) => key.slice("file:".length)),
           issues: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("issue:"))
             .map((key) => key.slice("issue:".length)),
+          docs: [...s.newRunContextIncluded]
+            .filter((key) => key.startsWith("docs:"))
+            .map((key) => key.slice("docs:".length)),
           defaultSkills: defaultSkillsFor({
             agent: s.newrun.agent,
             verification: newRunIssue?.verification ?? "direct",
@@ -601,13 +604,17 @@ export async function runTui(): Promise<void> {
     const includedKnowledge = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("knowledge:"))
       .map((key) => key.slice("knowledge:".length));
+    const includedDocs = [...s.newRunContextIncluded]
+      .filter((key) => key.startsWith("docs:"))
+      .map((key) => key.slice("docs:".length));
     const includedReferences = [...s.newRunContextIncluded]
       .filter((key) => key.startsWith("reference:"))
       .map((key) => key.slice("reference:".length));
-    if (includedFiles.length > 0 || includedIssues.length > 0 || includedKnowledge.length > 0 || includedReferences.length > 0) {
+    if (includedFiles.length > 0 || includedIssues.length > 0 || includedDocs.length > 0 || includedKnowledge.length > 0 || includedReferences.length > 0) {
       args.push("--context-include", JSON.stringify({
         ...(includedFiles.length > 0 ? { files: includedFiles } : {}),
         ...(includedIssues.length > 0 ? { issues: includedIssues } : {}),
+        ...(includedDocs.length > 0 ? { docs: includedDocs } : {}),
         ...(includedKnowledge.length > 0 ? { knowledge: includedKnowledge } : {}),
         ...(includedReferences.length > 0 ? { references: includedReferences } : {}),
       }));
