@@ -152,6 +152,7 @@ const MODEL_REASON_RANK: Record<string, number> = {
   "provider-disabled": 2,
   "provider-needs-auth": 3,
   "unfunded-provider": 4,
+  "free-model": 5,
   "no-tool-support": 6,
   "below-min-fit": 7,
   "below-min-capability": 8,
@@ -186,7 +187,7 @@ export function modelReasonLabel(reason: string | undefined): string {
     case "non-coding-model": return "not coding";
     case "router-model": return "router";
     case "no-tool-support": return "no tools";
-    case "not-free": return "paid only";
+    case "free-model": return "zero-cost model (paid tier)";
     case "unfunded-provider": return "unfunded provider";
     case "below-min-fit": return "below fit floor";
     case "below-min-capability": return "below cap floor";

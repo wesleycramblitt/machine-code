@@ -81,6 +81,9 @@ export interface ToolContext {
   allowMutations?: boolean;
   /** Agent capabilities, for capability-scoped command access (e.g. reference writes). */
   capabilities?: readonly string[];
+  /** Paths (relative to root) that this agent is allowed to write/edit.
+   *  Empty or undefined means all paths are allowed. */
+  allowedPaths?: readonly string[];
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -692,19 +695,16 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
     prepareArguments: (args) => cleanWritePath(args) as Static<typeof WriteParams>,
     async execute(_id, params: Static<typeof WriteParams>) {
       try {
-        // A role that can write but not edit (research) persists only under the
-        // project's issues/, knowledge/, and .machine_code/ dirs.
-        if (ctx.tools && !ctx.tools.includes("edit")) {
+        // If the agent config declares allowed paths, restrict writes to those.
+        if (ctx.allowedPaths && ctx.allowedPaths.length > 0) {
           const p = params.path.replace(/\\/g, "/").replace(/^\.\//, "");
-          const allowed =
-            p === "knowledge" ||
-            p.startsWith("knowledge/") ||
-            p === "issues" ||
-            p.startsWith("issues/") ||
-            p === ".machine_code" ||
-            p.startsWith(".machine_code/");
-          if (!allowed) {
-            return fail(`write is limited to issues/, knowledge/, or .machine_code/ for this role: ${params.path}`);
+          const match = ctx.allowedPaths.some(
+            (allowed) => p === allowed || p.startsWith(allowed.endsWith("/") ? allowed : allowed + "/"),
+          );
+          if (!match) {
+            return fail(
+              `write is restricted to: ${ctx.allowedPaths.join(", ")} for this role; got: ${params.path}`,
+            );
           }
         }
         const abs = resolveWithin(ctx.root, params.path);
@@ -1269,6 +1269,27 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     prepareArguments: (args) => cleanEditArgs(args) as Static<typeof EditParams>,
     async execute(_id, params: Static<typeof EditParams>) {
       try {
+        // If the agent config declares allowed paths, restrict edits to those.
+        if (ctx.allowedPaths && ctx.allowedPaths.length > 0) {
+          const pathsToCheck: string[] = [];
+          if (params.path) pathsToCheck.push(params.path);
+          if (params.files) {
+            for (const f of params.files) {
+              if (f.path) pathsToCheck.push(f.path);
+            }
+          }
+          for (const p of pathsToCheck) {
+            const normalized = p.replace(/\\/g, "/").replace(/^\.\//, "");
+            const match = ctx.allowedPaths.some(
+              (allowed) => normalized === allowed || normalized.startsWith(allowed.endsWith("/") ? allowed : allowed + "/"),
+            );
+            if (!match) {
+              return fail(
+                `edit is restricted to: ${ctx.allowedPaths.join(", ")} for this role; got: ${p}`,
+              );
+            }
+          }
+        }
         // Cross-file form: every file validates first, then all write.
         // Nothing is written when any file fails, so one call replaces one
         // per file with a single all-or-nothing report. When both forms are

@@ -11,6 +11,7 @@ blurb = "Turn ideas into curated references, documents, and/or features/bugs"
 approval = ""
 ambiguity = "strict"
 capabilities = ["code:read", "context:inherit", "knowledge:write"]
+allowed_paths = ["issues/", "docs/", ".machine_code/"]
 
 [weights]
 reasoning = 0.3

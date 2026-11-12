@@ -211,6 +211,9 @@ function rejectReason(
 ): string | null {
   if (input.tier === "local" && row.providerID !== "ollama") return "paid-model";
   if (input.tier === "paid" && row.providerID === "ollama") return "local-model";
+  // Free (zero-cost) offers are for the local tier only; the paid tier should
+  // never select them — they are unreliable API giveaways, not production models.
+  if (input.tier === "paid" && (row.free === true || (row.pricing.input === 0 && row.pricing.output === 0))) return "free-model";
   if (!input.configuredProviders.has(row.providerID)) return "provider-not-configured";
   if (input.requireProvider && row.providerID !== input.requireProvider) return "provider-filtered";
   if (input.requireModel && !matchesModel(row, input.requireModel)) return "model-filtered";

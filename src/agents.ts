@@ -42,6 +42,9 @@ export interface AgentDef {
   modeConfig: Record<string, AgentModeConfig>;
   blurb: string;
   preset: string;
+  /** Paths the agent is allowed to write/edit (relative to worktree root).
+   *  Empty or undefined means all paths are allowed. */
+  allowedPaths?: readonly string[];
 }
 
 interface RoleData {
@@ -59,6 +62,7 @@ interface RoleData {
   ambiguity?: unknown;
   capabilities?: unknown;
   base_prompt?: unknown;
+  allowed_paths?: unknown;
   weights?: Record<string, unknown>;
   /** Per-skill context-mode preset table: `[skills] clean-code = "include"`. */
   skills?: Record<string, unknown>;
@@ -245,6 +249,7 @@ export function agentDef(layout: Layout, name: AgentName): AgentDef {
     modeConfig: modeConfigs(role, modes),
     blurb: typeof role.blurb === "string" ? role.blurb : "",
     preset: typeof role.preset === "string" ? role.preset : "assistant",
+    allowedPaths: strings(role.allowed_paths),
   };
 }
 

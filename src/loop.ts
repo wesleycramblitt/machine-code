@@ -787,6 +787,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         processes,
         allowMutations: (input.agentCapabilities ?? []).includes("code:write"),
         capabilities: input.agentCapabilities ?? [],
+        allowedPaths: input.agent.allowedPaths,
       },
       input.agent.tools,
     );
