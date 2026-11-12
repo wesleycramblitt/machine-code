@@ -109,16 +109,14 @@ import { commitPlanningFiles } from "./tasks/planning.js";
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
 /**
- * Min-fit ladder for `f` on the new-run page. No duplicates — `findIndex`
+ * Min-fit ladder for `f` on the new-run page. Pure numbers in 0.25 steps
+ * from 4 up to 8.5, then wraps back to 4. No duplicates — `findIndex`
  * always hits the first match, so repeated values create infinite loops.
- * Sequence: role → 6.5 → step down by 0.25 to 4 → step up from 6.75 to 8.5 → 0.
  */
-const NEW_RUN_MIN_FITS: Array<number | null | undefined> = [
-  undefined,
-  6.5, 6.25, 6, 5.75, 5.5, 5.25, 5, 4.75, 4.5, 4.25, 4,
-  6.75, 7, 7.25, 7.5, 7.75, 8, 8.25, 8.5,
-  0,
-];
+const NEW_RUN_MIN_FITS: number[] = Array.from(
+  { length: Math.round((8.5 - 4) / 0.25) + 1 },
+  (_, i) => 4 + i * 0.25,
+);
 
 
 
