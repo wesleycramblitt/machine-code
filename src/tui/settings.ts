@@ -6,8 +6,8 @@
  * only writes a subset of the schema.
  */
 import type { Layout } from "../paths.js";
-import type { MachineConfig, Policy } from "../config.js";
-import { AGENT_META, AGENT_NAMES } from "../agents.js";
+import type { MachineConfig } from "../config.js";
+import { AGENT_META, AGENT_NAMES, agentDef } from "../agents.js";
 import { CAPABILITY_AXES, DEFAULT_THEME } from "../config.js";
 import { axisWeights } from "../select.js";
 import { listArtifacts } from "../artifacts/registry.js";
@@ -31,7 +31,7 @@ function bool(value: boolean | undefined): string {
 export function buildSettings(
   layout: Layout,
   machine: MachineConfig | undefined,
-  policy: Policy | undefined,
+  policy: any | undefined,
 ): SettingRow[] {
   const rows: SettingRow[] = [];
   const configFile = layout.machineConfig;
@@ -146,9 +146,8 @@ export function buildSettings(
 
   if (policy) {
     for (const name of AGENT_NAMES) {
-      const agent = policy.agents[name];
-      if (!agent) continue;
-      const weights = axisWeights(name, agent);
+      const def = agentDef(layout, name);
+      const weights = axisWeights(name, def);
       const top = CAPABILITY_AXES.map((axis) => [axis, weights[axis]] as const)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
@@ -158,7 +157,7 @@ export function buildSettings(
         id: `agent.${name}`,
         section: "agents",
         label: name,
-        value: `fit≥${agent.minFit}  ctx≥${agent.minContext}  out≈${agent.expectedOutputTokens}`,
+        value: `fit≥${def.minFit}  ctx≥${def.minContext}  out≈${def.expectedOutputTokens}`,
         file: policyFile,
         detail: `weights ${top} · modes ${(AGENT_META[name]?.modes ?? []).join(", ") || "single"}`,
         editable: true,
