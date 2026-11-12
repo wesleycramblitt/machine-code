@@ -296,6 +296,7 @@ function rejectReason(
 export interface PickFailure {
   error: string;
   rejected: RejectedCandidate[];
+  rejectedCount: number;
   rejectedByReason: Record<string, number>;
 }
 
@@ -313,7 +314,7 @@ export function modelStatus(
 export function pick(input: PickInput): PickResult | PickFailure {
   const weights = axisWeights(input.agent, input.policy);
   const estimate = estimateTokens(input.contextChars, input.policy.expectedOutputTokens ?? 32);
-  const vetoes = input.policy.vetoedModels ?? [];
+  const vetoes = input.machine.vetoes;
   const rejections = new Map<string, number>();
   const rejected: RejectedCandidate[] = [];
   const candidates: CandidateScore[] = [];
@@ -347,6 +348,7 @@ export function pick(input: PickInput): PickResult | PickFailure {
     return {
       error: `no eligible model (${rejections.size} rejected: ${[...rejections.entries()].map(([r, n]) => `${r}×${n}`).join(", ")})`,
       rejected,
+      rejectedCount: rejections.size,
       rejectedByReason: Object.fromEntries(rejections),
     };
   }
