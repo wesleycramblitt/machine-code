@@ -19,8 +19,6 @@ import { snapshotFiles } from "../catalogue/snapshot.js";
 import { pick, axisWeights } from "../select.js";
 
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
-// agents resolved inside orchestrate.ts
-import { orchestrate, executeIssue } from "../orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/question.js";
 import { summarizeRun, readStateView } from "../state/outcome.js";
@@ -31,7 +29,6 @@ import { agentDef, type AgentName } from "../agents.js";
 import { loadMachineConfig, ConfigError, AGENT_NAMES, SELECTION_TIERS } from "../config.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { type OrchestrateResult } from "../orchestrate.js";
 import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";

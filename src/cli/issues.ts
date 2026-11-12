@@ -12,7 +12,10 @@ import { RunRecorder, listRuns, reconcileRun, registerProject } from "../state/r
 import { createWorktree, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
 import { loadAvailability } from "../availability.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
-import { executeIssue, type OrchestrateResult } from "../orchestrate.js";
+import { runLoop, type RunLoopResult } from "../loop.js";
+import { resolveAgent } from "../agents/config.js";
+import { resolveGates } from "../verify.js";
+import { allCommands } from "../commands/registry.js";
 import { slugify } from "../plan/slug.js";
 import {
   findIssue,
@@ -30,7 +33,7 @@ import {
   type Issue,
   type IssueStatus,
 } from "../plan/issues.js";
-import { approveIssue, deleteIssue, issueToTaskPacket, planIssueWaves } from "../tasks/issue.js";
+import { approveIssue, deleteIssue, issueToTaskPacket } from "../tasks/issue.js";
 import { runItemId } from "../plan/lifecycle.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
@@ -239,11 +242,10 @@ export async function runIssueBuild(
   const runtime = await loadRuntime(l);
   const recorder = new RunRecorder(l, {
     agent: "engineer",
-    mode: issue.verification,
+    mode: "",
     request: goal,
     repoRoot: l.repoRoot,
     itemId: slug,
-    phase: "engineer",
   });
   registerProject(l.home, l.repoRoot);
   recorder.event("issue_build_start", { slug });
@@ -300,43 +302,54 @@ export async function runIssueBuild(
     throw error;
   }
 
-  let result: OrchestrateResult;
-  try {
-    result = await executeIssue({
-      models: runtime.models,
-      catalogue: runtime.catalogue.models,
-      configuredProviders: runtime.configuredProviders,
-      availability: loadAvailability(l.home),
-      layout: l,
-      machine: runtime.machine,
-      packet,
-      include: { issues: [issue.rel] },
-      request: goal,
-      root: l.repoRoot,
-      toolRoot,
-      home: l.home,
-      recorder,
-      ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
-      signal: abort.signal,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    recorder.finalize("failed", message);
-    await commitPlanningFiles(l, `[${kindTag(issue.kind)} BUILD] ${slug} (failed)`);
-    process.stderr.write(`build ${slug} failed: ${message}\n`);
-    return EXIT.failed;
-  }
+  // Resolve the engineer agent and gates, then run the loop directly.
+  const modelCommands = allCommands(l);
+  const gateCommands = allCommands(l, { scriptsRoot: toolRoot });
+  const gates = resolveGates(packet, gateCommands);
+  const resolved = resolveAgent(l, "engineer", {
+    machineOverrides: runtime.machine.agents.engineer,
+    runOverrides: {},
+  });
+  recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
+  const buildRequest =
+    `Implement this issue exactly:\n\n${JSON.stringify(packet, null, 2)}\n\n` +
+    "Acceptance commands must pass. If the issue is wrong or a gate cannot run, report blocked with evidence.";
+
+  const result = await runLoop({
+    models: runtime.models,
+    catalogue: runtime.catalogue.models,
+    configuredProviders: runtime.configuredProviders,
+    agent: resolved.def,
+    agentConfig: resolved.config,
+    agentCapabilities: resolved.capabilities,
+    layout: l,
+    machine: runtime.machine,
+    request: buildRequest,
+    root: l.repoRoot,
+    toolRoot,
+    home: l.home,
+    availability: loadAvailability(l.home),
+    recorder,
+    commands: modelCommands,
+    ...(flags.get("model") ? { requireModel: flags.get("model") } : {}),
+    signal: abort.signal,
+    gates,
+    ...(packet.context.length > 0 ? { seedFiles: packet.context } : {}),
+  });
   recorder.finalize(result.status, result.error, result.finalText);
   if (result.status === "completed") {
-    moveIssue(l, slug, issue.review === "human" ? "needs-human-review" : "done");
+    moveIssue(l, slug, "done");
   } else if (result.status === "blocked" || result.status === "failed") {
-    if (/acceptance gates failed/i.test(result.error ?? "")) moveIssue(l, slug, "failed-gates");
-    else moveIssue(l, slug, "blocked");
+    if (result.lastGateFailure) {
+      moveIssue(l, slug, "failed-gates");
+    } else {
+      moveIssue(l, slug, "blocked");
+    }
   }
   await commitPlanningFiles(l, `[${kindTag(issue.kind)} BUILD] ${slug} (${result.status})`);
   process.stdout.write(`build ${slug}: ${result.status}${result.error ? ` — ${result.error}` : ""}\n`);
   if (result.status === "completed") {
-    process.stdout.write(`  commit ${result.commit ?? "(none)"}\n  next: machine_code approve ${slug}\n`);
+    process.stdout.write(`  next: ${slug} is done\n`);
   }
   return EXIT[result.status];
 }
@@ -378,84 +391,13 @@ export async function cmdBuild(argv: string[]): Promise<number> {
   return runIssueBuild(l, issue, flags);
 }
 
-/* ------------------------------------------------------------------ batch */
+/* ---------------------------------------------------------------- future */
 
 /**
- * Build ready issues across isolated worktrees, honoring `depends` and a
- * `--max-parallel` cap. With `--auto-approve` it builds and merges wave by wave.
+ * TODO: Replace with a repo-level issue runner that processes all available
+ * issues with consistent settings (agent, model, tier, etc.) and handles
+ * approvals automatically where appropriate.
  */
-export async function cmdBatch(argv: string[]): Promise<number> {
-  const { flags } = parseFlags(argv);
-  const l = layout();
-  const maxParallel = Math.max(1, Number(flags.get("max-parallel") ?? "2") || 2);
-  const dryRun = flags.has("dry-run");
-  const autoApprove = flags.has("auto-approve");
-
-  const waves = planIssueWaves(l, maxParallel);
-  if (waves.length === 0) {
-    process.stdout.write("no ready issues\n");
-    return 0;
-  }
-  if (dryRun) {
-    for (let i = 0; i < waves.length; i++) process.stdout.write(`wave ${i + 1}: ${waves[i]!.join(", ")}\n`);
-    return 0;
-  }
-
-  const runBuildChild = (slug: string): Promise<{ slug: string; code: number }> =>
-    new Promise((resolve) => {
-      const child = spawn(process.execPath, [process.argv[1]!, "build", slug], { stdio: "inherit" });
-      child.on("error", () => resolve({ slug, code: 1 }));
-      child.on("exit", (code) => resolve({ slug, code: code ?? 1 }));
-    });
-
-  if (!autoApprove) {
-    const wave = waves[0] ?? [];
-    process.stdout.write(`wave 1: ${wave.join(", ")}\n`);
-    await Promise.all(wave.map(runBuildChild));
-    process.stdout.write(`next: machine_code approve ${wave.join(", ")}  (or re-run with --auto-approve)\n`);
-    return 0;
-  }
-
-  let guard = 0;
-  while (guard++ < 1000) {
-    const current = planIssueWaves(l, maxParallel);
-    const wave = current[0] ?? [];
-    if (wave.length === 0) break;
-    process.stdout.write(`wave ${guard}: ${wave.join(", ")}\n`);
-    const results = await Promise.all(wave.map(runBuildChild));
-    let approveFailed = false;
-    let humanPending = false;
-    for (const slug of wave) {
-      const issue = findIssue(l, slug);
-      if (!issue) continue;
-      if (issue.review === "human") {
-        humanPending = true;
-        process.stderr.write(`leaving ${slug} for a human merge (review=human)\n`);
-        continue;
-      }
-      // Only a built issue (done/) is approvable. A failed build or a
-      // changes_requested review stays todo/blocked and must not merge.
-      if (issue.status !== "done") {
-        process.stderr.write(`not approving ${slug}: status ${issue.status}\n`);
-        continue;
-      }
-      try {
-        await approveIssue(l, slug);
-      } catch (error) {
-        approveFailed = true;
-        process.stderr.write(`approve ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`);
-      }
-    }
-    const failed = results.filter((result) => result.code !== 0).map((result) => result.slug);
-    if (failed.length > 0) {
-      process.stderr.write(`build failed: ${failed.join(", ")}\n`);
-      break;
-    }
-    // A dependent must not build on an unmerged parent.
-    if (approveFailed || humanPending) break;
-  }
-  return 0;
-}
 
 /* ----------------------------------------------------------------- delete */
 

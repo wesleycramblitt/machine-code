@@ -20,7 +20,7 @@ import { pick, axisWeights } from "../select.js";
 
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
-import { orchestrate, executeIssue } from "../orchestrate.js";
+import { singleAgentRun } from "../orchestrate.js";
 import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/question.js";
 import { summarizeRun, readStateView } from "../state/outcome.js";
@@ -36,7 +36,6 @@ import { runProc } from "../proc.js";
 import { agentDef, normalizeAgentName, type AgentName } from "../agents.js";
 import { resolveAgent, resolveAgentConfig, type AgentConfig } from "../agents/config.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
-import { type OrchestrateResult } from "../orchestrate.js";
 import { AGENT_NAMES } from "../agents.js";
 import { gateFailureText, resolveGates, type GateSpec } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
@@ -892,11 +891,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  let result: RunLoopResult | OrchestrateResult;
-  // Resolve gates from the issue so they run inside the loop for the
-  // direct-exec path. The orchestrate path resolves them inside executeIssue.
-  const directGates: GateSpec[] | undefined =
-    directExec && itemSlug
+  let result: RunLoopResult;
+  // Resolve gates from the issue so they run inside the loop.
+  const issueGates: GateSpec[] | undefined =
+    itemSlug
       ? resolveGates(issueToTaskPacket(findIssue(l, itemSlug)!), allCommands(l, { scriptsRoot: toolRoot }))
       : undefined;
   if (directExec) {
@@ -936,31 +934,41 @@ export async function cmdRun(argv: string[]): Promise<number> {
       skipMap,
       skillExcludes,
       signal: abort.signal,
-      ...(directGates ? { gates: directGates } : {}),
+      ...(issueGates ? { gates: issueGates } : {}),
       ...(forkMessages ? { initialMessages: forkMessages, startMode: forkStartMode } : {}),
     });
   } else {
-    result = await orchestrate({
+    // Non-direct-exec: resolve the agent and run the loop directly.
+    const role = (agentNameParsed ?? "research") as AgentName;
+    const resolved = resolveAgent(l, role, {
+      machineOverrides: machine.agents[role],
+      runOverrides: agentOverrides,
+    });
+    recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
+    result = await runLoop({
       models,
       catalogue: catalogueDoc.models,
       configuredProviders,
-      availability: loadAvailability(l.home),
+      agent: resolved.def,
+      agentConfig: resolved.config,
+      agentCapabilities: resolved.capabilities,
       layout: l,
       machine,
-      agentName: agentNameParsed,
       request,
       root: l.repoRoot,
       toolRoot,
-      agentOverrides,
       home: l.home,
+      availability: loadAvailability(l.home),
       recorder,
+      commands: allCommands(l),
       requireProvider,
       requireModel,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
-      ...(hintsOn ? {} : { hints: false }),
       skipMap,
+      skillExcludes,
       signal: abort.signal,
+      ...(issueGates ? { gates: issueGates } : {}),
       ...(forkMessages ? { initialMessages: forkMessages, startMode: forkStartMode } : {}),
     });
   }

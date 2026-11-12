@@ -13,7 +13,7 @@ import { cmdInit, cmdInstall, cmdProviders, cmdPolicy, cmdConfig, cmdTools, cmdL
 import { cmdModels, cmdCatalogueSnapshot, cmdCatalogueRefresh, cmdProvider, cmdAvailability, cmdModel } from "./cli/models.js";
 import { cmdRun, controlCommand, cmdRespond, cmdFork, cmdResume, cmdPrune, cmdWorktree, cmdCorrect } from "./cli/run.js";
 import { cmdLog, cmdStatus, cmdRuns, cmdProcesses, cmdShow, cmdEval, cmdPack, cmdContext, cmdSpend, cmdPrompts } from "./cli/runs.js";
-import { cmdApprove, cmdPlan, cmdBuild, cmdBatch, cmdDelete, cmdIssue } from "./cli/issues.js";
+import { cmdApprove, cmdPlan, cmdBuild, cmdDelete, cmdIssue } from "./cli/issues.js";
 
 async function main(): Promise<void> {
   loadEnvFiles();
@@ -137,7 +137,7 @@ async function main(): Promise<void> {
       code = await cmdBuild(rest);
       break;
     case "batch":
-      code = await cmdBatch(rest);
+      fail("batch orchestration has been removed; use `machine_code build <slug>` for single issues");
       break;
     case "delete":
       code = await cmdDelete(rest);
