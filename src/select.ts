@@ -118,6 +118,11 @@ export interface PickInput {
   requireProvider?: string;
   /** Hard filter: pin selection to one catalogue key (or model id suffix). */
   requireModel?: string;
+  /**
+   * True when the provider runtime can actually instantiate the model.
+   * Filters stale catalogue rows before they cost a failed first call.
+   */
+  hasRuntimeModel?: (providerID: string, id: string) => boolean;
   /** Provider/model availability state (M2). */
   availability?: AvailabilityState;
   /** Selection tier: "paid" filters out ollama; "local" only allows ollama. */
@@ -218,6 +223,7 @@ function rejectReason(
   if (!input.configuredProviders.has(row.providerID)) return "provider-not-configured";
   if (input.requireProvider && row.providerID !== input.requireProvider) return "provider-filtered";
   if (input.requireModel && !matchesModel(row, input.requireModel)) return "model-filtered";
+  if (input.hasRuntimeModel && !input.hasRuntimeModel(row.providerID, row.id)) return "not-in-runtime-catalog";
   if (row.pricing.input < 0 || row.pricing.output < 0) return "invalid-pricing";
   const avail = input.availability;
   if (avail) {

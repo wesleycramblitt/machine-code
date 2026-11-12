@@ -182,9 +182,24 @@ export function resolveAgent(
     machineOverrides?: AgentConfigOverrides;
     runOverrides?: Partial<AgentConfig>;
     verification?: "direct" | "verified";
+    /** Run-level selection floors (CLI --min-fit/--min-capability/--min-axes).
+     * Applied onto the role def so pick() and the TUI preview agree. */
+    floors?: {
+      minFit?: number;
+      minCapability?: number;
+      minAxes?: Partial<Record<import("../config.js").CapabilityAxis, number>>;
+    };
   } = {},
 ): ResolvedAgent {
-  const def = agentDef(layout, role);
+  const baseDef = agentDef(layout, role);
+  const def = opts.floors
+    ? {
+        ...baseDef,
+        ...(opts.floors.minFit !== undefined ? { minFit: opts.floors.minFit } : {}),
+        ...(opts.floors.minCapability !== undefined ? { minCapability: opts.floors.minCapability } : {}),
+        ...(opts.floors.minAxes ? { minAxes: { ...(baseDef.minAxes ?? {}), ...opts.floors.minAxes } } : {}),
+      }
+    : baseDef;
   const config = resolveAgentConfig({
     role,
     machineOverrides: opts.machineOverrides,

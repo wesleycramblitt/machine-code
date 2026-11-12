@@ -16,7 +16,7 @@ import { refreshCatalogue } from "../catalogue/refresh.js";
 import { loadCatalogue } from "../catalogue/load.js";
 import { filterModels, siblingOffers, type ModelSort } from "../catalogue/query.js";
 import { snapshotFiles } from "../catalogue/snapshot.js";
-import { pick, axisWeights } from "../select.js";
+import { pick, matchesModel, axisWeights } from "../select.js";
 
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
@@ -283,21 +283,28 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (minFit !== undefined) {
     const n = Number(minFit);
     if (!Number.isFinite(n) || n < 0 || n > 10) fail("--min-fit needs a number in 0-10");
-    /* minFit floor applied via agent def — policy.toml removed */
   }
   const minCapability = flags.get("min-capability");
   if (minCapability !== undefined) {
     const n = Number(minCapability);
     if (!Number.isFinite(n) || n < 0 || n > 10) fail("--min-capability needs a number in 0-10");
-    /* minCap floor applied via agent def — policy.toml removed */
   }
   const minAxes = flags.get("min-axes");
   let minAxesSnapshot: Record<string, number> | undefined;
   if (minAxes !== undefined) {
-    const axes = parseAxisOverrides(minAxes);
-    minAxesSnapshot = axes;
-    /* axes floor applied via agent def — policy.toml removed */
+    minAxesSnapshot = parseAxisOverrides(minAxes);
   }
+  // Selection floors are not policy text — they override the role def so the
+  // run's pick() enforces exactly what the TUI preview and `models` dry-run
+  // enforce. Without this the flags are validated and recorded but ignored.
+  const floorOverrides =
+    minFit !== undefined || minCapability !== undefined || minAxesSnapshot
+      ? {
+          ...(minFit !== undefined ? { minFit: Number(minFit) } : {}),
+          ...(minCapability !== undefined ? { minCapability: Number(minCapability) } : {}),
+          ...(minAxesSnapshot ? { minAxes: minAxesSnapshot } : {}),
+        }
+      : undefined;
   // Per-run price ceiling ($ per 1M tokens). Narrows or replaces the machine
   // selection.price_caps without persisting.
   const priceFlag = (name: string): number | undefined => {
@@ -493,6 +500,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
   const agentDefObj = agentDef(l, agentNameParsed === "" ? "engineer" : agentNameParsed);
+  if (floorOverrides) {
+    if (floorOverrides.minFit !== undefined) agentDefObj.minFit = floorOverrides.minFit;
+    if (floorOverrides.minCapability !== undefined) agentDefObj.minCapability = floorOverrides.minCapability;
+    if (floorOverrides.minAxes) agentDefObj.minAxes = { ...(agentDefObj.minAxes ?? {}), ...floorOverrides.minAxes };
+  }
   const preflightInput = {
     agent: agentNameParsed,
     agentDef: agentDefObj,
@@ -501,6 +513,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     configuredProviders,
     availability: availabilityState,
     fundedProviders: fundedProviderIds(machine.providers),
+    // Stale catalogue rows (retired upstream, models.json not yet refreshed)
+    // must not cost a failed first call: filter to what the runtime has.
+    hasRuntimeModel: (providerID: string, id: string) => models.getModel(providerID, id) !== undefined,
     contextChars: request.length,
     requireProvider,
     requireModel,
@@ -508,6 +523,36 @@ export async function cmdRun(argv: string[]): Promise<number> {
   };
   let preflight = pick(preflightInput);
   if ("error" in preflight && (requireModel || requireProvider)) {
+    // A pin that can never work is a user error, not a preference: silently
+    // falling back to auto-selection has picked paid models the user never
+    // asked for. Scope the catalogue to the pin and ask why those rows fail;
+    // only hard scoping failures (wrong tier, unconfigured provider, stale
+    // catalogue row) fail loudly. Transient states (cooling, floors,
+    // funding) keep the old fallback.
+    const pinRows = catalogueDoc.models.filter(
+      (row) =>
+        (!requireModel || matchesModel(row, requireModel)) &&
+        (!requireProvider || row.providerID === requireProvider),
+    );
+    if (pinRows.length === 0) {
+      fail(
+        `model pin matches nothing (${requireModel ?? requireProvider}); check the key with: machine_code models --all`,
+      );
+    }
+    const pinOnly = pick({ ...preflightInput, catalogue: pinRows });
+    if ("error" in pinOnly) {
+      const reasons = new Set(Object.keys(pinOnly.rejectedByReason));
+      const hard = new Set(["local-model", "free-model", "provider-not-configured", "not-in-runtime-catalog"]);
+      if (reasons.size > 0 && [...reasons].every((reason) => hard.has(reason))) {
+        const hints = [
+          reasons.has("local-model") ? "ollama needs --tier local" : "",
+          reasons.has("free-model") ? "free offers need --tier local" : "",
+          reasons.has("provider-not-configured") ? "provider is not configured" : "",
+          reasons.has("not-in-runtime-catalog") ? "catalogue is stale; run: machine_code catalogue refresh" : "",
+        ].filter(Boolean);
+        fail(`model pin unusable (${requireModel ?? requireProvider}): ${[...reasons].join(", ")} (${hints.join("; ")})`);
+      }
+    }
     // A pin is a preference: if the pinned model is not ready before start,
     // fall back to auto-selection instead of refusing to start the run.
     const relaxed = pick({ ...preflightInput, requireProvider: undefined, requireModel: undefined });
@@ -946,6 +991,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       machineOverrides: machine.agents[role],
       runOverrides: agentOverrides,
       verification,
+      ...(floorOverrides ? { floors: floorOverrides } : {}),
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
     result = await runLoop({
@@ -982,6 +1028,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const resolved = resolveAgent(l, role, {
       machineOverrides: machine.agents[role],
       runOverrides: agentOverrides,
+      ...(floorOverrides ? { floors: floorOverrides } : {}),
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
     result = await runLoop({
@@ -1404,6 +1451,16 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
 
   const resolved = resolveAgent(l2, resumeAgent, {
     machineOverrides: machine.agents[resumeAgent],
+    // Floors were recorded at start; re-apply so a resumed run enforces
+    // the same thresholds instead of silently dropping to role defaults.
+    ...((typeof s.settings?.minFit === "number" || s.settings?.minAxes)
+      ? {
+          floors: {
+            ...(typeof s.settings?.minFit === "number" ? { minFit: s.settings.minFit as number } : {}),
+            ...(s.settings?.minAxes ? { minAxes: s.settings.minAxes } : {}),
+          },
+        }
+      : {}),
   });
   const result = await runLoop({
     models,

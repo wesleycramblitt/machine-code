@@ -123,6 +123,8 @@ export interface RunLoopInput {
   seedFiles?: string[];
   /** Hint symbol ranges pre-filling the living map (rendered as turn-1 deltas). */
   seedRanges?: Array<{ path: string; range: [number, number] }>;
+  /** Selection tier (paid filters out ollama/free; local only allows ollama). */
+  tier?: import("./config.js").SelectionTier;
   /** Layout + full policy: enable the task tool (delegation). */
   layout?: Layout;
   fullPolicy?: import("./config.js").Policy;
@@ -359,6 +361,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       contextChars: chars,
       requireProvider: pinProvider,
       requireModel: pinModel,
+      ...(input.tier ? { tier: input.tier } : {}),
+      hasRuntimeModel: (providerID: string, id: string) => input.models.getModel(providerID, id) !== undefined,
     });
 
   /**
