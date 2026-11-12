@@ -488,15 +488,20 @@ export async function runTui(): Promise<void> {
     const machine = base.machine;
     const catalogue = base.catalogue;
     if (!machine || !catalogue) return { context, error: "configuration/catalogue unavailable", machine };
-    const ap = machine.agents[s.newrun.agent];
+    let resolved;
+    try {
+      resolved = resolveAgent(newRunLayout, s.newrun.agent, {
+        machineOverrides: machine.agents[s.newrun.agent],
+        runOverrides: {
+          approval: s.newrun.approval,
+          ambiguity: s.newrun.ambiguity,
+        },
+      });
+    } catch {
+      return { context, error: `unknown agent ${s.newrun.agent}`, machine };
+    }
+    const ap = resolved.def;
     if (!ap) return { context, error: `unknown agent ${s.newrun.agent}`, machine };
-    const resolved = resolveAgent(newRunLayout, s.newrun.agent, {
-      machineOverrides: machine.agents[s.newrun.agent],
-      runOverrides: {
-        approval: s.newrun.approval,
-        ambiguity: s.newrun.ambiguity,
-      },
-    });
     s.newRunRequiredSkills = [...resolved.def.requiredSkills];
     const toolChars = toolSchemaChars(resolved.def.tools);
     const effective = effectiveDefForRun(agentDefFor(s.newRunRepo));

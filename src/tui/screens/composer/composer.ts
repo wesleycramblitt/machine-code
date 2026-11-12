@@ -68,7 +68,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   footerMapTokens = props.mapTokens(repoRoot);
   footerBandTone = theme.bodyBg;
     const ctx = preview.context;
-  const ap = preview.policy?.agents[run.agent];
+  const ap: any = preview.policy;
   const newRunIssue = run.item ? findIssue(layout(repoRoot), run.item) : undefined;
   const displayAgent = run.agent ? `${run.agent[0]!.toUpperCase()}${run.agent.slice(1)}` : run.agent;
   const resolvedAgent = resolveAgent(layout(repoRoot), run.agent, {
@@ -450,7 +450,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     0,
   );
   const contextTokens = Math.max(0, totalTokens - excludedTokens) + tokensForChars(ctx.promptChars);
-  const previewPolicy = preview.policy?.agents[run.agent];
+  const previewPolicy: any = preview.policy;
   const modelChars = preview.model && previewPolicy
     ? contextBudget(preview.model.context, previewPolicy.expectedOutputTokens).inputChars
     : undefined;
