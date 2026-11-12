@@ -961,6 +961,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ...(hintsOn ? {} : { hints: false }),
       skipMap,
       signal: abort.signal,
+      ...(forkMessages ? { initialMessages: forkMessages, startMode: forkStartMode } : {}),
     });
   }
 

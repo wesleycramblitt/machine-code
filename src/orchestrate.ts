@@ -63,6 +63,9 @@ export interface OrchestrateInput {
   /** Skip the deterministic map up front. */
   skipMap?: boolean;
   signal?: AbortSignal;
+  /** Fork context: carry parent run messages so the agent continues the conversation. */
+  initialMessages?: import("@earendil-works/pi-agent-core").AgentMessage[];
+  startMode?: "prompt" | "continue";
 }
 
 export type MergeState = "merged" | "awaiting_approval" | "skipped" | "failed";
@@ -105,6 +108,9 @@ export async function singleAgentRun(input: {
   signal?: AbortSignal;
   /** Gates to run inline after the agent finishes (loop-owned retry). */
   gates?: import("./verify.js").GateSpec[];
+  /** Fork context: carry parent run messages so the agent continues the conversation. */
+  initialMessages?: import("@earendil-works/pi-agent-core").AgentMessage[];
+  startMode?: "prompt" | "continue";
 }): Promise<RunLoopResult> {
   return runLoop({
     models: input.models,
@@ -129,6 +135,7 @@ export async function singleAgentRun(input: {
     skipMap: input.skipMap,
     signal: input.signal,
     ...(input.gates ? { gates: input.gates } : {}),
+    ...(input.initialMessages ? { initialMessages: input.initialMessages, startMode: input.startMode ?? "continue" } : {}),
   });
 }
 
@@ -155,6 +162,9 @@ export interface ExecuteIssueInput {
   hints?: boolean;
   skipMap?: boolean;
   signal?: AbortSignal;
+  /** Fork context: carry parent run messages so the agent continues the conversation. */
+  initialMessages?: import("@earendil-works/pi-agent-core").AgentMessage[];
+  startMode?: "prompt" | "continue";
   }
 
 /**
@@ -284,6 +294,7 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     skipMap: input.skipMap,
     signal: input.signal,
     gates,
+    ...(input.initialMessages ? { initialMessages: input.initialMessages, startMode: input.startMode ?? "continue" } : {}),
   });
   if (
     engineerResult.status === "failed" ||
@@ -391,6 +402,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       ...(input.seedFiles ? { seedFiles: input.seedFiles } : {}),
       skipMap: input.skipMap,
       signal: input.signal,
+      ...(input.initialMessages ? { initialMessages: input.initialMessages, startMode: input.startMode ?? "continue" } : {}),
     });
   }
 
@@ -482,6 +494,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
     ...(researchSeedFiles ? { seedFiles: researchSeedFiles } : {}),
     skipMap: input.skipMap,
     signal: input.signal,
+    ...(input.initialMessages ? { initialMessages: input.initialMessages, startMode: input.startMode ?? "continue" } : {}),
   });
   return { ...result, runId: recorder.id };
 }
