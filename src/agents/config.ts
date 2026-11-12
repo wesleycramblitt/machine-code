@@ -170,7 +170,6 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   ask: null, // gated by askEnabled(config)
   artifact: "artifact:provision",
   skill: null, // read-only skill bodies; exclusions are enforced inside the tool
-  todo: null, // writes the issue checklist; runner-owned
   finish: null, // terminal action
 };
 

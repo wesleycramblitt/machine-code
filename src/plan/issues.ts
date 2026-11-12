@@ -13,23 +13,15 @@
  * An issue file is plain markdown whose text IS the prompt — nothing else is
  * required. Optional `key: value` header lines at the very top set metadata
  * (`priority`, `review`, `tags`, `depends`, `acceptance`, `verify`,
- * `verification`, `todo`), followed by a blank line:
+ * `verification`), followed by a blank line:
  *
  *   priority: high
  *   tags: tui, perf
  *   acceptance: script:build
- *   todo:
- *     - [ ] Locate the change
- *     - [ ] Make the smallest edit
- *     - [ ] Finish
  *
  *   # Make lookups fast
  *
  *   Swap the linear scan for an index.
- *
- * `todo:` is a multi-line checklist: indented `- [ ]` / `- [x]` lines
- * immediately follow it (no blank line) and belong to the header. The body
- * stays the prompt only.
  *
  * Legacy `---` TOML front-matter files still read; they are rewritten in the
  * new form on the next touch. There is no "archived": delete an issue when it
@@ -110,8 +102,6 @@ export interface Issue {
   review: ReviewMode;
   /** direct: code only; verified: code + tests. */
   verification: "direct" | "verified";
-  /** Durable checklist parsed from the `## Todo` section. */
-  todo: TodoItem[];
   /** Named gate commands; empty means the runner's defaults. */
   acceptance: string[];
   /** Legacy alias for acceptance. */
@@ -171,7 +161,7 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
 
 /** Metadata keys allowed in the condensed `key: value` header. Anything else
  * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
-const META_KEYS = new Set(["priority", "review", "tags", "keywords", "depends", "acceptance", "verify", "verification", "todo"]);
+const META_KEYS = new Set(["priority", "review", "tags", "keywords", "depends", "acceptance", "verify", "verification"]);
 
 function stripQuotes(value: string): string {
   if (value.length >= 2) {
@@ -195,9 +185,6 @@ export function parseIssueFile(text: string): { front: Record<string, unknown>; 
   }
   // Condensed header: leading `key: value` lines for known keys, then the
   // body. No header, no blank line, no heading required.
-  //
-  // `todo:` may be a multi-line checklist: indented `- [ ]` / `- [x]`
-  // lines immediately follow it (no blank line) and belong to the header.
   const lines = text.split("\n");
   const front: Record<string, unknown> = {};
   let i = 0;
@@ -207,39 +194,10 @@ export function parseIssueFile(text: string): { front: Record<string, unknown>; 
     const match = /^([A-Za-z]+)\s*:\s*(.*)$/.exec(line);
     if (!match || !META_KEYS.has(match[1]!.toLowerCase())) break;
     const key = match[1]!.toLowerCase();
-    if (key === "todo") {
-      const inline = (match[2] ?? "").trim();
-      const items: TodoItem[] = [];
-      if (inline) {
-        const m = /^-\s*\[([ xX])\]\s*(.+)$/.exec(inline);
-        if (m) items.push({ text: m[2]!.trim(), done: m[1]!.toLowerCase() === "x" });
-        else items.push({ text: inline, done: false });
-      }
-      let j = i + 1;
-      while (j < lines.length && (lines[j] ?? "").trim() !== "") {
-        const l = lines[j] ?? "";
-        if (!/^\s+/.test(l)) break;
-        const m = /^\s*-\s*\[([ xX])\]\s*(.+)$/.exec(l);
-        if (m) items.push({ text: m[2]!.trim(), done: m[1]!.toLowerCase() === "x" });
-        else items.push({ text: l.trim(), done: false });
-        j += 1;
-      }
-      front.todo = items;
-      i = j;
-      if (i < lines.length && (lines[i] ?? "").trim() === "") break;
-      continue;
-    }
     front[key] = stripQuotes((match[2] ?? "").trim());
     i += 1;
   }
   let body = lines.slice(i).join("\n").trim();
-  // A legacy `## Todo` section in the body is folded into the header Todo so
-  // the body stays the prompt only.
-  const bodyTodo = parseIssueTodo(body);
-  if (bodyTodo.length > 0 && (!Array.isArray(front.todo) || (front.todo as TodoItem[]).length === 0)) {
-    front.todo = bodyTodo;
-  }
-  body = stripTodoSection(body);
   return { front, body: body || text.trim() };
 }
 
@@ -276,23 +234,6 @@ function stripTodoSection(body: string): string {
     }
   }
   return [...lines.slice(0, start), ...lines.slice(end)].join("\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
-/** Normalize a header `todo` value into TodoItems. */
-function normalizeTodo(value: unknown): TodoItem[] | null {
-  if (!Array.isArray(value) || value.length === 0) return null;
-  const out: TodoItem[] = [];
-  for (const entry of value) {
-    if (typeof entry === "string") {
-      const m = /^-\s*\[([ xX])\]\s*(.+)$/.exec(entry.trim());
-      if (m) out.push({ text: m[2]!.trim(), done: m[1]!.toLowerCase() === "x" });
-      else out.push({ text: entry.trim(), done: false });
-    } else if (entry && typeof entry === "object") {
-      const obj = entry as { text?: unknown; done?: unknown };
-      if (typeof obj.text === "string") out.push({ text: obj.text.trim(), done: obj.done === true });
-    }
-  }
-  return out.length > 0 ? out : null;
 }
 
 /** One-line rendering of a prompt for picker rows and summary lists.
@@ -345,62 +286,8 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
   // `verify` is the legacy alias for `acceptance`; normalize on write unless
   // `acceptance` is already set.
   if (!list(front.acceptance) && list(front.verify)) lines.push(`acceptance: ${list(front.verify)}`);
-  const todoItems = Array.isArray(front.todo)
-    ? (front.todo as TodoItem[]).filter((item) => item && typeof item.text === "string")
-    : [];
-  if (todoItems.length > 0) {
-    lines.push("todo:");
-    for (const item of todoItems) {
-      lines.push(`  - [${item.done ? "x" : " "}] ${item.text.trim()}`);
-    }
-  }
   const text = body.trim();
   return lines.length > 0 ? `${lines.join("\n")}\n\n${text}\n` : `${text}\n`;
-}
-
-export interface TodoItem {
-  text: string;
-  done: boolean;
-}
-
-/** Read the checklist from an issue body. */
-export function parseIssueTodo(body: string): TodoItem[] {
-  const lines = body.split("\n");
-  const start = lines.findIndex((line) => /^## Todo\b/.test(line));
-  if (start < 0) return [];
-  const out: TodoItem[] = [];
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    if (/^## /.test(line)) break;
-    const match = /^\s*-\s*\[([ xX])\]\s*(.+)$/.exec(line);
-    if (match) out.push({ text: match[2]!.trim(), done: match[1]!.toLowerCase() === "x" });
-  }
-  return out;
-}
-
-/** Render the issue's durable checklist. The issue file is the plan's home. */
-export function renderIssueTodo(items: readonly TodoItem[]): string {
-  return [
-    "## Todo",
-    ...items.map((item) => `- [${item.done ? "x" : " "}] ${item.text.trim()}`),
-  ].join("\n");
-}
-
-/** The deterministic fallback plan; research may write a more specific one. */
-export function defaultIssueTodo(kind: IssueKind, verification: "direct" | "verified"): TodoItem[] {
-  if (kind === "ideas") {
-    return [
-      { text: "Read and scope the idea", done: false },
-      { text: "Write features/bugs or curate references", done: false },
-      { text: "Finish", done: false },
-    ];
-  }
-  return [
-    { text: "Locate the change", done: false },
-    { text: "Make the smallest edit", done: false },
-    ...(verification === "verified" ? [{ text: "Write tests", done: false }] : []),
-    { text: "Finish", done: false },
-  ];
 }
 
 /** How many gate-failure repair attempts the issue has already recorded. */
@@ -441,28 +328,6 @@ export function ensureIssueVerification(layout: Layout, slug: string): void {
   writeFileSync(issue.path, serializeIssueFile(front, body), "utf8");
 }
 
-/** Ensure an issue has a Todo without overwriting a research-authored plan. */
-export function ensureIssueTodo(layout: Layout, slug: string): Issue | null {
-  const issue = findIssue(layout, slug);
-  if (!issue) return null;
-  if (issue.todo.length > 0) return issue;
-  updateIssueTodo(issue.path, defaultIssueTodo(issue.kind, issue.verification));
-  return readIssue(layout, issue.kind, issue.status, issue.slug);
-}
-
-/**
- * Replace the `## Todo` section in an issue file, preserving its header and
- * the rest of the body. Appends the section when it does not exist.
- */
-export function updateIssueTodo(abs: string, items: readonly TodoItem[]): void {
-  const text = readFileSync(abs, "utf8");
-  const { front, body } = parseIssueFile(text);
-  front.todo = items.map((item) => ({ text: item.text, done: item.done }));
-  // The Todo now lives in the header; strip any legacy body section.
-  const nextBody = stripTodoSection(body);
-  writeFileSync(abs, serializeIssueFile(front, nextBody), "utf8");
-}
-
 export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, slug: string): Issue | null {
   const abs = join(issueDir(layout, kind, status), `${slug}.md`);
   if (!existsSync(abs)) return null;
@@ -501,7 +366,6 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
           : [],
     review: toReview(front.review),
     verification: front.verification === "verified" ? "verified" : "direct",
-    todo: normalizeTodo(front.todo) ?? parseIssueTodo(body),
     verify: toAcceptance(front),
     acceptance: toAcceptance(front),
     title: titleOf(slug, body),
@@ -551,7 +415,6 @@ export interface NewIssueInput {
   verification?: "direct" | "verified";
   acceptance?: string[];
   verify?: string[];
-  todo?: TodoItem[] | string[];
   body?: string;
 }
 
@@ -601,29 +464,11 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   // The file is the prompt. A bare prompt needs nothing else; a title only
   // adds a heading above it. An explicit body is used as-is.
   const prompt = input.prompt.trim();
-  let body = input.body?.trim()
+  const body = input.body?.trim()
     ? input.body.trim()
     : input.title?.trim()
       ? `# ${input.title.trim()}\n\n${prompt}`
       : prompt;
-  // An explicit todo input wins; otherwise fold a legacy `## Todo` body
-  // section into the header, or seed the deterministic fallback.
-  let inputTodo: TodoItem[] | null = null;
-  if (input.todo && input.todo.length > 0) {
-    inputTodo = input.todo.map((entry) =>
-      typeof entry === "string" ? { text: entry, done: false } : (entry as TodoItem),
-    );
-  }
-  const parsedTodo = parseIssueTodo(body);
-  if (inputTodo) {
-    front.todo = inputTodo;
-    body = stripTodoSection(body);
-  } else if (parsedTodo.length > 0) {
-    front.todo = parsedTodo;
-    body = stripTodoSection(body);
-  } else {
-    front.todo = defaultIssueTodo(input.kind, verification);
-  }
   const dir = issueDir(layout, input.kind, status);
   mkdirSync(dir, { recursive: true });
   const abs = join(dir, `${slug}.md`);

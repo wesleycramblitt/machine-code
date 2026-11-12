@@ -1074,7 +1074,6 @@ export async function runTui(): Promise<void> {
               depends: issue.depends,
               prompt: issue.prompt,
               acceptance: issue.acceptance,
-              todo: issue.todo,
             }
           : null,
         runs: issueRuns,

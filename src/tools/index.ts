@@ -50,7 +50,6 @@ import { skillTool, type SkillToolContext } from "./skill.js";
 import { contextTool } from "./context.js";
 import { inspectTool } from "./inspect.js";
 import { finishTool, FinishParams, type FinishContext } from "./finish.js";
-import { todoTool, TodoParams } from "./todo.js";
 import { renderModuleGraph } from "../map/modules.js";
 import { languageForPath, serverForLanguage } from "../lsp/servers.js";
 import type { LedgerEntry, RunStateStore } from "../context/state.js";
@@ -2406,7 +2405,7 @@ function skillUnavailable(): AgentTool<typeof SkillUnavailableParams> {
   };
 }
 
-/* --------------------------------------------------------- finish / todo */
+/* --------------------------------------------------------- finish */
 
 function finishUnavailable(): AgentTool<typeof FinishParams> {
   return {
@@ -2420,17 +2419,7 @@ function finishUnavailable(): AgentTool<typeof FinishParams> {
   };
 }
 
-function todoUnavailable(): AgentTool<typeof TodoParams> {
-  return {
-    name: "todo",
-    label: "todo",
-    description: "Update the issue's checklist.",
-    parameters: TodoParams,
-    async execute() {
-      return fail("todo is not available without an attached issue");
-    },
-  };
-}
+
 
 
 /* ------------------------------------------------------------------ all */
@@ -2643,7 +2632,6 @@ export type CoreToolName =
   | "ask"
   | "artifact"
   | "skill"
-  | "todo"
   | "finish";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
@@ -2664,9 +2652,6 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     ...(ctx.finish
       ? { finish: finishTool({ onFinish: ctx.finish }) }
       : { finish: finishUnavailable() }),
-    todo: ctx.repoRoot && ctx.issuePath
-      ? todoTool({ repoRoot: ctx.repoRoot, toolRoot: ctx.root, issuePath: ctx.issuePath })
-      : todoUnavailable(),
   };
   // Prefer provider-side JSON-schema constrained sampling. Models that pass
   // tool-call tests in OpenCode are often much weaker without it: Beam Free is

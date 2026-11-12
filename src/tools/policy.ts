@@ -11,7 +11,6 @@ export const TOOL_GUIDE = [
   "- Read: read {path} returns numbered lines. Use read {symbol}, read {around}, or read {offset+limit} for one block. Never re-read what inspect already returned — use the artifact id.",
   "- Change: command run {name, args} for typed commands only (no shell). edit {path, oldString, newString} for edits; write {path, content} for new files. Batch edits across files in one call with edit {files: [...]}. The edit result shows the diff — this is the confirmation, never re-read to check. Changes are summarized in the workspace block.",
   "- Record: context note {kind: finding|decision|open, text} for conclusions the codebase doesn't capture. context recall {id} to fetch stored artifacts. context state to view the full run state.",
-  "- Plan: todo {items} replaces the issue checklist. 2-4 concrete steps. Skip it for a change you can hold in one edit.",
   "- Finish: finish {outcome} when the run is done. outcome=completed|blocked|failed.",
   "</tool-policy>",
 ].join("\n");

@@ -13,7 +13,11 @@ Price caps: $-/M in and out
 Total Budget: $10 (for the entire orchestration)
 
 Orchestration mode now just starts working on the highest priority, unblocked issues with as many processes as it can. If in free mode, runs indefinitely, if paid, runs under a budget.
-Blocked = dependent task not finished, human review needed, other issue level blocked statuses like merge failures.
+Blocked:
+    - dependent task not finished
+    - failed gates retry count exhausted
+    - human review needed
+    - other issue level blocked statuses like merge failures.
 
 No per issue orchestration mode since starting a run orchestrates anyway (we now just use acceptance gates for merging and looping)
 

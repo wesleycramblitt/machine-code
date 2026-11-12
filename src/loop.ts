@@ -354,7 +354,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   };
 
   const mapRoot = input.toolRoot ?? input.root;
-  // The issue file is the durable home of the todo checklist. Derive it from
+  // The issue file is the durable home of the task. Derive it from
   // the run's item so the todo tool works without another flag on every path.
   const issuePath = input.layout && recorder.current.itemId
     ? findIssue(input.layout, recorder.current.itemId)?.rel
@@ -417,13 +417,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   if (input.seedFiles && input.seedFiles.length > 0) {
     memory.seedWorkingFiles(input.seedFiles, 0);
   }
-  // The next action is the first open item in the issue's durable todo.
-  // The next action is seeded from the first todo item when available.
-  const issueForTodo = input.layout && recorder.current.itemId
-    ? findIssue(input.layout, recorder.current.itemId)
-    : null;
-  const firstTodoText = issueForTodo?.todo.find((item) => !item.done)?.text;
-
   // Rebuild the map and module index after a changed turn. The map cache is
   // keyed by the exact working tree, so this is a cheap stat pass when
   // nothing changed. Coalesce a burst of edits into one rebuild.

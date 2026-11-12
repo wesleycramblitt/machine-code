@@ -9,7 +9,7 @@ import { B, C, D, G, GR, M, R, RED, W, WHITE, Y, statusColor, icon, agentTone, c
 import { sortRuns } from "../status.js";
 import type { RunSummary } from "../../state/runs.js";
 import { runItemId } from "../../plan/lifecycle.js";
-import { ISSUE_STATUS_LABELS, type DisplayStatus, type IssueKind, type TodoItem } from "../../plan/issues.js";
+import { ISSUE_STATUS_LABELS, type DisplayStatus, type IssueKind } from "../../plan/issues.js";
 import { issueTone, kindBadge } from "./tones.js";
 import { windowedBody, type Viewport } from "./types.js";
 
@@ -27,7 +27,6 @@ export interface IssueHeader {
   /** The issue file's prompt: the whole body text. */
   prompt: string;
   acceptance: string[];
-  todo: TodoItem[];
 }
 
 export interface IssueProps extends Viewport {
@@ -89,12 +88,8 @@ export function renderIssue(props: IssueProps): IssueFrame {
       // Prompt: the whole body, wrapped to the terminal width.
       lines.push(` ${B}${W}Prompt:${R}`);
       lines.push(...promptLines(issue.prompt, cols));
-      // Acceptance / Todo / Tags / Depends / Verification.
+      // Acceptance / Tags / Depends / Verification.
       lines.push(` ${B}${WHITE}Acceptance:${R} ${D}${issue.acceptance.length > 0 ? issue.acceptance.join(", ") : "defaults"}${R}`);
-      if (issue.todo.length > 0) {
-        lines.push(` ${B}${WHITE}Todo:${R}`);
-        for (const item of issue.todo) lines.push(`   ${D}[${item.done ? "x" : " "}] ${item.text}${R}`);
-      }
       const meta: string[] = [];
       if (issue.tags.length > 0) meta.push(`${B}${WHITE}Tags:${R} ${D}${issue.tags.join(", ")}${R}`);
       if (issue.depends.length > 0) meta.push(`${B}${WHITE}Depends:${R} ${D}${issue.depends.join(", ")}${R}`);

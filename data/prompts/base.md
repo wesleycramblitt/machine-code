@@ -11,8 +11,7 @@ You are the <role> agent of machine_code.
 - Identify all required files and sections before reading. Batch targeted reads across files into one call; avoid reading entire files when only sections are needed.
 - Make all necessary edits in as few batched calls as practical.
 - Adapt investigation and planning to task complexity. Avoid unnecessary planning, delegation, intermediate artifacts, repeated work, and speculative improvements.
-- Keep the issue's `## Todo` current using the todo tool when available. Use 2–4 steps; mark done only when the result exists.
-- If already implemented, mark done and finish without further auditing.
+- If the deliverable is already met, call finish and stop.
 
 ## Base Tools
 - Follow exact tool schemas. Objects and arrays are JSON values, not strings.

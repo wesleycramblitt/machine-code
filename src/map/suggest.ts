@@ -454,15 +454,14 @@ function hintSymbols(
 
 /**
  * Ranker input: the task's words, not the harness wrapper. Harness boilerplate
- * ("Auto-created from run." on auto-filed issues, the ## Todo plan section)
- * is provenance and planning state, not task vocabulary — ranking on it lets
- * wrapper words ("created", "run") outvote the actual topic and hijack the
- * top hints with unrelated files. Strip it at every suggestion site.
+ * ("Auto-created from run." on auto-filed issues) is provenance, not task
+ * vocabulary — ranking on it lets wrapper words ("created", "run") outvote
+ * the actual topic and hijack the top hints with unrelated files. Strip it
+ * at every suggestion site.
  */
 export function suggestionText(request: string): string {
   return request
     .replace(/^Auto-created from run\.\s*/i, "")
-    .split(/\n## Todo\b/)[0]!
     .trim();
 }
 

@@ -26,7 +26,7 @@ import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/quest
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
-import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueTodo, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
+import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueVerification, findIssue, gateFailureAttempts, moveIssue, writeIssue } from "../plan/issues.js";
 import { enrichHints, renderHints, suggestHints, suggestionText, withKeywordTerms } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
@@ -354,7 +354,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // run was started. Seed a deterministic Todo before assembly so the model
   // sees the plan in the issue block.
   if (itemSlug) ensureIssueVerification(l, itemSlug);
-  const attachedIssue = itemSlug ? ensureIssueTodo(l, itemSlug) : null;
+  const attachedIssue = itemSlug ? findIssue(l, itemSlug) : null;
   if (attachedIssue) {
     contextInclude = contextInclude ?? {};
     contextInclude.files = [...new Set([...(contextInclude.files ?? []), attachedIssue.rel])];
@@ -945,7 +945,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       for (const path of written) {
         const slug = basename(path, ".md");
         ensureIssueVerification(l, slug);
-        ensureIssueTodo(l, slug);
       }
       const missing = written
         .map((path) => findIssue(l, basename(path, ".md")))
