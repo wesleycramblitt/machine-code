@@ -86,12 +86,12 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       if (runNarrow) {
         const identity = `${indent}  ${icon(run.status)} ${D}${runSlugText(run)}${R}${ask}${reason}`;
         rendered.push(selected(` ${trunc(identity, Math.max(12, cols - visible(right) - 2))} ${right}`, isSelected));
-        const agent = `${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}`;
+        const agent = `${agentTone(run.agent)}${run.agent}${R}${repoTag}`;
         const request = run.request.replace(/\s+/g, " ").slice(0, 60);
         const detail = `${agent} ${D}${request}${R}`;
         rendered.push(selected(` ${indent}      ${trunc(detail, Math.max(12, cols - indent.length - 8))}`, isSelected));
       } else {
-        const left = `${indent}  ${icon(run.status)} ${D}${runSlugText(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${run.mode ? `/${run.mode}` : ""}${repoTag}${ask}${reason}`;
+        const left = `${indent}  ${icon(run.status)} ${D}${runSlugText(run)}${R} ${agentTone(run.agent)}${run.agent}${R}${repoTag}${ask}${reason}`;
         const context = `  ${D}${run.request.replace(/\s+/g, " ").slice(0, 60)}${R}`;
         rendered.push(selected(` ${pad(left, Math.max(30, cols - visible(right) - visible(context) - 2))}${context}${right}`, isSelected));
       }

@@ -9,8 +9,6 @@ import type { KeyServices } from "../keys.js";
 
 const KIND_CYCLE = ["ideas", "features", "bugs"] as const;
 const PRIORITY_CYCLE = ["low", "medium", "high"] as const;
-const VERIFICATION_CYCLE = ["direct", "verified"] as const;
-
 /** Set a string field on NewIssueSettings by name. */
 function setField(s: NewIssueSettings, field: string, value: string): void {
   switch (field) {
@@ -168,13 +166,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
-  if (data === "v" && s.newIssue.kind !== "ideas") {
-    const idx = VERIFICATION_CYCLE.indexOf(s.newIssue.verification);
-    s.newIssue.verification = VERIFICATION_CYCLE[(idx + 1) % VERIFICATION_CYCLE.length]!;
-    ctx.notify(`verification: ${s.newIssue.verification}`);
-    ctx.draw();
-    return true;
-  }
+
   ctx.draw();
   return true;
 }

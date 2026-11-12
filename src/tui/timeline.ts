@@ -195,13 +195,11 @@ export function describeTimelineEvent(event: TimelineEventLike): string {
             ? "loop blocked no build plan"
             : `loop blocked ${text(event.tool)}`;
     case "child_spawned":
-      return `child ${text(event.childRunId).slice(-8)} ${text(event.role)}`;
+      return `child spawned`;
     case "child_completed":
-      return `child ${text(event.childRunId).slice(-8)} ${text(event.status)}`;
+      return `child completed`;
     case "build_outcome":
       return `build ${text(event.outcome)}`;
-    case "review_verdict":
-      return `review ${text(event.verdict)}`;
     default:
       return type;
   }

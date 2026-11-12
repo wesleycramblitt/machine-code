@@ -20,8 +20,6 @@ export interface IssueHeader {
   status: DisplayStatus;
   rel: string;
   priority: string;
-  review: string;
-  verification: "direct" | "verified";
   tags: string[];
   depends: string[];
   /** The issue file's prompt: the whole body text. */
@@ -83,8 +81,8 @@ export function renderIssue(props: IssueProps): IssueFrame {
       // Line 2: branch/worktree derived from the newest attached run.
       const work = worktreeOf(runs, slug);
       lines.push(` ${B}${WHITE}Branch:${R} ${D}${work.branch}${R}    ${B}${WHITE}Worktree:${R} ${D}${work.worktree}${R}`);
-      // Line 3: priority and review mode (even when none).
-      lines.push(` ${B}${WHITE}Priority:${R} ${D}${issue.priority}${R}    ${B}${WHITE}Review:${R} ${D}${issue.review}${R}`);
+      // Line 3: priority.
+      lines.push(` ${B}${WHITE}Priority:${R} ${D}${issue.priority}${R}`);
       // Prompt: the whole body, wrapped to the terminal width.
       lines.push(` ${B}${W}Prompt:${R}`);
       lines.push(...promptLines(issue.prompt, cols));
@@ -93,7 +91,6 @@ export function renderIssue(props: IssueProps): IssueFrame {
       const meta: string[] = [];
       if (issue.tags.length > 0) meta.push(`${B}${WHITE}Tags:${R} ${D}${issue.tags.join(", ")}${R}`);
       if (issue.depends.length > 0) meta.push(`${B}${WHITE}Depends:${R} ${D}${issue.depends.join(", ")}${R}`);
-      meta.push(`${B}${WHITE}Verification:${R} ${D}${issue.verification}${R}`);
       if (meta.length > 0) lines.push(` ${meta.join("    ")}`);
     }
     const attached = runs.filter((run) => runItemId(run) === slug);
@@ -109,9 +106,6 @@ export function renderIssue(props: IssueProps): IssueFrame {
     ...w,
     actions: joinCommands([
       command("n", "Run", undefined, C),
-      command("o", "Orchestrate", undefined, GR),
-      command("g", "Gate", issue?.review ?? "none", issue?.review === "human" ? Y : D),
-      command("a", "Approve", undefined, G),
       command("d", "Delete", undefined, RED),
     ]),
     secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",

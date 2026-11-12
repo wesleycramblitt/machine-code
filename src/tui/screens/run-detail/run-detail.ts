@@ -162,7 +162,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     const ctxUsage = contextUsage(s.usage, ev);
     const timeLabel = s.endedAt ? `ended ${ago(s.endedAt)} ago` : `updated ${ago(s.lastActivityAt)} ago`;
     const lines: string[] = [
-      ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${agentTone(s.agent)}${s.agent}${R}${s.mode ? `/${s.mode}` : ""}  ${G}${s.modelCalls}${R} call(s)  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${timeLabel}${R}`,
+      ` ${icon(s.status)} ${B}${BL}${s.id}${R}  ${statusColor(s.status)}${s.status.toUpperCase()}${R}  ${agentTone(s.agent)}${s.agent}${R}  ${G}${s.modelCalls}${R} call(s)  ${Y}${fmtMoney(s.cost.actual)}${R}  ${D}${timeLabel}${R}`,
       ` ${M}${fmtRunTokens(s.usage.totalTokens)}${R}${D} total${R}`,
     ];
     footerCtx = `${C}ctx${R} ${W}${fmtRunTokens(ctxUsage.tokens)}${R}`;
@@ -254,7 +254,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         // so the cursor does not jump. Space toggles expansion manually.
         const expandedEvent = expanded.has(`${s.id}:${i}`);
         const type = String(event.type);
-        if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}${event.mode ? `/${event.mode}` : ""}`);
+        if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}`);
         else if (type === "model_select") {
           if (event.error) eventLines.push(`${prefix} ${GR}${time}${R} ${RED}select error ${String(event.error)}${R}`);
           else {
@@ -556,16 +556,8 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       body = clipLines(lines, bodyH);
     } else if (section === "related") {
       lines.push(` ${B}${C}Lineage${R}`);
-      if (s.orchestrationId) {
-        lines.push(
-          `  ${D}orchestration${R} ${C}${s.orchestrationId}${R}` +
-            `${s.orchestrationScope ? ` ${D}${s.orchestrationScope}${R}` : ""}`,
-        );
-      }
       if (s.attempt !== undefined) lines.push(`  ${D}attempt${R}     ${W}${s.attempt}${R}`);
       if (s.phase) lines.push(`  ${D}phase${R}       ${W}${s.phase}${R}`);
-      if (s.planReview) lines.push(`  ${D}plan review${R} ${W}${s.planReview}${R}`);
-      if (s.resultReview) lines.push(`  ${D}result${R}      ${W}${s.resultReview}${R}`);
       if (s.planSnapshotHash) lines.push(`  ${D}snapshot${R}    ${D}${s.planSnapshotHash.slice(0, 12)}${R}`);
       if (s.parentRunId) lines.push(`  ${D}parent${R}      ${D}${s.parentRunId.slice(-8)}${R}`);
       if (s.resumedFrom) lines.push(`  ${D}resumed${R}     ${D}${s.resumedFrom.slice(-8)}${R}`);
@@ -576,7 +568,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       for (let i = 0; i < relatedList.length; i++) {
         const related = relatedList[i]!;
         const isSelected = i === childSel;
-        const line = ` ${icon(related.status)} ${D}${related.id.slice(-8)}${R} ${agentTone(related.agent)}${related.agent}${R}${related.mode ? `/${related.mode}` : ""} ${D}${fmtTokens(related.usage.totalTokens)} tok · ${fmtMoney(related.cost.actual)} · ${ago(related.lastActivityAt)}${R} ${related.request.replace(/\s+/g, " ").slice(0, 40)}`;
+        const line = ` ${icon(related.status)} ${D}${related.id.slice(-8)}${R} ${agentTone(related.agent)}${related.agent}${R} ${D}${fmtTokens(related.usage.totalTokens)} tok · ${fmtMoney(related.cost.actual)} · ${ago(related.lastActivityAt)}${R} ${related.request.replace(/\s+/g, " ").slice(0, 40)}`;
         lines.push(selected(line, isSelected));
       }
       body = clipLines(lines, bodyH);

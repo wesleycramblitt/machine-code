@@ -1162,8 +1162,6 @@ export async function runTui(): Promise<void> {
               status: effectiveStatus(issue, issueRuns),
               rel: issue.rel,
               priority: issue.priority,
-              review: issue.review,
-              verification: issue.verification,
               tags: issue.tags,
               depends: issue.depends,
               prompt: issue.prompt,
