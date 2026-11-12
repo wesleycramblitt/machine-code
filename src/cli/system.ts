@@ -35,9 +35,9 @@ import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
-import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
+import { loadAvailability, saveAvailability } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
-import { isFreeRow } from "../select.js";
+
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
@@ -303,9 +303,9 @@ export function cmdPolicy(argv: string[]): number {
     fail(`unknown agent "${role}"; choose one of ${AGENT_NAMES.join(", ")}`);
   }
 
-  process.stdout.write(`selection tier: ${machine.selection.tier}  (${SELECTION_TIERS.join(" | ")})\n`);
+  process.stdout.write(`selection tier: paid\n`);
   const funded = [...fundedProviderIds(machine.providers)].sort();
-  process.stdout.write(`funded providers: ${funded.join(", ") || "(none — free rows only)"}\n`);
+  process.stdout.write(`funded providers: ${funded.join(", ") || "(none)"}\n`);
   const multipliers = Object.entries(machine.providers).filter(([, v]) => v.costMultiplier !== undefined);
   if (multipliers.length > 0) {
     process.stdout.write(
@@ -322,14 +322,10 @@ export function cmdPolicy(argv: string[]): number {
     const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
       .map((axis) => `${axis}≥${ap.minAxes![axis]}`)
       .join(" ");
-    const freeFloors = CAPABILITY_AXES.filter((axis) => (ap.freeMinAxes?.[axis] ?? 0) > 0)
-      .map((axis) => `${axis}≥${ap.freeMinAxes![axis]}`)
-      .join(" ");
     const effectiveWeights = axisWeights(name, ap);
     const weights = CAPABILITY_AXES.map((axis) => `${axis} ${effectiveWeights[axis].toFixed(2)}`).join("  ");
     process.stdout.write(`\n[${name}]\n`);
     process.stdout.write(`  min_fit ${ap.minFit}   min_capability ${ap.minCapability}   min_context ${ap.minContext}   expected_out ${ap.expectedOutputTokens}   tool_call ${ap.toolCall}\n`);
-    process.stdout.write(`  free     min_fit ${ap.freeMinFit ?? ap.minFit}   min_capability ${ap.freeMinCapability ?? ap.minCapability}   axes ${freeFloors || "(inherits paid)"}\n`);
     const def = agentDef(l, name);
     process.stdout.write(`  modes ${def.modes.length ? `${def.modes.join(", ")}${def.defaultMode ? ` (default ${def.defaultMode})` : ""}` : "single-agent"}\n`);
     process.stdout.write(`  axes ${floors || "(none)"}\n`);

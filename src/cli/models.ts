@@ -35,9 +35,9 @@ import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
-import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
+import { loadAvailability, saveAvailability } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
-import { isFreeRow } from "../select.js";
+
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
@@ -121,7 +121,7 @@ export function cmdModels(argv: string[]): number {
   // A free-only query is a catalogue question, not a configured-provider
   // question: surface free offers from every provider.
   let rows = doc.models.filter(
-    (m) => activeProviders.has(m.providerID) && (all || flags.has("free") || configured.has(m.providerID)),
+    (m) => activeProviders.has(m.providerID) && (all || configured.has(m.providerID)),
   );
   if (provider) rows = rows.filter((m) => m.providerID === provider);
   const family = flags.get("family");
@@ -133,7 +133,7 @@ export function cmdModels(argv: string[]): number {
     text: query,
     minCapability: minCap !== undefined && Number.isFinite(minCap) ? minCap : undefined,
     families: family ? [family] : undefined,
-    freeOnly: flags.has("free"),
+    
     codingOnly: flags.has("coding"),
     toolCall: flags.has("tool"),
     minAxes: axisFloor,
@@ -146,10 +146,6 @@ export function cmdModels(argv: string[]): number {
   }
 
   const agent = flags.get("agent");
-  const tierFlag = flags.get("tier");
-  if (tierFlag !== undefined && tierFlag !== "free" && tierFlag !== "paid") {
-    fail("--tier must be free|paid");
-  }
   if (agent) {
     const ap = policy.agents[agent];
     if (!ap) fail(`unknown agent "${agent}"; choose one of ${Object.keys(policy.agents).join(", ")}`);
@@ -188,7 +184,6 @@ export function cmdModels(argv: string[]): number {
       availability: loadAvailability(l.home),
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars,
-      tier: tierFlag as import("../config.js").SelectionTier | undefined,
       requireProvider: provider,
       requireModel: flags.get("model"),
     });
@@ -208,15 +203,11 @@ export function cmdModels(argv: string[]): number {
     const floors = CAPABILITY_AXES.filter((axis) => (ap.minAxes?.[axis] ?? 0) > 0)
       .map((axis) => `${axis}>=${ap.minAxes![axis]}`)
       .join(" ");
-    const freeFloors = CAPABILITY_AXES.filter((axis) => (ap.freeMinAxes?.[axis] ?? 0) > 0)
-      .map((axis) => `${axis}>=${ap.freeMinAxes![axis]}`)
-      .join(" ");
     process.stdout.write(
-      `agent ${agent}  tier ${result.tier}  min_context ${ap.minContext}  min_fit ${ap.minFit}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
+      `agent ${agent}  paid tier  min_context ${ap.minContext}  min_fit ${ap.minFit}  min_capability ${ap.minCapability}  tool_call ${ap.toolCall}\n`,
     );
     process.stdout.write(
       `axes ${floors || "(no axis floors)"}\n` +
-        `free floors min_fit ${ap.freeMinFit ?? ap.minFit}  min_capability ${ap.freeMinCapability ?? ap.minCapability}  axes ${freeFloors || "(inherits paid)"}\n` +
         `weights ${CAPABILITY_AXES.map((axis) => `${axis} ${weights[axis].toFixed(2)}`).join("  ")}\n`,
     );
     if (machine.priceCaps.input !== undefined || machine.priceCaps.output !== undefined) {
@@ -262,7 +253,7 @@ export function cmdModels(argv: string[]): number {
     `${rows.length} model(s)  tier ${machine.selection.tier}  funded: ${funded.join(", ") || "(none)"}  ` +
       `${all ? "all providers" : `configured: ${[...configured].join(", ") || "(none)"}`}` +
       `${provider ? `  provider ${provider}` : ""}${family ? `  family ${family}` : ""}${minCap !== undefined ? `  cap >= ${minCap}` : ""}` +
-      `${flags.has("free") ? "  free" : ""}${flags.has("coding") ? "  coding" : ""}${flags.has("tool") ? "  tools" : ""}` +
+      `${flags.has("coding") ? "  coding" : ""}${flags.has("tool") ? "  tools" : ""}` +
       `${query ? `  filter "${query}"` : ""}  sort ${sortFlag}\n`,
   );
   process.stdout.write("   cap  key                                                        context  T/R/I       in $/M       out $/M\n");
@@ -396,7 +387,7 @@ export async function cmdAvailability(argv: string[]): Promise<number> {
   const configured = new Set(providerStatuses(createModelsCollection()).filter((p) => p.configured).map((p) => p.id));
   const now = Date.now();
   if (flags.has("probe")) {
-    const targets = probeCoolingCandidates(catalogue.models, state, configured, flags.has("free-only"));
+    const targets = probeCoolingCandidates(catalogue.models, state, configured);
     if (targets.length === 0) {
       process.stdout.write("no cooling models to probe\n");
       return 0;
@@ -427,7 +418,7 @@ export async function cmdAvailability(argv: string[]): Promise<number> {
     return 0;
   }
   process.stdout.write(
-    `probe ${machine.availability.probe}  interval ${Math.round(machine.availability.intervalMs / 1000)}s  timeout ${Math.round(machine.availability.timeoutMs / 1000)}s  free budget ${machine.availability.freeCompletionMaxPerHour}/h\n`,
+    `probe ${machine.availability.probe}  interval ${Math.round(machine.availability.intervalMs / 1000)}s  timeout ${Math.round(machine.availability.timeoutMs / 1000)}s\n`,
   );
   const cooling = Object.entries(state.models)
     .filter(([, health]) => typeof health.cooldownUntil === "number" && health.cooldownUntil > now)
@@ -462,11 +453,9 @@ export function probeCoolingCandidates(
   rows: readonly CatalogueRow[],
   state: ReturnType<typeof loadAvailability>,
   configured: ReadonlySet<string>,
-  freeOnly: boolean,
 ) {
   return rows
     .filter((row) => configured.has(row.providerID) && (state.models[row.key]?.cooldownUntil ?? 0) > Date.now())
-    .filter((row) => !freeOnly || row.free || (row.pricing.input === 0 && row.pricing.output === 0))
     .map(targetFor);
 }
 

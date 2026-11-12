@@ -47,8 +47,6 @@ export interface SpendBucket {
   calls: number;
   /** Billable token volume. */
   tokens: number;
-  /** Tokens billed at zero actual cost (free models/quotas). */
-  freeTokens: number;
   input: number;
   output: number;
   cacheRead: number;
@@ -59,7 +57,6 @@ export interface SpendSummary {
   totalActual: number;
   totalEstimated: number;
   totalTokens: number;
-  freeTokens: number;
   byProvider: Record<string, SpendBucket>;
   byModel: Record<string, SpendBucket>;
   byAgent: Record<string, SpendBucket>;
@@ -77,18 +74,16 @@ export interface SpendQuery {
 }
 
 function emptyBucket(): SpendBucket {
-  return { actual: 0, estimated: 0, calls: 0, tokens: 0, freeTokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  return { actual: 0, estimated: 0, calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
 function add(bucket: SpendBucket, rec: SpendRecord): void {
   const actual = rec.cost.actual ?? 0;
   const tokens = rec.usage.totalTokens || rec.usage.input + rec.usage.output + rec.usage.cacheRead + rec.usage.cacheWrite;
-  const free = actual === 0 && (rec.cost.actual !== null || rec.cost.estimated === 0);
   bucket.actual += actual;
   bucket.estimated += rec.cost.estimated;
   bucket.calls += 1;
   bucket.tokens += tokens;
-  bucket.freeTokens += free ? tokens : 0;
   bucket.input += rec.usage.input;
   bucket.output += rec.usage.output;
   bucket.cacheRead += rec.usage.cacheRead;
@@ -128,7 +123,6 @@ export function summarizeSpend(records: readonly SpendRecord[]): SpendSummary {
     totalActual: 0,
     totalEstimated: 0,
     totalTokens: 0,
-    freeTokens: 0,
     byProvider: {},
     byModel: {},
     byAgent: {},
@@ -138,11 +132,9 @@ export function summarizeSpend(records: readonly SpendRecord[]): SpendSummary {
   for (const rec of records) {
     const actual = rec.cost.actual ?? 0;
     const tokens = rec.usage.totalTokens || rec.usage.input + rec.usage.output + rec.usage.cacheRead + rec.usage.cacheWrite;
-    const free = actual === 0 && (rec.cost.actual !== null || rec.cost.estimated === 0);
     summary.totalActual += actual;
     summary.totalEstimated += rec.cost.estimated;
     summary.totalTokens += tokens;
-    summary.freeTokens += free ? tokens : 0;
     const day = rec.t.slice(0, 10);
     for (const [bucket, key] of [
       [summary.byProvider, rec.provider],

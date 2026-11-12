@@ -13,7 +13,7 @@
  * and optional per-axis floors. It then scores the same role-weighted axis mix
  * so a better model beats a cheaper worse one when the gap is large enough.
  */
-import type { AgentPolicy, CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
+import type { AgentPolicy, CapabilityAxis, MachineConfig } from "./config.js";
 import { CAPABILITY_AXES } from "./config.js";
 import { estimateCallCost, type AxisScores } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
@@ -114,7 +114,6 @@ export interface RejectedCandidate {
 export interface PickResult {
   selected: CatalogueRow;
   estimate: PickEstimate;
-  tier: SelectionTier;
   /** All eligible candidates after filtering, before the display cap. */
   eligibleCount: number;
   /** Top candidates after filtering, ascending score (best first), max 5. */
@@ -135,9 +134,7 @@ export interface PickInput {
   configuredProviders: ReadonlySet<string>;
   /** Estimated current context size in characters. */
   contextChars: number;
-  /** Per-run override of the machine selection tier. */
-  tier?: SelectionTier;
-  /** Providers with funding for paid rows. Free rows bypass this. */
+  /** Providers with funding for paid rows. */
   fundedProviders?: ReadonlySet<string>;
   /** Debug/test hard filter: restrict to one provider. */
   requireProvider?: string;
@@ -167,28 +164,7 @@ export function estimateTokens(contextChars: number, expectedOutputTokens: numbe
   };
 }
 
-export function isFreeRow(row: CatalogueRow): boolean {
-  return row.free === true || (row.pricing.input === 0 && row.pricing.output === 0);
-}
 
-/** Merge shared and free-specific per-axis floors, taking the stricter floor
- *  per axis so a free offer cannot dodge a raised shared floor (see
- *  rejectReason). A configured shared floor is still allowed to be *lower*
- *  than the free floor, letting the free tier pick its own quality in quiet
- *  configuration while a raised shared bar always applies. */
-function mergeAxisFloors(
-  shared: Partial<Record<CapabilityAxis, number>> | undefined,
-  free: Partial<Record<CapabilityAxis, number>> | undefined,
-): Partial<Record<CapabilityAxis, number>> | undefined {
-  if (!shared && !free) return undefined;
-  const merged: Partial<Record<CapabilityAxis, number>> = {};
-  for (const axis of CAPABILITY_AXES) {
-    const a = shared?.[axis];
-    const b = free?.[axis];
-    if (a !== undefined || b !== undefined) merged[axis] = Math.max(a ?? 0, b ?? 0);
-  }
-  return merged;
-}
 
 /**
  * Meta routers (OpenRouter "auto"/jev-router and similar) forward to unknown
@@ -218,9 +194,7 @@ export function effectiveCallCost(
   return estimateCallCost(row.pricing, inputTokens, outputTokens) * providerMultiplier(machine, row.providerID);
 }
 
-function selectionTier(input: PickInput): SelectionTier {
-  return input.tier ?? input.machine.selection?.tier ?? "paid";
-}
+
 
 function vetoed(row: CatalogueRow, vetoes: readonly string[]): boolean {
   return vetoes.includes(row.key) || (row.canonicalID !== null && vetoes.includes(row.canonicalID));
@@ -280,32 +254,15 @@ function rejectReason(
   if (row.coding === false) return "non-coding-model";
   if (isMetaRouter(row)) return "router-model";
   if (input.policy.toolCall && !row.toolCall) return "no-tool-support";
-  const tier = selectionTier(input);
-  const freeRow = isFreeRow(row);
-  if (tier === "free" && !freeRow) return "not-free";
-  if (tier === "paid" && !freeRow) {
-    if (input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
-  }
-  // Free offers use the free floor in both tiers. But an explicit raise of the
-  // shared floors — e.g. fit[f] (minFit) up in the run page — must gate free
-  // rows too, or a `:free` model stays selectable no matter how high the bar
-  // goes. Each gate takes whichever floor is stricter: the free-specific one
-  // OR the shared one for the current tier.
-  const minFit = freeRow
-    ? Math.max(input.policy.freeMinFit ?? input.policy.minFit, input.policy.minFit)
-    : input.policy.minFit;
-  const minCapability = freeRow
-    ? Math.max(input.policy.freeMinCapability ?? input.policy.minCapability, input.policy.minCapability)
-    : input.policy.minCapability;
-  const minAxes = freeRow ? mergeAxisFloors(input.policy.minAxes, input.policy.freeMinAxes) : input.policy.minAxes;
-  if (minFit > 0 && capabilityFit(row.scores, weights) < minFit) {
+  if (input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
+  if (input.policy.minFit > 0 && capabilityFit(row.scores, weights) < input.policy.minFit) {
     return "below-min-fit";
   }
-  if (minCapability > 0 && row.scores.capability < minCapability) {
+  if (input.policy.minCapability > 0 && row.scores.capability < input.policy.minCapability) {
     return "below-min-capability";
   }
   for (const axis of CAPABILITY_AXES) {
-    const floor = minAxes?.[axis];
+    const floor = input.policy.minAxes?.[axis];
     if (floor !== undefined && floor > 0 && row.scores[axis] < floor) return `below-min-${axis}`;
   }
   if (row.context < input.policy.minContext) return "below-min-context";
@@ -377,7 +334,6 @@ export function pick(input: PickInput): PickResult | PickFailure {
   return {
     selected: input.catalogue.find((row) => row.key === top[0]!.key)!,
     estimate,
-    tier: selectionTier(input),
     eligibleCount: candidates.length,
     candidates: top,
     rejectedCount: rejections.size,

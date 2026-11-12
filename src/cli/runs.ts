@@ -35,9 +35,8 @@ import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
-import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
+import { loadAvailability, saveAvailability } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
-import { isFreeRow } from "../select.js";
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
@@ -673,7 +672,7 @@ export function cmdContext(argv: string[]): number {
 export function printSpendBucket(label: string, bucket: SpendBucket): void {
   const perMillion = bucket.tokens > 0 ? bucket.actual / (bucket.tokens / 1_000_000) : 0;
   process.stdout.write(
-    `  ${cell(label, 42)} ${String(bucket.calls).padStart(5)} calls  ${fmtTokens(bucket.tokens).padStart(7)} tok  ${fmtTokens(bucket.freeTokens).padStart(7)} free  ${fmtMoney(bucket.actual)}  ${perMillion > 0 ? `${fmtMoney(perMillion)}/Mtok` : ""}\n`,
+    `  ${cell(label, 42)} ${String(bucket.calls).padStart(5)} calls  ${fmtTokens(bucket.tokens).padStart(7)} tok  ${fmtMoney(bucket.actual)}  ${perMillion > 0 ? `${fmtMoney(perMillion)}/Mtok` : ""}\n`,
   );
 }
 
@@ -693,7 +692,7 @@ export function cmdSpend(argv: string[]): number {
     return 0;
   }
   process.stdout.write(`spend (${days ? `last ${days} days` : "all time"})\n`);
-  process.stdout.write(`  actual ${fmtMoney(summary.totalActual)}   estimated ${fmtMoney(summary.totalEstimated)}   tokens ${fmtTokens(summary.totalTokens)}   free ${fmtTokens(summary.freeTokens)}\n`);
+  process.stdout.write(`  actual ${fmtMoney(summary.totalActual)}   estimated ${fmtMoney(summary.totalEstimated)}   tokens ${fmtTokens(summary.totalTokens)}\n`);
   const by = flags.get("by") ?? "provider";
   if (by === "provider") {
     process.stdout.write(`\nby provider\n`);
@@ -711,7 +710,7 @@ export function cmdSpend(argv: string[]): number {
     const series = spendDays(summary, Math.min(days || 30, 90));
     const max = Math.max(0, ...series.map((entry) => entry.bucket.actual));
     for (const { day, bucket } of series) {
-      process.stdout.write(`  ${day} ${spendBar(bucket.actual, max, 24)} ${fmtMoney(bucket.actual)}  ${fmtTokens(bucket.tokens)} tok  ${fmtTokens(bucket.freeTokens)} free\n`);
+      process.stdout.write(`  ${day} ${spendBar(bucket.actual, max, 24)} ${fmtMoney(bucket.actual)}  ${fmtTokens(bucket.tokens)} tok\n`);
     }
   } else {
     fail("--by must be provider|model|day|agent");

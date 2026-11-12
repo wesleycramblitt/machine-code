@@ -191,8 +191,6 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     return true;
   }
   if (data === "a") { ctx.cycleAgent(); ctx.draw(); return true; }
-  if (data === "t") { s.newrun.tier = s.newrun.tier === "paid" ? "free" : "paid"; ctx.draw(); return true; }
-  
   if (data === "g") { ctx.cycleAmbiguity(); ctx.draw(); return true; }
   if (data === "f") { ctx.cycleMinFit(); ctx.draw(); return true; }
   if (data === "F") { ctx.cycleFloors(); ctx.draw(); return true; }

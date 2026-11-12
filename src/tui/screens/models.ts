@@ -60,7 +60,6 @@ export interface ModelsListProps extends Viewport {
   scroll: number;
   filterText: string;
   showAllProviders: boolean;
-  freeOnly: boolean;
   codingOnly: boolean;
   sort: ModelSort;
   probing: ReadonlySet<string>;
@@ -147,7 +146,6 @@ export function renderModelsList(props: ModelsListProps): ModelsListFrame {
       command("space", "Fold", undefined, Y),
       command("/", "Search", undefined, BL),
       command("a", "Providers", props.showAllProviders ? "all" : "configured", C),
-      command("f", "Free", props.freeOnly ? "only" : "all", props.freeOnly ? G : GR),
       command("c", "Coding", props.codingOnly ? "only" : "all", props.codingOnly ? G : GR),
       command("g", "Group", group, BL),
       command("s", "Sort", props.sort, C),

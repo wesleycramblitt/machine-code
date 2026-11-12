@@ -64,7 +64,7 @@ import {
   isGenericTaskRequest, joinCommands, M, modelPriceText, modelReasonLabel, modelReasonRank,
   modelReasonText, type ModelPickerEntry, pad, PANEL_BG, printable, progress, RED, recentEditEvents,
   resolveTheme, runIdFromEvent, sanitizeLine, selected, SHOW, splitKeys, statusColor, stripAnsi,
-  SUBTAB_BG, START_BG, SYNC_OFF, SYNC_ON, tierTone, trunc, type UiTheme, visible, W, WHITE,
+  SUBTAB_BG, START_BG, SYNC_OFF, SYNC_ON, trunc, type UiTheme, visible, W, WHITE,
   wrapCommands, wrapPlain, wrapText, wrapTokenList, WRAP_OFF, WRAP_ON, ZEBRA_BG,
 } from "./tui/format.js";
 import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineIndex, stepTimelineSelection, waitingForRun } from "./tui/timeline.js";
@@ -239,20 +239,11 @@ export async function runTui(): Promise<void> {
 
   const defaultNewRun = (): NewRunState => {
     const agent = "research";
-    const repoLayout = layout(s.newRunRepo);
-    // A new run starts from the machine selection tier, not a hard-coded free
-    // default. The per-run toggle can still override it.
-    let tier: "free" | "paid" = "free";
-    try {
-      tier = loadMachineConfig(repoLayout).selection.tier;
-    } catch {
-      // keep the safe default when the machine config is unavailable
-    }
     return {
       agent,
       approval: "human",
       ambiguity: "precise",
-      tier,
+      tier: "paid",
       minFit: undefined,
       floors: "role",
       kind: "features",
@@ -302,7 +293,6 @@ export async function runTui(): Promise<void> {
     const preferredAgent = seed?.agent ?? (issue ? (issue.kind === "ideas" ? "research" : "engineer") : previous.agent);
     s.newrun = {
       ...defaultNewRun(),
-      ...(previous.tier ? { tier: previous.tier } : {}),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
       ...(attached ? { item: attached } : {}),
     };
@@ -482,7 +472,6 @@ export async function runTui(): Promise<void> {
       availability: base.availability,
       fundedProviders: fundedProviderIds(machine.providers),
       contextChars: context.chars + context.promptChars + toolChars,
-      tier: s.newrun.tier,
       requireModel,
     });
     let result = select(s.newrun.model);
@@ -549,7 +538,6 @@ export async function runTui(): Promise<void> {
       "run",
       "--agent", s.newrun.agent,
       ...(s.newrun.model ? ["--model", s.newrun.model] : []),
-      "--tier", s.newrun.tier,
       "--approval", s.newrun.approval,
       "--ambiguity", s.newrun.ambiguity,
       ...(s.newRunParentId ? ["--parent", s.newRunParentId] : []),
@@ -809,7 +797,6 @@ export async function runTui(): Promise<void> {
       ? filterModels(catalogueRows, {
           text: s.modelText,
           providers: s.modelsAll ? undefined : configured,
-          freeOnly: s.modelsFree,
           codingOnly: s.modelsCoding,
           sort: s.modelSort,
           weights: policyWeightsFor(s.newrun.agent),
@@ -1005,7 +992,6 @@ export async function runTui(): Promise<void> {
         scroll: s.modelScroll,
         filterText: s.modelText,
         showAllProviders: s.modelsAll,
-        freeOnly: s.modelsFree,
         codingOnly: s.modelsCoding,
         sort: s.modelSort,
         probing: s.probingModels,

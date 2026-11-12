@@ -89,16 +89,6 @@ export function handleModelsListKeys(s: TuiState, ctx: KeyServices, data: string
     return true;
   }
   if (data === "a") { s.modelsAll = !s.modelsAll; s.modelSel = 0; ctx.draw(); return true; }
-  if (data === "f") {
-    s.modelsFree = !s.modelsFree;
-    // Free offers usually live on providers without paid credentials. Show
-    // the whole catalogue while filtering by price, then the user can
-    // press a to narrow back to configured providers.
-    if (s.modelsFree) s.modelsAll = true;
-    s.modelSel = 0;
-    ctx.draw();
-    return true;
-  }
   if (data === "c") { s.modelsCoding = !s.modelsCoding; s.modelSel = 0; ctx.draw(); return true; }
   if (data === "g") {
     const values: Array<"provider" | "family" | "none"> = ["provider", "family", "none"];

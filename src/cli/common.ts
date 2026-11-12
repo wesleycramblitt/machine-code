@@ -35,9 +35,9 @@ import { resolveGates, runGates } from "../verify.js";
 import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
-import { loadAvailability, saveAvailability, clearFreeModelCooldowns } from "../availability.js";
+import { loadAvailability, saveAvailability } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
-import { isFreeRow } from "../select.js";
+
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
@@ -136,7 +136,7 @@ Usage:
                                     [--item <slug>] [--base <ref>]
                                     Agent config overrides:
                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
-                                    [--tier free|paid] [--min-fit N] [--min-capability N]
+                                    [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
                                     [--max-price $/M] [--max-input-price $/M] [--max-output-price $/M]
                                     [--model <key>] is a preference: auto-selection
@@ -152,12 +152,12 @@ Usage:
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
                                     Install missing base CLIs (default: pinned static binaries)
   machine_code providers            List providers, key sources, and model counts
-  machine_code models [filter]      Inspect the catalogue (--all, --provider, --family, --free,
+  machine_code models [filter]      Inspect the catalogue (--all, --provider, --family,
                                     --coding, --tool, --min-cap, --axis, --sort, --axes, --json)
   machine_code policy [role]        Show effective capability policy (--json)
   machine_code policy edit [--repo] Edit machine defaults or repo overrides
   machine_code models --agent <role> Dry-run selection (--context-chars N, --min-fit N,
-                                    --min-capability N, --min-axes code=6.5, --tier free|paid,
+                                    --min-capability N, --min-axes code=6.5,
                                     --max-price $/M, --max-input-price $/M, --max-output-price $/M)
   machine_code catalogue refresh    Rebuild ~/.machine_code/catalogue/models.json
                                     (listings for Ollama/OpenRouter-style providers
@@ -253,8 +253,6 @@ export const BOOLEAN_FLAGS = new Set([
   "direct-exec",
   "dry-run",
   "force",
-  "free",
-  "free-only",
   "coding",
   "probe",
   "result",

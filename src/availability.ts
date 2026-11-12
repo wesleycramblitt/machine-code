@@ -13,7 +13,7 @@ export type ErrorKind =
   | "funds"
   | "rate-limit-model"
   | "rate-limit-provider"
-  | "free-limit"
+  
   | "auth"
   | "quota"
   | "timeout"
@@ -31,7 +31,7 @@ export interface ClassifiedError {
   /** Suggested cooldown in ms; 0 means no cooldown (or manual action). */
   cooldownMs: number;
   /** Whether the model should be cooled (vs the provider). */
-  target: "model" | "provider" | "free-models" | "none";
+  target: "model" | "provider" | "none";
   /** Whether to disable the provider entirely until manual re-enable. */
   disableProvider: boolean;
   /** Whether to mark the provider needs-auth. */
@@ -47,8 +47,6 @@ export interface ClassifiedError {
 
 const COOLDOWN_TIERS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000, 24 * 60 * 60_000, 7 * 24 * 60 * 60_000, 30 * 24 * 60 * 60_000];
 const MAX_COOLDOWN = 30 * 24 * 60 * 60_000;
-/** Free-tier account limits are not a 1-minute model rate limit. */
-const FREE_LIMIT_COOLDOWN = 30 * 60_000;
 
 export interface ProviderHealth {
   disabled?: boolean;
@@ -73,8 +71,6 @@ export interface ModelHealth {
 export interface AvailabilityState {
   providers: Record<string, ProviderHealth>;
   models: Record<string, ModelHealth>;
-  /** Timestamps of free-model completion probes in the last hour. */
-  freeProbeTimes?: number[];
 }
 
 export function availabilityFile(home: string): string {
@@ -83,26 +79,19 @@ export function availabilityFile(home: string): string {
 
 export function loadAvailability(home: string): AvailabilityState {
   const file = availabilityFile(home);
-  if (!existsSync(file)) return { providers: {}, models: {}, freeProbeTimes: [] };
+  if (!existsSync(file)) return { providers: {}, models: {} };
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as AvailabilityState;
     return {
       providers: parsed.providers ?? {},
       models: parsed.models ?? {},
-      freeProbeTimes: Array.isArray(parsed.freeProbeTimes)
-        ? parsed.freeProbeTimes.filter((at): at is number => typeof at === "number" && Number.isFinite(at))
-        : [],
     };
   } catch {
-    return { providers: {}, models: {}, freeProbeTimes: [] };
+    return { providers: {}, models: {} };
   }
 }
 
 export function saveAvailability(home: string, state: AvailabilityState): void {
-  const now = Date.now();
-  if (state.freeProbeTimes) {
-    state.freeProbeTimes = state.freeProbeTimes.filter((at) => at > now - 60 * 60_000);
-  }
   writeFileSync(availabilityFile(home), JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
@@ -168,40 +157,11 @@ export function clearModelCooldown(state: AvailabilityState, key: string): void 
   }
 }
 
-/**
- * Free-model cooldowns are per run, not persisted. A free run must loop from
- * best fit to worst across every listed free model each time it starts, so a
- * previous run's rate limit, free-tier limit, or stall must not keep free
- * offers cooling for 30m+ into the next run. Call this at run start to drop
- * any persisted free-model cooldowns (kept for backwards compatibility with
- * state written before per-run semantics).
- */
-export function clearFreeModelCooldowns(state: AvailabilityState, freeKeys: readonly string[]): void {
-  for (const key of new Set(freeKeys)) {
-    const h = state.models[key];
-    if (!h) continue;
-    h.cooldownUntil = 0;
-    h.tier = 0;
-    delete h.lastErrorKind;
-  }
-}
-
 export function clearProviderCooldown(state: AvailabilityState, providerId: string): void {
   const h = state.providers[providerId];
   if (h) {
     h.cooldownUntil = 0;
     h.tier = 0;
-  }
-}
-
-/**
- * Free providers are retried from a clean slate each run. A previous run's
- * provider-wide 429 (or a misclassification) must not hide every free offer
- * on that provider for the next 30 minutes.
- */
-export function clearFreeProviderCooldowns(state: AvailabilityState, providerIds: readonly string[]): void {
-  for (const providerId of new Set(providerIds)) {
-    clearProviderCooldown(state, providerId);
   }
 }
 
@@ -225,31 +185,6 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   // the run rotates through models that hit the same account limit.
   const embedded = /\b(4\d\d|5\d\d)\b/.exec(msg);
   const code = status ?? (embedded ? Number(embedded[1]) : 0);
-
-  // Free-tier limits are usually model-specific. Do not assume that one
-  // model's 429 means every free offer on the provider is blocked; users
-  // routinely see sibling free models work. Widen the target only when the
-  // error explicitly says all free models/offers are affected. This must
-  // precede the generic 429 branch (OpenCode returns FreeUsageLimitError).
-  if (
-    msg.includes("free usage limit") ||
-    msg.includes("freeusagelimiterror") ||
-    msg.includes("free tier limit") ||
-    (msg.includes("free models") && msg.includes("subscribe"))
-  ) {
-    const allFree =
-      /\b(?:all|every)\s+free\s+(?:models?|offers?)\b/i.test(msg) ||
-      /\bfree\s+(?:models?|offers?)\s+(?:are|is)\s+(?:all\s+)?(?:blocked|limited|unavailable|exhausted)\b/i.test(msg);
-    return {
-      kind: "free-limit",
-      message: msg,
-      retryable: true,
-      cooldownMs: FREE_LIMIT_COOLDOWN,
-      target: allFree ? "free-models" : "model",
-      disableProvider: false,
-      needsAuth: false,
-    };
-  }
 
   // Billing / funds / budget guardrails are account conditions, but not a
   // reason to stop: rotate to another provider for this run. `applyErrorState`
@@ -383,19 +318,10 @@ export function applyClassification(
   providerId: string,
   modelKey: string,
   classified: ClassifiedError,
-  options?: { freeKeys?: readonly string[] },
 ): void {
   if (classified.disableProvider) disableProvider(state, providerId);
   if (classified.needsAuth) markNeedsAuth(state, providerId);
   if (!(classified.cooldownMs > 0 || classified.retryable)) return;
-  if (classified.target === "free-models") {
-    const keys = options?.freeKeys?.length ? options.freeKeys : [modelKey];
-    for (const key of new Set(keys)) {
-      state.models[key] = { ...(state.models[key] ?? {}), lastErrorKind: classified.kind };
-      coolModel(state, key, classified.cooldownMs || undefined);
-    }
-    return;
-  }
   if (classified.target === "model") {
     state.models[modelKey] = { ...(state.models[modelKey] ?? {}), lastErrorKind: classified.kind };
     coolModel(state, modelKey, classified.cooldownMs || undefined);

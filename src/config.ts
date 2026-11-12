@@ -22,27 +22,23 @@ export interface PriceCaps {
 
 export type PacketMode = "direct" | "verified" | "redundant";
 
-/** Free-tier only, or the best eligible model regardless of price. */
-export type SelectionTier = "free" | "paid";
-export const SELECTION_TIERS: readonly SelectionTier[] = ["free", "paid"];
+/** Selection tier — always paid; free was removed. */
+export type SelectionTier = "paid";
+export const SELECTION_TIERS: readonly SelectionTier[] = ["paid"];
 
-export type AvailabilityProbeMode = "off" | "metadata" | "free-models";
+export type AvailabilityProbeMode = "off" | "metadata";
 
 export interface AvailabilityConfig {
-  /** `metadata` uses free provider endpoints; `free-models` also permits a free 1-token probe. */
   probe: AvailabilityProbeMode;
   /** Minimum gap between automatic probes for one model. */
   intervalMs: number;
   timeoutMs: number;
-  /** Global budget for free-model completion probes. */
-  freeCompletionMaxPerHour: number;
 }
 
 export const DEFAULT_AVAILABILITY: AvailabilityConfig = {
   probe: "metadata",
   intervalMs: 5 * 60_000,
   timeoutMs: 5_000,
-  freeCompletionMaxPerHour: 2,
 };
 
 /**
@@ -159,14 +155,6 @@ export interface AgentPolicy {
   minFit: number;
   /** Hard per-axis floors (0-10); omitted axes have no floor. */
   minAxes?: Partial<Record<CapabilityAxis, number>>;
-  /**
-   * Free-offer floors. Free rows are judged by these in every tier so a
-   * zero-price model can trade one weak axis for cost. Omitted values inherit
-   * the paid floors above.
-   */
-  freeMinFit?: number;
-  freeMinCapability?: number;
-  freeMinAxes?: Partial<Record<CapabilityAxis, number>>;
   /** Role-weighted axis mix; missing axes fall back to the role defaults and are normalized. */
   axisWeights?: Partial<Record<CapabilityAxis, number>>;
   /** Whether the agent calls tools (drives the tool-support hard filter). */
@@ -237,9 +225,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
   const tierRaw =
     typeof selectionRaw.tier === "string"
       ? selectionRaw.tier
-      : selectionRaw.mode === "free"
-        ? "free"
-        : "paid";
+      : "paid";
   if (!SELECTION_TIERS.includes(tierRaw as SelectionTier)) {
     throw new ConfigError(`machine config: selection.tier must be one of ${SELECTION_TIERS.join(", ")}`);
   }
@@ -269,8 +255,8 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
   const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
   const availabilityRaw = (raw.availability ?? {}) as Record<string, unknown>;
   const probeMode: AvailabilityProbeMode =
-    availabilityRaw.probe === "off" || availabilityRaw.probe === "free-models"
-      ? availabilityRaw.probe
+    availabilityRaw.probe === "off"
+      ? "off"
       : "metadata";
   const mapRaw = (raw.map ?? {}) as Record<string, unknown>;
   const themeRaw = (raw.theme ?? {}) as Record<string, unknown>;
@@ -292,12 +278,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       probe: probeMode,
       intervalMs: asDuration(availabilityRaw.interval ?? availabilityRaw.interval_ms) ?? DEFAULT_AVAILABILITY.intervalMs,
       timeoutMs: asDuration(availabilityRaw.timeout_ms) ?? DEFAULT_AVAILABILITY.timeoutMs,
-      freeCompletionMaxPerHour: Math.max(
-        0,
-        Math.floor(
-          asNumber(availabilityRaw.free_completion_max_per_hour) ?? DEFAULT_AVAILABILITY.freeCompletionMaxPerHour,
-        ),
-      ),
     },
     providers,
     priceCaps: { input: asNumber(caps.input), output: asNumber(caps.output) },
@@ -326,21 +306,12 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
 }
 
 const policyDefaults = loadTomlData<{ policy?: Record<string, unknown> }>("defaults.toml").policy ?? {};
-const freeDefaults = (policyDefaults.free ?? {}) as Record<string, unknown>;
 
 export const DEFAULT_AGENT_POLICY: AgentPolicy = {
   minContext: asNumber(policyDefaults.min_context) ?? 32_000,
   expectedOutputTokens: asNumber(policyDefaults.expected_output_tokens) ?? 2_000,
   minCapability: asNumber(policyDefaults.min_capability) ?? 0,
   minFit: asNumber(policyDefaults.min_fit) ?? 6,
-  freeMinCapability: asNumber(freeDefaults.min_capability) ?? 0,
-  freeMinFit: asNumber(freeDefaults.min_fit) ?? 5.5,
-  freeMinAxes: asAxisMap(freeDefaults.axes, "policy.free.axes") ?? {
-    reasoning: 5,
-    code: 5,
-    agentic: 5,
-    general: 3,
-  },
   toolCall: typeof policyDefaults.tool_call === "boolean" ? policyDefaults.tool_call : true,
 };
 
@@ -378,7 +349,6 @@ function mergeAxes<T extends Partial<Record<CapabilityAxis, number>> | undefined
 
 function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_AGENT_POLICY): AgentPolicy {
   const raw = (value ?? {}) as Record<string, unknown>;
-  const freeRaw = (raw.free ?? {}) as Record<string, unknown>;
   return {
     minContext: asNumber(raw.min_context) ?? base.minContext,
     expectedOutputTokens: asNumber(raw.expected_output_tokens) ?? base.expectedOutputTokens,
@@ -388,9 +358,6 @@ function agentPolicy(value: unknown, label: string, base: AgentPolicy = DEFAULT_
     minCapability: asNumber(raw.min_capability) ?? base.minCapability,
     minFit: asNumber(raw.min_fit) ?? base.minFit,
     minAxes: mergeAxes(base.minAxes, asAxisMap(raw.axes, `${label}.axes`)),
-    freeMinCapability: asNumber(freeRaw.min_capability) ?? base.freeMinCapability,
-    freeMinFit: asNumber(freeRaw.min_fit) ?? base.freeMinFit,
-    freeMinAxes: mergeAxes(base.freeMinAxes, asAxisMap(freeRaw.axes, `${label}.free.axes`)),
     axisWeights: mergeAxes(base.axisWeights, asAxisMap(raw.weights, `${label}.weights`)),
     toolCall: typeof raw.tool_call === "boolean" ? raw.tool_call : base.toolCall,
     preset: typeof raw.preset === "string" ? raw.preset : typeof raw.config_mode === "string" ? raw.config_mode : base.preset,

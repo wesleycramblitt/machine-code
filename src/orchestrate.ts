@@ -368,8 +368,6 @@ export async function executeIssue(input: ExecuteIssueInput): Promise<Orchestrat
     }
   }
 
-  
-
   // No PR step: the feature branch merges directly on human/agent approval
   // (feature approve). The run record keeps merge fields unset.
   const mergeState: MergeState | undefined = toolRoot !== root ? "skipped" : undefined;
@@ -415,7 +413,7 @@ export async function orchestrate(input: OrchestrateInput): Promise<OrchestrateR
       skipMap: input.skipMap,
       skipSemantic: input.skipSemantic,
       signal: input.signal,
-      });
+    });
   }
 
   const selectedName = input.agentName ?? "research";

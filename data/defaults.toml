@@ -6,14 +6,4 @@ min_context = 32000
 expected_output_tokens = 2000
 tool_call = true
 
-# Free offers are judged by these looser floors in every tier. They let a
-# zero-price model trade one weak axis for cost while still excluding models
-# that are weak across the board. Override per role with [agents.<role>.free].
-[policy.free]
-min_capability = 0.0
-min_fit = 5.5
-[policy.free.axes]
-reasoning = 5.0
-code = 5.0
-agentic = 5.0
-general = 3.0
+

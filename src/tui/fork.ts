@@ -1,7 +1,6 @@
 import { AGENT_NAMES } from "../agents.js";
 import type { AgentConfig } from "../agents/config.js";
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
-import { isFreeRow } from "../select.js";
 import type { RunEvent, RunSummary } from "../state/runs.js";
 
 export interface ForkedRunSettings {
@@ -16,7 +15,7 @@ export interface ForkedRunSettings {
   model?: string;
   approval: "human" | "agent";
   ambiguity: "strict" | "precise" | "adaptive" | "autonomous";
-  tier: "free" | "paid";
+  tier: "paid";
   /** undefined = role policy; null = explicit zero. */
   minFit: number | null | undefined;
   floors: "role" | "strict" | "off";
@@ -85,7 +84,7 @@ export function forkSettingsFromRun(input: {
     row && (!configuredProviders || configuredProviders.has(row.providerID))
       ? row.key
       : undefined;
-  const tier = settings?.tier ?? (row ? (isFreeRow(row) ? "free" : "paid") : "free");
+  const tier: "paid" = "paid";
   const axes = settings?.minAxes;
   const hasAxes = Boolean(axes && Object.keys(axes).length > 0);
   const allZero = hasAxes && Object.values(axes!).every((value) => value === 0);

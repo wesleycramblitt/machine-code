@@ -14,8 +14,8 @@ import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-age
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type AssistantMessageEvent, type Context, type Message, type Model, type Usage } from "@earendil-works/pi-ai";
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig, type AgentPolicy, type Policy } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
-import { estimateTokens, pick, providerMultiplier, isFreeRow, relaxPinForFailure } from "./select.js";
-import { applyClassification, classifyError, clearFreeModelCooldowns, clearFreeProviderCooldowns, loadAvailability, resetModelTier, resetProviderTier, saveAvailability } from "./availability.js";
+import { estimateTokens, pick, providerMultiplier, relaxPinForFailure } from "./select.js";
+import { applyClassification, classifyError, loadAvailability, resetModelTier, resetProviderTier, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
@@ -286,19 +286,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // Callers normally load this, but a direct run must still respect persisted
   // cooldowns. Loading here also keeps the in-memory state current.
   const availability = input.availability ?? loadAvailability(input.home);
-  // Free-model cooldowns are per run: a free run loops from best fit to worst
-  // across every listed free model each time it starts. Drop any persisted
-  // free-model cooldowns so a previous run's limits do not shrink this run.
-  try {
-    const persistedFreeKeys = input.catalogue.filter((row) => isFreeRow(row)).map((row) => row.key);
-    clearFreeModelCooldowns(availability, persistedFreeKeys);
-    clearFreeProviderCooldowns(
-      availability,
-      input.catalogue.filter((row) => isFreeRow(row)).map((row) => row.providerID),
-    );
-  } catch {
-    // catalogue scan failure must not block the run
-  }
   const triedModels = new Set<string>();
 
   /**
@@ -314,58 +301,20 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     return Math.max(ollama, base);
   };
 
-  const freeKeysForProvider = (provider: string): string[] =>
-    input.catalogue
-      .filter((row) => row.providerID === provider && isFreeRow(row))
-      .map((row) => row.key);
-
-  const isFreeKey = (key: string): boolean => {
-    const row = input.catalogue.find((candidate) => candidate.key === key);
-    return row ? isFreeRow(row) : false;
-  };
-
   const applyErrorState = (
     provider: string,
     modelKey: string,
     classified: ReturnType<typeof classifyError>,
   ): void => {
-    // Per-run free semantics: free-model failures cool the in-memory
-    // availability and join `triedModels` so this run rotates from best fit to
-    // worst. A free-tier limit is model-specific unless the provider says all
-    // free models/offers are affected. Nothing is written to disk, so the next
-    // run starts fresh instead of inheriting a 30m+ cooldown.
-    // Provider-level account conditions (budget, credits): exclude every model
-    // on that provider for this run, then rotate to another provider with the
-    // same conversation. Persisted health is untouched, so topping up or a
-    // reset takes effect without a manual re-enable.
     if (classified.kind === "funds") {
-      // A provider-level funds error is about paid credit, not free quota.
-      // Keep the provider's free offers in the rotation so a zero-balance
-      // account still gets its free models before the final Ollama fallback.
       for (const row of input.catalogue) {
-        if (row.providerID === provider && !isFreeRow(row)) triedModels.add(row.key);
+        if (row.providerID === provider) triedModels.add(row.key);
       }
-      if (!isFreeKey(modelKey)) triedModels.add(modelKey);
-      return;
-    }
-    if (classified.target === "free-models") {
-      const freeKeys = freeKeysForProvider(provider);
-      const keys = freeKeys.length > 0 ? freeKeys : [modelKey];
-      applyClassification(availability, provider, modelKey, classified, { freeKeys: keys });
-      for (const key of keys) triedModels.add(key);
-      return;
-    }
-    if (isFreeKey(modelKey)) {
-      applyClassification(availability, provider, modelKey, classified);
       triedModels.add(modelKey);
       return;
     }
     const state = loadAvailability(input.home);
     applyClassification(state, provider, modelKey, classified);
-    // Gone models veto themselves out of the catalogue: a 410/404/EOL means
-    // the row is wrong, not the account. Only catalogue rows qualify (never
-    // vendor typos or ad-hoc ids), and the stanza carries the run as evidence.
-    // Free-tier paths keep cooldown-only behavior; their limits masquerade.
     if (classified.permanent === true && input.catalogue.some((row) => row.key === modelKey)) {
       const reason = `auto-vetoed: gone at runtime (${classified.message.slice(0, 140)})`;
       if (addCurationVeto(input.home, modelKey, `${reason} (run ${input.recorder.current.id})`)) {
@@ -376,17 +325,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     Object.assign(availability, state);
   };
 
-  /**
-   * A completed call proves the provider and model are healthy: clear any
-   * escalated cooldown tier so one transient failure cannot ratchet a
-   * provider toward day-long bans forever. Mirrors applyErrorState's
-   * free/paid split: free health stays in memory, paid health persists.
-   */
   const resetSuccessState = (provider: string, modelKey: string): void => {
-    if (isFreeKey(modelKey)) {
-      resetModelTier(availability, modelKey);
-      return;
-    }
     const state = loadAvailability(input.home);
     resetModelTier(state, modelKey);
     resetProviderTier(state, provider);

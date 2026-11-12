@@ -63,7 +63,7 @@ export interface TuiState {
   modelGroup: "provider" | "family" | "none";
   modelSort: ModelSort;
   modelsAll: boolean;
-  modelsFree: boolean;
+  
   modelsCoding: boolean;
   modelSel: number;
   modelScroll: number;
@@ -193,7 +193,7 @@ export function createTuiState(repoRoot: string): TuiState {
     modelGroup: "provider",
     modelSort: "capability",
     modelsAll: false,
-    modelsFree: false,
+    
     modelsCoding: true,
     modelSel: 0,
     modelScroll: 0,
@@ -234,7 +234,7 @@ export function createTuiState(repoRoot: string): TuiState {
       agent: "research",
       approval: "human",
       ambiguity: "precise",
-      tier: "free",
+      tier: "paid",
       minFit: undefined,
       floors: "role",
       prompt: "",

@@ -25,7 +25,7 @@ export function renderSpend(props: SpendProps): { body: string[]; actions: strin
   const summary = readSpendSummary(home, query);
   const headerLines = [
     ` ${B}${W}Spend${R} ${D}${daysWindow === 0 ? "all time" : `last ${daysWindow} days`}${R}`,
-    ` ${Y}$${summary.totalActual.toFixed(4)}${R} actual  ${D}$${summary.totalEstimated.toFixed(4)} estimate${R}  ${C}${fmtTokens(summary.totalTokens)}${R} tok  ${G}${fmtTokens(summary.freeTokens)}${R} free`,
+    ` ${Y}$${summary.totalActual.toFixed(4)}${R} actual  ${D}$${summary.totalEstimated.toFixed(4)} estimate${R}  ${C}${fmtTokens(summary.totalTokens)}${R} tok`,
   ];
   const lines: string[] = [
     ...headerLines.map((line) => background(fit(line, cols), theme.sectionBg)),
@@ -48,7 +48,7 @@ export function renderSpend(props: SpendProps): { body: string[]; actions: strin
       const label = key;
       const perMillion = bucket.tokens > 0 ? bucket.actual / (bucket.tokens / 1_000_000) : 0;
       const keyTone = groupBy === "agent" ? agentTone(key) : W;
-      lines.push(`  ${keyTone}${pad(label, narrow ? 20 : 38)}${R} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok · ${fmtTokens(bucket.freeTokens)} free${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
+      lines.push(`  ${keyTone}${pad(label, narrow ? 20 : 38)}${R} ${spendBar(bucket.actual, max, narrow ? 4 : 10)} ${fmtMoney(bucket.actual)}  ${D}${String(bucket.calls).padStart(4)} calls · ${fmtTokens(bucket.tokens)} tok${perMillion > 0 ? ` · ${fmtMoney(perMillion)}/Mtok` : ""}${R}`);
     }
   }
   const w = windowedBody(lines, props.scroll, props.scroll, bodyH);

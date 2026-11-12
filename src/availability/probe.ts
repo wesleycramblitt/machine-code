@@ -324,14 +324,12 @@ async function freeCompletionProbe(
   return statusResult(target, response, "free-completion", latencyMs);
 }
 
-export function canFreeProbe(state: AvailabilityState, config: AvailabilityConfig, now = Date.now()): boolean {
-  if (config.probe !== "free-models" || config.freeCompletionMaxPerHour <= 0) return false;
-  const recent = (state.freeProbeTimes ?? []).filter((at) => at > now - 60 * 60_000);
-  return recent.length < config.freeCompletionMaxPerHour;
+export function canFreeProbe(_state: AvailabilityState, _config: AvailabilityConfig, _now = Date.now()): boolean {
+  return false;
 }
 
-export function recordFreeProbe(state: AvailabilityState, now = Date.now()): void {
-  state.freeProbeTimes = [...(state.freeProbeTimes ?? []).filter((at) => at > now - 60 * 60_000), now];
+export function recordFreeProbe(_state: AvailabilityState, _now = Date.now()): void {
+  // no-op: free probes are disabled
 }
 
 const inFlightProbes = new Map<string, Promise<ProbeResult>>();
@@ -366,18 +364,7 @@ async function probeTargetBody(
       checkedAt: new Date().toISOString(),
     };
   }
-  const metadata = await metadataProbe(target, config);
-  if (config.probe !== "free-models" || !target.free) return metadata;
-  if (metadata.status === "auth" || metadata.status === "unavailable") return metadata;
-  if (state && !canFreeProbe(state, config)) {
-    return {
-      ...metadata,
-      message: "free completion probe budget exhausted",
-    };
-  }
-  if (state) recordFreeProbe(state);
-  const completion = await freeCompletionProbe(target, config);
-  return completion.status === "unknown" && metadata.status === "ready" ? metadata : completion;
+  return metadataProbe(target, config);
 }
 
 const RATE_LIMIT_KINDS = new Set(["rate-limit-model", "rate-limit-provider", "free-limit", "quota", "timeout"]);
