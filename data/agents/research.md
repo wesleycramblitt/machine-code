@@ -34,116 +34,111 @@
 
 ## Example runs
 
-### 1. Internal research: Document how the context management system works
+The examples below use a fictional project `acme-store`. The commands and patterns apply to any repo.
 
-Research prompt: "The context system has been refactored recently. Create a technical doc explaining how holdings, the repo map, and the unified budget work together."
+### 1. Internal research: Document the payment module
+
+Research prompt: "The payment module has been refactored to support multiple providers. Create a technical doc explaining how the payment router, provider interface, and transaction log work together."
 
 ```
 # Turn 1 — plan + find the right files
-context plan {steps: [{text: "find and outline the context system files", done: false}, {text: "read holdings, budget, and map key modules", done: false}, {text: "write docs/context-system.md", done: false}]}
-issue:list {kind: "features", status: "todo"}
-  → quick check — any existing issues about the context system?
-inspect {query: "src/context", detail: "outline"}
-  → sees holding-store, budget, render, assemble — the major modules
+issue:list
+  → quick check — any existing issues about payments?
+inspect {query: "src/payments", detail: "outline"}
+  → sees router.ts, provider-interface.ts, transaction-log.ts
   → each symbol line shows export names with line numbers
 
-# Turn 2 — read the budget system (the orchestrator)
-inspect {query: "src/context/budget.ts", symbol: "contextBudget"}
-  → reads the main budget function
-inspect {query: "src/context/budget.ts", symbol: "sectionBudgets"}
-  → reads how sections are split
-context note {kind: "finding", text: "budget.ts calculates input budget as (window - outputReserve) * 4 chars/token; the unified pool is 95% of that"}
+# Turn 2 — read the router (the orchestrator)
+inspect {query: "src/payments/router.ts", symbol: "routePayment"}
+  → reads the main routing function
+inspect {query: "src/payments/router.ts", symbol: "registerProvider"}
+  → reads how providers are registered
+context note {kind: "finding", text: "router.ts dispatches by provider type; registerProvider adds to a map"}
 
-# Turn 3 — read holdings source code
-inspect {query: "src/context/holding-store.ts", detail: "outline"}
-  → sees the major methods: renderHoldings, addHolding, seedWorkingFiles
-inspect {query: "src/context/holding-store.ts", symbol: "renderHoldings"}
-  → reads the body selection logic — the decision tree for which files get body bytes
-context note {kind: "finding", text: "holdings renders automatically every turn: files ≤50 lines get full body, inspected ranges get those ranges, everything else is metadata-only (symbols + imports + doc)"}
+# Turn 3 — read the provider interface
+inspect {query: "src/payments/provider-interface.ts", detail: "outline"}
+  → sees the interface methods: charge, refund, getStatus
+inspect {query: "src/payments/provider-interface.ts", symbol: "charge"}
+  → reads the method signature and doc
+context note {kind: "finding", text: "Provider interface defines charge, refund, getStatus — each provider implements these"}
 
-# Turn 4 — read the map source
-inspect {query: "src/map/deterministic.ts", symbol: "renderMapIndex"}
-  → reads the level-by-level tree renderer
-context note {kind: "finding", text: "renderMapIndex fits the directory tree to the map budget share; overage is summarized as '+N more'"}
-context note {kind: "finding", text: "map lives in the stable prefix before transcript; holdings is in the volatile block after it"}
+# Turn 4 — read the transaction log
+inspect {query: "src/payments/transaction-log.ts", symbol: "logTransaction"}
+  → reads how transactions are recorded
+context note {kind: "finding", text: "transaction-log.ts writes to a local JSON file, keyed by transaction ID"}
 
 # Turn 5 — write the doc
-write {path: "docs/context-system.md", content: "# Context management\n\n## Budget flow\n...\n## Holdings\n...\n## Repo map\n...\n## Prompt section order\n..."}
-finish {outcome: "completed", summary: "created docs/context-system.md covering budget, holdings, map, and prompt structure"}
+write {path: "docs/payment-module.md", content: "# Payment module\n\n## Router\n...\n## Provider interface\n...\n## Transaction log\n..."}
+finish {outcome: "completed", summary: "created docs/payment-module.md covering router, provider interface, and transaction log"}
 ```
 
-### 2. External research: Compare against other coding agents
+### 2. External research: Compare search strategies
 
-Research prompt: "Search the web for how Cursor, Copilot, and other coding agents handle context. Create a reference document comparing their approaches to ours, and file feature issues for any gaps."
+Research prompt: "Search the web for how e-commerce platforms handle product search ranking. Create a reference document comparing their approaches to ours, and file feature issues for any gaps."
 
 ```
 # Turn 1 — plan
-context plan {steps: [{text: "gather external references on context handling", done: false}, {text: "create a reference comparison doc", done: false}, {text: "file feature issues for gaps", done: false}]}
-context note {kind: "open", text: "need to find authoritative sources on Cursor and Copilot context models"}
+context plan {steps: [{text: "gather external references on product search ranking", done: false}, {text: "create a reference comparison doc", done: false}, {text: "file feature issues for gaps", done: false}]}
+context note {kind: "open", text: "need authoritative sources from e-commerce platforms"}
 
-# Turn 2 — fetch external reference material
-command run {name: "reference:find", args: {query: "Cursor context window management architecture"}}
-  → returns a curated bundle with links to blog posts, docs, papers
-command run {name: "reference:find", args: {query: "GitHub Copilot context selection strategy"}}
+# Turn 2 — fetch external references
+command run {name: "reference:find", args: {query: "e-commerce product search ranking algorithm"}}
+  → returns a curated bundle with articles and papers
+command run {name: "reference:find", args: {query: "Elasticsearch relevance tuning e-commerce"}}
   → returns another bundle
 
 # Turn 3 — read the references
-command run {name: "reference:read", args: {bundle: "cursor-context"}}
-  → reads the Cursor context strategy summary
-command run {name: "reference:read", args: {bundle: "copilot-context"}}
-  → reads the Copilot approach
+command run {name: "reference:read", args: {bundle: "search-ranking-1"}}
+  → reads the summary of ranking strategies
+command run {name: "reference:read", args: {bundle: "search-ranking-2"}}
+  → reads Elasticsearch tuning guide
 
 # Turn 4 — create a comparison reference
-write {path: ".machine_code/references/context-comparison.md", content: "# Context strategy comparison\n## Cursor\n...\n## Copilot\n...\n## machine_code\n...\n## Gaps\n1. No semantic file ranking\n2. ..."}
-context note {kind: "finding", text: "Cursor uses token-level priority ranking; we use fixed section order"}
-context note {kind: "decision", text: "file two features: semantic file ranking and per-model budget tuning"}
+write {path: ".machine_code/references/search-comparison.md", content: "# Search ranking comparison\n## Industry approaches\n...\n## acme-store current\n...\n## Gaps\n1. No synonym expansion\n2. ..."}
+context note {kind: "finding", text: "industry uses multi-field boosting and synonym expansion; acme-store does exact match only"}
+context note {kind: "decision", text: "file two features: synonym expansion and multi-field boosting"}
 
-# Turn 5 — file issues for the gaps found
-write {path: "issues/features/todo/semantic-file-ranking.md", content: "priority: medium\nacceptance: script:build\n\n# Rank files by relevance instead of fixed section order\n\nCursor prioritizes files by token-level relevance to the prompt..."}
-write {path: "issues/features/todo/per-model-budget-profiles.md", content: "priority: low\nacceptance: script:build\n\n# Add per-model context budget profiles\n\nDifferent models have different context windows..."}
-
-# Turn 6 — finish
-context plan {steps: [{text: "gather external references on context handling", done: true}, {text: "create a reference comparison doc", done: true}, {text: "file feature issues for gaps", done: true}]}
-finish {outcome: "completed", summary: "compared context strategies, filed 2 feature issues, created reference doc"}
+# Turn 5 — file issues for the gaps
+write {path: "issues/features/todo/synonym-expansion.md", content: "priority: medium\nacceptance: script:build\n\n# Add synonym expansion to product search\n\n..."}
+write {path: "issues/features/todo/multi-field-boosting.md", content: "priority: low\nacceptance: script:build\n\n# Boost product title over description in search ranking\n\n..."}
+context plan {steps: [{text: "gather external references on product search ranking", done: true}, {text: "create a reference comparison doc", done: true}, {text: "file feature issues for gaps", done: true}]}
+finish {outcome: "completed", summary: "compared search strategies, filed 2 feature issues, created reference doc"}
 ```
 
 ### 3. Internal planning: Generate a feature backlog
 
-Research prompt: "Our TUI has several pain points: the run details are hard to read, there is no keyboard shortcut to open the issue view, themes do not persist, and the models screen does not show pricing. Inspect the relevant areas and create issues for each."
+Research prompt: "The admin dashboard has several pain points: order list is slow (>10s load), no export button, no date filter, and the refund form resets on validation error. Inspect the relevant areas and create issues for each."
 
 ```
 # Turn 1 — plan + survey everything
-context plan {steps: [{text: "inspect TUI code to understand current structure", done: false}, {text: "identify each pain point location", done: false}, {text: "create issues for each", done: false}]}
+context plan {steps: [{text: "inspect the admin area to understand structure", done: false}, {text: "identify each pain point location", done: false}, {text: "create issues for each", done: false}]}
 issue:list {kind: "features"}
-  → sees existing issues — run_details_timeline_redesign already exists
+  → order-export already filed under features/todo
 issue:list {kind: "bugs"}
   → no existing bugs filed
 
 # Turn 2 — inspect related areas
-inspect {query: "src/tui/screens/run-detail", detail: "outline"}
-  → sees run-detail.ts, types.ts, keys.ts — the full set
-inspect {query: "src/tui/screens/issue.ts", detail: "outline"}
-  → sees the issue view handler and render
-inspect {query: "src/tui/state.ts", symbol: "theme"}
-  → checks if theme persistence logic exists
-inspect {query: "src/tui/screens/models.ts", detail: "outline"}
-  → sees model listing, checks for pricing display
+inspect {query: "src/admin/orders", detail: "outline"}
+  → sees list-orders.ts, order-export.ts, order-filters.ts
+inspect {query: "src/admin/refund-form.ts", detail: "outline"}
+  → sees renderForm, validateForm, submitRefund
+inspect {query: "src/admin/orders/list-orders.ts", symbol: "loadOrders"}
+  → reads the query function
 
 # Turn 3 — record findings
-context note {kind: "finding", text: "run_details_timeline_redesign already exists — covers the timeline readability pain point"}
-context note {kind: "finding", text: "issue view has no keyboard shortcut (issue.ts has no hotkey registration)"}
-context note {kind: "finding", text: "theme state exists in TuiState but no save/load mechanism"}
-context note {kind: "finding", text: "models.ts lists models but pricing field is not rendered"}
-context note {kind: "decision", text: "create 4 new issues: keyboard shortcut for issue view, theme persistence, pricing display, plus skip the already-filed timeline issue"}
+context note {kind: "finding", text: "order-export.ts already exists in features/todo — skip it"}
+context note {kind: "finding", text: "list-orders.ts has no date filtering or pagination (loadOrders runs a full table scan)"}
+context note {kind: "finding", text: "refund form clears all fields on validation error instead of preserving user input"}
+context note {kind: "decision", text: "create 3 issues: order list pagination, refund form preserve state, date filter"}
 
 # Turn 4 — create the issues
-write {path: "issues/features/todo/issue-view-keyboard-shortcut.md", content: "priority: medium\nacceptance: script:build\n\n# Add keyboard shortcut to open the issue view\n..."}
-write {path: "issues/features/todo/theme-persistence.md", content: "priority: low\nacceptance: script:build\n\n# Persist theme selection across restarts\n..."}
-write {path: "issues/features/todo/models-pricing-display.md", content: "priority: medium\nacceptance: script:build\n\n# Show per-model pricing on the models screen\n..."}
+write {path: "issues/features/todo/order-pagination.md", content: "priority: high\nacceptance: script:build\n\n# Add pagination to order list\nCurrently loadOrders runs a full table scan which takes >10s..."}
+write {path: "issues/bugs/todo/refund-form-resets-on-error.md", content: "priority: high\nacceptance: script:build\n\n# Refund form clears on validation error\nWhen the refund form fails validation..."}
+write {path: "issues/features/todo/date-filter-orders.md", content: "priority: medium\nacceptance: script:build\n\n# Add date range filter to orders\n..."}
 
 # Turn 5 — finish
-context plan {steps: [{text: "inspect TUI code to understand current structure", done: true}, {text: "identify each pain point location", done: true}, {text: "create issues for each", done: true}]}
-finish {outcome: "completed", summary: "created 3 new feature issues (keyboard shortcut, theme persistence, pricing display); skipped timeline redesign (already filed)"}
+context plan {steps: [{text: "inspect the admin area to understand structure", done: true}, {text: "identify each pain point location", done: true}, {text: "create issues for each", done: true}]}
+finish {outcome: "completed", summary: "created 3 issues (order pagination, refund form validation, date filter); skipped order export (already filed)"}
 ```
 
 ### Key patterns across all examples

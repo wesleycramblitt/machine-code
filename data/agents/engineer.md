@@ -28,62 +28,60 @@
 
 ## Example runs
 
-### Small feature: Add a new helper function
+The examples below are for a fictional project `acme-store`. The commands and patterns apply to any repo.
 
-Issue: "Add a `formatDuration` helper that converts milliseconds to a short human string like `3.2s` or `45ms`."
+### Small feature: Add a validation helper
+
+A fictional project `acme-store` has a `src/validators.ts` file. The issue is: "Add an `isValidEmail` function that returns true/false."
 
 ```
-# Turn 1 — plan + find where to put it
-context plan {steps: [{text: "find the format module and decide where to add the helper", done: false}, {text: "add formatDuration", done: false}]}
-inspect {query: "src/tui/format.ts", detail: "outline"}
-  → sees existing helper functions, the module's export pattern
+# Turn 1 — plan + outline
+context plan {steps: [{text: "find the validators module and its export pattern", done: false}, {text: "add isValidEmail", done: false}]}
+inspect {query: "src/validators.ts", detail: "outline"}
+  → sees existing helpers: isNotEmpty at line 5, isInRange at line 18
+  → both use JSDoc and export individually
 
 # Turn 2 — read the module header for conventions
-inspect {query: "src/tui/format.ts:1-10"}
-  → sees import style and JSDoc pattern
+inspect {query: "src/validators.ts:1-3"}
+  → sees import style
 
-# Turn 3 — write the function
-context note {kind: "finding", text: "format.ts exports helper functions with JSDoc; add formatDuration after trunc"}
-edit {path: "src/tui/format.ts", oldString: "export function trunc(", newString: "/** Convert ms to a short string. */\nexport function formatDuration(ms: number): string {\n  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;\n}\n\nexport function trunc("}
-  → diff shows one function added, existing code unchanged
+# Turn 3 — add the function
+context note {kind: "finding", text: "validators.ts exports individual functions with JSDoc"}
+edit {path: "src/validators.ts", oldString: "export function isInRange(", newString: "/** Return true when the string looks like an email. */\nexport function isValidEmail(value: string): boolean {\n  return /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(value);\n}\n\nexport function isInRange("}
+  → diff: one function added
 
 # Turn 4 — finish
-context plan {steps: [{text: "find the format module and decide where to add the helper", done: true}, {text: "add formatDuration", done: true}]}
-finish {outcome: "completed", summary: "added formatDuration to src/tui/format.ts"}
+context plan {steps: [{text: "find the validators module and its export pattern", done: true}, {text: "add isValidEmail", done: true}]}
+finish {outcome: "completed", summary: "added isValidEmail to src/validators.ts"}
 ```
 
 ### Larger feature: Extract a module
 
-Issue: "The event rendering logic is in run-detail.ts which is 600+ lines. Extract timeline event formatting into its own module at src/tui/format-events.ts."
+A fictional project `blog-engine` has a `src/publisher.ts` that is 700 lines. The issue is: "Extract the Markdown rendering functions into their own module at src/markdown.ts."
 
 ```
 # Turn 1 — understand the structure
-context plan {steps: [{text: "outline run-detail.ts to find event rendering functions", done: false}, {text: "identify which to extract", done: false}, {text: "create the new module", done: false}, {text: "wire it into run-detail.ts", done: false}, {text: "verify with script:build", done: false}]}
-inspect {query: "src/tui/screens/run-detail/run-detail.ts", detail: "outline"}
-  → sees renderTimelineEvent at 42, formatToolCall at 58, describeArgs at 74 + 8 more event functions
+context plan {steps: [{text: "outline publisher.ts to find render functions", done: false}, {text: "identify which to extract", done: false}, {text: "create markdown.ts", done: false}, {text: "wire into publisher.ts", done: false}]}
+inspect {query: "src/publisher.ts", detail: "outline"}
+  → sees renderPost at 45, renderComment at 72, formatDate at 88, validateSlug at 105, + 12 more
+  → symbols 45-72 are Markdown renderers; 88+ are utilities
 
-# Turn 2 — read the key functions to understand dependencies
-inspect {query: "src/tui/screens/run-detail/run-detail.ts", symbol: "renderTimelineEvent"}
-  → reads the function, sees it calls formatToolCall and describeArgs
-inspect {query: "src/tui/screens/run-detail/run-detail.ts", symbol: "formatToolCall"}
-  → reads it, sees no dependencies outside the module
-inspect {query: "src/tui/screens/run-detail/run-detail.ts", symbol: "describeArgs"}
-  → reads it, also self-contained
+# Turn 2 — read one function to check dependencies
+inspect {query: "src/publisher.ts", symbol: "renderPost"}
+  → returns ~60 lines. It imports formatDate from the same file but nothing else.
 
-# Turn 3 — note the extraction plan
-context note {kind: "decision", text: "extract renderTimelineEvent, formatToolCall, describeArgs, and the 6 smaller event helpers — they form a cohesive unit with no external dependencies"}
-context plan {steps: [{text: "outline run-detail.ts to find event rendering functions", done: true}, {text: "identify which to extract", done: true}, {text: "create the new module", done: false}, {text: "wire it into run-detail.ts", done: false}, {text: "verify with script:build", done: false}]}
+# Turn 3 — note the extraction decision
+context note {kind: "decision", text: "extract renderPost, renderComment, and formatDate — they form a cohesive Markdown unit. validateSlug stays in publisher.ts."}
+context plan {steps: [{text: "outline publisher.ts to find render functions", done: true}, {text: "identify which to extract", done: true}, {text: "create markdown.ts", done: false}, {text: "wire into publisher.ts", done: false}]}
 
-# Turn 4 — create the new module
-inspect {query: "src/tui/screens/run-detail/types.ts:1-5"}
-  → sees import style for reference
-write {path: "src/tui/screens/run-detail/format-events.ts", content: "import ...\n\nexport function renderTimelineEvent(...) { ... }\nexport function formatToolCall(...) { ... }..."}
+# Turn 4 — write the new module
+write {path: "src/markdown.ts", content: "import { formatDate } from \"./publisher\";\n\nexport function renderPost(...) { ... }\nexport function renderComment(...) { ... }"}
 
-# Turn 5 — wire it in + finish
-edit {path: "src/tui/screens/run-detail/run-detail.ts", oldString: "import { something } from \"./types\";", newString: "import { renderTimelineEvent, formatToolCall } from \"./format-events\";\nimport { something } from \"./types\";"}
-  (also remove the old function definitions that were copied out)
-context plan {steps: [{text: "outline run-detail.ts to find event rendering functions", done: true}, {text: "identify which to extract", done: true}, {text: "create the new module", done: true}, {text: "wire it into run-detail.ts", done: true}, {text: "verify with script:build", done: false}]}
-finish {outcome: "completed", summary: "extracted 9 event formatting functions into format-events.ts, run-detail.ts reduced from 640 to 480 lines"}
+# Turn 5 — edit publisher.ts to import from the new module
+edit {path: "src/publisher.ts", oldString: "function renderPost(", newString: "import { renderPost, renderComment } from \"./markdown\";\n\nfunction renderPost("}
+  (also remove the extracted function bodies)
+context plan {steps: [{text: "outline publisher.ts to find render functions", done: true}, {text: "identify which to extract", done: true}, {text: "create markdown.ts", done: true}, {text: "wire into publisher.ts", done: true}]}
+finish {outcome: "completed", summary: "extracted 3 Markdown functions into src/markdown.ts, publisher.ts down from 700 to 510 lines"}
 ```
 
 ## Constraints
