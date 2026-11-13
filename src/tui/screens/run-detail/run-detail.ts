@@ -385,7 +385,10 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
           if (expandedEvent && Array.isArray(event.results)) {
             for (const gate of results) eventLines.push(`    ${gate.passed ? `${G}✓` : `${RED}✗`}${R} ${gate.command}`);
           }
-        } else if (type === "error_classified") eventLines.push(`${prefix} ${GR}${time}${R} ${RED}⚠ ${String(event.kind)}${R}`);
+        } else if (type === "error_classified") {
+          const msg = String(event.message ?? "");
+          eventLines.push(`${prefix} ${GR}${time}${R} ${RED}⚠ ${String(event.kind)}${R}${msg ? ` ${D}${trunc(msg, Math.max(20, cols - 30))}${R}` : ""}`);
+        }
         else if (type === "malformed_tool_call") eventLines.push(`${prefix} ${GR}${time}${R} ${RED}⚠ malformed tool call${R} ${D}${String(event.model ?? "")}${R}`);
         else if (type === "retry") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}↻ retry${R} ${D}${String(event.failedModel)}${R}`);
         else if (type === "control") eventLines.push(`${prefix} ${GR}${time}${R} ${Y}⌘ ${String(event.action)}${R}`);

@@ -13,7 +13,6 @@ export type ErrorKind =
   | "funds"
   | "rate-limit-model"
   | "rate-limit-provider"
-  
   | "auth"
   | "quota"
   | "timeout"
@@ -22,6 +21,7 @@ export type ErrorKind =
   | "unsupported-param"
   | "refusal"
   | "malformed"
+  | "holdings-exceeded"
   | "unknown";
 
 export interface ClassifiedError {
@@ -304,6 +304,10 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   // Malformed response
   if (msg.includes("malformed") || msg.includes("invalid json") || msg.includes("parse error")) {
     return { kind: "malformed", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
+  }
+  // Holdings exceed budget — harness-internal, not recoverable by retry
+  if (msg.includes("holdings block exceeds") || msg.includes("holdings")) {
+    return { kind: "holdings-exceeded", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
   }
   return { kind: "unknown", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
 }
