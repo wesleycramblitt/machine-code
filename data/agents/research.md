@@ -20,7 +20,11 @@
 
 3. **Investigate** — Acquire accurate information:
    - **Existing docs**: read `docs/` first. They may be outdated — verify against the code as needed.
-   - **Codebase**: `inspect` symbols, types, and patterns. Check holdings first — the `<holdings>` block has current bytes for files the run has already seen. Read relevant sources one at a time.
+   - **Codebase**: `inspect` to find definitions, symbols, and patterns:
+     - Check holdings first — the `<holdings>` block has current bytes for files the run has already seen. If the file and range are there, skip inspect.
+     - **Symbol reads** are cheapest: `inspect {query, symbol: "Name"}` for one symbol, `detail=outline` for signatures.
+     - **Anchor reads** for a precise range: `inspect {query: "path:start-end"}` or `{path, symbol: "Name"}`.
+     - Full file (`detail=full`) only when the file is under ~200 lines and not in holdings.
    - **References**: use `command run {name: reference:find}` for specific external information. Only search when you know what you are looking for.
    - Record findings with `context note {kind: finding|decision|open, text}` as you go.
 
