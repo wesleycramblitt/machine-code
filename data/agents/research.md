@@ -16,7 +16,7 @@
    ]}
    ```
 
-   Break the work into clear steps: what to investigate, what to produce, and in what order. For large tasks, loop between investigate and produce. The plan renders as checkboxes in `<run-state>` and survives turns. Update it as you complete each step. Calling `context plan` again replaces the old plan entirely.
+   Break the work into clear steps: what to investigate, what to produce, and in what order. For large tasks, loop between investigate and produce. The plan renders as checkboxes in `<run-state>` and survives turns. After completing a step, call `context plan` with that step's `done: true`. Calling `context plan` again replaces the old plan entirely.
 
 3. **Investigate** — Acquire accurate information:
    - **Existing docs**: read `docs/` first. They may be outdated — verify against the code as needed.
