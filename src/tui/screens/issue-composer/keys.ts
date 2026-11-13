@@ -30,6 +30,12 @@ function getField(s: NewIssueSettings, field: string): string {
   return "";
 }
 
+/** Default acceptance gates for a given kind and verification state. */
+export function defaultAcceptance(kind: string, verification: string, hasTest: boolean): string {
+  if (kind === "ideas") return "research:verify";
+  return verification === "verified" && hasTest ? "script:build, script:test" : "script:build";
+}
+
 export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
   // ── Field edit mode (editing a single comma-text field inline) ──
   if (s.newIssueFieldEdit) {
@@ -123,15 +129,8 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   if (data === "k") {
     const idx = KIND_CYCLE.indexOf(s.newIssue.kind);
     s.newIssue.kind = KIND_CYCLE[(idx + 1) % KIND_CYCLE.length]!;
-    // Set default acceptance gates based on kind. User can edit before submit.
-    if (s.newIssue.kind === "ideas") {
-      s.newIssue.verification = "direct";
-      s.newIssue.acceptance = "research:verify";
-    } else {
-      s.newIssue.acceptance = s.newIssue.verification === "verified" && ctx.hasScript("test")
-        ? "script:build, script:test"
-        : "script:build";
-    }
+    s.newIssue.verification = "direct";
+    s.newIssue.acceptance = defaultAcceptance(s.newIssue.kind, "direct", ctx.hasScript("test"));
     ctx.notify(`kind: ${s.newIssue.kind}`);
     ctx.draw();
     return true;
@@ -143,7 +142,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
-  if (data === "a" && s.newIssue.kind !== "ideas") {
+  if (data === "a") {
     s.newIssueFieldEdit = "acceptance";
     s.newIssueFieldUndo = s.newIssue.acceptance;
     ctx.notify("edit acceptance gates (comma separated), Enter to confirm, Esc to cancel");
@@ -175,14 +174,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     const cycle = ["direct", "verified"] as const;
     const idx = cycle.indexOf(s.newIssue.verification);
     s.newIssue.verification = cycle[(idx + 1) % cycle.length]!;
-    // Update acceptance: verified adds script:test, direct removes it.
-    const gates = s.newIssue.acceptance.split(",").map((g) => g.trim()).filter(Boolean);
-    const hasTest = gates.includes("script:test");
-    if (s.newIssue.verification === "verified" && !hasTest && ctx.hasScript("test")) {
-      s.newIssue.acceptance = [...gates, "script:test"].join(", ");
-    } else if (s.newIssue.verification === "direct" && hasTest) {
-      s.newIssue.acceptance = gates.filter((g) => g !== "script:test").join(", ");
-    }
+    s.newIssue.acceptance = defaultAcceptance(s.newIssue.kind, s.newIssue.verification, ctx.hasScript("test"));
     ctx.notify(`verification: ${s.newIssue.verification}`);
     ctx.draw();
     return true;

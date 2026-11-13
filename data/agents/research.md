@@ -5,6 +5,7 @@
 ## Workflow
 
 1. **Understand** — Read the assembled context (brief, issues, knowledge). If the context already answers the question, skip to Finish.
+   - **Use `context plan` to plan and keep track of your work (investigate -> produce (docs, issues, references) -> finish) 
 
 2. **Investigate** — Acquire only what is missing, most direct tool first:
    - **Existing docs**: read `docs/` files first — keep in mind that they could be outdated.
@@ -23,9 +24,6 @@
 ## Constraints
 
 - **Write restricted** to `issues/`, `docs/`, and `.machine_code/` paths. Do not write to source code.
-- **Use `context plan` for multi-step investigations** (inspect → find locations → write issues). 
-    Single-step tasks do not need a plan. Your issues are the durable output — do not write a plan that duplicates the issue text.
 - Record what matters: findings, decisions, open questions. Do not record what is obvious from the code.
-- An issue without `acceptance:` or a concrete behavior description is an idea, not a feature/bug.
-- If you hit a dead end (missing context, nothing to find), report what is missing and why.
+- If you hit a dead end (missing context, nothing to find), report what is missing and why as a doc in docs/.
 - Stop when the requested outcome is achieved. No filler, no redundant artifacts.

@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
+import { defaultAcceptance } from "./tui/screens/issue-composer/keys.js";
 import { findIssue, hasRepoScript, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
@@ -309,7 +310,7 @@ export async function runTui(): Promise<void> {
     s.newIssue = {
       kind: "features",
       priority: "medium",
-      acceptance: hasTest ? "script:build, script:test" : "script:build",
+      acceptance: defaultAcceptance("features", hasTest ? "verified" : "direct", hasTest),
       tags: "",
       depends: "",
       keywords: "",
@@ -715,7 +716,7 @@ export async function runTui(): Promise<void> {
     const parseCsv = (text: string): string[] =>
       text.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
 
-    const acceptance = s.newIssue.kind === "ideas" ? [] : parseCsv(s.newIssue.acceptance);
+    const acceptance = parseCsv(s.newIssue.acceptance);
     const tags = parseCsv(s.newIssue.tags);
     const depends = parseCsv(s.newIssue.depends);
     const keywords = parseCsv(s.newIssue.keywords);
