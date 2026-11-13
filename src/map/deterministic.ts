@@ -852,7 +852,7 @@ function buildTree(files: MapFile[]): TreeNode {
 /** Render a level-by-level directory tree of the repo. Shows all dirs and files
  * at each depth before descending. When the budget runs out, the remaining
  * entries at the current level are summarized. */
-export function renderMapIndex(map: RepoMap, maxBytes = 20_000): string {
+export function renderMapIndex(map: RepoMap, maxBytes = 102_400): string {
   const codeFiles = map.files.filter((f) => isCodeLang(f.lang));
   const root = buildTree(codeFiles);
 
