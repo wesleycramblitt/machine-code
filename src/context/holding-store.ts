@@ -281,15 +281,23 @@ export class HoldingStore {
       const totalLines = fileLines.length;
 
       // Decide which ranges to send based on size and recency.
+      // Files over outlineLines are always metadata-only unless the model
+      // inspected specific ranges (stored in holding.ranges).
       let toSend: Array<[number, number]> | null = null;
       if (totalLines <= this.cfg("fullLines")) {
         toSend = [[1, totalLines]]; // full
       } else if (holding.seeded && totalLines <= this.cfg("seededFullLines")) {
         toSend = [[1, totalLines]]; // full
-      } else if (totalLines <= this.cfg("outlineLines") && level === "budget") {
-        toSend = [...holding.ranges]; // user-chosen ranges
+      } else if (totalLines <= this.cfg("outlineLines")) {
+        if (level === "budget") {
+          toSend = [...holding.ranges]; // user-chosen ranges (budget recency)
+        } else if (level === "active") {
+          toSend = [[1, totalLines]]; // recent, full file if under outlineLines
+        }
       } else if (level === "active") {
-        toSend = [[1, Math.min(totalLines, this.cfg("outlineLines"))]]; // recent, cap at outline
+        // File >= outlineLines, active recency: only send inspected ranges,
+        // never dump the first 500 lines.
+        toSend = holding.ranges.length > 0 ? [...holding.ranges] : null;
       }
       if (!toSend || toSend.length === 0) {
         // Metadata-only: body block skipped entirely.
