@@ -41,33 +41,26 @@ The examples below use a fictional project `acme-store`. The commands and patter
 Research prompt: "The payment module has been refactored to support multiple providers. Create a technical doc explaining how the payment router, provider interface, and transaction log work together."
 
 ```
-# Turn 1 — plan + find the right files
-issue:list
-  → quick check — any existing issues about payments?
-inspect {query: "src/payments", detail: "outline"}
-  → sees router.ts, provider-interface.ts, transaction-log.ts
-  → each symbol line shows export names with line numbers
-
-# Turn 2 — read the router (the orchestrator)
-inspect {query: "src/payments/router.ts", symbol: "routePayment"}
-  → reads the main routing function
-inspect {query: "src/payments/router.ts", symbol: "registerProvider"}
-  → reads how providers are registered
-context note {kind: "finding", text: "router.ts dispatches by provider type; registerProvider adds to a map"}
-
-# Turn 3 — read the provider interface
+# Turn 1 — plan + outline the key files
+context plan {steps: [{text: "read router, provider interface, transaction log", done: false}, {text: "write docs/payment-module.md", done: false}]}
+inspect {query: "src/payments/router.ts", detail: "outline"}
+  → sees routePayment at 12, registerProvider at 48
 inspect {query: "src/payments/provider-interface.ts", detail: "outline"}
-  → sees the interface methods: charge, refund, getStatus
+  → sees the interface with charge, refund, getStatus
+inspect {query: "src/payments/transaction-log.ts", detail: "outline"}
+  → sees logTransaction at 8, getTransaction at 35
+  (3 outlines in one call is fine — each is cheap and the results go into holdings)
+
+# Turn 2 — read the key symbols
+inspect {query: "src/payments/router.ts", symbol: "routePayment"}
+  → reads the dispatch logic
 inspect {query: "src/payments/provider-interface.ts", symbol: "charge"}
   → reads the method signature and doc
-context note {kind: "finding", text: "Provider interface defines charge, refund, getStatus — each provider implements these"}
-
-# Turn 4 — read the transaction log
 inspect {query: "src/payments/transaction-log.ts", symbol: "logTransaction"}
   → reads how transactions are recorded
-context note {kind: "finding", text: "transaction-log.ts writes to a local JSON file, keyed by transaction ID"}
+context note {kind: "finding", text: "router dispatches by provider type, interface defines charge/refund/getStatus, log writes to JSON keyed by transaction ID"}
 
-# Turn 5 — write the doc
+# Turn 3 — write the doc
 write {path: "docs/payment-module.md", content: "# Payment module\n\n## Router\n...\n## Provider interface\n...\n## Transaction log\n..."}
 finish {outcome: "completed", summary: "created docs/payment-module.md covering router, provider interface, and transaction log"}
 ```
@@ -110,47 +103,41 @@ finish {outcome: "completed", summary: "compared search strategies, filed 2 feat
 Research prompt: "The admin dashboard has several pain points: order list is slow (>10s load), no export button, no date filter, and the refund form resets on validation error. Inspect the relevant areas and create issues for each."
 
 ```
-# Turn 1 — plan + survey everything
-context plan {steps: [{text: "inspect the admin area to understand structure", done: false}, {text: "identify each pain point location", done: false}, {text: "create issues for each", done: false}]}
+# Turn 1 — plan + survey
+context plan {steps: [{text: "inspect admin code to understand each pain point", done: false}, {text: "create issues for each", done: false}]}
 issue:list {kind: "features"}
-  → order-export already filed under features/todo
+  → order-export already filed under features/todo — skip it
 issue:list {kind: "bugs"}
-  → no existing bugs filed
+  → no existing bugs
 
-# Turn 2 — inspect related areas
-inspect {query: "src/admin/orders", detail: "outline"}
-  → sees list-orders.ts, order-export.ts, order-filters.ts
+# Turn 2 — inspect each area
+inspect {query: "src/admin/orders/list-orders.ts", detail: "outline"}
+  → sees loadOrders at 5, renderTable at 42
 inspect {query: "src/admin/refund-form.ts", detail: "outline"}
-  → sees renderForm, validateForm, submitRefund
+  → sees renderForm at 10, validateForm at 55, submitRefund at 80
 inspect {query: "src/admin/orders/list-orders.ts", symbol: "loadOrders"}
-  → reads the query function
+  → reads 30 lines — no pagination, no date filtering, runs a full DB scan
+context note {kind: "finding", text: "order list has no pagination or date filter (loadOrders full table scan)"}
+context note {kind: "finding", text: "refund form has submitRefund but validation preserves no state"}
+context note {kind: "decision", text: "create 3 issues: pagination, date filter, refund form state. Skip order export (already filed)."}
 
-# Turn 3 — record findings
-context note {kind: "finding", text: "order-export.ts already exists in features/todo — skip it"}
-context note {kind: "finding", text: "list-orders.ts has no date filtering or pagination (loadOrders runs a full table scan)"}
-context note {kind: "finding", text: "refund form clears all fields on validation error instead of preserving user input"}
-context note {kind: "decision", text: "create 3 issues: order list pagination, refund form preserve state, date filter"}
-
-# Turn 4 — create the issues
-write {path: "issues/features/todo/order-pagination.md", content: "priority: high\nacceptance: script:build\n\n# Add pagination to order list\nCurrently loadOrders runs a full table scan which takes >10s..."}
-write {path: "issues/bugs/todo/refund-form-resets-on-error.md", content: "priority: high\nacceptance: script:build\n\n# Refund form clears on validation error\nWhen the refund form fails validation..."}
+# Turn 3 — create the issues (batch)
+write {path: "issues/features/todo/order-pagination.md", content: "priority: high\nacceptance: script:build\n\n# Add pagination to order list\n..."}
 write {path: "issues/features/todo/date-filter-orders.md", content: "priority: medium\nacceptance: script:build\n\n# Add date range filter to orders\n..."}
-
-# Turn 5 — finish
-context plan {steps: [{text: "inspect the admin area to understand structure", done: true}, {text: "identify each pain point location", done: true}, {text: "create issues for each", done: true}]}
-finish {outcome: "completed", summary: "created 3 issues (order pagination, refund form validation, date filter); skipped order export (already filed)"}
+write {path: "issues/bugs/todo/refund-form-resets-on-error.md", content: "priority: high\nacceptance: script:build\n\n# Refund form clears on validation error\n..."}
+context plan {steps: [{text: "inspect admin code to understand each pain point", done: true}, {text: "create issues for each", done: true}]}
+finish {outcome: "completed", summary: "created 3 issues (pagination, date filter, refund form state); skipped order export (already filed)"}
 ```
 
 ### Key patterns across all examples
 
-- **Holdings are automatic** — the `<holdings>` block renders every turn with metadata and body bytes. Never waste a turn reading them. The only reason to inspect a holdings source file is to document the system itself (internal research).
-- **Start with `context plan`** every time. It is a checklist that survives turns.
-- **`issue:list` first** to see what already exists. Do not create duplicates.
-- **`context note` for findings** — the model re-reads `<run-state>` every turn, so recorded findings prevent re-discovery.
-- **Multiple `write` calls in one turn** for batch creation of issues or docs. Each new or modified file counts toward the `research:verify` gate.
+- **`context plan` first** — set the checklist. Update `done: true` as you go. It survives turns and prevents re-work.
+- **`issue:list` before creating anything** — check what already exists. Do not create duplicates.
 - **`issue:show` to read existing issues** — never use inspect for markdown files.
+- **Outline first, then read symbols** — `detail: "outline"` is cheap. It gives you symbol names and line numbers. Then read exactly the symbol you need. Never read a whole file.
+- **`context note` captures findings** — notes render in `<run-state>` every turn, so you will not re-discover what you already learned.
+- **`write` creates new files, `edit` changes existing ones** — both count toward the `research:verify` gate.
 - **External research uses `reference:find`/`reference:read`**, never raw web search. The reference store curates bundles with attribution.
-- **Backlog planning** — create one feature issue per deliverable. Use `issue:list` to avoid duplicates.
 
 ## Constraints
 
