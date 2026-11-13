@@ -95,6 +95,8 @@ export interface StateStoreOptions {
   recorder?: EventSink;
   /** Optional run supervisor for the synchronous git-status safety net. */
   processes?: ProcessSupervisor;
+  /** Holdings recency/size config, pass in from machine config. */
+  holdingsConfig?: Partial<import("./holding-store.js").HoldingsConfig>;
 }
 
 function sha1(text: string): string {
@@ -155,6 +157,8 @@ export class RunStateStore {
       putArtifact: (text) => this.putArtifact(text),
       addReadFact: (ref, turn, excerptText) => this.addReadFact(ref, turn, excerptText),
     });
+    const holdingsCfg = options.holdingsConfig;
+    if (holdingsCfg) this.holdingsStore.setConfig(holdingsCfg);
     this.state = {
       version: 1,
       runId: options.runId,
@@ -175,8 +179,8 @@ export class RunStateStore {
     this.holdingsStore.seedHintRanges(entries, turn);
   }
 
-  renderHoldings(maxChars = 24_000, maxFiles = 40): string {
-    return this.holdingsStore.renderHoldings(maxChars, maxFiles);
+  renderHoldings(maxChars?: number): string {
+    return this.holdingsStore.renderHoldings(maxChars);
   }
 
   artifactStatus(id: string): { path: string; stale: boolean } | null {

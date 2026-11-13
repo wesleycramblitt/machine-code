@@ -6,14 +6,23 @@
  * that can recall older bytes. Bytes are always re-read from disk.
  */
 
+export interface HeldSymbol {
+  name: string;
+  range: [number, number];
+  /** Doc comment or docstring from the repo map. */
+  doc?: string;
+}
+
 export interface Holding {
   path: string;
   ranges: Array<[number, number]>;
   /** Symbols held, by name — the map fills in at symbol granularity. */
-  symbols: Array<{ name: string; range: [number, number] }>;
+  symbols: HeldSymbol[];
   /** Connections shown for this file, parsed from inspect results. */
   connections: { imports: string[]; importedBy: string[] };
   artifacts: string[];
+  /** File-level doc comment or module docstring, from the repo map. */
+  doc?: string;
   /** Fully present in the stable prefix: bytes skipped until it changes. */
   seeded: boolean;
   /** Disk signature when first acquired; recall compares against it. */

@@ -452,6 +452,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     repoRoot: mapRoot,
     recorder,
     processes,
+    holdingsConfig: input.machine.context.holdings,
   });
   // Preload the task files so the first prompt already carries them.
   // Holdings re-read from disk, so pins never go stale.
@@ -515,8 +516,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    */
   const holdingsCap = (inputChars: number | undefined): number => {
     const base = input.holdingsMaxChars ?? input.machine.context.holdingsMaxChars;
+    const pct = input.machine.context.holdings?.modelPct ?? 0.10;
     if (!inputChars || inputChars <= 0) return base;
-    return Math.min(base, Math.max(2_048, Math.floor(inputChars * 0.1)));
+    return Math.min(base, Math.max(2_048, Math.floor(inputChars * pct)));
   };
 
   const initialChars =
