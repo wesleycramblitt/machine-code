@@ -739,11 +739,6 @@ export function enrichHints(hints: readonly FileHint[], root: string): FileHint[
       return hint;
     }
     const lines = raw.split("\n");
-    // Cited ranges first: the request names exact lines, so they ride along
-    // verbatim (edit-ready). A symbol body that covers a cited range makes
-    // the range redundant — the body (with context) wins. Small files skip
-    // bodies: they travel whole through the file path, so a body would only
-    // duplicate already-inlined content. They still get keyword lines.
     const bodies: Array<{ symbol: string; start: number; text: string }> = [];
     if (!hint.small) {
       let used = 0;
@@ -784,86 +779,9 @@ export function enrichHints(hints: readonly FileHint[], root: string): FileHint[
           if (lines[i]!.toLowerCase().includes(needle)) hits.push(i + 1);
         }
       } else {
-        // Short tokens ("run") substring-match everywhere ("pruning");
-        // word boundaries keep them honest.
-        let pattern: RegExp;
-        try {
-          pattern = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\export function enrichHints(hints: readonly FileHint[], root: string): FileHint[] {
-  return hints.map((hint) => {
-    if (hint.small) return hint;
-    let raw: string;
-    try {
-      raw = readFileSync(join(root, hint.path), "utf8");
-    } catch {
-      return hint;
-    }
-    const lines = raw.split("\n");
-    // Cited ranges first: the request names exact lines, so they ride along
-    // verbatim (edit-ready). A symbol body that covers a cited range makes
-    // the range redundant — the body (with context) wins.
-    const bodies: Array<{ symbol: string; start: number; text: string }> = [];
-    let used = 0;
-    const takeBody = (symbol: string, start: number, end: number): void => {
-      const height = end - start + 1;
-      if (height <= 0) return;
-      const text = lines
-        .slice(start - 1, end)
-        .map((line, index) => `${start + index}: ${line}`)
-        .join("\n");
-      const cost = Buffer.byteLength(text, "utf8");
-      if (used + cost > HINT_BODIES_MAX_BYTES) return;
-      used += cost;
-      bodies.push({ symbol, start, text });
-    };
-    const covered = (start: number, end: number): boolean =>
-      bodies.some((body) => {
-        const bodyEnd = body.start + body.text.split("\n").length - 1;
-        return body.start <= start && bodyEnd >= end;
-      });
-    for (const symbol of hint.symbols) {
-      if (symbol.end - symbol.start + 1 > HINT_BODY_MAX_LINES) continue;
-      takeBody(symbol.name, symbol.start, symbol.end);
-    }
-    for (const range of hint.citedRanges ?? []) {
-      if (range.end - range.start + 1 > HINT_CITED_MAX_LINES) continue;
-      if (covered(range.start, range.end)) continue;
-      takeBody("", range.start, range.end);
-    }
-    if (hint.keywords.length === 0) return { ...hint, bodies };
-    const keywordLines: Array<{ keyword: string; lines: number[]; hits: number }> = [];
-    for (const keyword of hint.keywords) {
-      const hits: number[] = [];
-      if (keyword.length >= 4) {
-        const needle = keyword.toLowerCase();
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i]!.toLowerCase().includes(needle)) hits.push(i + 1);
-        }
-      } else {
-        // Short tokens ("run") substring-match everywhere ("pruning");
-        // word boundaries keep them honest.
         let pattern: RegExp;
         try {
           pattern = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
-        } catch {
-          continue;
-        }
-        for (let i = 0; i < lines.length; i++) {
-          if (pattern.test(lines[i]!)) hits.push(i + 1);
-        }
-      }
-      if (hits.length > 0 && hits.length <= KEYWORD_LINES_MAX_HITS) {
-        // First hits cluster in the doc head; the fix-relevant hit is often
-        // the last one (code tail). Show both ends instead of head only.
-        const shown = hits.slice(0, KEYWORD_LINES_SHOWN);
-        if (hits.length > KEYWORD_LINES_SHOWN && !shown.includes(hits[hits.length - 1]!)) {
-          shown.push(hits[hits.length - 1]!);
-        }
-        keywordLines.push({ keyword, lines: shown, hits: hits.length });
-      }
-    }
-    return { ...hint, keywordLines, bodies };
-  });
-}")}\\b`, "i");
         } catch {
           continue;
         }
@@ -878,20 +796,12 @@ export function enrichHints(hints: readonly FileHint[], root: string): FileHint[
     return hint.small ? { ...hint, keywordLines } : { ...hint, keywordLines, bodies };
   });
 }
-
-/**
- * Render hints as the task-evidence block: per file, why it matched, which
- * keywords hit which symbols and body lines, numbered bodies of the matched
- * symbols (edit-ready — a read can be skipped), relations, and the remaining
- * outline. One place, everything the first prompt needs.
- */
 export function renderHints(hints: readonly FileHint[]): string {
-  const outlined = hints.filter((hint) => !hint.small);
-  if (outlined.length === 0) return "";
+  if (hints.length === 0) return "";
   const blocks: string[] = [
     "Suggested files (evidence in one place — numbered bodies are edit-ready. Missing a block? read { \"path\": \"...\", \"symbol\": \"...\" } pulls one symbol in one call — never page with offset/limit. Files under 4KB arrive whole):",
   ];
-  for (const hint of outlined) {
+  for (const hint of hints) {
     blocks.push(`### ${hint.path} — ${hint.reason}`);
     const evidence: string[] = [];
     const evidenced = new Set<string>();
@@ -902,12 +812,7 @@ export function renderHints(hints: readonly FileHint[]): string {
     }
     for (const entry of hint.keywordLines ?? []) {
       if (evidence.some((line) => line.startsWith(`"${entry.keyword}"`))) continue;
-      const omitted = entry.hits - entry.lines.length;
-      const shown = omitted > 0 && entry.lines.length > 1
-        ? `${entry.lines.slice(0, -1).join(", ")} … ${entry.lines[entry.lines.length - 1]}`
-        : entry.lines.join(", ");
-      const extra = omitted > 0 ? ` (+${omitted} more)` : "";
-      evidence.push(`"${entry.keyword}" → lines ${shown}${extra}`);
+      evidence.push(`"${entry.keyword}" → lines ${entry.lines.join(", ")}`);
     }
     if (evidence.length > 0) blocks.push(`  ${evidence.join("; ")}`);
     for (const body of hint.bodies ?? []) {
