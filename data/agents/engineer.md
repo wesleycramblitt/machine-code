@@ -30,7 +30,7 @@
 
 4. **Edit** — Use the simplest form that works:
 
-   **Named block + symbol anchor (preferred):** Write the replacement as a fenced block ``` ``my-block-name`` ```, then reference it: `{symbol: "FunctionName", newString_named_block: "my-block-name"}`. Zero JSON escaping — use this for any code with `\`, `` ` ``, `"`, or `$`.
+   **Named block + symbol anchor (preferred):** Write the replacement as a fenced block with a name instead of a language ID (` ```my-block-name`), then reference it: `{symbol: "FunctionName", newString_named_block: "my-block-name"}`. Zero JSON escaping — use this for any code with `\`, `` ` ``, `"`, or `$`.
 
    **Symbol anchor only (simple content):** `{symbol: "FunctionName", newString: "..."}` — the tool finds the function boundary from the outline. No oldString needed.
 
