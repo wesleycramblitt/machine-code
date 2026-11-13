@@ -151,6 +151,7 @@ export class RunStateStore {
     this.processes = options.processes;
     this.holdingsStore = new HoldingStore({
       repoRoot: options.repoRoot,
+      currentTurn: () => this.currentTurn(),
       putArtifact: (text) => this.putArtifact(text),
       addReadFact: (ref, turn, excerptText) => this.addReadFact(ref, turn, excerptText),
     });
@@ -463,49 +464,41 @@ export class RunStateStore {
 
   /** Ingest the assistant message and its tool results once per completed turn. */
 
-  /** Current git diff summary as a compact workspace block.
+  /** Current full git diff as a patch block.
    *
-   * Diffed against HEAD (not the empty diff): the worktree branch starts at
-   * the run's base ref and the agent never commits, so HEAD is the original
-   * state and this block is the cumulative change since the run began —
-   * staged and unstaged — plus untracked files. */
+   * Diffed against HEAD: the worktree branch starts at the run's base ref
+   * and the agent never commits, so HEAD is the original state and this
+   * block is the cumulative change since the run began — staged and
+   * unstaged — plus untracked files. Colors stripped. */
   renderWorkspace(): string {
     if (!this.repoRoot) return "";
     try {
-      const diffArgs = ["-C", this.repoRoot, "diff", "HEAD", "--stat"];
+      const diffArgs = ["-C", this.repoRoot, "diff", "HEAD"];
       const untrackedArgs = ["-C", this.repoRoot, "ls-files", "--others", "--exclude-standard"];
 
       let diffOutput: string;
       let untrackedOutput: string;
       if (this.processes) {
         const diff = this.processes.runSync("git", diffArgs,
-          { cwd: this.repoRoot, timeoutMs: 3_000, origin: "tool", name: "git:workspace-diff" });
+          { cwd: this.repoRoot, timeoutMs: 5_000, origin: "tool", name: "git:workspace-diff" });
         diffOutput = diff.status === 0 ? diff.stdout : "";
         const untracked = this.processes.runSync("git", untrackedArgs,
           { cwd: this.repoRoot, timeoutMs: 3_000, origin: "tool", name: "git:workspace-untracked" });
         untrackedOutput = untracked.status === 0 ? untracked.stdout : "";
       } else {
-        diffOutput = execFileSync("git", diffArgs, { encoding: "utf8", timeout: 3_000 });
+        diffOutput = execFileSync("git", diffArgs, { encoding: "utf8", timeout: 5_000 });
         untrackedOutput = execFileSync("git", untrackedArgs, { encoding: "utf8", timeout: 3_000 });
       }
 
-      const changes = diffOutput.trim().split("\n").filter(Boolean);
+      const patch = diffOutput.trim();
       const untracked = untrackedOutput.trim().split("\n").filter(Boolean);
-      if (changes.length === 0 && untracked.length === 0) return "";
+      if (!patch && untracked.length === 0) return "";
 
-      // Parse diff --stat lines: "src/file.ts | 10 +++++-----" -> just the path
-      const changedPaths = changes
-        .map((line) => (line.split("|")[0] ?? "").trim())
-        .filter((p) => p.length > 0 && !p.includes("file changed") && !p.includes("files changed"));
-
-      const lines: string[] = ["<workspace>"];
-      if (changedPaths.length > 0) {
-        lines.push(`modified: ${changedPaths.length} file(s)`);
-        for (const path of changedPaths) lines.push(`  M ${path}`);
-      }
+      const lines: string[] = ["<workspace>", "Full git diff since the run started (cumulative changes):"];
+      if (patch) lines.push("", patch);
       if (untracked.length > 0) {
-        lines.push(`untracked: ${untracked.length} file(s)`);
-        for (const path of untracked) lines.push(`  ? ${path}`);
+        lines.push("", `untracked files (${untracked.length}):`);
+        for (const path of untracked) lines.push(`  ${path}`);
       }
       lines.push("</workspace>");
       return lines.join("\n");

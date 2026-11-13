@@ -633,6 +633,23 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       `origin="${item.origin}"`,
       ...(item.depth !== undefined ? [`depth="${item.depth}"`] : []),
     ];
+    // Files are seeded in holdings, which renders them every turn.
+    // Omit the body here to avoid duplicating code bytes in the prompt.
+    if (item.kind === "file") {
+      sources.push({
+        kind: item.kind,
+        origin: item.origin,
+        ref: item.ref,
+        depth: item.depth,
+        bytes: item.len,
+        hash: sha1(item.body),
+        truncated: item.trimmed === true,
+        ...(item.trimmed === true
+          ? { warning: `trimmed to ${item.len.toLocaleString()} chars to fit the ${usable.toLocaleString()} char input budget — file is seeded in holdings` }
+          : {}),
+      });
+      continue;
+    }
     blocks.push(`<context-block ${attrs.join(" ")}>\n${item.body}\n</context-block>`);
     sources.push({
       kind: item.kind,

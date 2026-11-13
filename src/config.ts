@@ -120,6 +120,23 @@ export interface MachineConfig {
     docsIndex?: string;
     /** Per-turn holdings-delta cap (before the per-model clamp). */
     holdingsMaxChars: number;
+    /** Holdings render constants. Every value here is tunable. */
+    holdings: {
+      /** Fraction of the model input budget to allocate to holdings (0.0-1.0). */
+      modelPct: number;
+      /** Files under this many lines always render full body. */
+      fullLines: number;
+      /** Seeded files under this many lines always render full body. */
+      seededFullLines: number;
+      /** Files over this many lines always render metadata-only (no body bytes). */
+      outlineLines: number;
+      /** Turns since last inspect/edit before a file is downgraded. */
+      recencyTurnsBudget: number;
+      /** Turns since last inspect/edit before a file is evicted to metadata-only. */
+      recencyTurnsEvict: number;
+      /** Max files in the inventory list. */
+      maxFiles: number;
+    };
   };
   /** Repository map ([map]). */
   map: {
@@ -295,6 +312,15 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       // reference store. An explicit docs_index still wins.
       docsIndex: typeof contextRaw.docs_index === "string" ? contextRaw.docs_index : undefined,
       holdingsMaxChars: asNumber(contextRaw.holdings_max_chars) ?? 48_000,
+      holdings: {
+        modelPct: asNumber(contextRaw.holdings_model_pct) ?? 0.10,
+        fullLines: asNumber(contextRaw.holdings_full_lines) ?? 50,
+        seededFullLines: asNumber(contextRaw.holdings_seeded_full_lines) ?? 200,
+        outlineLines: asNumber(contextRaw.holdings_outline_lines) ?? 500,
+        recencyTurnsBudget: asNumber(contextRaw.holdings_recency_turns_budget) ?? 3,
+        recencyTurnsEvict: asNumber(contextRaw.holdings_recency_turns_evict) ?? 5,
+        maxFiles: asNumber(contextRaw.holdings_max_files) ?? 40,
+      },
     },
     map: {
       enabled: mapRaw.enabled !== false,

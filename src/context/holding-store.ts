@@ -12,15 +12,50 @@ import type { Artifact } from "./artifacts.js";
 import type { Ref } from "./state.js";
 import { mergeRanges, type Holding } from "./holdings.js";
 
+export interface HoldingsConfig {
+  /** Fraction of model input budget to allocate (0.0-1.0). */
+  modelPct: number;
+  /** Files under this many lines always render full body. */
+  fullLines: number;
+  /** Seeded files under this many lines always render full body. */
+  seededFullLines: number;
+  /** Files over this many lines always render metadata-only. */
+  outlineLines: number;
+  /** Turns since last activity before file is downgraded. */
+  recencyTurnsBudget: number;
+  /** Turns since last activity before file is evicted to metadata-only. */
+  recencyTurnsEvict: number;
+  /** Max inventory entries. */
+  maxFiles: number;
+}
+
+export const DEFAULT_HOLDINGS_CONFIG: HoldingsConfig = {
+  modelPct: 0.10,
+  fullLines: 50,
+  seededFullLines: 200,
+  outlineLines: 500,
+  recencyTurnsBudget: 3,
+  recencyTurnsEvict: 5,
+  maxFiles: 40,
+};
+
 export interface HoldingHost {
   repoRoot?: string;
+  currentTurn: () => number;
   putArtifact(text: string): Artifact;
   addReadFact(ref: Ref, turn: number, excerptText?: string): void;
 }
 
 export class HoldingStore {
   readonly map = new Map<string, Holding>();
-  constructor(private readonly host: HoldingHost) {}
+  constructor(
+    private readonly host: HoldingHost,
+    private config: HoldingsConfig = DEFAULT_HOLDINGS_CONFIG,
+  ) {}
+
+  setConfig(c: Partial<HoldingsConfig>): void {
+    this.config = { ...this.config, ...c };
+  }
 
   /** Put task-relevant files in the working set before the first model call. */
   seedWorkingFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
@@ -146,102 +181,143 @@ export class HoldingStore {
     }
   }
 
+  /** Tune at machine config, not here. */
+  private static CFG = {
+    modelPct: 0.10,
+    fullLines: 50,
+    seededFullLines: 200,
+    outlineLines: 500,
+    recencyTurnsBudget: 3,
+    recencyTurnsEvict: 5,
+    maxFiles: 40,
+  };
+
   /**
-   * Durable knowledge as inventory + current bytes. Every holding gets one
-   * inventory line (names are never dropped); held ranges render their
-   * current bytes from disk every turn so the model never has to re-fetch a
-   * file because the transcript abbreviated an older result. Seeded files
-   * skip bytes until they change because the stable prefix carries them.
-   * Past the cap, bytes yield to artifact ids and inspect anchors.
+   * Durable knowledge as metadata + current bytes. Every holding gets a
+   * metadata line (always, even when evicted); bytes are included based on
+   * file size, recency, and seeding status. The cap is a hard fail — if
+   * exceeded the run aborts so the operator tunes the constants.
    *
-   * Dropping policy: inventory lists every holding (capped at maxFiles with
-   * a names-only overflow line — addressability is never lost). Deltas favor
-   * recent acquisitions first; files that do not fit keep their old sentSig
-   * and retry next turn; a single file larger than the cap sends a truncated
-   * head marked with its artifact id and inspect path.
+   * Priority: files the model just edited/inspected first, then small seeded
+   * files, then inspected ranges, then eviction-retry files. Files that do
+   * not fit throw so the cap can be tuned.
    */
-  renderHoldings(maxChars = 24_000, maxFiles = 40): string {
+  renderHoldings(maxChars = 48_000, maxFiles = 40): string {
+    const currentTurn = this.host.currentTurn();
     if (this.map.size === 0 || !this.host.repoRoot) return "";
     const sorted = [...this.map.values()].sort((a, b) => a.path.localeCompare(b.path));
     const shown = sorted.slice(0, Math.max(1, maxFiles));
-    const lines: string[] = ["<holdings>", "Living map: files held, with symbols, connections, and current bytes re-read from disk. The transcript may abbreviate older tool results; these bytes are current."];
+    const lines: string[] = [
+      "<holdings>",
+      "Every file the run has seen. Metadata is always shown. Bytes are current from disk every turn.",
+      "Never re-read what is here. To read a specific symbol, call inspect { query: \"SymbolName\" }.",
+      "",
+    ];
     let lastDir = "";
+    let inventoryUsed = 0;
+
+    // Phase 1: inventory (metadata for every file, always)
     for (const holding of shown) {
       const dir = holding.path.includes("/") ? `${holding.path.split("/").slice(0, -1).join("/")}/` : "./";
       if (dir !== lastDir) {
         lines.push(`[${dir}]`);
         lastDir = dir;
       }
-      const rangeText = holding.ranges.length > 0
-        ? holding.ranges.map(([s, e]) => (s === e ? `${s}` : `${s}-${e}`)).join(",")
+      const lineInfo = holding.ranges.length > 0
+        ? `${holding.ranges[0]![0]}-${holding.ranges[holding.ranges.length - 1]![1]} lines`
         : "outline";
+      const flags = [
+        holding.seeded ? "seeded" : "",
+        this.recencyLevel(holding, currentTurn) === "evicted" ? "evicted" : "",
+      ].filter(Boolean).join(", ");
+      const flagText = flags ? ` [${flags}]` : "";
       const art = holding.artifacts[holding.artifacts.length - 1] ?? "";
-      const bits = [rangeText];
-      if (holding.symbols.length > 0) {
-        const names = holding.symbols.slice(0, 6).map((s) => `${s.name} (${s.range[0]}-${s.range[1]})`).join(", ");
-        bits.push(`symbols: ${names}${holding.symbols.length > 6 ? ", …" : ""}`);
-      }
-      const relations = [
-        ...(holding.connections.imports.length > 0 ? [`imports: ${holding.connections.imports.slice(0, 4).join(", ")}`] : []),
-        ...(holding.connections.importedBy.length > 0 ? [`imported by: ${holding.connections.importedBy.slice(0, 4).join(", ")}`] : []),
-      ].join(" · ");
-      if (relations) bits.push(relations);
-      if (art) bits.push(art);
-      if (holding.seeded) bits.push("seeded");
-      lines.push(`- ${holding.path.split("/").pop()}: ${bits.join(" · ")}`);
+      lines.push(`${holding.path.split("/").pop()}${flagText} — ${lineInfo}${holding.symbols.length > 0 ? ` · ${holding.symbols.slice(0, 6).map((s) => `${s.name}(${s.range[0]})`).join(", ")}${holding.symbols.length > 6 ? ", …" : ""}` : ""}${art ? ` · ${art}` : ""}`);
+      inventoryUsed += lines[lines.length - 1]!.length + 1;
     }
     if (sorted.length > shown.length) {
-      const names = sorted.slice(shown.length).map((holding) => holding.path).join(", ");
-      lines.push(`- +${sorted.length - shown.length} more holdings (names only, bytes via recall): ${names}`);
+      const names = sorted.slice(shown.length).map((h) => h.path).join(", ");
+      lines.push(`+${sorted.length - shown.length} more: ${names}`);
     }
-    const deltas: string[] = [];
-    const pending: string[] = [];
+    if (inventoryUsed > maxChars) {
+      throw new Error(`holdings inventory alone exceeds ${maxChars.toLocaleString()} chars (${inventoryUsed.toLocaleString()}); raise maxFiles or reduce file path lengths`);
+    }
+
+    // Phase 2: body bytes (size + recency gated)
+    const bodyChars = maxChars - inventoryUsed;
+    const ordered = [...shown].sort((a, b) => {
+      const al = this.recencyLevel(a, currentTurn);
+      const bl = this.recencyLevel(b, currentTurn);
+      const r = (al === "evicted" ? 0 : al === "budget" ? 1 : 2) - (bl === "evicted" ? 0 : bl === "budget" ? 1 : 2);
+      return r || b.priority - a.priority || b.turn - a.turn || a.path.localeCompare(b.path);
+    });
+    const bodies: string[] = [];
     let used = 0;
-    const ordered = [...shown].sort((a, b) => b.priority - a.priority || b.turn - a.turn || a.path.localeCompare(b.path));
     for (const holding of ordered) {
-      if (used >= maxChars) {
-        pending.push(holding.path);
+      if (used >= bodyChars) break;
+      const level = this.recencyLevel(holding, currentTurn);
+      if (level === "evicted") continue;
+
+      const fileLines = this.readLines(holding.path);
+      if (!fileLines) continue;
+      const totalLines = fileLines.length;
+
+      // Decide which ranges to send based on size and recency.
+      let toSend: Array<[number, number]> | null = null;
+      if (totalLines <= HoldingStore.CFG.fullLines) {
+        toSend = [[1, totalLines]]; // full
+      } else if (holding.seeded && totalLines <= HoldingStore.CFG.seededFullLines) {
+        toSend = [[1, totalLines]]; // full
+      } else if (totalLines <= HoldingStore.CFG.outlineLines && level === "budget") {
+        toSend = [...holding.ranges]; // user-chosen ranges
+      } else if (level === "active") {
+        toSend = [[1, Math.min(totalLines, HoldingStore.CFG.outlineLines)]]; // recent, cap at outline
+      }
+      if (!toSend || toSend.length === 0) {
+        // Metadata-only: body block skipped entirely.
         continue;
       }
-      const sig = this.holdingSig(holding.path);
-      if (sig === null) {
-        const art = holding.artifacts[holding.artifacts.length - 1] ?? "";
-        deltas.push(`### ${holding.path} (unreadable since acquired${art ? `; recall ${art}` : ""})`);
-        continue;
-      }
-      if (holding.ranges.length === 0) continue;
-      // Seeded files are in the stable context block every turn; rendering
-      // their bytes again burns budget on text the model already sees.
-      if (holding.seeded) continue;
-      // Held bytes render every turn: the transcript abbreviates old results,
-      // so "already sent once" is not the same as "still visible to the model".
-      const toSend = holding.ranges;
-      if (toSend.length === 0) continue;
-      let raw: string;
-      try {
-        const abs = isAbsolute(holding.path) ? holding.path : join(this.host.repoRoot, holding.path);
-        raw = readFileSync(abs, "utf8");
-      } catch {
-        continue;
-      }
-      const fileLines = raw.split("\n");
       const parts: string[] = [];
       for (const [start, end] of toSend) {
-        const page = numberLinesCapped(fileLines, start, Math.max(1, end - start + 1), Math.max(256, maxChars - used));
+        const clamped = Math.min(end, totalLines);
+        const page = numberLinesCapped(fileLines, start, Math.max(1, clamped - start + 1), Math.max(256, bodyChars - used));
         parts.push(page.text);
         used += page.text.length + 1;
-        if (used >= maxChars) break;
+        if (used >= bodyChars) break;
       }
+      if (parts.length === 0) continue;
       const art = holding.artifacts[holding.artifacts.length - 1] ?? "";
-      deltas.push(`### ${holding.path}: held ranges (current)${art ? ` · ${art}` : ""}\n${parts.join("\n")}`);
-
+      bodies.push(`### ${holding.path}${art ? ` · ${art}` : ""}\n${parts.join("\n")}`);
     }
-    lines.push(...deltas);
-    if (pending.length > 0) {
-      lines.push(`_unsent this turn (cap reached; retries next turn): ${pending.join(", ")}_`);
-    }
+    lines.push("", ...bodies);
     lines.push("</holdings>");
+
+    const total = lines.reduce((s, l) => s + l.length + 1, 0);
+    if (total > maxChars) {
+      throw new Error(
+        `holdings block exceeds ${maxChars.toLocaleString()} chars (${total.toLocaleString()}). ` +
+        `Tune holdings config (outlineLines, fullLines, modelPct) or raise the cap. ` +
+        `Pending: ${sorted.filter((h) => this.recencyLevel(h, currentTurn) !== "evicted" && !bodies.some((b) => b.includes(h.path))).map((h) => h.path).join(", ") || "none"}`,
+      );
+    }
     return lines.join("\n");
+  }
+
+  /** Which byte level a holding qualifies for based on turn recency. */
+  private recencyLevel(holding: Holding, currentTurn: number): "evicted" | "budget" | "active" {
+    const age = currentTurn - holding.turn;
+    if (age > HoldingStore.CFG.recencyTurnsEvict) return "evicted";
+    if (age > HoldingStore.CFG.recencyTurnsBudget) return "budget";
+    return "active";
+  }
+
+  private readLines(path: string): string[] | null {
+    try {
+      const abs = isAbsolute(path) ? path : join(this.host.repoRoot!, path);
+      return readFileSync(abs, "utf8").split("\n");
+    } catch {
+      return null;
+    }
   }
 
   /** Pre-fill the map from hint symbols: ranges register as unsent, so the
