@@ -118,22 +118,14 @@ export interface MachineConfig {
   context: {
     maxChars: number;
     docsIndex?: string;
-    /** Budget proportions for each context component. */
+    /** Budget proportions for the per-turn volatile context (holdings, map). */
     budget: {
-      /** Total proportion of model input window to allocate to context (0.0-1.0). */
+      /** Total proportion of model input window to allocate (0.0-1.0). */
       total: number;
-      /** Share of the budget allocated to holdings (0.0-1.0 of total). */
+      /** Share allocated to holdings (0.0-1.0 of total). */
       holdings: number;
-      /** Share of the budget allocated to the repo map index (0.0-1.0 of total). */
+      /** Share allocated to the repo map (0.0-1.0 of total). */
       map: number;
-      /** Share of the budget allocated to the issue (0.0-1.0 of total). */
-      issue: number;
-      /** Share of the budget allocated to docs (0.0-1.0 of total). */
-      docs: number;
-      /** Share of the budget allocated to skills (0.0-1.0 of total). */
-      skills: number;
-      /** Share of the budget allocated to parent runs (0.0-1.0 of total). */
-      parents: number;
     };
     /** Holdings render constants. Every value here is tunable. */
     holdings: {
@@ -329,10 +321,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         total: asNumber(budgetRaw.total) ?? 0.80,
         holdings: asNumber(budgetRaw.holdings) ?? 0.35,
         map: asNumber(budgetRaw.map) ?? 0.05,
-        issue: asNumber(budgetRaw.issue) ?? 0.15,
-        docs: asNumber(budgetRaw.docs) ?? 0.15,
-        skills: asNumber(budgetRaw.skills) ?? 0.10,
-        parents: asNumber(budgetRaw.parents) ?? 0.05,
       },
       holdings: {
         fullLines: asNumber(contextRaw.holdings_full_lines) ?? 50,

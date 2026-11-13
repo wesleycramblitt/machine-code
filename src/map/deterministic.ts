@@ -873,11 +873,15 @@ export function renderMapIndex(map: RepoMap, maxBytes = 102_400): string {
     return Buffer.byteLength(candidate, "utf8") <= maxBytes;
   };
 
-  /** Render a node: its directory line, then files inside it, then children.
-   *  Returns the number of files rendered (for summary counting). */
+  /**
+   * Render a node: its directory line, then files inside it, then children.
+   * Returns the number of individual files listed (>=0). A dir that rendered
+   * only its directory line but no files or children returns 0 — callers
+   * check totalFiles to decide whether the subtree was skipped or empty.
+   */
   const renderNode = (node: TreeNode): number => {
     const dirLabel = `${"  ".repeat(node.depth)}${node.path}/ ${node.totalFiles} files · ${FMT(node.totalBytes)}`;
-    if (!fits(dirLabel)) return 0; // this whole subtree is skipped
+    if (!fits(dirLabel)) return -1; // -1 = skipped (not rendered at all)
 
     body.push(dirLabel);
     let rendered = 0;
@@ -891,7 +895,6 @@ export function renderMapIndex(map: RepoMap, maxBytes = 102_400): string {
         body.push(fLabel);
         rendered++;
       } else {
-        // Budget exhausted mid-file: summarize remaining.
         const remaining = sortedFiles.length - rendered;
         if (remaining > 0) body.push(`${"  ".repeat(indent)}+${remaining} more files — use inspect`);
         return rendered;
@@ -902,14 +905,12 @@ export function renderMapIndex(map: RepoMap, maxBytes = 102_400): string {
     const sortedChildren = [...node.children.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     for (const [, child] of sortedChildren) {
       const childFiles = renderNode(child);
-      rendered += childFiles;
-      // If a child skipped all its files, we're at budget and should stop.
-      if (childFiles === 0 && child.totalFiles > 0) {
-        // Add a summary line for this child
+      if (childFiles === -1 && child.totalFiles > 0) {
         const skipLabel = `${"  ".repeat(child.depth)}+${child.totalFiles} files in ${child.path}/ not shown — use inspect`;
         if (fits(skipLabel)) body.push(skipLabel);
         return rendered;
       }
+      rendered += Math.max(0, childFiles);
     }
 
     return rendered;
@@ -919,11 +920,12 @@ export function renderMapIndex(map: RepoMap, maxBytes = 102_400): string {
   const sortedRoot = [...root.children.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   for (const [, node] of sortedRoot) {
     const n = renderNode(node);
-    if (n === 0 && node.totalFiles > 0) {
+    if (n === -1) {
       body.push(`+${node.totalFiles} files in ${node.path}/ not shown — use inspect`);
     }
   }
 
+  if (body.length === 0) body.push("(no code files in this repo)");
   return `${headLine}\n${body.join("\n")}\n${footLine}`;
 }
 
