@@ -261,13 +261,13 @@ export class HoldingStore {
       throw new Error(`holdings inventory alone exceeds ${maxChars.toLocaleString()} chars (${inventoryUsed.toLocaleString()}); raise maxFiles or reduce file path lengths`);
     }
 
-    // Phase 2: body bytes (size + recency gated)
+    // Phase 2: body bytes (recency-gated — evicted files drop their
+    // inspected ranges and are metadata-only only)
     const bodyChars = maxChars - inventoryUsed;
     const ordered = [...shown].sort((a, b) => {
-      const al = this.recencyLevel(a, currentTurn);
-      const bl = this.recencyLevel(b, currentTurn);
-      const r = (al === "evicted" ? 0 : al === "budget" ? 1 : 2) - (bl === "evicted" ? 0 : bl === "budget" ? 1 : 2);
-      return r || b.priority - a.priority || b.turn - a.turn || a.path.localeCompare(b.path);
+      const aEv = this.recencyLevel(a, currentTurn) === "evicted";
+      const bEv = this.recencyLevel(b, currentTurn) === "evicted";
+      return (aEv ? 0 : 1) - (bEv ? 0 : 1) || b.priority - a.priority || b.turn - a.turn || a.path.localeCompare(b.path);
     });
     const bodies: string[] = [];
     let used = 0;
@@ -280,24 +280,15 @@ export class HoldingStore {
       if (!fileLines) continue;
       const totalLines = fileLines.length;
 
-      // Decide which ranges to send based on size and recency.
-      // Files over outlineLines are always metadata-only unless the model
-      // inspected specific ranges (stored in holding.ranges).
+      // Body bytes: small files (<= fullLines) get full body; otherwise only
+      // inspected ranges. Metadata (symbols, imports, docs) is always shown
+      // in the inventory above, so the model has a strong index to request
+      // specific ranges via inspect or context recall.
       let toSend: Array<[number, number]> | null = null;
       if (totalLines <= this.cfg("fullLines")) {
-        toSend = [[1, totalLines]]; // full
-      } else if (holding.seeded && totalLines <= this.cfg("seededFullLines")) {
-        toSend = [[1, totalLines]]; // full
-      } else if (totalLines <= this.cfg("outlineLines")) {
-        if (level === "budget") {
-          toSend = [...holding.ranges]; // user-chosen ranges (budget recency)
-        } else if (level === "active") {
-          toSend = [[1, totalLines]]; // recent, full file if under outlineLines
-        }
-      } else if (level === "active") {
-        // File >= outlineLines, active recency: only send inspected ranges,
-        // never dump the first 500 lines.
-        toSend = holding.ranges.length > 0 ? [...holding.ranges] : null;
+        toSend = [[1, totalLines]]; // full small file
+      } else if (holding.ranges.length > 0) {
+        toSend = [...holding.ranges]; // inspected ranges only
       }
       if (!toSend || toSend.length === 0) {
         // Metadata-only: body block skipped entirely.
