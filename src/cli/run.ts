@@ -91,13 +91,36 @@ async function mergeBranch(
   const step = async (args: string[], cwd: string, what: string): Promise<boolean> => {
     const result = await runProc("git", args, { cwd, timeoutMs: 30_000 });
     if (result.outcome !== "exit" || result.code !== 0) {
+      // Git reports merge conflicts on stdout ("CONFLICT ..."), not stderr,
+      // so a stderr-only message renders as an opaque "exit 1". Prefer
+      // conflict lines; fall back to stderr's first line.
+      const lines = [...result.stdout.split("\n"), ...result.stderr.split("\n")].map((l) => l.trim()).filter(Boolean);
+      const conflicts = lines.filter((l) => /conflict/i.test(l)).slice(0, 5);
+      const firstLine = conflicts.length > 0 ? conflicts.join("; ") : (result.stderr.trim().split("\n")[0] ?? "");
       const desc =
-        `${what} failed (${result.outcome}${result.code === null ? "" : ` exit ${result.code}`})${result.stderr.trim() ? `: ${result.stderr.trim().split("\n")[0]}` : ""}`;
+        `${what} failed (${result.outcome}${result.code === null ? "" : ` exit ${result.code}`})${firstLine ? `: ${firstLine}` : ""}`;
       process.stderr.write(`merge ${branch}: ${desc}\n`);
       if (!failure) failure = desc;
       return false;
     }
     return true;
+  };
+  /** Files with unresolved merge conflicts in `cwd` (empty when clean). */
+  const conflictedFiles = async (cwd: string): Promise<string[]> => {
+    try {
+      const unmerged = await runProc("git", ["diff", "--name-only", "--diff-filter=U"], { cwd, timeoutMs: 15_000 });
+      if (unmerged.outcome !== "exit" || unmerged.code !== 0) return [];
+      return unmerged.stdout.trim().split("\n").map((l) => l.trim()).filter(Boolean);
+    } catch {
+      return [];
+    }
+  };
+  const abortMerge = async (cwd: string): Promise<void> => {
+    try {
+      await runProc("git", ["merge", "--abort"], { cwd, timeoutMs: 15_000 });
+    } catch {
+      // Nothing to abort or abort failed; the branch still holds the work.
+    }
   };
   const fail = (detail?: string): { ok: boolean; detail?: string } => ({ ok: false, detail: detail ?? failure });
   try {
@@ -107,25 +130,37 @@ async function mergeBranch(
     // loudly at push time instead.
     await step(["fetch", "origin"], topRoot, "fetch");
     // Bring upstream into the feature branch (conflicts surface in the worktree).
-    if (!(await step(["merge", "origin/main", "-m", `sync ${branch} with upstream`], worktreeRoot, "sync"))) {
-      return fail();
+    // Sibling runs merge to main constantly, so a moved upstream is routine,
+    // not exceptional: retry once with a whitespace/move-tolerant diff before
+    // giving up. Still a real merge — content conflicts fail again below and
+    // are reported with exact files instead of an opaque "exit 1".
+    let synced = await step(["merge", "origin/main", "-m", `sync ${branch} with upstream`], worktreeRoot, "sync");
+    if (!synced) {
+      const files = await conflictedFiles(worktreeRoot);
+      await abortMerge(worktreeRoot);
+      const retry = await runProc(
+        "git",
+        ["merge", "-X", "patience", "-X", "ignore-all-space", "origin/main", "-m", `sync ${branch} with upstream`],
+        { cwd: worktreeRoot, timeoutMs: 30_000 },
+      );
+      if (retry.outcome === "exit" && retry.code === 0) {
+        synced = true;
+      } else {
+        await abortMerge(worktreeRoot);
+        const retryFiles = await conflictedFiles(worktreeRoot);
+        const named = [...files, ...retryFiles.filter((f) => !files.includes(f))];
+        return fail(
+          `sync conflicts in: ${named.length > 0 ? named.join(", ") : "(unknown files)"} — resolve in the worktree and merge ${branch} manually; the branch keeps all committed work`,
+        );
+      }
     }
     // Merge feature branch into main. On conflict, name the paths and abort:
     // a dirty main checkout poisons every later run, while the branch keeps
     // all the work for a manual retry.
     if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) {
-      try {
-        const unmerged = await runProc("git", ["diff", "--name-only", "--diff-filter=U"], { cwd: topRoot, timeoutMs: 15_000 });
-        const files = unmerged.stdout.trim();
-        if (files) failure = `conflicts in: ${files.split("\n").join(", ")}`;
-      } catch {
-        // Keep the step failure; the branch still holds the work.
-      }
-      try {
-        await runProc("git", ["merge", "--abort"], { cwd: topRoot, timeoutMs: 15_000 });
-      } catch {
-        // Main stays conflicted; the next run reports it. Nothing is lost.
-      }
+      const files = await conflictedFiles(topRoot);
+      if (files.length > 0) failure = `conflicts in: ${files.join(", ")}`;
+      await abortMerge(topRoot);
       return fail();
     }
     // A source merge is not a working binary for a compiled project. Rebuild

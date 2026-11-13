@@ -110,4 +110,5 @@ finish {outcome: "completed", summary: "renamed routePayment to route in router.
 - Log what you find after every inspect. Without notes, you will re-discover the same code.
 - The plan is the full path to completion. When all steps show `[x]`, call `finish`.
 - Do not re-run a tool whose result is stored. Use `context recall {id}`.
+- Never resubmit identical edit/write arguments after a validation failure — re-inspect the file or symbol first; the on-disk state moved under you. Never rerun a failing build or test without changing code first.
 - Keep changes minimal. Follow project conventions.

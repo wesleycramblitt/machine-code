@@ -741,6 +741,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     /** Successful read-only command results for the current file state. */
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
     let changeEpoch = 0;
+    /** Verbatim-retry escalation state (same tool+args+error across turns). */
+    let lastFailSig = "";
+    let identicalFailures = 0;
     /** Whether named code blocks have been extracted for the current turn. */
     let namedBlocksExtracted = false;
 
@@ -894,6 +897,33 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             };
           }
           const result = await execute(id, params, signal, onUpdate);
+          // Verbatim-retry escalation: the same tool+args failing with the
+          // same error three turns running means the model is stuck, not
+          // exploring (observed: identical edit/write args resubmitted 5-8x).
+          // Not a gate — just a louder hint pointing at the way out.
+          if (result.isError) {
+            const errText = result.content
+              .filter((item): item is { type: "text"; text: string } => item.type === "text")
+              .map((item) => item.text)
+              .join("\n");
+            const failSig = `${key}::${errText.slice(0, 200)}`;
+            if (failSig === lastFailSig) {
+              identicalFailures += 1;
+            } else {
+              lastFailSig = failSig;
+              identicalFailures = 1;
+            }
+            if (identicalFailures >= 3) {
+              recorder.event("identical_failure", { tool: tool.name, count: identicalFailures });
+              result.content.push({
+                type: "text" as const,
+                text: `[loop: this exact call failed ${identicalFailures} times with the same error. Stop resubmitting it — re-read the target first (inspect the file or symbol to see its current state), then change the approach.]`,
+              });
+            }
+          } else {
+            lastFailSig = "";
+            identicalFailures = 0;
+          }
           if (!result.isError && (tool.name === "edit" || tool.name === "write")) {
             changeEpoch += 1;
             commandCache.clear();
