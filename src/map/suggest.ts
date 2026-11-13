@@ -427,7 +427,7 @@ export interface FileHint {
   /** Raw request tokens with code or prose hits on this file: the body-grep set. */
   keywords: string[];
   /** Keyword → body lines, populated by enrichHints (run paths only). */
-  keywordLines?: Array<{ keyword: string; lines: number[]; hits: number }>;
+  keywordLines?: Array<{ keyword: string; lines: number[] }>;
   /** Numbered bodies of matched symbols, populated by enrichHints. */
   bodies?: Array<{ symbol: string; start: number; text: string }>;
   /** Exact line ranges the request cites (`path:123-145`). */
@@ -719,9 +719,6 @@ export function suggestHints(args: {
 }
 
 /** Body-evidence caps: keyword lines stay a pointer, symbol bodies stay small. */
-const KEYWORD_LINES_SHOWN = 3;
-/** Keywords hitting more lines than this do not localize: omit the lines. */
-const KEYWORD_LINES_MAX_HITS = 20;
 const HINT_BODY_MAX_LINES = 200;
 const HINT_BODIES_MAX_BYTES = 12 * 1024;
 /** Cited `path:start-end` ranges inline whole up to this height. */
@@ -734,6 +731,64 @@ const HINT_CITED_MAX_LINES = 100;
  * skip this (per-frame disk reads); run prompts must not.
  */
 export function enrichHints(hints: readonly FileHint[], root: string): FileHint[] {
+  return hints.map((hint) => {
+    let raw: string;
+    try {
+      raw = readFileSync(join(root, hint.path), "utf8");
+    } catch {
+      return hint;
+    }
+    const lines = raw.split("\n");
+    // Cited ranges first: the request names exact lines, so they ride along
+    // verbatim (edit-ready). A symbol body that covers a cited range makes
+    // the range redundant — the body (with context) wins. Small files skip
+    // bodies: they travel whole through the file path, so a body would only
+    // duplicate already-inlined content. They still get keyword lines.
+    const bodies: Array<{ symbol: string; start: number; text: string }> = [];
+    if (!hint.small) {
+      let used = 0;
+      const takeBody = (symbol: string, start: number, end: number): void => {
+        const height = end - start + 1;
+        if (height <= 0) return;
+        const text = lines
+          .slice(start - 1, end)
+          .map((line, index) => `${start + index}: ${line}`)
+          .join("\n");
+        const cost = Buffer.byteLength(text, "utf8");
+        if (used + cost > HINT_BODIES_MAX_BYTES) return;
+        used += cost;
+        bodies.push({ symbol, start, text });
+      };
+      const covered = (start: number, end: number): boolean =>
+        bodies.some((body) => {
+          const bodyEnd = body.start + body.text.split("\n").length - 1;
+          return body.start <= start && bodyEnd >= end;
+        });
+      for (const symbol of hint.symbols) {
+        if (symbol.end - symbol.start + 1 > HINT_BODY_MAX_LINES) continue;
+        takeBody(symbol.name, symbol.start, symbol.end);
+      }
+      for (const range of hint.citedRanges ?? []) {
+        if (range.end - range.start + 1 > HINT_CITED_MAX_LINES) continue;
+        if (covered(range.start, range.end)) continue;
+        takeBody("", range.start, range.end);
+      }
+    }
+    if (hint.keywords.length === 0) return hint.small ? hint : { ...hint, bodies };
+    const keywordLines: Array<{ keyword: string; lines: number[] }> = [];
+    for (const keyword of hint.keywords) {
+      const hits: number[] = [];
+      if (keyword.length >= 4) {
+        const needle = keyword.toLowerCase();
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i]!.toLowerCase().includes(needle)) hits.push(i + 1);
+        }
+      } else {
+        // Short tokens ("run") substring-match everywhere ("pruning");
+        // word boundaries keep them honest.
+        let pattern: RegExp;
+        try {
+          pattern = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\export function enrichHints(hints: readonly FileHint[], root: string): FileHint[] {
   return hints.map((hint) => {
     if (hint.small) return hint;
     let raw: string;
@@ -807,6 +862,20 @@ export function enrichHints(hints: readonly FileHint[], root: string): FileHint[
       }
     }
     return { ...hint, keywordLines, bodies };
+  });
+}")}\\b`, "i");
+        } catch {
+          continue;
+        }
+        for (let i = 0; i < lines.length; i++) {
+          if (pattern.test(lines[i]!)) hits.push(i + 1);
+        }
+      }
+      if (hits.length > 0) {
+        keywordLines.push({ keyword, lines: hits });
+      }
+    }
+    return hint.small ? { ...hint, keywordLines } : { ...hint, keywordLines, bodies };
   });
 }
 
