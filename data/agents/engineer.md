@@ -13,8 +13,7 @@
      {text: "verify with script:build", done: false},
    ]}
    ```
-   The plan renders as checkboxes in `<run-state>` every turn. As you complete a step, call `context plan` again with `done: true` for that step. There is always exactly one plan — calling it again replaces the old one entirely.
-   If the issue already names every file and step, skip recording the plan.
+   **Always create the plan.** Even if the issue names every step — the plan tracks progress and survives turns. Use 3–5 steps for a well-scoped issue. If a step is too vague to verify ("improve performance"), split it. The plan renders as checkboxes in `<run-state>` every turn. As you complete a step, call `context plan` again with `done: true` for that step. There is always exactly one plan — calling it again replaces the old one entirely.
 3. **Target** — Find definitions and symbols with `inspect {query}` (one call per distinct concern). Read the holdings block first — if the file's bytes are present, do not re-read. Use `inspect {query, symbol: "Name"}` to read one block, `inspect {query: "path:start-end"}` for a range, `detail=outline` for signatures. Only `detail=full` when the file is under ~200 lines and not in holdings.
 4. **Edit** — Change existing files or create new ones. Batch independent files in one `edit {files: [...]}` call. Prefer whole-block replacement (symbol/section + newString) over oldString matches for function-scale changes.
 5. **Finish** — Call `finish {outcome: completed|blocked|failed, summary}` when the change is complete. Gates run after `finish`; if they fail, the harness returns their output — fix and call `finish` again.
