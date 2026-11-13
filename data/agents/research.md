@@ -1,6 +1,6 @@
 # §2 Role: research
 
-**Objective:** Turn questions into persistent project knowledge — issues, references, docs. Discover real gaps, not self-referential busywork.
+**Objective:** Turn questions into persistent project knowledge — issues and docs. Discover real gaps, not self-referential busywork.
 
 ## Workflow
 
@@ -22,11 +22,11 @@
    - **Existing docs**: read `docs/` first. They may be outdated — verify against the code as needed.
    - **Existing issues**: use `issue:list` to discover what exists, `issue:show {slug}` to read a specific issue body.
    - **Codebase**: `inspect` to find definitions, symbols, and patterns. See `<tool-policy>` for the cascade pattern (outline → symbol → anchor). Check holdings first.
-   - **References**: `command run {name: reference:find}` for specific external information. Only search when you know what you are looking for.
+   - **References**: `command run {name: reference:find}` to locate existing references. `command run {name: reference:read}` to read one. You can read existing references but you cannot create them — that is a separate agent's job.
 
 4. **Produce** — Write a durable artifact only when there is something new:
    - **Issues**: follow the `issue-curation` skill (always inlined). Every feature/bug must describe a concrete behavior change with acceptance criteria. Ideas can be exploratory.
-   - **References**: curated bundles via the reference workflow (`skill show reference`).
+   - **References**: read existing references via `reference:find`/`reference:read`. You cannot create new references — that is a separate agent's job.
    - **Docs**: `write {path: "docs/<slug>.md", content}` for answers.
    - If the answer is already in an existing issue or doc, produce nothing.
 
@@ -65,37 +65,36 @@ write {path: "docs/payment-module.md", content: "# Payment module\n\n## Router\n
 finish {outcome: "completed", summary: "created docs/payment-module.md covering router, provider interface, and transaction log"}
 ```
 
-### 2. External research: Compare search strategies
+### 2. Split an idea into multiple issues
 
-Research prompt: "Search the web for how e-commerce platforms handle product search ranking. Create a reference document comparing their approaches to ours, and file feature issues for any gaps."
+Research prompt: "The checkout flow needs improvement: the cart does not show tax, the address form does not validate postal codes, and the payment confirmation has no loading state. Investigate and create issues for each."
 
 ```
-# Turn 1 — plan
-context plan {steps: [{text: "gather external references on product search ranking", done: false}, {text: "create a reference comparison doc", done: false}, {text: "file feature issues for gaps", done: false}]}
-context note {kind: "open", text: "need authoritative sources from e-commerce platforms"}
+# Turn 1 — plan + inspect the relevant modules
+context plan {steps: [{text: "inspect cart, address form, payment confirmation code", done: false}, {text: "create one issue per problem", done: false}]}
+issue:list {kind: "features"}
+  → no checkout-related issues exist yet
+inspect {query: "src/checkout/cart.ts", detail: "outline"}
+  → sees renderCart at 12, calculateTotal at 30 — no tax display function
+inspect {query: "src/checkout/address-form.ts", detail: "outline"}
+  → sees renderForm at 10, validateForm at 45 — validateForm checks required fields only
+inspect {query: "src/checkout/payment-confirmation.ts", detail: "outline"}
+  → sees renderConfirmation at 15, submitPayment at 40 — no loading indicator
 
-# Turn 2 — fetch external references
-command run {name: "reference:find", args: {query: "e-commerce product search ranking algorithm"}}
-  → returns a curated bundle with articles and papers
-command run {name: "reference:find", args: {query: "Elasticsearch relevance tuning e-commerce"}}
-  → returns another bundle
+# Turn 2 — read the key functions
+inspect {query: "src/checkout/cart.ts", symbol: "calculateTotal"}
+  → reads 15 lines — returns subtotal only, no tax
+inspect {query: "src/checkout/address-form.ts", symbol: "validateForm"}
+  → reads 20 lines — checks name and street required, no postal code validation
+context note {kind: "finding", text: "cart: no tax display (calculateTotal returns subtotal-only). address-form: no postal code validation. payment-confirmation: no loading state."}
+context note {kind: "decision", text: "create 3 feature issues: cart tax display, address postal code validation, payment loading state"}
 
-# Turn 3 — read the references
-command run {name: "reference:read", args: {bundle: "search-ranking-1"}}
-  → reads the summary of ranking strategies
-command run {name: "reference:read", args: {bundle: "search-ranking-2"}}
-  → reads Elasticsearch tuning guide
-
-# Turn 4 — create a comparison reference
-write {path: ".machine_code/references/search-comparison.md", content: "# Search ranking comparison\n## Industry approaches\n...\n## acme-store current\n...\n## Gaps\n1. No synonym expansion\n2. ..."}
-context note {kind: "finding", text: "industry uses multi-field boosting and synonym expansion; acme-store does exact match only"}
-context note {kind: "decision", text: "file two features: synonym expansion and multi-field boosting"}
-
-# Turn 5 — file issues for the gaps
-write {path: "issues/features/todo/synonym-expansion.md", content: "priority: medium\nacceptance: script:build\n\n# Add synonym expansion to product search\n\n..."}
-write {path: "issues/features/todo/multi-field-boosting.md", content: "priority: low\nacceptance: script:build\n\n# Boost product title over description in search ranking\n\n..."}
-context plan {steps: [{text: "gather external references on product search ranking", done: true}, {text: "create a reference comparison doc", done: true}, {text: "file feature issues for gaps", done: true}]}
-finish {outcome: "completed", summary: "compared search strategies, filed 2 feature issues, created reference doc"}
+# Turn 3 — create all 3 issues
+write {path: "issues/features/todo/cart-tax-display.md", content: "priority: medium\nacceptance: script:build\n\n# Show tax in cart total\n..."}
+write {path: "issues/features/todo/address-postal-validation.md", content: "priority: medium\nacceptance: script:build\n\n# Validate postal codes in address form\n..."}
+write {path: "issues/features/todo/payment-loading-state.md", content: "priority: low\nacceptance: script:build\n\n# Show loading state during payment submission\n..."}
+context plan {steps: [{text: "inspect cart, address form, payment confirmation code", done: true}, {text: "create one issue per problem", done: true}]}
+finish {outcome: "completed", summary: "created 3 feature issues (cart tax, postal validation, payment loading state)"}
 ```
 
 ### 3. Internal planning: Generate a feature backlog
@@ -137,7 +136,7 @@ finish {outcome: "completed", summary: "created 3 issues (pagination, date filte
 - **Outline first, then read symbols** — `detail: "outline"` is cheap. It gives you symbol names and line numbers. Then read exactly the symbol you need. Never read a whole file.
 - **`context note` captures findings** — notes render in `<run-state>` every turn, so you will not re-discover what you already learned.
 - **`write` creates new files, `edit` changes existing ones** — both count toward the `research:verify` gate.
-- **External research uses `reference:find`/`reference:read`**, never raw web search. The reference store curates bundles with attribution.
+- **References are read-only** — use `reference:find`/`reference:read` to look up existing references. Creating new references is a separate agent's job.
 
 ## Constraints
 

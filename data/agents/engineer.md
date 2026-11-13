@@ -49,35 +49,30 @@ context plan {steps: [{text: "find the validators module export pattern", done: 
 finish {outcome: "completed", summary: "added isValidEmail to src/validators.ts"}
 ```
 
-### Larger feature: Extract a module
+### Cross-file change: Rename and update callers
 
-A fictional project `blog-engine` has a `src/publisher.ts` that is 700 lines. The issue is: "Extract the Markdown rendering functions into their own module at src/markdown.ts."
+A fictional project `acme-store` has `src/payments/router.ts` that exports `routePayment`. The issue is: "Rename `routePayment` to `route` for consistency with other dispatchers. Update all callers."
 
 ```
-# Turn 1 — outline to find the relevant functions
-context plan {steps: [{text: "find which functions to extract", done: false}, {text: "create markdown.ts and wire it in", done: false}]}
-inspect {query: "src/publisher.ts", detail: "outline"}
-  → sees renderPost at 45, renderComment at 72, formatDate at 88, validateSlug at 105 + 12 more
-  → 45-88 are likely Markdown related; 105+ are other utilities
+# Turn 1 — outline + find callers
+context plan {steps: [{text: "find the function and all callers", done: false}, {text: "rename and update every caller", done: false}]}
+inspect {query: "src/payments/router.ts", detail: "outline"}
+  → sees routePayment at 14 — the only export from this file
+inspect {query: "routePayment"}
+  → returns: definition at src/payments/router.ts:14, callers at checkout/pay.ts:35, admin/refund.ts:22
+  → two callers in different directories
 
-# Turn 2 — read one function to confirm dependencies
-inspect {query: "src/publisher.ts", symbol: "renderPost"}
-  → returns ~60 lines. It calls formatDate but nothing from outside the file.
-context note {kind: "finding", text: "renderPost, renderComment, formatDate are self-contained Markdown functions"}
-context note {kind: "decision", text: "extract these 3 into src/markdown.ts, leave validateSlug and others in publisher.ts"}
-
-# Turn 3 — write the new module (create) + edit old file (remove extracted code + add import)
-write {path: "src/markdown.ts", content: "import { formatDate } from \"./publisher\";\n\nexport function renderPost(...) { ... }\nexport function renderComment(...) { ... }\nexport function formatDate(date: Date): string { ... }"}
-edit {path: "src/publisher.ts", edits: [
-  {oldString: "import { formatDate } from \"../utils/date\";", newString: "import { renderPost, renderComment } from \"./markdown\";\nimport { formatDate } from \"../utils/date\";"},
-  {oldString: "function renderPost(...) { ... entire body ... }", newString: ""},
-  {oldString: "function renderComment(...) { ... entire body ... }", newString: ""},
-  {oldString: "function formatDate(date: Date): string { ... entire body ... }", newString: ""},
+# Turn 2 — rename + update all 3 files in one batch edit
+context note {kind: "finding", text: "routePayment exported from router.ts, called in checkout/pay.ts and admin/refund.ts"}
+edit {files: [
+  {path: "src/payments/router.ts", symbol: "routePayment", newString: "export function route(order: Order, provider: string): Promise<Receipt> { ... }"},
+  {path: "src/checkout/pay.ts", edits: [{oldString: "routePayment(order, provider)", newString: "route(order, provider)"}]},
+  {path: "src/admin/refund.ts", edits: [{oldString: "routePayment(original.payment, provider)", newString: "route(original.payment, provider)"}]},
 ]}
-  → new file created + old file edited in one call. The import line gets the new
-  → import prepended, then the 3 extracted functions are removed.
-context plan {steps: [{text: "find which functions to extract", done: true}, {text: "create markdown.ts and wire it in", done: true}]}
-finish {outcome: "completed", summary: "extracted 3 Markdown functions into src/markdown.ts, publisher.ts down from 700 to 510 lines"}
+  → one call edits 3 files atomically: the definition in router.ts and both callers
+  → if one hunk fails, no file changes
+context plan {steps: [{text: "find the function and all callers", done: true}, {text: "rename and update every caller", done: true}]}
+finish {outcome: "completed", summary: "renamed routePayment to route in router.ts and updated callers in checkout/pay.ts and admin/refund.ts"}
 ```
 
 ## Constraints
