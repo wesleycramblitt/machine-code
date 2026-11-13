@@ -46,7 +46,7 @@ export const TOOL_GUIDE = [
   "  Omit `path` to search everything or set `path: \"src/file.ts\"` for one file.",
   '  Do not use `path: "src"` with a content keyword — that only lists the directory.',
   "",
-  '  **Regex search (fallback for multi-word patterns):**',
+  '  **Step 6 — Regex search (fallback for multi-word patterns):**',
   '  `{"query": "pattern", "regex": true}`',
   "  Single keywords without regex always work. If regex fails, use plain keyword search.",
   "",

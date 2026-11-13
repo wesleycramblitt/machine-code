@@ -181,6 +181,18 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
 
 /* -------------------------------------------------------------------- edit */
 
+/** Check whether a hunk or spec has at least one content source for a prefix (old/new). */
+function hasContentSource(obj: Record<string, unknown>, prefix: "old" | "new"): boolean {
+  const plain = obj[`${prefix}String`];
+  const b64 = obj[`${prefix}String_b64`];
+  const nb = obj[`${prefix}String_named_block`];
+  return (
+    (typeof plain === "string" && plain.trim() !== "") ||
+    (typeof b64 === "string" && b64.trim() !== "") ||
+    (typeof nb === "string" && nb.trim() !== "")
+  );
+}
+
 /**
  * Weak models fill every field: a multi-hunk call arrives with top-level
  * `oldString: ""` / `newString: ""` alongside a real `edits` array, which
@@ -242,12 +254,14 @@ function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknow
     changed = true;
   }
   if (Array.isArray(out.edits)) {
+    // A hunk is valid if it has at least one oldString source (plain, b64, or named block)
+    // and at least one newString source.
     const kept = out.edits.filter(
-      (hunk): hunk is { oldString: string; newString: string } =>
+      (hunk): hunk is Record<string, unknown> =>
         !!hunk &&
         typeof hunk === "object" &&
-        typeof (hunk as Record<string, unknown>).oldString === "string" &&
-        ((hunk as Record<string, unknown>).oldString as string).trim() !== "",
+        hasContentSource(hunk as Record<string, unknown>, "old") &&
+        hasContentSource(hunk as Record<string, unknown>, "new"),
     );
     if (kept.length !== out.edits.length) {
       if (kept.length > 0) out.edits = kept;
