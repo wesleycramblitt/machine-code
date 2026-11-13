@@ -1,9 +1,9 @@
 /**
- * machine_code — the `context` tool: run state and parent-run inspection.
+ * machine_code — the `context` tool: run state, parent-run inspection, and plan.
  *
  * The runner ingests tool results automatically. This tool lets the model
  * record decisions/findings, recall artifact bytes, forget stale facts, view
- * its state, or inspect a parent run's record.
+ * its state, inspect a parent run's record, or manage a durable plan checklist.
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -20,13 +20,18 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
-const CONTEXT_ACTIONS = new Set(["note", "recall", "forget", "state", "parent"]);
+const CONTEXT_ACTIONS = new Set(["note", "recall", "forget", "state", "parent", "plan"]);
 const CONTEXT_KINDS = new Set(["finding", "decision", "open"]);
+
+const PlanEntrySchema = Type.Object({
+  text: Type.String({ description: "Step description, one short sentence." }),
+  done: Type.Boolean({ description: "true when this step is complete." }),
+});
 
 const ContextParams = Type.Object({
   action: Type.String({
-    enum: ["note", "recall", "forget", "state", "parent"],
-    description: "Memory or context operation: note | recall | forget | state | parent.",
+    enum: ["note", "recall", "forget", "state", "parent", "plan"],
+    description: "Memory operation: note | recall | forget | state | parent | plan.",
   }),
   kind: Type.Optional(
     Type.String({
@@ -39,6 +44,13 @@ const ContextParams = Type.Object({
     Type.Array(Type.String(), { description: "References: path, path:line, or path:start-end." }),
   ),
   id: Type.Optional(Type.String({ description: "Artifact id for recall, fact/question id for forget, or run id for parent." })),
+  steps: Type.Optional(
+    Type.Array(PlanEntrySchema, {
+      description:
+        "Plan checklist: [{text: \"...\", done: false}, ...]. Replaces the entire plan. " +
+        "Set to [] to clear. The plan renders in <run-state> every turn as checkboxes.",
+    }),
+  ),
 });
 
 /**
@@ -75,7 +87,9 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     name: "context",
     label: "context",
     description:
-      "Run state and memory. note (kind finding|decision|open) records conclusions; " +
+      "Run state, memory, and plan. " +
+      "plan (steps: [{text, done}]) sets a durable checklist — there is always exactly one plan; " +
+      "calling it again replaces the old one. note (kind finding|decision|open) records conclusions; " +
       "recall (id) fetches stored artifacts; forget resolves facts; state dumps everything; " +
       "parent loads a parent run's record. " +
       "For codebase queries (definitions, references, file outlines) use inspect instead.",
@@ -128,9 +142,6 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
             if (!record) return fail(`no run ${params.id}`);
             const status = typeof record.status === "string" ? record.status : undefined;
             const stopReason = typeof record.stopReason === "string" ? record.stopReason : undefined;
-            // Same suppression as the assembled parent index: a stopped
-            // run's closing summary is not authoritative, so its result is
-            // withheld both inline and here.
             const stopped = status !== undefined && status !== "completed" && status !== "running";
             const request = typeof record.request === "string" ? record.request : "";
             const error = typeof record.error === "string" ? record.error : "";
@@ -145,6 +156,13 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
               ...(!stopped && finalText ? [`result: ${finalText}`] : []),
             ].filter(Boolean);
             return ok(capText(lines.join("\n"), READ_CAP_BYTES).text);
+          }
+          case "plan": {
+            if (!params.steps) return fail("plan requires steps: [{text, done}, ...]");
+            const steps = params.steps.map((s) => ({ text: s.text.slice(0, 240), done: s.done }));
+            memory.setPlan(steps);
+            const done = steps.filter((s) => s.done).length;
+            return ok(`plan set: ${done}/${steps.length} steps done`);
           }
           default:
             return fail(`unknown context action "${params.action}". Use one of: ${[...CONTEXT_ACTIONS].join(", ")}.`);

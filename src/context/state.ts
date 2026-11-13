@@ -26,6 +26,19 @@ import { ingestTurn as ingestTurnInto } from "./ingest.js";
 const MAX_STATE_CHARS = 10_000;
 
 export type FactKind = "finding" | "decision" | "change";
+
+export interface PlanEntry {
+  text: string;
+  done: boolean;
+}
+
+export interface RunPlan {
+  /** Fixed id so there is always exactly one plan. */
+  id: string;
+  steps: PlanEntry[];
+  turn: number;
+  status: "active" | "stale";
+}
 export type RefKind = "read" | "search" | "edit";
 
 export interface Ref {
@@ -61,6 +74,7 @@ export interface RunState {
   phase: "orient" | "target" | "act" | "verify" | "done";
   facts: Fact[];
   open: OpenQuestion[];
+  plan: RunPlan | null;
   counters: { turn: number; steps: number; artifacts: number };
 }
 
@@ -78,7 +92,8 @@ type Entry =
   | { type: "next"; text: string; turn?: number }
   | { type: "phase"; phase: RunState["phase"] }
   | { type: "open"; question: OpenQuestion }
-  | { type: "turn"; turn: number };
+  | { type: "turn"; turn: number }
+  | { type: "plan"; plan: RunPlan };
 
 interface EventSink {
   dir: string;
@@ -166,6 +181,7 @@ export class RunStateStore {
       phase: "orient",
       facts: [],
       open: [],
+      plan: null,
       counters: { turn: 0, steps: 0, artifacts: 0 },
     };
     this.load();
@@ -323,6 +339,9 @@ export class RunStateStore {
         this.state.counters.turn = Math.max(this.state.counters.turn, entry.turn);
         this.state.counters.steps += 1;
         break;
+      case "plan":
+        this.state.plan = entry.plan;
+        break;
     }
   }
 
@@ -369,6 +388,27 @@ export class RunStateStore {
 
   setPhase(phase: RunState["phase"]): void {
     this.append({ type: "phase", phase });
+  }
+
+  /**
+   * Set or update the run's durable plan checklist. The plan is a
+   * fixed list of steps with done/not-done status. The model calls
+   * this at the start of a non-trivial change (or when the issue
+   * does not name every step) and updates it as work completes.
+   *
+   * There is always exactly one plan: calling this replaces the
+   * previous one entirely. Set `steps` to `[]` to clear the plan.
+   */
+  setPlan(steps: Array<{ text: string; done: boolean }>, turn?: number): void {
+    const at = turn ?? this.currentTurn();
+    const plan: RunPlan = {
+      id: "plan",
+      steps,
+      turn: at,
+      status: "active",
+    };
+    this.append({ type: "plan", plan });
+    this.recorder?.event("state_plan", { turn: at, steps: steps.length, done: steps.filter((s) => s.done).length });
   }
 
   putArtifact(text: string): Artifact {
@@ -525,6 +565,15 @@ export class RunStateStore {
           ? "fix any gate output, then call finish again"
           : "make the smallest change that satisfies the issue, then call finish";
       const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`, `Phase: ${this.state.phase} · next: ${next}`];
+      // Plan checklist renders first — it is the current task sequence.
+      const plan = this.state.plan;
+      if (plan && plan.status === "active" && plan.steps.length > 0) {
+        const done = plan.steps.filter((s) => s.done).length;
+        lines.push(`Plan (${done}/${plan.steps.length} steps done):`);
+        for (const step of plan.steps) {
+          lines.push(step.done ? `  [x] ${step.text}` : `  [ ] ${step.text}`);
+        }
+      }
       if (decisions.length > 0) {
         lines.push("Decisions:");
         for (const fact of decisions) lines.push(`- ${fact.text}`);
