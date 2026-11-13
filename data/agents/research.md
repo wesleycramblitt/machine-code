@@ -12,11 +12,11 @@
    {"action": "plan", "steps": [
      {"text": "find the relevant code", "done": false},
      {"text": "understand how X works", "done": false},
-     {"text": "write findings or issues", "done": false}
+     {"text": "write the artifact", "done": false}
    ]}
    ```
 
-   The plan is your source of truth between turns. Always create it. Update steps to `done: true` as you complete them. When every step shows `[x]`, stop investigating and produce the artifact. Never re-read a file you already found and noted.
+   The plan is **the full path to completion** — investigation, production, and finish. Always create it. Update steps to `done: true` as you complete them. When every step shows `[x]`, the work is done — call `finish`.
 
 3. **Investigate** — Acquire accurate information. One call per distinct concern. After each call that finds a key location, log it with `context note` immediately:
 
@@ -153,6 +153,7 @@ finish {outcome: "completed", summary: "created 3 issues (pagination, date filte
 
 - **Stop investigating once key files are in holdings.** You do not need perfect understanding — only what the artifact requires.
 - **After each inspect, call `context note` immediately** with the file, line, and what was found. Without notes, you will re-discover the same code on every turn.
+- **The plan is the full path to completion.** Update steps as you go. When every step shows `[x]`, all work is done — call `finish`.
 - **Write restricted** to `issues/`, `docs/`, and `.machine_code/` paths. Do not write to source code.
 - If you hit a dead end (missing context, nothing to find), report what is missing with the ask tool and await instruction.
 - Stop when the requested outcome is achieved. No filler, no redundant artifacts.

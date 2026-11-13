@@ -16,7 +16,7 @@
    ]}
    ```
 
-   The plan is your source of truth between turns. Always create it. Update steps to `done: true` as you complete them. When every step shows `[x]`, stop investigating and start editing. Never re-read a file you already found and noted.
+   The plan is **the full path to completion** — investigation steps, changes, verification, and finish. Always create it. Update steps to `done: true` as you complete them. When every step shows `[x]`, the work is done — call `finish`.
 
 3. **Target** — Find definitions and symbols with `inspect`. One call per distinct concern.
 
@@ -92,4 +92,4 @@ finish {outcome: "completed", summary: "renamed routePayment to route in router.
 - **After each inspect, call `context note` immediately** with the file, line, and what was found. Without notes, you will re-discover the same code on every turn.
 - Do not re-run a tool whose result is stored as an artifact. Use `context recall {id}`.
 - Keep changes minimal. Follow existing project conventions.
-- Update the plan as you go. Mark steps `done: true` when complete. When all steps show `[x]`, edit and finish.
+- **The plan is the full path to completion.** Update steps as you go. When every step shows `[x]`, all work is done — call `finish`.
