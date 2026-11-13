@@ -395,9 +395,9 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     { label: "Docs", tone: contextTone("docs"), sectionKey: "section:docs", items: docItems },
     { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
     { label: "Files", tone: C, sectionKey: "section:files", items: fileItems },
+    { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
     { label: "Agent Prompt", tone: W, sectionKey: "section:prompt", items: promptItems },
     { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
-    { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
     { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
   ];
   if (contextTab >= sections.length) contextTab = 0;
