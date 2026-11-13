@@ -31,9 +31,9 @@ function getField(s: NewIssueSettings, field: string): string {
 }
 
 /** Default acceptance gates for a given kind and verification state. */
-export function defaultAcceptance(kind: string, verification: string, hasTest: boolean): string {
+export function defaultAcceptance(kind: string, verification: string): string {
   if (kind === "ideas") return "research:verify";
-  return verification === "verified" && hasTest ? "script:build, script:test" : "script:build";
+  return verification === "verified" ? "script:build, script:test" : "script:build";
 }
 
 export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
@@ -130,7 +130,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     const idx = KIND_CYCLE.indexOf(s.newIssue.kind);
     s.newIssue.kind = KIND_CYCLE[(idx + 1) % KIND_CYCLE.length]!;
     s.newIssue.verification = "direct";
-    s.newIssue.acceptance = defaultAcceptance(s.newIssue.kind, "direct", ctx.hasScript("test"));
+    s.newIssue.acceptance = defaultAcceptance(s.newIssue.kind, "direct");
     ctx.notify(`kind: ${s.newIssue.kind}`);
     ctx.draw();
     return true;
@@ -170,11 +170,11 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
-  if (data === "v") {
+  if (data === "v" && s.newIssue.kind !== "ideas") {
     const cycle = ["direct", "verified"] as const;
     const idx = cycle.indexOf(s.newIssue.verification);
     s.newIssue.verification = cycle[(idx + 1) % cycle.length]!;
-    s.newIssue.acceptance = defaultAcceptance(s.newIssue.kind, s.newIssue.verification, ctx.hasScript("test"));
+    s.newIssue.acceptance = defaultAcceptance(s.newIssue.kind, s.newIssue.verification);
     ctx.notify(`verification: ${s.newIssue.verification}`);
     ctx.draw();
     return true;

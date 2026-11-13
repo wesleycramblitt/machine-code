@@ -41,8 +41,6 @@ export interface KeyServices {
   startNewIssue: (repoRoot?: string) => void;
   /** Create the issue, commit, and push. */
   submitNewIssue: () => void;
-  /** Check whether the repo has a script with this name (e.g. "test", "build"). */
-  hasScript: (name: string) => boolean;
   agentIsolates: (agent: string) => boolean;
   searchSeed: () => string;
   repoRoot: string;

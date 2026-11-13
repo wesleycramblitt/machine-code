@@ -15,7 +15,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
 import { defaultAcceptance } from "./tui/screens/issue-composer/keys.js";
-import { findIssue, hasRepoScript, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
+import { findIssue, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
@@ -305,16 +305,15 @@ export async function runTui(): Promise<void> {
   };
 
   const startNewIssue = (repoRoot = l.repoRoot) => {
-    const hasTest = hasRepoScript(l, "test");
     s.newIssueRepo = repoRoot;
     s.newIssue = {
       kind: "features",
       priority: "medium",
-      acceptance: defaultAcceptance("features", hasTest ? "verified" : "direct", hasTest),
+      acceptance: defaultAcceptance("features", "direct"),
       tags: "",
       depends: "",
       keywords: "",
-      verification: hasTest ? "verified" : "direct",
+      verification: "direct",
       review: "none",
       prompt: "",
     };
@@ -1468,7 +1467,6 @@ export async function runTui(): Promise<void> {
     startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
     startNewIssue, submitNewIssue,
-    hasScript: (name) => hasRepoScript(l, name),
     agentIsolates, searchSeed,
     repoRoot: l.repoRoot,
   };
