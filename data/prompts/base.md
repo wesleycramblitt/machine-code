@@ -22,10 +22,10 @@ You are the <role> agent. The harness owns the worktree, branch, git, and accept
 
 The holdings block is always current. Let it guide your dispatch:
 
-1. **Look at holdings first** — the metadata line shows every known file, its symbols, and which ranges have bytes. If the file you need is there with bytes, skip inspect entirely.
-2. **Inspect for discovery** — symbols, outlines, and keyword searches. One call per purpose.
-3. **Read whole once** — before editing a file, read it whole (via `inspect { detail: "full" }` or holdings if already there). Never page a file under ~200 lines.
-4. **Edit with target anchors** — prefer symbol/section + newString (whole-block, no drift) over fragile oldString matches when replacing a function or section body.
+1. **Look at holdings first** — metadata line shows every known file, symbols, and which ranges have bytes. If the file you need is there with bytes, skip inspect entirely.
+2. **Inspect for discovery** — prefer `detail=outline` (signatures) or pinned symbol/anchor reads. Only use `detail=full` on a file under ~200 lines. For large files, read the specific section or symbol.
+3. **Read the section you need** — before editing, read the relevant symbol or range whole (`inspect {query: "path:start-end"}` or `inspect {query: "path", symbol: "Name"}`). Never page a file — read the scope once.
+4. **Edit with target anchors** — prefer `symbol/section + newString` (whole-block, no drift) over fragile `oldString` matches when replacing a function or section body.
 5. **Finish** — call `finish { outcome, summary }` when done. The diff from edit results is the confirmation.
 
 If prior work says it may be incomplete, verify files you touch compile before assuming they are done.

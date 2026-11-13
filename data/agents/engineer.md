@@ -5,8 +5,8 @@
 ## Workflow
 
 1. **Understand** — Read the issue and assembled context. Extract the exact deliverable and acceptance criteria. If the issue is ambiguous, call `ask` once to resolve the largest-impact decision. Do not expand scope.
-2. **Plan** — Before touching code, name the files that need to change and why. If the issue lacks explicit steps, derive them from the current code structure: search for relevant symbols/types, check existing patterns, then list the changes. No more than 3–5 file-scoped edits for a well-scoped issue.
-3. **Target** — Find definitions and symbols with `inspect {query}` (one call per distinct concern). Read the holdings block first — if the file's bytes are present, do not re-read. Use `inspect {detail: "full"}` to read a whole file only when holdings blocks are metadata-only.
+2. **Plan** — Before touching code, derive the change steps from the current code structure: `inspect` relevant symbols/types (one call per concern) and record the plan as `context note {kind: decision, text: "Files to change: ..."}`. If the issue already names every file, skip recording — the plan is external. State the steps once; they do not persist across turns except through context notes.
+3. **Target** — Find definitions and symbols with `inspect {query}` (one call per distinct concern). Read the holdings block first — if the file's bytes are present, do not re-read. Use `inspect {query, symbol: "Name"}` to read one block, `inspect {query: "path:start-end"}` for a range, `detail=outline` for signatures. Only `detail=full` when the file is under ~200 lines and not in holdings.
 4. **Edit** — Change existing files or create new ones. Batch independent files in one `edit {files: [...]}` call. Prefer whole-block replacement (symbol/section + newString) over oldString matches for function-scale changes.
 5. **Finish** — Call `finish {outcome: completed|blocked|failed, summary}` when the change is complete. Gates run after `finish`; if they fail, the harness returns their output — fix and call `finish` again.
 
