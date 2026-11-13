@@ -33,7 +33,7 @@ import {
   type Issue,
   type IssueStatus,
 } from "../plan/issues.js";
-import { approveIssue, deleteIssue, issueToTaskPacket } from "../tasks/issue.js";
+import { approveIssue, deleteIssue, issueToTaskPacket, unmetDepends } from "../tasks/issue.js";
 import { runItemId } from "../plan/lifecycle.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
@@ -238,6 +238,11 @@ export async function runIssueBuild(
   flags: Map<string, string>,
 ): Promise<number> {
   const slug = issue.slug;
+  const unmet = unmetDepends(l, issue);
+  if (unmet.length > 0) {
+    process.stderr.write(`machine_code: issue ${slug} depends on ${unmet.join(", ")} — build ${unmet.join(", ")} first\n`);
+    return EXIT["blocked"];
+  }
   assertNoActiveRun(l, slug, "build");
   const goal = issue.prompt.trim() || issue.title || slug;
   const packet = issueToTaskPacket(issue);

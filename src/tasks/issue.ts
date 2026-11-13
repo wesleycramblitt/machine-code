@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import { runProc } from "../proc.js";
-import { branchExists, branchState, defaultBaseBranch, mainWorktreeRoot, removeWorktree, type BranchState } from "../worktree.js";
+import { branchExists, branchState, defaultBaseBranch, mainWorktreeRoot, removeWorktree, withMergeLock, type BranchState } from "../worktree.js";
 import { listRuns, RunRecorder, type RunSummary } from "../state/runs.js";
 import { findIssue, listIssues, moveIssue, writeIssue, type Issue, type IssueKind, type IssueStatus, parseKind, legalStatus, ISSUE_KINDS, statusesForKind } from "../plan/issues.js";
 import { runMainBuild } from "../commands/build.js";
@@ -50,6 +50,19 @@ async function commitIssues(layout: Layout, message: string): Promise<void> {
  * Bulild waves: issues in ready/ with all deps satisfied.
  */
 const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+/** Depends slugs that are not done. Empty = clear to build. Enforced at
+ * build/run start so same-file sequences actually serialize: the dependent
+ * issue always builds on the dependency's merged result instead of racing it
+ * and conflicting at merge time. */
+export function unmetDepends(layout: Layout, issue: Issue): string[] {
+  const done = new Set(
+    listIssues(layout)
+      .filter((candidate) => candidate.status === "done")
+      .map((candidate) => candidate.slug),
+  );
+  return issue.depends.filter((dep) => !done.has(dep));
+}
 
 export function planIssueWaves(layout: Layout, maxParallel: number): string[][] {
   const issues = listIssues(layout).filter((issue) => issue.kind !== "ideas" && issue.status === "todo");
@@ -131,10 +144,12 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
     throw new Error(`branch ${branch} has no changes to approve`);
   }
   if (state.code === "ahead") {
-    const merge = await git(root, ["merge", "--no-ff", branch, "-m", `Merge ${branch} (${slug})`]);
-    if (merge.code !== 0) {
-      throw new Error(`merge of ${branch} into ${baseBranch} failed: ${merge.stderr.trim()}; resolve it manually`);
-    }
+    await withMergeLock(root, async () => {
+      const merge = await git(root, ["merge", "--no-ff", branch, "-m", `Merge ${branch} (${slug})`]);
+      if (merge.code !== 0) {
+        throw new Error(`merge of ${branch} into ${baseBranch} failed: ${merge.stderr.trim()}; resolve it manually`);
+      }
+    });
   }
   const build = await runMainBuild(root);
   if (!build.ok) {

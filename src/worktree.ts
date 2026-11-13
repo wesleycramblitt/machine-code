@@ -18,10 +18,12 @@
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -624,6 +626,72 @@ async function recreateWorktreeFromBranchBody(layout: Layout, runId: string, bra
   }
   await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
   return path;
+}
+
+/* ------------------------------------------------------------- merge lock */
+
+/** A merge that outlives its process must not block merges forever. */
+const MERGE_LOCK_STALE_MS = 10 * 60_000;
+/** How long to wait for another run's merge before giving up. */
+const MERGE_LOCK_WAIT_MS = 3 * 60_000;
+
+function mergeLockDir(mainRoot: string): string {
+  return join(mainRoot, ".machine_code", "local", "merge.lock");
+}
+
+/**
+ * Serialize merges per repo. Concurrent runs racing sync → merge → push
+ * corrupt each other's push (non-fast-forward) or stack conflicts on a
+ * moving main. mkdir is atomic: exactly one holder wins. Stale locks (dead
+ * pid or older than 10 minutes) are cleared; otherwise we wait up to
+ * 3 minutes, then fail loudly instead of merging blind.
+ */
+export async function withMergeLock<T>(mainRoot: string, fn: () => Promise<T>): Promise<T> {
+  const dir = mergeLockDir(mainRoot);
+  mkdirSync(join(mainRoot, ".machine_code", "local"), { recursive: true });
+  const ownerFile = join(dir, "owner.json");
+  const me = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+  const deadline = Date.now() + MERGE_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      mkdirSync(dir);
+      break;
+    } catch {
+      // Held by another run — check whether it is still alive below.
+    }
+    let stale = false;
+    try {
+      const raw = JSON.parse(readFileSync(ownerFile, "utf8")) as { pid?: unknown; startedAt?: unknown };
+      const pid = typeof raw.pid === "number" ? raw.pid : NaN;
+      let alive = Number.isFinite(pid);
+      if (alive) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          alive = false;
+        }
+      }
+      const age = Date.now() - Date.parse(typeof raw.startedAt === "string" ? raw.startedAt : "");
+      if (!alive || age > MERGE_LOCK_STALE_MS) stale = true;
+    } catch {
+      // Unreadable owner: holder is between mkdir and write, or crashed
+      // mid-write. Wait it out; the deadline bounds the stall.
+    }
+    if (stale) {
+      rmSync(dir, { recursive: true, force: true });
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new WorktreeError("merge_lock_busy", `another run is merging (lock ${dir}); retry once it finishes`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  try {
+    writeFileSync(ownerFile, me, "utf8");
+    return await fn();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /**

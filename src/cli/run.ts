@@ -30,7 +30,7 @@ import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueVerification
 import { suggestHints, suggestTaskFilesFromMap, suggestionText, withKeywordTerms } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
-import { issueToTaskPacket } from "../tasks/issue.js";
+import { issueToTaskPacket, unmetDepends } from "../tasks/issue.js";
 import { slugify } from "../plan/slug.js";
 import { runProc } from "../proc.js";
 import { agentDef, normalizeAgentName, type AgentName } from "../agents.js";
@@ -40,7 +40,7 @@ import { AGENT_NAMES } from "../agents.js";
 import { gateFailureText, resolveGates, type GateSpec } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
 import { runMainBuild } from "../commands/build.js";
-import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
+import { commitWorktree, createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, withMergeLock, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability } from "../availability.js";
 import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
 
@@ -77,18 +77,21 @@ async function syncFromRemote(topRoot: string): Promise<void> {
 
 /** Merge a feature branch into main and push. Brings main into the worktree first
  * so conflicts surface there, then merges into main, pushes, and deletes the remote
- * branch. */
+ * branch. Serialized per repo (merge lock) with push-race retries, so parallel
+ * runs finishing together merge one after another instead of failing each
+ * other's push. */
 async function mergeBranch(
   topRoot: string,
   worktreeRoot: string,
   branch: string,
 ): Promise<{ ok: boolean; detail?: string }> {
-  // runProc resolves instead of throwing, so every step must check its exit
-  // code explicitly. A blind sequence reports success while doing nothing
-  // (and strands the branch: -D cannot run while a worktree checks the
-  // branch out, so the worktree goes first).
-  let failure: string | undefined;
-  const step = async (args: string[], cwd: string, what: string): Promise<boolean> => {
+  return withMergeLock(topRoot, async () => {
+    // runProc resolves instead of throwing, so every step must check its exit
+    // code explicitly. A blind sequence reports success while doing nothing
+    // (and strands the branch: -D cannot run while a worktree checks the
+    // branch out, so the worktree goes first).
+    let failure: string | undefined;
+    const step = async (args: string[], cwd: string, what: string): Promise<boolean> => {
     const result = await runProc("git", args, { cwd, timeoutMs: 30_000 });
     if (result.outcome !== "exit" || result.code !== 0) {
       // Git reports merge conflicts on stdout ("CONFLICT ..."), not stderr,
@@ -123,55 +126,68 @@ async function mergeBranch(
     }
   };
   const fail = (detail?: string): { ok: boolean; detail?: string } => ({ ok: false, detail: detail ?? failure });
+  const pushRace = (out: { stdout: string; stderr: string }): boolean =>
+    /non-fast-forward|fetch first|stale info|rejected/i.test(`${out.stdout}\n${out.stderr}`);
   try {
-    // Refresh remote-tracking refs so the sync below sees real upstream.
-    // Best effort only: fetching into the checked-out main is refused by
-    // git, and offline work must still merge. A real divergence fails
-    // loudly at push time instead.
-    await step(["fetch", "origin"], topRoot, "fetch");
-    // Bring upstream into the feature branch (conflicts surface in the worktree).
-    // Sibling runs merge to main constantly, so a moved upstream is routine,
-    // not exceptional: retry once with a whitespace/move-tolerant diff before
-    // giving up. Still a real merge — content conflicts fail again below and
-    // are reported with exact files instead of an opaque "exit 1".
-    let synced = await step(["merge", "origin/main", "-m", `sync ${branch} with upstream`], worktreeRoot, "sync");
-    if (!synced) {
-      const files = await conflictedFiles(worktreeRoot);
-      await abortMerge(worktreeRoot);
-      const retry = await runProc(
-        "git",
-        ["merge", "-X", "patience", "-X", "ignore-all-space", "origin/main", "-m", `sync ${branch} with upstream`],
-        { cwd: worktreeRoot, timeoutMs: 30_000 },
-      );
-      if (retry.outcome === "exit" && retry.code === 0) {
-        synced = true;
-      } else {
+    // Retry loop for push races: another merger may land between our merge
+    // and our push. Content conflicts fail immediately (retrying cannot help);
+    // only a rejected push loops back to fetch the latest and merge again.
+    for (let attempt = 1; ; attempt++) {
+      // Refresh remote-tracking refs so the sync below sees real upstream.
+      // Best effort only: fetching into the checked-out main is refused by
+      // git, and offline work must still merge. A real divergence fails
+      // loudly at push time instead.
+      await step(["fetch", "origin"], topRoot, "fetch");
+      // Bring upstream into the feature branch (conflicts surface in the worktree).
+      // Sibling runs merge to main constantly, so a moved upstream is routine,
+      // not exceptional: retry once with a whitespace/move-tolerant diff before
+      // giving up. Still a real merge — content conflicts fail again below and
+      // are reported with exact files instead of an opaque "exit 1".
+      let synced = await step(["merge", "origin/main", "-m", `sync ${branch} with upstream`], worktreeRoot, "sync");
+      if (!synced) {
+        const files = await conflictedFiles(worktreeRoot);
         await abortMerge(worktreeRoot);
-        const retryFiles = await conflictedFiles(worktreeRoot);
-        const named = [...files, ...retryFiles.filter((f) => !files.includes(f))];
-        return fail(
-          `sync conflicts in: ${named.length > 0 ? named.join(", ") : "(unknown files)"} — resolve in the worktree and merge ${branch} manually; the branch keeps all committed work`,
+        const retry = await runProc(
+          "git",
+          ["merge", "-X", "patience", "-X", "ignore-all-space", "origin/main", "-m", `sync ${branch} with upstream`],
+          { cwd: worktreeRoot, timeoutMs: 30_000 },
         );
+        if (retry.outcome === "exit" && retry.code === 0) {
+          synced = true;
+        } else {
+          await abortMerge(worktreeRoot);
+          const retryFiles = await conflictedFiles(worktreeRoot);
+          const named = [...files, ...retryFiles.filter((f) => !files.includes(f))];
+          return fail(
+            `sync conflicts in: ${named.length > 0 ? named.join(", ") : "(unknown files)"} — resolve in the worktree and merge ${branch} manually; the branch keeps all committed work`,
+          );
+        }
       }
+      // Merge feature branch into main. On conflict, name the paths and abort:
+      // a dirty main checkout poisons every later run, while the branch keeps
+      // all the work for a manual retry.
+      if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) {
+        const files = await conflictedFiles(topRoot);
+        if (files.length > 0) failure = `conflicts in: ${files.join(", ")}`;
+        await abortMerge(topRoot);
+        return fail();
+      }
+      // A source merge is not a working binary for a compiled project. Rebuild
+      // main before declaring success; the running CLI uses dist/.
+      const build = await runMainBuild(topRoot);
+      if (!build.ok) {
+        process.stderr.write(`main build failed after merge: ${build.text}\n`);
+        return fail(`main build failed after merge: ${build.text}`);
+      }
+      // Push the merge to the remote.
+      const push = await runProc("git", ["push", "origin", "main"], { cwd: topRoot, timeoutMs: 30_000 });
+      if (push.outcome === "exit" && push.code === 0) break;
+      const pushErr = `${push.stderr.trim().split("\n")[0] ?? ""} (${push.outcome}${push.code === null ? "" : ` exit ${push.code}`})`;
+      if (attempt >= 3 || !pushRace(push)) {
+        return fail(`push failed: ${pushErr}`);
+      }
+      process.stderr.write(`merge ${branch}: push lost a race with another merger, retrying (${attempt}/3)\n`);
     }
-    // Merge feature branch into main. On conflict, name the paths and abort:
-    // a dirty main checkout poisons every later run, while the branch keeps
-    // all the work for a manual retry.
-    if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) {
-      const files = await conflictedFiles(topRoot);
-      if (files.length > 0) failure = `conflicts in: ${files.join(", ")}`;
-      await abortMerge(topRoot);
-      return fail();
-    }
-    // A source merge is not a working binary for a compiled project. Rebuild
-    // main before declaring success; the running CLI uses dist/.
-    const build = await runMainBuild(topRoot);
-    if (!build.ok) {
-      process.stderr.write(`main build failed after merge: ${build.text}\n`);
-      return fail(`main build failed after merge: ${build.text}`);
-    }
-    // Push the merge to the remote.
-    if (!(await step(["push", "origin", "main"], topRoot, "push"))) return fail();
     // Delete the remote branch (may fail if it was never pushed — fine).
     await runProc("git", ["push", "origin", "--delete", branch], { cwd: topRoot, timeoutMs: 15_000 });
     // The worktree checks the branch out, so remove it before deleting.
@@ -183,6 +199,7 @@ async function mergeBranch(
     process.stderr.write(`${detail}\n`);
     return fail(detail);
   }
+  });
 }
 
 /** Commits dirty work, or accepts an existing commit on the branch. */
@@ -284,6 +301,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
     // Engineer: work from todo, a failed attempt, or a legacy blocked state.
     if (normalizedAgent === "engineer" && !(ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)) {
       fail(`issue ${itemSlug} is ${issue.status}; engineer works from todo or a failed-gates/review state`);
+    }
+    // Engineer: dependencies serialize same-file sequences. Building before
+    // the dependency merges means racing it and conflicting at merge time.
+    if (normalizedAgent === "engineer" && issue.kind !== "ideas") {
+      const unmet = unmetDepends(l, issue);
+      if (unmet.length > 0) {
+        fail(`issue ${itemSlug} depends on ${unmet.join(", ")} — build ${unmet.join(", ")} first`);
+      }
     }
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }

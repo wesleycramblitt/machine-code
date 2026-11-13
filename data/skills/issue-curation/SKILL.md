@@ -80,6 +80,7 @@ When the research goal is to create scoped feature/bug issues from a prompt, the
    - A `keywords:` line with search terms that match the UI strings, component names, or concepts involved
    - An `acceptance:` line with verification commands
    - A body rich enough that an engineer can implement from it without ambiguity
+   - **Map files to issues before writing.** List which files each issue will touch. When two issues touch the same files, they MUST be ordered with `depends:` — the narrower or foundational one first — because parallel branches editing the same files cannot auto-merge. Issues with disjoint footprints stay parallel (no `depends:`). Same rule for follow-ons: schema/record first, then the code that uses it; migration first, then callers; API first, then client.
 4. **Name the concrete delta.** What behavior changes? What files will the engineer touch? This does not need to be a precise edit list — `"the issue screen status line needs to show the run phase"` is enough — but it must name the observable change.
 5. **Write each issue.** Follow the file shape above. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
 6. **If the prompt is too vague to decompose** (a few words with no specifics, examples, or mention of existing behavior), use the `ask` tool to ask the human clarifying questions — what specific behavior, what area of the codebase, or what problem they're trying to solve. Do not write a placeholder `ideas/` file; the research agent's purpose is to turn vagueness into concreteness through investigation and questioning.
@@ -88,5 +89,6 @@ When the research goal is to create scoped feature/bug issues from a prompt, the
 
 - **One concern per issue.** Splitting into 5-6 well-scoped features from one detailed idea is expected, not unusual. The body of each should be richer than the original idea text, not a summary of it.
 - **Name the dependency chain** with `depends:` when features build on each other. Features with no interdependencies can be built in parallel — mark them without `depends:`.
+- **Same files means sequence, not parallel.** Parallel branches touching the same files is the #1 merge-failure pattern: two agents independently create or edit the same path and neither merge can reconcile them. When footprints overlap, `depends:` is mandatory, not optional — and the build/run harness enforces it (a dependent issue refuses to build until its deps are done).
 - **Copy the full context from the original prompt** into each feature body where it applies. Don't make the engineer cross-reference the idea file.
 - **Each feature issue should be independently verifiable.** If you cannot describe how to verify it in one sentence, the scope is too large — split further.
