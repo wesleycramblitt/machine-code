@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
-import { findIssue, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
+import { findIssue, hasRepoScript, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
 import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
@@ -304,15 +304,16 @@ export async function runTui(): Promise<void> {
   };
 
   const startNewIssue = (repoRoot = l.repoRoot) => {
+    const hasTest = hasRepoScript(l, "test");
     s.newIssueRepo = repoRoot;
     s.newIssue = {
       kind: "features",
       priority: "medium",
-      acceptance: "",
+      acceptance: hasTest ? "script:build, script:test" : "script:build",
       tags: "",
       depends: "",
       keywords: "",
-      verification: "direct",
+      verification: hasTest ? "verified" : "direct",
       review: "none",
       prompt: "",
     };
@@ -1466,6 +1467,7 @@ export async function runTui(): Promise<void> {
     startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
     startNewIssue, submitNewIssue,
+    hasScript: (name) => hasRepoScript(l, name),
     agentIsolates, searchSeed,
     repoRoot: l.repoRoot,
   };

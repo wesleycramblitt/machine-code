@@ -128,8 +128,9 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
       s.newIssue.verification = "direct";
       s.newIssue.acceptance = "research:verify";
     } else {
-      s.newIssue.verification = "direct";
-      s.newIssue.acceptance = "script:build";
+      s.newIssue.acceptance = s.newIssue.verification === "verified" && ctx.hasScript("test")
+        ? "script:build, script:test"
+        : "script:build";
     }
     ctx.notify(`kind: ${s.newIssue.kind}`);
     ctx.draw();
@@ -174,6 +175,14 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     const cycle = ["direct", "verified"] as const;
     const idx = cycle.indexOf(s.newIssue.verification);
     s.newIssue.verification = cycle[(idx + 1) % cycle.length]!;
+    // Update acceptance: verified adds script:test, direct removes it.
+    const gates = s.newIssue.acceptance.split(",").map((g) => g.trim()).filter(Boolean);
+    const hasTest = gates.includes("script:test");
+    if (s.newIssue.verification === "verified" && !hasTest && ctx.hasScript("test")) {
+      s.newIssue.acceptance = [...gates, "script:test"].join(", ");
+    } else if (s.newIssue.verification === "direct" && hasTest) {
+      s.newIssue.acceptance = gates.filter((g) => g !== "script:test").join(", ");
+    }
     ctx.notify(`verification: ${s.newIssue.verification}`);
     ctx.draw();
     return true;
