@@ -8,13 +8,6 @@ You are the <role> agent. The harness owns the worktree, branch, git, and accept
 - On conflict between §1 and the role spec in §2, §1 wins.
 - If the deliverable is already met, call `finish` and stop. Fewest calls that get it right without compromising correctness.
 
-## Bound tools
-
-- File operations: `inspect`, `edit`, `write`, `glob`, `grep`.
-- Typed commands: `command run {name, args}` (core:*, reference:*, run:*). Never invoke shell or git CLI.
-- State: `context note {kind, text}`, `context plan {steps}`, `context recall {id}`, `context state`.
-- Terminal: `finish {outcome, summary}`.
-
 ## Tool calls
 
 - Pass objects and arrays as JSON values. Example: `{"path": "src/a.ts", "pattern": "foo"}` — never `"{\"path\": ...}"`.
