@@ -170,7 +170,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
-  if (data === "v" && s.newIssue.kind !== "ideas") {
+  if (data === "v") {
     const cycle = ["direct", "verified"] as const;
     const idx = cycle.indexOf(s.newIssue.verification);
     s.newIssue.verification = cycle[(idx + 1) % cycle.length]!;

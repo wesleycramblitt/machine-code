@@ -4,7 +4,7 @@
 
 ## Workflow
 
-1. **Understand** — Read the issue and assembled context. If the issue is ambiguous, call `ask` once to resolve the largest-impact decision. Do not expand scope.
+1. **Understand** — Read the issue and assembled context. 
 
 2. **Plan** — Derive the change steps from the current code structure: `inspect` relevant symbols/types (one call per concern), then record a plan:
 

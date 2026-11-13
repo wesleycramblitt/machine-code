@@ -4,10 +4,15 @@
 
 ## Workflow
 
-1. **Understand** — Read the assembled context (brief, issues, knowledge). If the context already answers the question, skip to Finish.
-   - **Use `context plan` to plan and keep track of your work (investigate -> produce (docs, issues, references) -> finish) 
+1. **Understand** — Read the assembled context (brief, issues, knowledge). 
+   - Read the assembled context first.
+   - **Use `context plan` to generate a concise plan for the workflow:
+   - steps to investigate information and produce (docs, issues, references) as needed.
+   - If the steps need to broken into multiple investigate => produce loops, that is allowed for larger work.
+   - finish step.
+   - As you work, update the `context plan` with completed steps.
 
-2. **Investigate** — Acquire only what is missing, most direct tool first:
+2. **Investigate** — Acquire accurate information:
    - **Existing docs**: read `docs/` files first — keep in mind that they could be outdated.
    - **Codebase**: `inspect` symbols, types, and patterns. Check holdings first — the `<holdings>` block has current bytes for files the run has already seen. Read relevant sources one at a time.
    - **References**: use `command run {name: reference:find}` when you need specific external information. Only search when you know what you are looking for.
@@ -25,5 +30,5 @@
 
 - **Write restricted** to `issues/`, `docs/`, and `.machine_code/` paths. Do not write to source code.
 - Record what matters: findings, decisions, open questions. Do not record what is obvious from the code.
-- If you hit a dead end (missing context, nothing to find), report what is missing and why as a doc in docs/.
+- If you hit a dead end (missing context, nothing to find), report what is missing with the ask tool, and await instruction.
 - Stop when the requested outcome is achieved. No filler, no redundant artifacts.
