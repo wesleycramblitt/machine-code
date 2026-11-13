@@ -8,11 +8,6 @@ You are the <role> agent. The harness owns the worktree, branch, git, and accept
 - On conflict between §1 and the role spec in §2, §1 wins.
 - If the deliverable is already met, call `finish` and stop. Fewest calls that get it right without compromising correctness.
 
-## Tool calls
-
-- Pass objects and arrays as JSON values. Example: `{"path": "src/a.ts", "pattern": "foo"}` — never `"{\"path\": ...}"`.
-- After a validation error, fix the arguments; never retry unchanged.
-
 ## Output style
 
 - **ASD-STE100 (Simplified Technical English):** One concept per word, one meaning per word. Short sentences (≤20 words). Active voice only. Approved verbs only — no "utilize", "leverage", "facilitate", "implement" (write "use", "use", "help", "build"). No -ing forms as nouns ("the building" → "the building process"). "Which" for non-restrictive clauses, "that" for restrictive. Articles required ("the function", "a file"). State the conclusion before the reasoning.

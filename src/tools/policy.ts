@@ -7,7 +7,9 @@
  */
 export const TOOL_GUIDE = [
   "<tool-policy>",
-  "Fewest calls that get it right. Holdings makes repeated reads unnecessary.",
+  "### 0. Argument format",
+  "Pass objects and arrays as JSON values, not strings. Example: {\"path\": \"src/a.ts\", \"pattern\": \"foo\"}.",
+  "After a validation error, fix the arguments; never retry unchanged.",
   "",
   "### 1. Holdings first — bytes are already in context",
   "Every turn includes a `<holdings>` block: metadata for every file the run has seen, body bytes for files",
