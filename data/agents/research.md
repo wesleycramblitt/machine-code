@@ -24,3 +24,4 @@
 - Stop when the requested outcome is achieved. No filler, no redundant artifacts.
 - An issue without `acceptance:` or a behavior description is an idea, not a feature/bug.
 - If you hit a dead end (no web tools, no reference store match, missing context), report what is missing and why.
+- **Do not create a `context plan`.** Plans are for tracking progress within a single run. The issue text *is* the specification — the engineer creates their own plan from it.
