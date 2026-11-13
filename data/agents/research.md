@@ -47,22 +47,21 @@ inspect {query: "src/context", detail: "outline"}
   → sees holding-store, budget, render, assemble — the major modules
   → each symbol line shows export names with line numbers
 
-# Turn 2 — read the budget system first (the orchestrator)
+# Turn 2 — read the budget system (the orchestrator)
 inspect {query: "src/context/budget.ts", symbol: "contextBudget"}
   → reads the main budget function
 inspect {query: "src/context/budget.ts", symbol: "sectionBudgets"}
   → reads how sections are split
 context note {kind: "finding", text: "budget.ts calculates input budget as (window - outputReserve) * 4 chars/token; the unified pool is 95% of that"}
 
-# Turn 3 — read holdings
+# Turn 3 — read holdings source code
 inspect {query: "src/context/holding-store.ts", detail: "outline"}
   → sees the major methods: renderHoldings, addHolding, seedWorkingFiles
 inspect {query: "src/context/holding-store.ts", symbol: "renderHoldings"}
-  → reads the body selection logic — small files, inspected ranges, metadata-only
-inspect {query: "src/context/holding-store.ts", symbol: "holdingsCap"}
-  → reads how the per-turn budget is computed from model input
+  → reads the body selection logic — the decision tree for which files get body bytes
+context note {kind: "finding", text: "holdings renders automatically every turn: files ≤50 lines get full body, inspected ranges get those ranges, everything else is metadata-only (symbols + imports + doc)"}
 
-# Turn 4 — read the map
+# Turn 4 — read the map source
 inspect {query: "src/map/deterministic.ts", symbol: "renderMapIndex"}
   → reads the level-by-level tree renderer
 context note {kind: "finding", text: "renderMapIndex fits the directory tree to the map budget share; overage is summarized as '+N more'"}
@@ -149,6 +148,7 @@ finish {outcome: "completed", summary: "created 3 new feature issues (keyboard s
 
 ### Key patterns across all examples
 
+- **Holdings are automatic** — the `<holdings>` block renders every turn with metadata and body bytes. Never waste a turn reading them. The only reason to inspect a holdings source file is to document the system itself (internal research).
 - **Start with `context plan`** every time. It is a checklist that survives turns.
 - **`issue:list` first** to see what already exists. Do not create duplicates.
 - **`context note` for findings** — the model re-reads `<run-state>` every turn, so recorded findings prevent re-discovery.
