@@ -164,7 +164,7 @@ export function suggestFilesForRequest(args: {
   limit?: number;
   exclude?: readonly string[];
 }): string[] {
-  const ranker = suggestTaskFilesFromMap(args.map, args.request, args.limit ?? 3).map((entry) => entry.path);
+  const ranker = suggestTaskFilesFromMap(args.map, args.request, args.limit ?? 10).map((entry) => entry.path);
   const cited = [
     ...extractAnchoredFiles(args.repoRoot, args.request).map((ref) => ref.path),
     ...extractBareAnchors(args.map, args.request),
@@ -181,7 +181,7 @@ export function suggestFilesForRequest(args: {
 export function suggestTaskFilesFromMap(
   map: RepoMap,
   request: string,
-  limit = 3,
+  limit = 10,
 ): SuggestedFile[] {
   // One stem, one vote: "commands" and "command" in the same request must not
   // pay the same evidence twice (observed: scripts.ts path hit paid double,
@@ -533,7 +533,7 @@ export function suggestHints(args: {
   exclude?: readonly string[];
 }): FileHint[] {
   const { map, request } = args;
-  const limit = args.limit ?? 3;
+  const limit = args.limit ?? 10;
   const excluded = new Set(args.exclude ?? []);
   const byPath = new Map(map.files.map((file) => [file.path, file]));
   // Reverse imports once: who depends on each file.
@@ -859,7 +859,7 @@ export function renderHints(hints: readonly FileHint[]): string {
 }
 
 /** Convenience wrapper for callers that have the layout root. */
-export function suggestTaskFiles(root: string, request: string, limit = 3): SuggestedFile[] {
+export function suggestTaskFiles(root: string, request: string, limit = 10): SuggestedFile[] {
   const map = readCachedMap(root);
   return map ? suggestTaskFilesFromMap(map, request, limit) : [];
 }
