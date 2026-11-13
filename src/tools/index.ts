@@ -93,7 +93,8 @@ function fail(text: string): AgentToolResult<undefined> {
 
 const WriteParams = Type.Object({
   path: Type.String({ description: "File path, relative to the worktree root." }),
-  content: Type.String({ description: "Full file content to write." }),
+  content: Type.Optional(Type.String({ description: "Full file content to write. Omit when using content_b64." })),
+  content_b64: Type.Optional(Type.String({ description: "Full file content as base64. Use when the content has characters (backslashes, backticks) that are hard to JSON-escape. Overrides content when both are present." })),
 });
 
 /** A path literally named "null" is a serialization artifact, never a real
@@ -135,8 +136,12 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
           return fail(`refusing to write a secret file: ${params.path}`);
         }
         mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs, params.content, "utf8");
-        return ok(`wrote ${params.path} (${Buffer.byteLength(params.content, "utf8")} bytes)`);
+        const content = params.content_b64
+          ? Buffer.from(params.content_b64, "base64").toString("utf8")
+          : params.content;
+        if (content === undefined) return fail("write needs content or content_b64");
+        writeFileSync(abs, content, "utf8");
+        return ok(`wrote ${params.path} (${Buffer.byteLength(content, "utf8")} bytes)`);
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
       }
@@ -225,13 +230,17 @@ function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknow
 
 const FileEditEntry = Type.Object({
   path: Type.Optional(Type.String({ description: "File path, relative to the worktree root." })),
-  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
-  newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString." })),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64." })),
+  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Use when the text has hard-to-escape characters. Overrides oldString when both are present." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString. Omit when using newString_b64." })),
+  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Use when the text has hard-to-escape characters. Overrides newString when both are present." })),
   edits: Type.Optional(
     Type.Array(
       Type.Object({
-        oldString: Type.String({ description: "Exact text to find." }),
-        newString: Type.String({ description: "Replacement text." }),
+        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64." })),
+        oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64." })),
+        newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
         replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
       }),
       { description: "Several exact-match hunks applied atomically to this file." },
@@ -243,13 +252,17 @@ const FileEditEntry = Type.Object({
 });
 
 const EditParams = Type.Object({  path: Type.Optional(Type.String({ description: "File path, relative to the worktree root (single-file form; omit when using files[])." })),
-  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
-  newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form)." })),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64." })),
+  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Use when the text has hard-to-escape characters. Overrides oldString when both are present." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form). Omit when using newString_b64." })),
+  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Use when the text has hard-to-escape characters. Overrides newString when both are present." })),
   edits: Type.Optional(
     Type.Array(
       Type.Object({
-        oldString: Type.String({ description: "Exact text to find." }),
-        newString: Type.String({ description: "Replacement text." }),
+        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64." })),
+        oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64." })),
+        newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
         replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
       }),
       { description: "Several exact-match hunks applied atomically to one file." },
@@ -507,8 +520,10 @@ function nearestRegionText(
 interface FileEditSpec {
   path: string;
   oldString?: string | null;
+  oldString_b64?: string | null;
   newString?: string | null;
-  edits?: Array<{ oldString: string; newString: string; replaceAll?: boolean | null }> | null;
+  newString_b64?: string | null;
+  edits?: Array<{ oldString?: string | null; oldString_b64?: string | null; newString?: string | null; newString_b64?: string | null; replaceAll?: boolean | null }> | null;
   symbol?: string | null;
   section?: string | null;
   replaceAll?: boolean | null;
@@ -537,16 +552,33 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   // A single-hunk call and an edits array are the same operation, not
   // alternatives: apply the single hunk first, then the array, in one
   // atomic pass. Weak models hedge by filling both forms.
+  // Resolve base64 fields before processing. Base64 avoids JSON escape issues
+  // with backslashes, backticks, and other special characters in code.
+  const resolvedOldString = spec.oldString_b64
+    ? Buffer.from(spec.oldString_b64, "base64").toString("utf8")
+    : spec.oldString;
+  const resolvedNewString = spec.newString_b64
+    ? Buffer.from(spec.newString_b64, "base64").toString("utf8")
+    : spec.newString;
+  const resolvedEdits = (spec.edits ?? []).map((hunk) => {
+    const oldStr = hunk.oldString_b64
+      ? Buffer.from(hunk.oldString_b64, "base64").toString("utf8")
+      : hunk.oldString ?? "";
+    const newStr = hunk.newString_b64
+      ? Buffer.from(hunk.newString_b64, "base64").toString("utf8")
+      : hunk.newString ?? "";
+    return { ...hunk, oldString: oldStr, newString: newStr };
+  });
   const singleOld =
-    typeof spec.oldString === "string" && spec.oldString.trim() !== "" ? spec.oldString : undefined;
+    typeof resolvedOldString === "string" && resolvedOldString.trim() !== "" ? resolvedOldString : undefined;
   const single: Array<{ oldString: string; newString: string; replaceAll?: boolean | null }> =
-    singleOld !== undefined && typeof spec.newString === "string"
-      ? [{ oldString: singleOld, newString: spec.newString, replaceAll: spec.replaceAll }]
+    singleOld !== undefined && typeof resolvedNewString === "string"
+      ? [{ oldString: singleOld, newString: resolvedNewString, replaceAll: spec.replaceAll }]
       : [];
   const edits = [
     ...single,
-    ...(spec.edits && spec.edits.length > 0
-      ? spec.edits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
+    ...(resolvedEdits.length > 0
+      ? resolvedEdits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
       : []),
   ];
   // A bare symbol/section + newString with no oldString is whole-block

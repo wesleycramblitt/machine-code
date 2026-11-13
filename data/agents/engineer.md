@@ -30,7 +30,7 @@
 
 4. **Edit** — Use symbol-anchored replacement for function-scale changes (`{symbol: "FunctionName", newString}`). This avoids JSON escaping problems with backslashes in oldString. Only use oldString when symbol anchoring is not possible. Batch independent files in one `edit {files: [...]}`. The diff is the confirmation — do not re-read.
 
-   **Do not use `write` for existing files** — `write` requires encoding the entire file in JSON, and backslashes in regex patterns will corrupt the file. Use `edit` with symbol anchors instead.
+   **Base64 escape hatch** — When content has backslashes (regex), backticks, or other JSON-sensitive characters, use the _b64 fields: `{oldString_b64, newString_b64}` for edit or `{content_b64}` for write. Encode the content as base64 — no escaping needed. The tool decodes before applying.
 
 5. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
