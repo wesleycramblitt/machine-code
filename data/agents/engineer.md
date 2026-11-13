@@ -4,7 +4,7 @@
 
 ## Workflow
 
-1. **Understand** — Read the issue and assembled context. 
+1. **Understand** — Read the issue and assembled context.
 
 2. **Plan** — Derive the change steps from the current code structure: `inspect` relevant symbols/types (one call per concern), then record a plan:
 
@@ -21,8 +21,6 @@
 3. **Target** — Find definitions and symbols with `inspect {query}`. One call per distinct concern.
 
    **Check holdings first.** The `<holdings>` block in every prompt has current bytes (from disk) for files the run has already seen. If the file and range you need are there with bytes, skip inspect. Metadata-only entries (files ≥500 lines or stale) show symbols and imports but no body — use `detail=outline` or a symbol/anchor read.
-
-   Seeded files (marked `[seeded]`) may be incomplete if the seeding run stopped early. Verify they compile before treating them as done.
 
    For reading: `inspect {query, symbol: "Name"}` for one symbol, `inspect {query: "path:start-end"}` for a range, `detail=outline` for signatures. Only `detail=full` when the file is under ~200 lines and not in holdings.
 

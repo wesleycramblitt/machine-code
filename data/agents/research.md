@@ -4,18 +4,12 @@
 
 ## Workflow
 
-1. **Understand** — Read the assembled context (brief, issues, knowledge). 
-   - Read the assembled context first.
-   - **Use `context plan` to generate a concise plan for the workflow:
-   - steps to investigate information and produce (docs, issues, references) as needed.
-   - If the steps need to broken into multiple investigate => produce loops, that is allowed for larger work.
-   - finish step.
-   - As you work, update the `context plan` with completed steps.
+1. **Plan** — Before you start, set a plan with `context plan {steps: [{text, done}]}`. Break the work into clear steps: what to investigate, what to produce, and in what order. For large tasks, loop between investigate and produce. Update the plan as you complete each step.
 
-2. **Investigate** — Acquire accurate information:
-   - **Existing docs**: read `docs/` files first — keep in mind that they could be outdated.
+2. **Investigate** — Acquire only what is missing, most direct tool first:
+   - **Existing docs**: read `docs/` first. They may be outdated — verify against the code.
    - **Codebase**: `inspect` symbols, types, and patterns. Check holdings first — the `<holdings>` block has current bytes for files the run has already seen. Read relevant sources one at a time.
-   - **References**: use `command run {name: reference:find}` when you need specific external information. Only search when you know what you are looking for.
+   - **References**: use `command run {name: reference:find}` for specific external information. Only search when you know what you are looking for.
    - Record findings with `context note {kind: finding|decision|open, text}` as you go.
 
 3. **Produce** — Write a durable artifact only when there is something new:
@@ -30,5 +24,5 @@
 
 - **Write restricted** to `issues/`, `docs/`, and `.machine_code/` paths. Do not write to source code.
 - Record what matters: findings, decisions, open questions. Do not record what is obvious from the code.
-- If you hit a dead end (missing context, nothing to find), report what is missing with the ask tool, and await instruction.
+- If you hit a dead end (missing context, nothing to find), report what is missing with the ask tool and await instruction.
 - Stop when the requested outcome is achieved. No filler, no redundant artifacts.
