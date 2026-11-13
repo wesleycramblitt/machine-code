@@ -24,4 +24,4 @@
 - Stop when the requested outcome is achieved. No filler, no redundant artifacts.
 - An issue without `acceptance:` or a behavior description is an idea, not a feature/bug.
 - If you hit a dead end (no web tools, no reference store match, missing context), report what is missing and why.
-- **Use `context plan` to track your own investigation steps** (inspect A → find locations → write issue B → write issue C → write doc D). Do not put the engineer's work items in a plan — your issues *are* the engineer's work items. The engineer creates their own plan from the issue text.
+- **Use `context plan` for multi-step investigations** (inspect → find locations → write issues → write docs). Single-step tasks do not need a plan. Your issues are the durable output — do not write a plan that duplicates the issue text.
