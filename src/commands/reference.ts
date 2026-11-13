@@ -63,40 +63,6 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
   });
 
-  // reference:search — DuckDuckGo HTML search (no API key).
-  out.set("reference:search", {
-    name: "reference:search",
-    description: "Web search via DuckDuckGo (no API key). Returns top result titles/URLs.",
-    binary: "node",
-    args: () => [],
-    schema: { query: { type: "string", required: true, description: "Search query." } },
-    readonly: true,
-    timeoutMs: 30_000,
-    handler: async (args) => {
-      const query = typeof args.query === "string" ? args.query : "";
-      if (!query) return { text: "reference:search requires query", isError: true };
-      try {
-        const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-        const r = await fetch(url, { signal: AbortSignal.timeout(20_000), headers: { "user-agent": "machine_code/0.0.0" } });
-        if (!r.ok) return { text: `search failed: HTTP ${r.status}`, isError: true };
-        const html = await r.text();
-        // Extract result links: <a class="result__a" href="...">title</a>
-        const results: string[] = [];
-        const re = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(html)) !== null && results.length < 10) {
-          const href = (m[1] ?? "").replace(/.*uddg=/, "").split("&")[0] ?? "";
-          const title = (m[2] ?? "").replace(/<[^>]+>/g, "").trim();
-          try { results.push(`${title}\n  ${decodeURIComponent(href)}`); } catch { results.push(`${title}\n  ${href}`); }
-        }
-        if (results.length === 0) return { text: "no results (or blocked)", isError: false };
-        return { text: results.join("\n\n"), isError: false };
-      } catch (e) {
-        return { text: `search failed: ${(e as Error).message}`, isError: true };
-      }
-    },
-  });
-
   // reference:index — write a bundle to the scoped reference dir.
   out.set("reference:index", {
     name: "reference:index",
