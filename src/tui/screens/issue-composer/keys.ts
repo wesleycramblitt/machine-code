@@ -4,6 +4,7 @@
  * Prompt editing, field cycling/editing, and `:!` submit.
  * Modeled closely on the new-run composer key handler.
  */
+import { printable } from "../../format.js";
 import type { TuiState, NewIssueSettings } from "../../state.js";
 import type { KeyServices } from "../keys.js";
 
@@ -62,9 +63,9 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
       ctx.draw();
       return true;
     }
-    if (data.length === 1 && data >= " " && data < "\x7f") {
+    if (!data.startsWith("\x1b")) {
       const cur = getField(s.newIssue, s.newIssueFieldEdit);
-      if (cur.length < 512) setField(s.newIssue, s.newIssueFieldEdit, cur + data);
+      if (cur.length < 512) setField(s.newIssue, s.newIssueFieldEdit, `${cur}${printable(data)}`);
       ctx.draw();
       return true;
     }
@@ -79,8 +80,8 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
       s.newIssue.prompt += "\n";
     } else if (data === "\x7f" || data === "\b") {
       s.newIssue.prompt = s.newIssue.prompt.slice(0, -1);
-    } else if (data.length === 1 && data >= " " && data < "\x7f") {
-      s.newIssue.prompt += data;
+    } else if (!data.startsWith("\x1b")) {
+      s.newIssue.prompt += printable(data);
       if (s.newIssue.prompt.length > 12_000) s.newIssue.prompt = s.newIssue.prompt.slice(0, 12_000);
     }
     ctx.draw();
