@@ -28,11 +28,15 @@
    {"action": "note", "kind": "finding", "text": "seedWorkingFiles called from run.ts:415 within runSession"}
    ```
 
-4. **Edit** — Use symbol-anchored replacement for function-scale changes (`{symbol: "FunctionName", newString}`). This avoids JSON escaping problems with backslashes in oldString. Only use oldString when symbol anchoring is not possible. Batch independent files in one `edit {files: [...]}`. The diff is the confirmation — do not re-read.
+4. **Edit** — Use the simplest form that works:
 
-   **Named code blocks (preferred for regex/backslash-heavy code):** Write the replacement as a fenced block in your response, then reference it: `newString_named_block: "my-block-name"`. The harness reads the block from scratch — no JSON escaping needed. Works for `write` too: `content_named_block`.
+   **Named block + symbol anchor (preferred):** Write the replacement as a fenced block ``` ``my-block-name`` ```, then reference it: `{symbol: "FunctionName", newString_named_block: "my-block-name"}`. Zero JSON escaping — use this for any code with `\`, `` ` ``, `"`, or `$`.
 
-   **Base64 fallback:** Use `_b64` fields when named blocks are not practical.
+   **Symbol anchor only (simple content):** `{symbol: "FunctionName", newString: "..."}` — the tool finds the function boundary from the outline. No oldString needed.
+
+   **Exact hunk (last resort):** `{oldString: "...", newString: "..."}` — only when you cannot use symbol anchoring. Backslashes and quotes in the text must be JSON-escaped correctly. One mistake corrupts the file.
+
+   Batch independent files in one `edit {files: [...]}`. The diff is the confirmation — do not re-read.
 
 5. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
@@ -49,6 +53,28 @@ context note {kind: "finding", text: "validators exports isNotEmpty (5), isInRan
 edit {path: "src/validators.ts", symbol: "isInRange", newString: "/** ... */\nexport function isValidEmail(...) { ... }\n\nexport function isInRange("}
 context plan {steps: [{text: "find the export pattern", done: true}, {text: "add isValidEmail", done: true}]}
 finish {outcome: "completed", summary: "added isValidEmail to src/validators.ts"}
+```
+
+```
+# Turn 1 — named block for regex-heavy code
+# Write the replacement as a named fenced block in the response text,
+# then reference it from the edit call:
+#
+#   ```enrich-hints-body
+#   export function enrichHints(hints, root) {
+#     return hints.map(hint => {
+#       keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+#     })
+#   }
+#   ```
+#
+context plan {steps: [{text: "replace enrichHints", done: false}, {text: "verify", done: false}]}
+inspect {query: "src/suggest.ts", symbol: "enrichHints"}
+
+edit {path: "src/suggest.ts", symbol: "enrichHints", newString_named_block: "enrich-hints-body"}
+  → harness reads the block — no escaping needed
+context plan {steps: [{text: "replace enrichHints", done: true}, {text: "verify", done: true}]}
+finish {outcome: "completed", summary: "replaced enrichHints with complete keyword evidence"}
 ```
 
 ```
