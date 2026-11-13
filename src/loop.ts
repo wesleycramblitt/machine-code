@@ -39,8 +39,10 @@ import { RunStateStore } from "./context/state.js";
 import { contextBudget, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
+import { extractNamedBlocks, writeNamedBlocks } from "./tools/named-blocks.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
+import { toolIndexBody } from "./context/references.js";
 import { findIssue } from "./plan/issues.js";
 import type { FinishRequest } from "./tools/finish.js";
 import { gateFailureText, runGates, type GateResult, type GateSpec } from "./verify.js";
@@ -421,9 +423,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     input.agent.tools.includes("command") && input.commands.size > 0
       ? [
           "<commands>",
-          'Typed commands. Call the command tool: {"action":"run","name":"...","args":{}}; {"action":"describe","name":"..."} for one schema.',
-          [...input.commands.keys()].sort().join(" · "),
-          "</commands>",
+          'Call: {"action":"run","name":"...","args":{}} to run a command, {"action":"describe","name":"..."} for its schema.',
+          "",
+          ...toolIndexBody(input.commands).split("\n"),
         ].join("\n")
       : "";
   if (wantMap) try {
@@ -739,6 +741,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     /** Successful read-only command results for the current file state. */
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
     let changeEpoch = 0;
+    /** Whether named code blocks have been extracted for the current turn. */
+    let namedBlocksExtracted = false;
 
     // First selection up front.
     const first = selectFor(initialChars);
@@ -825,6 +829,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
         : undefined;
 
+    const namedBlocksDir = join(input.root, ".machine_code", "blocks", recorder.id);
     const rawTools = coreTools(
       {
         root: input.toolRoot ?? input.root,
@@ -835,6 +840,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         skills: skillContext,
         state: memory,
         repoRoot: input.root,
+        namedBlocksDir,
         ...(issuePath ? { issuePath } : {}),
         finish: (result) => {
           finishRequested = result;
@@ -1352,6 +1358,25 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             tool: event.toolName,
             ...(event.args !== undefined ? { args: capJson(event.args) } : {}),
           });
+          // Extract named code blocks from the assistant message before any tool
+          // executes. These blocks let the model write code with backslashes and
+          // quotes as plain fenced text — no JSON escaping needed. Tools reference
+          // them via *_named_block fields. The assistant text for this turn is
+          // only available once; extract on the first tool execution.
+          if (!namedBlocksExtracted) {
+            namedBlocksExtracted = true;
+            const text = assistantText(lastAssistant);
+            const blocks = extractNamedBlocks(text);
+            if (blocks.length > 0) {
+              const blockDir = join(input.root, ".machine_code", "blocks", recorder.id);
+              writeNamedBlocks(blocks, blockDir);
+              recorder.event("named_blocks_extracted", {
+                count: blocks.length,
+                names: blocks.map((b) => b.name),
+                dir: blockDir,
+              });
+            }
+          }
           break;
         }
         case "tool_execution_end": {

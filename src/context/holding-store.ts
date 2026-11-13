@@ -19,10 +19,6 @@ export interface HoldingsConfig {
   seededFullLines: number;
   /** Files over this many lines always render metadata-only. */
   outlineLines: number;
-  /** Turns since last activity before file is downgraded. */
-  recencyTurnsBudget: number;
-  /** Turns since last activity before file is evicted to metadata-only. */
-  recencyTurnsEvict: number;
   /** Max inventory entries. */
   maxFiles: number;
 }
@@ -31,8 +27,6 @@ export const DEFAULT_HOLDINGS_CONFIG: HoldingsConfig = {
   fullLines: 50,
   seededFullLines: 200,
   outlineLines: 500,
-  recencyTurnsBudget: 3,
-  recencyTurnsEvict: 5,
   maxFiles: 40,
 };
 
@@ -211,9 +205,25 @@ export class HoldingStore {
    * files, then inspected ranges, then eviction-retry files. Files that do
    * not fit throw so the cap can be tuned.
    */
+  /** Evict the least-recently-used holding when the map is full.
+   *  Holdings fill budget-first; the most recently touched files get body
+   *  bytes, and when the budget is exhausted the oldest file drops to
+   *  metadata-only. There is no turn-based eviction: a file keeps its body
+   *  bytes as long as they fit within the budget. */
+  private evictLru(): void {
+    while (this.map.size >= this.cfg("maxFiles")) {
+      let oldest: { path: string; turn: number } | null = null;
+      for (const holding of this.map.values()) {
+        const h = holding;
+        if (!oldest || h.turn < oldest.turn) oldest = { path: h.path, turn: h.turn };
+      }
+      if (oldest) this.map.delete(oldest.path);
+    }
+  }
+
   renderHoldings(maxChars = 48_000, maxFiles = 40): string {
-    const currentTurn = this.host.currentTurn();
     if (this.map.size === 0 || !this.host.repoRoot) return "";
+    this.evictLru();
     const sorted = [...this.map.values()].sort((a, b) => a.path.localeCompare(b.path));
     const shown = sorted.slice(0, Math.max(1, maxFiles));
     const lines: string[] = [
@@ -235,11 +245,7 @@ export class HoldingStore {
       const lineInfo = holding.ranges.length > 0
         ? `${holding.ranges[0]![0]}-${holding.ranges[holding.ranges.length - 1]![1]} lines`
         : "outline";
-      const flags = [
-        holding.seeded ? "seeded" : "",
-        this.recencyLevel(holding, currentTurn) === "evicted" ? "evicted" : "",
-      ].filter(Boolean).join(", ");
-      const flagText = flags ? ` [${flags}]` : "";
+      const flagText = holding.seeded ? " [seeded]" : "";
       const art = holding.artifacts[holding.artifacts.length - 1] ?? "";
       const meta = [
         holding.doc ? `doc: ${holding.doc.slice(0, 120)}` : "",
@@ -258,20 +264,18 @@ export class HoldingStore {
       throw new Error(`holdings inventory alone exceeds ${maxChars.toLocaleString()} chars (${inventoryUsed.toLocaleString()}); raise maxFiles or reduce file path lengths`);
     }
 
-    // Phase 2: body bytes (recency-gated — evicted files drop their
-    // inspected ranges and are metadata-only only)
+    // Phase 2: body bytes — least-recently-touched files drop first when
+    // budget is exhausted. No turn-based eviction: files keep their bytes
+    // as long as they fit in the budget.
     const bodyChars = maxChars - inventoryUsed;
     const ordered = [...shown].sort((a, b) => {
-      const aEv = this.recencyLevel(a, currentTurn) === "evicted";
-      const bEv = this.recencyLevel(b, currentTurn) === "evicted";
-      return (aEv ? 0 : 1) - (bEv ? 0 : 1) || b.priority - a.priority || b.turn - a.turn || a.path.localeCompare(b.path);
+      // Most-recently-touched first, then highest priority, then alphabetically
+      return b.turn - a.turn || b.priority - a.priority || a.path.localeCompare(b.path);
     });
     const bodies: string[] = [];
     let used = 0;
     for (const holding of ordered) {
       if (used >= bodyChars) break;
-      const level = this.recencyLevel(holding, currentTurn);
-      if (level === "evicted") continue;
 
       const fileLines = this.readLines(holding.path);
       if (!fileLines) continue;
@@ -311,18 +315,10 @@ export class HoldingStore {
       throw new Error(
         `holdings block exceeds ${maxChars.toLocaleString()} chars (${total.toLocaleString()}). ` +
         `Tune holdings config (outlineLines, fullLines) or raise the cap. ` +
-        `Pending: ${sorted.filter((h) => this.recencyLevel(h, currentTurn) !== "evicted" && !bodies.some((b) => b.includes(h.path))).map((h) => h.path).join(", ") || "none"}`,
+        `Pending: ${sorted.filter((h) => !bodies.some((b) => b.includes(h.path))).map((h) => h.path).join(", ") || "none"}`,
       );
     }
     return lines.join("\n");
-  }
-
-  /** Which byte level a holding qualifies for based on turn recency. */
-  private recencyLevel(holding: Holding, currentTurn: number): "evicted" | "budget" | "active" {
-    const age = currentTurn - holding.turn;
-    if (age > this.cfg("recencyTurnsEvict")) return "evicted";
-    if (age > this.cfg("recencyTurnsBudget")) return "budget";
-    return "active";
   }
 
   private readLines(path: string): string[] | null {

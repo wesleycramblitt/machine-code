@@ -389,7 +389,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
         map: builtMap.map,
         request: suggestionRequest,
         repoRoot: l.repoRoot,
-        limit: 5,
+        limit: machine.map.suggestLimit,
         ...(attachedIssue?.rel ? { exclude: [attachedIssue.rel] } : {}),
       });
       suggestedFiles = hints.map((hint) => hint.path);

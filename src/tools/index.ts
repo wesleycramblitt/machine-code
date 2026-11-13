@@ -79,6 +79,8 @@ export interface ToolContext {
   /** Paths (relative to root) that this agent is allowed to write/edit.
    *  Empty or undefined means all paths are allowed. */
   allowedPaths?: readonly string[];
+  /** Directory where named code blocks from the assistant response are stored. */
+  namedBlocksDir?: string;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -89,11 +91,42 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
+function sanitizeBlockName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/**
+ * Resolve content from the highest-priority source: named_block > b64 > plain.
+ * Called from write/edit tool execute functions with the ToolContext.
+ */
+function resolveContent(
+  content: string | undefined | null,
+  contentB64: string | undefined | null,
+  contentNamedBlock: string | undefined | null,
+  blocksDir: string | undefined,
+): string | undefined {
+  if (contentNamedBlock) {
+    if (!blocksDir) return content ?? undefined;
+    const filePath = join(blocksDir, sanitizeBlockName(contentNamedBlock));
+    try {
+      return readFileSync(filePath, "utf8");
+    } catch {
+      return undefined;
+    }
+  }
+  if (contentB64) {
+    return Buffer.from(contentB64, "base64").toString("utf8");
+  }
+  return content ?? undefined;
+}
+
 /* ------------------------------------------------------------------- write */
 
 const WriteParams = Type.Object({
   path: Type.String({ description: "File path, relative to the worktree root." }),
-  content: Type.String({ description: "Full file content to write." }),
+  content: Type.Optional(Type.String({ description: "Full file content to write. Omit when using content_b64 or content_named_block." })),
+  content_b64: Type.Optional(Type.String({ description: "Full file content as base64. Overrides content." })),
+  content_named_block: Type.Optional(Type.String({ description: "Name of a fenced code block in the assistant response. The harness extracts it and reads from a scratch file. Use for code with backslashes. Overrides content and content_b64." })),
 });
 
 /** A path literally named "null" is a serialization artifact, never a real
@@ -135,8 +168,10 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
           return fail(`refusing to write a secret file: ${params.path}`);
         }
         mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs, params.content, "utf8");
-        return ok(`wrote ${params.path} (${Buffer.byteLength(params.content, "utf8")} bytes)`);
+        const content = resolveContent(params.content, params.content_b64, params.content_named_block, ctx.namedBlocksDir);
+        if (content === undefined) return fail("write needs content, content_b64, or content_named_block");
+        writeFileSync(abs, content, "utf8");
+        return ok(`wrote ${params.path} (${Buffer.byteLength(content, "utf8")} bytes)`);
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
       }
@@ -145,6 +180,18 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
 }
 
 /* -------------------------------------------------------------------- edit */
+
+/** Check whether a hunk or spec has at least one content source for a prefix (old/new). */
+function hasContentSource(obj: Record<string, unknown>, prefix: "old" | "new"): boolean {
+  const plain = obj[`${prefix}String`];
+  const b64 = obj[`${prefix}String_b64`];
+  const nb = obj[`${prefix}String_named_block`];
+  return (
+    (typeof plain === "string" && plain.trim() !== "") ||
+    (typeof b64 === "string" && b64.trim() !== "") ||
+    (typeof nb === "string" && nb.trim() !== "")
+  );
+}
 
 /**
  * Weak models fill every field: a multi-hunk call arrives with top-level
@@ -207,12 +254,14 @@ function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknow
     changed = true;
   }
   if (Array.isArray(out.edits)) {
+    // A hunk is valid if it has at least one oldString source (plain, b64, or named block)
+    // and at least one newString source.
     const kept = out.edits.filter(
-      (hunk): hunk is { oldString: string; newString: string } =>
+      (hunk): hunk is Record<string, unknown> =>
         !!hunk &&
         typeof hunk === "object" &&
-        typeof (hunk as Record<string, unknown>).oldString === "string" &&
-        ((hunk as Record<string, unknown>).oldString as string).trim() !== "",
+        hasContentSource(hunk as Record<string, unknown>, "old") &&
+        hasContentSource(hunk as Record<string, unknown>, "new"),
     );
     if (kept.length !== out.edits.length) {
       if (kept.length > 0) out.edits = kept;
@@ -225,13 +274,21 @@ function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknow
 
 const FileEditEntry = Type.Object({
   path: Type.Optional(Type.String({ description: "File path, relative to the worktree root." })),
-  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
-  newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString." })),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64 or oldString_named_block." })),
+  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+  oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString. Omit when using newString_b64 or newString_named_block." })),
+  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+  newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
   edits: Type.Optional(
     Type.Array(
       Type.Object({
-        oldString: Type.String({ description: "Exact text to find." }),
-        newString: Type.String({ description: "Replacement text." }),
+        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64 or oldString_named_block." })),
+        oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+        oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64 or newString_named_block." })),
+        newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+        newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
         replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
       }),
       { description: "Several exact-match hunks applied atomically to this file." },
@@ -243,13 +300,21 @@ const FileEditEntry = Type.Object({
 });
 
 const EditParams = Type.Object({  path: Type.Optional(Type.String({ description: "File path, relative to the worktree root (single-file form; omit when using files[])." })),
-  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form)." })),
-  newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form)." })),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64 or oldString_named_block." })),
+  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+  oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form). Omit when using newString_b64 or newString_named_block." })),
+  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+  newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
   edits: Type.Optional(
     Type.Array(
       Type.Object({
-        oldString: Type.String({ description: "Exact text to find." }),
-        newString: Type.String({ description: "Replacement text." }),
+        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64 or oldString_named_block." })),
+        oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+        oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64 or newString_named_block." })),
+        newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+        newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
         replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
       }),
       { description: "Several exact-match hunks applied atomically to one file." },
@@ -295,17 +360,27 @@ function mergeDuplicateFileEntries(
           "(symbol/section whole-block forms cannot be merged)",
       };
     }
+    const mergeHunk = (e: FileEditEntryValue): Array<Record<string, unknown>> => {
+      if (hasContentSource(e as unknown as Record<string, unknown>, "old") && hasContentSource(e as unknown as Record<string, unknown>, "new")) {
+        return [{
+          oldString: e.oldString,
+          oldString_b64: e.oldString_b64,
+          oldString_named_block: e.oldString_named_block,
+          newString: e.newString,
+          newString_b64: e.newString_b64,
+          newString_named_block: e.newString_named_block,
+          replaceAll: e.replaceAll,
+        }];
+      }
+      return [];
+    };
     const hunks = [
       ...(existing.edits ?? []),
-      ...(existing.oldString !== undefined
-        ? [{ oldString: existing.oldString, newString: existing.newString ?? "", ...(existing.replaceAll ? { replaceAll: true } : {}) }]
-        : []),
+      ...mergeHunk(existing),
       ...(entry.edits ?? []),
-      ...(entry.oldString !== undefined
-        ? [{ oldString: entry.oldString, newString: entry.newString ?? "", ...(entry.replaceAll ? { replaceAll: true } : {}) }]
-        : []),
+      ...mergeHunk(entry),
     ];
-    byPath.set(path, { path, edits: hunks });
+    byPath.set(path, { path, edits: hunks as FileEditEntryValue["edits"] });
   }
   return [...byPath.values()];
 }
@@ -507,8 +582,12 @@ function nearestRegionText(
 interface FileEditSpec {
   path: string;
   oldString?: string | null;
+  oldString_b64?: string | null;
+  oldString_named_block?: string | null;
   newString?: string | null;
-  edits?: Array<{ oldString: string; newString: string; replaceAll?: boolean | null }> | null;
+  newString_b64?: string | null;
+  newString_named_block?: string | null;
+  edits?: Array<{ oldString?: string | null; oldString_b64?: string | null; oldString_named_block?: string | null; newString?: string | null; newString_b64?: string | null; newString_named_block?: string | null; replaceAll?: boolean | null }> | null;
   symbol?: string | null;
   section?: string | null;
   replaceAll?: boolean | null;
@@ -529,7 +608,7 @@ interface PlannedFileEdit {
  * caller); returns { error } for every anchor/scope validation failure so a
  * multi-file call can report all failures before writing anything.
  */
-async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<PlannedFileEdit | { error: string }> {
+async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksDir?: string): Promise<PlannedFileEdit | { error: string }> {
   const pathText = typeof spec.path === "string" ? spec.path.trim() : "";
   if (pathText === "" || pathText.toLowerCase() === "null" || pathText.toLowerCase() === "undefined") {
     return { error: "edit needs a file path (single-file path, or path in each files[] entry)" };
@@ -537,26 +616,54 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   // A single-hunk call and an edits array are the same operation, not
   // alternatives: apply the single hunk first, then the array, in one
   // atomic pass. Weak models hedge by filling both forms.
+  // Resolve content from the highest-priority source per field:
+  // named_block > b64 > plain.
+  const readBlock = (name: string | undefined | null): string | undefined => {
+    if (!name || !namedBlocksDir) return undefined;
+    const file = join(namedBlocksDir, name.replace(/[^a-zA-Z0-9_-]/g, "_"));
+    try { return readFileSync(file, "utf8"); } catch { return undefined; }
+  };
+  const resolvedOldString =
+    readBlock(spec.oldString_named_block) ??
+    (spec.oldString_b64 ? Buffer.from(spec.oldString_b64, "base64").toString("utf8") : undefined) ??
+    spec.oldString;
+  const resolvedNewString =
+    readBlock(spec.newString_named_block) ??
+    (spec.newString_b64 ? Buffer.from(spec.newString_b64, "base64").toString("utf8") : undefined) ??
+    spec.newString;
+  const resolvedEdits = (spec.edits ?? []).map((hunk) => {
+    const oldStr =
+      readBlock(hunk.oldString_named_block) ??
+      (hunk.oldString_b64 ? Buffer.from(hunk.oldString_b64, "base64").toString("utf8") : undefined) ??
+      hunk.oldString ?? "";
+    const newStr =
+      readBlock(hunk.newString_named_block) ??
+      (hunk.newString_b64 ? Buffer.from(hunk.newString_b64, "base64").toString("utf8") : undefined) ??
+      hunk.newString ?? "";
+    return { ...hunk, oldString: oldStr, newString: newStr };
+  });
   const singleOld =
-    typeof spec.oldString === "string" && spec.oldString.trim() !== "" ? spec.oldString : undefined;
+    typeof resolvedOldString === "string" && resolvedOldString.trim() !== "" ? resolvedOldString : undefined;
   const single: Array<{ oldString: string; newString: string; replaceAll?: boolean | null }> =
-    singleOld !== undefined && typeof spec.newString === "string"
-      ? [{ oldString: singleOld, newString: spec.newString, replaceAll: spec.replaceAll }]
+    singleOld !== undefined && typeof resolvedNewString === "string"
+      ? [{ oldString: singleOld, newString: resolvedNewString, replaceAll: spec.replaceAll }]
       : [];
   const edits = [
     ...single,
-    ...(spec.edits && spec.edits.length > 0
-      ? spec.edits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
+    ...(resolvedEdits.length > 0
+      ? resolvedEdits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
       : []),
   ];
-  // A bare symbol/section + newString with no oldString is whole-block
-  // replacement (anchor-free); everything else needs at least one hunk.
+  // A bare symbol/section with no oldString is whole-block replacement
+  // (anchor-free). The content comes from resolvedNewString which handles
+  // named_block, b64, and plain newString. Everything else needs at least
+  // one hunk.
   const wholeScope =
-    edits.length === 0 && typeof spec.newString === "string" && (spec.symbol || spec.section)
-      ? spec.newString
+    edits.length === 0 && typeof resolvedNewString === "string" && (spec.symbol || spec.section)
+      ? resolvedNewString
       : undefined;
   if (edits.length === 0 && wholeScope === undefined)
-    return { error: "edit requires oldString/newString, a non-empty edits array, or symbol/section + newString for whole-block replacement" };
+    return { error: "edit needs oldString/newString, edits[], or symbol/section + newString/newString_named_block/newString_b64 for whole-block replacement" };
 
   const abs = resolveWithin(root, spec.path);
   assertRegularFile(abs);
@@ -779,7 +886,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           const plans: PlannedFileEdit[] = [];
           const errors: string[] = [];
           for (const [index, file] of mergedFiles.entries()) {
-            const planned = await planSingleFileEdit(ctx.root, { ...file, path: file.path ?? "" });
+            const planned = await planSingleFileEdit(ctx.root, { ...file, path: file.path ?? "" }, ctx.namedBlocksDir);
             if ("error" in planned) errors.push(`files[${index}]${file.path ? ` ${file.path}` : ""}: ${planned.error}`);
             else plans.push(planned);
           }
@@ -806,7 +913,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           return ok(out.join("\n"));
         }
-        const planned = await planSingleFileEdit(ctx.root, { ...params, path: params.path ?? "" });
+        const planned = await planSingleFileEdit(ctx.root, { ...params, path: params.path ?? "" }, ctx.namedBlocksDir);
         if ("error" in planned) return fail(planned.error);
         writeFileSync(planned.abs, planned.next, "utf8");
         const rendered = renderEditResult(params.path ?? "file", planned.next, planned.changes);

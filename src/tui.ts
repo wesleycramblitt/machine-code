@@ -167,6 +167,11 @@ export async function runTui(): Promise<void> {
     // discovery/reconcile failures leave the cached catalogue in place
   }
 
+  // Eagerly build the repo map so the composer shows Files and Docs content
+  // on first load instead of after the first run. Best-effort and silent.
+  const { buildRepoMap } = await import("./map/deterministic.js");
+  buildRepoMap(l.repoRoot).catch(() => {});
+
   const s = createTuiState(l.repoRoot);
 
   const stdin = process.stdin;

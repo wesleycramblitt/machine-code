@@ -116,8 +116,16 @@ function coerceScalarArtifacts(
     const schema = isRecord(properties[key]) ? properties[key] : null;
     if (!schema) continue;
     const types = declaredTypes(schema);
-    if (types.size === 0 || types.has("string")) continue;
     const trimmed = value.trim();
+    // String-typed fields with an `enum` constraint: drop "null"/"undefined"
+    // since they are never a valid enum value (models hedge by filling every
+    // field with the string "null").
+    if (types.has("string") && Array.isArray(schema.enum) && (trimmed === "null" || trimmed === "undefined")) {
+      out ??= { ...args };
+      delete out[key];
+      continue;
+    }
+    if (types.size === 0 || types.has("string")) continue;
     if (trimmed === "null" || trimmed === "undefined") {
       out ??= { ...args };
       delete out[key];

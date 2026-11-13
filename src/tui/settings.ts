@@ -105,6 +105,15 @@ export function buildSettings(
       detail: "Deterministic module summaries from code doc headers.",
       editable: false,
     });
+    rows.push({
+      id: "map.suggestLimit",
+      section: "map",
+      label: "Ranked suggestion limit",
+      value: String(machine.map.suggestLimit),
+      file: configFile,
+      detail: "Max ranked file suggestions per request; direct pins ride along.",
+      editable: true,
+    });
     
     const themeKeys = [
       "header_bg",

@@ -26,7 +26,7 @@ import { defaultSkillsFor, resolveSkillMode, skillMetas, type SkillMode } from "
 import { contextBudget } from "../../../context/budget.js";
 import { artifactPath, listArtifacts } from "../../../artifacts/registry.js";
 import { listReferenceEntries } from "../../../references/store.js";
-import { readCachedMap, renderMapIndex, symbolCount } from "../../../map/deterministic.js";
+import { readCachedMap } from "../../../map/deterministic.js";
 import { suggestHints, type FileHint } from "../../../map/suggest.js";
 
 import { skillListItems, toolListItems, tokensForChars } from "../../tools.js";
@@ -374,20 +374,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     Math.max(10, cols - 1),
   );
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
-  const mapEnabled = preview.machine?.map.enabled !== false;
-  const mapChars = mapEnabled ? (cachedMap ? renderMapIndex(cachedMap).length : 1024) : 0;
-  const codebaseItems = [
-    {
-      text: mapEnabled
-        ? cachedMap
-          ? `repo map · ${cachedMap.files.length} files · ${symbolCount(cachedMap)} symbols`
-          : "repo map · builds on first turn"
-        : "repo map · disabled",
-      chars: mapChars,
-      exists: mapEnabled && Boolean(cachedMap),
-      key: "map:index",
-    },
-    ];
+
   // The resolved agent prompt is context too: every line the run will
   // send, listed read-only. Fixed rows are always in context and cannot
   // be switched off, mirroring the core-tool rows.
@@ -405,14 +392,13 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     }));
   const sections = [
     { label: "Issues", tone: contextTone("issue"), sectionKey: "section:issues", items: issueItems },
-    { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
-    { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
-    { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
-    { label: "Codebase", tone: BL, sectionKey: "section:codebase", items: codebaseItems },
-    { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
     { label: "Docs", tone: contextTone("docs"), sectionKey: "section:docs", items: docItems },
-    { label: "Agent Prompt", tone: W, sectionKey: "section:prompt", items: promptItems },
+    { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
     { label: "Files", tone: C, sectionKey: "section:files", items: fileItems },
+    { label: "Skills", tone: contextTone("skill"), sectionKey: "section:skills", items: skillItems },
+    { label: "Agent Prompt", tone: W, sectionKey: "section:prompt", items: promptItems },
+    { label: "Tools", tone: contextTone("tool"), sectionKey: "section:tools", items: toolItems },
+    { label: "Scripts", tone: contextTone("script"), sectionKey: "section:scripts", items: scriptItems },
   ];
   if (contextTab >= sections.length) contextTab = 0;
   const isIncludedAvailable = (item: unknown): boolean => {
@@ -569,8 +555,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // Advertise space only on tabs where the handler actually acts. Skills
   // cycles include→on-demand→exclude; Issues/Files/References toggle include
   // (their rows carry `available` the handler recognizes). Tools and Agent
-  // Prompt rows are fixed, and Codebase/Scripts rows use prefixes space
-  // ignores, so none of those advertise a toggle.
+  // Prompt rows are fixed, and Scripts rows use prefixes space ignores,
+  // so none of those advertise a toggle.
   const sectionKey = activeSection.sectionKey;
   const togglesInclude = ["section:issues", "section:docs", "section:files", "section:references"].includes(sectionKey);
   const spaceCommand = sectionKey === "section:skills"

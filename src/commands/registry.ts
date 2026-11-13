@@ -10,6 +10,7 @@ import { cpSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "nod
 import { dirname, resolve } from "node:path";
 import { runProc } from "../proc.js";
 import { COMMAND_CAP_BYTES, capText, isSecretPath, resolveWithin, toRelative } from "../tools/safety.js";
+import { issueCommands } from "./issues.js";
 import { referenceCommands } from "./reference.js";
 import { researchVerifyCommand } from "./research.js";
 import { runCommands } from "./runs.js";
@@ -427,6 +428,7 @@ export function allCommands(
   options: { scriptsRoot?: string } = {},
 ): Map<string, CommandSpec> {
   const out = new Map<string, CommandSpec>(CORE_COMMANDS);
+  for (const spec of issueCommands(layout.repoRoot)) out.set(spec.name, spec);
   for (const [k, v] of referenceCommands(layout)) out.set(k, v);
   for (const [k, v] of runCommands(layout)) out.set(k, v);
   if (options.scriptsRoot) {

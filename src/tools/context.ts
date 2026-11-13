@@ -94,6 +94,21 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
       "parent loads a parent run's record. " +
       "For codebase queries (definitions, references, file outlines) use inspect instead.",
     parameters: ContextParams,
+    prepareArguments: (args): Static<typeof ContextParams> => {
+      // Belt-and-suspenders: drop "null"/"undefined" string values that models
+      // hedge with (the generic repair in repairToolArguments handles this too,
+      // but only when the compiled dist/ includes the fix).
+      if (!args || typeof args !== "object" || Array.isArray(args)) return args as Static<typeof ContextParams>;
+      const out = { ...(args as Record<string, unknown>) };
+      let changed = false;
+      for (const [key, value] of Object.entries(out)) {
+        if (typeof value === "string" && (value.trim() === "null" || value.trim() === "undefined")) {
+          delete out[key];
+          changed = true;
+        }
+      }
+      return (changed ? out : args) as Static<typeof ContextParams>;
+    },
     async execute(_id, params: Static<typeof ContextParams>) {
       const memory = ctx.state;
       if (!memory) return fail("run state is not available in this run");

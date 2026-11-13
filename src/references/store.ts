@@ -71,10 +71,25 @@ export function resolveReferencePath(layout: Layout, value: string): ReferencePa
     rel = `${rel}/index.md`;
   }
 
-  const root = referenceStore(layout);
-  const abs = isAbsolute(rel) ? resolve(rel) : resolve(root, rel);
-  if (abs !== root && !abs.startsWith(root + sep)) return null;
-  return { abs, rel: relative(root, abs), ...(anchor ? { anchor } : {}) };
+  const storeRoot = referenceStore(layout);
+  const abs = isAbsolute(rel) ? resolve(rel) : resolve(storeRoot, rel);
+  const inStore = abs === storeRoot || abs.startsWith(storeRoot + sep);
+  if (inStore && existsSync(abs)) {
+    return { abs, rel: relative(storeRoot, abs), ...(anchor ? { anchor } : {}) };
+  }
+  // Not in the machine-level store, or the file doesn't exist there —
+  // try the repo-level view (`.machine_code/references/`) and then the
+  // repo's own `references/` directory.
+  for (const root of [referenceView(layout), join(layout.repoDir, "references")]) {
+    const candidate = resolve(root, rel);
+    if ((candidate === root || candidate.startsWith(root + sep)) && existsSync(candidate)) {
+      return { abs: candidate, rel: relative(root, candidate), ...(anchor ? { anchor } : {}) };
+    }
+  }
+  // Return the machine store path even if it doesn't exist — the caller
+  // (readReference) does its own existence check and produces a better
+  // error message for missing files.
+  return inStore ? { abs, rel: relative(storeRoot, abs), ...(anchor ? { anchor } : {}) } : null;
 }
 
 function slugify(text: string): string {
