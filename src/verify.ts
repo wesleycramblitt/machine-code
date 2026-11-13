@@ -30,22 +30,14 @@ export interface GateSpec {
 
 /**
  * Resolve the gate set from the issue's declared acceptance commands.
- * No implicit gates — if the issue has no acceptance list, no gates run
- * and the change is accepted directly. Verified issues add script:test.
+ * Only the issue's explicit acceptance list is used. No implicit gates.
+ * If the issue has no acceptance, the change completes directly.
  */
 export function resolveGates(
   packet: TaskPacket,
-  commands?: ReadonlyMap<string, CommandSpec>,
+  _commands?: ReadonlyMap<string, CommandSpec>,
 ): GateSpec[] {
-  const gates: GateSpec[] = [];
-  for (const a of packet.acceptance) {
-    gates.push({ command: a.command, args: a.args ?? {}, required: true });
-  }
-  if (gates.length > 0) return gates;
-  if (packet.verification === "verified" && commands?.has("script:test")) {
-    gates.push({ command: "script:test", args: {}, required: true });
-  }
-  return gates;
+  return packet.acceptance.map((a) => ({ command: a.command, args: a.args ?? {}, required: true }));
 }
 
 /** Capped failure log for the repair pass. Exit code is the contract. */
