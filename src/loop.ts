@@ -429,9 +429,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   if (wantMap) try {
     const built = await buildRepoMap(mapRoot, { processes });
     repoMap = built.map;
-    // Render with a generous budget initially. The model-specific budget
+    // Render with a reasonable budget initially. The model-specific budget
     // is applied in prepareRequest after the model is selected.
-    mapIndex = renderMapIndex(built.map, 512_000);
+    mapIndex = renderMapIndex(built.map, 20_000);
     recorder.event("map_built", {
       files: built.map.files.length,
       symbols: symbolCount(built.map),
@@ -477,7 +477,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     repoMap = built.map;
     const mapBudget = lastBudget
       ? Math.floor(lastBudget.inputChars * contextBudgetConfig.total * contextBudgetConfig.map)
-      : 512_000;
+      : 20_000;
     mapIndex = renderMapIndex(repoMap, mapBudget);
     recorder.event("map_refresh", {
       turn,
@@ -1062,7 +1062,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           lastBudget = budget;
           const holdingsBudget = budgetFor(budget?.inputChars, contextBudgetConfig.holdings, contextBudgetConfig.holdings * 102_400, input.holdingsMaxChars);
           // Re-render the map with the model-specific budget
-          const mapBudget = budget ? Math.floor(budget.inputChars * contextBudgetConfig.total * contextBudgetConfig.map) : 512_000;
+          const mapBudget = budget ? Math.floor(budget.inputChars * contextBudgetConfig.total * contextBudgetConfig.map) : 20_000;
           if (repoMap && mapBudget >= 1024) {
             mapIndex = renderMapIndex(repoMap, mapBudget);
           }
