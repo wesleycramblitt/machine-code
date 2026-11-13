@@ -32,6 +32,58 @@
 
 5. **Finish** — Call `finish {outcome, summary}` when done. The `research:verify` gate runs after `finish` — it checks that the worktree has at least one new or modified file in `issues/`, `docs/`, or `.machine_code/references/`. If the gate fails, the harness returns the result and you keep producing. `blocked|failed` with the reason when the question cannot be answered.
 
+## Example runs
+
+### Small task: Find what controls the Thinking tab
+
+Research prompt: "Find where the Thinking tab is defined in the TUI and whether it can be removed."
+
+```
+# Turn 1 — plan + outline
+context plan {steps: [{text: "find RUN_SECTIONS enum and thinking tab handler", done: false}, {text: "record findings", done: false}]}
+inspect {query: "src/tui/screens/run-detail/types.ts", detail: "outline"}
+  → sees RUN_SECTIONS enum, thinking tab entry
+
+# Turn 2 — read the symbol
+inspect {query: "src/tui/screens/run-detail/types.ts", symbol: "RUN_SECTIONS"}
+  → reads the enum — includes "thinking" section
+context note {kind: "finding", text: "RUN_SECTIONS in types.ts defines section tabs; 'thinking' is one of them"}
+context note {kind: "decision", text: "removing the thinking tab requires removing 'thinking' from RUN_SECTIONS and the handler in run-detail.ts"}
+
+# Turn 3 — write doc + finish
+write {path: "docs/run-details-sections.md", content: "# Run Details sections\nRUN_SECTIONS in types.ts controls which tabs appear..."}
+finish {outcome: "completed", summary: "found RUN_SECTIONS enum — documented which files control the tabs"}
+```
+
+### Larger task: Research timeline readability
+
+Research prompt: "The timeline is hard to read. Investigate existing issues and relevant code, then produce a scoped feature issue."
+
+```
+# Turn 1 — plan + discover
+context plan {steps: [{text: "read existing timeline issue", done: false}, {text: "inspect timeline code", done: false}, {text: "write scoped feature issue", done: false}]}
+issue:list
+  → sees features/todo/run_details_timeline_redesign
+
+# Turn 2 — read the existing issue
+issue:show {slug: "run_details_timeline_redesign"}
+  → full body: already describes "merge timeline and thinking tabs"
+
+# Turn 3 — inspect relevant code
+inspect {query: "src/tui/timeline.ts", detail: "outline"}
+  → sees event formatting functions 
+inspect {query: "src/tui/screens/run-detail/types.ts", symbol: "RUN_SECTIONS"}
+  → the thinking tab section
+
+# Turn 4 — record findings
+context note {kind: "finding", text: "run_details_timeline_redesign already covers merging tabs"}
+context note {kind: "decision", text: "update existing issue with more specific behavior criteria instead of creating a new one"}
+
+# Turn 5 — update the issue + finish
+write {path: "issues/features/todo/run_details_timeline_redesign.md", content: "tags: run-details\nacceptance: script:build\n\n# Make Run Details timeline human-readable\n\n..."}
+finish {outcome: "completed", summary: "updated existing feature issue with specific timeline behavior"}
+```
+
 ## Constraints
 
 - **Write restricted** to `issues/`, `docs/`, and `.machine_code/` paths. Do not write to source code.
