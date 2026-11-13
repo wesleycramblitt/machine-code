@@ -28,38 +28,44 @@
    {"action": "note", "kind": "finding", "text": "seedWorkingFiles called from run.ts:415 within runSession"}
    ```
 
-4. **Edit** — Use the simplest form that works:
+4. **Edit** — Always use a named block. Write the replacement as a fenced block with a name instead of a language ID (` ```my-block-name`), then reference it:
 
-   **Named block + symbol anchor (preferred):** Write the replacement as a fenced block with a name instead of a language ID (` ```my-block-name`), then reference it: `{symbol: "FunctionName", newString_named_block: "my-block-name"}`. Zero JSON escaping — use this for any code with `\`, `` ` ``, `"`, or `$`.
+   ```
+   edit {path: "...", symbol: "FunctionName", newString_named_block: "my-block-name"}
+   ```
 
-   **Symbol anchor only (simple content):** `{symbol: "FunctionName", newString: "..."}` — the tool finds the function boundary from the outline. No oldString needed.
+   Zero JSON escaping — the harness extracts the block from your response and reads it from a scratch file. Use this for EVERY function change, even simple ones. It costs nothing and prevents corruption.
 
-   **Exact hunk (last resort):** `{oldString: "...", newString: "..."}` — only when you cannot use symbol anchoring. Backslashes and quotes in the text must be JSON-escaped correctly. One mistake corrupts the file.
+   **No symbolic anchor?** Use `edit {path, oldString_named_block: "...", newString_named_block: "..."}`.
 
-   Batch independent files in one `edit {files: [...]}`. The diff is the confirmation — do not re-read.
+   **Batch independent files** in one `edit {files: [...]}`. The diff is the confirmation — do not re-read.
 
 5. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
 ## Examples
 
 ```
-# Turn 1 — plan + outline
+# Turn 1 — named block is the default for ANY function change
+# Write the replacement as a named fenced block, then reference it:
+#   ```is-valid-email
+#   /** Return true when the string looks like an email. */
+#   export function isValidEmail(value: string): boolean {
+#     return /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(value);
+#   }
+#   ```
 context plan {steps: [{text: "find the export pattern", done: false}, {text: "add isValidEmail", done: false}]}
 inspect {query: "src/validators.ts", detail: "outline"}
   → sees isNotEmpty at 5, isInRange at 18
 context note {kind: "finding", text: "validators exports isNotEmpty (5), isInRange (18) with JSDoc"}
 
-# Turn 2 — symbol-anchored edit (no oldString, avoids JSON escaping)
-edit {path: "src/validators.ts", symbol: "isInRange", newString: "/** ... */\nexport function isValidEmail(...) { ... }\n\nexport function isInRange("}
+edit {path: "src/validators.ts", symbol: "isInRange", newString_named_block: "is-valid-email"}
+  → block inserted before isInRange — harness reads from scratch, no JSON escaping
 context plan {steps: [{text: "find the export pattern", done: true}, {text: "add isValidEmail", done: true}]}
 finish {outcome: "completed", summary: "added isValidEmail to src/validators.ts"}
 ```
 
 ```
-# Turn 1 — named block for regex-heavy code
-# Write the replacement as a named fenced block in the response text,
-# then reference it from the edit call:
-#
+# Turn 1 — replace a function with regex-heavy code (named block)
 #   ```enrich-hints-body
 #   export function enrichHints(hints, root) {
 #     return hints.map(hint => {
@@ -67,31 +73,29 @@ finish {outcome: "completed", summary: "added isValidEmail to src/validators.ts"
 #     })
 #   }
 #   ```
-#
 context plan {steps: [{text: "replace enrichHints", done: false}, {text: "verify", done: false}]}
 inspect {query: "src/suggest.ts", symbol: "enrichHints"}
 
 edit {path: "src/suggest.ts", symbol: "enrichHints", newString_named_block: "enrich-hints-body"}
-  → harness reads the block — no escaping needed
+  → block replaces the function — no escaping needed, even with regex backslashes
 context plan {steps: [{text: "replace enrichHints", done: true}, {text: "verify", done: true}]}
 finish {outcome: "completed", summary: "replaced enrichHints with complete keyword evidence"}
 ```
 
 ```
-# Turn 1 — find the function + all callers
-context plan {steps: [{text: "find routePayment and its callers", done: false}, {text: "rename in all files", done: false}]}
+# Turn 1 — find callers, batch edit multiple files
+context plan {steps: [{text: "find routePayment and callers", done: false}, {text: "rename in all files", done: false}]}
 inspect {query: "routePayment"}
   → definition at router.ts:14, callers at checkout/pay.ts:35, admin/refund.ts:22
-  → no path, no regex — just a function name. Finds all callers in one call.
 context note {kind: "finding", text: "routePayment in router.ts:14, called from pay.ts:35 and refund.ts:22"}
 
-# Turn 2 — rename in all 3 files, one batch edit
+# Turn 2 — rename all 3 files in one batch edit (symbol anchor for definition, oldString for callers)
 edit {files: [
   {path: "router.ts", symbol: "routePayment", newString: "export function route(...) { ... }"},
   {path: "pay.ts", edits: [{oldString: "routePayment(order, provider)", newString: "route(order, provider)"}]},
   {path: "refund.ts", edits: [{oldString: "routePayment(original.payment, provider)", newString: "route(original.payment, provider)"}]},
 ]}
-context plan {steps: [{text: "find routePayment and its callers", done: true}, {text: "rename in all files", done: true}]}
+context plan {steps: [{text: "find routePayment and callers", done: true}, {text: "rename in all files", done: true}]}
 finish {outcome: "completed", summary: "renamed routePayment to route in router.ts and callers"}
 ```
 
