@@ -475,9 +475,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     if (!wantMap) return;
     const built = await buildRepoMap(mapRoot, { processes });
     repoMap = built.map;
-    const mapBudget = lastBudget
-      ? Math.floor(lastBudget.inputChars * contextBudgetConfig.total * contextBudgetConfig.map)
-      : 102_400;
+    const { map: mapBudget } = computeBudgets(lastBudget?.inputChars);
     mapIndex = renderMapIndex(repoMap, mapBudget);
     recorder.event("map_refresh", {
       turn,
@@ -517,16 +515,25 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastOverviewChars = 0;
   let lastBudget: ContextBudget | null = null;
   let lastHoldingsChars = 0;
+  const ctxBudget = input.machine.context.budget;
+
   /**
-   * Compute per-component budget in chars from the model input budget and
-   * the proportional shares in config. An optional hard cap limits the result.
+   * Compute per-component budgets from a unified variable pool that covers
+   * all context: holdings, map, context block, workspace, state.
+   * pool = modelInputChars * ctxBudget.total (0.90).
+   * Each component gets a share of the pool; holdings and map get their
+   * configured shares; the context block gets the rest.
    */
-  const budgetFor = (inputChars: number | undefined, share: number, fallback: number, hardCap?: number): number => {
-    if (!inputChars || inputChars <= 0) return hardCap !== undefined ? Math.min(fallback, hardCap) : fallback;
-    const amount = Math.floor(inputChars * share);
-    return hardCap !== undefined ? Math.min(amount, hardCap) : Math.max(2_048, amount);
+  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { holdings: number; map: number; contextBlock: number } => {
+    const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
+    const holdings = Math.max(2_048, Math.floor(pool * ctxBudget.holdings));
+    const map = Math.max(1_024, Math.floor(pool * ctxBudget.map));
+    const contextBlock = Math.max(4_096, pool - holdings - map);
+    if (hardCap !== undefined) {
+      return { holdings: Math.min(holdings, hardCap), map, contextBlock };
+    }
+    return { holdings, map, contextBlock };
   };
-  const contextBudgetConfig = input.machine.context.budget;
 
   const initialChars =
     input.agent.prompt.length +
@@ -1045,6 +1052,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           pendingMessages = null;
           return rendered;
         }
+        const { holdings: hBudget } = computeBudgets(undefined, input.holdingsMaxChars);
         return renderPromptMessages(
           messages,
           memory,
@@ -1052,7 +1060,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           input.contextText,
           undefined,
           commandIndex,
-          budgetFor(undefined, contextBudgetConfig.holdings, contextBudgetConfig.holdings * 102_400, input.holdingsMaxChars),
+          hBudget,
         ).messages;
       },
       prepareRequest: async ({ context }) => {
@@ -1060,41 +1068,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const agentPolicy = input.fullPolicy?.agents?.[input.agent.name];
           const budget = row ? contextBudget(row.context, agentPolicy?.expectedOutputTokens ?? 16_000) : null;
           lastBudget = budget;
-          const holdingsBudget = budgetFor(budget?.inputChars, contextBudgetConfig.holdings, contextBudgetConfig.holdings * 102_400, input.holdingsMaxChars);
+
+          // Unified budget pool: 90% of the model's input window covers
+          // all variable context (holdings, map, context block, workspace,
+          // state block).
+          const budgets = computeBudgets(budget?.inputChars, input.holdingsMaxChars);
+          lastHoldingsChars = budgets.holdings;
+
           // Re-render the map with the model-specific budget
-          const mapBudget = budget ? Math.floor(budget.inputChars * contextBudgetConfig.total * contextBudgetConfig.map) : 102_400;
-          if (repoMap && mapBudget >= 1024) {
-            mapIndex = renderMapIndex(repoMap, mapBudget);
+          if (repoMap && budgets.map >= 1024) {
+            mapIndex = renderMapIndex(repoMap, budgets.map);
           }
-          lastHoldingsChars = holdingsBudget;
-          const baseOverhead =
-            input.agent.prompt.length +
-            mapIndex.length +
-            memory.renderBlock().length +
-            toolChars +
-            24_000;
+
+          // The context block gets the remaining pool (after holdings + map)
+          // minus a small overhead for workspace diff and state block (~2KB).
+          const overviewMaxChars = Math.max(4_096, budgets.contextBlock - 2_048);
           const overviewBaseChars = input.contextText?.length ?? 0;
-          const overviewMaxChars = budget
-            ? Math.max(8_000, budget.inputChars - baseOverhead)
-            : undefined;
-          const overviewEstimate = Math.min(overviewBaseChars, overviewMaxChars ?? overviewBaseChars);
-          lastOverviewChars = overviewEstimate;
-          if (budget) {
-            const projected = overviewBaseChars + baseOverhead;
-            const ratio = projected / budget.inputChars;
-            if (ratio >= 0.8) {
-              recorder.event("context_warning", {
-                kind: overviewBaseChars > overviewEstimate ? "overview-trimmed" : "context-near-budget",
-                chars: projected,
-                inputBudgetChars: budget.inputChars,
-                ratio,
-                model: row?.key,
-                message: overviewBaseChars > overviewEstimate
-                  ? "curated context exceeds the model input budget; lower-priority blocks are omitted"
-                  : "curated context is near the model input budget",
-              });
-            }
-          }
+          lastOverviewChars = Math.min(overviewBaseChars, overviewMaxChars);
+
           // The transcript is replayed whole; holdings deltas (not the ledger)
           // carry current file bytes the model does not already hold.
           return renderPromptMessages(
@@ -1104,7 +1095,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             input.contextText,
             overviewMaxChars,
             commandIndex,
-            holdingsBudget,
+            budgets.holdings,
           );
         };
 
