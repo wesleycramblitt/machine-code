@@ -56,23 +56,24 @@ finish {outcome: "completed", summary: "added isValidEmail to src/validators.ts"
 A fictional project `acme-store` has `src/payments/router.ts` that exports `routePayment`. The issue is: "Rename `routePayment` to `route` for consistency with other dispatchers. Update all callers."
 
 ```
-# Turn 1 — outline + find callers
+# Turn 1 — outline + find callers with content search
 context plan {steps: [{text: "find the function and all callers", done: false}, {text: "rename and update every caller", done: false}]}
 inspect {query: "src/payments/router.ts", detail: "outline"}
   → sees routePayment at 14 — the only export from this file
 inspect {query: "routePayment"}
   → returns: definition at src/payments/router.ts:14, callers at checkout/pay.ts:35, admin/refund.ts:22
-  → two callers in different directories
+  → key detail: no path, no regex — just a function name. Searches all files.
+  → two callers in different directories found in one call
+context note {kind: "finding", text: "routePayment defined in router.ts, called from checkout/pay.ts:35 and admin/refund.ts:22"}
 
 # Turn 2 — rename + update all 3 files in one batch edit
-context note {kind: "finding", text: "routePayment exported from router.ts, called in checkout/pay.ts and admin/refund.ts"}
 edit {files: [
   {path: "src/payments/router.ts", symbol: "routePayment", newString: "export function route(order: Order, provider: string): Promise<Receipt> { ... }"},
   {path: "src/checkout/pay.ts", edits: [{oldString: "routePayment(order, provider)", newString: "route(order, provider)"}]},
   {path: "src/admin/refund.ts", edits: [{oldString: "routePayment(original.payment, provider)", newString: "route(original.payment, provider)"}]},
 ]}
   → one call edits 3 files atomically: the definition in router.ts and both callers
-  → if one hunk fails, no file changes
+  → if one hunk fails, no file changes — the diff confirms success
 context plan {steps: [{text: "find the function and all callers", done: true}, {text: "rename and update every caller", done: true}]}
 finish {outcome: "completed", summary: "renamed routePayment to route in router.ts and updated callers in checkout/pay.ts and admin/refund.ts"}
 ```

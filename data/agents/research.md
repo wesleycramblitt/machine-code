@@ -37,33 +37,31 @@
 
 The examples below use a fictional project `acme-store`. The commands and patterns apply to any repo.
 
-### 1. Internal research: Document the payment module
+### 1. Trace a system flow
 
-Research prompt: "The payment module has been refactored to support multiple providers. Create a technical doc explaining how the payment router, provider interface, and transaction log work together."
+Research prompt: "Trace how the suggestion-seeding system works: when a new run starts from an issue, how do keywords and file hints get extracted and loaded into holdings?"
 
 ```
-# Turn 1 — plan + outline the key files
-context plan {steps: [{text: "read router, provider interface, transaction log", done: false}, {text: "write docs/payment-module.md", done: false}]}
-inspect {query: "src/payments/router.ts", detail: "outline"}
-  → sees routePayment at 12, registerProvider at 48
-inspect {query: "src/payments/provider-interface.ts", detail: "outline"}
-  → sees the interface with charge, refund, getStatus
-inspect {query: "src/payments/transaction-log.ts", detail: "outline"}
-  → sees logTransaction at 8, getTransaction at 35
-  (3 outlines in one call is fine — each is cheap and the results go into holdings)
+# Turn 1 — plan + find all the pieces by content search
+context plan {steps: [{text: "find where seedWorkingFiles and seedHintRanges are called", done: false}, {text: "trace how they get their input", done: false}, {text: "write findings note or issues", done: false}]}
+inspect {query: "seedWorkingFiles"}
+  → src/context/holding-store.ts:58 (definition), src/cli/run.ts:415 (caller)
+inspect {query: "seedHintRanges"}
+  → src/context/holding-store.ts:339 (definition), src/context/assemble.ts:480 (caller)
+context note {kind: "finding", text: "seedWorkingFiles called from run.ts runSession, seedHintRanges called from assembleContext"}
 
-# Turn 2 — read the key symbols
-inspect {query: "src/payments/router.ts", symbol: "routePayment"}
-  → reads the dispatch logic
-inspect {query: "src/payments/provider-interface.ts", symbol: "charge"}
-  → reads the method signature and doc
-inspect {query: "src/payments/transaction-log.ts", symbol: "logTransaction"}
-  → reads how transactions are recorded
-context note {kind: "finding", text: "router dispatches by provider type, interface defines charge/refund/getStatus, log writes to JSON keyed by transaction ID"}
+# Turn 2 — read the callers to understand the flow
+inspect {query: "src/cli/run.ts", symbol: "runSession"}
+  → reads the run entry point, sees seedWorkingFiles receives suggestedFiles
+inspect {query: "src/context/assemble.ts", symbol: "assembleContext"}
+  → reads how hintRanges from suggestHints get passed to seedHintRanges
+inspect {query: "suggestHints"}
+  → src/map/suggest.ts:220 (definition), called from assemble.ts:440
+context note {kind: "finding", text: "runSession extracts keywords → suggestHints (in map/suggest.ts) scores files → assembleContext seeds holdings with hint ranges"}
 
-# Turn 3 — write the doc
-write {path: "docs/payment-module.md", content: "# Payment module\n\n## Router\n...\n## Provider interface\n...\n## Transaction log\n..."}
-finish {outcome: "completed", summary: "created docs/payment-module.md covering router, provider interface, and transaction log"}
+# Turn 3 — write the finding or issue
+write {path: "issues/features/todo/suggestion-seeding-improvements.md", content: "priority: medium\nacceptance: script:build\n\n# Improve suggestion seeding for new runs\n..."}
+finish {outcome: "completed", summary: "traced suggestion seeding: runSession extracts keywords, suggestHints scores, assembleContext seeds"}
 ```
 
 ### 2. Split an idea into multiple issues
@@ -134,8 +132,10 @@ finish {outcome: "completed", summary: "created 3 issues (pagination, date filte
 - **`context plan` first** — set the checklist. Update `done: true` as you go. It survives turns and prevents re-work.
 - **`issue:list` before creating anything** — check what already exists. Do not create duplicates.
 - **`issue:show` to read existing issues** — never use inspect for markdown files.
+- **Content search to find where code lives** — `{"query": "FunctionName"}` (no path, no regex) searches every file for definitions, callers, and references. This is faster than inspecting directories.
 - **Outline first, then read symbols** — `detail: "outline"` is cheap. It gives you symbol names and line numbers. Then read exactly the symbol you need. Never read a whole file.
-- **`context note` captures findings** — notes render in `<run-state>` every turn, so you will not re-discover what you already learned.
+- **Log locations as you discover them** — use `context note` to record where functions are defined and called. Notes render every turn, so you will not re-discover paths you already found.
+- **`context note` captures findings** — findings, decisions, and open questions all survive turns.
 - **`write` creates new files, `edit` changes existing ones** — both count toward the `research:verify` gate.
 - **References are read-only** — use `reference:find`/`reference:read` to look up existing references. Creating new references is a separate agent's job.
 
