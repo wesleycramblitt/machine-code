@@ -137,10 +137,6 @@ export interface MachineConfig {
       seededFullLines: number;
       /** Files over this many lines always render metadata-only (no body bytes). */
       outlineLines: number;
-      /** Turns since last inspect/edit before a file is downgraded. */
-      recencyTurnsBudget: number;
-      /** Turns since last inspect/edit before a file is evicted to metadata-only. */
-      recencyTurnsEvict: number;
       /** Max files in the inventory list. */
       maxFiles: number;
     };
@@ -329,8 +325,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         fullLines: asNumber(contextRaw.holdings_full_lines) ?? 50,
         seededFullLines: asNumber(contextRaw.holdings_seeded_full_lines) ?? 200,
         outlineLines: asNumber(contextRaw.holdings_outline_lines) ?? 500,
-        recencyTurnsBudget: asNumber(contextRaw.holdings_recency_turns_budget) ?? 3,
-        recencyTurnsEvict: asNumber(contextRaw.holdings_recency_turns_evict) ?? 5,
         maxFiles: asNumber(contextRaw.holdings_max_files) ?? 40,
       },
     },
