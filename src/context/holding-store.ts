@@ -13,8 +13,6 @@ import type { Ref } from "./state.js";
 import { mergeRanges, type Holding } from "./holdings.js";
 
 export interface HoldingsConfig {
-  /** Fraction of model input budget to allocate (0.0-1.0). */
-  modelPct: number;
   /** Files under this many lines always render full body. */
   fullLines: number;
   /** Seeded files under this many lines always render full body. */
@@ -30,7 +28,6 @@ export interface HoldingsConfig {
 }
 
 export const DEFAULT_HOLDINGS_CONFIG: HoldingsConfig = {
-  modelPct: 0.10,
   fullLines: 50,
   seededFullLines: 200,
   outlineLines: 500,
@@ -313,7 +310,7 @@ export class HoldingStore {
     if (total > maxChars) {
       throw new Error(
         `holdings block exceeds ${maxChars.toLocaleString()} chars (${total.toLocaleString()}). ` +
-        `Tune holdings config (outlineLines, fullLines, modelPct) or raise the cap. ` +
+        `Tune holdings config (outlineLines, fullLines) or raise the cap. ` +
         `Pending: ${sorted.filter((h) => this.recencyLevel(h, currentTurn) !== "evicted" && !bodies.some((b) => b.includes(h.path))).map((h) => h.path).join(", ") || "none"}`,
       );
     }

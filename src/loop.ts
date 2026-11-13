@@ -413,6 +413,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // (map outline, read symbol, map slice). The full per-file map is never
   // re-sent.
   let mapIndex = "";
+  let repoMap: RepoMap | null = null;
   // Names only. The model must know a command exists before it can ask for
   // its schema; guessing core:run/typescript:check was a wasted call in every
   // observed run. The full schemas stay behind command action "describe".
@@ -427,7 +428,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       : "";
   if (wantMap) try {
     const built = await buildRepoMap(mapRoot, { processes });
-    mapIndex = renderMapIndex(built.map);
+    repoMap = built.map;
+    // Render with a generous budget initially. The model-specific budget
+    // is applied in prepareRequest after the model is selected.
+    mapIndex = renderMapIndex(built.map, 512_000);
     recorder.event("map_built", {
       files: built.map.files.length,
       symbols: symbolCount(built.map),
@@ -470,7 +474,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const refreshMapIndex = async (turn: number): Promise<void> => {
     if (!wantMap) return;
     const built = await buildRepoMap(mapRoot, { processes });
-    mapIndex = renderMapIndex(built.map);
+    repoMap = built.map;
+    const mapBudget = lastBudget
+      ? Math.floor(lastBudget.inputChars * contextBudgetConfig.total * contextBudgetConfig.map)
+      : 512_000;
+    mapIndex = renderMapIndex(repoMap, mapBudget);
     recorder.event("map_refresh", {
       turn,
       ok: true,
@@ -510,16 +518,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastBudget: ContextBudget | null = null;
   let lastHoldingsChars = 0;
   /**
-   * Per-turn holdings-delta cap: run override, else machine default,
-   * clamped per model to 10% of its input budget so deltas scale with
-   * the max context limits instead of a fixed byte count.
+   * Compute per-component budget in chars from the model input budget and
+   * the proportional shares in config. An optional hard cap limits the result.
    */
-  const holdingsCap = (inputChars: number | undefined): number => {
-    const base = input.holdingsMaxChars ?? input.machine.context.holdingsMaxChars;
-    const pct = input.machine.context.holdings?.modelPct ?? 0.10;
-    if (!inputChars || inputChars <= 0) return base;
-    return Math.min(base, Math.max(2_048, Math.floor(inputChars * pct)));
+  const budgetFor = (inputChars: number | undefined, share: number, fallback: number, hardCap?: number): number => {
+    if (!inputChars || inputChars <= 0) return hardCap !== undefined ? Math.min(fallback, hardCap) : fallback;
+    const amount = Math.floor(inputChars * share);
+    return hardCap !== undefined ? Math.min(amount, hardCap) : Math.max(2_048, amount);
   };
+  const contextBudgetConfig = input.machine.context.budget;
 
   const initialChars =
     input.agent.prompt.length +
@@ -1045,7 +1052,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           input.contextText,
           undefined,
           commandIndex,
-          holdingsCap(undefined),
+          budgetFor(undefined, contextBudgetConfig.holdings, contextBudgetConfig.holdings * 102_400, input.holdingsMaxChars),
         ).messages;
       },
       prepareRequest: async ({ context }) => {
@@ -1053,7 +1060,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const agentPolicy = input.fullPolicy?.agents?.[input.agent.name];
           const budget = row ? contextBudget(row.context, agentPolicy?.expectedOutputTokens ?? 16_000) : null;
           lastBudget = budget;
-          const holdingsBudget = holdingsCap(budget?.inputChars);
+          const holdingsBudget = budgetFor(budget?.inputChars, contextBudgetConfig.holdings, contextBudgetConfig.holdings * 102_400, input.holdingsMaxChars);
+          // Re-render the map with the model-specific budget
+          const mapBudget = budget ? Math.floor(budget.inputChars * contextBudgetConfig.total * contextBudgetConfig.map) : 512_000;
+          if (repoMap && mapBudget >= 1024) {
+            mapIndex = renderMapIndex(repoMap, mapBudget);
+          }
           lastHoldingsChars = holdingsBudget;
           const baseOverhead =
             input.agent.prompt.length +

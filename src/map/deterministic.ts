@@ -811,28 +811,120 @@ export function moduleOf(path: string): string {
   return parts.length > 1 ? parts[0]! : ".";
 }
 
-/** Stable, small repo index for the first prompt. Full slices stay on demand.
- * Modules, not raw first-level directories: `src/tui.ts` and `src/tui/*`
- * count together. A folder is never hidden because of its name, only because
- * its files are not code. */
-export function renderMapIndex(map: RepoMap, maxBytes = 1024): string {
-  const dirs = new Map<string, number>();
-  for (const file of map.files) {
+/** A node in the directory tree for the map index. */
+interface TreeNode {
+  name: string;
+  path: string;
+  depth: number;
+  files: MapFile[];
+  children: Map<string, TreeNode>;
+  totalFiles: number;
+  totalBytes: number;
+}
+
+function buildTree(files: MapFile[]): TreeNode {
+  const root: TreeNode = { name: ".", path: "", depth: 0, files: [], children: new Map(), totalFiles: 0, totalBytes: 0 };
+  for (const file of files) {
     if (!isCodeLang(file.lang)) continue;
-    const dir = moduleOf(file.path);
-    dirs.set(dir, (dirs.get(dir) ?? 0) + 1);
+    const parts = file.path.split("/");
+    const ancestors: TreeNode[] = [root];
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i]!;
+      let child = node.children.get(part);
+      if (!child) {
+        child = { name: part, path: parts.slice(0, i + 1).join("/"), depth: i + 1, files: [], children: new Map(), totalFiles: 0, totalBytes: 0 };
+        node.children.set(part, child);
+      }
+      node = child;
+      ancestors.push(node);
+    }
+    node.files.push(file);
+    // Bump totals up the ancestor chain
+    for (const a of ancestors) {
+      a.totalFiles += 1;
+      a.totalBytes += file.bytes;
+    }
   }
-  const codeFiles = [...dirs.values()].reduce((sum, count) => sum + count, 0);
-  const lines = [
-    `Repo map: ${codeFiles} code files · head ${map.head || "(no git)"} · ${symbolCount(map)} symbols.`,
-    ...[...dirs.entries()]
-      .sort((a, b) => (a[0] === "." ? -1 : b[0] === "." ? 1 : a[0].localeCompare(b[0])))
-      .map(([dir, count]) => `${dir === "." ? "./" : `${dir}/`} ${count}`),
-    "Use inspect {\"query\": \"<dir or file>\"} for a slice or outline; inspect {\"query\": \"<symbol>\"} for a block.",
-  ];
-  const text = lines.join("\n");
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
-  return `${truncateToBytes(text, Math.max(0, maxBytes - 24))}\n[map index truncated]`;
+  return root;
+}
+
+/** Render a level-by-level directory tree of the repo. Shows all dirs and files
+ * at each depth before descending. When the budget runs out, the remaining
+ * entries at the current level are summarized. */
+export function renderMapIndex(map: RepoMap, maxBytes = 102_400): string {
+  const codeFiles = map.files.filter((f) => isCodeLang(f.lang));
+  const root = buildTree(codeFiles);
+
+  const headLine = `Repo map: ${codeFiles.length} code files · head ${map.head || "(no git)"} · ${symbolCount(map)} symbols.`;
+  const footLine = `Use inspect {"query": "<dir or file>"} for a slice or outline; inspect {"query": "<symbol>"} for a block.`;
+
+  const FMT = (n: number): string => n >= 1024 * 1024
+    ? `${(n / (1024 * 1024)).toFixed(1)}MB`
+    : n >= 1024
+      ? `${(n / 1024).toFixed(0)}KB`
+      : `${n}B`;
+
+  const body: string[] = [];
+
+  /** Check whether adding `text` to the body fits within maxBytes. */
+  const fits = (text: string): boolean => {
+    const candidate = `${headLine}\n${body.join("\n")}${body.length > 0 ? "\n" : ""}${text}\n${footLine}`;
+    return Buffer.byteLength(candidate, "utf8") <= maxBytes;
+  };
+
+  /** Render a node: its directory line, then files inside it, then children.
+   *  Returns the number of files rendered (for summary counting). */
+  const renderNode = (node: TreeNode): number => {
+    const dirLabel = `${"  ".repeat(node.depth)}${node.path}/ ${node.totalFiles} files · ${FMT(node.totalBytes)}`;
+    if (!fits(dirLabel)) return 0; // this whole subtree is skipped
+
+    body.push(dirLabel);
+    let rendered = 0;
+
+    // Files directly inside this directory
+    const sortedFiles = [...node.files].sort((a, b) => a.path.localeCompare(b.path));
+    for (const file of sortedFiles) {
+      const indent = node.depth + 1;
+      const fLabel = `${"  ".repeat(indent)}${file.path} ${file.lines} lines · ${FMT(file.bytes)}`;
+      if (fits(fLabel)) {
+        body.push(fLabel);
+        rendered++;
+      } else {
+        // Budget exhausted mid-file: summarize remaining.
+        const remaining = sortedFiles.length - rendered;
+        if (remaining > 0) body.push(`${"  ".repeat(indent)}+${remaining} more files — use inspect`);
+        return rendered;
+      }
+    }
+
+    // Children directories
+    const sortedChildren = [...node.children.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [, child] of sortedChildren) {
+      const childFiles = renderNode(child);
+      rendered += childFiles;
+      // If a child skipped all its files, we're at budget and should stop.
+      if (childFiles === 0 && child.totalFiles > 0) {
+        // Add a summary line for this child
+        const skipLabel = `${"  ".repeat(child.depth)}+${child.totalFiles} files in ${child.path}/ not shown — use inspect`;
+        if (fits(skipLabel)) body.push(skipLabel);
+        return rendered;
+      }
+    }
+
+    return rendered;
+  };
+
+  // Render each top-level directory
+  const sortedRoot = [...root.children.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  for (const [, node] of sortedRoot) {
+    const n = renderNode(node);
+    if (n === 0 && node.totalFiles > 0) {
+      body.push(`+${node.totalFiles} files in ${node.path}/ not shown — use inspect`);
+    }
+  }
+
+  return `${headLine}\n${body.join("\n")}\n${footLine}`;
 }
 
 export interface SymbolRange {

@@ -118,12 +118,25 @@ export interface MachineConfig {
   context: {
     maxChars: number;
     docsIndex?: string;
-    /** Per-turn holdings-delta cap (before the per-model clamp). */
-    holdingsMaxChars: number;
+    /** Budget proportions for each context component. */
+    budget: {
+      /** Total proportion of model input window to allocate to context (0.0-1.0). */
+      total: number;
+      /** Share of the budget allocated to holdings (0.0-1.0 of total). */
+      holdings: number;
+      /** Share of the budget allocated to the repo map index (0.0-1.0 of total). */
+      map: number;
+      /** Share of the budget allocated to the issue (0.0-1.0 of total). */
+      issue: number;
+      /** Share of the budget allocated to docs (0.0-1.0 of total). */
+      docs: number;
+      /** Share of the budget allocated to skills (0.0-1.0 of total). */
+      skills: number;
+      /** Share of the budget allocated to parent runs (0.0-1.0 of total). */
+      parents: number;
+    };
     /** Holdings render constants. Every value here is tunable. */
     holdings: {
-      /** Fraction of the model input budget to allocate to holdings (0.0-1.0). */
-      modelPct: number;
       /** Files under this many lines always render full body. */
       fullLines: number;
       /** Seeded files under this many lines always render full body. */
@@ -268,6 +281,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     };
   }
   const contextRaw = (raw.context ?? {}) as Record<string, unknown>;
+  const budgetRaw = (contextRaw.budget ?? {}) as Record<string, unknown>;
   const availabilityRaw = (raw.availability ?? {}) as Record<string, unknown>;
   const probeMode: AvailabilityProbeMode =
     availabilityRaw.probe === "off"
@@ -311,9 +325,16 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       // code doc headers and the live map; external material lives in the
       // reference store. An explicit docs_index still wins.
       docsIndex: typeof contextRaw.docs_index === "string" ? contextRaw.docs_index : undefined,
-      holdingsMaxChars: asNumber(contextRaw.holdings_max_chars) ?? 48_000,
+      budget: {
+        total: asNumber(budgetRaw.total) ?? 0.80,
+        holdings: asNumber(budgetRaw.holdings) ?? 0.35,
+        map: asNumber(budgetRaw.map) ?? 0.05,
+        issue: asNumber(budgetRaw.issue) ?? 0.15,
+        docs: asNumber(budgetRaw.docs) ?? 0.15,
+        skills: asNumber(budgetRaw.skills) ?? 0.10,
+        parents: asNumber(budgetRaw.parents) ?? 0.05,
+      },
       holdings: {
-        modelPct: asNumber(contextRaw.holdings_model_pct) ?? 0.10,
         fullLines: asNumber(contextRaw.holdings_full_lines) ?? 50,
         seededFullLines: asNumber(contextRaw.holdings_seeded_full_lines) ?? 200,
         outlineLines: asNumber(contextRaw.holdings_outline_lines) ?? 500,
