@@ -124,9 +124,9 @@ export interface MachineConfig {
       total: number;
       /** Share allocated to fixed overhead (system prompt, agent prompt, tool guide, command index). */
       overhead: number;
-      /** Share allocated to holdings (0.0-1.0 of total). */
+      /** Share of the variable pool (after overhead) allocated to holdings (0.0-1.0). */
       holdings: number;
-      /** Share allocated to the repo map (0.0-1.0 of total). */
+      /** Share of the variable pool (after overhead) allocated to the repo map (0.0-1.0). */
       map: number;
     };
     /** Holdings render constants. Every value here is tunable. */

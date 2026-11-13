@@ -518,17 +518,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const ctxBudget = input.machine.context.budget;
 
   /**
-   * Compute per-component budgets from a unified pool that covers ALL context
-   * (fixed overhead + variable). Shares sum to 1.0 of the pool.
+   * Compute per-component budgets from a unified pool that covers ALL context.
    * pool = modelInputChars * ctxBudget.total (0.95).
    *
-   * Fixed overhead: system prompt, agent prompt, tool guide, command index.
-   * Variable: holdings, map, context block, workspace, state block.
+   * Fixed overhead (system/agent/tool guide/command index) gets ctxBudget.overhead
+   * of the pool. The remaining variable pool (holdings, map, context block) is
+   * split by the holdings and map shares. The context block gets what's left.
    */
   const computeBudgets = (inputChars: number | undefined, hardCap?: number): { holdings: number; map: number; contextBlock: number } => {
     const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
-    // Overhead is allocated from the pool but not capped — it always fits
-    // because the shares sum to 1.0. Variable components get the rest.
     const variableShare = 1.0 - ctxBudget.overhead;
     const variablePool = Math.floor(pool * variableShare);
     const holdings = Math.max(2_048, Math.floor(variablePool * ctxBudget.holdings));
