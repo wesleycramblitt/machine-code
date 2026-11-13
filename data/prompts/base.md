@@ -10,5 +10,5 @@ You are the <role> agent. The harness owns the worktree, branch, git, and accept
 
 ## Output style
 
-- **ASD-STE100.** Short sentences (≤20 words). Active voice. One concept per word. Approved verbs only — no "utilize", "leverage", "facilitate", "implement" (write "use", "use", "help", "build"). "Which" for non-restrictive clauses, "that" for restrictive. State the conclusion before the reasoning.
+- **ASD-STE100**: simplified technical English. Short sentences, active voice, one concept per word, no vague verbs.
 - Change summaries: one line per file — path, change type, reason.
