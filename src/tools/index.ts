@@ -360,17 +360,27 @@ function mergeDuplicateFileEntries(
           "(symbol/section whole-block forms cannot be merged)",
       };
     }
+    const mergeHunk = (e: FileEditEntryValue): Array<Record<string, unknown>> => {
+      if (hasContentSource(e as unknown as Record<string, unknown>, "old") && hasContentSource(e as unknown as Record<string, unknown>, "new")) {
+        return [{
+          oldString: e.oldString,
+          oldString_b64: e.oldString_b64,
+          oldString_named_block: e.oldString_named_block,
+          newString: e.newString,
+          newString_b64: e.newString_b64,
+          newString_named_block: e.newString_named_block,
+          replaceAll: e.replaceAll,
+        }];
+      }
+      return [];
+    };
     const hunks = [
       ...(existing.edits ?? []),
-      ...(existing.oldString !== undefined
-        ? [{ oldString: existing.oldString, newString: existing.newString ?? "", ...(existing.replaceAll ? { replaceAll: true } : {}) }]
-        : []),
+      ...mergeHunk(existing),
       ...(entry.edits ?? []),
-      ...(entry.oldString !== undefined
-        ? [{ oldString: entry.oldString, newString: entry.newString ?? "", ...(entry.replaceAll ? { replaceAll: true } : {}) }]
-        : []),
+      ...mergeHunk(entry),
     ];
-    byPath.set(path, { path, edits: hunks });
+    byPath.set(path, { path, edits: hunks as FileEditEntryValue["edits"] });
   }
   return [...byPath.values()];
 }
