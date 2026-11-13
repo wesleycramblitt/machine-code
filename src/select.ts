@@ -225,6 +225,15 @@ function rejectReason(
   if (input.requireModel && !matchesModel(row, input.requireModel)) return "model-filtered";
   if (input.hasRuntimeModel && !input.hasRuntimeModel(row.providerID, row.id)) return "not-in-runtime-catalog";
   if (row.pricing.input < 0 || row.pricing.output < 0) return "invalid-pricing";
+  // Hard spend ceiling ($ per 1M tokens, machine price_caps or --max-price).
+  // Compared against the effective billed rate (after provider multipliers),
+  // so subscription discounts count toward the cap. Unset side = no ceiling.
+  const caps = input.machine.priceCaps;
+  if (caps && (caps.input !== undefined || caps.output !== undefined)) {
+    const mult = providerMultiplier(input.machine, row.providerID);
+    if (caps.input !== undefined && row.pricing.input * mult > caps.input) return "over-price-cap";
+    if (caps.output !== undefined && row.pricing.output * mult > caps.output) return "over-price-cap";
+  }
   const avail = input.availability;
   if (avail) {
     if (isProviderDisabled(avail, row.providerID)) return "provider-disabled";

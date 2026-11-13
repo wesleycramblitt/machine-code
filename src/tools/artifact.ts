@@ -33,8 +33,8 @@ export interface ArtifactToolContext {
 
 const ArtifactParams = Type.Object({
   action: Type.Union(
-    [Type.Literal("list"), Type.Literal("show"), Type.Literal("usage"), Type.Literal("create"), Type.Literal("update")],
-    { description: "list, show, usage, or a provisioning request." },
+    [Type.Literal("list"), Type.Literal("show"), Type.Literal("usage"), Type.Literal("create"), Type.Literal("update"), Type.Literal("run")],
+    { description: "list, show, usage, run, or a provisioning request (create/update)." },
   ),
   name: Type.Optional(Type.String({ description: "Artifact name or repo-relative path." })),
   kind: Type.Optional(Type.Union([Type.Literal("tool"), Type.Literal("script")])),
@@ -280,6 +280,34 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
         if (!artifact) return fail(`artifact not found: ${name}`);
         if (params.action === "usage") {
           return ok(usageFor(ctx, artifact.name));
+        }
+        if (params.action === "run") {
+          const invocation = runInvocation(ctx.layout, artifact, params.args ?? []);
+          if (!invocation) return fail(`artifact ${artifact.name} has no runnable command or script`);
+          const result = await runProc(invocation.binary, invocation.args, {
+            cwd: ctx.layout.repoRoot,
+            timeoutMs: 120_000,
+          });
+          const succeeded = result.outcome === "exit" && result.code === 0;
+          recordUsage(ctx, {
+            artifact: artifact.name,
+            kind: artifact.kind === "script" ? "script" : "tool",
+            scope: "task",
+            runId: ctx.recorder.id,
+            role: ctx.recorder.current.agent,
+            at: new Date().toISOString(),
+            success: succeeded,
+            action: "run",
+          } as ArtifactUsage);
+          if (result.outcome === "spawn-error") return fail(`artifact run failed to start: ${result.spawnError}`);
+          if (result.outcome === "timeout") return fail(`artifact ${artifact.name} timed out after 120s`);
+          const capped = capText(result.stdout.trimEnd(), COMMAND_CAP_BYTES);
+          if (result.code !== 0) {
+            return fail(
+              `${artifact.name} exited ${result.code}: ${result.stderr.trim() || "(no stderr)"}${capped.text ? `\n${capped.text}` : ""}`,
+            );
+          }
+          return ok(capped.text || "(no output)");
         }
         const path = artifactPath(ctx.layout, artifact);
         recordUsage(ctx, {

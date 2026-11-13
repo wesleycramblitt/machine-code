@@ -206,11 +206,23 @@ export async function resolveBaseRef(mainRoot: string, ref: string): Promise<str
   return result.stdout.trim();
 }
 
-/** Path of the worktree holding `branch` checked out, if any. */
+/** Path of the worktree holding `branch` checked out, if any.
+ * Stale registrations (directory deleted, e.g. by pruning orphaned run dirs)
+ * are pruned and ignored: returning a phantom path sends the run's tools at
+ * a nonexistent cwd, where map/glob report zero files and git history
+ * misreads look like an empty checkout. */
 export async function branchCheckedOutAt(mainRoot: string, branch: string): Promise<string | null> {
-  for (const entry of await worktreeList(mainRoot)) {
-    if (entry.branch === branch) return entry.path;
-  }
+  const findLive = (entries: WorktreeEntry[]): string | null => {
+    for (const entry of entries) {
+      if (entry.branch === branch) return entry.path;
+    }
+    return null;
+  };
+  const found = findLive(await worktreeList(mainRoot));
+  if (found === null || existsSync(found)) return found;
+  await git(mainRoot, ["worktree", "prune"]);
+  const pruned = findLive(await worktreeList(mainRoot));
+  if (pruned === null || existsSync(pruned)) return pruned;
   return null;
 }
 
