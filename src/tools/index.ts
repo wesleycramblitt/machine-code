@@ -79,6 +79,8 @@ export interface ToolContext {
   /** Paths (relative to root) that this agent is allowed to write/edit.
    *  Empty or undefined means all paths are allowed. */
   allowedPaths?: readonly string[];
+  /** Directory where named code blocks from the assistant response are stored. */
+  namedBlocksDir?: string;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -89,12 +91,42 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
+function sanitizeBlockName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/**
+ * Resolve content from the highest-priority source: named_block > b64 > plain.
+ * Called from write/edit tool execute functions with the ToolContext.
+ */
+function resolveContent(
+  content: string | undefined | null,
+  contentB64: string | undefined | null,
+  contentNamedBlock: string | undefined | null,
+  blocksDir: string | undefined,
+): string | undefined {
+  if (contentNamedBlock) {
+    if (!blocksDir) return content ?? undefined;
+    const filePath = join(blocksDir, sanitizeBlockName(contentNamedBlock));
+    try {
+      return readFileSync(filePath, "utf8");
+    } catch {
+      return undefined;
+    }
+  }
+  if (contentB64) {
+    return Buffer.from(contentB64, "base64").toString("utf8");
+  }
+  return content ?? undefined;
+}
+
 /* ------------------------------------------------------------------- write */
 
 const WriteParams = Type.Object({
   path: Type.String({ description: "File path, relative to the worktree root." }),
-  content: Type.Optional(Type.String({ description: "Full file content to write. Omit when using content_b64." })),
-  content_b64: Type.Optional(Type.String({ description: "Full file content as base64. Use when the content has characters (backslashes, backticks) that are hard to JSON-escape. Overrides content when both are present." })),
+  content: Type.Optional(Type.String({ description: "Full file content to write. Omit when using content_b64 or content_named_block." })),
+  content_b64: Type.Optional(Type.String({ description: "Full file content as base64. Overrides content." })),
+  content_named_block: Type.Optional(Type.String({ description: "Name of a fenced code block in the assistant response. The harness extracts it and reads from a scratch file. Use for code with backslashes. Overrides content and content_b64." })),
 });
 
 /** A path literally named "null" is a serialization artifact, never a real
@@ -136,10 +168,8 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
           return fail(`refusing to write a secret file: ${params.path}`);
         }
         mkdirSync(dirname(abs), { recursive: true });
-        const content = params.content_b64
-          ? Buffer.from(params.content_b64, "base64").toString("utf8")
-          : params.content;
-        if (content === undefined) return fail("write needs content or content_b64");
+        const content = resolveContent(params.content, params.content_b64, params.content_named_block, ctx.namedBlocksDir);
+        if (content === undefined) return fail("write needs content, content_b64, or content_named_block");
         writeFileSync(abs, content, "utf8");
         return ok(`wrote ${params.path} (${Buffer.byteLength(content, "utf8")} bytes)`);
       } catch (error) {
@@ -230,17 +260,21 @@ function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknow
 
 const FileEditEntry = Type.Object({
   path: Type.Optional(Type.String({ description: "File path, relative to the worktree root." })),
-  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64." })),
-  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Use when the text has hard-to-escape characters. Overrides oldString when both are present." })),
-  newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString. Omit when using newString_b64." })),
-  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Use when the text has hard-to-escape characters. Overrides newString when both are present." })),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64 or oldString_named_block." })),
+  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+  oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text, or whole-block replacement with symbol/section and no oldString. Omit when using newString_b64 or newString_named_block." })),
+  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+  newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
   edits: Type.Optional(
     Type.Array(
       Type.Object({
-        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64." })),
+        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64 or oldString_named_block." })),
         oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
-        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64." })),
+        oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64 or newString_named_block." })),
         newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+        newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
         replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
       }),
       { description: "Several exact-match hunks applied atomically to this file." },
@@ -252,17 +286,21 @@ const FileEditEntry = Type.Object({
 });
 
 const EditParams = Type.Object({  path: Type.Optional(Type.String({ description: "File path, relative to the worktree root (single-file form; omit when using files[])." })),
-  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64." })),
-  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Use when the text has hard-to-escape characters. Overrides oldString when both are present." })),
-  newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form). Omit when using newString_b64." })),
-  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Use when the text has hard-to-escape characters. Overrides newString when both are present." })),
+  oldString: Type.Optional(Type.String({ description: "Exact text to find (single-hunk form). Omit when using oldString_b64 or oldString_named_block." })),
+  oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
+  oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+  newString: Type.Optional(Type.String({ description: "Replacement text (single-hunk form). Omit when using newString_b64 or newString_named_block." })),
+  newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+  newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
   edits: Type.Optional(
     Type.Array(
       Type.Object({
-        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64." })),
+        oldString: Type.Optional(Type.String({ description: "Exact text to find. Omit when using oldString_b64 or oldString_named_block." })),
         oldString_b64: Type.Optional(Type.String({ description: "oldString as base64. Overrides oldString." })),
-        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64." })),
+        oldString_named_block: Type.Optional(Type.String({ description: "oldString from a named code block. Overrides oldString and oldString_b64." })),
+        newString: Type.Optional(Type.String({ description: "Replacement text. Omit when using newString_b64 or newString_named_block." })),
         newString_b64: Type.Optional(Type.String({ description: "newString as base64. Overrides newString." })),
+        newString_named_block: Type.Optional(Type.String({ description: "newString from a named code block. Overrides newString and newString_b64." })),
         replaceAll: Type.Optional(Type.Boolean({ description: "Replace every occurrence in the scope." })),
       }),
       { description: "Several exact-match hunks applied atomically to one file." },
@@ -521,9 +559,11 @@ interface FileEditSpec {
   path: string;
   oldString?: string | null;
   oldString_b64?: string | null;
+  oldString_named_block?: string | null;
   newString?: string | null;
   newString_b64?: string | null;
-  edits?: Array<{ oldString?: string | null; oldString_b64?: string | null; newString?: string | null; newString_b64?: string | null; replaceAll?: boolean | null }> | null;
+  newString_named_block?: string | null;
+  edits?: Array<{ oldString?: string | null; oldString_b64?: string | null; oldString_named_block?: string | null; newString?: string | null; newString_b64?: string | null; newString_named_block?: string | null; replaceAll?: boolean | null }> | null;
   symbol?: string | null;
   section?: string | null;
   replaceAll?: boolean | null;
@@ -544,7 +584,7 @@ interface PlannedFileEdit {
  * caller); returns { error } for every anchor/scope validation failure so a
  * multi-file call can report all failures before writing anything.
  */
-async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<PlannedFileEdit | { error: string }> {
+async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksDir?: string): Promise<PlannedFileEdit | { error: string }> {
   const pathText = typeof spec.path === "string" ? spec.path.trim() : "";
   if (pathText === "" || pathText.toLowerCase() === "null" || pathText.toLowerCase() === "undefined") {
     return { error: "edit needs a file path (single-file path, or path in each files[] entry)" };
@@ -552,21 +592,30 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec): Promise<Pla
   // A single-hunk call and an edits array are the same operation, not
   // alternatives: apply the single hunk first, then the array, in one
   // atomic pass. Weak models hedge by filling both forms.
-  // Resolve base64 fields before processing. Base64 avoids JSON escape issues
-  // with backslashes, backticks, and other special characters in code.
-  const resolvedOldString = spec.oldString_b64
-    ? Buffer.from(spec.oldString_b64, "base64").toString("utf8")
-    : spec.oldString;
-  const resolvedNewString = spec.newString_b64
-    ? Buffer.from(spec.newString_b64, "base64").toString("utf8")
-    : spec.newString;
+  // Resolve content from the highest-priority source per field:
+  // named_block > b64 > plain.
+  const readBlock = (name: string | undefined | null): string | undefined => {
+    if (!name || !namedBlocksDir) return undefined;
+    const file = join(namedBlocksDir, name.replace(/[^a-zA-Z0-9_-]/g, "_"));
+    try { return readFileSync(file, "utf8"); } catch { return undefined; }
+  };
+  const resolvedOldString =
+    readBlock(spec.oldString_named_block) ??
+    (spec.oldString_b64 ? Buffer.from(spec.oldString_b64, "base64").toString("utf8") : undefined) ??
+    spec.oldString;
+  const resolvedNewString =
+    readBlock(spec.newString_named_block) ??
+    (spec.newString_b64 ? Buffer.from(spec.newString_b64, "base64").toString("utf8") : undefined) ??
+    spec.newString;
   const resolvedEdits = (spec.edits ?? []).map((hunk) => {
-    const oldStr = hunk.oldString_b64
-      ? Buffer.from(hunk.oldString_b64, "base64").toString("utf8")
-      : hunk.oldString ?? "";
-    const newStr = hunk.newString_b64
-      ? Buffer.from(hunk.newString_b64, "base64").toString("utf8")
-      : hunk.newString ?? "";
+    const oldStr =
+      readBlock(hunk.oldString_named_block) ??
+      (hunk.oldString_b64 ? Buffer.from(hunk.oldString_b64, "base64").toString("utf8") : undefined) ??
+      hunk.oldString ?? "";
+    const newStr =
+      readBlock(hunk.newString_named_block) ??
+      (hunk.newString_b64 ? Buffer.from(hunk.newString_b64, "base64").toString("utf8") : undefined) ??
+      hunk.newString ?? "";
     return { ...hunk, oldString: oldStr, newString: newStr };
   });
   const singleOld =
@@ -811,7 +860,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           const plans: PlannedFileEdit[] = [];
           const errors: string[] = [];
           for (const [index, file] of mergedFiles.entries()) {
-            const planned = await planSingleFileEdit(ctx.root, { ...file, path: file.path ?? "" });
+            const planned = await planSingleFileEdit(ctx.root, { ...file, path: file.path ?? "" }, ctx.namedBlocksDir);
             if ("error" in planned) errors.push(`files[${index}]${file.path ? ` ${file.path}` : ""}: ${planned.error}`);
             else plans.push(planned);
           }
@@ -838,7 +887,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           return ok(out.join("\n"));
         }
-        const planned = await planSingleFileEdit(ctx.root, { ...params, path: params.path ?? "" });
+        const planned = await planSingleFileEdit(ctx.root, { ...params, path: params.path ?? "" }, ctx.namedBlocksDir);
         if ("error" in planned) return fail(planned.error);
         writeFileSync(planned.abs, planned.next, "utf8");
         const rendered = renderEditResult(params.path ?? "file", planned.next, planned.changes);

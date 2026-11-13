@@ -30,7 +30,9 @@
 
 4. **Edit** — Use symbol-anchored replacement for function-scale changes (`{symbol: "FunctionName", newString}`). This avoids JSON escaping problems with backslashes in oldString. Only use oldString when symbol anchoring is not possible. Batch independent files in one `edit {files: [...]}`. The diff is the confirmation — do not re-read.
 
-   **Base64 escape hatch** — When content has backslashes (regex), backticks, or other JSON-sensitive characters, use the _b64 fields: `{oldString_b64, newString_b64}` for edit or `{content_b64}` for write. Encode the content as base64 — no escaping needed. The tool decodes before applying.
+   **Named code blocks (preferred for regex/backslash-heavy code):** Write the replacement as a fenced block in your response, then reference it: `newString_named_block: "my-block-name"`. The harness reads the block from scratch — no JSON escaping needed. Works for `write` too: `content_named_block`.
+
+   **Base64 fallback:** Use `_b64` fields when named blocks are not practical.
 
 5. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
