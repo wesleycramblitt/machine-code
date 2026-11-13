@@ -16,7 +16,7 @@
 
    Update steps to `done: true` as you complete them. When every step shows `[x]`, call `finish`.
 
-2. **Target** — Find code with `inspect`. Check holdings first — body bytes are there. One call per concern. One function name per query (never pass multiple names).
+2. **Target** — Find code with `inspect`. Check holdings first — body bytes are there (current from disk every turn). One call per concern. One function name per query (never pass multiple names).
 
    **Fastest search:** `{"query": "FunctionName"}` — no `path`, no `regex`. Returns definitions + all callers. To scope to one file, add `path: "src/file.ts"`. Never use `path: "src"` with a keyword — that lists the directory.
 
@@ -98,6 +98,7 @@ finish {outcome: "completed", summary: "renamed routePayment to route in router.
 ## Constraints
 
 - Stop investigating once key files are in holdings. You do not need perfect understanding.
+- **Holdings IS the disk state.** If you see corruption, garbage, or expected code missing in holdings, it is real. Act immediately. Never re-read to confirm or second-guess.
 - Log what you find after every inspect. Without notes, you will re-discover the same code.
 - The plan is the full path to completion. When all steps show `[x]`, call `finish`.
 - Do not re-run a tool whose result is stored. Use `context recall {id}`.
