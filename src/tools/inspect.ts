@@ -268,8 +268,14 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             "--max-count", "60", "--context", "2", ...excludeGlobs(), "--", query];
           if (scope) args.push(scope);
           const result = await runProc("rg", args, { cwd: ctx.root, timeoutMs: 30_000 });
-          if (result.outcome !== "exit" || (result.code !== 0 && !result.stdout)) {
+          if (result.outcome !== "exit") {
             return fail(`regex search failed: ${result.spawnError ?? `exit ${result.code ?? "?"}`}`);
+          }
+          if (result.code !== 0 && !result.stdout) {
+            // rg exit 1 without output = no matches. Return "no matches" instead of failing.
+            const envelope = `<inspect query="${query}" mode="find" match="regex">\nno matches\n</inspect>`;
+            const artifact = ctx.state?.putArtifact(envelope);
+            return ok(artifact ? `${envelope}\n\n[artifact: ${artifact.id}]` : envelope);
           }
           const text = result.stdout.trimEnd() || "no matches";
           const envelope = `<inspect query="${query}" mode="find" match="regex">\n${text}\n</inspect>`;
@@ -352,7 +358,12 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
               }
               const lines = [`directory: ${shown} [match: path]`, `subdirectories: ${[...dirs].sort().join(", ") || "(none)"}`];
               for (const child of children.slice(0, 40)) lines.push(`  ${child.path} (${child.symbols.length} symbols, ${child.lines} lines)`);
-              const envelope = `<inspect query="${query}" mode="directory" match="path">\n${lines.join("\n")}\n</inspect>`;
+              // If path was specified but the query was NOT a path/directory (e.g. {query: "someKeyword", path: "src"}),
+              // the user likely wanted content search — guide them.
+              const keywordHint = !scope && query !== shown
+                ? `\n(To search file contents for "${query}", omit path or use path: "src/specific-file.ts". path: "src" with a keyword lists the directory.)`
+                : "";
+              const envelope = `<inspect query="${query}" mode="directory" match="path">\n${lines.join("\n")}${keywordHint}\n</inspect>`;
               const artifact = ctx.state?.putArtifact(envelope);
               return ok(artifact ? `${envelope}\n\n[artifact: ${artifact.id}]` : envelope);
             }

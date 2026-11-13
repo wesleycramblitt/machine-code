@@ -22,6 +22,7 @@
    - **Existing docs**: read `docs/` first. They may be outdated — verify against the code as needed.
    - **Existing issues**: use `issue:list` to discover what exists, `issue:show {slug}` to read a specific issue body.
    - **Codebase**: `inspect` to find definitions, symbols, and patterns. See `<tool-policy>` for the cascade pattern (outline → symbol → anchor). Check holdings first.
+   - **Content search**: `{"query": "SomeFunctionName"}` (no `path`, no `regex`) finds definitions, callers, and all references across the entire codebase. This is the fastest way to locate code. Do not use `path: "src"` with a content keyword — that returns a directory listing.
    - **References**: `command run {name: reference:find}` to locate existing references. `command run {name: reference:read}` to read one. You can read existing references but you cannot create them — that is a separate agent's job.
 
 4. **Produce** — Write a durable artifact only when there is something new:

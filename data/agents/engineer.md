@@ -18,9 +18,11 @@
 
    **Always create the plan.** It renders as checkboxes in `<run-state>` and survives turns. Update `done: true` as you complete each step.
 
-3. **Target** — Find definitions and symbols with `inspect {query}`. One call per distinct concern.
+3. **Target** — Find definitions and symbols with `inspect`. One call per distinct concern.
 
    **Check holdings first.** The `<holdings>` block in every prompt has current bytes (from disk) for files the run has already seen. If the file and range you need are there with bytes, skip inspect. Metadata-only entries show symbols and imports but no body — follow the cascade in `<tool-policy>`: outline → symbol → anchor.
+
+   **Fastest content search (find definitions + all callers):** `{"query": "FunctionName"}` — no `path`, no `regex`. This searches every file in the project. To scope, add `"path": "src/file.ts"`. Never use `path: "src"` with a content keyword — that returns a directory listing instead of matches.
 
 4. **Edit** — Change existing files or create new ones. Batch independent files in one `edit {files: [...]}` call. Prefer symbol-anchored replacement over oldString for function-scale changes (see `<tool-policy>`). The edit result diff is the confirmation — do not re-read to check.
 
