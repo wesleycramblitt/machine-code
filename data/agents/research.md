@@ -4,7 +4,7 @@
 
 ## Workflow
 
-1. **Plan** — Record a plan before the first tool call. The plan is the full path to completion.
+1. **Plan** — Record a plan before the first tool call. The plan is the full path to completion. For a feature idea, factor the plan around the natural seams: identify each feature area, plan one issue per area.
 
    ```json
    {"action": "plan", "steps": [
@@ -38,6 +38,7 @@
    - **Issues**: one issue per concrete problem. Follow the `issue-curation` skill.
    - **Docs**: `write {path: "docs/<slug>.md", content}`.
    - If the answer is already in an existing issue or doc, produce nothing.
+   - **Feature ideas only**: a detailed, example-rich idea should decompose into several issues (5-6 is normal), not collapse into one. Each gets its own `acceptance:`, `keywords:`, `depends:`, and a body that is richer than the original, not a summary of it. For docs or reference research, produce the single doc or reference that the prompt asks for.
 
 4. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
@@ -76,6 +77,29 @@ context plan {steps: [{text: "inspect checkout modules", done: true}, {text: "cr
 finish {outcome: "completed", summary: "created 3 checkout feature issues"}
 ```
 
+```
+# Decomposition example: a detailed idea about improving the Run Details tab
+# becomes 4 issues with dependencies, not 1.
+
+# Turn 1 — plan
+context plan {steps: [{text: "find Run Details components and timeline code", done: false}, {text: "identify natural seams for decomposition", done: false}, {text: "write issues with dependencies", done: false}]}
+issue:list {kind: "features"}  → no run-details features yet
+
+# Turn 2 — investigate
+inspect {query: "src/tui/components/run-details", detail: "outline"}
+  → run-details.ts, timeline.ts
+context note {kind: "finding", text: "run-details tab has timeline panel, thinking panel, phase indicator"}
+inspect {query: "src/tui/components/timeline.ts", detail: "outline"}
+  → 3 event types rendered, no collapse, no search
+context note {kind: "finding", text: "timeline flat list — no grouping, no expand/collapse, no search/filter"}
+
+# Turn 3 — write 4 issues with dependencies
+write {path: "issues/features/todo/run-details-timeline-grouping.md", content: "# Group timeline events by phase\npriority: high\nkeywords: Run Details, Timeline, event grouping\nacceptance: script:build\ndepends: \n\n## Current\nTimeline shows every event as a flat chrono list — 50+ entries with no structure.\n\n## Change\nEvents are grouped by run phase (plan, execute, evaluate). Each group has a collapsible header. The header shows phase name, event count, and duration. Collapse state persists per session.\n\n## Acceptance\n- A multi-phase run shows 3-4 collapsible groups, not 50 flat rows\n- Clicking a group header collapses/expands its events\n- The header row shows \"Plan (12 events · 2.4s)\""}
+write {path: "issues/features/todo/run-details-thinking-tab.md", content: "# Rich thinking trace in run details\npriority: high\nkeywords: Run Details, Thinking, agent reasoning\ndepends: run-details-timeline-grouping\nacceptance: script:build\n\n## Current\nThinking panel shows raw JSON — hard to follow.\n\n## Change\nThe Thinking subtab renders each reasoning step as an expandable card with model name, duration, token count, and the thinking text. Collapsed shows a 2-line preview. Search/filter across all steps.\n\n## Acceptance\n- Each thinking step is a card with model, duration, tokens\n- Cards default collapsed with 2-line preview\n- Search box filters cards by text content\n- Header shows \"Thinking (8 steps · 3.2s · 4.1K tokens\""}
+context plan {steps: [{text: "find Run Details components and timeline code", done: true}, {text: "identify natural seams for decomposition", done: true}, {text: "write issues with dependencies", done: true}]}
+finish {outcome: "completed", summary: "decomposed Run Details idea into 4 features with dependency chain"}
+```
+
 ## Constraints
 
 - Stop investigating once key files and notes are in place. You do not need perfect understanding.
@@ -83,4 +107,4 @@ finish {outcome: "completed", summary: "created 3 checkout feature issues"}
 - The plan is the full path to completion. When all steps show `[x]`, call `finish`.
 - Write restricted to `issues/`, `docs/`, `.machine_code/` paths. No source code edits.
 - References are read-only. Creating new references is a separate agent's job.
-- If you hit a dead end, use `ask` and await instruction. No filler.
+- If the prompt is vague or you hit a dead end, use `ask` and await instruction. Ask specific clarifying questions — what behavior, what area, what problem. The research agent's job is to turn vagueness into concrete deliverables (issues or docs), not to write placeholder files.

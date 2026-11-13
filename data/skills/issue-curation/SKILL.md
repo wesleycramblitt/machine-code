@@ -54,7 +54,7 @@ These waste turns. Do not create them.
 
 - **Mirroring.** If the research prompt is "add settings caching" and the issue says "add settings caching" with no delta, you added nothing. Value comes from *why* it matters, *what* changes, and *how* to verify it.
 - **Implementation instead of behavior.** "Add an AppConfig class with load/save methods" tells how, not what. "Settings persist across restarts and load lazily" tells what — the engineer chooses the how.
-- **Vague scope.** "Refactor the layout engine" — what is wrong with it? What does success look like? If you cannot name the files or acceptance, make it an idea.
+- **Vague scope.** "Refactor the layout engine" — what is wrong with it? What does success look like? If you cannot name the files or acceptance, use `ask` to get specifics before writing an issue.
 - **Filler.** An issue that adds no behavior, fixes no bug, and documents nothing familiar. Delete or omit it.
 - **Non-issues.** "Add a comment explaining X." Docs are useful — put them in `docs/`, not in issues.
 
@@ -66,13 +66,27 @@ These waste turns. Do not create them.
 
 ## Research workflow: curating issues from investigation
 
-When the research goal is to create a scoped feature/bug issue, the route is:
+When the research goal is to create scoped feature/bug issues from a prompt, the route is:
 
 1. **Read the prompt and existing issues.** If the behavior is already described in a `features/todo/` or `bugs/todo/` issue, that is the work item — do not create a duplicate.
 2. **Inspect the codebase** to understand the relevant area:
    - Start with a broad `inspect` (keyword or directory listing) to find the right files.
    - Then target specific symbols, patterns, and imports to understand the current behavior.
    - Check docs and references when the prompt names external APIs or patterns.
-3. **Name the concrete delta.** What behavior changes? What files will the engineer touch? This does not need to be a precise edit list — `"the issue screen status line needs to show the run phase"` is enough — but it must name the observable change.
-4. **Write the issue.** Follow the file shape above. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
-5. **If you cannot name the change** (behavior is too vague, area is too complex), record an `ideas/<slug>.md` and finish as completed. The planner can research further.
+3. **Decompose the idea into concrete features.** A well-described idea with specific examples and feature areas should become **multiple feature issues**, one per natural seam. For each issue, write:
+   - The specific behavior change (what observable difference does this make?)
+   - The files or area of the codebase it touches
+   - A `depends:` line when one feature must land before another (use issue slugs)
+   - A `keywords:` line with search terms that match the UI strings, component names, or concepts involved
+   - An `acceptance:` line with verification commands
+   - A body rich enough that an engineer can implement from it without ambiguity
+4. **Name the concrete delta.** What behavior changes? What files will the engineer touch? This does not need to be a precise edit list — `"the issue screen status line needs to show the run phase"` is enough — but it must name the observable change.
+5. **Write each issue.** Follow the file shape above. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
+6. **If the prompt is too vague to decompose** (a few words with no specifics, examples, or mention of existing behavior), use the `ask` tool to ask the human clarifying questions — what specific behavior, what area of the codebase, or what problem they're trying to solve. Do not write a placeholder `ideas/` file; the research agent's purpose is to turn vagueness into concreteness through investigation and questioning.
+
+### Decomposition guidelines
+
+- **One concern per issue.** Splitting into 5-6 well-scoped features from one detailed idea is expected, not unusual. The body of each should be richer than the original idea text, not a summary of it.
+- **Name the dependency chain** with `depends:` when features build on each other. Features with no interdependencies can be built in parallel — mark them without `depends:`.
+- **Copy the full context from the original prompt** into each feature body where it applies. Don't make the engineer cross-reference the idea file.
+- **Each feature issue should be independently verifiable.** If you cannot describe how to verify it in one sentence, the scope is too large — split further.
