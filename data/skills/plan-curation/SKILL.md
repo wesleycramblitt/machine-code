@@ -44,21 +44,36 @@ One paragraph of detail the prompt needs.
   research finishes; features/bugs move todo → blocked ⇄ todo → done. There
   is no archived status: delete an issue you no longer want.
 
-## Writing good issues
+## Good issues have scope and acceptance
 
-The issue prompt is the goal. The agent reads the body text as the
-deliverable. Make the scope and acceptance criteria obvious from the
-text alone:
+The issue prompt is the goal. The engineer reads the body text as the
+deliverable. For an issue to be actionable, it must pass these tests:
 
-- **Ideas**: Describe the question or direction to explore. What should
-  research produce — feature/bug issues, curated references, or docs?
-- **Features**: Say what to build, what it replaces, and how it should
-  work. One paragraph is enough.
-- **Bugs**: Describe the failure, how to reproduce it, and the expected
-  behavior. Include error output or screenshots when relevant.
+**Features:** What behavior changes? What does it replace? What is the
+acceptance gate? If the answer to "how do I know this is done" is not
+obvious from the body, add an `acceptance:` line.
 
-Keep the prompt tight. A clear deliverable removes the need for a
-checklist or plan section.
+**Bugs:** What fails, how to reproduce it, what is expected. Include
+error output or the exact steps. The engineer should be able to reproduce
+the bug from the body alone.
+
+**Ideas:** A question or direction to explore. Ideas do not need
+acceptance — they are not implementation work yet.
+
+### Anti-patterns
+
+- **Mirroring the prompt.** If the research prompt is "add settings caching"
+  and the issue says "add settings caching" with no delta, you added no
+  value. A good issue says *what part of settings caches what data, when it
+  is invalidated, and how to verify it works*.
+- **Implementation instead of behavior.** "Add an AppConfig class with
+  load/save methods" tells *how*, not *what*. "Settings should persist across
+  restarts and load lazily" tells *what* — the engineer picks the how.
+- **Vague scope.** "Refactor the layout engine" — what is wrong with it?
+  What does success look like? If you cannot name the files or acceptance
+  gate, make it an idea.
+- **Filler.** If an issue adds no new behavior, no bug fix, and no doc
+  readers would miss, delete it or leave it out.
 
 ## Procedure
 
