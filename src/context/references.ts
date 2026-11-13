@@ -148,7 +148,7 @@ export function resolveSkillMode(name: string, input: SkillModeInput = {}): Skil
 }
 
 export function defaultSkillsFor(args: { agent: string; verification?: "direct" | "verified" }): string[] {
-  if (args.agent === "research") return ["clean-code", "plan-curation"];
+  if (args.agent === "research") return ["clean-code", "issue-curation"];
   if (args.agent === "engineer") {
     return args.verification === "verified"
       ? ["clean-code", "verified-testing"]
