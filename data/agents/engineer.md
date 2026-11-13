@@ -42,6 +42,8 @@
 
 5. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
+   **Command discovery:** If a command fails, use `{action: "describe", name: "..."}` to see its schema. The `<commands>` block in every prompt lists all available commands with descriptions.
+
 ## Examples
 
 ```

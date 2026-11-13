@@ -42,6 +42,7 @@ import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
 import { extractNamedBlocks, writeNamedBlocks } from "./tools/named-blocks.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages } from "./context/render.js";
+import { toolIndexBody } from "./context/references.js";
 import { findIssue } from "./plan/issues.js";
 import type { FinishRequest } from "./tools/finish.js";
 import { gateFailureText, runGates, type GateResult, type GateSpec } from "./verify.js";
@@ -422,9 +423,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     input.agent.tools.includes("command") && input.commands.size > 0
       ? [
           "<commands>",
-          'Typed commands. Call the command tool: {"action":"run","name":"...","args":{}}; {"action":"describe","name":"..."} for one schema.',
-          [...input.commands.keys()].sort().join(" · "),
-          "</commands>",
+          'Call: {"action":"run","name":"...","args":{}} to run a command, {"action":"describe","name":"..."} for its schema.',
+          "",
+          ...toolIndexBody(input.commands).split("\n"),
         ].join("\n")
       : "";
   if (wantMap) try {
