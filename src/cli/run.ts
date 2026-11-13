@@ -1062,6 +1062,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ...(floorOverrides ? { floors: floorOverrides } : {}),
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
+    // Research runs verify with a deterministic file-existence check instead
+    // of a brittle "Outcome:" text match. This gate runs inside the loop the
+    // same way script gates do — if it fails, the agent gets the output and
+    // can create the missing files.
+    const researchGate: GateSpec = { command: "research:verify", args: {}, required: true };
+    const gates = issueGates ?? (role === "research" ? [researchGate] : undefined);
     result = await runLoop({
       models,
       catalogue: catalogueDoc.models,
@@ -1087,50 +1093,20 @@ export async function cmdRun(argv: string[]): Promise<number> {
       skipMap,
       skillExcludes,
       signal: abort.signal,
-      ...(issueGates ? { gates: issueGates } : {}),
+      gates,
       ...(forkMessages ? { initialMessages: forkMessages, startMode: forkStartMode } : {}),
     });
   }
 
-  // Research may finish with new issues, curated references, or a conclusion
-  // that no change is needed. Its terminal outcome is the semantic gate; the
-  // runner does not require a file count.
+  // Research that completed means gates passed. The research:verify gate
+  // already checked for new files in issues/, docs/, .machine_code/references/.
+  // Move any parent idea to researched and commit the new artifacts.
   if (result.status === "completed" && itemSlug && agentNameParsed === "research") {
     const issue = findIssue(l, itemSlug);
     if (issue?.kind === "ideas" && issue.status === "needs-research") {
-      const events = readRun(l, recorder.id)?.events ?? [];
-      const written = [...new Set(touchedPaths(events))].filter((path) =>
-        /^issues\/(?:features|bugs)\//.test(path),
-      );
-      // Research may write a specific plan; the fallback guarantees every
-      // created issue has a Todo the next run can pick up.
-      for (const path of written) {
-        const slug = basename(path, ".md");
-        ensureIssueVerification(l, slug);
-      }
-      const missing = written
-        .map((path) => findIssue(l, basename(path, ".md")))
-        .filter((created) => created !== null && created.acceptance.length === 0);
-      if (missing.length > 0) {
-        recorder.event("research_missing_acceptance", {
-          slug: issue.slug,
-          issues: missing.map((created) => created!.slug),
-        });
-        process.stderr.write(
-          `warning: ${missing.length} issue(s) created without acceptance: ${missing.map((c) => c!.slug).join(", ")}\n`,
-        );
-      }
-      const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.test(
-        result.finalText ?? "",
-      );
-      if (outcome) {
-        moveIssue(l, issue.slug, "researched");
-        await commitPlanningFiles(l, `[${kindTag(issue.kind)} RESEARCHED] ${issue.slug}`);
-        recorder.event("idea_researched", { slug: issue.slug, created: written.length });
-      } else {
-        recorder.event("research_incomplete", { slug: issue.slug });
-        process.stderr.write(`research left ${issue.slug} needs-research: no "Outcome: researched" line\n`);
-      }
+      moveIssue(l, issue.slug, "researched");
+      await commitPlanningFiles(l, `[${kindTag(issue.kind)} RESEARCHED] ${issue.slug}`);
+      recorder.event("idea_researched", { slug: issue.slug });
     }
   }
 

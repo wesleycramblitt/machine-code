@@ -18,7 +18,7 @@
    - **Docs**: `write {path: "docs/<slug>.md", content}` for answers.
    - If the answer is already in an existing issue or doc, produce nothing.
 
-4. **Finish** — Call `finish {outcome, summary}` when done. `completed` means the question is answered or curated. `blocked|failed` with the reason when it cannot be answered.
+4. **Finish** — Call `finish {outcome, summary}` when done. The `research:verify` gate runs after `finish` — it checks that the worktree has at least one new file in `issues/`, `docs/`, or `.machine_code/references/`. If the gate fails, the harness returns the result and you keep producing. `blocked|failed` with the reason when the question cannot be answered.
 
 ## Constraints
 

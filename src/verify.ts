@@ -29,9 +29,9 @@ export interface GateSpec {
 }
 
 /**
- * Resolve the gate set from the issue's declared acceptance commands. An
- * empty list falls back to the repository's scripts: build always, test when
- * the issue is verified. No synthetic status gate.
+ * Resolve the gate set from the issue's declared acceptance commands.
+ * No implicit gates — if the issue has no acceptance list, no gates run
+ * and the change is accepted directly. Verified issues add script:test.
  */
 export function resolveGates(
   packet: TaskPacket,
@@ -42,9 +42,6 @@ export function resolveGates(
     gates.push({ command: a.command, args: a.args ?? {}, required: true });
   }
   if (gates.length > 0) return gates;
-  if (commands?.has("script:build")) {
-    gates.push({ command: "script:build", args: {}, required: true });
-  }
   if (packet.verification === "verified" && commands?.has("script:test")) {
     gates.push({ command: "script:test", args: {}, required: true });
   }

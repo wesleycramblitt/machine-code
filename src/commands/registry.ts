@@ -11,6 +11,7 @@ import { dirname, resolve } from "node:path";
 import { runProc } from "../proc.js";
 import { COMMAND_CAP_BYTES, capText, isSecretPath, resolveWithin, toRelative } from "../tools/safety.js";
 import { referenceCommands } from "./reference.js";
+import { researchVerifyCommand } from "./research.js";
 import { runCommands } from "./runs.js";
 import { scriptCommands } from "./scripts.js";
 import type { Layout } from "../paths.js";
@@ -268,9 +269,10 @@ const SPECS: CommandSpec[] = [
   },
 ];
 
-export const CORE_COMMANDS: ReadonlyMap<string, CommandSpec> = new Map(
-  SPECS.map((spec) => [spec.name, spec]),
-);
+export const CORE_COMMANDS: ReadonlyMap<string, CommandSpec> = new Map([
+  ...SPECS.map((spec) => [spec.name, spec] as const),
+  ["research:verify", researchVerifyCommand],
+]);
 
 export interface CommandRunResult {
   text: string;
