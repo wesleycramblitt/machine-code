@@ -1,0 +1,3 @@
+# Research: Improve the Run Details timeline
+
+The existing feature issue, `issues/features/todo/run_details_timeline_redesign.md`, captures the actionable scope: remove the separate Thinking tab and show thinking/output with Timeline, then present each tool request and response together under one timestamp. Readable output and edit diffs are secondary details when the existing event data supports them.
