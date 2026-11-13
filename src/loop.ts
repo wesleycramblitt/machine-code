@@ -1385,6 +1385,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       if (!cancelRequested && !pauseRequested && !input.signal?.aborted) {
         try {
           const classified = classifyError(new Error(message));
+          recorder.event("error_classified", {
+            kind: classified.kind,
+            target: classified.target,
+            retryable: classified.retryable,
+            disableProvider: classified.disableProvider,
+            needsAuth: classified.needsAuth,
+          });
           if (classified.retryable) {
             const provider = currentRow?.providerID ?? "";
             const failedKey = currentRow?.key ?? "";
