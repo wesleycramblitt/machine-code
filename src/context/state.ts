@@ -565,11 +565,21 @@ export class RunStateStore {
           ? "fix any gate output, then call finish again"
           : "make the smallest change that satisfies the issue, then call finish";
       const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`, `Phase: ${this.state.phase} · next: ${next}`];
-      // Plan checklist renders first — it is the current task sequence.
+      // Compact summary line — lets the agent see at a glance how much it has established.
+      const summaryParts: string[] = [];
       const plan = this.state.plan;
       if (plan && plan.status === "active" && plan.steps.length > 0) {
         const done = plan.steps.filter((s) => s.done).length;
-        lines.push(`Plan (${done}/${plan.steps.length} steps done):`);
+        summaryParts.push(`${done}/${plan.steps.length} plan steps done`);
+      }
+      if (findings.length > 0) summaryParts.push(`${findings.length} findings`);
+      if (decisions.length > 0) summaryParts.push(`${decisions.length} decisions`);
+      const open = this.state.open.filter((question) => question.status === "open");
+      if (open.length > 0) summaryParts.push(`${open.length} open`);
+      if (summaryParts.length > 0) lines.push(`Summary: ${summaryParts.join(" · ")}`);
+      // Plan checklist renders right after the summary.
+      if (plan && plan.status === "active" && plan.steps.length > 0) {
+        lines.push(`Plan (${plan.steps.filter((s) => s.done).length}/${plan.steps.length} steps):`);
         for (const step of plan.steps) {
           lines.push(step.done ? `  [x] ${step.text}` : `  [ ] ${step.text}`);
         }
@@ -591,7 +601,6 @@ export class RunStateStore {
         lines.push("Tree changes (not from this run):");
         for (const fact of externalChanges) lines.push(`- ${fact.text}`);
       }
-      const open = this.state.open.filter((question) => question.status === "open");
       if (open.length > 0) {
         lines.push("Open:");
         for (const question of open) lines.push(`- ${question.text}`);

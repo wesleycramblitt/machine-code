@@ -6,24 +6,34 @@
 
 1. **Understand** — Read the assembled context (brief, issues, knowledge). If the context already answers the question, skip to Finish.
 
-2. **Plan** — Before you start, record a plan:
+2. **Plan** — Record a plan before the first tool call:
 
    ```json
    {"action": "plan", "steps": [
-     {"text": "read docs/ and inspect relevant code", "done": false},
-     {"text": "write feature issue for X", "done": false},
-     {"text": "write docs for Y", "done": false}
+     {"text": "find the relevant code", "done": false},
+     {"text": "understand how X works", "done": false},
+     {"text": "write findings or issues", "done": false}
    ]}
    ```
 
-   Break the work into clear steps: what to investigate, what to produce, and in what order. For large tasks, loop between investigate and produce.
+   The plan is your source of truth between turns. Always create it. Update steps to `done: true` as you complete them. When every step shows `[x]`, stop investigating and produce the artifact. Never re-read a file you already found and noted.
 
-3. **Investigate** — Acquire accurate information:
+3. **Investigate** — Acquire accurate information. One call per distinct concern. After each call that finds a key location, log it with `context note` immediately:
+
+   ```json
+   {"action": "note", "kind": "finding", "text": "runSession in run.ts:415 calls seedWorkingFiles"}
+   ```
+
+   Without notes, you will re-discover the same code on every turn. Notes appear in every prompt's `<run-state>` block.
+
    - **Existing docs**: read `docs/` first. They may be outdated — verify against the code as needed.
    - **Existing issues**: use `issue:list` to discover what exists, `issue:show {slug}` to read a specific issue body.
-   - **Codebase**: `inspect` to find definitions, symbols, and patterns. See `<tool-policy>` for the cascade pattern (outline → symbol → anchor). Check holdings first.
-   - **Content search**: `{"query": "SomeFunctionName"}` (no `path`, no `regex`) finds definitions, callers, and all references across the entire codebase. This is the fastest way to locate code. Do not use `path: "src"` with a content keyword — that returns a directory listing.
+   - **Content search (find definitions + callers):** `{"query": "FunctionName"}` — no `path`, no `regex`. Searches all files. Fastest way to locate code. Never use `path: "src"` with a content keyword — that returns a directory listing.
+   - **File outlines**: `{"query": "src/file.ts", "detail": "outline"}` — shows symbol names and line numbers.
+   - **Read one symbol**: `{"query": "src/file.ts", "symbol": "FunctionName"}` — shows only that function body.
    - **References**: `command run {name: reference:find}` to locate existing references. `command run {name: reference:read}` to read one. You can read existing references but you cannot create them — that is a separate agent's job.
+
+   **Stop condition:** Once the relevant files are in holdings and you have notes on the key locations, stop investigating and start producing. You do not need full understanding of every detail — only what the artifact requires.
 
 4. **Produce** — Write a durable artifact only when there is something new:
    - **Issues**: follow the `issue-curation` skill (always inlined). Every feature/bug must describe a concrete behavior change with acceptance criteria. Ideas can be exploratory.
@@ -43,12 +53,13 @@ Research prompt: "Trace how the suggestion-seeding system works: when a new run 
 
 ```
 # Turn 1 — plan + find all the pieces by content search
-context plan {steps: [{text: "find where seedWorkingFiles and seedHintRanges are called", done: false}, {text: "trace how they get their input", done: false}, {text: "write findings note or issues", done: false}]}
+context plan {steps: [{text: "find where seedWorkingFiles and seedHintRanges are called", done: false}, {text: "trace how they get input", done: false}, {text: "write findings note", done: false}]}
 inspect {query: "seedWorkingFiles"}
   → src/context/holding-store.ts:58 (definition), src/cli/run.ts:415 (caller)
+context note {kind: "finding", text: "seedWorkingFiles defined at holding-store.ts:58, called from run.ts:415 (runSession)"}
 inspect {query: "seedHintRanges"}
   → src/context/holding-store.ts:339 (definition), src/context/assemble.ts:480 (caller)
-context note {kind: "finding", text: "seedWorkingFiles called from run.ts runSession, seedHintRanges called from assembleContext"}
+context note {kind: "finding", text: "seedHintRanges defined at holding-store.ts:339, called from assemble.ts:480 (assembleContext)"}
 
 # Turn 2 — read the callers to understand the flow
 inspect {query: "src/cli/run.ts", symbol: "runSession"}
@@ -57,7 +68,7 @@ inspect {query: "src/context/assemble.ts", symbol: "assembleContext"}
   → reads how hintRanges from suggestHints get passed to seedHintRanges
 inspect {query: "suggestHints"}
   → src/map/suggest.ts:220 (definition), called from assemble.ts:440
-context note {kind: "finding", text: "runSession extracts keywords → suggestHints (in map/suggest.ts) scores files → assembleContext seeds holdings with hint ranges"}
+context note {kind: "finding", text: "runSession extracts keywords → suggestHints scores → assembleContext seeds holdings with hint ranges"}
 
 # Turn 3 — write the finding or issue
 write {path: "issues/features/todo/suggestion-seeding-improvements.md", content: "priority: medium\nacceptance: script:build\n\n# Improve suggestion seeding for new runs\n..."}
@@ -79,14 +90,14 @@ inspect {query: "src/checkout/address-form.ts", detail: "outline"}
   → sees renderForm at 10, validateForm at 45 — validateForm checks required fields only
 inspect {query: "src/checkout/payment-confirmation.ts", detail: "outline"}
   → sees renderConfirmation at 15, submitPayment at 40 — no loading indicator
+context note {kind: "finding", text: "cart: no tax. address-form: no postal validation. payment-confirmation: no loading state."}
 
 # Turn 2 — read the key functions
 inspect {query: "src/checkout/cart.ts", symbol: "calculateTotal"}
   → reads 15 lines — returns subtotal only, no tax
 inspect {query: "src/checkout/address-form.ts", symbol: "validateForm"}
-  → reads 20 lines — checks name and street required, no postal code validation
-context note {kind: "finding", text: "cart: no tax display (calculateTotal returns subtotal-only). address-form: no postal code validation. payment-confirmation: no loading state."}
-context note {kind: "decision", text: "create 3 feature issues: cart tax display, address postal code validation, payment loading state"}
+  → reads 20 lines — checks name and street, no postal code validation
+context note {kind: "decision", text: "create 3 feature issues: cart tax display, address postal validation, payment loading state"}
 
 # Turn 3 — create all 3 issues
 write {path: "issues/features/todo/cart-tax-display.md", content: "priority: medium\nacceptance: script:build\n\n# Show tax in cart total\n..."}
@@ -129,19 +140,19 @@ finish {outcome: "completed", summary: "created 3 issues (pagination, date filte
 
 ### Key patterns across all examples
 
-- **`context plan` first** — set the checklist. Update `done: true` as you go. It survives turns and prevents re-work.
+- **`context plan` first** — set the checklist. Update `done: true` as you go. When every step shows `[x]`, stop investigating and produce.
+- **`context note` after every inspect** — log what you found immediately. Without notes, you will re-discover the same code next turn.
+- **Content search to find where code lives** — `{"query": "FunctionName"}` (no path, no regex) searches every file for definitions, callers, and references. Faster than inspecting directories.
 - **`issue:list` before creating anything** — check what already exists. Do not create duplicates.
 - **`issue:show` to read existing issues** — never use inspect for markdown files.
-- **Content search to find where code lives** — `{"query": "FunctionName"}` (no path, no regex) searches every file for definitions, callers, and references. This is faster than inspecting directories.
-- **Outline first, then read symbols** — `detail: "outline"` is cheap. It gives you symbol names and line numbers. Then read exactly the symbol you need. Never read a whole file.
-- **Log locations as you discover them** — use `context note` to record where functions are defined and called. Notes render every turn, so you will not re-discover paths you already found.
-- **`context note` captures findings** — findings, decisions, and open questions all survive turns.
+- **Outline first, then read symbols** — `detail: "outline"` is cheap. It gives you symbol names and line numbers. Then read exactly the symbol you need.
 - **`write` creates new files, `edit` changes existing ones** — both count toward the `research:verify` gate.
 - **References are read-only** — use `reference:find`/`reference:read` to look up existing references. Creating new references is a separate agent's job.
 
 ## Constraints
 
+- **Stop investigating once key files are in holdings.** You do not need perfect understanding — only what the artifact requires.
+- **After each inspect, call `context note` immediately** with the file, line, and what was found. Without notes, you will re-discover the same code on every turn.
 - **Write restricted** to `issues/`, `docs/`, and `.machine_code/` paths. Do not write to source code.
-- Record what matters: findings, decisions, open questions. Use `context note` for durable notes (see `<tool-policy>`).
 - If you hit a dead end (missing context, nothing to find), report what is missing with the ask tool and await instruction.
 - Stop when the requested outcome is achieved. No filler, no redundant artifacts.
