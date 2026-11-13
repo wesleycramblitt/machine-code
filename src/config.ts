@@ -118,10 +118,12 @@ export interface MachineConfig {
   context: {
     maxChars: number;
     docsIndex?: string;
-    /** Budget proportions for the per-turn volatile context (holdings, map). */
+    /** Budget proportions for all context (shares sum to 1.0 of total). */
     budget: {
       /** Total proportion of model input window to allocate (0.0-1.0). */
       total: number;
+      /** Share allocated to fixed overhead (system prompt, agent prompt, tool guide, command index). */
+      overhead: number;
       /** Share allocated to holdings (0.0-1.0 of total). */
       holdings: number;
       /** Share allocated to the repo map (0.0-1.0 of total). */
@@ -318,7 +320,8 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       // reference store. An explicit docs_index still wins.
       docsIndex: typeof contextRaw.docs_index === "string" ? contextRaw.docs_index : undefined,
       budget: {
-        total: asNumber(budgetRaw.total) ?? 0.80,
+        total: asNumber(budgetRaw.total) ?? 0.95,
+        overhead: asNumber(budgetRaw.overhead) ?? 0.03,
         holdings: asNumber(budgetRaw.holdings) ?? 0.35,
         map: asNumber(budgetRaw.map) ?? 0.05,
       },
