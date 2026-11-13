@@ -654,14 +654,16 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksD
       ? resolvedEdits.filter((hunk) => typeof hunk.oldString === "string" && hunk.oldString.trim() !== "")
       : []),
   ];
-  // A bare symbol/section + newString with no oldString is whole-block
-  // replacement (anchor-free); everything else needs at least one hunk.
+  // A bare symbol/section with no oldString is whole-block replacement
+  // (anchor-free). The content comes from resolvedNewString which handles
+  // named_block, b64, and plain newString. Everything else needs at least
+  // one hunk.
   const wholeScope =
-    edits.length === 0 && typeof spec.newString === "string" && (spec.symbol || spec.section)
-      ? spec.newString
+    edits.length === 0 && typeof resolvedNewString === "string" && (spec.symbol || spec.section)
+      ? resolvedNewString
       : undefined;
   if (edits.length === 0 && wholeScope === undefined)
-    return { error: "edit requires oldString/newString, a non-empty edits array, or symbol/section + newString for whole-block replacement" };
+    return { error: "edit needs oldString/newString, edits[], or symbol/section + newString/newString_named_block/newString_b64 for whole-block replacement" };
 
   const abs = resolveWithin(root, spec.path);
   assertRegularFile(abs);
