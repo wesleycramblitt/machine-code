@@ -21,7 +21,7 @@ import { resolveSelectionContext, pickWithContext, pinViability } from "../selec
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 // agents resolved inside orchestrate.ts
 import { singleAgentRun } from "../orchestrate.js";
-import { RunRecorder, listRuns, listAllRuns, readRun, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
+import { RunRecorder, listRuns, listAllRuns, registerProject, reconcileRun, pruneRuns, listProjects, sendControl, waitForControlAck, isPidAlive, isActiveStatus, type RunStatus, type RunSummary } from "../state/runs.js";
 import { appendInbox, readInbox, latestUnansweredQuestion } from "../state/question.js";
 import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
@@ -1062,12 +1062,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ...(floorOverrides ? { floors: floorOverrides } : {}),
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
-    // Research runs verify with a deterministic file-existence check instead
-    // of a brittle "Outcome:" text match. This gate runs inside the loop the
-    // same way script gates do — if it fails, the agent gets the output and
-    // can create the missing files.
-    const researchGate: GateSpec = { command: "research:verify", args: {}, required: true };
-    const gates = issueGates ?? (role === "research" ? [researchGate] : undefined);
     result = await runLoop({
       models,
       catalogue: catalogueDoc.models,
@@ -1093,7 +1087,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       skipMap,
       skillExcludes,
       signal: abort.signal,
-      gates,
+      ...(issueGates ? { gates: issueGates } : {}),
       ...(forkMessages ? { initialMessages: forkMessages, startMode: forkStartMode } : {}),
     });
   }

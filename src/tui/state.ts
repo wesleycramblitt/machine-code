@@ -314,7 +314,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newIssue: {
       kind: "features",
       priority: "medium",
-      acceptance: "",
+      acceptance: "script:build",
       tags: "",
       depends: "",
       keywords: "",

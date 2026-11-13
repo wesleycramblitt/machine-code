@@ -123,9 +123,13 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   if (data === "k") {
     const idx = KIND_CYCLE.indexOf(s.newIssue.kind);
     s.newIssue.kind = KIND_CYCLE[(idx + 1) % KIND_CYCLE.length]!;
+    // Set default acceptance gates based on kind. User can edit before submit.
     if (s.newIssue.kind === "ideas") {
       s.newIssue.verification = "direct";
-      s.newIssue.acceptance = "";
+      s.newIssue.acceptance = "research:verify";
+    } else {
+      s.newIssue.verification = "direct";
+      s.newIssue.acceptance = "script:build";
     }
     ctx.notify(`kind: ${s.newIssue.kind}`);
     ctx.draw();
