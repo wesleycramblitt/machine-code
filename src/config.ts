@@ -146,6 +146,8 @@ export interface MachineConfig {
     enabled: boolean;
     /** Deterministic module index in the up-front context. */
     semantic: boolean;
+    /** Max ranked file suggestions for a request; direct pins ride along. */
+    suggestLimit: number;
   };
   /** TUI palette ([theme]); hex strings. */
   theme: ThemeConfig;
@@ -331,6 +333,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     map: {
       enabled: mapRaw.enabled !== false,
       semantic: mapRaw.semantic !== false,
+      suggestLimit: asNumber(mapRaw.suggest_limit) ?? 10,
     },
     theme,
   };
