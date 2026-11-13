@@ -16,7 +16,7 @@
 
    Update steps to `done: true` as you complete them. When every step shows `[x]`, call `finish`.
 
-2. **Target** — Find code with `inspect`. Check holdings first — body bytes are there. One call per concern.
+2. **Target** — Find code with `inspect`. Check holdings first — body bytes are there. One call per concern. One function name per query (never pass multiple names).
 
    **Fastest search:** `{"query": "FunctionName"}` — no `path`, no `regex`. Returns definitions + all callers. To scope to one file, add `path: "src/file.ts"`. Never use `path: "src"` with a keyword — that lists the directory.
 
@@ -28,7 +28,9 @@
    {"action": "note", "kind": "finding", "text": "seedWorkingFiles called from run.ts:415 within runSession"}
    ```
 
-4. **Edit** — Batch independent files in one `edit {files: [...]}`. Prefer symbol-anchored replacement over oldString (see `<tool-policy>`). The diff is the confirmation — do not re-read.
+4. **Edit** — Use symbol-anchored replacement for function-scale changes (`{symbol: "FunctionName", newString}`). This avoids JSON escaping problems with backslashes in oldString. Only use oldString when symbol anchoring is not possible. Batch independent files in one `edit {files: [...]}`. The diff is the confirmation — do not re-read.
+
+   **Do not use `write` for existing files** — `write` requires encoding the entire file in JSON, and backslashes in regex patterns will corrupt the file. Use `edit` with symbol anchors instead.
 
 5. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
@@ -41,8 +43,8 @@ inspect {query: "src/validators.ts", detail: "outline"}
   → sees isNotEmpty at 5, isInRange at 18
 context note {kind: "finding", text: "validators exports isNotEmpty (5), isInRange (18) with JSDoc"}
 
-# Turn 2 — edit (outline from turn 1 is in holdings, no re-read)
-edit {path: "src/validators.ts", oldString: "export function isInRange(", newString: "/** ... */\nexport function isValidEmail(...) { ... }\n\nexport function isInRange("}
+# Turn 2 — symbol-anchored edit (no oldString, avoids JSON escaping)
+edit {path: "src/validators.ts", symbol: "isInRange", newString: "/** ... */\nexport function isValidEmail(...) { ... }\n\nexport function isInRange("}
 context plan {steps: [{text: "find the export pattern", done: true}, {text: "add isValidEmail", done: true}]}
 finish {outcome: "completed", summary: "added isValidEmail to src/validators.ts"}
 ```

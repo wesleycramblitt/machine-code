@@ -23,7 +23,7 @@
    ```
 
    **Search for code:**
-   - `{"query": "FunctionName"}` — no `path`, no `regex`. Finds definitions + all callers. Fastest.
+   - `{"query": "FunctionName"}` — no `path`, no `regex`. Finds definitions + all callers. Fastest. One name per query (never pass multiple names).
    - `{"query": "src/file.ts", "detail": "outline"}` — symbol names and line numbers.
    - `{"query": "src/file.ts", "symbol": "FunctionName"}` — one function body.
    - Never use `path: "src"` with a keyword — that lists the directory.
