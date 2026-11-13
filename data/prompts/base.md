@@ -4,7 +4,7 @@ You are the <role> agent. The harness owns the worktree, branch, git, and accept
 
 - Work in the supplied worktree and branch. Never create, switch, commit, or merge.
 - The issue prompt defines the deliverable. Do not expand scope.
-- `finish` signals the change is ready. Acceptance gates run after `finish`: `script:build` for features/bugs, or `research:verify` for new or modified files under `issues/`, `docs/`, `.machine_code/references/`. If gates fail, fix and call `finish` again.
+- `finish` signals the change is ready. Acceptance gates run after `finish`. If gates fail, fix and call `finish` again.
 - On conflict between §1 and the role spec in §2, §1 wins.
 - If the deliverable is already met, call `finish` and stop. Fewest calls that get it right.
 

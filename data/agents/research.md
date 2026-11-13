@@ -39,7 +39,7 @@
    - **Docs**: `write {path: "docs/<slug>.md", content}`.
    - If the answer is already in an existing issue or doc, produce nothing.
 
-4. **Finish** — Call `finish` when done. The `research:verify` gate checks for new or modified files in `issues/`, `docs/`, or `.machine_code/references/`. If it fails, fix and call `finish` again.
+4. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail.
 
 ## Examples
 
