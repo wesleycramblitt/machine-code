@@ -2,9 +2,9 @@
  * machine_code — runs list screen.
  *
  * Pure render of the work tree (repository → kind → issue → runs, or
- * repository → status). Row focus dimming, issue tones, and the
- * pending-answer affordance live here; the caller supplies the prebuilt
- * index plus a pending-question lookup.
+ * repository → status). Row focus dimming, issue tones, dependency
+ * suffixes, and the pending-answer affordance live here; the caller supplies
+ * the prebuilt index plus a pending-question lookup.
  */
 import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
@@ -70,10 +70,21 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
       const priorityTone = PRIORITY_TONE[row.priority] ?? D;
       const priority = row.priority && row.priority !== "medium" ? ` ${priorityTone}· ${row.priority}${R}` : "";
+      // One dim dependency suffix after priority/review: a slug naming no
+      // issue shows as unknown (a typo is not waiting on real work), the rest
+      // as blocked. Clean rows stay clean.
+      const blockedBy = row.blockedBy ?? [];
+      const unknownDeps = row.unknownDeps ?? [];
+      let depText = "";
+      if (unknownDeps.length === 1) depText = `· unknown dep ${unknownDeps[0]}`;
+      else if (unknownDeps.length > 1) depText = `· unknown deps ${unknownDeps.length}`;
+      else if (blockedBy.length === 1) depText = `· blocked by ${blockedBy[0]}`;
+      else if (blockedBy.length > 1) depText = `· blocked by ${blockedBy.length}`;
+      const deps = depText ? ` ${D}${depText}${R}` : "";
       const title = row.title
-        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 25))}${R}`
+        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 25 - depText.length))}${R}`
         : "";
-      const text = ` ${indent}${folded}${slugTone}${style.glyph}${R} ${slugTone}${row.slug}${R}${priority}${review}${title}`;
+      const text = ` ${indent}${folded}${slugTone}${style.glyph}${R} ${slugTone}${row.slug}${R}${priority}${review}${deps}${title}`;
       rendered.push(selected(text, isSelected));
     } else {
       const run = row.run;

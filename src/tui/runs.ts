@@ -87,6 +87,10 @@ export type RunRow =
       effective: DisplayStatus;
       priority: string;
       review: Issue["review"];
+      /** Depends slugs that name an issue but are not satisfied yet; rendered as "· blocked by …". */
+      blockedBy?: string[];
+      /** Depends slugs that name no issue (typo, rename, deletion); rendered as "· unknown dep …". */
+      unknownDeps?: string[];
       depth: number;
       parent?: string;
       collapsible: boolean;
@@ -173,6 +177,23 @@ export function buildRunIndex(options: RunOptions): RunIndex {
   const group = options.group ?? "all";
   const rows: RunRow[] = [];
   const byRunId = new Map<string, RunRow & { kind: "run" }>();
+
+  // Dependency state per repo, built once per index build — the keys handler
+  // rebuilds the index on every keypress, so per-row issue lookups would
+  // multiply. Mirrors `unmetDepends`/`unknownDepends` (src/tasks/issue.ts) over
+  // the in-memory tree: satisfied = done, or a researched idea; known = the
+  // slug names an issue at all.
+  const emptyDeps = { satisfied: new Set<string>(), known: new Set<string>() };
+  const depsByRepo = new Map<string, { satisfied: Set<string>; known: Set<string> }>();
+  for (const [repoRoot, repoIssues] of Object.entries(options.issuesByRepo ?? {})) {
+    const satisfied = new Set<string>();
+    const known = new Set<string>();
+    for (const issue of repoIssues) {
+      known.add(issue.slug);
+      if (issue.status === "done" || (issue.kind === "ideas" && issue.status === "researched")) satisfied.add(issue.slug);
+    }
+    depsByRepo.set(repoRoot, { satisfied, known });
+  }
 
   const attentionRuns = options.runs.filter(statusNeedsAttention);
   const baseRuns = options.attentionOnly ? attentionRuns : [...options.runs];
@@ -272,6 +293,9 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       const related = runsByItem.get(issue.slug) ?? [];
       const id = `issue:${issue.kind}:${issue.slug}`;
       const isCollapsed = collapsed.get(id) ?? false;
+      const deps = depsByRepo.get(repoRoot) ?? emptyDeps;
+      const blockedBy = issue.depends.filter((dep) => dep !== issue.slug && deps.known.has(dep) && !deps.satisfied.has(dep));
+      const unknownDeps = issue.depends.filter((dep) => dep !== issue.slug && !deps.known.has(dep));
       rows.push({
         kind: "issue",
         id,
@@ -282,6 +306,8 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         effective: effectiveStatus(issue, repoRuns),
         priority: issue.priority,
         review: issue.review,
+        blockedBy,
+        unknownDeps,
         depth: issueDepth,
         parent: parentId,
         collapsible: related.length > 0,
