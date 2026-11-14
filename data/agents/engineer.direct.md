@@ -18,7 +18,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
-3. **Anchor, then edit** — Note the conclusion your edit depends on — one line with a ref. Then edit: if the next call does not need a new fact, it should be an edit, not another read. Reads fade after ~2 turns — a turn that ends with reads alone must close with a note.
+3. **Anchor, then edit** — Note the conclusion your edit depends on — one line with a `path:line` ref: what the code does, the choice you made and why, or what blocks you. Never paste bodies. Then edit: if the next call does not need a new fact, it should be an edit, not another read. Reads fade after ~2 turns — a turn that ends with reads alone must close with a note.
 
    `context {action: "note", kind: "finding", text: "routePayment defined in router.ts:14, called from pay.ts:35", refs: ["router.ts:14"]}`
 

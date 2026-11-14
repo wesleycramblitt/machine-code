@@ -1147,8 +1147,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const overviewBaseChars = input.contextText?.length ?? 0;
           lastOverviewChars = Math.min(overviewBaseChars, overviewMaxChars);
 
-          // The transcript is replayed whole; the symbol map (not the ledger)
-          // carries what the model has already seen.
+          // The last two steps replay in full; the symbol map plus notes
+          // carry everything older worth keeping.
           return renderPromptMessages(
             context.messages,
             memory,

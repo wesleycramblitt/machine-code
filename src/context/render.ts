@@ -2,10 +2,11 @@
  * machine_code — render the model prompt from run state + the current step.
  *
  * The prompt is the system prompt, the assembled task context, a compact state
- * block, the current symbol map, and the transcript as a call ledger: the last
- * two steps in full, older calls as one-liners. The seeds live in the assembled
- * context; replaying every dump every turn is what made long runs cost
- * millions of tokens. The last two results stay verbatim so the current
+ * block, the current symbol map, and the last two transcript steps in full.
+ * The seeds live in the assembled context; replaying every dump every turn
+ * is what made long runs cost millions of tokens. Older steps are dropped
+ * outright — durable knowledge lives in notes and the symbol map, not in
+ * truncated call receipts. The last two results stay verbatim so the current
  * step's evidence is always intact.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -111,27 +112,7 @@ function textOfMessage(message: MessageLike): string {
     .join("\n");
 }
 
-function stepLedger(step: MessageLike[]): string[] {
-  const lines: string[] = [];
-  for (const message of step) {
-    if (message.role === "assistant") {
-      const text = textOfMessage(message).replace(/\s+/g, " ").trim();
-      if (text) lines.push(`- said: ${text.slice(0, 140)}`);
-      for (const block of Array.isArray(message.content) ? message.content : []) {
-        const b = block as Record<string, unknown>;
-        if (b?.type !== "toolCall") continue;
-        const name = typeof b.name === "string" ? b.name : "tool";
-        lines.push(`- ${name} ${JSON.stringify(b.arguments ?? {}).slice(0, 180)}`);
-      }
-    } else if (message.role === "toolResult") {
-      const text = textOfMessage(message);
-      lines.push(`  → ${text.split("\n")[0]?.trim().slice(0, 120) ?? ""}`);
-    }
-  }
-  return lines;
-}
-
-/** Keep the task, a short ledger of older calls, and the last two steps. */
+/** Keep the task head and the last two full steps. */
 function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
   const steps = transcriptSteps(source);
   const firstAssistant = steps.findIndex((message) => message.role === "assistant");
@@ -141,20 +122,8 @@ function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
     if (message.role === "assistant") groups.push([message]);
     else if (groups.length > 0) groups[groups.length - 1]!.push(message);
   }
-  const older = groups.slice(0, Math.max(0, groups.length - KEEP_FULL_STEPS));
-  // The ledger is a receipt roll, not context: cap it at the last 10 calls.
-  // Older calls survive on disk (transcript, state) and identical repeats
-  // are served from run history, so nothing the model can act on is lost.
-  const ledgerSteps = older.slice(-10);
   const recent = groups.slice(-KEEP_FULL_STEPS).flat();
-  const ledgerLines = ledgerSteps.flatMap(stepLedger);
-  const ledger: MessageLike[] = ledgerLines.length > 0
-    ? [{
-        role: "user",
-        content: `<ledger>\nEarlier calls (one line each; full results scrolled out — re-ask only for something new):\n${ledgerLines.join("\n")}\n</ledger>`,
-      }]
-    : [];
-  return [...steps.slice(0, firstAssistant), ...ledger, ...recent];
+  return [...steps.slice(0, firstAssistant), ...recent];
 }
 
 export interface RenderedPrompt {
