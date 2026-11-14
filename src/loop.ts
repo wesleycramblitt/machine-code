@@ -526,6 +526,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   /** Consecutive turns with tool calls but no note, plan update, or edit.
    * Any streak at all carries a reminder on the next prompt. */
   let readOnlyStreak = 0;
+  /** Consecutive text-only turns (no tool calls, no finish) on a run that
+   * owes a change. The first ones get a reprompt and a continue; past the
+   * cap the run ends and the existing blocked handling applies. */
+  let textOnlyStreak = 0;
+  let continuePromptArmed = false;
+  const MAX_TEXT_ONLY_CONTINUES = 2;
   const ctxBudget = input.machine.context.budget;
 
   /**
@@ -1323,6 +1329,25 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         currentModel = model;
         return { model };
       },
+      prepareNextTurn: async () => {
+        // Consume the reprompt armed by a text-only turn (see finishTurn):
+        // the model stopped without a tool call or finish, so hand it the
+        // rule in plain words and let the next provider request continue.
+        if (!continuePromptArmed) return undefined;
+        continuePromptArmed = false;
+        return {
+          messages: [
+            {
+              role: "user",
+              content:
+                "You stopped without a tool call or finish, so the run cannot advance. " +
+                "Continue now with one of: a context note, a plan update, an edit, a write, or finish. " +
+                "Do not answer in prose alone — text without a call ends the run.",
+              timestamp: Date.now(),
+            } as unknown as import("@earendil-works/pi-agent-core").AgentMessage,
+          ],
+        };
+      },
       finishTurn: async ({ message }) => {
         turns += 1;
         reportedTurns += 1;
@@ -1356,6 +1381,22 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             recorder.event("model_call_cap", { calls: recorder.current.modelCalls, maxCalls });
             return { action: "end" as const };
           }
+        }
+        // A text-only turn on a run that owes a change is not an ending —
+        // the model stopped mid-thought (observed: a 5-turn run that died
+        // mid-plan with prose and no call). Reprompt boundedly and continue;
+        // past the cap the run ends and the blocked handling below applies.
+        // Pure-question runs are exempt: prose is their deliverable.
+        const hasCalls = message.content.some((block) => block.type === "toolCall");
+        if (!hasCalls && !finishRequested && wantsChange) {
+          textOnlyStreak += 1;
+          if (textOnlyStreak <= MAX_TEXT_ONLY_CONTINUES) {
+            continuePromptArmed = true;
+            recorder.event("text_only_continue", { streak: textOnlyStreak });
+            return { action: "continue" as const };
+          }
+        } else if (hasCalls) {
+          textOnlyStreak = 0;
         }
         return undefined;
       },
