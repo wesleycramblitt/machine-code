@@ -802,7 +802,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         triedModels.size > 0
           ? `all eligible models failed (${triedModels.size} tried); last error: ${lastFailure ?? first.error}`
           : first.error;
-      recorder.event("model_select", { error, rejected: first.rejected });
+      recorder.event("model_select", { error, rejected: first.rejected, rejectedByReason: first.rejectedByReason });
       recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure });
       clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
       return { status: "failed", finalText: "", error };
