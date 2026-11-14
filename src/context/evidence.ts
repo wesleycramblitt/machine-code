@@ -34,8 +34,11 @@ function textOf(result: { content: Array<{ type?: unknown; text?: unknown }> }):
     .join("\n");
 }
 
-function withProvenance(envelope: string, turn: number | null): string {
-  const tag = turn === null ? "[re-served; body current from disk]" : `[asked turn ${turn}; body current from disk]`;
+function withProvenance(envelope: string): string {
+  // No turn numbers, no relative age: anything that lets the model judge
+  // freshness by age invites the stale-data distrust pattern. Everything
+  // here was re-retrieved this turn, so the tag says exactly that.
+  const tag = "[re-served; body current from disk]";
   const lines = envelope.split("\n");
   if (lines.length > 0 && lines[0]!.startsWith("<") && envelope.includes("</")) {
     return [lines[0], tag, ...lines.slice(1)].join("\n");
@@ -92,7 +95,7 @@ export async function buildEvidence(input: EvidenceInput): Promise<string> {
       if (!result || result.isError) continue;
       const text = textOf(result).trim();
       if (!text) continue;
-      take(withProvenance(text, call.turn));
+      take(withProvenance(text));
     }
   }
 
