@@ -14,9 +14,9 @@ import {
   progress, selected, statusColor, stripAnsi, trunc, visible, wrapText, wrapTokenList,
 } from "../../format.js";
 import {
-  describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineIndex, waitingForRun,
+  describeTimelineEvent, describeToolArgs, isTimelineEvent, waitingForRun,
 } from "../../timeline.js";
-import { scrollLines } from "../../scroll.js";
+import { scrollLines, selectableLines } from "../../scroll.js";
 import { contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ThinkingChunk } from "../../../report/run.js";
 import { readStateView, summarizeRun } from "../../../state/outcome.js";
 import { latestUnansweredQuestion, readInbox } from "../../../state/question.js";
@@ -71,8 +71,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   let processSel = props.processSel;
   const processFollow = props.processFollow;
   let eventSel = props.eventSel;
-  let eventScroll = props.eventScroll;
-  let eventBodyScroll = props.eventBodyScroll;
+  let eventCursor = props.eventCursor;
   const timelineFollow = props.timelineFollow;
   const timelineVerbose = props.timelineVerbose;
   let thinkingScroll = props.thinkingScroll;
@@ -167,7 +166,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         : []),
       ...(section === "timeline"
         ? [
-            hint("j/k", expanded.has(`${s.id}:${eventSel}`) ? "scroll" : "events", Y),
+            hint("j/k", "move", Y),
             hint("space", "expand", G),
             hint("F", `follow ${timelineFollow ? "ON" : "OFF"}`, Y),
             hint("v", timelineVerbose ? "all" : "key events"),
@@ -281,24 +280,17 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       /** Visible events in render order, for zebra striping. */
       const visibleOrder: number[] = [];
       let timelineAttempt = 0;
-      if (timelineFollow) {
-        const lastVisible = lastTimelineIndex(ev, timelineVerbose);
-        if (lastVisible >= 0 && eventSel !== lastVisible) {
-          eventSel = lastVisible;
-          eventBodyScroll = 0;
-        }
-      }
       for (let i = 0; i < ev.length; i++) {
         starts[i] = eventLines.length;
         const event = ev[i]!;
         if (event.type === "model_select" && event.call === 0) timelineAttempt += 1;
         if (!isTimelineEvent(event, timelineVerbose)) continue;
         visibleOrder.push(i);
-        const isSelected = i === eventSel;
-        const prefix = isSelected ? `${C}▸${R}` : " ";
+        const prefix = " ";
         const time = String(event.t ?? "").slice(11, 19);
-        // Selection never expands: block heights stay stable while moving,
-        // so the cursor does not jump. Space toggles expansion manually.
+        // Selection is a single line, not a whole block. The cursor can rest
+        // on any rendered line (header or body); the cursor row gets color in
+        // the post-pass. Space toggles the containing event's expansion.
         const expandedEvent = expanded.has(`${s.id}:${i}`);
         const type = String(event.type);
         if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}`);
@@ -472,51 +464,47 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         else if (type === "context_assembled") eventLines.push(`${prefix} ${GR}${time}${R} ${BL}context${R} ${D}${fmtTokens(Number(event.chars ?? 0))} chars${R}`);
         else eventLines.push(`${prefix} ${GR}${time}${R} ${D}${type}${R}`);
       }
-      eventSel = Math.max(0, Math.min(ev.length - 1, eventSel));
-      while (eventSel < ev.length - 1 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel += 1;
-      while (eventSel > 0 && !isTimelineEvent(ev[eventSel], timelineVerbose)) eventSel -= 1;
-      // Full-width stripes and selection. Padding must sit INSIDE the
-      // tone wrap: the frame paints body background over everything past
-      // the wrap's final reset, so unwrapped padding would punch
-      // body-colored holes at every line end.
-      for (let order = 0; order < visibleOrder.length; order++) {
-        const evIdx = visibleOrder[order]!;
-        const nextIdx = visibleOrder[order + 1];
-        const blockStart = starts[evIdx] ?? 0;
-        const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
-        if (evIdx === eventSel) {
-          if (blockStart < blockEnd) {
-            eventLines[blockStart] = selected(fit(eventLines[blockStart]!, cols), true);
-          }
-          continue;
-        }
-        if (order % 2 === 0) continue;
-        for (let line = blockStart; line < blockEnd; line++) {
-          eventLines[line] = background(fit(eventLines[line]!, cols), ZEBRA_BG);
-        }
-      }
-      const timeWait =
-        waiting && timelineFollow && waiting.kind !== "input" && waiting.kind !== "paused" ? waitingLine() : null;
-      const visibleCount = Math.max(1, bodyH - 4 - (timeWait ? 1 : 0));
-      const start = starts[eventSel] ?? 0;
-      const end = starts[eventSel + 1] ?? eventLines.length;
-      if (end - start <= visibleCount) {
-        eventBodyScroll = 0;
-        // Keep the whole selected block visible; selected model calls should
-        // show their output, not just their header.
-        if (end > eventScroll + visibleCount) eventScroll = end - visibleCount;
-        if (start < eventScroll) eventScroll = start;
+      if (eventLines.length === 0) {
+        lines.push(` ${D}(no timeline events yet)${R}`);
+        body = clipLines(lines, bodyH);
       } else {
-        // A long block starts at the top so the first output lines are visible.
-        // j/k move the line offset inside the block.
-        const maxBodyScroll = Math.max(0, end - start - visibleCount);
-        eventBodyScroll = Math.max(0, Math.min(eventBodyScroll, maxBodyScroll));
-        eventScroll = start + eventBodyScroll;
+        eventSel = Math.max(0, Math.min(eventSel, eventLines.length - 1));
+        // Follow: pin the cursor to the newest rendered line.
+        if (timelineFollow) eventSel = eventLines.length - 1;
+        // Which event contains the cursor line.
+        eventCursor = -1;
+        for (let order = 0; order < visibleOrder.length; order++) {
+          const evIdx = visibleOrder[order]!;
+          const nextIdx = visibleOrder[order + 1];
+          const blockStart = starts[evIdx] ?? 0;
+          const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
+          if (eventSel >= blockStart && eventSel < blockEnd) {
+            eventCursor = evIdx;
+            break;
+          }
+        }
+        // Zebra stripes across every other block, skipping the cursor row.
+        for (let order = 0; order < visibleOrder.length; order++) {
+          const evIdx = visibleOrder[order]!;
+          if (order % 2 === 0) continue;
+          const nextIdx = visibleOrder[order + 1];
+          const blockStart = starts[evIdx] ?? 0;
+          const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
+          for (let line = blockStart; line < blockEnd; line++) {
+            if (line === eventSel) continue;
+            eventLines[line] = background(fit(eventLines[line]!, cols), ZEBRA_BG);
+          }
+        }
+        // Color-coded cursor row, wherever it rests (header or body line).
+        eventLines[eventSel] = selected(fit(eventLines[eventSel]!, cols), true);
+        const timeWait =
+          waiting && timelineFollow && waiting.kind !== "input" && waiting.kind !== "paused" ? waitingLine() : null;
+        const visibleCount = Math.max(1, bodyH - 4 - (timeWait ? 1 : 0));
+        const view = selectableLines(eventLines, eventSel, eventSel, visibleCount);
+        lines.push(...view.lines);
+        if (timeWait) lines.push(timeWait);
+        body = clipLines(lines, bodyH);
       }
-      eventScroll = Math.max(0, Math.min(eventScroll, Math.max(0, eventLines.length - visibleCount)));
-      lines.push(...eventLines.slice(eventScroll, eventScroll + visibleCount));
-      if (timeWait) lines.push(timeWait);
-      body = clipLines(lines, bodyH);
     } else if (section === "thinking") {
       // Human-readable output: assistant text interleaved with edit/write
       // calls rendered as -/+ diff snippets (not raw JSON). Timeline keeps
@@ -691,8 +679,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     runScroll,
     processSel,
     eventSel,
-    eventScroll,
-    eventBodyScroll,
+    eventCursor,
     thinkingScroll,
     childSel,
     changeSel,

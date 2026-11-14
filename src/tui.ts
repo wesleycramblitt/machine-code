@@ -1339,8 +1339,7 @@ export async function runTui(): Promise<void> {
           processSel: s.processSel,
           processFollow: s.processFollow,
           eventSel: s.eventSel,
-          eventScroll: s.eventScroll,
-          eventBodyScroll: s.eventBodyScroll,
+          eventCursor: s.eventCursor,
           timelineFollow: s.timelineFollow,
           timelineVerbose: s.timelineVerbose,
           thinkingScroll: s.thinkingScroll,
@@ -1360,8 +1359,7 @@ export async function runTui(): Promise<void> {
         s.runScroll = frame.runScroll;
         s.processSel = frame.processSel;
         s.eventSel = frame.eventSel;
-        s.eventScroll = frame.eventScroll;
-        s.eventBodyScroll = frame.eventBodyScroll;
+        s.eventCursor = frame.eventCursor;
         s.thinkingScroll = frame.thinkingScroll;
         s.childSel = frame.childSel;
         s.changeSel = frame.changeSel;

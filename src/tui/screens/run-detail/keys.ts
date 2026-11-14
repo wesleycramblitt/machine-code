@@ -5,13 +5,13 @@
  * follow/open/kill, related-run opening, answer/interrupt/correct/fork,
  * issue approval, and delete. Returns true when consumed.
  *
- * In the timeline, j/k move between events; inside an expanded event they
- * scroll the block body (no ^D/^U there).
+ * In the timeline, j/k move the cursor line by line over every rendered
+ * line (header or expanded body); space expands the event under the cursor.
+ * There is no ^D/^U in the timeline.
  */
 import { layout } from "../../../paths.js";
 import { listAllRuns } from "../../../state/runs.js";
 import { CTRL_D, CTRL_U, HALF_PAGE } from "../../format.js";
-import { isTimelineEvent, lastTimelineIndex, stepTimelineSelection } from "../../timeline.js";
 import { RUN_SECTIONS } from "./types.js";
 import { relatedRuns } from "../../../report/run.js";
 import { reconcileProcessRecords } from "../../../processes/reconcile.js";
@@ -24,28 +24,8 @@ const eventKey = (runId: string, index: number): string => `${runId}:${index}`;
 export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
   const detail = ctx.runDetailData();
   if (!detail) { s.screen = "list"; ctx.draw(); return true; }
-  const n = detail.events.length;
-  const selected = (): boolean => {
-    while (s.eventSel < n && !isTimelineEvent(detail.events[s.eventSel], s.timelineVerbose)) s.eventSel += 1;
-    return s.eventSel < n;
-  };
-  const expanded = (): boolean => s.expanded.has(eventKey(detail.summary.id, s.eventSel));
-  const stepTimeline = (direction: -1 | 1): void => {
-    s.timelineFollow = false;
-    const next = stepTimelineSelection(detail.events, s.eventSel, direction, s.timelineVerbose);
-    if (next !== s.eventSel) {
-      s.eventSel = next;
-      s.eventBodyScroll = 0;
-    }
-  };
-  const stepOrScroll = (direction: -1 | 1): void => {
-    if (s.runSection !== "timeline") { stepTimeline(direction); return; }
-    if (!selected()) return;
-    if (expanded()) { s.timelineFollow = false; s.eventBodyScroll = Math.max(0, s.eventBodyScroll + direction); }
-    else stepTimeline(direction);
-  };
   if (data === "j" || data === "\x1b[B") {
-    if (s.runSection === "timeline") stepOrScroll(1);
+    if (s.runSection === "timeline") { s.timelineFollow = false; s.eventSel++; }
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel++; }
     else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll++; }
     else if (s.runSection === "changes") {
@@ -59,7 +39,7 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     return true;
   }
   if (data === "k" || data === "\x1b[A") {
-    if (s.runSection === "timeline") stepOrScroll(-1);
+    if (s.runSection === "timeline") { s.timelineFollow = false; s.eventSel--; }
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel = Math.max(0, s.processSel - 1); }
     else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll = Math.max(0, s.thinkingScroll - 1); }
     else if (s.runSection === "changes") {
@@ -79,12 +59,9 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     s.changeOpen = null;
     s.processSel = 0;
     s.processFollow = false;
-    s.eventScroll = 0;
-    s.eventBodyScroll = 0;
     if (s.runSection === "timeline") {
       s.timelineFollow = true;
-      const last = lastTimelineIndex(detail.events, s.timelineVerbose);
-      if (last >= 0) s.eventSel = last;
+      s.eventSel = -1; // sentinel: render snaps the cursor to the last line
     }
     s.thinkingFollow = true;
     ctx.draw();
@@ -95,9 +72,8 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   const toggleEvent = () => {
     if (s.runSection !== "timeline") return true;
     s.timelineFollow = false;
-    if (!selected()) return true;
-    s.eventBodyScroll = 0;
-    const key = eventKey(detail.summary.id, s.eventSel);
+    if (s.eventCursor < 0) return true;
+    const key = eventKey(detail.summary.id, s.eventCursor);
     if (s.expanded.has(key)) s.expanded.delete(key); else s.expanded.add(key);
   };
   if (data === " ") { toggleEvent(); ctx.draw(); return true; }
@@ -105,25 +81,20 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   if (data === "r") { ctx.resumeRun(detail); ctx.draw(); return true; }
   if (s.runSection === "timeline" && data === "F") {
     s.timelineFollow = !s.timelineFollow;
-    if (s.timelineFollow) {
-      const last = lastTimelineIndex(detail.events, s.timelineVerbose);
-      if (last >= 0) s.eventSel = last;
-      s.eventBodyScroll = 0;
-    }
+    if (s.timelineFollow) { s.eventSel = -1; }
     ctx.notify(s.timelineFollow ? "following latest event" : "follow off");
     ctx.draw();
     return true;
   }
   if (s.runSection === "timeline" && data === "v") {
     s.timelineVerbose = !s.timelineVerbose;
-    const last = lastTimelineIndex(detail.events, s.timelineVerbose);
-    if (last >= 0) s.eventSel = last;
-    s.eventBodyScroll = 0;
+    s.timelineFollow = true;
+    s.eventSel = -1;
     ctx.notify(s.timelineVerbose ? "showing all events" : "showing key events");
     ctx.draw();
     return true;
   }
-  // In the timeline, j/k scrolls the expanded block, so there is no ^D/^U.
+  // In the timeline, j/k move the line cursor rather than paging, so there is no ^D/^U.
   if ((data === CTRL_D || data === CTRL_U) && s.runSection !== "timeline") {
     const direction = data === CTRL_D ? 1 : -1;
     if (s.runSection === "thinking") {
@@ -222,9 +193,7 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     s.thinkingFollow = true;
     if (s.runSection === "timeline") {
       s.timelineFollow = true;
-      const last = lastTimelineIndex(detail.events, s.timelineVerbose);
-      if (last >= 0) s.eventSel = last;
-      s.eventBodyScroll = 0;
+      s.eventSel = -1;
     }
     ctx.draw();
     return true;
