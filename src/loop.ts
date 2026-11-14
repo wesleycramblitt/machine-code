@@ -518,7 +518,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastBudget: ContextBudget | null = null;
   let lastSymbolsChars = 0;
   /** Consecutive turns with tool calls but no note, plan update, or edit.
-   * At three the next prompt carries a reminder (see withRecordNudge). */
+   * Any streak at all carries a reminder on the next prompt. */
   let readOnlyStreak = 0;
   const ctxBudget = input.machine.context.budget;
 
@@ -549,13 +549,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * The mandate lives in the role prompts; this is the backstop that makes
    * it real — prompt text alone did not hold (85 read-only turns observed). */
   const RECORD_NUDGE =
-    "Three turns with reads and no note, plan update, or edit. " +
+    "Last turn had reads with no note, plan update, or edit. " +
     "Write down what you have learned so far (context note), update the plan, or edit — " +
     "if the next step needs no new fact, edit instead of reading again.";
   const withRecordNudge = (
     messages: import("@earendil-works/pi-agent-core").AgentMessage[],
   ): import("@earendil-works/pi-agent-core").AgentMessage[] => {
-    if (readOnlyStreak < 3) return messages;
+    if (readOnlyStreak < 1) return messages;
     recorder.event("record_nudge", { streak: readOnlyStreak });
     return [
       ...messages,

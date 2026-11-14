@@ -22,7 +22,7 @@ export interface SymbolMapConfig {
 }
 
 export const DEFAULT_SYMBOL_MAP_CONFIG: SymbolMapConfig = {
-  maxFiles: 40,
+  maxFiles: 500,
 };
 
 export interface SymbolMapHost {
@@ -144,7 +144,7 @@ export class SymbolMap {
     }
   }
 
-  renderSymbols(maxChars = 48_000, maxFiles = 40): string {
+  renderSymbols(maxChars = 48_000, maxFiles = 500): string {
     if (this.entries.size === 0 || !this.host.repoRoot) return "";
     this.evictLru();
     // Most-recently-touched first: the working set sits at the top where
@@ -152,15 +152,18 @@ export class SymbolMap {
     const sorted = [...this.entries.values()].sort(
       (a, b) => b.turn - a.turn || b.priority - a.priority || a.path.localeCompare(b.path),
     );
-    const shown = sorted.slice(0, Math.max(1, maxFiles));
-    const lines: string[] = [
-      "<symbols>",
-      "The run's symbol map: every file it has seen, with symbols and docs.",
-      "No file bodies are included — inspect a path, symbol, or range for bytes.",
-      "",
-    ];
-    let lastDir = "";
-    let inventoryUsed = 0;
+    // Over budget: drop the oldest entries until it fits. The char budget
+    // (a share of the model's input window) is the only cap — no throw.
+    let shown = sorted.slice(0, Math.max(1, maxFiles));
+    const build = (): { text: string; used: number } => {
+      const lines: string[] = [
+        "<symbols>",
+        "The run's symbol map: every file it has seen, with symbols and docs.",
+        "No file bodies are included — inspect a path, symbol, or range for bytes.",
+        "",
+      ];
+      let lastDir = "";
+      let inventoryUsed = 0;
 
     // Inventory: one line per file. Symbols and docs only — the model's
     // symbol map, most-recently-touched first.
@@ -173,7 +176,7 @@ export class SymbolMap {
       const flagText = entry.seeded ? " [seeded]" : "";
       const meta = [
         entry.doc ? `doc: ${entry.doc.slice(0, 120)}` : "",
-        entry.symbols.length > 0 ? `symbols: ${entry.symbols.slice(0, 6).map((s) => `${s.name}(${s.range[0]})${s.doc ? ` "${s.doc.slice(0, 60)}"` : ""}`).join(", ")}${entry.symbols.length > 6 ? ", …" : ""}` : "",
+        entry.symbols.length > 0 ? `symbols: ${entry.symbols.slice(0, 20).map((s) => `${s.name}(${s.range[0]})${s.doc ? ` "${s.doc.slice(0, 60)}"` : ""}`).join(", ")}${entry.symbols.length > 20 ? ", …" : ""}` : "",
       ].filter(Boolean).join(" · ");
       lines.push(`${entry.path.split("/").pop()}${flagText}${meta ? ` — ${meta}` : ""}`);
       inventoryUsed += lines[lines.length - 1]!.length + 1;
@@ -182,12 +185,17 @@ export class SymbolMap {
       const names = sorted.slice(shown.length).map((h) => h.path).join(", ");
       lines.push(`+${sorted.length - shown.length} more: ${names}`);
     }
-    if (inventoryUsed > maxChars) {
-      throw new Error(`symbol map alone exceeds ${maxChars.toLocaleString()} chars (${inventoryUsed.toLocaleString()}); raise maxFiles or reduce file path lengths`);
-    }
 
     lines.push("</symbols>");
-    return lines.join("\n");
+    return { text: lines.join("\n"), used: inventoryUsed };
+  };
+    let built = build();
+    while (built.used > maxChars && shown.length > 1) {
+      shown = shown.slice(0, -1);
+      built = build();
+    }
+
+    return built.text;
   }
 
   /** Pre-fill the map from hints: paths register as seen, so the first

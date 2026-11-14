@@ -14,7 +14,7 @@ import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { READ_CAP_BYTES, capText, isBinaryFile, numberLinesCapped, resolveWithin } from "./safety.js";
+import { capText, isBinaryFile, numberLinesCapped, resolveWithin } from "./safety.js";
 import { buildRepoMap, symbolRange, type MapFile, type RepoMap } from "../map/deterministic.js";
 import { suggestTaskFilesFromMap, type SuggestedFile } from "../map/suggest.js";
 import type { ToolContext } from "./index.js";
@@ -152,7 +152,7 @@ async function lspSymbolLookup(
       const symbols = await client.workspaceSymbols(name);
       if (!symbols || symbols.length === 0) continue;
       const exact = symbols.filter((s: { name?: string }) => (s.name ?? "") === name);
-      const matched = exact.length > 0 ? exact : symbols.slice(0, 16);
+      const matched = exact.length > 0 ? exact : symbols.slice(0, 64);
       const lines = formatSymbols(matched);
       if (lines.length > 0) return [`symbol: ${name} (LSP)`, ...lines];
     }
@@ -208,18 +208,20 @@ function fuzzyFiles(map: RepoMap, query: string, scope?: string): SuggestedFile[
         symbolVia: rankedEntry?.symbolVia ?? {},
       });
     }
-    if (out.length >= 8) break;
+    if (out.length >= 32) break;
   }
-  // Ranker evidence fills the rest, capped.
+  // Ranker evidence fills the rest.
   for (const entry of ranked) {
-    if (out.length >= 6) break;
+    if (out.length >= 24) break;
     push(entry);
   }
-  return out.slice(0, 6);
+  return out.slice(0, 24);
 }
 
-const BODY_LINE_CAP = 60;
-const FIND_BYTES_CAP = 12 * 1024;
+/** Bodies over this many lines are skipped in keyword-search evidence unless
+ * detail=full: search evidence stays skimmable, targeted reads stay whole. */
+const BODY_LINE_CAP = 400;
+const FIND_BYTES_CAP = 128 * 1024;
 
 export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
   return {
@@ -277,8 +279,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           }
           const text = result.stdout.trimEnd() || "no matches";
           const envelope = `<inspect query="${query}" mode="find" match="regex">\n${text}\n</inspect>`;
-                    const capped = capText(envelope, READ_CAP_BYTES);
-          return ok(capped.text);
+          return ok(envelope);
         }
 
         // Mode 2 — anchored slice or whole file (this is the read path).
@@ -308,15 +309,14 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             const aStart = anchor.start;
             const aEnd = anchor.end;
             const lines = source.split("\n");
-            const page = numberLinesCapped(lines, aStart, aEnd - aStart + 1, READ_CAP_BYTES);
+            const page = numberLinesCapped(lines, aStart, aEnd - aStart + 1, Number.MAX_SAFE_INTEGER);
             slice = { header: `${aStart}-${aStart + page.delivered - 1} of ${lines.length} lines`, text: page.text, start: aStart, end: aStart + page.delivered - 1 };
           } else {
-            slice = fileSlice(source, { symbol: params.symbol, offset: params.offset, limit: params.limit, around: params.around }, file, READ_CAP_BYTES);
+            slice = fileSlice(source, { symbol: params.symbol, offset: params.offset, limit: params.limit, around: params.around }, file, Number.MAX_SAFE_INTEGER);
           }
           if ("error" in slice) return fail(`${slice.error}. Use detail=outline to list symbols first.`);
           const envelope = `<inspect query="${query}" mode="file" match="path">\n### ${rel}: ${slice.header}\n${slice.text}\n</inspect>`;
-                    const capped = capText(envelope, READ_CAP_BYTES);
-          return ok(capped.text);
+          return ok(envelope);
         }
 
         // Mode 3 — glob pattern: query contains glob characters.
@@ -351,7 +351,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
                 if (slash >= 0) dirs.add(rest.slice(0, slash));
               }
               const lines = [`directory: ${shown} [match: path]`, `subdirectories: ${[...dirs].sort().join(", ") || "(none)"}`];
-              for (const child of children.slice(0, 40)) lines.push(`  ${child.path} (${child.symbols.length} symbols, ${child.lines} lines)`);
+              for (const child of children.slice(0, 200)) lines.push(`  ${child.path} (${child.symbols.length} symbols, ${child.lines} lines)`);
               // If path was specified but the query was NOT a path/directory (e.g. {query: "someKeyword", path: "src"}),
               // the user likely wanted content search — guide them.
               const keywordHint = !scope && query !== shown
@@ -383,21 +383,20 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
                 if (detail !== "outline") {
                   const raw = source.split("\n").slice(range.start - 1, range.end);
                   const numbered = raw.map((line, i) => `${range.start + i}: ${line}`).join("\n");
-                  body = capText(numbered, detail === "full" ? READ_CAP_BYTES : 6 * 1024).text;
+                  body = numbered;
                 }
               }
             } else if (defFile) {
               lines.push(`definition: ${defFile.path} [match: symbol]`);
             }
-            const callers = map.files.filter((entry) => entry.path !== defFile.path && (entry.imports ?? []).includes(defFile.path)).slice(0, 6);
+            const callers = map.files.filter((entry) => entry.path !== defFile.path && (entry.imports ?? []).includes(defFile.path)).slice(0, 100);
             if (callers.length > 0) {
               lines.push("callers:");
               for (const caller of callers) lines.push(`  ${caller.path}`);
             }
           }
           const envelope = `<inspect query="${query}" mode="symbol" match="symbol">\n${lines.join("\n")}${body ? `\n${body}` : ""}\n</inspect>`;
-                    const capped = capText(envelope, READ_CAP_BYTES);
-          return ok(capped.text);
+          return ok(envelope);
         }
 
         // Mode 5 — ranked keyword find with dense per-file evidence.
@@ -415,19 +414,19 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             : /path match/i.test(entry.reason) ? "path" : "keyword";
           const header = `## ${entry.path} — ${entry.reason} [match: ${kind}]`;
           const evidence: string[] = [];
-          for (const symbol of file?.symbols.slice(0, 8) ?? []) {
+          for (const symbol of file?.symbols.slice(0, 24) ?? []) {
             const via = entry.symbolVia[symbol.name] ?? [];
             if (via.length > 0) evidence.push(`"${via.join('", "')}" → ${symbol.kind} ${symbol.name} (${symbol.line}-${symbol.end})`);
           }
           const parts: string[] = [header];
-          if (evidence.length > 0 && detail !== "outline") parts.push(`  ${evidence.slice(0, 4).join("; ")}`);
+          if (evidence.length > 0 && detail !== "outline") parts.push(`  ${evidence.slice(0, 12).join("; ")}`);
           if (detail !== "outline" && file) {
             try {
               const source = readFileSync(join(ctx.root, entry.path), "utf8");
               const bodies: string[] = [];
-              for (const name of Object.keys(entry.symbolVia).slice(0, 3)) {
+              for (const name of Object.keys(entry.symbolVia).slice(0, 8)) {
                 const range = symbolRange(file, name);
-                if (!range || range.end - range.start + 1 > BODY_LINE_CAP) continue;
+                if (!range || (range.end - range.start + 1 > BODY_LINE_CAP && detail !== "full")) continue;
                 const text = source.split("\n").slice(range.start - 1, range.end).map((line, i) => `${range.start + i}: ${line}`).join("\n");
                 const cost = Buffer.byteLength(text, "utf8");
                 if (used + cost > FIND_BYTES_CAP) break;
@@ -444,25 +443,24 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             }
           }
           if (file && (file.imports?.length || map.files.some((f) => (f.imports ?? []).includes(entry.path)))) {
-            const importedBy = map.files.filter((f) => (f.imports ?? []).includes(entry.path)).slice(0, 4).map((f) => f.path);
+            const importedBy = map.files.filter((f) => (f.imports ?? []).includes(entry.path)).slice(0, 16).map((f) => f.path);
             const relations = [
-              ...(file.imports?.length ? [`imports: ${file.imports.slice(0, 4).join(", ")}`] : []),
+              ...(file.imports?.length ? [`imports: ${file.imports.slice(0, 16).join(", ")}`] : []),
               ...(importedBy.length ? [`imported by: ${importedBy.join(", ")}`] : []),
             ].join(" · ");
             if (relations) parts.push(`  ${relations}`);
           }
-          const rest = (file?.symbols ?? []).filter((s) => !(s.name in entry.symbolVia)).slice(0, 6);
+          const rest = (file?.symbols ?? []).filter((s) => !(s.name in entry.symbolVia)).slice(0, 24);
           if (rest.length > 0 && detail === "full") parts.push(`  also: ${rest.map((s) => `${s.kind} ${s.name} (${s.line}-${s.end})`).join(", ")}`);
           parts.push("");
           const block = parts.join("\n");
-          if (used + block.length > FIND_BYTES_CAP + 4 * 1024) break;
+          if (used + block.length > FIND_BYTES_CAP + 32 * 1024) break;
           used += block.length;
           blocks.push(block);
         }
         blocks.push("</inspect>");
         const envelope = blocks.join("\n");
-                const capped = capText(envelope, READ_CAP_BYTES);
-        return ok(capped.text);
+        return ok(envelope);
       } catch (error) {
         return fail(`inspect failed: ${error instanceof Error ? error.message : String(error)}`);
       }

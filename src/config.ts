@@ -318,10 +318,10 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         overhead: asNumber(budgetRaw.overhead) ?? 0.03,
         symbols: asNumber(budgetRaw.symbols) ?? 0.35,
         map: asNumber(budgetRaw.map) ?? 0.05,
-        state: asNumber(budgetRaw.state) ?? 0.10,
+        state: asNumber(budgetRaw.state) ?? 0.15,
       },
       symbols: {
-        maxFiles: asNumber(contextRaw.symbols_max_files) ?? 40,
+        maxFiles: asNumber(contextRaw.symbols_max_files) ?? 500,
       },
     },
     map: {

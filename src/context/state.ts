@@ -343,7 +343,7 @@ export class RunStateStore {
     if (!clean) return;
     const at = turn ?? this.currentTurn();
     if (kind === "open") {
-      const text = clean.length > 1000 ? `${clean.slice(0, 1000)}…` : clean;
+      const text = clean.length > 4000 ? `${clean.slice(0, 4000)}…` : clean;
       this.append({
         type: "open",
         question: { id: `q_${sha1(clean).slice(0, 10)}`, text, turn: at, status: "open" },
@@ -356,7 +356,7 @@ export class RunStateStore {
     // Findings carry investigation detail; decisions carry rationale. Caps are
     // a backstop, not a target — the block budget evicts oldest-first.
     // Trimmed text is marked so the ledger never silently drops content.
-    const cap = kind === "decision" ? 8_000 : 2_000;
+    const cap = kind === "decision" ? 32_000 : 8_000;
     const trimmed = clean.length > cap ? `${clean.slice(0, cap)}…` : clean;
     this.append({
       type: "fact",

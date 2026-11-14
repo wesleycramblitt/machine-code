@@ -23,7 +23,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
    - Write down what each edit depends on: behavior, exact lines, surprises — enough that the file stays closed. One line plus `path:line` ref, never whole files.
    - Then edit: if the next step needs no new fact, edit instead of reading again.
    - Close every turn: note what you learned and decided, fix or drop what turned out wrong, update the plan on scope moves. Rewriting a note updates it; `forget` removes one by its text. Finished notes stay — checked-off steps are the done-signal.
-   - Three turns of reads with no note, plan update, or edit draws a harness reminder.
+   - A turn of reads with no note, plan update, or edit draws a harness reminder on the next turn.
 
    `context {action: "note", kind: "finding", text: "routePayment defined in router.ts:14, called from pay.ts:35", refs: ["router.ts:14"]}`
 
