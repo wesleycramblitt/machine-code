@@ -1639,6 +1639,11 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
                 recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
                 const { updateIssueMeta } = await import("../plan/issues.js");
                 if (merged.mergeCommit) updateIssueMeta(l2, resumeIssue.slug, { commit: merged.mergeCommit });
+                if (resumeIssue.kind === "ideas") {
+                  moveIssue(l2, resumeIssue.slug, "researched");
+                  await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} RESEARCHED] ${resumeIssue.slug}`);
+                  recorder.event("idea_researched", { slug: resumeIssue.slug });
+                }
                 if (resumeIssue.kind !== "ideas") {
                   moveIssue(l2, resumeIssue.slug, "done");
                   await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} DONE] ${resumeIssue.slug}`);
