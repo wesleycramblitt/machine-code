@@ -42,24 +42,6 @@ export function isTimelineEvent(event: TimelineEventLike | undefined, verbose = 
   return true;
 }
 
-export function stepTimelineSelection(
-  events: readonly TimelineEventLike[],
-  current: number,
-  direction: -1 | 1,
-  verbose = false,
-): number {
-  let next = current + direction;
-  while (next >= 0 && next < events.length && !isTimelineEvent(events[next], verbose)) next += direction;
-  return next >= 0 && next < events.length ? next : current;
-}
-
-export function lastTimelineIndex(events: readonly TimelineEventLike[], verbose = false): number {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    if (isTimelineEvent(events[index], verbose)) return index;
-  }
-  return -1;
-}
-
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
 }

@@ -125,10 +125,10 @@ export interface TuiState {
   changeOpen: number | null;
   processSel: number;
   processFollow: boolean;
+  /** Line index into the rendered timeline (the cursor row). */
   eventSel: number;
-  eventScroll: number;
-  /** Line offset inside a selected timeline block (expanded inputs/outputs). */
-  eventBodyScroll: number;
+  /** Event index currently under the cursor row (float). */
+  eventCursor: number;
   /** Follow the newest timeline event; j/k turns it off. */
   timelineFollow: boolean;
   /** Show routine internals in the timeline. */
@@ -276,8 +276,7 @@ export function createTuiState(repoRoot: string): TuiState {
     processSel: 0,
     processFollow: false,
     eventSel: 0,
-    eventScroll: 0,
-    eventBodyScroll: 0,
+    eventCursor: 0,
     timelineFollow: true,
     timelineVerbose: false,
     thinkingScroll: 0,

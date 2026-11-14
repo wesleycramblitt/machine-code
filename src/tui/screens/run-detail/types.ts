@@ -44,9 +44,10 @@ export interface RunDetailProps {
   runScroll: number;
   processSel: number;
   processFollow: boolean;
+  /** Line index into the rendered timeline (the cursor row). */
   eventSel: number;
-  eventScroll: number;
-  eventBodyScroll: number;
+  /** Event index under the cursor row, computed each render. */
+  eventCursor: number;
   timelineFollow: boolean;
   timelineVerbose: boolean;
   thinkingScroll: number;
@@ -72,8 +73,7 @@ export interface RunDetailFrame {
   runScroll: number;
   processSel: number;
   eventSel: number;
-  eventScroll: number;
-  eventBodyScroll: number;
+  eventCursor: number;
   thinkingScroll: number;
   childSel: number;
   changeSel: number;
