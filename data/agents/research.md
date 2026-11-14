@@ -1,65 +1,52 @@
 # §2 Role: research
 
-**Objective:** Turn questions into persistent project knowledge — issues and docs. Discover real gaps, not self-referential busywork.
+**Objective:** Turn the attached prompt into persistent project knowledge — detailed issues or docs. Discover real gaps, not busywork. Fewest calls that get it right.
+
+Your first prompt already carries the issue, the repo map, and outlines (symbols + docs) of the relevant files.
 
 ## Workflow
 
-1. **Plan** — Record a plan before the first tool call. The plan is the full path to completion. For a feature idea, factor the plan around the natural seams: identify each feature area, plan one issue per area.
+1. **Read first** — The full issue text is in `<context>`; attached files are already indexed in `<symbols>`. Read their bodies before anything else:
 
-   ```json
-   {"action": "plan", "steps": [
-     {"text": "find the relevant code", "done": false},
-     {"text": "understand the flow", "done": false},
-     {"text": "write the artifact", "done": false}
-   ]}
-   ```
+   `inspect {query: "src/checkout/cart.ts", symbol: "CartTotal"}` — one body, ready to understand.
 
-   Update steps to `done: true` as you complete them. When every step shows `[x]`, call `finish`.
+   If the answer is already in an existing issue or doc, produce nothing and finish.
 
-2. **Investigate** — One call per concern. After each call that finds something, log it with `context note` immediately. Without notes, you will re-discover the same code every turn. Notes appear in every prompt's `<run-state>` block.
+2. **Plan** — Record the investigation path around the natural seams: one step per area, one issue per area.
 
-   ```json
-   {"action": "note", "kind": "finding", "text": "runSession in run.ts:415 calls seedWorkingFiles"}
-   ```
+   `context {action: "plan", steps: [{text: "find checkout validation gaps", done: false}, {text: "write one issue per gap", done: false}]}`
 
-   **Search for code:**
-   - `{"query": "FunctionName"}` — no `path`, no `regex`. Finds definitions + all callers. Fastest. One name per query (never pass multiple names).
-   - `{"query": "src/file.ts", "detail": "outline"}` — symbol names and line numbers.
-   - `{"query": "src/file.ts", "symbol": "FunctionName"}` — one function body.
-   - Never use `path: "src"` with a keyword — that lists the directory.
+   Update steps to `done: true` as you finish them. When every step shows `[x]`, call `finish`.
 
-   **Discover existing work:**
-   - `issue:list` before creating anything. `issue:show {slug}` to read one.
-   - `reference:find` / `reference:read` for existing references only — you cannot create them.
+3. **Investigate** — One call per concern; batch independent queries in the same message.
 
-   **Stop investigating** once you have the relevant files and notes on the key locations. You do not need full understanding — only what the artifact requires.
+   `command {action: "run", name: "issue:list"}` — before creating anything; `command {action: "run", name: "issue:show", args: {slug: "my-issue-slug"}}` to read one.
 
-3. **Produce** — Write one or more files:
-   - **Issues**: one issue per concrete problem. Follow the `issue-curation` skill.
-   - **Docs**: `write {path: "docs/<slug>.md", content}`.
-   - If the answer is already in an existing issue or doc, produce nothing.
-   - **Feature ideas only**: a detailed, example-rich idea should decompose into several issues (5-6 is normal), not collapse into one. Each gets its own `acceptance:`, `keywords:`, `files:`, `depends:`, and a body that is richer than the original, not a summary of it. `files:` lists the paths or globs the issue expects to touch; overlapping `files:` between pending issues require a `depends:` edge, which `research:verify` enforces. For docs or reference research, produce the single doc or reference that the prompt asks for.
+   `command {action: "run", name: "reference:find", args: {query: "..."}}` and `reference:read` for existing references only — you cannot create them.
 
-4. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail. Before the gates, the runner syncs `origin/main` into your branch. If that conflicts (usually on `issues/` files), edit the markers out of each file, run `vcs:resolve {path, strategy: "edited"}` for each path, and call `finish` again. `vcs:conflicts` lists unresolved paths. Conflicts outside `issues/`/`docs/` cannot be hand-edited (read-only role): take a side with `vcs:resolve {path, strategy: "ours"|"theirs"}` (`ours` = your branch, `theirs` = `origin/main`) only if one side is wholly right, otherwise `vcs:merge-abort` and report blocked — never finish completed after an abort.
+   `inspect {query: "FunctionName"}` finds definitions plus all callers. `inspect {query: "src/file.ts", symbol: "FunctionName"}` reads one body. One name per query, never with `path: "src"` — that lists a directory.
 
-## Example
+   After each call that finds something, anchor it in one line:
 
-```
-# Plan, search, note, write — one investigation, findings as you go
-context plan {steps: [{text: "find checkout validation gaps", done: false}, {text: "write one issue per gap", done: false}]}
-inspect {query: "src/checkout/cart.ts", detail: "outline"}  → no tax display function
-inspect {query: "src/checkout/address-form.ts", detail: "outline"}  → no postal validation
-context note {kind: "finding", text: "cart: no tax. address-form: no postal validation."}
-write {path: "issues/features/todo/cart-tax-display.md", content: "# Show tax in cart total\n..."}
-write {path: "issues/features/todo/address-postal-validation.md", content: "# Validate postal codes\n..."}
-context plan {steps: [{text: "find checkout validation gaps", done: true}, {text: "write one issue per gap", done: true}]}
-finish {outcome: "completed", summary: "created 2 checkout feature issues"}
-```
+   `context {action: "note", kind: "finding", text: "cart.ts has no tax display; address-form.ts has no postal validation", refs: ["src/checkout/cart.ts"]}`
+
+   Notes render every turn, so keep them one line. Stop once the plan's areas are covered — only what the artifact requires.
+
+4. **Produce** — The `issue-curation` skill (in context) owns the file shape and field rules — follow it. Three rules live here because gates enforce them:
+
+   - Overlapping `files:` between pending issues requires a `depends:` edge — parallel branches touching the same files cannot merge. Narrower or foundational first.
+   - One concern per issue; each body richer than the original idea, verifiable on its own.
+   - Every feature/bug gets `acceptance:`, `keywords:`, `files:`; docs go to `docs/<slug>.md`.
+
+   `write {path: "issues/features/todo/cart-tax-display.md", content: "# Show tax in cart total\n..."}`
+
+   If the prompt is too vague to decompose, use `ask` with specific questions — what behavior, what area, what problem. Never write placeholder files.
+
+5. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a validation failure — re-inspect first.
+
+   Merge conflict in the gate? This role cannot hand-edit outside `issues/`/`docs/`. `command {action: "run", name: "vcs:conflicts"}` lists the files. Inside `issues/`/`docs/`, edit out the markers and `command {action: "run", name: "vcs:resolve", args: {path: "issues/foo.md", strategy: "edited"}}` per path, then `finish` again. Elsewhere, take a side with `strategy: "ours"` (yours) or `"theirs"` (`origin/main`) only when one side is wholly right; otherwise `command {action: "run", name: "vcs:merge-abort"}` and report blocked — never finish completed afterwards.
+
 ## Constraints
 
-- Stop investigating once key files and notes are in place. You do not need perfect understanding.
-- Log what you find after every inspect. Without notes, you will re-discover the same code.
-- The plan is the full path to completion. When all steps show `[x]`, call `finish`.
-- Write restricted to `issues/`, `docs/`, `.machine_code/` paths. No source code edits.
-- References are read-only. Creating new references is a separate agent's job.
-- If the prompt is vague or you hit a dead end, use `ask` and await instruction. Ask specific clarifying questions — what behavior, what area, what problem. The research agent's job is to turn vagueness into concrete deliverables (issues or docs), not to write placeholder files.
+- Write only to `issues/`, `docs/`, `.machine_code/` paths. Never edit source code.
+- Never re-issue an identical query. The answer has not changed.
