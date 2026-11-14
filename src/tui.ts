@@ -17,6 +17,8 @@ import { layout, type Layout } from "./paths.js";
 import { defaultAcceptance } from "./tui/screens/issue-composer/keys.js";
 import { findIssue, kindTag, listIssues, updateIssueContents, writeIssue, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
+import { orchestratorCounters } from "./orchestration/scheduler.js";
+import { readOrchestratorState, updateOrchestratorState, type OrchestratorSettings } from "./orchestration/store.js";
 import { isPidAlive, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -45,6 +47,8 @@ import { handleDeleteKeys } from "./tui/screens/delete-keys.js";
 import { handleIssueKeys } from "./tui/screens/issue-keys.js";
 import { handleSettingsKeys } from "./tui/screens/settings-keys.js";
 import { handleSpendKeys } from "./tui/screens/spend-keys.js";
+import { handleOrchestrateKeys } from "./tui/screens/orchestrate-keys.js";
+import { renderOrchestrate } from "./tui/screens/orchestrate.js";
 import type { KeyServices } from "./tui/screens/keys.js";
 import { handleModelKeys, handleModelsListKeys } from "./tui/screens/models-keys.js";
 import { handleRunsListKeys } from "./tui/screens/runs-list-keys.js";
@@ -1048,6 +1052,7 @@ export async function runTui(): Promise<void> {
       modelCount: modelRows.length,
       modelFilter: s.modelText,
       newRunRepo: s.newRunRepo,
+      orchestrateRepo: s.orchestrateRepo ?? l.repoRoot,
       runsList: runsListScreen,
     });
     const header = chrome.header;
@@ -1395,6 +1400,28 @@ export async function runTui(): Promise<void> {
       secondary = frame.secondary;
     }
 
+    /* ----------------------------------------------------- orchestrate */
+    else if (s.screen === "orchestrate") {
+      const orchRepo = s.orchestrateRepo ?? l.repoRoot;
+      const orchState = readOrchestratorState(layout(orchRepo));
+      // Counters cover only runs the orchestrator started for this repo.
+      const orchCounters = orchestratorCounters(
+        allRuns.filter((run) => run.repoRoot === orchRepo && orchState.startedRunIds.includes(run.id)),
+      );
+      const frame = renderOrchestrate({
+        cols, narrow, bodyH, theme, toast: s.toast,
+        repoRoot: orchRepo,
+        active: orchState.active,
+        settings: orchState.settings,
+        sel: s.orchestrateSel,
+        counters: orchCounters,
+        preview: orchestratePreview(orchRepo, orchState.settings, configured),
+      });
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
+    }
+
     /* ---------------------------------------------------------- correct */
     else if (s.screen === "correct") {
       const detail = runDetailData();
@@ -1599,6 +1626,57 @@ export async function runTui(): Promise<void> {
     s.modelPickSel = index >= 0 ? index + 1 : 0;
   };
 
+  /**
+   * Resolved model preview for the orchestration page: one model name per
+   * role for the current tier + minFit, resolved the same way the composer
+   * preview resolves its model (resolveSelectionContext + pickWithContext).
+   * Names are cached briefly so background redraws stay cheap; null means
+   * the picker found no eligible model.
+   */
+  const orchestratePreview = (
+    repoRoot: string,
+    settings: OrchestratorSettings,
+    configuredProviders: ReadonlySet<string>,
+  ): { engineer: string | null; research: string | null } => {
+    const key = `${repoRoot}\0${settings.tier}\0${settings.engineerMinFit}\0${settings.researchMinFit}`;
+    if (s.orchestratePreview && s.orchestratePreview.key === key && Date.now() - s.orchestratePreview.at < 5_000) {
+      return { engineer: s.orchestratePreview.engineer, research: s.orchestratePreview.research };
+    }
+    const resolve = (role: string, minFit: number): string | null => {
+      try {
+        const orchLayout = layout(repoRoot);
+        const machine = loadMachineConfig(orchLayout);
+        const catalogue = loadCatalogue(orchLayout.catalogueFile);
+        const ctx = resolveSelectionContext({
+          role,
+          layout: orchLayout,
+          machine,
+          def: agentDef(orchLayout, role),
+          tier: settings.tier,
+          floors: { minFit },
+        });
+        const pick = pickWithContext(ctx, {
+          agent: role,
+          machine,
+          catalogue: catalogue?.models ?? [],
+          configuredProviders,
+          availability: loadAvailability(l.home),
+          fundedProviders: fundedProviderIds(machine.providers),
+          contextChars: 0,
+        });
+        return "error" in pick ? null : pick.selected.name;
+      } catch {
+        return null;
+      }
+    };
+    const preview = {
+      engineer: resolve("engineer", settings.engineerMinFit),
+      research: resolve("research", settings.researchMinFit),
+    };
+    s.orchestratePreview = { key, at: Date.now(), ...preview };
+    return preview;
+  };
+
   /* ------------------------------------------------------------- input */
 
   const keyCtx: KeyServices = {
@@ -1609,6 +1687,8 @@ export async function runTui(): Promise<void> {
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
     startNewIssue, startEditIssue, submitNewIssue,
     agentIsolates, searchSeed,
+    startOrchestrator: (repoRoot) => updateOrchestratorState(layout(repoRoot), { active: true }),
+    stopOrchestrator: (repoRoot) => updateOrchestratorState(layout(repoRoot), { active: false }),
     repoRoot: l.repoRoot,
   };
 
@@ -1624,6 +1704,7 @@ export async function runTui(): Promise<void> {
     if (s.screen === "correct") return handleCorrectKeys(s, keyCtx, data);
     if (s.screen === "newissue") return handleIssueComposerKeys(s, keyCtx, data);
     if (s.screen === "newrun") return handleComposerKeys(s, keyCtx, data);
+    if (s.screen === "orchestrate") return handleOrchestrateKeys(s, keyCtx, data);
 
     if (s.searchMode) {
       if (data === "\x1b") { s.searchMode = false; s.searchText = ""; draw(); return; }

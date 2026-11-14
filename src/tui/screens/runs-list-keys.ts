@@ -1,8 +1,9 @@
 /**
  * machine_code — runs list keys.
  *
- * Move/fold/open, `n`/`N` new runs, `D` delete, `!` attention filter, `g`
- * group cycle, `f` repo scope, `/` search, `a` answer. The index is rebuilt
+ * Move/fold/open, `n`/`N` new runs, `o` orchestration, `D` delete, `!`
+ * attention filter, `g` group cycle, `f` repo scope, `/` search, `a` answer.
+ * The index is rebuilt
  * per keypress like the draw path so navigation and rendering agree.
  */
 import { layout } from "../../paths.js";
@@ -115,6 +116,17 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
     return true;
   }
   if (data === "N") { ctx.startNewRun(undefined, l.repoRoot); ctx.draw(); return true; }
+  if (data === "o") {
+    // Orchestration is a repo-level control: it opens only from a repo row.
+    const row = index.selectable[s.runsSel];
+    if (row?.kind !== "repo") { ctx.notify("select a repo to orchestrate"); ctx.draw(); return true; }
+    s.orchestrateRepo = row.repoRoot;
+    s.orchestrateSel = 0;
+    s.orchestrateColon = false;
+    s.screen = "orchestrate";
+    ctx.draw();
+    return true;
+  }
   if (data === "I") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "issue") ctx.startNewIssue(repoForRow(row), row.slug);
