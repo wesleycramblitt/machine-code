@@ -70,7 +70,6 @@ import {
   SUBTAB_BG, START_BG, SYNC_OFF, SYNC_ON, trunc, type UiTheme, visible, W, WHITE,
   wrapCommands, wrapPlain, wrapText, wrapTokenList, WRAP_OFF, WRAP_ON, ZEBRA_BG,
 } from "./tui/format.js";
-import { describeTimelineEvent, describeToolArgs, isTimelineEvent, lastTimelineIndex, stepTimelineSelection, waitingForRun } from "./tui/timeline.js";
 import { buildSettings, settingsFileFor, type SettingRow } from "./tui/settings.js";
 import { forkSettingsFromRun, type ForkedRunSettings } from "./tui/fork.js";
 import { loadMachineConfig, CAPABILITY_AXES, SELECTION_TIERS, type MachineConfig } from "./config.js";

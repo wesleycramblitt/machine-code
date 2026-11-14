@@ -127,7 +127,6 @@ export interface TuiState {
   processFollow: boolean;
   /** Line index into the rendered timeline (the cursor row). */
   eventSel: number;
-  eventScroll: number;
   /** Event index currently under the cursor row (float). */
   eventCursor: number;
   /** Follow the newest timeline event; j/k turns it off. */
