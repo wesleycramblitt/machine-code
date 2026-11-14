@@ -1346,6 +1346,8 @@ export async function runTui(): Promise<void> {
           thinkingScroll: s.thinkingScroll,
           thinkingFollow: s.thinkingFollow,
           childSel: s.childSel,
+          changeSel: s.changeSel,
+          changeOpen: s.changeOpen,
           expanded: s.expanded,
           changes: currentChanges(detail),
           mapTokens: mapStatusTokens,
@@ -1362,6 +1364,8 @@ export async function runTui(): Promise<void> {
         s.eventBodyScroll = frame.eventBodyScroll;
         s.thinkingScroll = frame.thinkingScroll;
         s.childSel = frame.childSel;
+        s.changeSel = frame.changeSel;
+        s.changeOpen = frame.changeOpen;
       }
     }
 

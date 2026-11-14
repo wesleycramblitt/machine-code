@@ -78,6 +78,8 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   let thinkingScroll = props.thinkingScroll;
   const thinkingFollow = props.thinkingFollow;
   let childSel = props.childSel;
+  let changeSel = props.changeSel;
+  let changeOpen = props.changeOpen;
   const expanded = props.expanded;
   let runCwd = "";
   let runHints = "";
@@ -179,11 +181,17 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               hint("x", "kill", RED),
               hint("X", "kill all", RED),
             ]
-          : section === "overview" || section === "changes" || section === "context"
+          : section === "overview" || section === "context"
             ? [hint("j/k", "scroll"), hint("^D/^U", "page", Y)]
-            : section === "related"
-              ? [hint("j/k", "select"), hint("^D/^U", "page", Y)]
-              : []),
+            : section === "changes"
+              ? [
+                  hint("j/k", "select"),
+                  hint("enter", changeOpen === null ? "open diff" : "close diff", G),
+                  hint("^D/^U", "page", Y),
+                ]
+              : section === "related"
+                ? [hint("j/k", "select"), hint("^D/^U", "page", Y)]
+                : []),
     ]);
     // Index health is about the repo the user operates, not the run's
     // ephemeral worktree (which never carries a map cache, so this always
@@ -559,20 +567,52 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       body = clipLines(lines, bodyH);
     } else if (section === "changes") {
       const changes = props.changes;
+      const files = changes.files;
+      // A stale file index (the list changed since the last draw) falls back
+      // to the list view instead of rendering an out-of-range selection.
+      if (changeOpen !== null && (changeOpen < 0 || changeOpen >= files.length)) changeOpen = null;
       lines.push(` ${B}${C}Worktree${R} ${D}${s.worktree ?? "(none)"}${R}`);
       if (changes.error) lines.push(` ${Y}${changes.error}${R}`);
-      if (changes.status) for (const line of changes.status.split("\n").slice(0, Math.max(3, bodyH - 12))) lines.push(`  ${W}${line}${R}`);
-      if (changes.diffStat) {
-        lines.push("", ` ${B}${C}Diffstat${R}`);
-        for (const line of changes.diffStat.split("\n").slice(0, Math.max(2, bodyH - 18))) lines.push(`  ${D}${line}${R}`);
-      }
-      if (changes.recent) {
-        lines.push("", ` ${B}${C}Recent commits${R}`);
-        for (const line of changes.recent.split("\n").slice(0, 5)) lines.push(`  ${W}${line}${R}`);
-      }
-      if (touched.length) {
-        lines.push("", ` ${B}${C}Touched by tools${R}`);
-        for (const path of touched.slice(0, 10)) lines.push(`  ${G}✎${R} ${W}${path}${R}`);
+      if (changeOpen === null) {
+        if (changes.status) for (const line of changes.status.split("\n").slice(0, Math.max(3, bodyH - 12))) lines.push(`  ${W}${line}${R}`);
+        // One row per changed file: porcelain code, path, and +/- line counts
+        // parsed from that file's diff. Enter opens the full diff below.
+        if (files.length > 0) {
+          lines.push("", ` ${B}${C}Changed files${R}`);
+          changeSel = Math.max(0, Math.min(changeSel, files.length - 1));
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i]!;
+            let adds = 0;
+            let dels = 0;
+            for (const line of file.diff.split("\n")) {
+              if (line.startsWith("+") && !line.startsWith("+++")) adds += 1;
+              else if (line.startsWith("-") && !line.startsWith("---")) dels += 1;
+            }
+            const row = `  ${file.code} ${W}${trunc(file.path, Math.max(20, cols - 18))}${R} ${G}+${adds}${R}${RED}-${dels}${R}`;
+            lines.push(selected(row, i === changeSel));
+          }
+        }
+        if (changes.diffStat) {
+          lines.push("", ` ${B}${C}Diffstat${R}`);
+          for (const line of changes.diffStat.split("\n").slice(0, Math.max(2, bodyH - 18))) lines.push(`  ${D}${line}${R}`);
+        }
+        if (changes.recent) {
+          lines.push("", ` ${B}${C}Recent commits${R}`);
+          for (const line of changes.recent.split("\n").slice(0, 5)) lines.push(`  ${W}${line}${R}`);
+        }
+        if (touched.length) {
+          lines.push("", ` ${B}${C}Touched by tools${R}`);
+          for (const path of touched.slice(0, 10)) lines.push(`  ${G}✎${R} ${W}${path}${R}`);
+        }
+      } else {
+        // Full per-file diff, verbatim from git: ---/+++ headers, @@ hunks,
+        // +/- lines. Pass-through — only colored and width-truncated.
+        const file = files[changeOpen]!;
+        lines.push("", ` ${B}${C}${trunc(file.path, Math.max(20, cols - 16))}${R} ${D}${file.code}${R} ${D}· enter closes${R}`, "");
+        for (const line of file.diff.split("\n")) {
+          const tone = line.startsWith("@@") ? C : line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
+          lines.push(`  ${tone}${trunc(line, cols - 4)}${R}`);
+        }
       }
       const w = scrollLines(lines, runScroll, bodyH);
       runScroll = w.scroll;
@@ -655,5 +695,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     eventBodyScroll,
     thinkingScroll,
     childSel,
+    changeSel,
+    changeOpen,
   };
 }

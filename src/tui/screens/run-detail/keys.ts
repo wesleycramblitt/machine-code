@@ -48,6 +48,11 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     if (s.runSection === "timeline") stepOrScroll(1);
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel++; }
     else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll++; }
+    else if (s.runSection === "changes") {
+      // Diff open: j/k page the diff; otherwise they move the file cursor.
+      if (s.changeOpen !== null) s.runScroll++;
+      else s.changeSel++;
+    }
     else if (s.runSection === "related") s.childSel++;
     else s.runScroll++;
     ctx.draw();
@@ -57,6 +62,10 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     if (s.runSection === "timeline") stepOrScroll(-1);
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel = Math.max(0, s.processSel - 1); }
     else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll = Math.max(0, s.thinkingScroll - 1); }
+    else if (s.runSection === "changes") {
+      if (s.changeOpen !== null) s.runScroll = Math.max(0, s.runScroll - 1);
+      else s.changeSel = Math.max(0, s.changeSel - 1);
+    }
     else if (s.runSection === "related") s.childSel = Math.max(0, s.childSel - 1);
     else s.runScroll = Math.max(0, s.runScroll - 1);
     ctx.draw();
@@ -66,6 +75,8 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     const index = RUN_SECTIONS.indexOf(s.runSection);
     s.runSection = RUN_SECTIONS[(index + delta + RUN_SECTIONS.length) % RUN_SECTIONS.length]!;
     s.runScroll = 0;
+    s.changeSel = 0;
+    s.changeOpen = null;
     s.processSel = 0;
     s.processFollow = false;
     s.eventScroll = 0;
@@ -186,6 +197,12 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   }
   if (data === "\r" || data === "\n") {
     if (s.runSection === "timeline") toggleEvent();
+    else if (s.runSection === "changes") {
+      // Enter toggles the selected file's full diff; the scroll resets both
+      // ways so the view always starts at the top.
+      s.runScroll = 0;
+      s.changeOpen = s.changeOpen === null ? s.changeSel : null;
+    }
     else if (s.runSection === "processes") {
       const record = reconcileProcessRecords(detail.dir)[s.processSel];
       if (!record) ctx.notify("no process selected");
