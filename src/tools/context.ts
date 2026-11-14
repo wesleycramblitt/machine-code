@@ -115,7 +115,7 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
       if (!CONTEXT_ACTIONS.has(params.action)) {
         return fail(`unknown context action "${params.action}". Use one of: ${[...CONTEXT_ACTIONS].join(", ")}.`);
       }
-      if (params.kind != null && !CONTEXT_KINDS.has(params.kind)) {
+      if (params.action === "note" && params.kind != null && !CONTEXT_KINDS.has(params.kind)) {
         return fail(`unknown note kind "${params.kind}". Use one of: ${[...CONTEXT_KINDS].join(", ")}.`);
       }
       try {

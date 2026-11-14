@@ -1773,8 +1773,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       const gateRoot = input.toolRoot ?? input.root;
       // vcs:sync is runner-owned: add it only to the gate command map so the
       // agent can resolve conflicts but cannot start merges on its own.
+      // Project scripts also resolve only here: the model's map deliberately
+      // excludes script:* (models never run repo scripts), but gates must
+      // still find script:build / script:test for the acceptance run.
       const gateCommands = new Map(input.commands);
       gateCommands.set(vcsSyncCommand.name, vcsSyncCommand);
+      try {
+        const { scriptCommands } = await import("./commands/scripts.js");
+        for (const [name, spec] of scriptCommands(gateRoot)) gateCommands.set(name, spec);
+      } catch {
+        // No scripts dir: gates referencing script:* fail with unknown
+        // command, the same as a missing script anywhere else.
+      }
       const gateResult = await runGates(gates, { root: gateRoot, commands: gateCommands });
       recorder.event("gates", {
         attempt: gateAttempts,

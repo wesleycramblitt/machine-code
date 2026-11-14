@@ -949,6 +949,63 @@ export function symbolRange(file: MapFile, name: string): SymbolRange | null {
   };
 }
 
+/**
+ * Resolve a nested/local definition (a const inside a function body, an
+ * object method) that the top-level symbol index never carries. Matches a
+ * definition line, then brace-balances to the block end — or takes the
+ * statement for brace-less forms. Conservative patterns only: call sites
+ * (`foo(bar)`) must never match.
+ */
+export function nestedDefinitionRange(lines: readonly string[], name: string): SymbolRange | null {
+  const id = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const def = new RegExp(
+    `^\\s*(?:export\\s+)?(?:const|let|var)\\s+${id}\\s*=|^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+${id}\\b|^\\s*(?:export\\s+)?(?:class|interface|type|enum)\\s+${id}\\b|^\\s*${id}\\s*[:=]\\s*(?:async\\s*)?(?:\\(|=>)`,
+  );
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (def.test(lines[i]!)) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  let depth = 0;
+  let opened = false;
+  const lastProbe = Math.min(lines.length - 1, start + 3);
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i]!;
+    for (const ch of line) {
+      if (ch === "{") {
+        depth += 1;
+        opened = true;
+      } else if (ch === "}") {
+        depth -= 1;
+        if (opened && depth <= 0) {
+          return { name, kind: "nested", start: start + 1, end: i + 1 };
+        }
+      }
+    }
+    if (i >= lastProbe && !opened) {
+      // Brace-less statement: run to the terminating semicolon at depth
+      // zero (a single-expression const), capped so a missing semicolon
+      // cannot swallow the file.
+      let pdepth = 0;
+      for (let j = start; j < Math.min(lines.length, start + 25); j++) {
+        for (const ch of lines[j]!) {
+          if (ch === "(" || ch === "[") pdepth += 1;
+          else if (ch === ")" || ch === "]") pdepth = Math.max(0, pdepth - 1);
+          else if (ch === ";" && pdepth === 0) {
+            return { name, kind: "nested", start: start + 1, end: j + 1 };
+          }
+        }
+      }
+      return { name, kind: "nested", start: start + 1, end: Math.min(lines.length, start + 25) };
+    }
+    if (i - start > 2000) break;
+  }
+  return { name, kind: "nested", start: start + 1, end: lines.length };
+}
+
 /** Resolve the symbol that contains a line. */
 export function rangeAround(file: MapFile, line: number): SymbolRange | null {
   if (file.symbols.length === 0) return null;
