@@ -39,6 +39,8 @@ export interface KeyServices {
   submitNewRun: () => void;
   /** Open the issue composer for a new issue. When seedSlug is given, prefill every field from that issue (unlinked copy). */
   startNewIssue: (repoRoot?: string, seedSlug?: string) => void;
+  /** Open the composer to edit an existing issue in place (orange Update badge). */
+  startEditIssue: (slug: string, repoRoot?: string) => void;
   /** Create the issue, commit, and push. */
   submitNewIssue: () => void;
   /** Resume a stalled run in place (same id, branch, worktree, transcript). */

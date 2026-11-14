@@ -208,6 +208,8 @@ export interface TuiState {
   newIssueFieldEdit: string | null;
   /** Original value of the field being edited, for cancel. */
   newIssueFieldUndo: string | undefined;
+  /** Edit target: slug/kind/status of the issue being updated (null = creating). */
+  newIssueEdit: { slug: string; kind: string; status: string } | null;
   answerText: string;
   answerQuestionId: string;
   answerOptions: string[];
@@ -335,6 +337,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newIssueColon: false,
     newIssueFieldEdit: null,
     newIssueFieldUndo: undefined,
+    newIssueEdit: null,
     answerText: "",
     answerQuestionId: "",
     answerOptions: [],

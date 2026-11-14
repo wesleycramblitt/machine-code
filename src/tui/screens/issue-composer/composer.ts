@@ -16,7 +16,7 @@
  * Back[Esc] is in the chrome header (red background).
  */
 import {
-  B, C, D, G, GR, M, R, RED, W, Y, START_BG, WHITE,
+  B, C, D, G, GR, M, R, RED, W, Y, START_BG, UPDATE_BG, WHITE,
   PURPLE_FG, YELLOW_FG, RED_FG,
   command, commandBadge, fit, joinCommands, trunc, visible, wrapText,
 } from "../../format.js";
@@ -32,7 +32,7 @@ function fieldLine(key: string, label: string, value: string, isEditing: boolean
 }
 
 export function renderIssueComposer(props: IssueComposerProps): IssueComposerFrame {
-  const { cols, bodyH, theme, toast, settings, insert, confirm, fieldEdit } = props;
+  const { cols, bodyH, theme, toast, settings, insert, confirm, fieldEdit, editing } = props;
   const boxWidth = Math.max(20, cols - 2);
   const inner = Math.max(12, boxWidth - 2);
 
@@ -85,7 +85,9 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
   const leftSide = joinCommands([kindToken, priorityToken]);
-  const createBadge = commandBadge("Create", ":!", START_BG, WHITE);
+  const createBadge = editing
+    ? commandBadge("Update", ":!", UPDATE_BG, WHITE)
+    : commandBadge("Create", ":!", START_BG, WHITE);
   const padWidth = Math.max(1, boxWidth - visible(leftSide) - visible(createBadge) - 2);
   block.push(` ${leftSide}${" ".repeat(padWidth)}${createBadge}`);
   // One extra blank line below for breathing room

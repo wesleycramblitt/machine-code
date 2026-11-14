@@ -581,6 +581,60 @@ export function updateIssueReview(layout: Layout, slug: string, review: ReviewMo
   return readIssue(layout, issue.kind, issue.status, slug);
 }
 
+/** Update the editable contents of an issue in place, preserving its identity
+ * (id, branch, commit). The prompt becomes the new body; header keys are
+ * replaced wholesale from the patch. Kind/status never move the file. */
+export function updateIssueContents(
+  layout: Layout,
+  slug: string,
+  patch: {
+    prompt: string;
+    priority?: string;
+    tags?: string[];
+    depends?: string[];
+    files?: string[];
+    acceptance?: string[];
+    keywords?: string[];
+    verification?: "direct" | "verified";
+    review?: ReviewMode;
+  },
+): Issue | null {
+  const issue = findIssue(layout, slug);
+  if (!issue) return null;
+  const text = readFileSync(issue.path, "utf8");
+  const { front } = parseIssueFile(text);
+  if (patch.priority !== undefined) front.priority = patch.priority;
+  if (patch.tags !== undefined) {
+    if (patch.tags.length > 0) front.tags = patch.tags;
+    else delete front.tags;
+  }
+  if (patch.depends !== undefined) {
+    if (patch.depends.length > 0) front.depends = patch.depends;
+    else delete front.depends;
+  }
+  if (patch.files !== undefined) {
+    if (patch.files.length > 0) front.files = patch.files;
+    else delete front.files;
+  }
+  if (patch.acceptance !== undefined) {
+    if (patch.acceptance.length > 0) front.acceptance = patch.acceptance;
+    else delete front.acceptance;
+    delete front.verify;
+  }
+  if (patch.keywords !== undefined) {
+    if (patch.keywords.length > 0) front.keywords = patch.keywords;
+    else delete front.keywords;
+  }
+  if (patch.verification !== undefined) {
+    if (patch.verification === "verified") front.verification = "verified";
+    else delete front.verification;
+  }
+  if (patch.review !== undefined) front.review = patch.review;
+  const body = patch.prompt.trim() || issue.body;
+  writeFileSync(issue.path, serializeIssueFile(front, body), "utf8");
+  return readIssue(layout, issue.kind, issue.status, slug);
+}
+
 /** Update durable issue metadata (commit reference, branch) without touching
  * the prompt body. Used when work lands and the branch/worktree are pruned. */
 export function updateIssueMeta(

@@ -48,6 +48,8 @@ export const PANEL_BG = "\x1b[48;2;18;18;18m";
 export const SUBTAB_BG = "\x1b[48;2;5;5;5m";
 /** Start action is the only destructive-red control in the composer. */
 export const START_BG = "\x1b[48;2;170;30;30m";
+/** Update action uses orange to distinguish edit from create. */
+export const UPDATE_BG = "\x1b[48;2;200;120;20m";
 /** Kind colors for the runs page, desaturated to sit with the muted green. */
 const KIND_RGB = {
   purple: "139;124;170",

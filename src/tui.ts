@@ -15,7 +15,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layout, type Layout } from "./paths.js";
 import { defaultAcceptance } from "./tui/screens/issue-composer/keys.js";
-import { findIssue, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
+import { findIssue, kindTag, listIssues, updateIssueContents, writeIssue, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
 import { isPidAlive, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
@@ -314,6 +314,7 @@ export async function runTui(): Promise<void> {
 
   const startNewIssue = (repoRoot = l.repoRoot, seedSlug?: string) => {
     s.newIssueRepo = repoRoot;
+    s.newIssueEdit = null;
     s.newIssue = {
       kind: "features",
       priority: "medium",
@@ -352,6 +353,38 @@ export async function runTui(): Promise<void> {
     s.newIssueColon = false;
     s.newIssueFieldEdit = null;
     s.newIssueFieldUndo = undefined;
+    s.screen = "newissue";
+  };
+
+  const startEditIssue = (slug: string, repoRoot = l.repoRoot) => {
+    const issueLayout = layout(repoRoot);
+    const issue = findIssue(issueLayout, slug);
+    if (!issue) { notify(`no issue ${slug}`); return; }
+    const kind = (issue.kind === "ideas" || issue.kind === "features" || issue.kind === "bugs" ? issue.kind : "features") as "ideas" | "features" | "bugs";
+    const priority = (issue.priority === "low" || issue.priority === "medium" || issue.priority === "high" ? issue.priority : "medium") as "low" | "medium" | "high";
+    const verification = (kind === "ideas" ? "direct" : issue.verification === "verified" ? "verified" : "direct") as "direct" | "verified";
+    s.newIssueRepo = repoRoot;
+    s.newIssue = {
+      kind,
+      priority,
+      acceptance: (issue.acceptance ?? []).join(", ") || defaultAcceptance(kind, verification),
+      tags: (issue.tags ?? []).join(", "),
+      depends: (issue.depends ?? []).join(", "),
+      files: (issue.files ?? []).join(", "),
+      keywords: (issue.keywords ?? []).join(", "),
+      verification,
+      review: issue.review === "human" ? "human" : "none",
+      prompt: issue.prompt ?? "",
+    };
+    s.newIssueEdit = { slug: issue.slug, kind: issue.kind, status: issue.status };
+    s.newIssueInsert = false;
+    s.newIssueConfirm = false;
+    s.newIssueCursor = 0;
+    s.newIssueColon = false;
+    s.newIssueFieldEdit = null;
+    s.newIssueFieldUndo = undefined;
+    s.selectedIssueSlug = issue.slug;
+    s.selectedIssueRepo = repoRoot;
     s.screen = "newissue";
   };
 
@@ -757,10 +790,47 @@ export async function runTui(): Promise<void> {
     s.newIssueColon = false;
     const prompt = s.newIssue.prompt.trim();
     if (!prompt) {
-      notify("type an issue body before creating");
+      notify(s.newIssueEdit ? "type an issue body before updating" : "type an issue body before creating");
       return;
     }
     const issueLayout = layout(s.newIssueRepo);
+    const parseCsv = (text: string): string[] =>
+      text.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+    const acceptance = parseCsv(s.newIssue.acceptance);
+    const tags = parseCsv(s.newIssue.tags);
+    const depends = parseCsv(s.newIssue.depends);
+    const files = parseCsv(s.newIssue.files);
+    const keywords = parseCsv(s.newIssue.keywords);
+    const editTarget = s.newIssueEdit;
+    if (editTarget) {
+      try {
+        const updated = updateIssueContents(issueLayout, editTarget.slug, {
+          prompt,
+          priority: s.newIssue.priority,
+          tags,
+          depends,
+          files,
+          acceptance,
+          keywords,
+          verification: s.newIssue.verification,
+          review: s.newIssue.review,
+        });
+        if (!updated) { notify(`no issue ${editTarget.slug}`); return; }
+        const slug = editTarget.slug;
+        s.newIssueEdit = null;
+        s.selectedIssueSlug = slug;
+        s.selectedIssueRepo = s.newIssueRepo;
+        s.screen = "issue";
+        s.page = "runs";
+        void commitPlanningFiles(issueLayout, `[UPDATE ${kindTag(updated.kind)}] ${slug}`, true).then((committed) => {
+          notify(committed ? `issue ${slug} updated and pushed` : `issue ${slug} updated (no changes to commit)`);
+          draw();
+        }).catch(() => {});
+      } catch (error) {
+        notify(`failed to update issue: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
     // Slug from first line of prompt, lowercased and hyphenated.
     const firstLine = prompt.split("\n")[0]!.trim();
     const slug = firstLine
@@ -768,15 +838,6 @@ export async function runTui(): Promise<void> {
       .replace(/^-+|-+$/g, "")
       .toLowerCase()
       .slice(0, 60) || "untitled";
-
-    const parseCsv = (text: string): string[] =>
-      text.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
-
-    const acceptance = parseCsv(s.newIssue.acceptance);
-    const tags = parseCsv(s.newIssue.tags);
-    const depends = parseCsv(s.newIssue.depends);
-    const files = parseCsv(s.newIssue.files);
-    const keywords = parseCsv(s.newIssue.keywords);
 
     try {
       writeIssue(issueLayout, {
@@ -1140,6 +1201,7 @@ export async function runTui(): Promise<void> {
         colon: s.newIssueColon,
         confirm: s.newIssueConfirm,
         fieldEdit: s.newIssueFieldEdit,
+        editing: !!s.newIssueEdit,
       });
       body = frame.body;
       actions = frame.actions;
@@ -1543,7 +1605,7 @@ export async function runTui(): Promise<void> {
     cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier,
     startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
-    startNewIssue, submitNewIssue,
+    startNewIssue, startEditIssue, submitNewIssue,
     agentIsolates, searchSeed,
     repoRoot: l.repoRoot,
   };

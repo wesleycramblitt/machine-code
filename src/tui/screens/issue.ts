@@ -130,6 +130,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
     ...w,
     actions: joinCommands([
       command("n", "Run", undefined, C),
+      command("e", "Edit", undefined, C),
       // Approve is only offered for built work: the issue is in a reviewable
       // status and the branch probe found changes worth merging.
       ...(issue && (issue.status === "needs-human-review" || issue.status === "done")
