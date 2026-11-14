@@ -63,6 +63,18 @@ function cleanInspectArgs(args: Record<string, unknown>): Record<string, unknown
   if (typeof out.path === "string" && out.path.trim() === "") { delete out.path; changed = true; }
   if (typeof out.name === "string" && out.name.trim() === "") { delete out.name; changed = true; }
   if (typeof out.target === "string" && out.target.trim() === "") { delete out.target; changed = true; }
+  if (typeof out.symbol === "string" && out.symbol.trim() === "") { delete out.symbol; changed = true; }
+  if (typeof out.detail === "string" && out.detail.trim() === "") { delete out.detail; changed = true; }
+  // Weak models zero-fill every numeric field. Lines are 1-based and a
+  // zero-line page is never what a read wants, so non-positive paging
+  // values mean "no paging" — drop them. Without this, a bare file read
+  // with offset:0/limit:0 returns one line and burns a turn re-reading.
+  for (const field of ["offset", "limit", "around"] as const) {
+    if (typeof out[field] === "number" && !(out[field] as number >= 1)) {
+      delete out[field];
+      changed = true;
+    }
+  }
   return changed ? out : args;
 }
 

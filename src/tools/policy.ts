@@ -26,7 +26,7 @@ export const TOOL_GUIDE = [
   '  Keyword search: `{"query": "someIdentifier"}` — add `"path": "src/file.ts"` to scope to one file',
   '  Regex fallback for multi-word patterns: `{"query": "pattern", "regex": true}` — single keywords work without regex',
   '  Never use `"path": "src"` with a keyword — that lists the directory instead of searching.',
-  "  Unfamiliar code: read the whole body once (a symbol with no limit, or the full file when small). Paging with small limits costs a turn per page.",
+  "  Unfamiliar code: outline first, then the whole symbol body with no limit; full file when small. Paging with small limits is the fallback for odd files only — it costs a turn per page.",
   "  Earlier answers reappear under `<evidence>`, re-read fresh from disk — do not re-ask for what is already there. Re-inspect only for a narrower slice or a file that changed since.",
   "",
   "### 3. Change with intent — exact text, fences only for escaping",
