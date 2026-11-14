@@ -343,7 +343,7 @@ export class RunStateStore {
     if (!clean) return;
     const at = turn ?? this.currentTurn();
     if (kind === "open") {
-      const text = clean.length > 4000 ? `${clean.slice(0, 4000)}…` : clean;
+      const text = clean;
       this.append({
         type: "open",
         question: { id: `q_${sha1(clean).slice(0, 10)}`, text, turn: at, status: "open" },
@@ -353,17 +353,15 @@ export class RunStateStore {
     }
     const refsParsed = refs.map(parseRef);
     const key = `${kind}:${sha1(`${clean}\0${refsParsed.map((ref) => ref.path).join("\0")}`)}`;
-    // Findings carry investigation detail; decisions carry rationale. Caps are
-    // a backstop, not a target — the block budget evicts oldest-first.
-    // Trimmed text is marked so the ledger never silently drops content.
-    const cap = kind === "decision" ? 32_000 : 8_000;
-    const trimmed = clean.length > cap ? `${clean.slice(0, cap)}…` : clean;
+    // No per-note cap: the model decides how much a note needs. The block
+    // budget below is the only bound, evicting oldest findings first when
+    // the state outgrows the model's share of the context pool.
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind,
-        text: trimmed,
+        text: clean,
         refs: refsParsed,
         turn: at,
         status: "active",

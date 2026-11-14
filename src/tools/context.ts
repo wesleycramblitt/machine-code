@@ -162,7 +162,7 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
           }
           case "plan": {
             if (!params.steps) return fail("plan requires steps: [{text, done}, ...]");
-            const steps = params.steps.map((s) => ({ text: s.text.slice(0, 2000), done: s.done }));
+            const steps = params.steps.map((s) => ({ text: s.text, done: s.done }));
             memory.setPlan(steps);
             const done = steps.filter((s) => s.done).length;
             return ok(`plan set: ${done}/${steps.length} steps done`);
