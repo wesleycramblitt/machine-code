@@ -119,6 +119,9 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       `${B}${tone}${key}${R} ${D}${label}${R}`;
     runHints = joinCommands([
       command("f", "fork", undefined, Y),
+      ...(["blocked", "failed", "interrupted", "paused"].includes(s.status)
+        ? [command("r", "resume", undefined, G)]
+        : []),
       hint("D", "delete", RED),
       ...(pending ? [hint("a", "answer", Y)] : []),
       ...(["running", "awaiting_input", "paused"].includes(s.status)

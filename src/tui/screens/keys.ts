@@ -41,6 +41,8 @@ export interface KeyServices {
   startNewIssue: (repoRoot?: string) => void;
   /** Create the issue, commit, and push. */
   submitNewIssue: () => void;
+  /** Resume a stalled run in place (same id, branch, worktree, transcript). */
+  resumeRun: (detail: RunDetail) => void;
   agentIsolates: (agent: string) => boolean;
   searchSeed: () => string;
   repoRoot: string;

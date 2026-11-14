@@ -17,7 +17,7 @@ import { layout, type Layout } from "./paths.js";
 import { defaultAcceptance } from "./tui/screens/issue-composer/keys.js";
 import { findIssue, kindTag, listIssues, writeIssue, type Issue } from "./plan/issues.js";
 import { effectiveStatus } from "./plan/lifecycle.js";
-import { listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
+import { isPidAlive, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
 import { headerCounts, sortRuns } from "./tui/status.js";
@@ -381,6 +381,24 @@ export async function runTui(): Promise<void> {
     s.newRunParentId = summary.id;
     s.screen = "newrun";
     notify(`forked settings from ${summary.id.slice(-8)}; edit the request and start`);
+  };
+
+  const resumeRun = (detail: RunDetail) => {
+    const summary = detail.summary;
+    if (summary.status === "completed" || summary.status === "cancelled") {
+      notify(`run ${summary.id.slice(-8)} is already ${summary.status}; nothing to resume`);
+      return;
+    }
+    if (summary.status === "running" && isPidAlive(summary.pid)) {
+      notify(`run ${summary.id.slice(-8)} is still running; interrupt it first`);
+      return;
+    }
+    // Detached like any other launch: cmdResume reopens the same record,
+    // reuses the branch/worktree, and continues the transcript. A resume is
+    // a new process, so it picks up the current build's caps and gates.
+    if (launch(["resume", summary.id], summary.repoRoot)) {
+      notify(`resuming ${summary.id.slice(-8)} (${summary.status})`);
+    }
   };
 
   const cycleAgent = () => {
@@ -1500,7 +1518,7 @@ export async function runTui(): Promise<void> {
   /* ------------------------------------------------------------- input */
 
   const keyCtx: KeyServices = {
-    draw, notify, launch, openEditor, startNewRun, forkRun, answerRun,
+    draw, notify, launch, openEditor, startNewRun, forkRun, resumeRun, answerRun,
     interrupt, startCorrect, submitCorrection, runDetailData, pendingForRun,
     cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier,
     startIssuePicker, pickerIssues, chooseIssue,
