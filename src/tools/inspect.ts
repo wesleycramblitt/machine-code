@@ -229,7 +229,8 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
     label: "inspect",
     description:
       "Find and read code in one call: pass a file path, path:line range, symbol name, or free keywords. " +
-      "Returns numbered, edit-ready excerpts with the match kind (symbol | path | keyword | regex) named per file. " +
+      "Returns numbered, edit-ready excerpts with the match kind (symbol | path | keyword | content) named per file. " +
+      "Keyword search falls back to file-content search when no symbol or path matches. " +
       "Use detail=outline for signatures, summary (default) for matched bodies, full for capped bodies; " +
       "offset/limit/around/symbol page a file. This replaces read and search — do not page with offset unless paging.",
     parameters: InspectParams,
@@ -402,8 +403,27 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
         // Mode 5 — ranked keyword find with dense per-file evidence.
         const files = fuzzyFiles(map, query, scope);
         if (files.length === 0) {
+          // Symbol, path, and ranker all missed — often a local nested
+          // inside a function body, which the map never indexes. Fall back
+          // to literal content search (scoped when the caller gave a path)
+          // before reporting no matches, so one call finds it.
+          try {
+            const { runProc } = await import("../proc.js");
+            const { excludeGlobs } = await import("./safety.js");
+            const args = ["--line-number", "--with-filename", "--no-heading", "--color", "never",
+              "--max-count", "40", "--context", "2", "-F", "--", query];
+            if (scope) args.push(scope);
+            const result = await runProc("rg", args, { cwd: ctx.root, timeoutMs: 30_000 });
+            const text = (result.stdout ?? "").trimEnd();
+            if (result.outcome === "exit" && text) {
+              const envelope = `<inspect query="${query}" mode="find" match="content">\n${capText(text, 12 * 1024).text}\n</inspect>`;
+              return ok(envelope);
+            }
+          } catch {
+            // content search unavailable — fall through to no-matches
+          }
           return ok(
-            `<inspect query="${query}" mode="find" match="none">\nno matches for "${query}". Try a shorter keyword, a basename, or regex:true.\n</inspect>`,
+            `<inspect query="${query}" mode="find" match="none">\nno matches for "${query}" in symbols, paths, or contents. Read the file directly if you know it.\n</inspect>`,
           );
         }
         const blocks: string[] = [`<inspect query="${query}" mode="find">`];

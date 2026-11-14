@@ -15,7 +15,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Layout } from "../paths.js";
 import { packageDataDir } from "../data.js";
-import { listIssues, singleLine } from "../plan/issues.js";
+import { findIssue, listIssues, singleLine } from "../plan/issues.js";
 import type { MachineConfig } from "../config.js";
 import { artifactExists, artifactPath, artifactSummary, resolveArtifact } from "../artifacts/registry.js";
 import { defaultSkillsFor, resolveSkillMode, skillIndexBody, skillMetas, type SkillMode } from "./references.js";
@@ -674,15 +674,18 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // Lost-in-the-middle recap: when issue sources exist, restate the critical
   // objective last (highest-relevance first AND last) so the tail of the
   // stable prefix re-anchors the run before the volatile per-turn content
-  // (working context, transcript) follows in render.ts.
+  // (working context, transcript) follows in render.ts. Each point carries
+  // its status: finished references are background, never the task.
   const issueSources = ordered.filter((entry) => entry.kind === "issue");
   let recap = "";
   if (issueSources.length > 0) {
     const points = issueSources.slice(0, 4).map((entry) => {
       const first = entry.body.split("\n").find((line) => line.trim() !== "") ?? entry.ref;
-      return `issue ${entry.ref}: ${first.trim().slice(0, 120)}`;
+      const slug = entry.ref.split("/").pop()?.replace(/\.md$/, "") ?? entry.ref;
+      const status = findIssue(layout, slug)?.status;
+      return `issue ${entry.ref}${status ? ` [${status}]` : ""}: ${first.trim().slice(0, 120)}`;
     });
-    recap = `<context-recap>\nRecap (authoritative — act on this): ${points.join("; ")}. The issue blocks above outrank the working files in between.\n</context-recap>`;
+    recap = `<context-recap>\nRecap (authoritative — act on the open issue; done/researched issues are background only): ${points.join("; ")}. The issue blocks above outrank the working files in between.\n</context-recap>`;
     blocks.push(recap);
     sections.issues += recap.length;
   }

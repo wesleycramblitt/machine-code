@@ -865,15 +865,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  // Explicitly referenced finished issues: inject what was asked (the
-  // issue prompt) plus what was committed (the merge's stat + diff), so
-  // the agent never needs git history tools. Files from the commit are
-  // seeded below so they land in the symbol map like suggestions.
-  // Reference issues (done/researched only): what was asked (the prompt)
-  // plus what was committed (the merge's stat + diff), each in its own
-  // section. Without a commit, just the prompt. File names — from the
-  // commit diff when there is one, else the files: header — join the
-  // union that seeds the symbol map below.
+  // Reference issues (done/researched only): the prompt plus an unmistakable
+  // status line — finished work is background, never the task. No stat, no
+  // diff; the bytes live in the worktree and the file list below seeds the
+  // symbol map. Without a commit, fall back to the issue's files: header.
   let depFiles: string[] = [];
   if ((contextInclude?.issues?.length ?? 0) > 0) {
     try {
@@ -895,26 +890,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
               ? changed.stdout.trim().split("\n").map((f) => f.trim()).filter(Boolean)
               : [];
           if (changedFiles.length > 0) files.push(...changedFiles);
-          // The stored commit is the merge into main, so diff against its
-          // first parent: exactly what that feature merge introduced, nothing else.
-          const stat = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--stat"], {
-            cwd: l.repoRoot,
-            timeoutMs: 15_000,
-          });
-          const statText = stat.outcome === "exit" && stat.code === 0 ? stat.stdout.trim() : "";
-          const diff = await runProc(
-            "git",
-            ["diff", `${depIssue.commit}^1`, depIssue.commit, "--", ...(changedFiles.length > 0 ? changedFiles : ["."])],
-            { cwd: l.repoRoot, timeoutMs: 15_000 },
-          );
-          const diffText =
-            diff.outcome === "exit" && diff.code === 0 && diff.stdout.trim() ? diff.stdout.trim() : "";
           refs.push(
-            `Reference ${depIssue.slug} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt}${statText ? `\n\nLanded change:\n${statText}` : ""}${diffText ? `\n\nDiff:\n${diffText}` : ""}`,
+            `Reference (already ${depIssue.status} — background only, NOT your task): ${depIssue.slug} @ ${depIssue.commit.slice(0, 12)}:\n${depIssue.prompt}`,
           );
         } else {
           if (depIssue.files.length > 0) files.push(...depIssue.files);
-          refs.push(`Reference ${depIssue.slug} (no commit yet):\n${depIssue.prompt}`);
+          refs.push(`Reference (already ${depIssue.status} — background only, NOT your task): ${depIssue.slug} (no commit yet):\n${depIssue.prompt}`);
         }
       }
       depFiles = [...new Set(files)];

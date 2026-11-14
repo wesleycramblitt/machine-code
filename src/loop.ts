@@ -449,9 +449,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     });
   }
 
-  // The goal is the issue itself. Hints and the reused-branch note are task
-  // framing; repeating them inside <run-state> duplicates the prompt.
-  const goal = input.request.split(/\n\n## (?:Context|Skills|Existing branch state|Worktree)\b/)[0]!.trim() || input.request;
+  // The goal orients the state block. The full request already rides every
+  // prompt in the transcript head and the assembled context carries the
+  // issue bodies — repeating all of it here triples the issue text.
+  // One line suffices.
+  const goalHead = input.request.split(/\n\n## (?:Context|Skills|Existing branch state|Worktree)\b/)[0]!.trim() || input.request;
+  const firstLine = goalHead.split("\n").find((line) => line.trim() !== "")?.trim() ?? goalHead;
+  const goal = firstLine.length > 300 ? `${firstLine.slice(0, 299)}…` : firstLine;
   const memory = new RunStateStore({
     runDir: recorder.dir,
     runId: recorder.id,

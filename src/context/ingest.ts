@@ -8,7 +8,7 @@
 import type { SymbolMap } from "./symbol-map.js";
 import { contentHash } from "./symbol-map.js";
 import type { Ref } from "./state.js";
-import { editRange, excerpt, inline, lineCount, str, textOf, toolCalls } from "./text.js";
+import { editRange, excerpt, inline, lineCount, readExcerpt, str, textOf, toolCalls } from "./text.js";
 
 export interface IngestHost {
   repoRoot?: string;
@@ -159,7 +159,7 @@ export function ingestTurn(
         }
         if (mode === "file" || mode === "symbol") {
           const ref = found[0];
-          if (ref) host.addReadFact({ ...ref, hash, bytes: Buffer.byteLength(resultText, "utf8") }, turn, excerpt(resultText));
+          if (ref) host.addReadFact({ ...ref, hash, bytes: Buffer.byteLength(resultText, "utf8") }, turn, readExcerpt(resultText));
         } else if (found.length > 0) {
           const hits = found.slice(0, 3).map((ref) => `${ref.path}${ref.range ? `:${ref.range[0]}` : ""}`).join(", ");
           host.addSearchFact(query || mode, found.slice(0, 10), turn, hits);

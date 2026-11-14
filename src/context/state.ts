@@ -578,6 +578,15 @@ export class RunStateStore {
         lines.push("Findings:");
         for (const fact of findings) lines.push(`- ${fact.text}`);
       }
+      // Auto-recorded evidence: what earlier reads contained. The transcript
+      // keeps two steps and the symbol map keeps names only — this is the
+      // only place older bodies survive, so prefer it over re-reading.
+      // Same budget, oldest fades first.
+      const seen = newestFirst(active.filter((fact) => fact.kind === "finding" && (fact.key.startsWith("read:") || fact.key.startsWith("search:") || fact.key.startsWith("command:"))));
+      if (seen.length > 0) {
+        lines.push("Seen (earlier tool output — prefer this over re-reading):");
+        for (const fact of seen) lines.push(`- ${fact.text}`);
+      }
       if (runChanges.length > 0) {
         lines.push("Changes:");
         for (const fact of newestFirst(runChanges)) lines.push(`- ${fact.text}`);
