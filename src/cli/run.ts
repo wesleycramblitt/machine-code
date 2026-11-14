@@ -1376,6 +1376,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   // Worktree: reuse, recreate from branch, or (with --recreate) start fresh.
   // Sync main first so a recreated worktree starts from current upstream.
   let toolRoot = l2.repoRoot;
+  let recorderPatchWorktree: { worktree: string; branch: string; baseBranch: string; baseRef: string } | undefined;
   await syncFromRemote(l2.repoRoot);
   if (s.worktree) {
     if (existsSync(s.worktree)) {
@@ -1390,15 +1391,51 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     } else {
       fail(`worktree ${s.worktree} is missing and branch ${s.branch ?? "(none)"} no longer exists; use --recreate to start from the base commit`);
     }
+  } else {
+    // No worktree was ever acquired (e.g. the first attempt blocked on a
+    // dirty tree). A mutating agent must never run on the main checkout:
+    // it would edit main directly, pass gates there, and strand
+    // uncommitted changes with no commit/merge/move. Retry creation (the
+    // tree may be clean now); refuse if it still fails.
+    const resumeAgentName = normalizeAgentName(s.agent ?? "research");
+    if (resumeAgentName === "research" || resumeAgentName === "engineer") {
+      const slug = s.itemId ?? s.packetId ?? undefined;
+      const attached = slug ? findIssue(l2, slug) : null;
+      try {
+        await syncFromRemote(l2.repoRoot);
+        const spec = await createWorktree({
+          layout: l2,
+          runId: id,
+          kind: slug ? "issue" : "run",
+          ...(slug ? { slug } : {}),
+          ...(attached?.branch ? { branch: attached.branch } : {}),
+          ...(s.baseRef ? { base: s.baseRef } : {}),
+        });
+        toolRoot = spec.path;
+        recorderPatchWorktree = { worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef };
+        process.stderr.write(`worktree ${spec.path} (branch ${spec.branch})\n`);
+      } catch (error) {
+        const msg = error instanceof WorktreeError
+          ? `${error.code}: ${error.message}`
+          : `worktree creation failed: ${error instanceof Error ? error.message : String(error)}`;
+        process.stderr.write(`machine_code: cannot resume ${id} without a worktree: ${msg}\n`);
+        return EXIT.blocked;
+      }
+    }
   }
 
   const gateCommands = allCommands(l2, { scriptsRoot: toolRoot });
   // The agent and the gates share one map so script:* resolves for both.
   const commands = allCommands(l2, { scriptsRoot: toolRoot });
   const recorder = RunRecorder.reopen(l2, s);
+  if (recorderPatchWorktree) {
+    recorder.patchSummary(recorderPatchWorktree);
+    recorder.event("worktree_created", { ...recorderPatchWorktree, resumed: true });
+  }
+  const resumeFromStatus = s.status;
   recorder.setStatus("running", "resume");
   recorder.patchSummary({ pid: process.pid });
-  recorder.event("resume_started", { fromStatus: s.status });
+  recorder.event("resume_started", { fromStatus: resumeFromStatus });
 
   const abort = new AbortController();
   let sigints = 0;
