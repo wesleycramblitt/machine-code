@@ -21,8 +21,10 @@ import { rangesOverlap } from "./symbols.js";
 import { SymbolMap } from "./symbol-map.js";
 import { ingestTurn as ingestTurnInto } from "./ingest.js";
 
-/** Keep the model-facing state block compact; full facts remain in state.jsonl. */
-const MAX_STATE_CHARS = 10_000;
+/** Bound on the model-facing state block; full facts remain in state.jsonl.
+ * Generous: notes render every turn, but they are the run's memory —
+ * trimming them starves later turns. Overflow evicts oldest findings first. */
+const MAX_STATE_CHARS = 30_000;
 
 export type FactKind = "finding" | "decision" | "change";
 
@@ -340,7 +342,7 @@ export class RunStateStore {
     if (!clean) return;
     const at = turn ?? this.currentTurn();
     if (kind === "open") {
-      const text = clean.length > 240 ? `${clean.slice(0, 240)}…` : clean;
+      const text = clean.length > 1000 ? `${clean.slice(0, 1000)}…` : clean;
       this.append({
         type: "open",
         question: { id: `q_${sha1(clean).slice(0, 10)}`, text, turn: at, status: "open" },
@@ -350,9 +352,10 @@ export class RunStateStore {
     }
     const refsParsed = refs.map(parseRef);
     const key = `${kind}:${sha1(`${clean}\0${refsParsed.map((ref) => ref.path).join("\0")}`)}`;
-    // Plans are decisions and need room for numbered steps. Findings stay small.
+    // Findings carry investigation detail; decisions carry rationale. Caps are
+    // a backstop, not a target — the block budget evicts oldest-first.
     // Trimmed text is marked so the ledger never silently drops content.
-    const cap = kind === "decision" ? 2_000 : 240;
+    const cap = kind === "decision" ? 8_000 : 2_000;
     const trimmed = clean.length > cap ? `${clean.slice(0, cap)}…` : clean;
     this.append({
       type: "fact",
