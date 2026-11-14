@@ -79,6 +79,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       approval: run.approval,
       ambiguity: run.ambiguity,
     },
+    verification: newRunIssue?.verification ?? "direct",
   });
   const issueOutcome = (() => {
     const refCount = [...included].filter(

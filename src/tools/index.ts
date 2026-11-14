@@ -96,28 +96,60 @@ function sanitizeBlockName(name: string): string {
 }
 
 /**
+ * Loud failure when a referenced named block was not extracted this turn.
+ * The old silent fallthrough produced a generic "edit needs ..." error that
+ * never named the block, so the model retried the same fence. Name the
+ * block, list what was extracted, and state the fence syntax + the _b64
+ * fallback so the retry fixes the actual problem.
+ */
+function missingBlockError(blocksDir: string | undefined, name: string): string {
+  let found: string[] = [];
+  if (blocksDir) {
+    try {
+      found = readdirSync(blocksDir);
+    } catch {
+      found = [];
+    }
+  }
+  const have =
+    found.length > 0
+      ? ` Extracted blocks this turn: ${found.join(", ")}.`
+      : " No blocks were extracted this turn.";
+  return (
+    `named block "${name}" was not found.${have} ` +
+    `The fence must open with \`\`\`${name} alone on the line and close with \`\`\` alone ` +
+    `— no language id, no extra words. Fix the fences and retry, or resend the content with the _b64 field instead.`
+  );
+}
+
+/**
  * Resolve content from the highest-priority source: named_block > b64 > plain.
- * Called from write/edit tool execute functions with the ToolContext.
+ * A named block that missed extraction falls through to the other sources;
+ * when nothing resolves, the caller fails loud with the block name.
  */
 function resolveContent(
   content: string | undefined | null,
   contentB64: string | undefined | null,
   contentNamedBlock: string | undefined | null,
   blocksDir: string | undefined,
-): string | undefined {
-  if (contentNamedBlock) {
-    if (!blocksDir) return content ?? undefined;
-    const filePath = join(blocksDir, sanitizeBlockName(contentNamedBlock));
+): { text: string | undefined; missingBlock?: string } {
+  if (contentNamedBlock && blocksDir) {
     try {
-      return readFileSync(filePath, "utf8");
+      return { text: readFileSync(join(blocksDir, sanitizeBlockName(contentNamedBlock)), "utf8") };
     } catch {
-      return undefined;
+      // Fall through to b64/plain; the caller reports the miss when empty.
     }
   }
   if (contentB64) {
-    return Buffer.from(contentB64, "base64").toString("utf8");
+    return { text: Buffer.from(contentB64, "base64").toString("utf8") };
   }
-  return content ?? undefined;
+  if (content !== undefined && content !== null) {
+    return { text: content };
+  }
+  return {
+    text: undefined,
+    ...(contentNamedBlock ? { missingBlock: contentNamedBlock } : {}),
+  };
 }
 
 /* ------------------------------------------------------------------- write */
@@ -168,8 +200,15 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
           return fail(`refusing to write a secret file: ${params.path}`);
         }
         mkdirSync(dirname(abs), { recursive: true });
-        const content = resolveContent(params.content, params.content_b64, params.content_named_block, ctx.namedBlocksDir);
-        if (content === undefined) return fail("write needs content, content_b64, or content_named_block");
+        const resolved = resolveContent(params.content, params.content_b64, params.content_named_block, ctx.namedBlocksDir);
+        if (resolved.text === undefined) {
+          return fail(
+            resolved.missingBlock
+              ? missingBlockError(ctx.namedBlocksDir, resolved.missingBlock)
+              : "write needs content, content_b64, or content_named_block",
+          );
+        }
+        const content = resolved.text;
         writeFileSync(abs, content, "utf8");
         return ok(`wrote ${params.path} (${Buffer.byteLength(content, "utf8")} bytes)`);
       } catch (error) {
@@ -618,10 +657,16 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksD
   // atomic pass. Weak models hedge by filling both forms.
   // Resolve content from the highest-priority source per field:
   // named_block > b64 > plain.
+  const missing = new Set<string>();
   const readBlock = (name: string | undefined | null): string | undefined => {
     if (!name || !namedBlocksDir) return undefined;
-    const file = join(namedBlocksDir, name.replace(/[^a-zA-Z0-9_-]/g, "_"));
-    try { return readFileSync(file, "utf8"); } catch { return undefined; }
+    const file = join(namedBlocksDir, sanitizeBlockName(name));
+    try {
+      return readFileSync(file, "utf8");
+    } catch {
+      missing.add(name);
+      return undefined;
+    }
   };
   const resolvedOldString =
     readBlock(spec.oldString_named_block) ??
@@ -662,6 +707,28 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksD
     edits.length === 0 && typeof resolvedNewString === "string" && (spec.symbol || spec.section)
       ? resolvedNewString
       : undefined;
+  // A named block that missed extraction must fail loud: the silent
+  // fallthrough used to produce a generic "edit needs ..." error that never
+  // named the block, so the model retried the same fence. A named source
+  // with a plain/b64 fallback still resolves normally — only a block with
+  // no other source behind it errors.
+  const blockStranded = (nb: string | undefined | null, b64: string | undefined | null, plain: string | undefined | null): boolean =>
+    !!nb && missing.has(nb) && !(typeof b64 === "string" && b64.trim() !== "") && !(typeof plain === "string" && plain.trim() !== "");
+  const stranded =
+    blockStranded(spec.oldString_named_block, spec.oldString_b64, spec.oldString) ||
+    blockStranded(spec.newString_named_block, spec.newString_b64, spec.newString) ||
+    (spec.edits ?? []).some(
+      (hunk) =>
+        blockStranded(hunk.oldString_named_block, hunk.oldString_b64, hunk.oldString) ||
+        blockStranded(hunk.newString_named_block, hunk.newString_b64, hunk.newString),
+    );
+  if (stranded) {
+    const name =
+      [spec.oldString_named_block, spec.newString_named_block, ...(spec.edits ?? []).flatMap((hunk) => [hunk.oldString_named_block, hunk.newString_named_block])].find(
+        (nb) => nb && missing.has(nb),
+      ) ?? [...missing][0]!;
+    return { error: missingBlockError(namedBlocksDir, name) };
+  }
   if (edits.length === 0 && wholeScope === undefined)
     return { error: "edit needs oldString/newString, edits[], or symbol/section + newString/newString_named_block/newString_b64 for whole-block replacement" };
 

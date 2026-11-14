@@ -339,6 +339,7 @@ export async function runIssueBuild(
   const resolved = resolveAgent(l, "engineer", {
     machineOverrides: runtime.machine.agents.engineer,
     runOverrides: {},
+    verification: packet.verification ?? "direct",
   });
   recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
   const buildRequest =

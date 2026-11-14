@@ -143,9 +143,9 @@ export interface RunLoopInput {
   contextText?: string;
   /** Skip the deterministic repo map index in the model's up-front context. */
   skipMap?: boolean;
-  /** Per-turn holdings-delta cap override (default: machine context.holdings_max_chars,
+  /** Per-turn symbol-map cap override (default: machine context.symbols_max_chars,
    * clamped per model to 10% of its input budget). */
-  holdingsMaxChars?: number;
+  symbolsMaxChars?: number;
   
   /** Composer-excluded skill names the skill tool must refuse. */
   skillExcludes?: string[];
@@ -459,15 +459,14 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     repoRoot: mapRoot,
     recorder,
     processes,
-    holdingsConfig: input.machine.context.holdings,
+    symbolMapConfig: input.machine.context.symbols,
   });
-  // Preload the task files so the first prompt already carries them.
-  // Holdings re-read from disk, so pins never go stale.
+  // Preload the task files so the first prompt already indexes them.
   if (input.seedFiles && input.seedFiles.length > 0) {
-    memory.seedWorkingFiles(input.seedFiles, 0);
+    memory.seedFiles(input.seedFiles, 0);
   }
   if (input.seedRanges && input.seedRanges.length > 0) {
-    memory.seedHintRanges(input.seedRanges, 0);
+    memory.seedHints(input.seedRanges, 0);
   }
   // Rebuild the map and module index after a changed turn. The map cache is
   // keyed by the exact working tree, so this is a cheap stat pass when
@@ -517,7 +516,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   // task pack that selects files after the user curated the context.
   let lastOverviewChars = 0;
   let lastBudget: ContextBudget | null = null;
-  let lastHoldingsChars = 0;
+  let lastSymbolsChars = 0;
   const ctxBudget = input.machine.context.budget;
 
   /**
@@ -525,20 +524,22 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * pool = modelInputChars * ctxBudget.total (0.95).
    *
    * Fixed overhead (system/agent/tool guide/command index) gets ctxBudget.overhead
-   * of the pool. The remaining variable pool (holdings, map, context block) is
-   * split by the holdings and map shares. The context block gets what's left.
+   * of the pool. The remaining variable pool (symbols, map, state, context
+   * block) is split by the symbol-map, map, and state shares. The context
+   * block gets what's left.
    */
-  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { holdings: number; map: number; contextBlock: number } => {
+  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; contextBlock: number } => {
     const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
     const variableShare = 1.0 - ctxBudget.overhead;
     const variablePool = Math.floor(pool * variableShare);
-    const holdings = Math.max(2_048, Math.floor(variablePool * ctxBudget.holdings));
+    const symbols = Math.max(2_048, Math.floor(variablePool * ctxBudget.symbols));
     const map = Math.max(1_024, Math.floor(variablePool * ctxBudget.map));
-    const contextBlock = Math.max(4_096, variablePool - holdings - map);
+    const state = Math.max(4_096, Math.floor(variablePool * ctxBudget.state));
+    const contextBlock = Math.max(4_096, variablePool - symbols - map - state);
     if (hardCap !== undefined) {
-      return { holdings: Math.min(holdings, hardCap), map, contextBlock };
+      return { symbols: Math.min(symbols, hardCap), map, state, contextBlock };
     }
-    return { holdings, map, contextBlock };
+    return { symbols, map, state, contextBlock };
   };
 
   const initialChars =
@@ -1111,7 +1112,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           pendingMessages = null;
           return rendered;
         }
-        const { holdings: hBudget } = computeBudgets(undefined, input.holdingsMaxChars);
+        const { symbols: sBudget, state: stBudget } = computeBudgets(undefined, input.symbolsMaxChars);
         return renderPromptMessages(
           messages,
           memory,
@@ -1119,7 +1120,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           input.contextText,
           undefined,
           commandIndex,
-          hBudget,
+          sBudget,
+          stBudget,
         ).messages;
       },
       prepareRequest: async ({ context }) => {
@@ -1129,24 +1131,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           lastBudget = budget;
 
           // Unified budget pool: 90% of the model's input window covers
-          // all variable context (holdings, map, context block, workspace,
+          // all variable context (symbols, map, context block, workspace,
           // state block).
-          const budgets = computeBudgets(budget?.inputChars, input.holdingsMaxChars);
-          lastHoldingsChars = budgets.holdings;
+          const budgets = computeBudgets(budget?.inputChars, input.symbolsMaxChars);
+          lastSymbolsChars = budgets.symbols;
 
           // Re-render the map with the model-specific budget
           if (repoMap && budgets.map >= 1024) {
             mapIndex = renderMapIndex(repoMap, budgets.map);
           }
 
-          // The context block gets the remaining pool (after holdings + map)
-          // minus a small overhead for workspace diff and state block (~2KB).
+          // The context block gets the remaining pool (after symbols, map,
+          // and state) minus a small overhead for the workspace diff (~2KB).
           const overviewMaxChars = Math.max(4_096, budgets.contextBlock - 2_048);
           const overviewBaseChars = input.contextText?.length ?? 0;
           lastOverviewChars = Math.min(overviewBaseChars, overviewMaxChars);
 
-          // The transcript is replayed whole; holdings deltas (not the ledger)
-          // carry current file bytes the model does not already hold.
+          // The transcript is replayed whole; the symbol map (not the ledger)
+          // carries what the model has already seen.
           return renderPromptMessages(
             context.messages,
             memory,
@@ -1154,7 +1156,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             input.contextText,
             overviewMaxChars,
             commandIndex,
-            budgets.holdings,
+            budgets.symbols,
+            budgets.state,
           );
         };
 
@@ -1288,7 +1291,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               tokens: actualContextTokens > 0 ? actualContextTokens : Math.ceil(lastRequestChars / 4),
               stateChars: memory.renderBlock().length,
               overviewChars: lastOverviewChars,
-              holdingsChars: lastHoldingsChars,
+              symbolsChars: lastSymbolsChars,
               ...(lastBudget
                 ? {
                     contextWindow: lastBudget.contextWindowTokens,

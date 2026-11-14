@@ -124,20 +124,16 @@ export interface MachineConfig {
       total: number;
       /** Share allocated to fixed overhead (system prompt, agent prompt, tool guide, command index). */
       overhead: number;
-      /** Share of the variable pool (after overhead) allocated to holdings (0.0-1.0). */
-      holdings: number;
+      /** Share of the variable pool (after overhead) allocated to the symbol map (0.0-1.0). */
+      symbols: number;
       /** Share of the variable pool (after overhead) allocated to the repo map (0.0-1.0). */
       map: number;
+      /** Share of the variable pool (after overhead) allocated to the run-state block (0.0-1.0). */
+      state: number;
     };
-    /** Holdings render constants. Every value here is tunable. */
-    holdings: {
-      /** Files under this many lines always render full body. */
-      fullLines: number;
-      /** Seeded files under this many lines always render full body. */
-      seededFullLines: number;
-      /** Files over this many lines always render metadata-only (no body bytes). */
-      outlineLines: number;
-      /** Max files in the inventory list. */
+    /** Symbol-map constants. Every value here is tunable. */
+    symbols: {
+      /** Max files in the symbol-map index. */
       maxFiles: number;
     };
   };
@@ -320,14 +316,12 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       budget: {
         total: asNumber(budgetRaw.total) ?? 0.95,
         overhead: asNumber(budgetRaw.overhead) ?? 0.03,
-        holdings: asNumber(budgetRaw.holdings) ?? 0.35,
+        symbols: asNumber(budgetRaw.symbols) ?? 0.35,
         map: asNumber(budgetRaw.map) ?? 0.05,
+        state: asNumber(budgetRaw.state) ?? 0.10,
       },
-      holdings: {
-        fullLines: asNumber(contextRaw.holdings_full_lines) ?? 50,
-        seededFullLines: asNumber(contextRaw.holdings_seeded_full_lines) ?? 200,
-        outlineLines: asNumber(contextRaw.holdings_outline_lines) ?? 500,
-        maxFiles: asNumber(contextRaw.holdings_max_files) ?? 40,
+      symbols: {
+        maxFiles: asNumber(contextRaw.symbols_max_files) ?? 40,
       },
     },
     map: {

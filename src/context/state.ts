@@ -1,5 +1,5 @@
 /**
- * machine_code — run state: facts, holdings, changes, and a durable ledger.
+ * machine_code — run state: facts, symbol map, changes, and a durable ledger.
  *
  * state.jsonl is the authoritative record. The live prompt is rendered from
  * this state plus the current step; the raw transcript is never replayed.
@@ -16,14 +16,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
-import { rangesOverlap } from "./holdings.js";
-import { HoldingStore } from "./holding-store.js";
+import { rangesOverlap } from "./symbols.js";
+import { SymbolMap } from "./symbol-map.js";
 import { ingestTurn as ingestTurnInto } from "./ingest.js";
 
-/** Keep the model-facing state block compact; full facts remain in state.jsonl. */
-const MAX_STATE_CHARS = 10_000;
+/** Fallback bound on the model-facing state block; full facts remain in
+ * state.jsonl. Runs pass a per-model budget instead, so this only binds
+ * callers without one (file output, estimates). Overflow evicts oldest
+ * findings first. */
+const MAX_STATE_CHARS = 30_000;
 
 export type FactKind = "finding" | "decision" | "change";
 
@@ -46,7 +48,6 @@ export interface Ref {
   range?: [number, number];
   symbol?: string;
   hash?: string;
-  artifact?: string;
   bytes?: number;
 }
 
@@ -75,14 +76,12 @@ export interface RunState {
   facts: Fact[];
   open: OpenQuestion[];
   plan: RunPlan | null;
-  counters: { turn: number; steps: number; artifacts: number };
+  counters: { turn: number; steps: number };
 }
 
-/** File bodies this run has acquired: the model's durable knowledge.
- * Rendered per turn as inventory (always) + deltas (new/changed only),
- * re-read from disk so bytes are always current. Replaces the old
- * working-file set and read ledger with one map and one rule:
- * a signature match means the model already holds it. */
+/** Journal entry types for the append-only run-state log. Facts carry the
+ * model's durable knowledge (findings, decisions, changes); the symbol map
+ * carries what it has seen. */
 
 type Entry =
   | { type: "init"; runId: string; goal: string }
@@ -110,8 +109,8 @@ export interface StateStoreOptions {
   recorder?: EventSink;
   /** Optional run supervisor for the synchronous git-status safety net. */
   processes?: ProcessSupervisor;
-  /** Holdings recency/size config, pass in from machine config. */
-  holdingsConfig?: Partial<import("./holding-store.js").HoldingsConfig>;
+  /** Symbol-map size config, pass in from machine config. */
+  symbolMapConfig?: Partial<import("./symbol-map.js").SymbolMapConfig>;
 }
 
 function sha1(text: string): string {
@@ -134,8 +133,7 @@ function parseRef(value: string): Ref {
 function refLabel(ref: Ref): string {
   const range = ref.range ? `:${ref.range[0]}-${ref.range[1]}` : "";
   const symbol = ref.symbol ? ` (${ref.symbol})` : "";
-  const artifact = ref.artifact ? ` · ${ref.artifact}` : "";
-  return `${ref.path}${range}${symbol}${artifact}`;
+  return `${ref.path}${range}${symbol}`;
 }
 
 function writeTextAtomic(file: string, text: string): void {
@@ -158,7 +156,7 @@ export class RunStateStore {
   private readonly processes?: ProcessSupervisor;
   private state: RunState;
   private sequence = 0;
-  private readonly holdingsStore: HoldingStore;
+  private readonly symbolMap: SymbolMap;
 
   constructor(options: StateStoreOptions) {
     this.runDir = options.runDir;
@@ -166,14 +164,13 @@ export class RunStateStore {
     this.repoRoot = options.repoRoot;
     this.recorder = options.recorder;
     this.processes = options.processes;
-    this.holdingsStore = new HoldingStore({
+    this.symbolMap = new SymbolMap({
       repoRoot: options.repoRoot,
       currentTurn: () => this.currentTurn(),
-      putArtifact: (text) => this.putArtifact(text),
       addReadFact: (ref, turn, excerptText) => this.addReadFact(ref, turn, excerptText),
     });
-    const holdingsCfg = options.holdingsConfig;
-    if (holdingsCfg) this.holdingsStore.setConfig(holdingsCfg);
+    const symbolMapCfg = options.symbolMapConfig;
+    if (symbolMapCfg) this.symbolMap.setConfig(symbolMapCfg);
     this.state = {
       version: 1,
       runId: options.runId,
@@ -182,29 +179,25 @@ export class RunStateStore {
       facts: [],
       open: [],
       plan: null,
-      counters: { turn: 0, steps: 0, artifacts: 0 },
+      counters: { turn: 0, steps: 0 },
     };
     this.load();
   }
 
-  seedWorkingFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
-    this.holdingsStore.seedWorkingFiles(paths, turn, maxBytes);
+  seedFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
+    this.symbolMap.seedFiles(paths, turn, maxBytes);
   }
 
-  seedHintRanges(entries: ReadonlyArray<{ path: string; range: [number, number] }>, turn = 0): void {
-    this.holdingsStore.seedHintRanges(entries, turn);
+  seedHints(entries: ReadonlyArray<{ path: string; range: [number, number] }>, turn = 0): void {
+    this.symbolMap.seedHints(entries, turn);
   }
 
-  renderHoldings(maxChars?: number): string {
-    return this.holdingsStore.renderHoldings(maxChars);
+  renderSymbols(maxChars?: number): string {
+    return this.symbolMap.renderSymbols(maxChars);
   }
 
-  artifactStatus(id: string): { path: string; stale: boolean } | null {
-    return this.holdingsStore.artifactStatus(id);
-  }
-
-  get holdings(): HoldingStore {
-    return this.holdingsStore;
+  get symbols(): SymbolMap {
+    return this.symbolMap;
   }
 
   appendTurn(turn: number): void {
@@ -350,23 +343,27 @@ export class RunStateStore {
     if (!clean) return;
     const at = turn ?? this.currentTurn();
     if (kind === "open") {
+      const text = clean.length > 1000 ? `${clean.slice(0, 1000)}…` : clean;
       this.append({
         type: "open",
-        question: { id: `q_${sha1(clean).slice(0, 10)}`, text: clean.slice(0, 240), turn: at, status: "open" },
+        question: { id: `q_${sha1(clean).slice(0, 10)}`, text, turn: at, status: "open" },
       });
       this.saveMarkdown();
       return;
     }
     const refsParsed = refs.map(parseRef);
     const key = `${kind}:${sha1(`${clean}\0${refsParsed.map((ref) => ref.path).join("\0")}`)}`;
-    // Plans are decisions and need room for numbered steps. Findings stay small.
-    const cap = kind === "decision" ? 2_000 : 240;
+    // Findings carry investigation detail; decisions carry rationale. Caps are
+    // a backstop, not a target — the block budget evicts oldest-first.
+    // Trimmed text is marked so the ledger never silently drops content.
+    const cap = kind === "decision" ? 8_000 : 2_000;
+    const trimmed = clean.length > cap ? `${clean.slice(0, cap)}…` : clean;
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind,
-        text: clean.slice(0, cap),
+        text: trimmed,
         refs: refsParsed,
         turn: at,
         status: "active",
@@ -409,16 +406,6 @@ export class RunStateStore {
     };
     this.append({ type: "plan", plan });
     this.recorder?.event("state_plan", { turn: at, steps: steps.length, done: steps.filter((s) => s.done).length });
-  }
-
-  putArtifact(text: string): Artifact {
-    const artifact = putArtifact(this.runDir, text);
-    this.state.counters.artifacts += 1;
-    return artifact;
-  }
-
-  getArtifact(id: string): string | null {
-    return getArtifact(this.runDir, id);
   }
 
   addReadFact(ref: Ref, turn: number, excerptText = ""): void {
@@ -552,7 +539,7 @@ export class RunStateStore {
   }
 
     /** Compact model-facing state block: decisions, findings, and open questions. */
-  renderBlock(): string {
+  renderBlock(maxChars = MAX_STATE_CHARS): string {
     let active = this.state.facts.filter((fact) => fact.status === "active");
     const build = (): string => {
       const decisions = active.filter((fact) => fact.kind === "decision");
@@ -610,11 +597,11 @@ export class RunStateStore {
     };
 
     let block = build();
-    if (block.length > MAX_STATE_CHARS) {
+    if (block.length > maxChars) {
       for (const fact of active.filter((item) => item.kind === "finding")) {
         active = active.filter((item) => item !== fact);
         block = build();
-        if (block.length <= MAX_STATE_CHARS) break;
+        if (block.length <= maxChars) break;
       }
     }
     return block;

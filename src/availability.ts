@@ -21,7 +21,7 @@ export type ErrorKind =
   | "unsupported-param"
   | "refusal"
   | "malformed"
-  | "holdings-exceeded"
+  | "symbols-exceeded"
   | "unknown";
 
 export interface ClassifiedError {
@@ -305,9 +305,9 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   if (msg.includes("malformed") || msg.includes("invalid json") || msg.includes("parse error")) {
     return { kind: "malformed", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
   }
-  // Holdings exceed budget — harness-internal, not recoverable by retry
-  if (msg.includes("holdings block exceeds") || msg.includes("holdings")) {
-    return { kind: "holdings-exceeded", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
+  // Symbol-map index exceeds budget — harness-internal, not recoverable by retry
+  if (msg.includes("symbol map alone exceeds")) {
+    return { kind: "symbols-exceeded", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
   }
   return { kind: "unknown", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
 }

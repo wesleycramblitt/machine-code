@@ -2,13 +2,11 @@
  * machine_code — render the model prompt from run state + the current step.
  *
  * The prompt is the system prompt, the assembled task context, a compact state
- * block, current holdings (inventory always, new/changed bytes only), and the
- * transcript as a call ledger: recent tool payloads in full, older bulk
- * summarized with a re-fetch path.
- * Full bytes live in artifacts, holdings re-read them from disk when they
- * change, and the assembled context carries the seeds; replaying every dump
- * every turn is what made long runs cost millions of tokens. The last few
- * results stay verbatim so the current step's evidence is always intact.
+ * block, the current symbol map, and the transcript as a call ledger: the last
+ * two steps in full, older calls as one-liners. The seeds live in the assembled
+ * context; replaying every dump every turn is what made long runs cost
+ * millions of tokens. The last two results stay verbatim so the current
+ * step's evidence is always intact.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
@@ -113,10 +111,6 @@ function textOfMessage(message: MessageLike): string {
     .join("\n");
 }
 
-function artifactRef(text: string): string | undefined {
-  return /\[artifact:?\s*(art_[a-f0-9]{16})\]/.exec(text)?.[1];
-}
-
 function stepLedger(step: MessageLike[]): string[] {
   const lines: string[] = [];
   for (const message of step) {
@@ -131,14 +125,13 @@ function stepLedger(step: MessageLike[]): string[] {
       }
     } else if (message.role === "toolResult") {
       const text = textOfMessage(message);
-      const artifact = artifactRef(text);
-      lines.push(`  → ${text.split("\n")[0]?.trim().slice(0, 120) ?? ""}${artifact ? ` [${artifact}]` : ""}`);
+      lines.push(`  → ${text.split("\n")[0]?.trim().slice(0, 120) ?? ""}`);
     }
   }
   return lines;
 }
 
-/** Keep the task, a one-line ledger of older calls, and the last two steps. */
+/** Keep the task, a short ledger of older calls, and the last two steps. */
 function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
   const steps = transcriptSteps(source);
   const firstAssistant = steps.findIndex((message) => message.role === "assistant");
@@ -149,12 +142,16 @@ function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
     else if (groups.length > 0) groups[groups.length - 1]!.push(message);
   }
   const older = groups.slice(0, Math.max(0, groups.length - KEEP_FULL_STEPS));
+  // The ledger is a receipt roll, not context: cap it at the last 10 calls.
+  // Older calls survive on disk (transcript, state) and identical repeats
+  // are served from run history, so nothing the model can act on is lost.
+  const ledgerSteps = older.slice(-10);
   const recent = groups.slice(-KEEP_FULL_STEPS).flat();
-  const ledgerLines = older.flatMap(stepLedger);
+  const ledgerLines = ledgerSteps.flatMap(stepLedger);
   const ledger: MessageLike[] = ledgerLines.length > 0
     ? [{
         role: "user",
-        content: `<ledger>\nEarlier calls (one line each; bytes live in holdings or artifacts):\n${ledgerLines.join("\n")}\n</ledger>`,
+        content: `<ledger>\nEarlier calls (one line each; full results scrolled out — re-ask only for something new):\n${ledgerLines.join("\n")}\n</ledger>`,
       }]
     : [];
   return [...steps.slice(0, firstAssistant), ...ledger, ...recent];
@@ -172,25 +169,26 @@ export function renderPromptMessages(
   startupContext?: string,
   overviewMaxChars?: number,
   commandIndex?: string,
-  holdingsMaxChars = 48_000,
+  symbolsMaxChars = 48_000,
+  stateMaxChars = 30_000,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
   //   system → assembled context → map index → tool guide → command index
-  //     → transcript → workspace → holdings → run state.
+  //     → transcript → workspace → symbols → run state.
   // The stable prefix renders before the transcript so it stays byte-identical
   // across turns. The ~1KB map index names every directory with file counts;
   // deeper structure pulls via inspect or map overview.
-  // The per-turn holdings and run state sit *after* the transcript so they
+  // The per-turn symbols and run state sit *after* the transcript so they
   // never shift the cache prefix.
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
   const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
   const volatile = [
     state.renderWorkspace(),
-    state.renderHoldings(holdingsMaxChars),
-    state.renderBlock(),
+    state.renderSymbols(symbolsMaxChars),
+    state.renderBlock(stateMaxChars),
   ].filter(Boolean).join("\n\n");
   const out = [
     ...(system ? [system] : []),
