@@ -16,7 +16,7 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    `context {action: "plan", steps: [{text: "scope tax display and postal validation", done: false}, {text: "write both issues", done: false}]}`
 
-   The count comes from scoping: each feature is one change that can land on its own with gates green. Keep splitting while a candidate holds two changes that each stand alone; stop when a piece cannot merge by itself without breaking the build. A cross-cutting rename is one feature — all twenty sites in one diff, proved by the build plus no remaining references — never twenty one-site pieces. None at all is a valid result — write the docs or finish with the finding. Update steps to `done` as you go; when all show `[x]`, call `finish`.
+   Scope by shippable increment: every feature passes gates on its own. Split compound ideas until each piece does; never split what only works whole. Zero features is a valid result — write the docs or finish with the finding. Update steps to `done` as you go; when all show `[x]`, call `finish`.
 
 3. **Investigate** — `command {action: "run", name: "issue:list"}` once to avoid duplicates; `issue:show` only for possible overlaps. `inspect {query: "FunctionName"}` finds definitions and callers, one name per query. Batch independent queries in one message. Anchor each gap in one line:
 
