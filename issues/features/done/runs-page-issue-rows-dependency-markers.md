@@ -1,7 +1,8 @@
-tags: tui
+commit: 39bac8d6a798f51015600d98869471138d9c2e4c
 files: src/tui/runs.ts, src/tui/screens/runs-list.ts
-keywords: issue rows, blocked by, unknown dep, Depends, Group
+tags: tui
 acceptance: script:build
+keywords: issue rows, blocked by, unknown dep, Depends, Group
 
 # Issue rows show what they are blocked by
 
