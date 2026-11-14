@@ -35,6 +35,7 @@ import {
   renderOutline,
   renderRepoMap,
   symbolRange,
+  nestedDefinitionRange,
   rangeAround,
 } from "../map/deterministic.js";
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
@@ -770,7 +771,8 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksD
   let scopeEnd = lines.length;
   if (spec.symbol) {
     const file = await outlineFile(root, spec.path);
-    const range = file ? symbolRange(file, spec.symbol) : null;
+    const range =
+      (file ? symbolRange(file, spec.symbol) : null) ?? nestedDefinitionRange(lines, spec.symbol);
     if (!range) {
       // Exact-only misses burn a turn. Auto-resolve an unambiguous
       // case-insensitive match; otherwise name the closest candidates.

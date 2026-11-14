@@ -15,7 +15,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { capText, isBinaryFile, numberLinesCapped, resolveWithin } from "./safety.js";
-import { buildRepoMap, symbolRange, type MapFile, type RepoMap } from "../map/deterministic.js";
+import { buildRepoMap, nestedDefinitionRange, symbolRange, type MapFile, type RepoMap } from "../map/deterministic.js";
 import { suggestTaskFilesFromMap, type SuggestedFile } from "../map/suggest.js";
 import type { ToolContext } from "./index.js";
 
@@ -114,7 +114,7 @@ function fileSlice(
   let end = total;
   let label = "";
   if (params.symbol) {
-    const range = file ? symbolRange(file, params.symbol) : null;
+    const range = (file ? symbolRange(file, params.symbol) : null) ?? nestedDefinitionRange(lines, params.symbol);
     if (!range) return { error: `symbol "${params.symbol}" not found in this file` };
     start = range.start;
     end = range.end;
@@ -376,7 +376,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             const abs = join(ctx.root, defFile.path);
             if (existsSync(abs) && !lspResult) {
               const source = readFileSync(abs, "utf8");
-              const range = symbolRange(defFile, query);
+              const range = symbolRange(defFile, query) ?? nestedDefinitionRange(source.split("\n"), query);
               if (range) {
                 lines.push(`symbol: ${query} [match: symbol]`, `file: ${defFile.path}`, `lines: [${range.start}, ${range.end}]`);
                 const sig = source.split("\n")[range.start - 1]?.trim() ?? "";
@@ -445,7 +445,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
               const source = readFileSync(join(ctx.root, entry.path), "utf8");
               const bodies: string[] = [];
               for (const name of Object.keys(entry.symbolVia).slice(0, 8)) {
-                const range = symbolRange(file, name);
+                const range = symbolRange(file, name) ?? nestedDefinitionRange(source.split("\n"), name);
                 if (!range || (range.end - range.start + 1 > BODY_LINE_CAP && detail !== "full")) continue;
                 const text = source.split("\n").slice(range.start - 1, range.end).map((line, i) => `${range.start + i}: ${line}`).join("\n");
                 const cost = Buffer.byteLength(text, "utf8");
