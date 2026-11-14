@@ -29,7 +29,7 @@ import { coreTools } from "./tools/index.js";
 import { toolDefinitionChars, toolSchemaChars } from "./tools/schema.js";
 import type { AgentConfig } from "./agents/config.js";
 import { addCurationVeto } from "./catalogue/overlay.js";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
@@ -971,6 +971,24 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         const call = callIndex;
         const firstTokenTimeoutMs = firstTokenTimeoutMsFor(model.provider);
         const requestText = renderModelInput((context as Context).messages);
+        // The event keeps a bounded head preview so events.jsonl stays
+        // greppable; the full prompt goes to prompts/ so the timeline can
+        // load exactly what the model saw on demand (lazy, not per tick).
+        let inputFile: string | undefined;
+        if (requestText.length > MODEL_IO_CAP) {
+          try {
+            const promptsDir = join(recorder.dir, "prompts");
+            mkdirSync(promptsDir, { recursive: true });
+            let name = `call-${String(call).padStart(3, "0")}.txt`;
+            for (let dup = 2; existsSync(join(promptsDir, name)); dup += 1) {
+              name = `call-${String(call).padStart(3, "0")}-r${dup}.txt`;
+            }
+            writeFileSync(join(promptsDir, name), requestText, "utf8");
+            inputFile = `prompts/${name}`;
+          } catch {
+            inputFile = undefined;
+          }
+        }
         recorder.event("model_request", {
           call,
           provider: model.provider,
@@ -982,6 +1000,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             requestText.length > MODEL_IO_CAP
               ? requestText.slice(0, MODEL_IO_CAP) + "\n…[truncated]"
               : requestText,
+          ...(inputFile ? { inputFile } : {}),
         });
 
         // Abort the request if the provider produces nothing for too long. The

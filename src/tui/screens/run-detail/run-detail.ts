@@ -24,8 +24,44 @@ import { reconcileProcessRecords } from "../../../processes/reconcile.js";
 import { readLogTail } from "../../../processes/logs.js";
 import { CAPABILITY_AXES } from "../../../config.js";
 import type { RunEvent } from "../../../state/runs.js";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { clipLines } from "../types.js";
 import { RUN_SECTIONS, RUN_SECTION_LABEL, type RunDetailFrame, type RunDetailProps } from "./types.js";
+
+/**
+ * Full per-call prompts live in the run dir (prompts/call-NNN.txt), written
+ * when the prompt exceeds the event-log cap. The timeline preview only ever
+ * holds the head, so expanding an input loads the file lazily here instead
+ * of on every 1s tick. Wrapped lines are cached per (file, width); prompt
+ * files are immutable, so entries never go stale. Bounded to a few expanded
+ * inputs to cap memory.
+ */
+const promptFileCache = new Map<string, string[]>();
+function fullPromptLines(runDir: string, inputFile: string, cols: number): string[] | null {
+  const abs = join(runDir, inputFile);
+  if (!abs.startsWith(runDir) || !existsSync(abs)) return null;
+  const key = `${abs}::${cols}`;
+  const cached = promptFileCache.get(key);
+  if (cached) return cached;
+  let text: string;
+  try {
+    text = readFileSync(abs, "utf8");
+  } catch {
+    return null;
+  }
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    for (const wrapped of wrapText(line, Math.max(30, cols - 6))) out.push(wrapped);
+  }
+  promptFileCache.set(key, out);
+  while (promptFileCache.size > 3) {
+    const oldest = promptFileCache.keys().next();
+    if (oldest.done) break;
+    promptFileCache.delete(oldest.value);
+  }
+  return out;
+}
 
 export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   const { cols, short, bodyH, theme } = props;
@@ -273,19 +309,32 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         } else if (type === "model_request") {
           const messages = Number(event.messages ?? 0);
           const chars = Number(event.chars ?? 0);
-          eventLines.push(`${prefix} ${GR}${time}${R} ${BL}input${R} ${D}${messages} msg · ${fmtTokens(chars)} chars${R}`);
-          const input = typeof event.input === "string" ? event.input : "";
-          if (input) {
-            const inputLines = input.split("\n");
-            while (inputLines.length > 0 && inputLines[inputLines.length - 1]!.trim() === "") inputLines.pop();
-            // The head is the repeating system prompt; the tail is the
-            // unique send for this call, so the preview shows the tail.
-            const shown = expandedEvent ? inputLines : inputLines.slice(-4);
-            if (!expandedEvent && inputLines.length > 4) {
-              eventLines.push(`    ${D}… ${inputLines.length - 4} head lines hidden (space to expand)${R}`);
+          const inputFile = typeof event.inputFile === "string" ? event.inputFile : "";
+          eventLines.push(`${prefix} ${GR}${time}${R} ${BL}input${R} ${D}${messages} msg · ${fmtTokens(chars)} chars${R}${inputFile ? ` ${D}full prompt in file${R}` : ""}`);
+          // The event preview is head-only (log cap). When a full prompt file
+          // was recorded, expanding loads the exact text the model saw;
+          // otherwise fall back to the capped preview.
+          const full = expandedEvent && inputFile ? fullPromptLines(detail.dir, inputFile, cols) : null;
+          if (full !== null) {
+            eventLines.push(`    ${D}… full prompt ${chars.toLocaleString()} chars · ${full.length.toLocaleString()} lines · j/k scrolls${R}`);
+            for (const line of full) eventLines.push(`    ${D}${line}${R}`);
+          } else {
+            if (expandedEvent && inputFile) {
+              eventLines.push(`    ${Y}full prompt file missing (${inputFile}); showing capped preview${R}`);
             }
-            for (const line of shown) {
-              for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+            const input = typeof event.input === "string" ? event.input : "";
+            if (input) {
+              const inputLines = input.split("\n");
+              while (inputLines.length > 0 && inputLines[inputLines.length - 1]!.trim() === "") inputLines.pop();
+              // The head is the repeating system prompt; the tail is the
+              // unique send for this call, so the preview shows the tail.
+              const shown = expandedEvent ? inputLines : inputLines.slice(-4);
+              if (!expandedEvent && inputLines.length > 4) {
+                eventLines.push(`    ${D}… ${inputLines.length - 4} head lines hidden (space to expand${inputFile ? "; full prompt in file" : ""})${R}`);
+              }
+              for (const line of shown) {
+                for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+              }
             }
           }
         } else if (type === "model_call_end") {
