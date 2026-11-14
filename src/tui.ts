@@ -942,7 +942,7 @@ export async function runTui(): Promise<void> {
     if (s.changesCache && s.changesCache.runId === detail.summary.id && Date.now() - s.changesCache.at < 4_000) {
       return s.changesCache.data;
     }
-    const data = changesFor(detail.summary.worktree);
+    const data = changesFor(detail.summary.worktree, detail.summary);
     s.changesCache = { runId: detail.summary.id, at: Date.now(), data };
     return data;
   };
