@@ -248,7 +248,9 @@ export async function runTui(): Promise<void> {
       approval: "human",
       ambiguity: "precise",
       tier: "paid",
-      minFit: 6.5,
+      // No explicit floor: the run enforces the agent's own configured
+      // minFit. `f` sets an explicit override when you want one.
+      minFit: undefined,
       floors: "role",
       kind: "features",
       priority: "medium",
@@ -417,7 +419,8 @@ export async function runTui(): Promise<void> {
   const cycleTier = () => {
     const tiers: NewRunState["tier"][] = ["paid", "local"];
     s.newrun.tier = tiers[(tiers.indexOf(s.newrun.tier) + 1) % tiers.length]!;
-    s.newrun.minFit = s.newrun.tier === "paid" ? 6.5 : 5;
+    // minFit is untouched: undefined keeps following the agent's configured
+    // floor, an explicit `f` value stays exactly as set.
   };
 
   const agentDefFor = (repoRoot = l.repoRoot): any => {
