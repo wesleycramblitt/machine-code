@@ -79,11 +79,15 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     },
   });
   const issueOutcome = (() => {
+    const refCount = [...included].filter(
+      (key) => key.startsWith("issue:") && (!run.item || !key.endsWith(`/${run.item}.md`)),
+    ).length;
+    const refs = refCount > 0 ? ` · ${refCount} reference${refCount === 1 ? "" : "s"}` : "";
     if (run.item) {
-      if (!newRunIssue) return "issue file is missing";
-      return `${newRunIssue.status} · review ${newRunIssue.review}`;
+      if (!newRunIssue) return `issue file is missing${refs}`;
+      return `main: ${newRunIssue.status} · review ${newRunIssue.review}${refs}`;
     }
-    return "no issue · run is untracked";
+    return `no main issue · run is untracked${refs}`;
   })();
   
   const itemsFor = (kinds: readonly string[]) =>
@@ -118,17 +122,24 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     : [];
   const suggestedFiles = new Map(fileHints.map((hint) => [hint.path, hint]));
   const issueItems: ContextPanelItem[] = itemsFor(["issue"]);
-  // Every issue as an available row the user can search and opt into with
-  // space, filtered by the selected agent. The issue file is the work item's
-  // own contract/context.
+  // Actionable issues for the selected agent (the main-issue candidates),
+  // plus done/researched issues as reference-only rows. References are
+  // opt-in context; the run never attaches to them.
   const knownIssues = new Set(issueItems.map((item) => item.key));
   for (const issue of listIssues(newRunLayout)) {
     // Filter by agent kind.
     if (run.agent === "research" && issue.kind !== "ideas") continue;
     if (run.agent !== "research" && issue.kind === "ideas") continue;
     if (run.agent === "research" && issue.kind !== "ideas") continue;
-    // Engineer: todo, failed attempts, or a legacy blocked state.
-    if (run.agent === "engineer" && !(ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)) continue;
+    const actionable =
+      run.agent === "engineer"
+        ? (ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)
+        : issue.status === "needs-research";
+    const referenceOnly = issue.status === "done" || issue.status === "researched";
+    // Engineer: todo, failed attempts, or a legacy blocked state — plus
+    // done/researched as references. Anything else (e.g. needs-human-review)
+    // stays out of the run composer.
+    if (!actionable && !referenceOnly) continue;
     const key = `issue:${issue.rel}`;
     if (knownIssues.has(key)) continue;
     let size = 0;
@@ -138,7 +149,11 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       // keep the row visible with an unknown size
     }
     issueItems.push({
-      text: `${issue.slug} · ${issue.kind} [${issue.status}] · available`,
+      text: run.item === issue.slug
+        ? `${issue.slug} · ${issue.kind} [${issue.status}] · main issue`
+        : referenceOnly
+          ? `${issue.slug} · ${issue.kind} [${issue.status}] · reference`
+          : `${issue.slug} · ${issue.kind} [${issue.status}] · available`,
       chars: size,
       exists: true,
       key,

@@ -866,6 +866,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // issue prompt) plus what was committed (the merge's stat + diff), so
   // the agent never needs git history tools. Files from the commit are
   // seeded below so they land in holdings like suggestions.
+  // Reference issues (done/researched only): what was asked (the prompt)
+  // plus what was committed (the merge's stat + diff), each in its own
+  // section. Without a commit, just the prompt. File names — from the
+  // commit diff when there is one, else the files: header — join the
+  // union that seeds holdings below.
   let depFiles: string[] = [];
   if ((contextInclude?.issues?.length ?? 0) > 0) {
     try {
@@ -873,33 +878,44 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const files: string[] = [];
       for (const ref of contextInclude?.issues ?? []) {
         const depIssue = findIssue(l, ref.split("/").pop()?.replace(/\.md$/, "") ?? ref);
-        if (!depIssue || !depIssue.commit) continue;
-        const changed = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--name-only"], {
-          cwd: l.repoRoot,
-          timeoutMs: 15_000,
-        });
-        const changedFiles =
-          changed.outcome === "exit" && changed.code === 0
-            ? changed.stdout.trim().split("\n").map((f) => f.trim()).filter(Boolean)
-            : [];
-        if (changedFiles.length > 0) files.push(...changedFiles);
-        // The stored commit is the merge into main, so diff against its
-        // first parent: exactly what that feature merge introduced, nothing else.
-        const stat = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--stat"], {
-          cwd: l.repoRoot,
-          timeoutMs: 15_000,
-        });
-        const statText = stat.outcome === "exit" && stat.code === 0 ? stat.stdout.trim().slice(0, 2000) : "";
-        const diff = await runProc(
-          "git",
-          ["diff", `${depIssue.commit}^1`, depIssue.commit, "--", ...(changedFiles.length > 0 ? changedFiles : ["."])],
-          { cwd: l.repoRoot, timeoutMs: 15_000 },
-        );
-        const diffText =
-          diff.outcome === "exit" && diff.code === 0 && diff.stdout.trim() ? diff.stdout.trim().slice(0, 6000) : "";
-        refs.push(
-          `Reference ${depIssue.slug} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt.slice(0, 1500)}${statText ? `\n\nLanded change:\n${statText}` : ""}${diffText ? `\n\nDiff:\n${diffText}` : ""}`,
-        );
+        if (!depIssue || depIssue.slug === itemSlug) continue;
+        if (depIssue.status !== "done" && depIssue.status !== "researched") {
+          process.stderr.write(
+            `machine_code: ignoring reference ${depIssue.slug} (status ${depIssue.status}; references must be done or researched)\n`,
+          );
+          continue;
+        }
+        if (depIssue.commit) {
+          const changed = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--name-only"], {
+            cwd: l.repoRoot,
+            timeoutMs: 15_000,
+          });
+          const changedFiles =
+            changed.outcome === "exit" && changed.code === 0
+              ? changed.stdout.trim().split("\n").map((f) => f.trim()).filter(Boolean)
+              : [];
+          if (changedFiles.length > 0) files.push(...changedFiles);
+          // The stored commit is the merge into main, so diff against its
+          // first parent: exactly what that feature merge introduced, nothing else.
+          const stat = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--stat"], {
+            cwd: l.repoRoot,
+            timeoutMs: 15_000,
+          });
+          const statText = stat.outcome === "exit" && stat.code === 0 ? stat.stdout.trim().slice(0, 2000) : "";
+          const diff = await runProc(
+            "git",
+            ["diff", `${depIssue.commit}^1`, depIssue.commit, "--", ...(changedFiles.length > 0 ? changedFiles : ["."])],
+            { cwd: l.repoRoot, timeoutMs: 15_000 },
+          );
+          const diffText =
+            diff.outcome === "exit" && diff.code === 0 && diff.stdout.trim() ? diff.stdout.trim().slice(0, 6000) : "";
+          refs.push(
+            `Reference ${depIssue.slug} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt.slice(0, 1500)}${statText ? `\n\nLanded change:\n${statText}` : ""}${diffText ? `\n\nDiff:\n${diffText}` : ""}`,
+          );
+        } else {
+          if (depIssue.files.length > 0) files.push(...depIssue.files);
+          refs.push(`Reference ${depIssue.slug} (no commit yet):\n${depIssue.prompt.slice(0, 1500)}`);
+        }
       }
       depFiles = [...new Set(files)];
       if (refs.length > 0) {
@@ -951,6 +967,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       .filter((source) => source.kind === "file" && typeof source.ref === "string")
       .map((source) => source.ref as string),
     ...priorWorkFiles,
+    ...(attachedIssue?.files ?? []),
     ...depFiles,
     ...suggestedFiles.slice(0, 3),
   ])];

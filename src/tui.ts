@@ -1355,14 +1355,25 @@ export async function runTui(): Promise<void> {
 
   const pickerIssues = () => {
     const needle = s.itemPickText.trim().toLowerCase();
-    const issues = listIssues(layout(s.newRunRepo));
-    if (!needle) return issues;
-    return issues.filter((issue) =>
+    // Main-issue candidates only: actionable statuses. Done/researched
+    // issues are references via the context tab, not link targets.
+    const actionable = listIssues(layout(s.newRunRepo)).filter(
+      (issue) => issue.status !== "done" && issue.status !== "researched",
+    );
+    if (!needle) return actionable;
+    return actionable.filter((issue) =>
       `${issue.slug} ${issue.prompt} ${issue.status} ${issue.kind}`.toLowerCase().includes(needle),
     );
   };
 
   const chooseIssue = (issue: Issue) => {
+    // One main issue per run, and it must be actionable. Done/researched
+    // issues are references (context tab), never the thing the run works on.
+    if (issue.status === "done" || issue.status === "researched") {
+      notify(`${issue.slug} is ${issue.status} — add it as a reference from the context tab instead`);
+      s.itemPick = null;
+      return;
+    }
     const previousPrompt = s.newrun.item ? findIssue(layout(s.newRunRepo), s.newrun.item)?.prompt ?? "" : "";
     const hadItem = Boolean(s.newrun.item);
     s.newrun.item = issue.slug;

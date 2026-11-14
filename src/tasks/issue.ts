@@ -225,6 +225,9 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   if (!build.ok) {
     throw new Error(`merge succeeded but main build failed: ${build.text}`);
   }
+  const head = await git(root, ["rev-parse", "HEAD"]);
+  const { updateIssueMeta } = await import("../plan/issues.js");
+  if (head.code === 0 && head.stdout.trim()) updateIssueMeta(layout, slug, { commit: head.stdout.trim() });
   moveIssue(layout, slug, "done");
   await commitIssues(layout, `[COMPLETE] ${slug}`);
 }
