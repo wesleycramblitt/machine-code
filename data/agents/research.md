@@ -22,7 +22,7 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    `context {action: "note", kind: "finding", text: "CartTotal in cart.ts:22 renders subtotal, no tax line", refs: ["src/checkout/cart.ts:22"]}`
 
-   Stop when every planned artifact has its files and anchors. Reads fade after ~2 turns, so anchor before moving on — a gap noted is a gap kept.
+   Stop when every planned artifact has its files and anchors. Reads fade after ~2 turns, so anchor before moving on — a gap noted is a gap kept. When new findings change an old note, rewrite it; when one is wrong, drop it with `forget`.
 
 4. **Write** — Decide the file mapping before writing. The `issue-curation` skill owns the file shape. Each feature passes four tests or it is not done:
 

@@ -542,9 +542,13 @@ export class RunStateStore {
     /** Compact model-facing state block: decisions, findings, and open questions. */
   renderBlock(maxChars = MAX_STATE_CHARS): string {
     let active = this.state.facts.filter((fact) => fact.status === "active");
+    // Sections are grouped by kind (decisions decide, findings inform) and
+    // newest-first within each section, so current thinking sits on top.
+    // Eviction below still drops oldest findings first.
+    const newestFirst = <T>(list: readonly T[]): T[] => [...list].reverse();
     const build = (): string => {
-      const decisions = active.filter((fact) => fact.kind === "decision");
-      const findings = active.filter((fact) => fact.kind === "finding" && !fact.key.startsWith("read:") && !fact.key.startsWith("search:") && !fact.key.startsWith("command:"));
+      const decisions = newestFirst(active.filter((fact) => fact.kind === "decision"));
+      const findings = newestFirst(active.filter((fact) => fact.kind === "finding" && !fact.key.startsWith("read:") && !fact.key.startsWith("search:") && !fact.key.startsWith("command:")));
       const changes = active.filter((fact) => fact.kind === "change");
       const runChanges = changes.filter((fact) => !fact.key.startsWith("change:git:"));
       const next = this.state.phase === "done"
@@ -582,16 +586,16 @@ export class RunStateStore {
       }
       if (runChanges.length > 0) {
         lines.push("Changes:");
-        for (const fact of runChanges) lines.push(`- ${fact.text}`);
+        for (const fact of newestFirst(runChanges)) lines.push(`- ${fact.text}`);
       }
       const externalChanges = changes.filter((fact) => !runChanges.includes(fact));
       if (externalChanges.length > 0) {
         lines.push("Tree changes (not from this run):");
-        for (const fact of externalChanges) lines.push(`- ${fact.text}`);
+        for (const fact of newestFirst(externalChanges)) lines.push(`- ${fact.text}`);
       }
       if (open.length > 0) {
         lines.push("Open:");
-        for (const question of open) lines.push(`- ${question.text}`);
+        for (const question of newestFirst(open)) lines.push(`- ${question.text}`);
       }
       lines.push("</run-state>");
       return lines.join("\n");
