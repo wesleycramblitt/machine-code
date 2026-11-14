@@ -388,7 +388,7 @@ export function eventTone(type: string, isError = false): string {
     case "error_classified":
     case "malformed_tool_call":
     case "loop_blocked":
-    case "holdings-exceeded": return RED;
+    case "symbols-exceeded": return RED;
     default: return D;
   }
 }

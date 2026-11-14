@@ -10,15 +10,16 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import { extractSymbols } from "../map/deterministic.js";
 import type { Ref } from "./state.js";
-import { type Holding } from "./holdings.js";
+import { type SymbolEntry } from "./symbols.js";
 
 /** Content fingerprint for fact keys (no store behind it). */
 export function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 16);
 }
 
-export interface HoldingsConfig {
+export interface SymbolMapConfig {
   /** Files under this many lines always render full body. */
   fullLines: number;
   /** Seeded files under this many lines always render full body. */
@@ -29,32 +30,35 @@ export interface HoldingsConfig {
   maxFiles: number;
 }
 
-export const DEFAULT_HOLDINGS_CONFIG: HoldingsConfig = {
+export const DEFAULT_SYMBOL_MAP_CONFIG: SymbolMapConfig = {
   fullLines: 50,
   seededFullLines: 200,
   outlineLines: 500,
   maxFiles: 40,
 };
 
-export interface HoldingHost {
+export interface SymbolMapHost {
   repoRoot?: string;
   currentTurn: () => number;
   addReadFact(ref: Ref, turn: number, excerptText?: string): void;
 }
 
-export class HoldingStore {
-  readonly map = new Map<string, Holding>();
+export class SymbolMap {
+  readonly map = new Map<string, SymbolEntry>();
   constructor(
-    private readonly host: HoldingHost,
-    private config: HoldingsConfig = DEFAULT_HOLDINGS_CONFIG,
+    private readonly host: SymbolMapHost,
+    private config: SymbolMapConfig = DEFAULT_SYMBOL_MAP_CONFIG,
   ) {}
 
-  setConfig(c: Partial<HoldingsConfig>): void {
+  setConfig(c: Partial<SymbolMapConfig>): void {
     this.config = { ...this.config, ...c };
   }
 
-  /** Put task-relevant files in the working set before the first model call. */
-  seedWorkingFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
+  /** Put task-relevant files in the working set before the first model call.
+   * Seeds the symbol map with each file's outline (symbols + docs) so the
+   * first prompt already indexes the suggested files — no bodies, no inspect
+   * needed to discover what's in them. */
+  seedSeenFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
     if (!this.host.repoRoot) return;
     for (const [index, path] of paths.entries()) {
       try {
@@ -69,7 +73,10 @@ export class HoldingStore {
           bytes: Buffer.byteLength(content, "utf8"),
         };
         this.host.addReadFact(ref, turn);
-        this.addHolding(ref.path, true, turn, paths.length - index);
+        this.addSeen(ref.path, true, turn, paths.length - index);
+        for (const symbol of extractSymbols(path, content).slice(0, 40)) {
+          this.addSymbolWithDoc(path, symbol.name, [symbol.line, symbol.end], symbol.doc, turn);
+        }
       } catch {
         // A missing or unreadable preload is not a run failure.
       }
@@ -80,7 +87,7 @@ export class HoldingStore {
    * Record a seen file. Presence, symbols, and turn are the whole record —
    * byte ranges are not tracked; inspect serves bytes on demand.
    */
-  addHolding(
+  addSeen(
     path: string,
     seeded: boolean,
     turn: number,
@@ -140,31 +147,22 @@ export class HoldingStore {
   }
 
   /** Get a tunable value from instance config or the static default. */
-  private cfg<K extends keyof HoldingsConfig>(key: K): HoldingsConfig[K] {
-    return this.config[key] ?? DEFAULT_HOLDINGS_CONFIG[key];
+  private cfg<K extends keyof SymbolMapConfig>(key: K): SymbolMapConfig[K] {
+    return this.config[key] ?? DEFAULT_SYMBOL_MAP_CONFIG[key];
   }
 
   /**
-   * Durable knowledge as metadata + current bytes. Every holding gets a
-   * metadata line (always, even when evicted); bytes are included based on
-   * file size, recency, and seeding status. The cap is a hard fail — if
-   * exceeded the run aborts so the operator tunes the constants.
-   *
-   * Priority: files the model just edited/inspected first, then small seeded
-   * files, then inspected ranges, then eviction-retry files. Files that do
-   * not fit throw so the cap can be tuned.
+   * Durable index as one line per file. Every entry renders, most recent
+   * first; the map is capped at maxFiles entries (LRU). The cap is a hard
+   * fail — if exceeded the run aborts so the operator tunes the constants.
    */
-  /** Evict the least-recently-used holding when the map is full.
-   *  Holdings fill budget-first; the most recently touched files get body
-   *  bytes, and when the budget is exhausted the oldest file drops to
-   *  metadata-only. There is no turn-based eviction: a file keeps its body
-   *  bytes as long as they fit within the budget. */
+  /** Evict the least-recently-seen file when the map is full. No
+   * turn-based eviction otherwise: entries stay for the whole run. */
   private evictLru(): void {
     while (this.map.size >= this.cfg("maxFiles")) {
       let oldest: { path: string; turn: number } | null = null;
-      for (const holding of this.map.values()) {
-        const h = holding;
-        if (!oldest || h.turn < oldest.turn) oldest = { path: h.path, turn: h.turn };
+      for (const entry of this.map.values()) {
+        if (!oldest || entry.turn < oldest.turn) oldest = { path: entry.path, turn: entry.turn };
       }
       if (oldest) this.map.delete(oldest.path);
     }
@@ -190,18 +188,18 @@ export class HoldingStore {
 
     // Inventory: one line per file. Symbols and docs only — the model's
     // symbol map, most-recently-touched first.
-    for (const holding of shown) {
-      const dir = holding.path.includes("/") ? `${holding.path.split("/").slice(0, -1).join("/")}/` : "./";
+    for (const entry of shown) {
+      const dir = entry.path.includes("/") ? `${entry.path.split("/").slice(0, -1).join("/")}/` : "./";
       if (dir !== lastDir) {
         lines.push(`[${dir}]`);
         lastDir = dir;
       }
-      const flagText = holding.seeded ? " [seeded]" : "";
+      const flagText = entry.seeded ? " [seeded]" : "";
       const meta = [
-        holding.doc ? `doc: ${holding.doc.slice(0, 120)}` : "",
-        holding.symbols.length > 0 ? `symbols: ${holding.symbols.slice(0, 6).map((s) => `${s.name}(${s.range[0]})${s.doc ? ` "${s.doc.slice(0, 60)}"` : ""}`).join(", ")}${holding.symbols.length > 6 ? ", …" : ""}` : "",
+        entry.doc ? `doc: ${entry.doc.slice(0, 120)}` : "",
+        entry.symbols.length > 0 ? `symbols: ${entry.symbols.slice(0, 6).map((s) => `${s.name}(${s.range[0]})${s.doc ? ` "${s.doc.slice(0, 60)}"` : ""}`).join(", ")}${entry.symbols.length > 6 ? ", …" : ""}` : "",
       ].filter(Boolean).join(" · ");
-      lines.push(`${holding.path.split("/").pop()}${flagText}${meta ? ` — ${meta}` : ""}`);
+      lines.push(`${entry.path.split("/").pop()}${flagText}${meta ? ` — ${meta}` : ""}`);
       inventoryUsed += lines[lines.length - 1]!.length + 1;
     }
     if (sorted.length > shown.length) {
@@ -222,7 +220,7 @@ export class HoldingStore {
     const seeded = entries.slice(0, 24);
     for (const [index, entry] of seeded.entries()) {
       if (!entry.path) continue;
-      this.addHolding(entry.path, false, turn, seeded.length - index);
+      this.addSeen(entry.path, false, turn, seeded.length - index);
     }
   }
 

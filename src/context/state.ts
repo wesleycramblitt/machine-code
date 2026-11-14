@@ -1,5 +1,5 @@
 /**
- * machine_code — run state: facts, holdings, changes, and a durable ledger.
+ * machine_code — run state: facts, symbol map, changes, and a durable ledger.
  *
  * state.jsonl is the authoritative record. The live prompt is rendered from
  * this state plus the current step; the raw transcript is never replayed.
@@ -17,8 +17,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
-import { rangesOverlap } from "./holdings.js";
-import { HoldingStore } from "./holding-store.js";
+import { rangesOverlap } from "./symbols.js";
+import { SymbolMap } from "./symbol-map.js";
 import { ingestTurn as ingestTurnInto } from "./ingest.js";
 
 /** Keep the model-facing state block compact; full facts remain in state.jsonl. */
@@ -76,11 +76,9 @@ export interface RunState {
   counters: { turn: number; steps: number };
 }
 
-/** File bodies this run has acquired: the model's durable knowledge.
- * Rendered per turn as inventory (always) + deltas (new/changed only),
- * re-read from disk so bytes are always current. Replaces the old
- * working-file set and read ledger with one map and one rule:
- * a signature match means the model already holds it. */
+/** Journal entry types for the append-only run-state log. Facts carry the
+ * model's durable knowledge (findings, decisions, changes); the symbol map
+ * carries what it has seen. */
 
 type Entry =
   | { type: "init"; runId: string; goal: string }
@@ -109,7 +107,7 @@ export interface StateStoreOptions {
   /** Optional run supervisor for the synchronous git-status safety net. */
   processes?: ProcessSupervisor;
   /** Holdings recency/size config, pass in from machine config. */
-  holdingsConfig?: Partial<import("./holding-store.js").HoldingsConfig>;
+  symbolMapConfig?: Partial<import("./symbol-map.js").SymbolMapConfig>;
 }
 
 function sha1(text: string): string {
@@ -155,7 +153,7 @@ export class RunStateStore {
   private readonly processes?: ProcessSupervisor;
   private state: RunState;
   private sequence = 0;
-  private readonly holdingsStore: HoldingStore;
+  private readonly symbolMap: SymbolMap;
 
   constructor(options: StateStoreOptions) {
     this.runDir = options.runDir;
@@ -163,13 +161,13 @@ export class RunStateStore {
     this.repoRoot = options.repoRoot;
     this.recorder = options.recorder;
     this.processes = options.processes;
-    this.holdingsStore = new HoldingStore({
+    this.symbolMap = new SymbolMap({
       repoRoot: options.repoRoot,
       currentTurn: () => this.currentTurn(),
       addReadFact: (ref, turn, excerptText) => this.addReadFact(ref, turn, excerptText),
     });
-    const holdingsCfg = options.holdingsConfig;
-    if (holdingsCfg) this.holdingsStore.setConfig(holdingsCfg);
+    const symbolMapCfg = options.symbolMapConfig;
+    if (symbolMapCfg) this.symbolMap.setConfig(symbolMapCfg);
     this.state = {
       version: 1,
       runId: options.runId,
@@ -183,20 +181,20 @@ export class RunStateStore {
     this.load();
   }
 
-  seedWorkingFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
-    this.holdingsStore.seedWorkingFiles(paths, turn, maxBytes);
+  seedSeenFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
+    this.symbolMap.seedSeenFiles(paths, turn, maxBytes);
   }
 
   seedHintRanges(entries: ReadonlyArray<{ path: string; range: [number, number] }>, turn = 0): void {
-    this.holdingsStore.seedHintRanges(entries, turn);
+    this.symbolMap.seedHintRanges(entries, turn);
   }
 
   renderSymbols(maxChars?: number): string {
-    return this.holdingsStore.renderSymbols(maxChars);
+    return this.symbolMap.renderSymbols(maxChars);
   }
 
-  get holdings(): HoldingStore {
-    return this.holdingsStore;
+  get symbols(): SymbolMap {
+    return this.symbolMap;
   }
 
   appendTurn(turn: number): void {

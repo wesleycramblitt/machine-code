@@ -459,12 +459,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     repoRoot: mapRoot,
     recorder,
     processes,
-    holdingsConfig: input.machine.context.holdings,
+    symbolMapConfig: input.machine.context.holdings,
   });
   // Preload the task files so the first prompt already carries them.
   // Holdings re-read from disk, so pins never go stale.
   if (input.seedFiles && input.seedFiles.length > 0) {
-    memory.seedWorkingFiles(input.seedFiles, 0);
+    memory.seedSeenFiles(input.seedFiles, 0);
   }
   if (input.seedRanges && input.seedRanges.length > 0) {
     memory.seedHintRanges(input.seedRanges, 0);
@@ -525,8 +525,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * pool = modelInputChars * ctxBudget.total (0.95).
    *
    * Fixed overhead (system/agent/tool guide/command index) gets ctxBudget.overhead
-   * of the pool. The remaining variable pool (holdings, map, context block) is
-   * split by the holdings and map shares. The context block gets what's left.
+   * of the pool. The remaining variable pool (symbols, map, context block) is
+   * split by the symbol-map and map shares. The context block gets what's left.
    */
   const computeBudgets = (inputChars: number | undefined, hardCap?: number): { holdings: number; map: number; contextBlock: number } => {
     const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
@@ -884,37 +884,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             commandAction === "run" &&
             commandName.length > 0 &&
             input.commands.get(commandName)?.readonly === true;
-          // Pure reads are deterministic within a change epoch (any edit or
-          // mutating command bumps the epoch and clears the cache). Serving
-          // an identical repeat from the stored result instead of re-running
-          // it: observed behavior is re-asking for bytes already seen, so
-          // the loop answers from history rather than asking the model not to.
-          const repeatableRead =
-            tool.name === "inspect" ||
-            tool.name === "search" ||
-            tool.name === "map" ||
-            tool.name === "glob" ||
-            tool.name === "grep";
-          const cached = cacheableCommand || repeatableRead ? commandCache.get(key) : undefined;
+          const cached = cacheableCommand ? commandCache.get(key) : undefined;
           if (cached && cached.epoch === changeEpoch) {
-            if (cacheableCommand) {
-              return {
-                content: [{
-                  type: "text" as const,
-                  text:
-                    `[cached ${commandName} from turn ${cached.turn}; no files changed since]
-` +
-                    cached.text,
-                }],
-                details: undefined,
-              };
-            }
-            recorder.event("repeat_served", { tool: tool.name, turn: cached.turn });
             return {
               content: [{
                 type: "text" as const,
                 text:
-                  `[repeat: identical ${tool.name} already ran at turn ${cached.turn} and nothing changed since; serving the stored result instead of re-executing]
+                  `[cached ${commandName} from turn ${cached.turn}; no files changed since]
 ` +
                   cached.text,
               }],
@@ -957,7 +933,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             changeEpoch += 1;
             commandCache.clear();
           }
-          if (!result.isError && (cacheableCommand || repeatableRead)) {
+          if (!result.isError && cacheableCommand) {
             const text = result.content
               .filter((item): item is { type: "text"; text: string } => item.type === "text")
               .map((item) => item.text)
@@ -969,11 +945,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               text,
               preview,
             });
-            while (commandCache.size > 200) {
-              const oldest = commandCache.keys().next();
-              if (oldest.done) break;
-              commandCache.delete(oldest.value);
-            }
           }
           return result;
         },
@@ -1158,7 +1129,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           lastBudget = budget;
 
           // Unified budget pool: 90% of the model's input window covers
-          // all variable context (holdings, map, context block, workspace,
+          // all variable context (symbols, map, context block, workspace,
           // state block).
           const budgets = computeBudgets(budget?.inputChars, input.holdingsMaxChars);
           lastHoldingsChars = budgets.holdings;
@@ -1168,14 +1139,14 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             mapIndex = renderMapIndex(repoMap, budgets.map);
           }
 
-          // The context block gets the remaining pool (after holdings + map)
+          // The context block gets the remaining pool (after symbols + map)
           // minus a small overhead for workspace diff and state block (~2KB).
           const overviewMaxChars = Math.max(4_096, budgets.contextBlock - 2_048);
           const overviewBaseChars = input.contextText?.length ?? 0;
           lastOverviewChars = Math.min(overviewBaseChars, overviewMaxChars);
 
-          // The transcript is replayed whole; holdings deltas (not the ledger)
-          // carry current file bytes the model does not already hold.
+          // The transcript is replayed whole; the symbol map (not the ledger)
+          // carries what the model has already seen.
           return renderPromptMessages(
             context.messages,
             memory,

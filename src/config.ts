@@ -129,15 +129,9 @@ export interface MachineConfig {
       /** Share of the variable pool (after overhead) allocated to the repo map (0.0-1.0). */
       map: number;
     };
-    /** Holdings render constants. Every value here is tunable. */
+    /** Symbol-map constants. Every value here is tunable. */
     holdings: {
-      /** Files under this many lines always render full body. */
-      fullLines: number;
-      /** Seeded files under this many lines always render full body. */
-      seededFullLines: number;
-      /** Files over this many lines always render metadata-only (no body bytes). */
-      outlineLines: number;
-      /** Max files in the inventory list. */
+      /** Max files in the symbol-map index. */
       maxFiles: number;
     };
   };
@@ -324,9 +318,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         map: asNumber(budgetRaw.map) ?? 0.05,
       },
       holdings: {
-        fullLines: asNumber(contextRaw.holdings_full_lines) ?? 50,
-        seededFullLines: asNumber(contextRaw.holdings_seeded_full_lines) ?? 200,
-        outlineLines: asNumber(contextRaw.holdings_outline_lines) ?? 500,
         maxFiles: asNumber(contextRaw.holdings_max_files) ?? 40,
       },
     },

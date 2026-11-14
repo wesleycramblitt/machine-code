@@ -627,8 +627,8 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       `origin="${item.origin}"`,
       ...(item.depth !== undefined ? [`depth="${item.depth}"`] : []),
     ];
-    // Files are seeded in holdings, which renders them every turn.
-    // Omit the body here to avoid duplicating code bytes in the prompt.
+    // Seed files are indexed in the symbol map; omit the body here to avoid
+    // duplicating bytes in the prompt.
     if (item.kind === "file") {
       sources.push({
         kind: item.kind,
@@ -639,7 +639,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
         hash: sha1(item.body),
         truncated: item.trimmed === true,
         ...(item.trimmed === true
-          ? { warning: `trimmed to ${item.len.toLocaleString()} chars to fit the ${usable.toLocaleString()} char input budget — file is seeded in holdings` }
+          ? { warning: `trimmed to ${item.len.toLocaleString()} chars to fit the ${usable.toLocaleString()} char input budget — file is indexed in the symbol map` }
           : {}),
       });
       continue;

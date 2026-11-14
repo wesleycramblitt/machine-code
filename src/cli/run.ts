@@ -303,11 +303,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
     contextInclude.files = [...new Set([...(contextInclude.files ?? []), attachedIssue.rel])];
   }
   // Suggestions are context files. Small ones inline whole into the run's
-  // file set (and become seeded holdings); everything else stays on demand —
-  // one inspect call runs the same ranker and returns the evidence denser,
-  // stored as artifacts. Outlines are not baked into the prompt: the model
-  // would hold bytes the holdings tracker never saw, and every turn would
-  // re-send them. No second `## Context` prompt block.
+  // file set (and become seeded symbol-map entries with outlines); everything
+  // else stays on demand — one inspect call runs the same ranker and returns
+  // the evidence denser. Outlines are not baked into the prompt: the model
+  // would hold bytes the symbol map never saw, and every turn would re-send
+  // them. No second `## Context` prompt block.
   // Suggestion file list, computed up front and recorded once the recorder
   // exists below. Best effort; the run still has the issue without it.
   let suggestedFiles: string[] = [];
@@ -330,8 +330,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
         ...(attachedIssue?.rel ? { exclude: [attachedIssue.rel] } : {}),
       });
       suggestedFiles = hints.map((hint) => hint.path);
-      // Hint symbols pre-fill the living map: their ranges register as
-      // unsent holdings, so turn 1 carries their bodies as deltas.
+      // Hint symbols pre-fill the living map: their paths register as seen,
+      // so turn 1 already indexes the suggested files.
       for (const hint of hints) {
         for (const symbol of hint.symbols.slice(0, 3)) {
           if (symbol.start >= 1 && symbol.end >= symbol.start && hintRanges.length < 12) {
@@ -868,12 +868,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // Explicitly referenced finished issues: inject what was asked (the
   // issue prompt) plus what was committed (the merge's stat + diff), so
   // the agent never needs git history tools. Files from the commit are
-  // seeded below so they land in holdings like suggestions.
+  // seeded below so they land in the symbol map like suggestions.
   // Reference issues (done/researched only): what was asked (the prompt)
   // plus what was committed (the merge's stat + diff), each in its own
   // section. Without a commit, just the prompt. File names — from the
   // commit diff when there is one, else the files: header — join the
-  // union that seeds holdings below.
+  // union that seeds the symbol map below.
   let depFiles: string[] = [];
   if ((contextInclude?.issues?.length ?? 0) > 0) {
     try {
@@ -959,9 +959,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
     recorder.event("context_assembled", { chars: contextBundle.chars, sources: contextBundle.sources, warnings: contextBundle.warnings });
   }
   const contextText = contextBundle.text || undefined;
-  // Pin the assembled file sources as seeded holdings so the first prompt
-  // already carries the code the run is about, instead of the model paging
-  // for it over several turns.
+  // Pin the assembled file sources as seeded symbol-map entries (with outlines)
+  // so the first prompt already indexes the code the run is about, instead
+  // of the model paging for it over several turns.
   const seedFiles = [...new Set([
     ...contextBundle.sources
       .filter((source) => source.kind === "file" && typeof source.ref === "string")

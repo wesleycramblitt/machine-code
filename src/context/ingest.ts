@@ -1,18 +1,18 @@
 /**
  * machine_code — turn ingestion.
  *
- * Parses one completed assistant/tool step into facts and holdings. Kept
- * separate from the state ledger so parsing rules and memory rules can be
- * read and tested independently.
+ * Parses one completed assistant/tool step into facts and the symbol map.
+ * Kept separate from the state ledger so parsing rules and memory rules can
+ * be read and tested independently.
  */
-import type { HoldingStore } from "./holding-store.js";
-import { contentHash } from "./holding-store.js";
+import type { SymbolMap } from "./symbol-map.js";
+import { contentHash } from "./symbol-map.js";
 import type { Ref } from "./state.js";
 import { editRange, excerpt, inline, lineCount, str, textOf, toolCalls } from "./text.js";
 
 export interface IngestHost {
   repoRoot?: string;
-  holdings: HoldingStore;
+  symbols: SymbolMap;
   addReadFact(ref: Ref, turn: number, excerptText?: string): void;
   addSearchFact(query: string, refs: Ref[], turn: number, hits?: string): void;
   addCommandFact(name: string, ok: boolean, turn: number, excerptText?: string): void;
@@ -132,9 +132,9 @@ export function ingestTurn(
             current = header[1]!;
             const ref = { path: current, range: [Number(header[2]), Number(header[3])] as [number, number] };
             found.push(ref);
-            host.holdings.addHolding(current, false, turn);
+            host.symbols.addSeen(current, false, turn);
             if (mode === "symbol" && query && !query.includes("/") && !query.includes(" ")) {
-              host.holdings.addSymbol(current, query, ref.range, turn);
+              host.symbols.addSymbol(current, query, ref.range, turn);
             }
             continue;
           }
@@ -147,15 +147,15 @@ export function ingestTurn(
           const evidence = /^  "[^"]+" → \S+ (\S+) \((\d+)-(\d+)\)/.exec(line);
           if (evidence && current) {
             const range: [number, number] = [Number(evidence[2]), Number(evidence[3])];
-            host.holdings.addHolding(current, false, turn);
-            host.holdings.addSymbol(current, evidence[1]!, range, turn);
+            host.symbols.addSeen(current, false, turn);
+            host.symbols.addSymbol(current, evidence[1]!, range, turn);
             continue;
           }
         }
         if ((mode === "file" || mode === "symbol") && found.length === 0 && str(args.path)) {
           const ref = { path: str(args.path)! };
           found.push(ref);
-          host.holdings.addHolding(ref.path, false, turn);
+          host.symbols.addSeen(ref.path, false, turn);
         }
         if (mode === "file" || mode === "symbol") {
           const ref = found[0];
@@ -203,7 +203,7 @@ export function ingestTurn(
     host.event("context_ingested", {
       turn,
       facts: host.activeFacts(),
-      holdings: host.holdings.map.size,
+      holdings: host.symbols.map.size,
     });
     host.save();
     return { changed };

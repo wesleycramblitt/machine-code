@@ -141,7 +141,7 @@ Usage:
                                     [--context-include '<json>'] add issue/docs files
                                     selected in the composer
                                     [--context-budget N] cap assembled context chars
-                                    [--holdings-budget N] cap per-turn holdings bytes
+                                    [--holdings-budget N] cap per-turn symbol-map chars
                                     [--hints false] turn off file-hint suggestions
                                     (on by default; explicit includes still apply)
                                     [--skill-modes '<json>'] per-skill include|on-demand|exclude

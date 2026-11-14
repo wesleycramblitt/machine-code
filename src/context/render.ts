@@ -2,13 +2,11 @@
  * machine_code — render the model prompt from run state + the current step.
  *
  * The prompt is the system prompt, the assembled task context, a compact state
- * block, current holdings (inventory always, new/changed bytes only), and the
- * transcript as a call ledger: recent tool payloads in full, older bulk
- * summarized with a re-fetch path.
- * Full bytes live in artifacts, holdings re-read them from disk when they
- * change, and the assembled context carries the seeds; replaying every dump
- * every turn is what made long runs cost millions of tokens. The last few
- * results stay verbatim so the current step's evidence is always intact.
+ * block, the current symbol map, and the transcript as a call ledger: the last
+ * two steps in full, older calls as one-liners. The seeds live in the assembled
+ * context; replaying every dump every turn is what made long runs cost
+ * millions of tokens. The last two results stay verbatim so the current
+ * step's evidence is always intact.
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { RunStateStore } from "./state.js";
