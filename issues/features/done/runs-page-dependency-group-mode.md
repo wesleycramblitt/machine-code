@@ -1,8 +1,9 @@
-tags: tui
+commit: 725b1027218823a7562ca41af641d4e92aa3f8a8
 depends: runs-page-issue-rows-dependency-markers
 files: src/tui/runs.ts, src/tui/screens/runs-list-keys.ts, src/tui.ts
-keywords: Group, By dependencies, --group, g
+tags: tui
 acceptance: script:build
+keywords: Group, By dependencies, --group, g
 
 # Runs page group mode: By dependencies
 
