@@ -370,10 +370,19 @@ export function thinkingChunks(events: readonly RunEvent[]): ThinkingChunk[] {
   return order.map((key) => out.get(key)!).filter((chunk) => chunk.text.trim().length > 0);
 }
 
+export interface ChangeFile {
+  path: string;
+  /** Porcelain status codes (XY) from git status. */
+  code: string;
+  /** Full git diff body for this file, including +++/--- headers. */
+  diff: string;
+}
+
 export interface ChangeSummary {
   status: string;
   diffStat: string;
   recent: string;
+  files: ChangeFile[];
   error?: string;
 }
 
@@ -397,19 +406,49 @@ function git(cwd: string, args: string[], timeout = 4_000): string {
 /** Best-effort working-tree summary for a run's worktree. */
 export function changesFor(worktree: string | undefined): ChangeSummary {
   if (!worktree || !existsSync(worktree)) {
-    return { status: "", diffStat: "", recent: "", error: "no worktree" };
+    return { status: "", diffStat: "", recent: "", files: [], error: "no worktree" };
   }
   try {
+    const files: ChangeFile[] = [];
+    try {
+      // porcelain v1: "XY <path>" (renames become "XY orig -> new").
+      for (const line of git(worktree, ["status", "--porcelain=v1"]).split("\n")) {
+        if (line.trim() === "") continue;
+        const code = line.slice(0, 2);
+        let path = line.slice(3);
+        const arrow = path.indexOf(" -> ");
+        if (arrow >= 0) path = path.slice(arrow + 4);
+        if (!path) continue;
+        let diff = "";
+        try {
+          diff = git(worktree, ["diff", "--no-color", "HEAD", "--", path]);
+          // Untracked files have no diff vs HEAD; show them as a full add.
+          if (diff === "" && code.endsWith("?") && existsSync(join(worktree, path))) {
+            diff = readFileSync(join(worktree, path), "utf8")
+              .split("\n")
+              .map((l) => `+${l}`)
+              .join("\n");
+          }
+        } catch {
+          diff = "";
+        }
+        files.push({ path, code, diff });
+      }
+    } catch {
+      // Per-file diff is best-effort; the status lines still render.
+    }
     return {
       status: git(worktree, ["status", "--short", "--branch"]),
       diffStat: git(worktree, ["diff", "--stat", "--no-color", "HEAD"]),
       recent: git(worktree, ["log", "--oneline", "--no-color", "-5"]),
+      files,
     };
   } catch (error) {
     return {
       status: "",
       diffStat: "",
       recent: "",
+      files: [],
       error: error instanceof Error ? error.message : String(error),
     };
   }
