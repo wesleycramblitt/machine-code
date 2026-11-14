@@ -95,6 +95,9 @@ export interface AssembleInput {
   };
   /** Model input budget in characters; used to report over-budget context. */
   budgetChars?: number;
+  /** Slug of the run's own issue: the recap names it as the task so
+   * included references (any status) read as linked context, never the job. */
+  primaryIssue?: string;
   /** Drop whole sections or individual sources selected in the composer. */
   exclude?: ContextExclusion;
   /** Add files selected in the composer. */
@@ -685,7 +688,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       const status = findIssue(layout, slug)?.status;
       return `issue ${entry.ref}${status ? ` [${status}]` : ""}: ${first.trim().slice(0, 120)}`;
     });
-    recap = `<context-recap>\nRecap (authoritative — act on the open issue; done/researched issues are background only): ${points.join("; ")}. The issue blocks above outrank the working files in between.\n</context-recap>`;
+    recap = `<context-recap>\nRecap (authoritative — act on${input.primaryIssue ? ` ${input.primaryIssue}` : " the open issue"}; other issues are linked context, not the task): ${points.join("; ")}. The issue blocks above outrank the working files in between.\n</context-recap>`;
     blocks.push(recap);
     sections.issues += recap.length;
   }

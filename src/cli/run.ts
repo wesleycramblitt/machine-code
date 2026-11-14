@@ -923,6 +923,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     fileRoot: toolRoot,
     agent: agentNameParsed,
     verification,
+    primaryIssue: itemSlug || undefined,
     parentRuns: parentChain.length > 0 ? parentChain : undefined,
     ...(contextBudgetChars !== undefined ? { budgetChars: contextBudgetChars } : {}),
     exclude: contextExclude,
