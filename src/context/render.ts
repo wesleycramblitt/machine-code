@@ -170,6 +170,7 @@ export function renderPromptMessages(
   overviewMaxChars?: number,
   commandIndex?: string,
   symbolsMaxChars = 48_000,
+  stateMaxChars = 30_000,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
@@ -187,7 +188,7 @@ export function renderPromptMessages(
   const volatile = [
     state.renderWorkspace(),
     state.renderSymbols(symbolsMaxChars),
-    state.renderBlock(),
+    state.renderBlock(stateMaxChars),
   ].filter(Boolean).join("\n\n");
   const out = [
     ...(system ? [system] : []),

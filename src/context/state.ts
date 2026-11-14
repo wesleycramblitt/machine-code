@@ -21,9 +21,10 @@ import { rangesOverlap } from "./symbols.js";
 import { SymbolMap } from "./symbol-map.js";
 import { ingestTurn as ingestTurnInto } from "./ingest.js";
 
-/** Bound on the model-facing state block; full facts remain in state.jsonl.
- * Generous: notes render every turn, but they are the run's memory —
- * trimming them starves later turns. Overflow evicts oldest findings first. */
+/** Fallback bound on the model-facing state block; full facts remain in
+ * state.jsonl. Runs pass a per-model budget instead, so this only binds
+ * callers without one (file output, estimates). Overflow evicts oldest
+ * findings first. */
 const MAX_STATE_CHARS = 30_000;
 
 export type FactKind = "finding" | "decision" | "change";
@@ -538,7 +539,7 @@ export class RunStateStore {
   }
 
     /** Compact model-facing state block: decisions, findings, and open questions. */
-  renderBlock(): string {
+  renderBlock(maxChars = MAX_STATE_CHARS): string {
     let active = this.state.facts.filter((fact) => fact.status === "active");
     const build = (): string => {
       const decisions = active.filter((fact) => fact.kind === "decision");
@@ -596,11 +597,11 @@ export class RunStateStore {
     };
 
     let block = build();
-    if (block.length > MAX_STATE_CHARS) {
+    if (block.length > maxChars) {
       for (const fact of active.filter((item) => item.kind === "finding")) {
         active = active.filter((item) => item !== fact);
         block = build();
-        if (block.length <= MAX_STATE_CHARS) break;
+        if (block.length <= maxChars) break;
       }
     }
     return block;

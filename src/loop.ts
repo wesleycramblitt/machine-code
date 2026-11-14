@@ -524,20 +524,22 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * pool = modelInputChars * ctxBudget.total (0.95).
    *
    * Fixed overhead (system/agent/tool guide/command index) gets ctxBudget.overhead
-   * of the pool. The remaining variable pool (symbols, map, context block) is
-   * split by the symbol-map and map shares. The context block gets what's left.
+   * of the pool. The remaining variable pool (symbols, map, state, context
+   * block) is split by the symbol-map, map, and state shares. The context
+   * block gets what's left.
    */
-  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; contextBlock: number } => {
+  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; contextBlock: number } => {
     const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
     const variableShare = 1.0 - ctxBudget.overhead;
     const variablePool = Math.floor(pool * variableShare);
     const symbols = Math.max(2_048, Math.floor(variablePool * ctxBudget.symbols));
     const map = Math.max(1_024, Math.floor(variablePool * ctxBudget.map));
-    const contextBlock = Math.max(4_096, variablePool - symbols - map);
+    const state = Math.max(4_096, Math.floor(variablePool * ctxBudget.state));
+    const contextBlock = Math.max(4_096, variablePool - symbols - map - state);
     if (hardCap !== undefined) {
-      return { symbols: Math.min(symbols, hardCap), map, contextBlock };
+      return { symbols: Math.min(symbols, hardCap), map, state, contextBlock };
     }
-    return { symbols, map, contextBlock };
+    return { symbols, map, state, contextBlock };
   };
 
   const initialChars =
@@ -1110,7 +1112,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           pendingMessages = null;
           return rendered;
         }
-        const { symbols: sBudget } = computeBudgets(undefined, input.symbolsMaxChars);
+        const { symbols: sBudget, state: stBudget } = computeBudgets(undefined, input.symbolsMaxChars);
         return renderPromptMessages(
           messages,
           memory,
@@ -1119,6 +1121,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           undefined,
           commandIndex,
           sBudget,
+          stBudget,
         ).messages;
       },
       prepareRequest: async ({ context }) => {
@@ -1138,8 +1141,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             mapIndex = renderMapIndex(repoMap, budgets.map);
           }
 
-          // The context block gets the remaining pool (after symbols + map)
-          // minus a small overhead for workspace diff and state block (~2KB).
+          // The context block gets the remaining pool (after symbols, map,
+          // and state) minus a small overhead for the workspace diff (~2KB).
           const overviewMaxChars = Math.max(4_096, budgets.contextBlock - 2_048);
           const overviewBaseChars = input.contextText?.length ?? 0;
           lastOverviewChars = Math.min(overviewBaseChars, overviewMaxChars);
@@ -1154,6 +1157,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             overviewMaxChars,
             commandIndex,
             budgets.symbols,
+            budgets.state,
           );
         };
 
