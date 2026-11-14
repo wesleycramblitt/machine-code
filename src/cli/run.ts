@@ -901,7 +901,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
             cwd: l.repoRoot,
             timeoutMs: 15_000,
           });
-          const statText = stat.outcome === "exit" && stat.code === 0 ? stat.stdout.trim().slice(0, 2000) : "";
+          const statText = stat.outcome === "exit" && stat.code === 0 ? stat.stdout.trim() : "";
           const diff = await runProc(
             "git",
             ["diff", `${depIssue.commit}^1`, depIssue.commit, "--", ...(changedFiles.length > 0 ? changedFiles : ["."])],
@@ -910,11 +910,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
           const diffText =
             diff.outcome === "exit" && diff.code === 0 && diff.stdout.trim() ? diff.stdout.trim() : "";
           refs.push(
-            `Reference ${depIssue.slug} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt.slice(0, 1500)}${statText ? `\n\nLanded change:\n${statText}` : ""}${diffText ? `\n\nDiff:\n${diffText}` : ""}`,
+            `Reference ${depIssue.slug} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt}${statText ? `\n\nLanded change:\n${statText}` : ""}${diffText ? `\n\nDiff:\n${diffText}` : ""}`,
           );
         } else {
           if (depIssue.files.length > 0) files.push(...depIssue.files);
-          refs.push(`Reference ${depIssue.slug} (no commit yet):\n${depIssue.prompt.slice(0, 1500)}`);
+          refs.push(`Reference ${depIssue.slug} (no commit yet):\n${depIssue.prompt}`);
         }
       }
       depFiles = [...new Set(files)];
