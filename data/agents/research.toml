@@ -14,7 +14,7 @@ capabilities = ["code:read", "context:inherit", "knowledge:write"]
 allowed_paths = ["issues/", "docs/", ".machine_code/"]
 
 [selection]
-min_fit = 6.0
+min_fit = 5.0
 
 [selection.axes]
 reasoning = 5.0

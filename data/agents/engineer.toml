@@ -13,7 +13,7 @@ ambiguity = "precise"
 capabilities = ["code:read", "context:inherit", "code:write", "artifact:provision"]
 
 [selection]
-min_fit = 6.0
+min_fit = 5.0
 
 [selection.axes]
 code = 5.5
