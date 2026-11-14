@@ -18,7 +18,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
-3. **Write it down, then edit** — Only the last two turns stay visible, so conclusions live in notes or they are gone.
+3. **Write it down, then edit** — Only the last two turns stay visible, but read bodies reappear under `<evidence>`, fresh from disk. Notes carry conclusions, not bytes: what each edit depends on lives in a note so the file stays closed.
 
    - Write down what each edit depends on: behavior, exact lines, surprises — enough that the file stays closed. One line plus `path:line` ref, never whole files.
    - Then edit: if the next step needs no new fact, edit instead of reading again.
