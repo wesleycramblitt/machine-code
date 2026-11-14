@@ -1,9 +1,10 @@
+commit: a3854aa1c4a7b0f9c8ae86dff24401bd54b5ea79
 priority: high
-tags: tui, orchestration
 depends: orchestrator-settings-store-and-scheduler
 files: src/tui/state.ts, src/tui/screens/orchestrate.ts, src/tui/screens/orchestrate-keys.ts, src/tui/screens/chrome.ts, src/tui/screens/keys.ts, src/tui/screens/runs-list-keys.ts, src/tui.ts
-keywords: Orchestration, Back[Esc], Start[:!], Stop[:!], orchestrate screen, model preview
+tags: tui, orchestration
 acceptance: script:build
+keywords: Orchestration, Back[Esc], Start[:!], Stop[:!], orchestrate screen, model preview
 
 # Orchestration page in the runs TUI
 
