@@ -302,16 +302,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const triedModels = new Set<string>();
 
   /**
-   * First-token timeout for one provider call. Ollama is local and known to
-   * exist, but it may be busy with another request, so it waits far longer
-   * than remote providers before the call is abandoned and rotated.
+   * First-token timeout for one provider call (ms), or undefined for no
+   * first-token timeout. Remote providers keep the finite default so a stall
+   * is abandoned and rotated. Ollama is local and may sit queued behind
+   * another GPU request (loading a model, finishing a long generation), so a
+   * queue wait is not an error: by default local calls wait indefinitely, and
+   * the call is bounded only by the run's own caps and the user's Ctrl-C. A
+   * finite `ollama_first_token_timeout_ms` override still applies.
    */
-  const firstTokenTimeoutMsFor = (providerID: string): number => {
+  const firstTokenTimeoutMsFor = (providerID: string): number | undefined => {
     const base = input.machine.selection?.firstTokenTimeoutMs ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS;
     if (providerID !== "ollama") return base;
-    const ollama =
-      input.machine.selection?.ollamaFirstTokenTimeoutMs ?? DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS;
-    return Math.max(ollama, base);
+    return input.machine.selection?.ollamaFirstTokenTimeoutMs;
   };
 
   const applyErrorState = (
@@ -1121,8 +1123,14 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           flush();
           wrapped.end(message);
         };
-        const timer = setTimeout(() => {
-          if (settled) return;
+        /** Unbounded local (ollama) calls never set a first-token timer; a
+         * queue wait is not an error. Remote calls keep the finite timer and
+         * abandon on a stall, cooling the model and rotating as today. */
+        const timer =
+          firstTokenTimeoutMs === undefined
+            ? undefined
+            : setTimeout(() => {
+        if (settled) return;
           abort.abort();
           const message = assistantError(
             model,
