@@ -18,7 +18,11 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
-3. **Write it down, then edit** — Only the last two turns stay visible, so write down the conclusion your edit depends on before moving on: what the code does and where, with enough detail that the file stays closed — behavior, exact lines, surprises. Never paste whole files. Then edit: if the next step does not need a new fact, edit instead of reading again. Close every turn the same way: note what you learned and what you decided, fix or drop what turned out wrong, and update the plan if the scope moved. Rewriting a note updates it; `forget` removes one by its text. Leave finished notes alone — checked-off plan steps are the done-signal.
+3. **Write it down, then edit** — Only the last two turns stay visible, so conclusions live in notes or they are gone.
+
+   - Write down what each edit depends on: behavior, exact lines, surprises — enough that the file stays closed. One line plus `path:line` ref, never whole files.
+   - Then edit: if the next step needs no new fact, edit instead of reading again.
+   - Close every turn: note what you learned and decided, fix or drop what turned out wrong, update the plan on scope moves. Rewriting a note updates it; `forget` removes one by its text. Finished notes stay — checked-off steps are the done-signal.
 
    `context {action: "note", kind: "finding", text: "routePayment defined in router.ts:14, called from pay.ts:35", refs: ["router.ts:14"]}`
 
