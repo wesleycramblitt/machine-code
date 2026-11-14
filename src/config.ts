@@ -130,6 +130,8 @@ export interface MachineConfig {
       map: number;
       /** Share of the variable pool (after overhead) allocated to the run-state block (0.0-1.0). */
       state: number;
+      /** Share of the variable pool bounding any single whole-file read (0.0-1.0). Over it, inspect serves the outline plus a redirect. */
+      wholeFile: number;
       /** Share of the variable pool (after overhead) allocated to re-served tool evidence (0.0-1.0). */
       evidence: number;
     };
@@ -317,6 +319,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         map: asNumber(budgetRaw.map) ?? 0.05,
         state: asNumber(budgetRaw.state) ?? 0.15,
         evidence: asNumber(budgetRaw.evidence) ?? 0.10,
+        wholeFile: asNumber(budgetRaw.whole_file) ?? 0.05,
       },
     },
     map: {

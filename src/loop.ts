@@ -534,7 +534,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * of the pool. The remaining variable pool (symbols, map, state, evidence,
    * context block) is split by share. The context block gets what's left.
    */
-  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; evidence: number; contextBlock: number } => {
+  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; evidence: number; wholeFile: number; contextBlock: number } => {
     const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
     const variableShare = 1.0 - ctxBudget.overhead;
     const variablePool = Math.floor(pool * variableShare);
@@ -542,11 +542,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const map = Math.max(1_024, Math.floor(variablePool * ctxBudget.map));
     const state = Math.max(4_096, Math.floor(variablePool * ctxBudget.state));
     const evidence = Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence));
+    const wholeFile = Math.max(2_048, Math.floor(variablePool * ctxBudget.wholeFile));
     const contextBlock = Math.max(4_096, variablePool - symbols - map - state - evidence);
     if (hardCap !== undefined) {
-      return { symbols: Math.min(symbols, hardCap), map, state, evidence, contextBlock };
+      return { symbols: Math.min(symbols, hardCap), map, state, evidence, wholeFile, contextBlock };
     }
-    return { symbols, map, state, evidence, contextBlock };
+    return { symbols, map, state, evidence, wholeFile, contextBlock };
   };
 
   /** Reminder appended to the next prompt after a read-only turn.
@@ -862,28 +863,26 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         : undefined;
 
     const namedBlocksDir = join(input.root, ".machine_code", "blocks", recorder.id);
-    const rawTools = coreTools(
-      {
-        root: input.toolRoot ?? input.root,
-        commands: input.commands,
-        tools: input.agent.tools,
-        ask: askContext,
-        skills: skillContext,
-        state: memory,
-        repoRoot: input.root,
-        namedBlocksDir,
-        ...(issuePath ? { issuePath } : {}),
-        finish: (result) => {
-          finishRequested = result;
-          recorder.event("finish", { outcome: result.outcome, summary: result.summary });
-        },
-        processes,
-        allowMutations: (input.agentCapabilities ?? []).includes("code:write"),
-        capabilities: input.agentCapabilities ?? [],
-        allowedPaths: input.agent.allowedPaths,
+    const toolCtx: import("./tools/index.js").ToolContext = {
+      root: input.toolRoot ?? input.root,
+      commands: input.commands,
+      tools: input.agent.tools,
+      ask: askContext,
+      skills: skillContext,
+      state: memory,
+      repoRoot: input.root,
+      namedBlocksDir,
+      ...(issuePath ? { issuePath } : {}),
+      finish: (result) => {
+        finishRequested = result;
+        recorder.event("finish", { outcome: result.outcome, summary: result.summary });
       },
-      input.agent.tools,
-    );
+      processes,
+      allowMutations: (input.agentCapabilities ?? []).includes("code:write"),
+      capabilities: input.agentCapabilities ?? [],
+      allowedPaths: input.agent.allowedPaths,
+    };
+    const rawTools = coreTools(toolCtx, input.agent.tools);
     // Rebuild the retained-call ledger from a resumed transcript so
     // re-served evidence covers pre-resume reads (turn unknown).
     for (const message of input.initialMessages ?? []) {
@@ -1199,6 +1198,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // state block).
           const budgets = computeBudgets(budget?.inputChars, input.symbolsMaxChars);
           lastSymbolsChars = budgets.symbols;
+          // Deterministic fit for whole-file reads, refreshed per turn
+          // from the same pool as every other share.
+          toolCtx.maxWholeFileChars = budgets.wholeFile;
 
           // Re-render the map with the model-specific budget
           if (repoMap && budgets.map >= 1024) {

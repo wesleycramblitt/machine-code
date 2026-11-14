@@ -62,6 +62,10 @@ export interface ToolContext {
   commands: ReadonlyMap<string, import("../commands/registry.js").CommandSpec>;
   /** Tools available to this run, for role-aware errors. */
   tools?: readonly string[];
+  /** Whole-file byte cap for inspect reads; over it the tool serves the
+   * outline with a redirect instead. Unset means uncapped. The loop sets
+   * this per turn from the budget pool. */
+  maxWholeFileChars?: number;
   /** When provided, the `ask` tool is live (suspends the run for input). */
   ask?: AskContext;
   /** When provided, the `skill` tool is live (on-demand skill bodies). */

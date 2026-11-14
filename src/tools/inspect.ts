@@ -314,6 +314,20 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             const envelope = `<inspect query="${query}" mode="file" match="path">\n${lines.join("\n")}\n</inspect>`;
                         return ok(envelope);
           }
+          // Deterministic fit: whole-file reads over the run's per-read
+          // budget come back as the outline instead. The harness decides
+          // fit; the model decides comprehension. Same shape as an outline
+          // call plus the redirect, so no turn is wasted re-asking.
+          const wantsWholeFile =
+            !anchor && params.symbol == null && params.offset == null && params.limit == null && params.around == null;
+          if (wantsWholeFile && ctx.maxWholeFileChars != null && Buffer.byteLength(source, "utf8") > ctx.maxWholeFileChars) {
+            const lines: string[] = [`path: ${rel} [match: path]`, `lines: ${source.split("\n").length}`];
+            for (const symbol of file?.symbols ?? []) lines.push(`  ${symbol.kind} ${symbol.name} (${symbol.line}-${symbol.end})`);
+            if (lines.length === 2) lines.push("(no symbols indexed; read a path:START-END slice instead)");
+            lines.push(`[whole file exceeds the run's per-read budget; use an outline symbol, a symbol body, or a path:START-END slice]`);
+            const envelope = `<inspect query="${query}" mode="file" match="path">\n${lines.join("\n")}\n</inspect>`;
+            return ok(envelope);
+          }
           let slice: { header: string; text: string; start: number; end: number } | { error: string };
           if (anchor && anchor.start !== undefined && anchor.end !== undefined) {
             const aStart = anchor.start;
