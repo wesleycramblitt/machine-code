@@ -109,8 +109,6 @@ export interface StateStoreOptions {
   recorder?: EventSink;
   /** Optional run supervisor for the synchronous git-status safety net. */
   processes?: ProcessSupervisor;
-  /** Symbol-map size config, pass in from machine config. */
-  symbolMapConfig?: Partial<import("./symbol-map.js").SymbolMapConfig>;
 }
 
 function sha1(text: string): string {
@@ -169,8 +167,6 @@ export class RunStateStore {
       currentTurn: () => this.currentTurn(),
       addReadFact: (ref, turn, excerptText) => this.addReadFact(ref, turn, excerptText),
     });
-    const symbolMapCfg = options.symbolMapConfig;
-    if (symbolMapCfg) this.symbolMap.setConfig(symbolMapCfg);
     this.state = {
       version: 1,
       runId: options.runId,
@@ -184,8 +180,8 @@ export class RunStateStore {
     this.load();
   }
 
-  seedFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
-    this.symbolMap.seedFiles(paths, turn, maxBytes);
+  seedFiles(paths: readonly string[], turn = 0): void {
+    this.symbolMap.seedFiles(paths, turn);
   }
 
   seedHints(entries: ReadonlyArray<{ path: string; range: [number, number] }>, turn = 0): void {

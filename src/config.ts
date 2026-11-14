@@ -131,11 +131,6 @@ export interface MachineConfig {
       /** Share of the variable pool (after overhead) allocated to the run-state block (0.0-1.0). */
       state: number;
     };
-    /** Symbol-map constants. Every value here is tunable. */
-    symbols: {
-      /** Max files in the symbol-map index. */
-      maxFiles: number;
-    };
   };
   /** Repository map ([map]). */
   map: {
@@ -319,9 +314,6 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         symbols: asNumber(budgetRaw.symbols) ?? 0.35,
         map: asNumber(budgetRaw.map) ?? 0.05,
         state: asNumber(budgetRaw.state) ?? 0.15,
-      },
-      symbols: {
-        maxFiles: asNumber(contextRaw.symbols_max_files) ?? 500,
       },
     },
     map: {

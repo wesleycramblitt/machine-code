@@ -459,7 +459,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     repoRoot: mapRoot,
     recorder,
     processes,
-    symbolMapConfig: input.machine.context.symbols,
   });
   // Preload the task files so the first prompt already indexes them.
   if (input.seedFiles && input.seedFiles.length > 0) {
