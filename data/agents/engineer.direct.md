@@ -22,8 +22,6 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    - Write down what each edit depends on: behavior, exact lines, surprises — enough that the file stays closed. One line plus `path:line` ref, never whole files.
    - Then edit: if the next step needs no new fact, edit instead of reading again.
-   - Close every turn: note what you learned and decided, fix or drop what turned out wrong, update the plan on scope moves. Rewriting a note updates it; `forget` removes one by its text. Finished notes stay — checked-off steps are the done-signal.
-   - A turn of reads with no note, plan update, or edit draws a harness reminder on the next turn.
 
    `context {action: "note", kind: "finding", text: "routePayment defined in router.ts:14, called from pay.ts:35", refs: ["router.ts:14"]}`
 
@@ -36,7 +34,11 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    No symbolic anchor? `edit {path, oldString_named_block: "old", newString_named_block: "new"}` with two fenced blocks. Batch independent files in one call. The diff is the confirmation — never re-read. Do not create tests. Do not search for test files.
 
-4. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. Never resubmit identical arguments after a validation failure — re-inspect first.
+4. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
+
+   Note conclusions, not receipts: what the code does and where (`path:line`), what you decided and why, what blocks you and what would unblock it. Fix or drop what turned out wrong — rewriting a note updates it, `forget` removes one by its text. Finished notes stay; checked-off plan steps are the done-signal.
+
+5. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. Never resubmit identical arguments after a validation failure — re-inspect first.
 
    Merge conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. Edit each to the correct final code, clear every `<<<<<<<` / `=======` / `>>>>>>>` marker, then `command {action: "run", name: "vcs:resolve", args: {path: "src/file.ts", strategy: "edited"}}` per path and `finish` again. Only when one side is wholly correct, take it with `strategy: "ours"` (yours) or `"theirs"` (`origin/main`). If unresolvable, `command {action: "run", name: "vcs:merge-abort"}` and report blocked — never finish completed afterwards.
 
