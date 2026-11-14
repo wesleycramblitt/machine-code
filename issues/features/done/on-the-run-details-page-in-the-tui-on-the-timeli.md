@@ -1,5 +1,6 @@
 id: 56483f
 branch: mc/on-the-run-details-page-in-the-tui-on-the-timeli-56483f
+commit: 6c0ac29b1e5964be8275d5950eb754777b7eb0b8
 acceptance: script:build
 
 Auto-created from run.
