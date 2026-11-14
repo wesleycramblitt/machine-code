@@ -18,7 +18,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   const l = layout(ctx.repoRoot);
   const allRuns = listAllRuns(l.home).filter((run) => !s.deletingRuns.has(run.id));
   const scopeFiltered = s.runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
-  const workGroup = s.runsGroup === "all" || s.runsGroup === "category";
+  const workGroup = s.runsGroup === "all" || s.runsGroup === "category" || s.runsGroup === "deps";
   const issuesByRepo: Record<string, readonly Issue[]> = {};
   for (const root of new Set([l.repoRoot, ...scopeFiltered.map((run) => run.repoRoot)])) {
     issuesByRepo[root] = listIssues(layout(root));
