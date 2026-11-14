@@ -7,11 +7,9 @@
  *
  * In the timeline, j/k move the cursor line by line over every rendered
  * line (header or expanded body); space expands the event under the cursor.
- * There is no ^D/^U in the timeline.
  */
 import { layout } from "../../../paths.js";
 import { listAllRuns } from "../../../state/runs.js";
-import { CTRL_D, CTRL_U, HALF_PAGE } from "../../format.js";
 import { RUN_SECTIONS } from "./types.js";
 import { relatedRuns } from "../../../report/run.js";
 import { reconcileProcessRecords } from "../../../processes/reconcile.js";
@@ -91,23 +89,6 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     s.timelineFollow = true;
     s.eventSel = -1;
     ctx.notify(s.timelineVerbose ? "showing all events" : "showing key events");
-    ctx.draw();
-    return true;
-  }
-  // In the timeline, j/k move the line cursor rather than paging, so there is no ^D/^U.
-  if ((data === CTRL_D || data === CTRL_U) && s.runSection !== "timeline") {
-    const direction = data === CTRL_D ? 1 : -1;
-    if (s.runSection === "thinking") {
-      s.thinkingFollow = false;
-      s.thinkingScroll = Math.max(0, s.thinkingScroll + direction * HALF_PAGE);
-    } else if (s.runSection === "processes") {
-      s.processFollow = false;
-      s.processSel = Math.max(0, s.processSel + direction * 5);
-    } else if (s.runSection === "related") {
-      s.childSel = Math.max(0, s.childSel + direction * 5);
-    } else {
-      s.runScroll = Math.max(0, s.runScroll + direction * HALF_PAGE);
-    }
     ctx.draw();
     return true;
   }
