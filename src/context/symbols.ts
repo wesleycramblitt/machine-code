@@ -6,17 +6,17 @@
  * this map and reads by tool call.
  */
 
-export interface HeldSymbol {
+export interface SymbolRef {
   name: string;
   range: [number, number];
   /** Doc comment or docstring from the repo map. */
   doc?: string;
 }
 
-export interface SymbolEntry {
+export interface SeenFile {
   path: string;
   /** Symbols held, by name — the map fills in at symbol granularity. */
-  symbols: HeldSymbol[];
+  symbols: SymbolRef[];
   /** File-level doc comment or module docstring, from the repo map. */
   doc?: string;
   /** Fully present in the stable prefix: bytes skipped until it changes. */

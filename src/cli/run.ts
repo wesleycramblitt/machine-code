@@ -375,12 +375,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
       fail("--context-budget needs a positive character count");
     }
   }
-  const holdingsBudgetFlag = flags.get("holdings-budget");
-  let holdingsMaxChars: number | undefined;
-  if (holdingsBudgetFlag !== undefined) {
-    holdingsMaxChars = Number(holdingsBudgetFlag);
-    if (!Number.isFinite(holdingsMaxChars) || holdingsMaxChars <= 0) {
-      fail("--holdings-budget needs a positive character count");
+  const symbolsBudgetFlag = flags.get("symbols-budget");
+  let symbolsMaxChars: number | undefined;
+  if (symbolsBudgetFlag !== undefined) {
+    symbolsMaxChars = Number(symbolsBudgetFlag);
+    if (!Number.isFinite(symbolsMaxChars) || symbolsMaxChars <= 0) {
+      fail("--symbols-budget needs a positive character count");
     }
   }
   // Composer per-skill mode overrides: {"clean-code":"include",...}.
@@ -1077,7 +1077,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
-      ...(holdingsMaxChars !== undefined ? { holdingsMaxChars } : {}),
+      ...(symbolsMaxChars !== undefined ? { symbolsMaxChars } : {}),
       skipMap,
       skillExcludes,
       signal: abort.signal,
@@ -1114,7 +1114,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
-      ...(holdingsMaxChars !== undefined ? { holdingsMaxChars } : {}),
+      ...(symbolsMaxChars !== undefined ? { symbolsMaxChars } : {}),
       skipMap,
       skillExcludes,
       signal: abort.signal,

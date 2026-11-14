@@ -203,7 +203,7 @@ export function ingestTurn(
     host.event("context_ingested", {
       turn,
       facts: host.activeFacts(),
-      holdings: host.symbols.map.size,
+      symbols: host.symbols.entries.size,
     });
     host.save();
     return { changed };

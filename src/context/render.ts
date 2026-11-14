@@ -169,24 +169,24 @@ export function renderPromptMessages(
   startupContext?: string,
   overviewMaxChars?: number,
   commandIndex?: string,
-  holdingsMaxChars = 48_000,
+  symbolsMaxChars = 48_000,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
   //   system → assembled context → map index → tool guide → command index
-  //     → transcript → workspace → holdings → run state.
+  //     → transcript → workspace → symbols → run state.
   // The stable prefix renders before the transcript so it stays byte-identical
   // across turns. The ~1KB map index names every directory with file counts;
   // deeper structure pulls via inspect or map overview.
-  // The per-turn holdings and run state sit *after* the transcript so they
+  // The per-turn symbols and run state sit *after* the transcript so they
   // never shift the cache prefix.
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
   const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
   const volatile = [
     state.renderWorkspace(),
-    state.renderSymbols(holdingsMaxChars),
+    state.renderSymbols(symbolsMaxChars),
     state.renderBlock(),
   ].filter(Boolean).join("\n\n");
   const out = [

@@ -19,7 +19,7 @@ export const TOOL_GUIDE = [
   "Do not re-issue an identical query: if the index already points at the file, read it; reword only when you need something new.",
   "",
   "### 2. Inspect — cascade from outline to targeted read",
-  "`inspect {query}` finds definitions, symbols, outlines, and keyword matches — everything not in holdings.",
+  "`inspect {query}` finds definitions, symbols, outlines, and keyword matches — everything not in the symbol map.",
   "Batch independent queries into one model call — each inspect is one distinct concern. Start small and drill deeper:",
   "",
   '  **Step 1 — Outline first (cheapest):**',

@@ -106,7 +106,7 @@ export interface StateStoreOptions {
   recorder?: EventSink;
   /** Optional run supervisor for the synchronous git-status safety net. */
   processes?: ProcessSupervisor;
-  /** Holdings recency/size config, pass in from machine config. */
+  /** Symbol-map size config, pass in from machine config. */
   symbolMapConfig?: Partial<import("./symbol-map.js").SymbolMapConfig>;
 }
 
@@ -181,12 +181,12 @@ export class RunStateStore {
     this.load();
   }
 
-  seedSeenFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
-    this.symbolMap.seedSeenFiles(paths, turn, maxBytes);
+  seedFiles(paths: readonly string[], turn = 0, maxBytes = 65536): void {
+    this.symbolMap.seedFiles(paths, turn, maxBytes);
   }
 
-  seedHintRanges(entries: ReadonlyArray<{ path: string; range: [number, number] }>, turn = 0): void {
-    this.symbolMap.seedHintRanges(entries, turn);
+  seedHints(entries: ReadonlyArray<{ path: string; range: [number, number] }>, turn = 0): void {
+    this.symbolMap.seedHints(entries, turn);
   }
 
   renderSymbols(maxChars?: number): string {
