@@ -550,7 +550,7 @@ export class RunStateStore {
         : this.state.phase === "verify"
           ? "fix any gate output, then call finish again"
           : "make the smallest change that satisfies the issue, then call finish";
-      const lines: string[] = ["<run-state>", `Goal: ${this.state.goal}`, `Phase: ${this.state.phase} · next: ${next}`];
+      const lines: string[] = ["<run-state>", `Phase: ${this.state.phase} · next: ${next}`];
       // Compact summary line — lets the agent see at a glance how much it has established.
       const summaryParts: string[] = [];
       const plan = this.state.plan;
@@ -616,7 +616,7 @@ export class RunStateStore {
   }
 
   renderMarkdown(): string {
-    return `# Run state: ${this.state.runId}\nPhase: ${this.state.phase}\n\n${this.renderBlock()}\n`;
+    return `# Run state: ${this.state.runId}\nPhase: ${this.state.phase}\nGoal: ${this.state.goal}\n\n${this.renderBlock()}\n`;
   }
 
   saveMarkdown(): void {

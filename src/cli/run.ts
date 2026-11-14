@@ -877,9 +877,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
       for (const ref of contextInclude?.issues ?? []) {
         const depIssue = findIssue(l, ref.split("/").pop()?.replace(/\.md$/, "") ?? ref);
         if (!depIssue || depIssue.slug === itemSlug) continue;
-        // Only done/researched issues are references. Other includes are
-        // plain context bodies (already inlined by assembly) — not references.
+        // Only finished issues become Reference blocks: the composer only
+        // offers done/researched as references (an open issue is either the
+        // run's own task or plain context). The framing derives from the
+        // status so a future caller can't silently mislabel.
         if (depIssue.status !== "done" && depIssue.status !== "researched") continue;
+        const framing = `already ${depIssue.status} — background only, NOT your task`;
         if (depIssue.commit) {
           const changed = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--name-only"], {
             cwd: l.repoRoot,
@@ -891,11 +894,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
               : [];
           if (changedFiles.length > 0) files.push(...changedFiles);
           refs.push(
-            `Reference (already ${depIssue.status} — background only, NOT your task): ${depIssue.slug} @ ${depIssue.commit.slice(0, 12)}:\n${depIssue.prompt}`,
+            `Reference (${framing}): ${depIssue.slug} @ ${depIssue.commit.slice(0, 12)}:\n${depIssue.prompt}`,
           );
         } else {
           if (depIssue.files.length > 0) files.push(...depIssue.files);
-          refs.push(`Reference (already ${depIssue.status} — background only, NOT your task): ${depIssue.slug} (no commit yet):\n${depIssue.prompt}`);
+          refs.push(`Reference (${framing}): ${depIssue.slug} (no commit yet):\n${depIssue.prompt}`);
         }
       }
       depFiles = [...new Set(files)];

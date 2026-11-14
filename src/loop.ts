@@ -449,10 +449,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     });
   }
 
-  // The goal orients the state block. The full request already rides every
-  // prompt in the transcript head and the assembled context carries the
-  // issue bodies — repeating all of it here triples the issue text.
-  // One line suffices.
+  // The goal labels the state file, not the prompt: the full request rides
+  // every prompt in the transcript head and the recap re-anchors it, so
+  // the stored goal stays one line.
   const goalHead = input.request.split(/\n\n## (?:Context|Skills|Existing branch state|Worktree)\b/)[0]!.trim() || input.request;
   const firstLine = goalHead.split("\n").find((line) => line.trim() !== "")?.trim() ?? goalHead;
   const goal = firstLine.length > 300 ? `${firstLine.slice(0, 299)}…` : firstLine;
