@@ -66,10 +66,13 @@ import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, print
 import { parseAxisOverrides } from "./models.js";
 
 /** Update the local main branch from the remote. Non-blocking: if the remote is
- * unreachable the work continues with the local state. */
+ * unreachable the work continues with the local state. A divergence is
+ * reported loudly (never forced): the run continues on local main. */
 async function syncFromRemote(topRoot: string): Promise<void> {
   try {
-    await runProc("git", ["fetch", "origin", "main:main"], { cwd: topRoot, timeoutMs: 30_000 });
+    const { fastForwardMain } = await import("../tasks/sync.js");
+    const synced = await fastForwardMain(topRoot);
+    if (!synced.ok) process.stderr.write(`machine_code: main sync: ${synced.detail}\n`);
   } catch {
     // Remote unreachable — local main is good enough.
   }
@@ -1371,7 +1374,9 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   const { machine, models, catalogue, configuredProviders } = runtime;
 
   // Worktree: reuse, recreate from branch, or (with --recreate) start fresh.
+  // Sync main first so a recreated worktree starts from current upstream.
   let toolRoot = l2.repoRoot;
+  await syncFromRemote(l2.repoRoot);
   if (s.worktree) {
     if (existsSync(s.worktree)) {
       toolRoot = s.worktree;

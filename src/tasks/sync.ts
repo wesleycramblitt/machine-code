@@ -48,6 +48,37 @@ export async function abortMergeIfInProgress(cwd: string): Promise<boolean> {
   return true;
 }
 
+/** Bring local main up to origin/main (fast-forward only, never throws).
+ * Plain `git fetch origin main:main` is refused when main is checked out
+ * (which it always is in the main worktree), so fetch the remote ref and
+ * fast-forward explicitly. A dirty main tree or a real divergence refuses
+ * the fast-forward and is reported, never forced. */
+export async function fastForwardMain(
+  mainRoot: string,
+  baseBranch?: string,
+): Promise<{ ok: boolean; detail: string }> {
+  const base = baseBranch?.trim() || "main";
+  const fetch = await git(mainRoot, ["fetch", "origin"], 60_000);
+  if (!ok(fetch)) {
+    return { ok: true, detail: "offline: keeping local main" };
+  }
+  if (!(await refExists(mainRoot, `origin/${base}`))) {
+    return { ok: true, detail: `no origin/${base} to sync` };
+  }
+  const ff = await git(mainRoot, ["merge", "--ff-only", `origin/${base}`], 60_000);
+  if (ok(ff)) {
+    const msg = ff.stdout.trim() || ff.stderr.trim();
+    return {
+      ok: true,
+      detail: /already up to date/i.test(`${ff.stdout}\n${ff.stderr}`) ? "already up to date" : `fast-forwarded (${msg.slice(0, 120)})`,
+    };
+  }
+  return {
+    ok: false,
+    detail: `local ${base} has diverged from origin/${base}; not forcing: ${firstLine(ff.stderr) || firstLine(ff.stdout)}`,
+  };
+}
+
 export interface SyncResult {
   ok: boolean;
   detail: string;

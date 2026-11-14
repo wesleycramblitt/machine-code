@@ -72,7 +72,7 @@ export interface ComposerProps extends Viewport {
   excluded: ReadonlySet<string>;
   included: ReadonlySet<string>;
   /** Issues-tab manual sort: selected-first when true, build order otherwise. */
-  issueSortSelected: boolean;
+  sortSelected: boolean;
   /** Issues-tab select mode: exactly one primary vs N references. */
   issueMode: "primary" | "reference";
   skillModes: ReadonlyMap<string, SkillMode>;

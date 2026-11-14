@@ -225,6 +225,13 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   if (!build.ok) {
     throw new Error(`merge succeeded but main build failed: ${build.text}`);
   }
+  // Publish the merge: approve lands directly on main, so push here.
+  // Failure fails approval (clean retry: the merge is already done, so a
+  // retry skips straight to build + push).
+  const pushed = await git(root, ["push", "origin", baseBranch]);
+  if (pushed.code !== 0) {
+    throw new Error(`merge landed locally but push failed: ${pushed.stderr.trim()}; re-run approve to retry the push`);
+  }
   const head = await git(root, ["rev-parse", "HEAD"]);
   const { updateIssueMeta } = await import("../plan/issues.js");
   if (head.code === 0 && head.stdout.trim()) updateIssueMeta(layout, slug, { commit: head.stdout.trim() });

@@ -275,7 +275,7 @@ export async function runTui(): Promise<void> {
     s.newRunContextExcluded.clear();
     s.newRunContextIncluded.clear();
     s.newRunIssueMode = "primary";
-    s.newRunIssueSort = false;
+    s.newRunSortSelected = false;
     s.newRunPreviewCache = null;
     s.newRunParentId = null;
     s.modelPick = null;
@@ -395,6 +395,7 @@ export async function runTui(): Promise<void> {
       if (key.startsWith("issue:")) s.newRunContextExcluded.delete(key);
     }
     s.newRunIssueMode = "primary";
+    s.newRunSortSelected = false;
     notify(`agent ${s.newrun.agent}; issue selection cleared`);
   };
 
@@ -1048,7 +1049,7 @@ export async function runTui(): Promise<void> {
         contextFiltering: s.newRunContextFiltering,
         excluded: s.newRunContextExcluded,
         included: s.newRunContextIncluded,
-        issueSortSelected: s.newRunIssueSort,
+        sortSelected: s.newRunSortSelected,
         issueMode: s.newRunIssueMode,
         skillModes: s.newRunSkillModes,
         skillShown: s.newRunSkillShown,

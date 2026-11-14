@@ -287,6 +287,14 @@ export async function runIssueBuild(
 
   let toolRoot = l.repoRoot;
   try {
+    // Sync main first so the branch starts from (or merges) current upstream.
+    try {
+      const { fastForwardMain } = await import("../tasks/sync.js");
+      const synced = await fastForwardMain(l.repoRoot);
+      if (!synced.ok) process.stderr.write(`machine_code: main sync: ${synced.detail}\n`);
+    } catch {
+      // Remote unreachable — local main is good enough.
+    }
     const reuse = reusableWorktreeOwner(listRuns(l), issue.branch, "engineer");
     if (reuse) {
       toolRoot = reuse.path;

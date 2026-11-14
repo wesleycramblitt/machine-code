@@ -116,6 +116,21 @@ export async function mergeBranchIntoMain(
         if (attempt >= 3 || !pushRace(push)) return fail(`push failed: ${pushErr}`);
         process.stderr.write(`merge ${branch}: push lost a race with another merger, retrying (${attempt}/3)\n`);
       }
+      // Local main is the merge commit and the push just landed it, but
+      // verify origin agrees: a concurrent push landing between our push
+      // and this check means we are behind again. Loud, never fatal here —
+      // the next run's pre-run sync fast-forwards.
+      await git(topRoot, ["fetch", "origin"], 60_000);
+      const headCheck = await git(topRoot, ["rev-parse", "HEAD"], 15_000);
+      const originCheck = await git(topRoot, ["rev-parse", "--verify", "origin/main"], 15_000);
+      if (
+        ok(headCheck) && ok(originCheck) &&
+        headCheck.stdout.trim() !== originCheck.stdout.trim()
+      ) {
+        process.stderr.write(
+          `merge ${branch}: pushed ${headCheck.stdout.trim().slice(0, 12)} but origin/main is ${originCheck.stdout.trim().slice(0, 12)} (another merger landed after); next run syncs\n`,
+        );
+      }
       // Delete the remote branch (may fail if it was never pushed — fine).
       await git(topRoot, ["push", "origin", "--delete", branch], 15_000);
       // The worktree checks the branch out, so remove it before deleting.

@@ -131,8 +131,8 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     ctx.draw();
     return true;
   }
-  if (data === "s" && s.newRunContextSectionKey === "section:issues") {
-    s.newRunIssueSort = !s.newRunIssueSort;
+  if (data === "s") {
+    s.newRunSortSelected = !s.newRunSortSelected;
     s.newRunContextItem = 0;
     s.newRunContextItemKey = null;
     ctx.draw();

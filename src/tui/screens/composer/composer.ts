@@ -188,15 +188,9 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       counted: false,
     });
   }
-  // Manual sort only: selected-first when `s` toggled it on, stable build
-  // order otherwise. Selecting never re-sorts by itself.
-  const issuesSectionItems = props.issueSortSelected
-    ? [
-        ...issueItems.filter((item) => item.key === mainIssueKey),
-        ...issueItems.filter((item) => item.key !== mainIssueKey && included.has(item.key)),
-        ...issueItems.filter((item) => item.key !== mainIssueKey && !included.has(item.key)),
-      ]
-    : issueItems;
+  // The issues list itself never re-sorts: the manual sort below applies
+  // per-tab at render time. Selecting never re-sorts by itself.
+  const issuesSectionItems = issueItems;
   const fileItems: ContextPanelItem[] = itemsFor(["file"]);
   const knownFiles = new Set(fileItems.map((item) => item.key));
   // Paths that belong to other context sections; exclude from the file tab.
@@ -521,9 +515,23 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   contextSectionKey = activeSection.sectionKey;
   // `/` narrows the active tab by substring; rows keep their build order.
   const contextFilter = contextFilterRaw.trim().toLowerCase();
-  const shownItems = contextFilter
+  const filteredItems = contextFilter
     ? activeSection.items.filter((item) => item.text.toLowerCase().includes(contextFilter))
     : activeSection.items;
+  // Manual sort only (`s`): fixed rows stay pinned, then the main issue,
+  // then other includes, then the rest — stable within groups. Selecting
+  // never re-sorts by itself.
+  const shownItems = props.sortSelected
+    ? [...filteredItems].sort((a, b) => {
+        const rank = (item: ContextPanelItem): number => {
+          if ((item as { fixed?: boolean }).fixed) return 0;
+          if (item.key === mainIssueKey) return 1;
+          if (included.has(item.key)) return 2;
+          return 3;
+        };
+        return rank(a) - rank(b);
+      })
+    : filteredItems;
   contextItemKeys = shownItems.map((item) => item.key);
   contextItemAvailable = shownItems.map(
     (item) => (item as { available?: boolean }).available === true,
@@ -627,9 +635,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const modeCommand = sectionKey === "section:issues"
     ? command("r", "Mode", issueMode === "primary" ? "primary" : "reference", C)
     : "";
-  const sortCommand = sectionKey === "section:issues"
-    ? command("s", "Sort", props.issueSortSelected ? "selected" : "default", C)
-    : "";
+  const sortCommand = command("s", "Sort", props.sortSelected ? "selected" : "default", C);
   const contextCommands = panelLine(
     joinCommands([
       compact("h/l", "tabs", Y),

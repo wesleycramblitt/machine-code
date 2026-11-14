@@ -69,7 +69,7 @@ function render(root, { agent, item, issueMode, included = [], sorted = false })
     contextFiltering: false,
     excluded: new Set(),
     included: new Set(included),
-    issueSortSelected: sorted,
+    sortSelected: sorted,
     issueMode,
     skillModes: new Map(),
     skillShown: new Map(),
@@ -192,6 +192,39 @@ describe("composer issue modes", () => {
     }
   });
 
+  it("s sorts main first, then other included, then rest", () => {
+    const root = scratchRepo();
+    try {
+      const sorted = render(root, {
+        agent: "engineer",
+        item: "b-done",
+        issueMode: "reference",
+        included: [
+          "issue:issues/features/done/b-done.md",
+          "issue:issues/features/todo/a-todo.md",
+        ],
+        sorted: true,
+      });
+      // b-done is the main: first even though a-todo builds first.
+      // (b-done is done, so it cannot be the run's main in practice;
+      // this only exercises the ordering rule.)
+      assert.deepEqual(slugs(sorted), ["b-done", "a-todo"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("s toggles from any tab", () => {
+    const root = scratchRepo();
+    try {
+      const s = stubState(root, { newRunContextSectionKey: "section:files" });
+      handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
+      assert.equal(s.newRunSortSelected, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("mode toggle is a bottom key command", () => {
     const root = scratchRepo();
     try {
@@ -255,13 +288,13 @@ describe("composer issue keys", () => {
         newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
         newRunContextItem: 0,
       });
-      assert.equal(s.newRunIssueSort, undefined);
+      assert.equal(s.newRunSortSelected, undefined);
       handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
-      assert.equal(s.newRunIssueSort, true);
+      assert.equal(s.newRunSortSelected, true);
       assert.equal(s.newRunContextItem, 0);
       assert.equal(s.newRunContextItemKey, null);
       handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
-      assert.equal(s.newRunIssueSort, false);
+      assert.equal(s.newRunSortSelected, false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

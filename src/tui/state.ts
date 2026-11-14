@@ -170,7 +170,7 @@ export interface TuiState {
   /** Issues-tab select mode: one primary work item vs N references. */
   newRunIssueMode: "primary" | "reference";
   /** Issues-tab manual sort: selected-first when true, build order otherwise. */
-  newRunIssueSort: boolean;
+  newRunSortSelected: boolean;
   /** Explicit per-skill mode choices (include | on-demand | exclude). */
   newRunSkillModes: Map<string, SkillMode>;
   /** Modes as rendered this frame (single source for space-cycling). */
@@ -311,7 +311,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunContextExcluded: new Set<string>(),
     newRunContextIncluded: new Set<string>(),
     newRunIssueMode: "primary",
-    newRunIssueSort: false,
+    newRunSortSelected: false,
     newRunSkillModes: new Map<string, SkillMode>(),
     newRunSkillShown: new Map<string, SkillMode>(),
     newRunRequiredSkills: [],

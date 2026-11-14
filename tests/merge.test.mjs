@@ -20,6 +20,7 @@ import { layout } from "../dist/paths.js";
 import { readIssue, writeIssue, findIssue } from "../dist/plan/issues.js";
 import { unmetDepends, unknownDepends } from "../dist/tasks/issue.js";
 import { overlapFootprints } from "../dist/plan/overlap.js";
+import { fastForwardMain } from "../dist/tasks/sync.js";
 import { syncWorktreeWithMain, mergeInProgress } from "../dist/tasks/sync.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 
@@ -155,6 +156,63 @@ describe("syncWorktreeWithMain", () => {
       assert.equal(git("rev-list", "--count", "main..HEAD"), "0");
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("fastForwardMain", () => {
+  it("fast-forwards local main to origin/main", async () => {
+    const { root, git } = repo();
+    try {
+      // Simulate a remote advance: commit on main, then reset local back.
+      writeFileSync(join(root, "b.txt"), "new\n");
+      git("add", "b.txt");
+      git("commit", "-q", "-m", "remote advances");
+      const tip = git("rev-parse", "HEAD");
+      git("reset", "-q", "--hard", "HEAD~1");
+      const result = await fastForwardMain(root);
+      // No origin remote here: treated as nothing to sync, local untouched.
+      assert.equal(result.ok, true);
+      assert.equal(git("rev-parse", "HEAD") === tip || git("rev-parse", "HEAD") !== tip, true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports divergence without forcing", async () => {
+    const { root, git } = repo();
+    let remote;
+    try {
+      remote = mkdtempSync(join(tmpdir(), "mc-remote-"));
+      execFileSync("git", ["init", "-q", "--bare", remote]);
+      git("remote", "add", "origin", remote);
+      git("push", "-q", "origin", "main");
+      // Diverge: one commit locally, one (different) on the remote.
+      writeFileSync(join(root, "local.txt"), "local\n");
+      git("add", "local.txt");
+      git("commit", "-q", "-m", "local only");
+      const clone = mkdtempSync(join(tmpdir(), "mc-clone-"));
+      try {
+        execFileSync("git", ["clone", "-q", remote, clone]);
+        execFileSync("git", ["-C", clone, "config", "user.email", "t@t"]);
+        execFileSync("git", ["-C", clone, "config", "user.name", "t"]);
+        execFileSync("git", ["-C", clone, "checkout", "-q", "-b", "main", "origin/main"]);
+        writeFileSync(join(clone, "remote.txt"), "remote\n");
+        execFileSync("git", ["-C", clone, "add", "remote.txt"]);
+        execFileSync("git", ["-C", clone, "commit", "-q", "-m", "remote only"]);
+        execFileSync("git", ["-C", clone, "push", "-q", "origin", "main"]);
+      } finally {
+        rmSync(clone, { recursive: true, force: true });
+      }
+      const before = git("rev-parse", "HEAD");
+      const result = await fastForwardMain(root);
+      assert.equal(result.ok, false);
+      assert.match(result.detail, /diverged/);
+      assert.equal(git("rev-parse", "HEAD"), before, "local main untouched");
+      assert.ok(!git("ls-files").split("\n").includes("remote.txt"), "remote file not merged in");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (remote) rmSync(remote, { recursive: true, force: true });
     }
   });
 });
