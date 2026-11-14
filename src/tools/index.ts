@@ -171,7 +171,19 @@ function cleanWritePath(args: unknown): unknown {
     delete out.path;
     return out;
   }
-  return args;
+  // Same weak-model habit as edits: a "null" b64 would decode to garbage
+  // bytes and succeed, writing corruption to disk. Strip those spellings.
+  let changed = false;
+  for (const field of ["content_b64", "content_named_block"]) {
+    if (typeof out[field] === "string") {
+      const v = (out[field] as string).trim();
+      if (v === "" || v === "null" || v === "undefined") {
+        delete out[field];
+        changed = true;
+      }
+    }
+  }
+  return changed ? out : args;
 }
 
 export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
@@ -220,16 +232,14 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
 
 /* -------------------------------------------------------------------- edit */
 
-/** Check whether a hunk or spec has at least one content source for a prefix (old/new). */
+/** Check whether a hunk or spec has at least one content source for a prefix (old/new).
+ * Weak models fill every field with the string "null"; those spellings are
+ * never real content (a "null" b64 decodes to identical garbage on both
+ * sides, which once surfaced as "oldString and newString must differ"). */
 function hasContentSource(obj: Record<string, unknown>, prefix: "old" | "new"): boolean {
-  const plain = obj[`${prefix}String`];
-  const b64 = obj[`${prefix}String_b64`];
-  const nb = obj[`${prefix}String_named_block`];
-  return (
-    (typeof plain === "string" && plain.trim() !== "") ||
-    (typeof b64 === "string" && b64.trim() !== "") ||
-    (typeof nb === "string" && nb.trim() !== "")
-  );
+  const usable = (value: unknown): boolean =>
+    typeof value === "string" && value.trim() !== "" && value.trim() !== "null" && value.trim() !== "undefined";
+  return usable(obj[`${prefix}String`]) || usable(obj[`${prefix}String_b64`]) || usable(obj[`${prefix}String_named_block`]);
 }
 
 /**
@@ -275,6 +285,15 @@ function cleanEditFields(out: Record<string, unknown>, isNullish: (value: unknow
   if (isNullish(out.oldString)) {
     delete out.oldString;
     changed = true;
+  }
+  // Weak models fill every _b64/_named_block field with the string "null".
+  // A "null" b64 decodes to identical garbage on both sides, so strip these
+  // spellings before resolution priority (named_block > b64 > plain) can act.
+  for (const field of ["oldString_b64", "newString_b64", "oldString_named_block", "newString_named_block"]) {
+    if (typeof out[field] === "string" && isNullish(out[field])) {
+      delete out[field];
+      changed = true;
+    }
   }
   // An empty replacement is only meaningful against a real anchor. A bare
   // symbol/section with no oldString replaces the whole scoped block, so an
