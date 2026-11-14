@@ -845,16 +845,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       suspend: checkpoint,
     };
 
-    const artifactContext: import("./tools/artifact.js").ArtifactToolContext | undefined =
-      input.layout && input.agent.tools.includes("artifact")
-        ? {
-            layout: layoutFor(mapRoot),
-            capabilities: input.agentCapabilities ?? [],
-            recorder,
-            allowScripts: true,
-          }
-        : undefined;
-
     // Skill tool: on-demand SKILL.md bodies. Preset-excluded skills plus the
     // composer's per-skill exclusions are invisible here.
     const skillContext: import("./tools/skill.js").SkillToolContext | undefined =
@@ -878,7 +868,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         commands: input.commands,
         tools: input.agent.tools,
         ask: askContext,
-        artifacts: artifactContext,
         skills: skillContext,
         state: memory,
         repoRoot: input.root,

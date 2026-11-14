@@ -41,7 +41,6 @@ import {
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
 import { documentSections, sectionTitle } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
-import { artifactTool, type ArtifactToolContext } from "./artifact.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
 import { contextTool } from "./context.js";
 import { inspectTool } from "./inspect.js";
@@ -65,8 +64,6 @@ export interface ToolContext {
   tools?: readonly string[];
   /** When provided, the `ask` tool is live (suspends the run for input). */
   ask?: AskContext;
-  /** When provided, the `artifact` tool is live (tools/scripts inventory). */
-  artifacts?: ArtifactToolContext;
   /** When provided, the `skill` tool is live (on-demand skill bodies). */
   skills?: SkillToolContext;
   /** Run state for the `context` tool. */
@@ -1853,7 +1850,6 @@ const CORE_TOOL_NAMES = new Set([
   "command",
   "context",
   "ask",
-  "artifact",
   "skill",
 ]);
 
@@ -2017,22 +2013,6 @@ function askUnavailable(): AgentTool<typeof AskUnavailableParams> {
 }
 
 /* ----------------------------------------------------------------- artifact */
-
-const ArtifactUnavailableParams = Type.Object({
-  action: Type.String({ description: "Artifact operation." }),
-});
-
-function artifactUnavailable(): AgentTool<typeof ArtifactUnavailableParams> {
-  return {
-    name: "artifact",
-    label: "artifact",
-    description: "Reusable tool and script inventory.",
-    parameters: ArtifactUnavailableParams,
-    async execute() {
-      return fail("artifact provisioning is not available in this run (role lacks artifact access)");
-    },
-  };
-}
 
 /* ------------------------------------------------------------------- skill */
 
@@ -2275,7 +2255,6 @@ export type CoreToolName =
   | "context"
   | "inspect"
   | "ask"
-  | "artifact"
   | "skill"
   | "finish";
 
@@ -2290,7 +2269,6 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     context: contextTool(ctx),
     inspect: inspectTool(ctx),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
-    artifact: ctx.artifacts ? artifactTool(ctx.artifacts) : artifactUnavailable(),
     skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),
     ...(ctx.finish
       ? { finish: finishTool({ onFinish: ctx.finish }) }

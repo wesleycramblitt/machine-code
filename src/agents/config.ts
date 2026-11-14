@@ -169,7 +169,6 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   command: null,
   context: null,
   ask: null, // gated by askEnabled(config)
-  artifact: "artifact:provision",
   skill: null, // read-only skill bodies; exclusions are enforced inside the tool
   finish: null, // terminal action
 };
