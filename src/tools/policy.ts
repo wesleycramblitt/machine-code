@@ -15,7 +15,7 @@ export const TOOL_GUIDE = [
   "### 1. Symbols first — the index, not the bytes",
   "Every turn includes a `<symbols>` block: every file the run has seen, with symbols and docs. No bodies.",
   "To read bytes, call inspect with a path, symbol, or range. Prefer `detail: \"outline\"` first, then one symbol or range.",
-  "Find the file in the index, then inspect for bytes. Never re-issue an identical query: reword only when you need something new.",
+  "Find the file in the index, then inspect for bytes.",
   "",
   "### 2. Inspect — one call per concern, cheapest shape that answers",
   "`inspect {query}` routes by shape: a path reads the file, `path:line` or `path:start-end` reads a slice, a bare name finds its definition plus every caller, anything else is a ranked content search.",

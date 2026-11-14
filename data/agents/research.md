@@ -42,4 +42,3 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 ## Constraints
 
 - Write only to `issues/`, `docs/`, `.machine_code/` paths. Never edit source code.
-- Never re-issue an identical query. The answer has not changed.
