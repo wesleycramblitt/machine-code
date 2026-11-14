@@ -1060,7 +1060,7 @@ export async function runTui(): Promise<void> {
 
     const scopedRuns = s.runsRepoScope === "cwd" ? allRuns.filter((run) => run.repoRoot === l.repoRoot) : allRuns;
     const filteredRuns = runsListScreen ? scopedRuns : [];
-    const workGroup = s.runsGroup === "all" || s.runsGroup === "category";
+    const workGroup = s.runsGroup === "all" || s.runsGroup === "category" || s.runsGroup === "deps";
     const issuesByRepo: Record<string, readonly Issue[]> = {};
     for (const root of new Set([l.repoRoot, ...filteredRuns.map((run) => run.repoRoot)])) {
       issuesByRepo[root] = listIssues(layout(root));

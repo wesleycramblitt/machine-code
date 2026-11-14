@@ -1,12 +1,12 @@
 /**
  * machine_code — navigable work hierarchy.
  *
- * Two modes over the issues tree:
+ * Group modes over the issues tree:
  *
- *   all   repository → kind (Features/Bugs/Ideas) → issue → runs
- *   type  repository → kind → status section → issue → runs
- *   status  repository → run status
- *   overall run status across every repository
+ *   all       repository → kind (Features/Bugs/Ideas) → issue → runs
+ *   category  repository → kind → status → tag → issue → runs
+ *   deps      repository → Ready/Cyclic sections → issues nested under the
+ *             dependency they wait on → runs
  *
  * Status is a directory: the row set comes from `issues/<kind>/<status>/`.
  * The issue file is the work item; there are no packet rows.
@@ -26,14 +26,15 @@ import { effectiveStatus, runItemId } from "../plan/lifecycle.js";
 import type { DisplayStatus } from "../plan/issues.js";
 import { sortRuns } from "./status.js";
 
-export type RunGroup = "all" | "category";
+export type RunGroup = "all" | "category" | "deps";
 
 /** Modes the TUI cycles with `g`. */
-export const RUN_GROUPS: readonly RunGroup[] = ["all", "category"];
+export const RUN_GROUPS: readonly RunGroup[] = ["all", "category", "deps"];
 
 export const RUN_GROUP_LABELS: Record<RunGroup, string> = {
   all: "All",
   category: "By category",
+  deps: "By dependencies",
 };
 
 /** Parse a `--group` value, accepting the pre-restructure names. */
@@ -41,7 +42,8 @@ export function parseRunGroup(value: string | undefined): RunGroup | undefined {
   if (!value) return undefined;
   if (value === "packets" || value === "plan" || value === "type" || value === "issues") return "all";
   if (value === "tag" || value === "tags") return "category";
-  return (["all", "category"] as const).find((group) => group === value);
+  if (value === "deps" || value === "dependencies") return "deps";
+  return (["all", "category", "deps"] as const).find((group) => group === value);
 }
 
 export type SectionTone = "feature" | "bug" | "idea" | "other" | "category" | "status" | "untracked";
@@ -375,6 +377,65 @@ export function buildRunIndex(options: RunOptions): RunIndex {
           }
         }
       }
+    } else if (group === "deps") {
+      // By dependencies: ready work first, then blocked issues nested under
+      // the dependency they wait on, one indent per hop. No kind or status
+      // headers — dependency chains cross kinds, and a row duplicated into
+      // two kind sections would fold from two row ids. Done issues and
+      // researched ideas are satisfied dependencies, so this view holds
+      // outstanding work only.
+      const deps = depsByRepo.get(repoRoot) ?? emptyDeps;
+      const outstanding = issues.filter((issue) => !deps.satisfied.has(issue.slug));
+      // First unmet dependency, using the same known-and-unsatisfied filter
+      // the row suffix renders as "blocked by". An unknown slug cannot nest,
+      // so an issue whose deps are all unknown stays in Ready with its
+      // unknown-dep marker. A known unmet dep is outstanding itself, so the
+      // parent row always exists in this view.
+      const parentOf = new Map<string, string>();
+      for (const issue of outstanding) {
+        const dep = issue.depends.find((candidate) => candidate !== issue.slug && deps.known.has(candidate) && !deps.satisfied.has(candidate));
+        if (dep) parentOf.set(issue.slug, dep);
+      }
+      // A chain that loops back through the issue itself cannot nest under
+      // its dependency; those issues land in the Cyclic section. The walk
+      // stops on any revisit, so cyclic data renders instead of hanging.
+      const cyclic = new Set<string>();
+      for (const issue of outstanding) {
+        const seen = new Set<string>([issue.slug]);
+        let current = parentOf.get(issue.slug);
+        while (current && !seen.has(current)) {
+          seen.add(current);
+          current = parentOf.get(current);
+        }
+        if (current === issue.slug) cyclic.add(issue.slug);
+      }
+      for (const slug of cyclic) parentOf.delete(slug);
+      const childrenOf = new Map<string, Issue[]>();
+      const ready: Issue[] = [];
+      const cyclicList: Issue[] = [];
+      for (const issue of outstanding) {
+        const parent = parentOf.get(issue.slug);
+        if (parent) {
+          const list = childrenOf.get(parent) ?? [];
+          list.push(issue);
+          childrenOf.set(parent, list);
+        } else if (cyclic.has(issue.slug)) cyclicList.push(issue);
+        else ready.push(issue);
+      }
+      const pushDepTree = (issue: Issue, issueDepth: number, parentId: string): void => {
+        pushIssue(issue, issueDepth, parentId);
+        for (const child of sortIssues(childrenOf.get(issue.slug) ?? [])) {
+          pushDepTree(child, issueDepth + 1, `issue:${issue.kind}:${issue.slug}`);
+        }
+      };
+      const readyId = `deps:ready:${repoRoot}`;
+      if (pushSection(readyId, "Ready", ready.length, depth, "status")) {
+        for (const issue of sortIssues(ready)) pushDepTree(issue, depth + 1, readyId);
+      }
+      const cyclicId = `deps:cyclic:${repoRoot}`;
+      if (pushSection(cyclicId, "Cyclic", cyclicList.length, depth, "status")) {
+        for (const issue of sortIssues(cyclicList)) pushDepTree(issue, depth + 1, cyclicId);
+      }
     }
 
     const free = repoRuns.filter((run) => !runItemId(run));
@@ -384,7 +445,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     }
   };
 
-  const workGroup = group === "all" || group === "category";
+  const workGroup = group === "all" || group === "category" || group === "deps";
   const repoNames = [
     ...new Set([
       ...baseRuns.map(repoOf),
