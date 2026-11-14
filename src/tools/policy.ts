@@ -40,7 +40,7 @@ export const TOOL_GUIDE = [
   "",
   "### 4. Plan, record, and finish",
   '**Plan:** `context {action: "plan", steps: [{text: "...", done: false}]}` — replaces the whole plan; renders as checkboxes in `<run-state>`. Update steps to done as you complete them.',
-  '**Note:** `context {action: "note", kind: "finding|decision|open", text: "...", refs: ["path:line"]}` — one line with a ref; notes render every turn, so keep them short.',
+  '**Note:** `context {action: "note", kind: "finding|decision|open", text: "...", refs: ["path:line"]}` — one line with a ref; notes render every turn, so keep them short. Full tool results fade after ~2 turns (older calls survive only as one-line pointers), so a turn ending with reads alone is a turn that forgets: close it with a note, a plan update, or an edit.',
   '**Other actions:** `forget {id}` drops a stale fact; `state` prints the ledger; `parent {id}` reads the parent run.',
   '**Finish:** `finish {outcome: "completed", summary: "..."}` when ready for gates. `blocked` / `failed` stop the run with the reason. Gates run after finish; fix and call finish again if they fail.',
   "",
