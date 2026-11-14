@@ -119,6 +119,10 @@ export interface TuiState {
   deletingRuns: Set<string>;
   runSection: RunSection;
   runScroll: number;
+  /** Selected changed-file row in the changes section (index into ChangeSummary.files). */
+  changeSel: number;
+  /** Index of the changed file whose full diff is open (null = file list). */
+  changeOpen: number | null;
   processSel: number;
   processFollow: boolean;
   eventSel: number;
@@ -267,6 +271,8 @@ export function createTuiState(repoRoot: string): TuiState {
     deletingRuns: new Set<string>(),
     runSection: "overview",
     runScroll: 0,
+    changeSel: 0,
+    changeOpen: null,
     processSel: 0,
     processFollow: false,
     eventSel: 0,

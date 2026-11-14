@@ -52,6 +52,10 @@ export interface RunDetailProps {
   thinkingScroll: number;
   thinkingFollow: boolean;
   childSel: number;
+  /** Selected changed-file row in the changes section (index into ChangeSummary.files). */
+  changeSel: number;
+  /** Index of the changed file whose full diff is open (null = file list). */
+  changeOpen: number | null;
   expanded: ReadonlySet<string>;
   /** Cached worktree change summary for the detail's run. */
   changes: ChangeSummary;
@@ -72,4 +76,6 @@ export interface RunDetailFrame {
   eventBodyScroll: number;
   thinkingScroll: number;
   childSel: number;
+  changeSel: number;
+  changeOpen: number | null;
 }
