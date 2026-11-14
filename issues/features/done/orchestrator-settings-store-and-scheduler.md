@@ -1,7 +1,8 @@
-tags: orchestration
+commit: 8230896237b58f58e7030344f942906724c8dc74
 files: src/orchestration/store.ts, src/orchestration/scheduler.ts
-keywords: orchestration, orchestrator, minFit, processes, runnableIssues
+tags: orchestration
 acceptance: script:build
+keywords: orchestration, orchestrator, minFit, processes, runnableIssues
 
 # Orchestrator settings store and issue scheduler
 
