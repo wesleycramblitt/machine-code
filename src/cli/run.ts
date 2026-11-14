@@ -1056,7 +1056,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
       home: l.home,
       availability: loadAvailability(l.home),
       recorder,
-      commands: allCommands(l, { scriptsRoot: toolRoot }),
+      // Model map: core + issues + reference only. Project scripts stay
+      // out — the model never runs them; gates get their own map below.
+      commands: allCommands(l),
       requireProvider,
       requireModel,
       contextText,
@@ -1094,7 +1096,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
       home: l.home,
       availability: loadAvailability(l.home),
       recorder,
-      commands: allCommands(l, { scriptsRoot: toolRoot }),
+      // Model map: core + issues + reference only. Project scripts stay
+      // out — the model never runs them; gates get their own map below.
+      commands: allCommands(l),
       requireProvider,
       requireModel,
       contextText,
@@ -1411,8 +1415,8 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   }
 
   const gateCommands = allCommands(l2, { scriptsRoot: toolRoot });
-  // The agent and the gates share one map so script:* resolves for both.
-  const commands = allCommands(l2, { scriptsRoot: toolRoot });
+  // Separate maps: gates resolve script:*, the agent never sees them.
+  const commands = allCommands(l2);
   const recorder = RunRecorder.reopen(l2, s);
   if (recorderPatchWorktree) {
     recorder.patchSummary(recorderPatchWorktree);
