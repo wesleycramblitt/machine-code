@@ -10,7 +10,7 @@ import { CTRL_D, CTRL_U, HALF_PAGE, modelReasonText } from "../../format.js";
 import { printable } from "../../format.js";
 import { loadAvailability } from "../../../availability.js";
 import { layout } from "../../../paths.js";
-import { findIssue } from "../../../plan/issues.js";
+import { ENGINEER_WORK_STATUSES, findIssue } from "../../../plan/issues.js";
 import { NEW_RUN_CONTEXT_TABS } from "./types.js";
 import type { SkillMode } from "../../../context/references.js";
 import type { TuiState } from "../../state.js";
@@ -163,20 +163,34 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === " ") {
     const key = s.newRunContextItemKeys[s.newRunContextItem];
     const available = s.newRunContextItemAvailable[s.newRunContextItem] === true;
-    // Primary mode: space links the row as the one main issue (replacing
-    // the previous main). Reference mode falls through to the toggle below.
-    if (
-      key && key.startsWith("issue:") &&
-      s.newRunContextSectionKey === "section:issues" &&
-      s.newRunIssueMode === "primary"
-    ) {
+    // Issues tab, primary mode: space links the row as the one main issue.
+    // Ineligible rows (wrong kind/status for the agent) are refused with
+    // the reason. Reference mode falls through to the include toggle, but
+    // the main row itself can never be a reference.
+    if (key && key.startsWith("issue:")) {
+      const inIssuesTab = s.newRunContextSectionKey === "section:issues";
       const rel = key.slice("issue:".length);
       const slug = rel.split("/").pop()?.replace(/\.md$/, "") ?? "";
-      const issue = slug ? findIssue(layout(ctx.repoRoot), slug) : undefined;
-      if (issue) ctx.chooseIssue(issue);
-      else ctx.notify(`issue not found: ${rel}`);
-      ctx.draw();
-      return true;
+      if (inIssuesTab && s.newRunIssueMode === "primary") {
+        const issue = slug ? findIssue(layout(ctx.repoRoot), slug) : undefined;
+        if (!issue) {
+          ctx.notify(`issue not found: ${rel}`);
+        } else {
+          const eligible =
+            s.newrun.agent === "engineer"
+              ? issue.kind !== "ideas" && (ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)
+              : issue.kind === "ideas" && issue.status === "needs-research";
+          if (!eligible) ctx.notify(`${issue.slug} cannot be the main issue for ${s.newrun.agent} (status ${issue.status})`);
+          else ctx.chooseIssue(issue);
+        }
+        ctx.draw();
+        return true;
+      }
+      if (inIssuesTab && s.newRunIssueMode === "reference" && s.newrun.item && slug === s.newrun.item) {
+        ctx.notify(`${slug} is the main issue — references must be other issues`);
+        ctx.draw();
+        return true;
+      }
     }
     if (key && key.startsWith("skill:")) {
       // Three modes cycle: include (body inlined) → on-demand

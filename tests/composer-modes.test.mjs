@@ -93,40 +93,42 @@ function render(root, { agent, item, issueMode, included = [] }) {
 const slugs = (frame) => frame.contextItemKeys.map((k) => k.split("/").pop().replace(/\.md$/, ""));
 
 describe("composer issue modes", () => {
-  it("primary/engineer lists only the actionable todo", () => {
+  it("primary/engineer lists everything, eligible and reference alike", () => {
     const root = scratchRepo();
     try {
       const frame = render(root, { agent: "engineer", issueMode: "primary" });
-      assert.deepEqual(slugs(frame), ["a-todo"]);
+      assert.deepEqual(slugs(frame), ["a-todo", "b-done"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("reference/engineer lists todo + done, never ideas, never the main", () => {
+  it("reference/engineer lists the same rows, main included and visible", () => {
     const root = scratchRepo();
     try {
       const frame = render(root, { agent: "engineer", issueMode: "reference" });
       assert.deepEqual(slugs(frame), ["a-todo", "b-done"]);
       const main = render(root, { agent: "engineer", item: "a-todo", issueMode: "reference", included: ["issue:issues/features/todo/a-todo.md"] });
-      assert.deepEqual(slugs(main), ["b-done"]);
+      assert.deepEqual(slugs(main), ["a-todo", "b-done"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("reference keeps get the purple mark, primary keeps green", () => {
+  it("reference keeps are purple in both modes, main keep stays green", () => {
     const root = scratchRepo();
     try {
-      const frame = render(root, {
-        agent: "engineer",
-        issueMode: "reference",
-        included: ["issue:issues/features/done/b-done.md"],
-      });
-      const lines = [...(frame.bottomAlign?.above ?? []), ...(frame.bottomAlign?.block ?? [])].join("\n");
-      const bLine = lines.split("\n").find((l) => l.includes("b-done"));
-      assert.ok(bLine, "done row renders");
-      assert.ok(bLine.includes(PURPLE_MARK) && bLine.includes("✓"), "reference keep is purple-checked");
+      for (const issueMode of ["reference", "primary"]) {
+        const frame = render(root, {
+          agent: "engineer",
+          issueMode,
+          included: ["issue:issues/features/done/b-done.md"],
+        });
+        const lines = [...(frame.bottomAlign?.above ?? []), ...(frame.bottomAlign?.block ?? [])].join("\n");
+        const bLine = lines.split("\n").find((l) => l.includes("b-done"));
+        assert.ok(bLine, `done row renders (${issueMode})`);
+        assert.ok(bLine.includes(PURPLE_MARK) && bLine.includes("✓"), `reference keep is purple-checked (${issueMode})`);
+      }
       const primary = render(root, {
         agent: "engineer",
         item: "a-todo",
@@ -152,12 +154,12 @@ describe("composer issue modes", () => {
     }
   });
 
-  it("mode hint names the current mode", () => {
+  it("mode toggle is a bottom key command", () => {
     const root = scratchRepo();
     try {
       const frame = render(root, { agent: "engineer", issueMode: "reference" });
-      const text = [...(frame.bottomAlign?.above ?? []), frame.secondary].join("\n").replace(/\x1b\[[0-9;]*m/g, "");
-      assert.match(text, /r mode: reference/);
+      const text = [...(frame.bottomAlign?.above ?? []), ...(frame.bottomAlign?.block ?? [])].join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+      assert.match(text, /r.*Mode.*reference/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -225,6 +227,59 @@ describe("composer issue keys", () => {
       assert.equal(handled, true);
       assert.equal(linked, "a-todo");
       assert.equal(s.newRunContextIncluded.size, 0, "primary link does not toggle includes itself");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("space in primary mode refuses ineligible rows", () => {
+    const root = scratchRepo();
+    try {
+      const s = stubState(root, {
+        newRunContextItemKeys: ["issue:issues/features/done/b-done.md"],
+        newRunContextItemAvailable: [true],
+      });
+      let linked = null;
+      const notes = [];
+      const ctx = {
+        draw: () => {},
+        repoRoot: root,
+        notify: (m) => notes.push(m),
+        chooseIssue: (issue) => { linked = issue.slug; },
+      };
+      const handled = handleComposerKeys(s, ctx, " ");
+      assert.equal(handled, true);
+      assert.equal(linked, null);
+      assert.ok(notes.some((m) => m.includes("cannot be the main issue")), `notified, got: ${notes.join("; ")}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("space in reference mode refuses the main row", () => {
+    const root = scratchRepo();
+    try {
+      const s = stubState(root, {
+        newRunIssueMode: "reference",
+        newrun: { ...baseRun("engineer"), item: "a-todo" },
+        newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
+        newRunContextItemAvailable: [true],
+      });
+      let linked = null;
+      const notes = [];
+      const ctx = {
+        draw: () => {},
+        repoRoot: root,
+        notify: (m) => notes.push(m),
+        chooseIssue: (issue) => { linked = issue.slug; },
+      };
+      // stubState spreads overrides after defaults, but newrun needs the merge above
+      s.newrun.item = "a-todo";
+      const handled = handleComposerKeys(s, ctx, " ");
+      assert.equal(handled, true);
+      assert.equal(linked, null);
+      assert.ok(!s.newRunContextIncluded.has("issue:issues/features/todo/a-todo.md"));
+      assert.ok(notes.some((m) => m.includes("main issue")), `notified, got: ${notes.join("; ")}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
