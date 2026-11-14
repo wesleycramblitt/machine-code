@@ -420,15 +420,9 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
     });
   }
 
-  // The issues tree is context for research (avoid duplicate items); an
-  // engineer/review run already carries the one issue it works on.
-  if (input.agent === "research") {
-    const list = listIssues(layout);
-    if (list.length > 0) {
-      const body = list.map((issue) => `- [${issue.status}] ${issue.slug} - ${singleLine(issue.prompt).slice(0, 120)}`).join("\n");
-      pending.push({ kind: "issue", origin: "inherited", ref: "issues/", depth: 3, body, band: 7 });
-    }
-  }
+  // No whole-tree issues aggregate: the agent sees the linked main issue
+  // plus explicitly referenced issues only. (Research discovers the tree
+  // with issue:list instead of carrying it in every prompt.)
   if (machine.context.docsIndex) {
     const abs = withinRepo(fileRoot, machine.context.docsIndex);
     if (abs && existsSync(abs)) {

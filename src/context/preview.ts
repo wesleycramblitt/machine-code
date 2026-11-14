@@ -169,13 +169,8 @@ export function previewContext(
     if (!exists) warnings.push(`docs ${path} is missing or outside the repo`);
   }
 
-  if (options.agent === "research") {
-    const issues = listIssues(layout);
-    if (issues.length > 0) {
-      const body = issues.map((issue) => `- [${issue.status}] ${issue.slug} - ${singleLine(issue.prompt).slice(0, 120)}`).join("\n");
-      sources.push({ kind: "issue", ref: "issues/", origin: "inherited", depth: 3, chars: body.length, exists: true });
-    }
-  }
+  // No whole-tree issues aggregate: the agent sees explicitly linked and
+  // referenced issues only. (Research discovers the tree with issue:list.)
   // Default skills and explicit composer includes are candidates for body
   // inlining; the mode chain decides. Defaults resolve to on-demand
   // (description-only) unless a role preset or composer override says

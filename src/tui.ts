@@ -384,6 +384,18 @@ export async function runTui(): Promise<void> {
     const previousAgent = s.newrun.agent;
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
     s.newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
+    // The main issue must match the agent (ideas↔research, features/bugs↔
+    // engineer). A switch that orphans the linked issue clears it instead
+    // of leaving a pair the run would refuse.
+    if (s.newrun.item) {
+      const linked = findIssue(layout(s.newRunRepo), s.newrun.item);
+      const wantsResearch = linked?.kind === "ideas";
+      const isResearch = s.newrun.agent === "research";
+      if (linked && wantsResearch !== isResearch) {
+        s.newrun.item = undefined;
+        notify(`unlinked ${linked.slug}: ${linked.kind} needs ${wantsResearch ? "research" : "engineer"}`);
+      }
+    }
   };
 
   const cycleAmbiguity = () => {
