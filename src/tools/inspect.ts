@@ -359,9 +359,14 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           }
         }
 
-        // Mode 4 — directory listing, by query or by path scope.
+        // Mode 4 — directory listing, by query or by path scope. Only when
+        // no search is being asked: a query alongside a directory scope
+        // (e.g. a keyword with path:"src") is a scoped search, not a
+        // listing request — the model hedges with broad scopes meaning
+        // "the repo". Those fall through to symbol/keyword search with the
+        // scope applied.
         const dirCandidate = scope ?? (!queryIsFile && !anchor ? query : undefined);
-        if (dirCandidate) {
+        if (dirCandidate && (query === dirCandidate || !scope)) {
           try {
             if (statSync(resolveWithin(ctx.root, dirCandidate)).isDirectory() && map.files.every((f) => f.path !== query)) {
               const shown = scope ?? dirCandidate;
@@ -429,13 +434,18 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           // Symbol, path, and ranker all missed — often a local nested
           // inside a function body, which the map never indexes. Fall back
           // to literal content search (scoped when the caller gave a path)
-          // before reporting no matches, so one call finds it.
+          // before reporting no matches, so one call finds it. Multi-word
+          // queries match files containing ANY term: models describe what
+          // they want ("timeout stream abort") rather than single identifiers.
           try {
             const { runProc } = await import("../proc.js");
             const { excludeGlobs } = await import("./safety.js");
+            const terms = [...new Set(query.split(/\s+/).filter((t) => t.length >= 3))];
+            const patterns = terms.length > 0 ? terms : [query];
             const args = ["--line-number", "--with-filename", "--no-heading", "--color", "never",
-              "--max-count", "40", "--context", "2", "-F", "--", query];
-            if (scope) args.push(scope);
+              "--max-count", "40", "--context", "2", "-F", ...excludeGlobs()];
+            for (const term of patterns) args.push("--regexp", term);
+            args.push("--", scope ?? ".");
             const result = await runProc("rg", args, { cwd: ctx.root, timeoutMs: 30_000 });
             const text = (result.stdout ?? "").trimEnd();
             if (result.outcome === "exit" && text) {

@@ -23,7 +23,7 @@ export const TOOL_GUIDE = [
   '  Outline (cheapest, lists symbols): `{"query": "src/file.ts", "detail": "outline"}`',
   '  One symbol body: `{"query": "src/file.ts", "symbol": "FunctionName"}` or `{"query": "src/file.ts:42-85"}`',
   '  Definition plus callers: `{"query": "FunctionName"}` — no path, no regex, one name per query',
-  '  Keyword locate, file-focused: `{"query": "someIdentifier", "path": "src/file.ts"}` — returns ±30 lines around each hit plus the enclosing symbol name',
+  '  Keyword locate, file-focused: `{"query": "someIdentifier", "path": "src/file.ts"}` — returns ±30 lines around each hit plus the enclosing symbol name. Multi-word queries match files containing ANY term; single keywords need no regex',
   '  Regex fallback for multi-word patterns: `{"query": "pattern", "regex": true}` — single keywords work without regex',
   '  Never use `"path": "src"` with a keyword — that lists the directory instead of searching.',
   "  Page (fallback): `{\"query\": \"src/file.ts:1-200\"}` — 200 lines minimum per page. Paging costs a turn per page; prefer the shapes above.",
