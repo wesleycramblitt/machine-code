@@ -53,7 +53,7 @@ import { vcsSyncCommand } from "./commands/vcs.js";
 export const MAX_TURNS = 0;
 
 /** Default model call cap for a single run. Prevents runaway costs. */
-const MAX_CALLS = 50;
+const MAX_CALLS = 250;
 
 /** Default maximum number of gate retry attempts within a run. */
 const MAX_GATE_ATTEMPTS = 5;
