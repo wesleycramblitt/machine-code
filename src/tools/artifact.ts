@@ -282,6 +282,18 @@ export function artifactTool(ctx: ArtifactToolContext): AgentTool<typeof Artifac
           return ok(usageFor(ctx, artifact.name));
         }
         if (params.action === "run") {
+          // Repo scripts run in gates after finish — never by the model.
+          // (Same rule as command run script:*: the model-facing surface
+          // refuses; gates call runCommand directly and are unaffected.)
+          // Copy first: the check below must not narrow artifact.kind for
+          // the recordUsage call further down.
+          const kind: string = artifact.kind;
+          if (kind === "script") {
+            return fail(
+              `script artifacts run in gates after finish; models cannot run repo scripts. ` +
+              `Finish the change and the gates run it — gate output comes back to you if it fails.`,
+            );
+          }
           const invocation = runInvocation(ctx.layout, artifact, params.args ?? []);
           if (!invocation) return fail(`artifact ${artifact.name} has no runnable command or script`);
           const result = await runProc(invocation.binary, invocation.args, {
