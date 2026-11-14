@@ -12,7 +12,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Edit as soon as the first file is confirmed — do not map the whole repo first. Re-plan when the code changes the scope; small corrections just get done. Update steps to `done: true` as you finish them. When every step shows `[x]`, call `finish`.
 
-2. **Read only what you will change** — `<symbols>` already indexes every seen file, with line counts. Small enough to hold: read the whole file. Too big: outline, then one symbol body, then keyword locate, then page (200 lines minimum).
+2. **Read only what you will change** — the index shows line counts and symbols per file. Short files: read the whole file. Long or dense files (many symbols): outline, then one symbol body, then keyword locate, then page (200 lines minimum).
 
    `inspect {query: "src/router.ts", symbol: "routePayment"}` — one function body, ready to edit.
 

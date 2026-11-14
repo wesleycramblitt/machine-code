@@ -13,7 +13,7 @@ export const TOOL_GUIDE = [
   "After a validation error, fix the arguments; never retry unchanged.",
   "",
   "### 1. Read ladder — check size, then pick the cheapest shape",
-  "The `<symbols>` block and the map index show line counts — use them. Small enough to hold in working memory: read the whole file. Too big for that: outline first, then one symbol body, then keyword locate, then page as the fallback.",
+  "The `<symbols>` block and the map index show line counts and symbols per file — use both. Two questions: does it fit, and can you take it in at once? Short files: read the whole file. Long or dense files (many symbols): outline first, then one symbol body, then keyword locate, then page as the fallback.",
   "Every turn includes a `<symbols>` block: every file the run has seen, with symbols and docs. No bodies.",
   "To read bytes, call inspect with a path, symbol, or range.",
   "",
