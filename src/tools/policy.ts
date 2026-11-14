@@ -55,6 +55,7 @@ export const TOOL_GUIDE = [
   '  Issues: `issue:list` (filter with `args: {kind, status}`), `issue:show` with `args: {slug}`',
   "  References: `reference:find` / `reference:read` — existing references only, read-only",
   "  Conflicts: `vcs:conflicts` lists unresolved files; `vcs:resolve` with `args: {path, strategy}`; `vcs:merge-abort`",
+  "  History: `core:status` for the tree, `core:diff` with `args: {path}` for one file's patch (the prompt carries stat only), `core:history` / `core:show` for commits",
   'Skills: `skill {action: "show", name: "..."}` pulls an on-demand body; `skill {action: "list"}` lists them.',
   'Files: `glob {pattern}` (for example `{"pattern": "src/**/*.ts"}`) lists paths without reading bodies.',
   "</tool-policy>",

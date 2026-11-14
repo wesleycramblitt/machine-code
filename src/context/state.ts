@@ -495,16 +495,17 @@ export class RunStateStore {
 
   /** Ingest the assistant message and its tool results once per completed turn. */
 
-  /** Current full git diff as a patch block.
+  /** Current change summary as a stat block.
    *
    * Diffed against HEAD: the worktree branch starts at the run's base ref
    * and the agent never commits, so HEAD is the original state and this
    * block is the cumulative change since the run began — staged and
-   * unstaged — plus untracked files. Colors stripped. */
+   * unstaged — plus untracked files. Stat only, no patch bytes: the full
+   * diff is one `core:diff` call away, scoped by path when needed. */
   renderWorkspace(): string {
     if (!this.repoRoot) return "";
     try {
-      const diffArgs = ["-C", this.repoRoot, "diff", "HEAD"];
+      const diffArgs = ["-C", this.repoRoot, "diff", "HEAD", "--stat", "--no-color"];
       const untrackedArgs = ["-C", this.repoRoot, "ls-files", "--others", "--exclude-standard"];
 
       let diffOutput: string;
@@ -525,7 +526,7 @@ export class RunStateStore {
       const untracked = untrackedOutput.trim().split("\n").filter(Boolean);
       if (!patch && untracked.length === 0) return "";
 
-      const lines: string[] = ["<workspace>", "Full git diff since the run started (cumulative changes):"];
+      const lines: string[] = ["<workspace>", "Changed files since the run started (stat only):"];
       if (patch) lines.push("", patch);
       if (untracked.length > 0) {
         lines.push("", `untracked files (${untracked.length}):`);
