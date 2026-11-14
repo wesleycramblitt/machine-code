@@ -82,7 +82,8 @@ export interface TuiState {
   runsSel: number;
   runsScroll: number;
   runsAttention: boolean;
-  collapsed: Set<string>;
+  /** Runs-page collapse overrides by row id; unset rows use their default. */
+  collapsed: Map<string, boolean>;
   modelText: string;
   modelGroup: "provider" | "family" | "none";
   modelSort: ModelSort;
@@ -240,7 +241,7 @@ export function createTuiState(repoRoot: string): TuiState {
     runsSel: 0,
     runsScroll: 0,
     runsAttention: false,
-    collapsed: new Set<string>(),
+    collapsed: new Map<string, boolean>(),
     modelText: "",
     modelGroup: "provider",
     modelSort: "capability",

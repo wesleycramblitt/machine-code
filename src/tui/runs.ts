@@ -100,7 +100,8 @@ export interface RunOptions {
   /** Issues by repo root; the expandable issue tree is built per repo. */
   issuesByRepo?: Readonly<Record<string, readonly Issue[]>>;
   group?: RunGroup;
-  collapsed?: ReadonlySet<string>;
+  /** Explicit user collapse overrides by row id; a row not listed uses its default. */
+  collapsed?: ReadonlyMap<string, boolean>;
   /** Case-insensitive substring over run fields and repository paths. */
   text?: string;
   /** Only keep work that needs a human or is in flight. */
@@ -167,7 +168,7 @@ const STATUS_ORDER: Array<{ status: RunSummary["status"]; label: string }> = [
 ];
 
 export function buildRunIndex(options: RunOptions): RunIndex {
-  const collapsed = options.collapsed ?? new Set<string>();
+  const collapsed = options.collapsed ?? new Map<string, boolean>();
   const text = options.text?.trim().toLowerCase() ?? "";
   const group = options.group ?? "all";
   const rows: RunRow[] = [];
@@ -203,13 +204,18 @@ export function buildRunIndex(options: RunOptions): RunIndex {
 
   const pushSection = (id: string, label: string, count: number, depth: number, tone: SectionTone, kind?: IssueKind, status?: IssueStatus): boolean => {
     if (count === 0) return false;
-    rows.push({ kind: "section", id, label, count, depth, collapsible: true, collapsed: collapsed.has(id), tone, ...(kind ? { issueKind: kind } : {}), ...(status ? { issueStatus: status } : {}) });
-    return !collapsed.has(id);
+    // Finished work stays out of the way: done and researched sections start
+    // collapsed; every other row starts expanded. `collapsed` holds only
+    // user overrides, so an absent id falls back to the default.
+    const byDefault = status === "done" || status === "researched";
+    const isCollapsed = collapsed.get(id) ?? byDefault;
+    rows.push({ kind: "section", id, label, count, depth, collapsible: true, collapsed: isCollapsed, tone, ...(kind ? { issueKind: kind } : {}), ...(status ? { issueStatus: status } : {}) });
+    return !isCollapsed;
   };
 
   const pushRepo = (repoRoot: string, count: number): boolean => {
     const id = `repo:${repoRoot}`;
-    const isCollapsed = collapsed.has(id);
+    const isCollapsed = collapsed.get(id) ?? false;
     rows.push({
       kind: "repo",
       id,
@@ -265,7 +271,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
     const pushIssue = (issue: Issue, issueDepth: number, parentId: string): void => {
       const related = runsByItem.get(issue.slug) ?? [];
       const id = `issue:${issue.kind}:${issue.slug}`;
-      const isCollapsed = collapsed.has(id);
+      const isCollapsed = collapsed.get(id) ?? false;
       rows.push({
         kind: "issue",
         id,
