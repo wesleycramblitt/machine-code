@@ -340,9 +340,10 @@ export class RunStateStore {
     if (!clean) return;
     const at = turn ?? this.currentTurn();
     if (kind === "open") {
+      const text = clean.length > 240 ? `${clean.slice(0, 240)}…` : clean;
       this.append({
         type: "open",
-        question: { id: `q_${sha1(clean).slice(0, 10)}`, text: clean.slice(0, 240), turn: at, status: "open" },
+        question: { id: `q_${sha1(clean).slice(0, 10)}`, text, turn: at, status: "open" },
       });
       this.saveMarkdown();
       return;
@@ -350,13 +351,15 @@ export class RunStateStore {
     const refsParsed = refs.map(parseRef);
     const key = `${kind}:${sha1(`${clean}\0${refsParsed.map((ref) => ref.path).join("\0")}`)}`;
     // Plans are decisions and need room for numbered steps. Findings stay small.
+    // Trimmed text is marked so the ledger never silently drops content.
     const cap = kind === "decision" ? 2_000 : 240;
+    const trimmed = clean.length > cap ? `${clean.slice(0, cap)}…` : clean;
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind,
-        text: clean.slice(0, cap),
+        text: trimmed,
         refs: refsParsed,
         turn: at,
         status: "active",
