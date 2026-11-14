@@ -312,7 +312,7 @@ export async function runTui(): Promise<void> {
     s.screen = "newrun";
   };
 
-  const startNewIssue = (repoRoot = l.repoRoot) => {
+  const startNewIssue = (repoRoot = l.repoRoot, seedSlug?: string) => {
     s.newIssueRepo = repoRoot;
     s.newIssue = {
       kind: "features",
@@ -326,6 +326,26 @@ export async function runTui(): Promise<void> {
       review: "none",
       prompt: "",
     };
+    if (seedSlug) {
+      const seed = findIssue(layout(repoRoot), seedSlug);
+      if (seed) {
+        const kind = (seed.kind === "ideas" || seed.kind === "features" || seed.kind === "bugs" ? seed.kind : "features") as "ideas" | "features" | "bugs";
+        const priority = (seed.priority === "low" || seed.priority === "medium" || seed.priority === "high" ? seed.priority : "medium") as "low" | "medium" | "high";
+        const verification = (kind === "ideas" ? "direct" : seed.verification === "verified" ? "verified" : "direct") as "direct" | "verified";
+        s.newIssue = {
+          kind,
+          priority,
+          acceptance: (seed.acceptance ?? []).join(", ") || defaultAcceptance(kind, verification),
+          tags: (seed.tags ?? []).join(", "),
+          depends: (seed.depends ?? []).join(", "),
+          files: (seed.files ?? []).join(", "),
+          keywords: (seed.keywords ?? []).join(", "),
+          verification,
+          review: seed.review === "human" ? "human" : "none",
+          prompt: seed.prompt ?? "",
+        };
+      }
+    }
     s.newIssueInsert = false;
     s.newIssueConfirm = false;
     s.newIssueCursor = 0;

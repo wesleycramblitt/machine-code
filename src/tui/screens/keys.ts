@@ -37,8 +37,8 @@ export interface KeyServices {
   startModelPicker: () => void;
   buildNewRunArgs: () => string[] | null;
   submitNewRun: () => void;
-  /** Open the issue composer for a new issue. */
-  startNewIssue: (repoRoot?: string) => void;
+  /** Open the issue composer for a new issue. When seedSlug is given, prefill every field from that issue (unlinked copy). */
+  startNewIssue: (repoRoot?: string, seedSlug?: string) => void;
   /** Create the issue, commit, and push. */
   submitNewIssue: () => void;
   /** Resume a stalled run in place (same id, branch, worktree, transcript). */
