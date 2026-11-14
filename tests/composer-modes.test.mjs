@@ -48,7 +48,7 @@ function baseRun(agent, item) {
   };
 }
 
-function render(root, { agent, item, issueMode, included = [] }) {
+function render(root, { agent, item, issueMode, included = [], sorted = false }) {
   return renderComposer({
     cols: 100,
     narrow: false,
@@ -69,7 +69,7 @@ function render(root, { agent, item, issueMode, included = [] }) {
     contextFiltering: false,
     excluded: new Set(),
     included: new Set(included),
-    hintsEnabled: false,
+    issueSortSelected: sorted,
     issueMode,
     skillModes: new Map(),
     skillShown: new Map(),
@@ -154,6 +154,44 @@ describe("composer issue modes", () => {
     }
   });
 
+  it("selecting never re-sorts or re-labels rows", () => {
+    const root = scratchRepo();
+    try {
+      const before = render(root, { agent: "engineer", issueMode: "reference" });
+      const after = render(root, {
+        agent: "engineer",
+        issueMode: "reference",
+        included: ["issue:issues/features/todo/a-todo.md", "issue:issues/features/done/b-done.md"],
+      });
+      assert.deepEqual(slugs(after), slugs(before), "order stable across selection");
+      const lines = [...(after.bottomAlign?.above ?? []), ...(after.bottomAlign?.block ?? [])].join("\n");
+      assert.ok(!lines.split("\n").some((l) => l.includes("issues/features/")), "no full-path rows");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("s sorts selected-first on demand", () => {
+    const root = scratchRepo();
+    try {
+      const plain = render(root, {
+        agent: "engineer",
+        issueMode: "reference",
+        included: ["issue:issues/features/done/b-done.md"],
+      });
+      assert.deepEqual(slugs(plain), ["a-todo", "b-done"]);
+      const sorted = render(root, {
+        agent: "engineer",
+        issueMode: "reference",
+        included: ["issue:issues/features/done/b-done.md"],
+        sorted: true,
+      });
+      assert.deepEqual(slugs(sorted), ["b-done", "a-todo"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("mode toggle is a bottom key command", () => {
     const root = scratchRepo();
     try {
@@ -205,6 +243,25 @@ describe("composer issue keys", () => {
       assert.equal(s.newRunIssueMode, "reference");
       assert.equal(s.newRunContextItem, 0);
       assert.equal(s.newRunContextItemKey, null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("s toggles selected-first sort and resets the cursor", () => {
+    const root = scratchRepo();
+    try {
+      const s = stubState(root, {
+        newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
+        newRunContextItem: 0,
+      });
+      assert.equal(s.newRunIssueSort, undefined);
+      handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
+      assert.equal(s.newRunIssueSort, true);
+      assert.equal(s.newRunContextItem, 0);
+      assert.equal(s.newRunContextItemKey, null);
+      handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
+      assert.equal(s.newRunIssueSort, false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

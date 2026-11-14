@@ -71,8 +71,8 @@ export interface ComposerProps extends Viewport {
   contextFiltering: boolean;
   excluded: ReadonlySet<string>;
   included: ReadonlySet<string>;
-  /** File-hint suggestions on/off; when off, no row is marked suggested. */
-  hintsEnabled: boolean;
+  /** Issues-tab manual sort: selected-first when true, build order otherwise. */
+  issueSortSelected: boolean;
   /** Issues-tab select mode: exactly one primary vs N references. */
   issueMode: "primary" | "reference";
   skillModes: ReadonlyMap<string, SkillMode>;

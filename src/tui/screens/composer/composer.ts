@@ -119,15 +119,17 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // Hints refresh from the prompt every frame: matched terms and the top
   // symbols per file, so the row already tells the model where to read.
   // Off means no suggested marks and no auto-seeding for this run.
-  const fileHints: FileHint[] = cachedMap && props.hintsEnabled
+  const fileHints: FileHint[] = cachedMap
     ? suggestHints({ map: cachedMap, request: suggestionPrompt, repoRoot, limit: 3 })
     : [];
   const suggestedFiles = new Map(fileHints.map((hint) => [hint.path, hint]));
-  const issueItems: ContextPanelItem[] = itemsFor(["issue"]);
+  const issueItems: ContextPanelItem[] = [];
+  // Issue rows always render from the issue tree (slug form), never from
+  // preview sources: included rows must not jump to the top or flip to a
+  // full path just because they were selected.
   // Actionable issues for the selected agent (the main-issue candidates),
   // plus done/researched issues as reference rows. References are
   // opt-in context; the run never attaches to them.
-  const knownIssues = new Set(issueItems.map((item) => item.key));
   for (const issue of listIssues(newRunLayout)) {
     // Filter by agent kind.
     if (run.agent === "research" && issue.kind !== "ideas") continue;
@@ -143,7 +145,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     // stays out of the run composer.
     if (!actionable && !referenceOnly) continue;
     const key = `issue:${issue.rel}`;
-    if (knownIssues.has(key)) continue;
     let size = 0;
     try {
       size = statSync(join(newRunLayout.repoRoot, issue.rel)).size;
@@ -166,7 +167,36 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // Both modes list everything; the mode only changes what space does and
   // how keeps are colored. The main row is labeled and keeps green.
   const mainIssueKey = run.item ? `issue:${runIssue?.rel ?? ""}` : null;
-  const issuesSectionItems = issueItems;
+  // Included rows for issues missing from the tree (moved/deleted files):
+  // keep a slug-form fallback so nothing renders as a bare path.
+  for (const key of included) {
+    if (!key.startsWith("issue:")) continue;
+    if (issueItems.some((item) => item.key === key)) continue;
+    const slug = key.slice("issue:".length).split("/").pop()?.replace(/\.md$/, "") ?? key;
+    let size = 0;
+    try {
+      size = statSync(join(newRunLayout.repoRoot, key.slice("issue:".length))).size;
+    } catch {
+      // keep the row visible with an unknown size
+    }
+    issueItems.push({
+      text: `${slug} · missing · reference`,
+      chars: size,
+      exists: false,
+      key,
+      available: true,
+      counted: false,
+    });
+  }
+  // Manual sort only: selected-first when `s` toggled it on, stable build
+  // order otherwise. Selecting never re-sorts by itself.
+  const issuesSectionItems = props.issueSortSelected
+    ? [
+        ...issueItems.filter((item) => item.key === mainIssueKey),
+        ...issueItems.filter((item) => item.key !== mainIssueKey && included.has(item.key)),
+        ...issueItems.filter((item) => item.key !== mainIssueKey && !included.has(item.key)),
+      ]
+    : issueItems;
   const fileItems: ContextPanelItem[] = itemsFor(["file"]);
   const knownFiles = new Set(fileItems.map((item) => item.key));
   // Paths that belong to other context sections; exclude from the file tab.
@@ -597,14 +627,17 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const modeCommand = sectionKey === "section:issues"
     ? command("r", "Mode", issueMode === "primary" ? "primary" : "reference", C)
     : "";
+  const sortCommand = sectionKey === "section:issues"
+    ? command("s", "Sort", props.issueSortSelected ? "selected" : "default", C)
+    : "";
   const contextCommands = panelLine(
     joinCommands([
       compact("h/l", "tabs", Y),
       compact("j/k", "sel", M),
       compact("/", "filter", BL),
-      compact("H", props.hintsEnabled ? "hints on" : "hints off", props.hintsEnabled ? C : GR),
       spaceCommand,
       modeCommand,
+      sortCommand,
     ]),
     false,
     true,
