@@ -105,7 +105,13 @@ export interface MachineConfig {
   maxOutputTokens?: number;
   defaultMode?: PacketMode;
   /** Selection tier and per-call request guards ([selection]). */
-  selection: { tier: SelectionTier; firstTokenTimeoutMs: number; ollamaFirstTokenTimeoutMs: number | undefined };
+  selection: {
+    tier: SelectionTier;
+    firstTokenTimeoutMs: number;
+    ollamaFirstTokenTimeoutMs: number | undefined;
+    /** Allow zero-price cloud offers in selection (default false). Local ollama rows are always exempt. */
+    freeCloudModelsEnabled: boolean;
+  };
   /** Cooldown recovery probes ([availability]). */
   availability: AvailabilityConfig;
   /** Per-provider billing adjustments ([providers.<id>]). */
@@ -292,6 +298,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       tier: tierRaw as SelectionTier,
       firstTokenTimeoutMs: asNumber(selectionRaw.first_token_timeout_ms) ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
       ollamaFirstTokenTimeoutMs: asNumber(selectionRaw.ollama_first_token_timeout_ms),
+      freeCloudModelsEnabled: selectionRaw.free_cloud_models_enabled === true,
     },
     availability: {
       probe: probeMode,

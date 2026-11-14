@@ -92,7 +92,8 @@ export function loadCuration(layout: Layout): Curation {
  * - ":batch" variants are asynchronous batch endpoints, not interactive.
  *
  * ":free" variants are kept: they are real zero-price offers, visible in the
- * catalogue and only eligible when the caller explicitly chooses the free tier.
+ * catalogue and selectable only when selection.free_cloud_models_enabled is
+ * true in the machine config (default false).
  */
 export function isMetaModel(providerID: string, id: string): boolean {
   if (id === "auto") return true;
@@ -353,9 +354,10 @@ if (meta) {
   row.supportedParameters = meta.supportedParameters;
 }
 
-// Zero-price rows are retained but marked free. They are only eligible in
-// the explicit `free` selection mode, so credits/free tiers (NVIDIA) are
-// usable without silently entering normal paid selection.
+// Zero-price rows are retained but marked free. Selection of these rows is
+// gated by the machine setting selection.free_cloud_models_enabled (default
+// false), so credits/free tiers (NVIDIA) stay visible in the catalogue without
+// silently entering selection until the user opts in.
 row.free = row.pricing.input === 0 && row.pricing.output === 0;
 
 // Direct providers: borrow the canonical owner slug so benchmark data is

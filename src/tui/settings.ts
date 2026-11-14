@@ -48,7 +48,15 @@ export function buildSettings(
       editable: true,
       choices: ["paid", "local"],
     });
-    
+    rows.push({
+      id: "selection.freeCloudModelsEnabled",
+      section: "selection",
+      label: "Free cloud models",
+      value: bool(machine.selection.freeCloudModelsEnabled),
+      file: configFile,
+      detail: "Allow zero-price cloud offers in selection (free_cloud_models_enabled). Ollama is always exempt.",
+      editable: false,
+    });
     rows.push({
       id: "selection.maxOutput",
       section: "selection",
@@ -113,8 +121,8 @@ export function buildSettings(
       file: configFile,
       detail: "Max ranked file suggestions per request; direct pins ride along.",
       editable: true,
-    });
-    
+        });
+
     const themeKeys = [
       "header_bg",
       "header_fg",

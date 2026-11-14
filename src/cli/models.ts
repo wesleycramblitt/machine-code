@@ -209,7 +209,7 @@ export function cmdModels(argv: string[]): number {
       .map((axis) => `${axis}>=${selection.def.minAxes![axis]}`)
       .join(" ");
     process.stdout.write(
-      `agent ${agent}  tier ${machine.selection.tier}  min_context ${selection.def.minContext}  min_fit ${selection.def.minFit}  min_capability ${selection.def.minCapability}  tool_call ${selection.def.toolCall}\n`,
+      `agent ${agent}  tier ${machine.selection.tier}  free_cloud ${machine.selection.freeCloudModelsEnabled ? "on" : "off"}  min_context ${selection.def.minContext}  min_fit ${selection.def.minFit}  min_capability ${selection.def.minCapability}  tool_call ${selection.def.toolCall}\n`,
     );
     process.stdout.write(
       `axes ${floors || "(no axis floors)"}\n` +

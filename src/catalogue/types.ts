@@ -36,7 +36,8 @@ export interface CatalogueRow {
   modes: string[];
   /** Raw upstream supported-parameter list when available. */
   supportedParameters?: string[];
-  /** Priced at zero (free tier/credits); eligible in both tiers. */
+  /** Priced at zero (free tier/credits); selectable only when
+   * selection.free_cloud_models_enabled is true (ollama rows are exempt). */
   free?: boolean;
   canonicalID: string | null;
   pricing: Pricing;
