@@ -1,9 +1,10 @@
+commit: 1bf63e58a8f4f38f19d8dec85a88fcd8cb786f2e
 priority: low
-tags: models, selection, config
 depends: local-model-call-timeouts
 files: src/config.ts, src/select.ts, src/tui/settings.ts, src/cli/run.ts
-keywords: free models, free-cloud, free_cloud_models_enabled, free-model rejection, SelectionTier
+tags: models, selection, config
 acceptance: script:build
+keywords: free models, free-cloud, free_cloud_models_enabled, free-model rejection, SelectionTier
 
 # Free-cloud-models on/off setting
 
