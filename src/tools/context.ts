@@ -2,8 +2,8 @@
  * machine_code — the `context` tool: run state, parent-run inspection, and plan.
  *
  * The runner ingests tool results automatically. This tool lets the model
- * record decisions/findings, recall artifact bytes, forget stale facts, view
- * its state, inspect a parent run's record, or manage a durable plan checklist.
+ * record decisions/findings, forget stale facts, view its state, inspect
+ * a parent run's record, or manage a durable plan checklist.
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -20,7 +20,7 @@ function fail(text: string): AgentToolResult<undefined> {
   return { content: [{ type: "text", text }], details: undefined, isError: true };
 }
 
-const CONTEXT_ACTIONS = new Set(["note", "recall", "forget", "state", "parent", "plan"]);
+const CONTEXT_ACTIONS = new Set(["note", "forget", "state", "parent", "plan"]);
 const CONTEXT_KINDS = new Set(["finding", "decision", "open"]);
 
 const PlanEntrySchema = Type.Object({
@@ -30,8 +30,8 @@ const PlanEntrySchema = Type.Object({
 
 const ContextParams = Type.Object({
   action: Type.String({
-    enum: ["note", "recall", "forget", "state", "parent", "plan"],
-    description: "Memory operation: note | recall | forget | state | parent | plan.",
+    enum: ["note", "forget", "state", "parent", "plan"],
+      description: "Memory operation: note | forget | state | parent | plan.",
   }),
   kind: Type.Optional(
     Type.String({
@@ -43,7 +43,7 @@ const ContextParams = Type.Object({
   refs: Type.Optional(
     Type.Array(Type.String(), { description: "References: path, path:line, or path:start-end." }),
   ),
-  id: Type.Optional(Type.String({ description: "Artifact id for recall, fact/question id for forget, or run id for parent." })),
+  id: Type.Optional(Type.String({ description: "Fact/question id for forget, or run id for parent." })),
   steps: Type.Optional(
     Type.Array(PlanEntrySchema, {
       description:
@@ -90,7 +90,7 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
       "Run state, memory, and plan. " +
       "plan (steps: [{text, done}]) sets a durable checklist — there is always exactly one plan; " +
       "calling it again replaces the old one. note (kind finding|decision|open) records conclusions; " +
-      "recall (id) fetches stored artifacts; forget resolves facts; state dumps everything; " +
+      "forget resolves facts; state dumps everything; " +
       "parent loads a parent run's record. " +
       "For codebase queries (definitions, references, file outlines) use inspect instead.",
     parameters: ContextParams,
@@ -125,18 +125,6 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
             const kind = (params.kind ?? "finding") as "finding" | "decision" | "open";
             memory.note(kind, params.text, params.refs ?? []);
             return ok(`noted ${kind}`);
-          }
-          case "recall": {
-            if (!params.id) return fail("recall requires id");
-            const text = memory.getArtifact(params.id);
-            if (text === null) return fail(`no artifact ${params.id}`);
-            const capped = capText(text, READ_CAP_BYTES);
-            const status = memory.artifactStatus(params.id);
-            const stale =
-              status !== null && status.stale
-                ? `\n[stale: ${status.path} changed since this artifact was stored; current bytes are in the holdings block above]`
-                : "";
-            return ok(`[artifact ${params.id}]\n${capped.text}${stale}`);
           }
           case "forget": {
             let id = params.id;

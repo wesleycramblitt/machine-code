@@ -113,10 +113,6 @@ function textOfMessage(message: MessageLike): string {
     .join("\n");
 }
 
-function artifactRef(text: string): string | undefined {
-  return /\[artifact:?\s*(art_[a-f0-9]{16})\]/.exec(text)?.[1];
-}
-
 function stepLedger(step: MessageLike[]): string[] {
   const lines: string[] = [];
   for (const message of step) {
@@ -131,14 +127,13 @@ function stepLedger(step: MessageLike[]): string[] {
       }
     } else if (message.role === "toolResult") {
       const text = textOfMessage(message);
-      const artifact = artifactRef(text);
-      lines.push(`  → ${text.split("\n")[0]?.trim().slice(0, 120) ?? ""}${artifact ? ` [${artifact}]` : ""}`);
+      lines.push(`  → ${text.split("\n")[0]?.trim().slice(0, 120) ?? ""}`);
     }
   }
   return lines;
 }
 
-/** Keep the task, a one-line ledger of older calls, and the last two steps. */
+/** Keep the task, a short ledger of older calls, and the last two steps. */
 function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
   const steps = transcriptSteps(source);
   const firstAssistant = steps.findIndex((message) => message.role === "assistant");
@@ -149,12 +144,16 @@ function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
     else if (groups.length > 0) groups[groups.length - 1]!.push(message);
   }
   const older = groups.slice(0, Math.max(0, groups.length - KEEP_FULL_STEPS));
+  // The ledger is a receipt roll, not context: cap it at the last 10 calls.
+  // Older calls survive on disk (transcript, state) and identical repeats
+  // are served from run history, so nothing the model can act on is lost.
+  const ledgerSteps = older.slice(-10);
   const recent = groups.slice(-KEEP_FULL_STEPS).flat();
-  const ledgerLines = older.flatMap(stepLedger);
+  const ledgerLines = ledgerSteps.flatMap(stepLedger);
   const ledger: MessageLike[] = ledgerLines.length > 0
     ? [{
         role: "user",
-        content: `<ledger>\nEarlier calls (one line each; bytes live in holdings or artifacts):\n${ledgerLines.join("\n")}\n</ledger>`,
+        content: `<ledger>\nEarlier calls (one line each; full results scrolled out — re-ask only for something new):\n${ledgerLines.join("\n")}\n</ledger>`,
       }]
     : [];
   return [...steps.slice(0, firstAssistant), ...ledger, ...recent];
@@ -189,7 +188,7 @@ export function renderPromptMessages(
   const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
   const volatile = [
     state.renderWorkspace(),
-    state.renderHoldings(holdingsMaxChars),
+    state.renderSymbols(holdingsMaxChars),
     state.renderBlock(),
   ].filter(Boolean).join("\n\n");
   const out = [

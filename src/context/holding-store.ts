@@ -1,16 +1,22 @@
 /**
- * machine_code — held file bodies.
+ * machine_code — held file index.
  *
- * Owns the living map: which ranges the model has seen, symbols and
- * connections, and the current bytes re-read from disk. The state ledger
- * only records facts; this store answers "what does the model hold now?".
+ * Owns the living map: which ranges the model has seen, and the symbols,
+ * docs, and connections those ranges exposed. The map is an index, not a
+ * payload store: no file bodies render from here (inspect serves bytes on
+ * demand). The state ledger only records facts; this store answers "what
+ * does the model already know about?".
  */
-import { readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { numberLinesCapped } from "../tools/safety.js";
-import type { Artifact } from "./artifacts.js";
 import type { Ref } from "./state.js";
-import { mergeRanges, type Holding } from "./holdings.js";
+import { type Holding } from "./holdings.js";
+
+/** Content fingerprint for fact keys (no store behind it). */
+export function contentHash(text: string): string {
+  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+}
 
 export interface HoldingsConfig {
   /** Files under this many lines always render full body. */
@@ -33,7 +39,6 @@ export const DEFAULT_HOLDINGS_CONFIG: HoldingsConfig = {
 export interface HoldingHost {
   repoRoot?: string;
   currentTurn: () => number;
-  putArtifact(text: string): Artifact;
   addReadFact(ref: Ref, turn: number, excerptText?: string): void;
 }
 
@@ -56,17 +61,15 @@ export class HoldingStore {
         const abs = isAbsolute(path) ? path : join(this.host.repoRoot, path);
         const content = readFileSync(abs, "utf8");
         if (Buffer.byteLength(content, "utf8") > maxBytes) continue;
-        const artifact = this.host.putArtifact(content);
         const total = content.length === 0 ? 1 : content.split("\n").length;
         const ref: Ref = {
           path,
           range: [1, total],
-          hash: artifact.hash.slice(0, 16),
-          artifact: artifact.id,
-          bytes: artifact.bytes,
+          hash: contentHash(content),
+          bytes: Buffer.byteLength(content, "utf8"),
         };
         this.host.addReadFact(ref, turn);
-        this.addHolding(ref.path, ref.range, artifact.id, true, turn, paths.length - index);
+        this.addHolding(ref.path, true, turn, paths.length - index);
       } catch {
         // A missing or unreadable preload is not a run failure.
       }
@@ -74,13 +77,11 @@ export class HoldingStore {
   }
 
   /**
-   * Record acquired file bodies. Ranges merge per path; bytes always render
-   * from disk, artifacts stay addressable for recall.
+   * Record a seen file. Presence, symbols, and turn are the whole record —
+   * byte ranges are not tracked; inspect serves bytes on demand.
    */
   addHolding(
     path: string,
-    range: [number, number] | undefined,
-    artifactId: string,
     seeded: boolean,
     turn: number,
     priority = 0,
@@ -88,21 +89,14 @@ export class HoldingStore {
     if (!path) return;
     const existing = this.map.get(path);
     if (existing) {
-      if (range) existing.ranges = mergeRanges([...existing.ranges, range]);
-      if (artifactId && !existing.artifacts.includes(artifactId)) existing.artifacts.push(artifactId);
       existing.seeded = existing.seeded && seeded;
       existing.priority = Math.max(existing.priority, priority);
       existing.turn = Math.max(existing.turn, turn);
     } else {
-      const sig = this.holdingSig(path);
       this.map.set(path, {
         path,
-        ranges: range ? [range] : [],
         symbols: [],
-        connections: { imports: [], importedBy: [] },
-        artifacts: artifactId ? [artifactId] : [],
         seeded,
-        acqSig: sig,
         priority,
         turn,
       });
@@ -114,17 +108,12 @@ export class HoldingStore {
     if (!path || !name) return;
     const existing = this.map.get(path) ?? {
       path,
-      ranges: [],
       symbols: [],
-      connections: { imports: [], importedBy: [] },
-      artifacts: [],
       seeded: false,
-      acqSig: this.holdingSig(path),
       priority: 0,
       turn,
     };
     this.map.set(path, existing);
-    if (range) existing.ranges = mergeRanges([...existing.ranges, range]);
     if (!existing.symbols.some((s) => s.name === name)) {
       existing.symbols.push({ name, range });
       existing.symbols.sort((a, b) => a.range[0] - b.range[0]);
@@ -147,46 +136,6 @@ export class HoldingStore {
       const h = this.map.get(path);
       const sym = h?.symbols.find((s) => s.name === name);
       if (sym) sym.doc = doc;
-    }
-  }
-
-  /** Attach connections shown for a file (parsed from inspect relations). */
-  addConnections(path: string, imports: string[], importedBy: string[]): void {
-    const existing = this.map.get(path);
-    if (!existing) return;
-    for (const name of imports) {
-      const clean = name.trim().replace(/,?\s*…$/, "");
-      if (clean && !existing.connections.imports.includes(clean)) existing.connections.imports.push(clean);
-    }
-    for (const name of importedBy) {
-      const clean = name.trim().replace(/,?\s*…$/, "");
-      if (clean && !existing.connections.importedBy.includes(clean)) existing.connections.importedBy.push(clean);
-    }
-  }
-
-  /**
-   * Staleness of a recalled artifact: the file it came from and whether the
-   * disk has moved since acquisition. Bytes and command outputs have no
-   * path and are never stale — only file bodies are checked.
-   */
-  artifactStatus(id: string): { path: string; stale: boolean } | null {
-    for (const holding of this.map.values()) {
-      if (!holding.artifacts.includes(id)) continue;
-      const current = this.holdingSig(holding.path);
-      if (current === null) return { path: holding.path, stale: true };
-      return { path: holding.path, stale: holding.acqSig !== null && current !== holding.acqSig };
-    }
-    return null;
-  }
-
-  private holdingSig(path: string): string | null {
-    if (!this.host.repoRoot) return null;
-    try {
-      const abs = isAbsolute(path) ? path : join(this.host.repoRoot, path);
-      const stat = statSync(abs);
-      return `${stat.mtimeMs}:${stat.size}`;
-    } catch {
-      return null;
     }
   }
 
@@ -221,39 +170,38 @@ export class HoldingStore {
     }
   }
 
-  renderHoldings(maxChars = 48_000, maxFiles = 40): string {
+  renderSymbols(maxChars = 48_000, maxFiles = 40): string {
     if (this.map.size === 0 || !this.host.repoRoot) return "";
     this.evictLru();
-    const sorted = [...this.map.values()].sort((a, b) => a.path.localeCompare(b.path));
+    // Most-recently-touched first: the working set sits at the top where
+    // attention actually lands; older files follow alphabetically.
+    const sorted = [...this.map.values()].sort(
+      (a, b) => b.turn - a.turn || b.priority - a.priority || a.path.localeCompare(b.path),
+    );
     const shown = sorted.slice(0, Math.max(1, maxFiles));
     const lines: string[] = [
-      "<holdings>",
-      "Every file the run has seen. Metadata is always shown. Bytes are current from disk every turn.",
-      "Never re-read what is here. To read a specific symbol, call inspect { query: \"SymbolName\" }.",
+      "<symbols>",
+      "The run's symbol map: every file it has seen, with symbols and docs.",
+      "No file bodies are included — inspect a path, symbol, or range for bytes.",
       "",
     ];
     let lastDir = "";
     let inventoryUsed = 0;
 
-    // Phase 1: inventory (metadata for every file, always)
+    // Inventory: one line per file. Symbols and docs only — the model's
+    // symbol map, most-recently-touched first.
     for (const holding of shown) {
       const dir = holding.path.includes("/") ? `${holding.path.split("/").slice(0, -1).join("/")}/` : "./";
       if (dir !== lastDir) {
         lines.push(`[${dir}]`);
         lastDir = dir;
       }
-      const lineInfo = holding.ranges.length > 0
-        ? `${holding.ranges[0]![0]}-${holding.ranges[holding.ranges.length - 1]![1]} lines`
-        : "outline";
       const flagText = holding.seeded ? " [seeded]" : "";
-      const art = holding.artifacts[holding.artifacts.length - 1] ?? "";
       const meta = [
         holding.doc ? `doc: ${holding.doc.slice(0, 120)}` : "",
         holding.symbols.length > 0 ? `symbols: ${holding.symbols.slice(0, 6).map((s) => `${s.name}(${s.range[0]})${s.doc ? ` "${s.doc.slice(0, 60)}"` : ""}`).join(", ")}${holding.symbols.length > 6 ? ", …" : ""}` : "",
-        holding.connections.imports.length > 0 ? `imports: ${holding.connections.imports.slice(0, 4).join(", ")}` : "",
-        art,
       ].filter(Boolean).join(" · ");
-      lines.push(`${holding.path.split("/").pop()}${flagText} — ${lineInfo}${meta ? ` · ${meta}` : ""}`);
+      lines.push(`${holding.path.split("/").pop()}${flagText}${meta ? ` — ${meta}` : ""}`);
       inventoryUsed += lines[lines.length - 1]!.length + 1;
     }
     if (sorted.length > shown.length) {
@@ -261,86 +209,20 @@ export class HoldingStore {
       lines.push(`+${sorted.length - shown.length} more: ${names}`);
     }
     if (inventoryUsed > maxChars) {
-      throw new Error(`holdings inventory alone exceeds ${maxChars.toLocaleString()} chars (${inventoryUsed.toLocaleString()}); raise maxFiles or reduce file path lengths`);
+      throw new Error(`symbol map alone exceeds ${maxChars.toLocaleString()} chars (${inventoryUsed.toLocaleString()}); raise maxFiles or reduce file path lengths`);
     }
 
-    // Phase 2: body bytes — least-recently-touched files drop first when
-    // budget is exhausted. No turn-based eviction: files keep their bytes
-    // as long as they fit in the budget.
-    const bodyChars = maxChars - inventoryUsed;
-    const ordered = [...shown].sort((a, b) => {
-      // Most-recently-touched first, then highest priority, then alphabetically
-      return b.turn - a.turn || b.priority - a.priority || a.path.localeCompare(b.path);
-    });
-    const bodies: string[] = [];
-    let used = 0;
-    for (const holding of ordered) {
-      if (used >= bodyChars) break;
-
-      const fileLines = this.readLines(holding.path);
-      if (!fileLines) continue;
-      const totalLines = fileLines.length;
-
-      // Body bytes: small files (<= fullLines) get full body; otherwise only
-      // inspected ranges. Metadata (symbols, imports, docs) is always shown
-      // in the inventory above, so the model has a strong index to request
-      // specific ranges via inspect or context recall.
-      let toSend: Array<[number, number]> | null = null;
-      if (totalLines <= this.cfg("fullLines")) {
-        toSend = [[1, totalLines]]; // full small file
-      } else if (holding.ranges.length > 0) {
-        toSend = [...holding.ranges]; // inspected ranges only
-      }
-      if (!toSend || toSend.length === 0) {
-        // Metadata-only: body block skipped entirely.
-        continue;
-      }
-      const parts: string[] = [];
-      for (const [start, end] of toSend) {
-        const clamped = Math.min(end, totalLines);
-        const page = numberLinesCapped(fileLines, start, Math.max(1, clamped - start + 1), Math.max(256, bodyChars - used));
-        parts.push(page.text);
-        used += page.text.length + 1;
-        if (used >= bodyChars) break;
-      }
-      if (parts.length === 0) continue;
-      const art = holding.artifacts[holding.artifacts.length - 1] ?? "";
-      bodies.push(`### ${holding.path}${art ? ` · ${art}` : ""}\n${parts.join("\n")}`);
-    }
-    lines.push("", ...bodies);
-    lines.push("</holdings>");
-
-    const total = lines.reduce((s, l) => s + l.length + 1, 0);
-    if (total > maxChars) {
-      throw new Error(
-        `holdings block exceeds ${maxChars.toLocaleString()} chars (${total.toLocaleString()}). ` +
-        `Tune holdings config (outlineLines, fullLines) or raise the cap. ` +
-        `Pending: ${sorted.filter((h) => !bodies.some((b) => b.includes(h.path))).map((h) => h.path).join(", ") || "none"}`,
-      );
-    }
+    lines.push("</symbols>");
     return lines.join("\n");
   }
 
-  private readLines(path: string): string[] | null {
-    try {
-      const abs = isAbsolute(path) ? path : join(this.host.repoRoot!, path);
-      return readFileSync(abs, "utf8").split("\n");
-    } catch {
-      return null;
-    }
-  }
-
-  /** Pre-fill the map from hint symbols: ranges register as unsent, so the
-   * first render carries their bodies as deltas without an inspect call. */
+  /** Pre-fill the map from hints: paths register as seen, so the first
+   * render lists them in the inventory without an inspect call. */
   seedHintRanges(entries: ReadonlyArray<{ path: string; range: [number, number] }>, turn = 0): void {
     const seeded = entries.slice(0, 24);
     for (const [index, entry] of seeded.entries()) {
-      if (!entry.path || entry.range[0] < 1 || entry.range[1] < entry.range[0]) continue;
-      // Store a preamble artifact even for hint ranges so the model can
-      // recall the file's approximate state before the tip changed.
-      const snippet = `hint range ${entry.path}:${entry.range[0]}-${entry.range[1]}`;
-      const art = this.host.putArtifact(snippet);
-      this.addHolding(entry.path, entry.range, art.id, false, turn, seeded.length - index);
+      if (!entry.path) continue;
+      this.addHolding(entry.path, false, turn, seeded.length - index);
     }
   }
 

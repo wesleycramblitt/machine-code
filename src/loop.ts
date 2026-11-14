@@ -884,13 +884,37 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             commandAction === "run" &&
             commandName.length > 0 &&
             input.commands.get(commandName)?.readonly === true;
-          const cached = cacheableCommand ? commandCache.get(key) : undefined;
+          // Pure reads are deterministic within a change epoch (any edit or
+          // mutating command bumps the epoch and clears the cache). Serving
+          // an identical repeat from the stored result instead of re-running
+          // it: observed behavior is re-asking for bytes already seen, so
+          // the loop answers from history rather than asking the model not to.
+          const repeatableRead =
+            tool.name === "inspect" ||
+            tool.name === "search" ||
+            tool.name === "map" ||
+            tool.name === "glob" ||
+            tool.name === "grep";
+          const cached = cacheableCommand || repeatableRead ? commandCache.get(key) : undefined;
           if (cached && cached.epoch === changeEpoch) {
+            if (cacheableCommand) {
+              return {
+                content: [{
+                  type: "text" as const,
+                  text:
+                    `[cached ${commandName} from turn ${cached.turn}; no files changed since]
+` +
+                    cached.text,
+                }],
+                details: undefined,
+              };
+            }
+            recorder.event("repeat_served", { tool: tool.name, turn: cached.turn });
             return {
               content: [{
                 type: "text" as const,
                 text:
-                  `[cached ${commandName} from turn ${cached.turn}; no files changed since]
+                  `[repeat: identical ${tool.name} already ran at turn ${cached.turn} and nothing changed since; serving the stored result instead of re-executing]
 ` +
                   cached.text,
               }],
@@ -933,7 +957,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             changeEpoch += 1;
             commandCache.clear();
           }
-          if (!result.isError && cacheableCommand) {
+          if (!result.isError && (cacheableCommand || repeatableRead)) {
             const text = result.content
               .filter((item): item is { type: "text"; text: string } => item.type === "text")
               .map((item) => item.text)
@@ -945,6 +969,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               text,
               preview,
             });
+            while (commandCache.size > 200) {
+              const oldest = commandCache.keys().next();
+              if (oldest.done) break;
+              commandCache.delete(oldest.value);
+            }
           }
           return result;
         },

@@ -1,9 +1,9 @@
 /**
- * machine_code — held file ranges.
+ * machine_code — the run's symbol map.
  *
- * A holding is the model's durable knowledge of one file: which ranges it has
- * seen, the symbols and connections those ranges exposed, and the artifacts
- * that can recall older bytes. Bytes are always re-read from disk.
+ * An index of files the run has seen: their symbols and docs. No bodies,
+ * no line ranges — inspect serves bytes on demand. The model navigates by
+ * this map and reads by tool call.
  */
 
 export interface HeldSymbol {
@@ -15,19 +15,13 @@ export interface HeldSymbol {
 
 export interface Holding {
   path: string;
-  ranges: Array<[number, number]>;
   /** Symbols held, by name — the map fills in at symbol granularity. */
   symbols: HeldSymbol[];
-  /** Connections shown for this file, parsed from inspect results. */
-  connections: { imports: string[]; importedBy: string[] };
-  artifacts: string[];
   /** File-level doc comment or module docstring, from the repo map. */
   doc?: string;
   /** Fully present in the stable prefix: bytes skipped until it changes. */
   seeded: boolean;
-  /** Disk signature when first acquired; recall compares against it. */
-  acqSig: string | null;
-  /** Higher renders its bytes first when the cap is tight. */
+  /** Higher renders first; recency decides the working set order. */
   priority: number;
   turn: number;
 }

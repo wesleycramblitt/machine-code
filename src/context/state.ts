@@ -16,7 +16,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import { getArtifact, putArtifact, type Artifact } from "./artifacts.js";
 import type { ProcessSupervisor } from "../processes/supervisor.js";
 import { rangesOverlap } from "./holdings.js";
 import { HoldingStore } from "./holding-store.js";
@@ -46,7 +45,6 @@ export interface Ref {
   range?: [number, number];
   symbol?: string;
   hash?: string;
-  artifact?: string;
   bytes?: number;
 }
 
@@ -75,7 +73,7 @@ export interface RunState {
   facts: Fact[];
   open: OpenQuestion[];
   plan: RunPlan | null;
-  counters: { turn: number; steps: number; artifacts: number };
+  counters: { turn: number; steps: number };
 }
 
 /** File bodies this run has acquired: the model's durable knowledge.
@@ -134,8 +132,7 @@ function parseRef(value: string): Ref {
 function refLabel(ref: Ref): string {
   const range = ref.range ? `:${ref.range[0]}-${ref.range[1]}` : "";
   const symbol = ref.symbol ? ` (${ref.symbol})` : "";
-  const artifact = ref.artifact ? ` · ${ref.artifact}` : "";
-  return `${ref.path}${range}${symbol}${artifact}`;
+  return `${ref.path}${range}${symbol}`;
 }
 
 function writeTextAtomic(file: string, text: string): void {
@@ -169,7 +166,6 @@ export class RunStateStore {
     this.holdingsStore = new HoldingStore({
       repoRoot: options.repoRoot,
       currentTurn: () => this.currentTurn(),
-      putArtifact: (text) => this.putArtifact(text),
       addReadFact: (ref, turn, excerptText) => this.addReadFact(ref, turn, excerptText),
     });
     const holdingsCfg = options.holdingsConfig;
@@ -182,7 +178,7 @@ export class RunStateStore {
       facts: [],
       open: [],
       plan: null,
-      counters: { turn: 0, steps: 0, artifacts: 0 },
+      counters: { turn: 0, steps: 0 },
     };
     this.load();
   }
@@ -195,12 +191,8 @@ export class RunStateStore {
     this.holdingsStore.seedHintRanges(entries, turn);
   }
 
-  renderHoldings(maxChars?: number): string {
-    return this.holdingsStore.renderHoldings(maxChars);
-  }
-
-  artifactStatus(id: string): { path: string; stale: boolean } | null {
-    return this.holdingsStore.artifactStatus(id);
+  renderSymbols(maxChars?: number): string {
+    return this.holdingsStore.renderSymbols(maxChars);
   }
 
   get holdings(): HoldingStore {
@@ -409,16 +401,6 @@ export class RunStateStore {
     };
     this.append({ type: "plan", plan });
     this.recorder?.event("state_plan", { turn: at, steps: steps.length, done: steps.filter((s) => s.done).length });
-  }
-
-  putArtifact(text: string): Artifact {
-    const artifact = putArtifact(this.runDir, text);
-    this.state.counters.artifacts += 1;
-    return artifact;
-  }
-
-  getArtifact(id: string): string | null {
-    return getArtifact(this.runDir, id);
   }
 
   addReadFact(ref: Ref, turn: number, excerptText = ""): void {

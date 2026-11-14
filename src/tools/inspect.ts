@@ -9,7 +9,6 @@
  * arguments (`offset`/`limit`/`around`, `symbol`, `detail`) scope file
  * bodies, so this tool also covers everything the old `read` did.
  *
- * Every result is stored as an artifact for `context recall`.
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -274,14 +273,12 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           if (result.code !== 0 && !result.stdout) {
             // rg exit 1 without output = no matches. Return "no matches" instead of failing.
             const envelope = `<inspect query="${query}" mode="find" match="regex">\nno matches\n</inspect>`;
-            const artifact = ctx.state?.putArtifact(envelope);
-            return ok(artifact ? `${envelope}\n\n[artifact: ${artifact.id}]` : envelope);
+                        return ok(envelope);
           }
           const text = result.stdout.trimEnd() || "no matches";
           const envelope = `<inspect query="${query}" mode="find" match="regex">\n${text}\n</inspect>`;
-          const artifact = ctx.state?.putArtifact(envelope);
-          const capped = capText(envelope, READ_CAP_BYTES);
-          return ok(artifact ? `${capped.text}\n\n[artifact: ${artifact.id}]` : capped.text);
+                    const capped = capText(envelope, READ_CAP_BYTES);
+          return ok(capped.text);
         }
 
         // Mode 2 — anchored slice or whole file (this is the read path).
@@ -304,8 +301,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             for (const symbol of file?.symbols ?? []) lines.push(`  ${symbol.kind} ${symbol.name} (${symbol.line}-${symbol.end})`);
             if (lines.length === 2) lines.push("(no symbols indexed; use detail=full to read the body)");
             const envelope = `<inspect query="${query}" mode="file" match="path">\n${lines.join("\n")}\n</inspect>`;
-            const artifact = ctx.state?.putArtifact(envelope);
-            return ok(artifact ? `${envelope}\n\n[artifact: ${artifact.id}]` : envelope);
+                        return ok(envelope);
           }
           let slice: { header: string; text: string; start: number; end: number } | { error: string };
           if (anchor && anchor.start !== undefined && anchor.end !== undefined) {
@@ -319,9 +315,8 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           }
           if ("error" in slice) return fail(`${slice.error}. Use detail=outline to list symbols first.`);
           const envelope = `<inspect query="${query}" mode="file" match="path">\n### ${rel}: ${slice.header}\n${slice.text}\n</inspect>`;
-          const artifact = ctx.state?.putArtifact(envelope);
-          const capped = capText(envelope, READ_CAP_BYTES);
-          return ok(artifact ? `${capped.text}\n\n[artifact: ${artifact.id}]` : capped.text);
+                    const capped = capText(envelope, READ_CAP_BYTES);
+          return ok(capped.text);
         }
 
         // Mode 3 — glob pattern: query contains glob characters.
@@ -336,8 +331,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             const matched = allFiles.filter((file) => matchers.some((m) => m.test(file)));
             const text = matched.length > 0 ? matched.join("\n") : `no files match "${query}"`;
             const envelope = `<inspect query="${query}" mode="find" match="path">\n${text}\n</inspect>`;
-            const artifact = ctx.state?.putArtifact(envelope);
-            return ok(artifact ? `${envelope}\n\n[artifact: ${artifact.id}]` : envelope);
+                        return ok(envelope);
           }
         }
 
@@ -364,8 +358,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
                 ? `\n(To search file contents for "${query}", omit path or use path: "src/specific-file.ts". path: "src" with a keyword lists the directory.)`
                 : "";
               const envelope = `<inspect query="${query}" mode="directory" match="path">\n${lines.join("\n")}${keywordHint}\n</inspect>`;
-              const artifact = ctx.state?.putArtifact(envelope);
-              return ok(artifact ? `${envelope}\n\n[artifact: ${artifact.id}]` : envelope);
+                            return ok(envelope);
             }
           } catch {
             // not a directory — fall through to symbol/find
@@ -403,9 +396,8 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             }
           }
           const envelope = `<inspect query="${query}" mode="symbol" match="symbol">\n${lines.join("\n")}${body ? `\n${body}` : ""}\n</inspect>`;
-          const artifact = ctx.state?.putArtifact(envelope);
-          const capped = capText(envelope, READ_CAP_BYTES);
-          return ok(artifact ? `${capped.text}\n\n[artifact: ${artifact.id}]` : capped.text);
+                    const capped = capText(envelope, READ_CAP_BYTES);
+          return ok(capped.text);
         }
 
         // Mode 5 — ranked keyword find with dense per-file evidence.
@@ -469,9 +461,8 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
         }
         blocks.push("</inspect>");
         const envelope = blocks.join("\n");
-        const artifact = ctx.state?.putArtifact(envelope);
-        const capped = capText(envelope, READ_CAP_BYTES);
-        return ok(artifact ? `${capped.text}\n\n[artifact: ${artifact.id}]` : capped.text);
+                const capped = capText(envelope, READ_CAP_BYTES);
+        return ok(capped.text);
       } catch (error) {
         return fail(`inspect failed: ${error instanceof Error ? error.message : String(error)}`);
       }
