@@ -1,8 +1,9 @@
+commit: 06f5a3458f1268ad969fd4e0ef24fc67f9f1f042
 priority: low
-tags: models, timeouts, local
 files: src/loop.ts, src/cli/run.ts, src/cli/common.ts, src/tui.ts, src/config.ts
-keywords: first token timeout, firstTokenTimeoutMs, ollamaFirstTokenTimeoutMs, local model timeout, model call timeout, no timeout local
+tags: models, timeouts, local
 acceptance: script:build
+keywords: first token timeout, firstTokenTimeoutMs, ollamaFirstTokenTimeoutMs, local model timeout, model call timeout, no timeout local
 
 # Local model calls must not time out waiting for the first token
 
