@@ -286,6 +286,26 @@ async function ensureNodeModules(path: string): Promise<void> {
 export async function refreshReusedWorktree(path: string, baseBranch = "main"): Promise<RefreshResult> {
   await ensureNodeModules(path);
   try {
+    // Pull the remote copy of this feature branch first: another machine
+    // (or an interrupted run) may have pushed commits local doesn't have.
+    const head = await runProc("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: path, timeoutMs: 20_000 });
+    const branch = head.stdout.trim();
+    if (branch && branch !== "HEAD") {
+      await runProc("git", ["fetch", "origin", branch], { cwd: path, timeoutMs: 60_000 });
+      const remote = await runProc("git", ["rev-parse", "--verify", `origin/${branch}`], { cwd: path, timeoutMs: 20_000 });
+      if (remote.code === 0) {
+        const behindRemote = await runProc("git", ["rev-list", "--count", `HEAD..origin/${branch}`], {
+          cwd: path,
+          timeoutMs: 20_000,
+        });
+        if (behindRemote.code === 0 && Number(behindRemote.stdout.trim()) > 0) {
+          const ff = await runProc("git", ["merge", "--ff-only", `origin/${branch}`], { cwd: path, timeoutMs: 60_000 });
+          // Non-fast-forward (both sides moved) is left for the sync gate,
+          // which resolves it in-run with agent help.
+          if (ff.code !== 0) return "conflict";
+        }
+      }
+    }
     const base = await runProc("git", ["rev-parse", "--verify", baseBranch], { cwd: path, timeoutMs: 20_000 });
     if (base.code !== 0) return "skipped";
     const behind = await runProc("git", ["rev-list", "--count", `HEAD..${baseBranch}`], { cwd: path, timeoutMs: 20_000 });
@@ -450,6 +470,9 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   }
 
   if (await branchExists(mainRoot, branch)) {
+    // Local branch exists: fast-forward it from the remote copy first so a
+    // new run never starts behind pushed work from another machine.
+    await git(mainRoot, ["fetch", "origin", `${branch}:${branch}`]).catch(() => undefined);
     // Reuse the branch across runs (fresh worktree, same branch).
     await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
   } else if (

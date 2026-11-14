@@ -864,22 +864,41 @@ export async function cmdRun(argv: string[]): Promise<number> {
 
   // Done dependencies are immutable references: include the depended-on
   // issue's prompt plus its landed diff summary inline, so the agent never
-  // needs git history tools to understand what already shipped.
-  if (attachedIssue && attachedIssue.depends.length > 0) {
+  // needs git history tools to understand what already shipped. Explicitly
+  // referenced done issues (composer context includes) get the same treatment.
+  let depFiles: string[] = [];
+  if (attachedIssue && (attachedIssue.depends.length > 0 || (contextInclude?.issues?.length ?? 0) > 0)) {
     try {
+      const wanted = new Set<string>(attachedIssue.depends);
+      for (const ref of contextInclude?.issues ?? []) {
+        const bySlug = findIssue(l, ref.split("/").pop()?.replace(/\.md$/, "") ?? ref);
+        if (bySlug) wanted.add(bySlug.slug);
+      }
       const refs: string[] = [];
-      for (const dep of attachedIssue.depends) {
+      const files: string[] = [];
+      for (const dep of wanted) {
         const depIssue = findIssue(l, dep);
         if (!depIssue || !depIssue.commit) continue;
-        const stat = await runProc("git", ["show", "--stat", "--oneline", depIssue.commit], {
+        if (depIssue.files.length > 0) files.push(...depIssue.files);
+        // The stored commit is the merge into main, so diff against its
+        // first parent: exactly what that feature merge introduced, nothing else.
+        const stat = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--stat"], {
           cwd: l.repoRoot,
           timeoutMs: 15_000,
         });
         const statText = stat.outcome === "exit" && stat.code === 0 ? stat.stdout.trim().slice(0, 2000) : "";
+        const diff = await runProc(
+          "git",
+          ["diff", `${depIssue.commit}^1`, depIssue.commit, "--", ...(depIssue.files.length > 0 ? depIssue.files : ["."])],
+          { cwd: l.repoRoot, timeoutMs: 15_000 },
+        );
+        const diffText =
+          diff.outcome === "exit" && diff.code === 0 && diff.stdout.trim() ? diff.stdout.trim().slice(0, 6000) : "";
         refs.push(
-          `Completed dependency ${dep} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt.slice(0, 1500)}${statText ? `\n\nLanded change:\n${statText}` : ""}`,
+          `Completed dependency ${dep} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt.slice(0, 1500)}${statText ? `\n\nLanded change:\n${statText}` : ""}${diffText ? `\n\nDiff:\n${diffText}` : ""}`,
         );
       }
+      depFiles = [...new Set(files)];
       if (refs.length > 0) {
         request = `${request}\n\n${refs.join("\n\n")}`;
         recorder.event("depends_context", { count: refs.length });
@@ -929,6 +948,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       .filter((source) => source.kind === "file" && typeof source.ref === "string")
       .map((source) => source.ref as string),
     ...priorWorkFiles,
+    ...depFiles,
     ...suggestedFiles.slice(0, 3),
   ])];
   const seedRanges = hintRanges
