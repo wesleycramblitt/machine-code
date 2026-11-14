@@ -163,24 +163,26 @@ export function renderPromptMessages(
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
   //   system → assembled context → map index → tool guide → command index
-  //     → transcript → workspace → symbols → run state → evidence.
-  // The stable prefix renders before the transcript so it stays byte-identical
-  // across turns. The ~1KB map index names every directory with file counts;
-  // deeper structure pulls via inspect or map overview.
-  // The per-turn symbols, run state, and evidence sit *after* the transcript
-  // so they never shift the cache prefix.
+  //     → symbols → transcript → workspace → run state → evidence.
+  // The stable prefix renders before the symbols so it stays byte-identical
+  // across turns; the guide and command index stay inside it so a changing
+  // symbol map never re-prices them. Symbols sit with the other indexes,
+  // ahead of the transcript wall, so file locations stay adjacent to the
+  // repo map. The per-turn workspace, run state, and evidence sit *after*
+  // the transcript so they never shift the cache prefix.
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
   const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
+  const symbols = state.renderSymbols(symbolsMaxChars);
   const volatile = [
     state.renderWorkspace(),
-    state.renderSymbols(symbolsMaxChars),
     state.renderBlock(stateMaxChars),
     evidence,
   ].filter(Boolean).join("\n\n");
   const out = [
     ...(system ? [system] : []),
     ...(stable ? [{ role: "user", content: stable, timestamp: Date.now() } as MessageLike] : []),
+    ...(symbols ? [{ role: "user", content: symbols, timestamp: Date.now() } as MessageLike] : []),
     ...transcriptMessages(source),
     ...(volatile ? [{ role: "user", content: volatile, timestamp: Date.now() } as MessageLike] : []),
   ] as unknown as AgentMessage[];
