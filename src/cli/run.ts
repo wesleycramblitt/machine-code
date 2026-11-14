@@ -1090,6 +1090,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const resolved = resolveAgent(l, role, {
       machineOverrides: machine.agents[role],
       runOverrides: agentOverrides,
+      verification,
       ...(floorOverrides ? { floors: floorOverrides } : {}),
     });
     recorder.recordConfig({ ...resolved.config, capabilities: resolved.capabilities });
@@ -1572,6 +1573,9 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
 
   const resolved = resolveAgent(l2, resumeAgent, {
     machineOverrides: machine.agents[resumeAgent],
+    // Resume carries the issue's verification forward so the mode-specific
+    // prompt (direct vs verified) matches the original run.
+    verification: resumeIssue?.verification ?? "direct",
     // Floors were recorded at start; re-apply so a resumed run enforces
     // the same thresholds instead of silently dropping to role defaults.
     ...((typeof s.settings?.minFit === "number" || s.settings?.minAxes)

@@ -208,20 +208,44 @@ function basePrompt(name: AgentName): string {
   if (!existsSync(file)) return "";
   return readFileSync(file, "utf8").replaceAll("<role>", name);
 }
-function agentPrompt(layout: Layout, name: AgentName): string {
+function agentPrompt(layout: Layout, name: AgentName, mode?: string): string {
   const role = roleData(name);
+  // Mode-specific prompt first (engineer.direct.md), then the role file.
+  // A mode file fully owns its contract — shared rules stay in base.md.
+  const modeFile = mode ? join(packageDataDir(), "agents", `${name}.${mode}.md`) : null;
   const override = join(packageDataDir(), "agents", `${name}.md`);
-  const rolePrompt = existsSync(override)
-    ? readFileSync(override, "utf8")
-    : typeof role.prompt === "string"
-      ? role.prompt
-      : "";
+  const rolePrompt =
+    modeFile && existsSync(modeFile)
+      ? readFileSync(modeFile, "utf8")
+      : existsSync(override)
+        ? readFileSync(override, "utf8")
+        : typeof role.prompt === "string"
+          ? role.prompt
+          : "";
   if (role.base_prompt === false) return rolePrompt.trim();
   const base = basePrompt(name).trim();
   const roleText = rolePrompt.trim();
   if (!base) return roleText;
   if (!roleText) return base;
   return [base, roleText].filter(Boolean).join("\n\n");
+}
+
+/** True when a mode-specific prompt file exists (it owns its contract). */
+export function hasModePrompt(name: AgentName, mode: string): boolean {
+  return existsSync(join(packageDataDir(), "agents", `${name}.${mode}.md`));
+}
+
+/** Declared orchestration modes for a role. */
+export function roleModes(name: AgentName): string[] {
+  return strings(roleData(name).modes);
+}
+
+/** Default mode when the run does not select one. */
+export function roleDefaultMode(name: AgentName): string | undefined {
+  const role = roleData(name);
+  const raw = typeof role.default_mode === "string" ? role.default_mode : undefined;
+  const modes = strings(role.modes);
+  return raw && modes.includes(raw) ? raw : undefined;
 }
 
 function modeConfigs(role: RoleData, modes: readonly string[]): Record<string, AgentModeConfig> {
@@ -246,13 +270,13 @@ export function normalizeAgentName(name: string): AgentName {
   return name;
 }
 
-export function agentDef(layout: Layout, name: AgentName): AgentDef {
+export function agentDef(layout: Layout, name: AgentName, mode?: string): AgentDef {
   const role = roleData(name);
   const modes = strings(role.modes);
   const defaultModeRaw = typeof role.default_mode === "string" ? role.default_mode : undefined;
   return {
     name,
-    prompt: agentPrompt(layout, name),
+    prompt: agentPrompt(layout, name, mode),
     tools: strings(role.tools) as CoreToolName[],
     readonly: role.readonly === true,
     modes,

@@ -10,7 +10,10 @@ import type { AgentConfigOverrides } from "../config.js";
 import {
   AGENT_NAMES,
   agentDef,
+  hasModePrompt,
+  roleDefaultMode,
   roleDefaults as roleDefaultsData,
+  roleModes,
   type AgentDef,
   type AgentName,
 } from "../agents.js";
@@ -182,6 +185,10 @@ export function resolveAgent(
     machineOverrides?: AgentConfigOverrides;
     runOverrides?: Partial<AgentConfig>;
     verification?: "direct" | "verified";
+    /** Explicit mode; defaults to the verification value when it names a
+     * declared mode, else the role default. The mode selects the prompt
+     * file: agents/<role>.<mode>.md wins over agents/<role>.md. */
+    mode?: string;
     /** Run-level selection floors (CLI --min-fit/--min-capability/--min-axes).
      * Applied onto the role def so pick() and the TUI preview agree. */
     floors?: {
@@ -191,7 +198,14 @@ export function resolveAgent(
     };
   } = {},
 ): ResolvedAgent {
-  const baseDef = agentDef(layout, role);
+  const modes = roleModes(role);
+  const mode =
+    opts.mode && modes.includes(opts.mode)
+      ? opts.mode
+      : opts.verification && modes.includes(opts.verification)
+        ? opts.verification
+        : roleDefaultMode(role);
+  const baseDef = agentDef(layout, role, mode);
   const def = opts.floors
     ? {
         ...baseDef,
@@ -218,12 +232,17 @@ export function resolveAgent(
   if (def.readonly) tools = tools.filter((t) => t !== "write" && t !== "edit");
   // The terminal action is harness-owned and must survive old role overrides.
   if (!tools.includes("finish")) tools = [...tools, "finish"];
+  // A mode-specific prompt file owns its test contract, so the injected
+  // line would only duplicate it — skip it and let the prompt speak once.
+  const modeOwnsContract = role === "engineer" && mode !== undefined && hasModePrompt(role, mode);
   const testLine =
-    role === "engineer"
-      ? testPromptLine(opts.verification, hasRepoScript(layout, "test"))
-      : hasRepoScript(layout, "test")
-        ? null
-        : "This repo has no test runner, so never hunt for test files or test commands.";
+    modeOwnsContract
+      ? null
+      : role === "engineer"
+        ? testPromptLine(opts.verification, hasRepoScript(layout, "test"))
+        : hasRepoScript(layout, "test")
+          ? null
+          : "This repo has no test runner, so never hunt for test files or test commands.";
   const prompt = composePrompt(def, config, tools) + (testLine ? `\n${testLine}` : "");
   return { def: { ...def, prompt, tools }, config, capabilities, prompt };
 }

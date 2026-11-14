@@ -589,6 +589,7 @@ export async function runTui(): Promise<void> {
           approval: s.newrun.approval,
           ambiguity: s.newrun.ambiguity,
         },
+        verification: newRunIssue?.verification ?? "direct",
       });
     } catch {
       return { context, error: `unknown agent ${s.newrun.agent}`, machine };

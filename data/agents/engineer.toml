@@ -6,11 +6,18 @@ name = "engineer"
 order = 2
 tools = ["context", "inspect", "write", "edit", "glob", "command", "ask", "artifact", "skill", "finish"]
 readonly = false
-modes = []
+modes = ["direct", "verified"]
+default_mode = "direct"
 blurb = "plans + builds a feature/bug in one run"
 approval = "human"
 ambiguity = "precise"
 capabilities = ["code:read", "context:inherit", "code:write", "artifact:provision"]
+
+[mode.direct]
+verification = "direct"
+
+[mode.verified]
+verification = "verified"
 
 [selection]
 min_fit = 5.0
