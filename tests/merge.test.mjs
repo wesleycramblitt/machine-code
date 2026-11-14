@@ -20,8 +20,8 @@ import { layout } from "../dist/paths.js";
 import { readIssue, writeIssue, findIssue } from "../dist/plan/issues.js";
 import { unmetDepends, unknownDepends } from "../dist/tasks/issue.js";
 import { overlapFootprints } from "../dist/plan/overlap.js";
-import { fastForwardMain } from "../dist/tasks/sync.js";
-import { syncWorktreeWithMain, mergeInProgress } from "../dist/tasks/sync.js";
+import { fastForwardMain, syncWorktreeWithMain, mergeInProgress } from "../dist/tasks/sync.js";
+import { withMergeLock } from "../dist/worktree.js";
 import { CORE_COMMANDS, runCommand } from "../dist/commands/registry.js";
 
 function repo() {
@@ -261,6 +261,132 @@ describe("vcs conflict commands", () => {
       assert.equal(aborted.isError, false);
       assert.equal(await mergeInProgress(root), false);
       assert.equal(git("show", "HEAD:a.txt"), "feature");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to stage a file that still has markers", async () => {
+    const { root } = diverge();
+    try {
+      await syncWorktreeWithMain(root);
+      // Stage the raw conflict without editing: resolve must refuse.
+      const staged = await runCommand("vcs:resolve", { path: "a.txt", strategy: "edited" }, { root, commands: CORE_COMMANDS });
+      assert.equal(staged.isError, true);
+      assert.match(staged.text, /conflict markers/);
+      assert.equal(await mergeInProgress(root), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("sync resume refuses to commit staged markers", async () => {
+    const { root, git } = diverge();
+    try {
+      await syncWorktreeWithMain(root);
+      // Bypass vcs:resolve with raw git: stage the marked file directly.
+      execFileSync("git", ["-C", root, "add", "--", "a.txt"]);
+      const resumed = await syncWorktreeWithMain(root);
+      assert.equal(resumed.ok, false);
+      assert.match(resumed.detail, /markers/);
+      assert.deepEqual(resumed.conflicts, ["a.txt"]);
+      assert.equal(await mergeInProgress(root), true);
+      // Nothing committed: the merge is still open.
+      assert.match(git("log", "--oneline", "-1"), /main change|feature change/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("merge-lock mutual exclusion", () => {
+  it("serializes two holders and releases cleanly", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mc-lock-"));
+    try {
+      const order = [];
+      const slow = withMergeLock(root, async () => {
+        order.push("slow-start");
+        await new Promise((r) => setTimeout(r, 200));
+        order.push("slow-end");
+      });
+      await new Promise((r) => setTimeout(r, 50));
+      const quick = withMergeLock(root, async () => {
+        order.push("quick");
+      });
+      await Promise.all([slow, quick]);
+      assert.deepEqual(order, ["slow-start", "slow-end", "quick"]);
+      const { existsSync } = await import("node:fs");
+      assert.equal(existsSync(join(root, ".machine_code", "local", "merge.lock")), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a torn owner file instead of stalling", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mc-lock-"));
+    try {
+      mkdirSync(join(root, ".machine_code", "local", "merge.lock"), { recursive: true });
+      writeFileSync(join(root, ".machine_code", "local", "merge.lock", "owner.json"), "{torn");
+      const result = await withMergeLock(root, async () => "proceeded");
+      assert.equal(result, "proceeded");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("fastForwardMain dirty tree", () => {
+  it("refuses a dirty tree without touching it", async () => {
+    const { root, git } = repo();
+    let remote;
+    try {
+      remote = mkdtempSync(join(tmpdir(), "mc-remote-"));
+      execFileSync("git", ["init", "-q", "--bare", remote]);
+      git("remote", "add", "origin", remote);
+      git("push", "-q", "origin", "main");
+      const clone = mkdtempSync(join(tmpdir(), "mc-clone-"));
+      try {
+        execFileSync("git", ["clone", "-q", remote, clone]);
+        execFileSync("git", ["-C", clone, "config", "user.email", "t@t"]);
+        execFileSync("git", ["-C", clone, "config", "user.name", "t"]);
+        execFileSync("git", ["-C", clone, "checkout", "-q", "-b", "main", "origin/main"]);
+        // Remote moves the tracked file; the local tree dirties the same
+        // file, so a fast-forward would clobber work and must refuse.
+        writeFileSync(join(clone, "a.txt"), "remote\n");
+        execFileSync("git", ["-C", clone, "add", "a.txt"]);
+        execFileSync("git", ["-C", clone, "commit", "-q", "-m", "remote only"]);
+        execFileSync("git", ["-C", clone, "push", "-q", "origin", "main"]);
+      } finally {
+        rmSync(clone, { recursive: true, force: true });
+      }
+      writeFileSync(join(root, "a.txt"), "local-dirty\n");
+      const before = git("rev-parse", "HEAD");
+      const result = await fastForwardMain(root);
+      assert.equal(result.ok, false);
+      assert.match(result.detail, /dirty/);
+      assert.equal(git("rev-parse", "HEAD"), before);
+      assert.equal(git("show", "HEAD:a.txt"), "base", "committed content untouched");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (remote) rmSync(remote, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("research:verify kind-precise matching", () => {
+  it("tells same-slug issues in different kinds apart", async () => {
+    const { matchChangedIssue } = await import("../dist/commands/research.js");
+    const { listIssues } = await import("../dist/plan/issues.js");
+    const { root } = repo();
+    try {
+      const l = layout(root);
+      writeIssue(l, { kind: "features", slug: "shared", prompt: "F" });
+      writeIssue(l, { kind: "bugs", slug: "shared", prompt: "B" });
+      const all = listIssues(l);
+      assert.equal(matchChangedIssue(all, "issues/features/todo/shared.md")?.kind, "features");
+      assert.equal(matchChangedIssue(all, "issues/bugs/todo/shared.md")?.kind, "bugs");
+      assert.equal(matchChangedIssue(all, "issues/features/todo/other.md"), undefined);
+      assert.equal(matchChangedIssue(all, "src/loop.ts"), undefined);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

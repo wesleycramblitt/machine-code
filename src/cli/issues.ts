@@ -298,7 +298,7 @@ export async function runIssueBuild(
     const reuse = reusableWorktreeOwner(listRuns(l), issue.branch, "engineer");
     if (reuse) {
       toolRoot = reuse.path;
-      const refresh = await refreshReusedWorktree(reuse.path);
+      const refresh = await refreshReusedWorktree(reuse.path, reuse.run.baseBranch ?? "main");
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,

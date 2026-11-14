@@ -6,10 +6,28 @@
  * .machine_code/references/). Replaces the fragile "Outcome: researched"
  * text-match system with a hard git check.
  */
+
+/**
+ * Which issue a changed research path belongs to. Exact rel first; then kind
+ * dir + exact filename — never a bare slug suffix, which collides across
+ * kinds (features/todo/foo.md vs bugs/todo/foo.md).
+ */
+export function matchChangedIssue(allIssues: Issue[], file: string): Issue | undefined {
+  const exact = allIssues.find((issue) => issue.rel === file);
+  if (exact) return exact;
+  const parts = file.split("/");
+  if (parts[0] !== "issues" || parts.length < 3) return undefined;
+  const name = parts[parts.length - 1] ?? "";
+  return allIssues.find(
+    (issue) =>
+      issue.kind === parts[1] &&
+      issue.rel.split("/").pop() === name,
+  );
+}
 import { execFileSync } from "node:child_process";
 import type { CommandSpec } from "./registry.js";
 import { layout } from "../paths.js";
-import { listIssues } from "../plan/issues.js";
+import { listIssues, type Issue } from "../plan/issues.js";
 import { overlapFootprints } from "../plan/overlap.js";
 
 const RESEARCH_PATHS = ["issues/", "docs/", ".machine_code/references/"];
@@ -90,9 +108,7 @@ export const researchVerifyCommand: CommandSpec = {
       // would race on parallel branches and conflict at merge time. Enforce
       // the edge while the research agent can still fix it.
       const allIssues = listIssues(layout(ctx.root));
-      const changedIssues = allIssues.filter((issue) =>
-        unique.some((file) => file === issue.rel || file.endsWith(`/${issue.slug}.md`)),
-      );
+      const changedIssues = [...new Set(unique.map((file) => matchChangedIssue(allIssues, file)).filter((issue) => issue !== undefined))];
       const pending = allIssues.filter((issue) => issue.kind !== "ideas" && issue.status !== "done");
       const violations: string[] = [];
       for (const left of changedIssues) {

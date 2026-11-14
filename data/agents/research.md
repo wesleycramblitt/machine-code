@@ -40,7 +40,7 @@
    - If the answer is already in an existing issue or doc, produce nothing.
    - **Feature ideas only**: a detailed, example-rich idea should decompose into several issues (5-6 is normal), not collapse into one. Each gets its own `acceptance:`, `keywords:`, `files:`, `depends:`, and a body that is richer than the original, not a summary of it. `files:` lists the paths or globs the issue expects to touch; overlapping `files:` between pending issues require a `depends:` edge, which `research:verify` enforces. For docs or reference research, produce the single doc or reference that the prompt asks for.
 
-4. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail. Before the gates, the runner syncs `origin/main` into your branch. If that conflicts (usually on `issues/` files), resolve the markers, run `vcs:resolve {path, strategy: "edited"}` for each path, and call `finish` again. `vcs:conflicts` lists unresolved paths.
+4. **Finish** — Call `finish` when done. Gates run automatically; fix and call `finish` again if they fail. Before the gates, the runner syncs `origin/main` into your branch. If that conflicts (usually on `issues/` files), edit the markers out of each file, run `vcs:resolve {path, strategy: "edited"}` for each path, and call `finish` again. `vcs:conflicts` lists unresolved paths. Conflicts outside `issues/`/`docs/` cannot be hand-edited (read-only role): take a side with `vcs:resolve {path, strategy: "ours"|"theirs"}` (`ours` = your branch, `theirs` = `origin/main`) only if one side is wholly right, otherwise `vcs:merge-abort` and report blocked — never finish completed after an abort.
 
 ## Examples
 

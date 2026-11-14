@@ -49,9 +49,9 @@
 6. **Merge conflicts** — The runner syncs `origin/main` into your branch (`vcs:sync`) before the build/test gates. If main moved, the sync can conflict. When it does, the gate fails with the exact unmerged paths:
    - `vcs:conflicts` lists the unresolved files.
    - Edit each file to combine both sides into the correct final code. Remove every `<<<<<<<`, `=======`, and `>>>>>>>` marker.
-   - Mark each path resolved: `vcs:resolve {path: "src/file.ts", strategy: "edited"}`. Use `strategy: "ours"` or `"theirs"` only when one side is wholly correct.
+   - Mark each path resolved: `vcs:resolve {path: "src/file.ts", strategy: "edited"}`. Use `strategy: "ours"` (your branch's side) or `"theirs"` (`origin/main`'s side) only when one side is wholly correct — the sync merges `origin/main` into your branch, so ours means you.
    - Call `finish` again. `vcs:sync` commits the merge, then the build/test gates run on the synced tree.
-   - If the conflict is genuinely unresolvable, run `vcs:merge-abort` and report blocked with the exact files and why. Never leave markers in the tree.
+   - If the conflict is genuinely unresolvable, run `vcs:merge-abort` and report blocked with the exact files and why — do not finish completed afterwards (that just re-runs the sync into the same conflict). Never leave markers in the tree.
 
 ## Examples
 

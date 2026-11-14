@@ -20,6 +20,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -30,6 +31,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { runProc } from "./proc.js";
 import type { ProcessSupervisor } from "./processes/supervisor.js";
 import type { Layout } from "./paths.js";
+import { layout } from "./paths.js";
 import { loadMachineConfig } from "./config.js";
 import { writeJsonAtomic, isActiveStatus, type RunSummary } from "./state/run-schema.js";
 import { listRuns } from "./state/runs.js";
@@ -187,6 +189,12 @@ export async function branchState(mainRoot: string, branch: string, baseBranch: 
 
 /** Resolve the default base branch: configured, origin HEAD, main, master, current. */
 export async function defaultBaseBranch(mainRoot: string): Promise<string> {
+  try {
+    const configured = loadMachineConfig(layout(mainRoot)).git?.baseBranch?.trim();
+    if (configured && (await branchExists(mainRoot, configured))) return configured;
+  } catch {
+    // Unreadable machine config — fall through to git detection.
+  }
   const remote = await git(mainRoot, ["symbolic-ref", "refs/remotes/origin/HEAD"]);
   if (remote.code === 0) {
     const ref = remote.stdout.trim();
@@ -290,25 +298,30 @@ export async function refreshReusedWorktree(path: string, baseBranch = "main"): 
     // (or an interrupted run) may have pushed commits local doesn't have.
     const head = await runProc("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: path, timeoutMs: 20_000 });
     const branch = head.stdout.trim();
-    if (branch && branch !== "HEAD") {
-      await runProc("git", ["fetch", "origin", branch], { cwd: path, timeoutMs: 60_000 });
-      const remote = await runProc("git", ["rev-parse", "--verify", `origin/${branch}`], { cwd: path, timeoutMs: 20_000 });
-      if (remote.code === 0) {
-        const behindRemote = await runProc("git", ["rev-list", "--count", `HEAD..origin/${branch}`], {
-          cwd: path,
-          timeoutMs: 20_000,
-        });
-        if (behindRemote.code === 0 && Number(behindRemote.stdout.trim()) > 0) {
-          const ff = await runProc("git", ["merge", "--ff-only", `origin/${branch}`], { cwd: path, timeoutMs: 60_000 });
-          // Non-fast-forward (both sides moved) is left for the sync gate,
-          // which resolves it in-run with agent help.
-          if (ff.code !== 0) return "conflict";
-        }
+    if (!branch || branch === "HEAD") return "skipped";
+    await runProc("git", ["fetch", "origin", branch], { cwd: path, timeoutMs: 60_000 });
+    const remote = await runProc("git", ["rev-parse", "--verify", `origin/${branch}`], { cwd: path, timeoutMs: 20_000 });
+    if (remote.code === 0) {
+      const behindRemote = await runProc("git", ["rev-list", "--count", `HEAD..origin/${branch}`], {
+        cwd: path,
+        timeoutMs: 20_000,
+      });
+      if (behindRemote.code !== 0) return "skipped";
+      if (Number(behindRemote.stdout.trim()) > 0) {
+        const ff = await runProc("git", ["merge", "--ff-only", `origin/${branch}`], { cwd: path, timeoutMs: 60_000 });
+        // Non-fast-forward (both sides moved) is left for the sync gate,
+        // which resolves it in-run with agent help.
+        if (ff.code !== 0) return "conflict";
       }
     }
-    const base = await runProc("git", ["rev-parse", "--verify", baseBranch], { cwd: path, timeoutMs: 20_000 });
+    // Merge the freshest base: prefer the just-fetched remote ref, fall back
+    // to the local branch when offline.
+    await runProc("git", ["fetch", "origin", baseBranch], { cwd: path, timeoutMs: 60_000 });
+    const originBase = await runProc("git", ["rev-parse", "--verify", `origin/${baseBranch}`], { cwd: path, timeoutMs: 20_000 });
+    const baseRef = originBase.code === 0 ? `origin/${baseBranch}` : baseBranch;
+    const base = await runProc("git", ["rev-parse", "--verify", baseRef], { cwd: path, timeoutMs: 20_000 });
     if (base.code !== 0) return "skipped";
-    const behind = await runProc("git", ["rev-list", "--count", `HEAD..${baseBranch}`], { cwd: path, timeoutMs: 20_000 });
+    const behind = await runProc("git", ["rev-list", "--count", `HEAD..${baseRef}`], { cwd: path, timeoutMs: 20_000 });
     if (behind.code !== 0) return "skipped";
     if (Number(behind.stdout.trim()) === 0) return "current";
     const status = await runProc("git", ["status", "--porcelain"], { cwd: path, timeoutMs: 20_000 });
@@ -323,7 +336,7 @@ export async function refreshReusedWorktree(path: string, baseBranch = "main"): 
       );
       if (commit.code !== 0) return "skipped";
     }
-    const merge = await runProc("git", ["merge", baseBranch, "--no-edit"], { cwd: path, timeoutMs: 120_000 });
+    const merge = await runProc("git", ["merge", baseRef, "--no-edit"], { cwd: path, timeoutMs: 120_000 });
     if (merge.code !== 0) {
       await runProc("git", ["merge", "--abort"], { cwd: path, timeoutMs: 30_000 });
       return "conflict";
@@ -482,8 +495,18 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
     // Worktree pruned but branch survives on the remote: resume from it.
     await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
   } else {
-    await gitOrThrow(mainRoot, ["worktree", "add", "-b", branch, path, baseRef], `worktree add ${branch}`);
-    createdBranches.push(branch);
+    // Two creators can race past the branchExists check together; if the
+    // branch appeared in between, plain-add instead of failing outright.
+    try {
+      await gitOrThrow(mainRoot, ["worktree", "add", "-b", branch, path, baseRef], `worktree add ${branch}`);
+      createdBranches.push(branch);
+    } catch (error) {
+      if (error instanceof WorktreeError && /already exists/i.test(error.message) && (await branchExists(mainRoot, branch))) {
+        await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
+      } else {
+        throw error;
+      }
+    }
   }
 
   const { linked, skipped } = await linkDependencies(mainRoot, path, await dependencyLinks(layout));
@@ -652,8 +675,19 @@ async function recreateWorktreeFromBranchBody(layout: Layout, runId: string, bra
   const path = join(layout.localDir, "worktrees", runId);
   if (existsSync(path)) {
     const registered = (await worktreeList(mainRoot)).some((e) => e.path === path);
-    if (!registered) rmSync(path, { recursive: true, force: true });
-    else return path;
+    if (!registered) {
+      rmSync(path, { recursive: true, force: true });
+    } else {
+      // A registered dir is only reusable when it actually holds `branch`;
+      // anything else (a reused runId, a manual checkout) is not this run.
+      const head = await git(path, ["rev-parse", "--abbrev-ref", "HEAD"]);
+      const actual = head.code === 0 ? head.stdout.trim() : "";
+      if (actual === branch) return path;
+      throw new WorktreeError(
+        "worktree_branch_mismatch",
+        `worktree at ${path} holds ${actual || "(unknown)"}, not ${branch}; remove it before resuming`,
+      );
+    }
   }
   await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
   return path;
@@ -661,8 +695,6 @@ async function recreateWorktreeFromBranchBody(layout: Layout, runId: string, bra
 
 /* ------------------------------------------------------------- merge lock */
 
-/** A merge that outlives its process must not block merges forever. */
-const MERGE_LOCK_STALE_MS = 10 * 60_000;
 /** How long to wait for another run's merge before giving up. */
 const MERGE_LOCK_WAIT_MS = 3 * 60_000;
 
@@ -673,9 +705,11 @@ function mergeLockDir(mainRoot: string): string {
 /**
  * Serialize merges per repo. Concurrent runs racing sync → merge → push
  * corrupt each other's push (non-fast-forward) or stack conflicts on a
- * moving main. mkdir is atomic: exactly one holder wins. Stale locks (dead
- * pid or older than 10 minutes) are cleared; otherwise we wait up to
- * 3 minutes, then fail loudly instead of merging blind.
+ * moving main. mkdir is atomic: exactly one holder wins. A lock is only
+ * ever cleared when its holder is provably gone (dead pid, or an owner
+ * file so broken it could never belong to a live holder); a live holder
+ * is never evicted no matter how long it runs. Waiters give up after
+ * 3 minutes and fail loudly instead of merging blind.
  */
 export async function withMergeLock<T>(mainRoot: string, fn: () => Promise<T>): Promise<T> {
   const dir = mergeLockDir(mainRoot);
@@ -702,11 +736,15 @@ export async function withMergeLock<T>(mainRoot: string, fn: () => Promise<T>): 
           alive = false;
         }
       }
-      const age = Date.now() - Date.parse(typeof raw.startedAt === "string" ? raw.startedAt : "");
-      if (!alive || age > MERGE_LOCK_STALE_MS) stale = true;
+      // A live holder is never stale, however old: evicting it would run
+      // two merges at once. Only a dead holder (or garbage no live holder
+      // could have written) may be cleared.
+      if (!alive) stale = true;
     } catch {
-      // Unreadable owner: holder is between mkdir and write, or crashed
-      // mid-write. Wait it out; the deadline bounds the stall.
+      // Unreadable/truncated owner: no live holder can own this state (a
+      // live holder wrote valid JSON right after mkdir). Clear it so one
+      // torn write cannot stall waiters for the full 3 minutes.
+      stale = true;
     }
     if (stale) {
       rmSync(dir, { recursive: true, force: true });
@@ -718,10 +756,19 @@ export async function withMergeLock<T>(mainRoot: string, fn: () => Promise<T>): 
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   try {
-    writeFileSync(ownerFile, me, "utf8");
+    // Atomic owner write (tmp + rename): readers never see a torn file.
+    const tmp = `${ownerFile}.${process.pid}.tmp`;
+    writeFileSync(tmp, me, "utf8");
+    renameSync(tmp, ownerFile);
     return await fn();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    // Release only our own lock: if our ownership somehow lapsed (stale
+    // clear raced us), never delete a successor's lock.
+    try {
+      if (readFileSync(ownerFile, "utf8") === me) rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Owner already gone — nothing to release.
+    }
   }
 }
 

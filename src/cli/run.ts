@@ -648,7 +648,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (reuse) {
       toolRoot = reuse.path;
       reusedWorktree = true;
-      const refresh = await refreshReusedWorktree(reuse.path);
+      const refresh = await refreshReusedWorktree(reuse.path, reuse.run.baseBranch ?? "main");
       recorder.patchSummary({
         worktree: reuse.path,
         worktreeOwnerRunId: reuse.run.id,
@@ -729,8 +729,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
         process.stderr.write(`worktree ${spec.path} (branch ${spec.branch})\n`);
       } catch (error) {
         if (error instanceof WorktreeError && error.code === "branch_checked_out" && issueWorktree && itemSlug) {
-          // mc/<slug> is already checked out in another worktree: just use it.
-          const branch = `mc/${itemSlug}`;
+          // The issue branch is already checked out in another worktree: just use it.
+          const branch = attachedIssue?.branch ?? `mc/${itemSlug}`;
           const existing = await branchCheckedOutAt(l.repoRoot, branch);
           if (!existing) {
             recorder.finalize("blocked", `${error.code}: ${error.message}`);
@@ -749,7 +749,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
           reusedWorktree = true;
           // Never touch a worktree that an active run owns; otherwise bring
           // it current like any other reuse.
-          const refresh = ownerActive ? "skipped" : await refreshReusedWorktree(existing);
+          const refresh = ownerActive ? "skipped" : await refreshReusedWorktree(existing, owner?.baseBranch ?? baseBranch);
           recorder.patchSummary({
             worktree: existing,
             ...(owner ? { worktreeOwnerRunId: owner.id } : {}),
@@ -1183,9 +1183,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
             const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch);
             if (merged.ok) {
               recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
+              const { updateIssueMeta } = await import("../plan/issues.js");
+              if (merged.mergeCommit) updateIssueMeta(l, issue.slug, { commit: merged.mergeCommit });
               if (issue.kind !== "ideas") {
-                const { updateIssueMeta } = await import("../plan/issues.js");
-                if (merged.mergeCommit) updateIssueMeta(l, issue.slug, { commit: merged.mergeCommit });
                 moveIssue(l, issue.slug, "done");
                 await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
               }
@@ -1491,6 +1491,41 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   // Resolve gates upfront and pass them into the loop so resume runs them inline.
   const resumeItem = s.itemId ?? s.packetId;
   const resumeIssue = resumeItem ? findIssue(l2, resumeItem) : null;
+  if (resumeIssue && (resumeIssue.status === "done" || resumeIssue.status === "researched")) {
+    // The work already landed (and the branch was pruned) while this run
+    // was paused. Resuming would redo it onto a gone branch.
+    const msg = `issue ${resumeIssue.slug} is already ${resumeIssue.status}; start a new run instead of resuming ${id}`;
+    recorder.finalize("blocked", msg);
+    process.stderr.write(`machine_code: ${msg}\n`);
+    return EXIT.blocked;
+  }
+  if (resumeIssue && resumeIssue.kind !== "ideas") {
+    // Deps may have landed (or new conflicting runs started) while paused;
+    // re-check what the start path enforces instead of merging stale work.
+    const { unmetDepends, unknownDepends, activeFileConflicts } = await import("../tasks/issue.js");
+    const unmet = unmetDepends(l2, resumeIssue);
+    if (unmet.length > 0) {
+      const msg = `issue ${resumeIssue.slug} depends on ${unmet.join(", ")} — build ${unmet.join(", ")} first`;
+      recorder.finalize("blocked", msg);
+      process.stderr.write(`machine_code: ${msg}\n`);
+      return EXIT.blocked;
+    }
+    const unknown = unknownDepends(l2, resumeIssue);
+    if (unknown.length > 0) {
+      process.stderr.write(
+        `machine_code: ignoring unknown depends for ${resumeIssue.slug}: ${unknown.join(", ")}\n`,
+      );
+    }
+    const overlaps = activeFileConflicts(l2, resumeIssue).filter((c) => c.runId !== id);
+    if (overlaps.length > 0) {
+      const msg =
+        `issue ${resumeIssue.slug} shares files with active work — ` +
+        overlaps.map((c) => `${c.slug} (run ${c.runId.slice(-8)}: ${c.files.join(", ")})`).join("; ");
+      recorder.finalize("blocked", msg);
+      process.stderr.write(`machine_code: ${msg}; wait for it to finish\n`);
+      return EXIT.blocked;
+    }
+  }
   const resumeGatesRaw: GateSpec[] | undefined =
     resumeIssue ? resolveGates(issueToTaskPacket(resumeIssue), gateCommands) : undefined;
   const resumeGates: GateSpec[] | undefined =
@@ -1511,7 +1546,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
         }
       : {}),
   });
-  const result = await runLoop({
+  let result = await runLoop({
     models,
     catalogue: catalogue.models,
     configuredProviders,
@@ -1536,7 +1571,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
 
   // A resumed Engineer phase still owes the runner its gates, commit, and move.
   // Gates now run inside the loop. Handle completion or block from exhaustion.
-  if (result.status === "completed" && resumeAgent === "engineer" && resumeIssue) {
+  if (result.status === "completed" && (resumeAgent === "engineer" || resumeAgent === "research") && resumeIssue) {
     if (toolRoot !== l2.repoRoot) {
       try {
         const commit = await ensureCommitted(
@@ -1547,23 +1582,48 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
         if (commit) {
           recorder.patchSummary({ commit });
           recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: resumeIssue.slug });
-          if (resumeIssue.kind !== "ideas") {
-            if (resumeIssue.review === "none" || flags.has("no-review")) {
-              const branch = recorder.current.branch;
-              if (branch) {
-                const merged = await mergeBranchIntoMain(l2.repoRoot, toolRoot, branch);
-                if (merged.ok) {
-                  recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
-                  const { updateIssueMeta } = await import("../plan/issues.js");
-                  if (merged.mergeCommit) updateIssueMeta(l2, resumeIssue.slug, { commit: merged.mergeCommit });
+          // Keep a remote copy: an interruption between here and the merge
+          // must not lose the work.
+          if (recorder.current.branch) {
+            const { pushFeatureBranch } = await import("../tasks/sync.js");
+            const pushed = await pushFeatureBranch(toolRoot, recorder.current.branch);
+            recorder.event("branch_pushed", { branch: recorder.current.branch, pushed });
+          }
+          const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
+          if (resumeIssue.kind === "ideas" && (outcome === "curated" || outcome === "done")) {
+            recorder.event("research_no_commit_expected", { outcome });
+          } else if (resumeIssue.review === "none" || flags.has("no-review") || resumeIssue.kind === "ideas") {
+            const branch = recorder.current.branch;
+            if (branch) {
+              const merged = await mergeBranchIntoMain(l2.repoRoot, toolRoot, branch);
+              if (merged.ok) {
+                recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
+                const { updateIssueMeta } = await import("../plan/issues.js");
+                if (merged.mergeCommit) updateIssueMeta(l2, resumeIssue.slug, { commit: merged.mergeCommit });
+                if (resumeIssue.kind !== "ideas") {
                   moveIssue(l2, resumeIssue.slug, "done");
                   await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} DONE] ${resumeIssue.slug}`);
                 }
+              } else {
+                result = {
+                  ...result,
+                  status: "blocked",
+                  error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}`,
+                };
               }
-            } else {
-              moveIssue(l2, resumeIssue.slug, "needs-human-review");
-              await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} NEEDS HUMAN REVIEW] ${resumeIssue.slug}`);
             }
+          } else {
+            moveIssue(l2, resumeIssue.slug, "needs-human-review");
+            await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} NEEDS HUMAN REVIEW] ${resumeIssue.slug}`);
+          }
+        } else if (resumeAgent === "engineer") {
+          result = { ...result, status: "blocked", error: "engineer produced no committable change" };
+        } else {
+          const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
+          if (outcome !== "curated" && outcome !== "done") {
+            result = { ...result, status: "blocked", error: "research produced no committable change" };
+          } else {
+            recorder.event("research_no_commit_expected", { outcome });
           }
         }
       } catch (error) {

@@ -384,10 +384,23 @@ export async function runCommand(
     };
   }
   if (spec.handler) {
+    // Handlers run in-process (no spawned timeout like the binary path),
+    // so enforce the spec timeout here. A timed-out handler keeps running
+    // in the background; every current handler is retry-safe (git ops and
+    // reads), so a retry after this error is coherent.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await spec.handler(args, ctx);
+      const timeout = new Promise<CommandRunResult>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ text: `${name} timed out after ${spec.timeoutMs}ms`, isError: true }),
+          spec.timeoutMs,
+        );
+      });
+      return await Promise.race([spec.handler(args, ctx), timeout]);
     } catch (error) {
       return { text: `command failed: ${(error as Error).message}`, isError: true };
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
   let argv: string[];

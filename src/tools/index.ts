@@ -1885,14 +1885,25 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         // Reference-store writes are curated knowledge, not worktree
         // mutation: roles with knowledge:write may curate references even
         // when worktree mutation is off (research curates; it never edits
-        // source). Conflict resolution is the same: a knowledge role may
-        // resolve an in-progress merge of its issue/doc files. The vcs
-        // commands themselves refuse to run outside an active merge and
-        // refuse paths that are not unmerged. Everything else non-readonly
-        // needs code:write.
+        // source). Conflict resolution is narrower: a knowledge role may
+        // only touch paths it could write anyway (its allowedPaths). The
+        // vcs commands themselves refuse to run outside an active merge and
+        // refuse paths that are not unmerged; this scoping stops a read-only
+        // role from resolving conflicts in source files via take-a-side.
+        // Everything else non-readonly needs code:write.
         const knowledgeWrite = (ctx.capabilities ?? []).includes("knowledge:write");
         const referenceWrite = params.name.startsWith("reference:") && knowledgeWrite;
-        const mergeWrite = params.name.startsWith("vcs:") && knowledgeWrite;
+        const mergeWrite = (() => {
+          if (!params.name.startsWith("vcs:") || !knowledgeWrite) return false;
+          if (params.name !== "vcs:resolve") return true;
+          const roots = ctx.allowedPaths;
+          if (!roots || roots.length === 0) return true;
+          const target = typeof params.args?.path === "string"
+            ? params.args.path.replace(/\\/g, "/").replace(/^\.\//, "")
+            : "";
+          if (!target) return false;
+          return roots.some((root) => target === root || target.startsWith(root.endsWith("/") ? root : `${root}/`));
+        })();
         if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite) {
           return fail(`${params.name} mutates files; this role is read-only`);
         }

@@ -7,22 +7,33 @@
 import { runProc } from "../proc.js";
 import { defaultBaseBranch } from "../worktree.js";
 
-type GitResult = Awaited<ReturnType<typeof runProc>>;
+export type GitResult = Awaited<ReturnType<typeof runProc>>;
 
-async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<GitResult> {
-  return runProc("git", args, { cwd, timeoutMs });
+export async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<GitResult> {
+  // Never prompt for credentials: fail fast instead of hanging until timeout.
+  return runProc("git", args, { cwd, timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
 }
 
-function ok(result: GitResult): boolean {
+export function ok(result: GitResult): boolean {
   return result.outcome === "exit" && result.code === 0;
 }
 
-function firstLine(text: string): string {
+export function firstLine(text: string): string {
   return text.trim().split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
 }
 
-async function refExists(cwd: string, ref: string): Promise<boolean> {
+export async function refExists(cwd: string, ref: string): Promise<boolean> {
   return ok(await git(cwd, ["rev-parse", "--verify", `${ref}^{commit}`]));
+}
+
+/** Line-start conflict markers (`<<<<<<<`, `>>>>>>>`) in tracked files.
+ * After `git add`, a still-marked file is staged and no longer shows as
+ * unmerged (`-U`), so the merge would otherwise commit markers as resolved.
+ * `=======` alone is too common in legit content to scan for. */
+export async function stagedConflictMarkers(cwd: string): Promise<string[]> {
+  const result = await git(cwd, ["grep", "-l", "-e", "^<<<<<<< ", "-e", "^>>>>>>> ", "--", "."], 30_000);
+  if (!ok(result)) return [];
+  return result.stdout.trim().split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
 export async function mergeInProgress(cwd: string): Promise<boolean> {
@@ -51,13 +62,17 @@ export async function abortMergeIfInProgress(cwd: string): Promise<boolean> {
 /** Bring local main up to origin/main (fast-forward only, never throws).
  * Plain `git fetch origin main:main` is refused when main is checked out
  * (which it always is in the main worktree), so fetch the remote ref and
- * fast-forward explicitly. A dirty main tree or a real divergence refuses
- * the fast-forward and is reported, never forced. */
+ * fast-forward explicitly. Refuses when HEAD is not on the base branch or
+ * the tree is dirty; a real divergence is reported, never forced. */
 export async function fastForwardMain(
   mainRoot: string,
   baseBranch?: string,
 ): Promise<{ ok: boolean; detail: string }> {
   const base = baseBranch?.trim() || "main";
+  const head = await git(mainRoot, ["rev-parse", "--abbrev-ref", "HEAD"], 15_000);
+  if (!ok(head) || head.stdout.trim() !== base) {
+    return { ok: false, detail: `main worktree is on ${ok(head) ? head.stdout.trim() : "(unknown)"}, not ${base}; leaving it alone` };
+  }
   const fetch = await git(mainRoot, ["fetch", "origin"], 60_000);
   if (!ok(fetch)) {
     return { ok: true, detail: "offline: keeping local main" };
@@ -72,6 +87,10 @@ export async function fastForwardMain(
       ok: true,
       detail: /already up to date/i.test(`${ff.stdout}\n${ff.stderr}`) ? "already up to date" : `fast-forwarded (${msg.slice(0, 120)})`,
     };
+  }
+  const dirty = await git(mainRoot, ["status", "--porcelain"], 15_000);
+  if (ok(dirty) && dirty.stdout.trim() !== "") {
+    return { ok: false, detail: `cannot fast-forward ${base}: worktree is dirty (commit or clean it first)` };
   }
   return {
     ok: false,
@@ -121,6 +140,18 @@ export async function syncWorktreeWithMain(
     if (files.length > 0) {
       if (options.abortOnConflict) await abortMerge(cwd);
       return { ok: false, detail: `unresolved conflicts in: ${files.join(", ")}`, conflicts: files };
+    }
+    // No unmerged paths does NOT mean resolved: staged files may still
+    // carry markers the agent forgot to edit out. Committing those would
+    // bake conflicts into the branch, so hand them back instead.
+    const marked = await stagedConflictMarkers(cwd);
+    if (marked.length > 0) {
+      if (options.abortOnConflict) await abortMerge(cwd);
+      return {
+        ok: false,
+        detail: `staged files still contain conflict markers: ${marked.join(", ")} — finish editing every side, then vcs:resolve each path again`,
+        conflicts: marked,
+      };
     }
     const add = await git(cwd, ["add", "-A"]);
     if (!ok(add)) {

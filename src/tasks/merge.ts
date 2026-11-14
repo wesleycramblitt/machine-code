@@ -9,23 +9,18 @@
 import { runProc } from "../proc.js";
 import { runMainBuild } from "../commands/build.js";
 import { commitWorktree, defaultBaseBranch, withMergeLock } from "../worktree.js";
-import { abortMerge, conflictedFiles, syncWorktreeWithMain } from "./sync.js";
+import {
+  abortMerge,
+  conflictedFiles,
+  firstLine,
+  git,
+  ok,
+  refExists,
+  syncWorktreeWithMain,
+  type GitResult,
+} from "./sync.js";
 
 export { abortMergeIfInProgress } from "./sync.js";
-
-type GitResult = Awaited<ReturnType<typeof runProc>>;
-
-async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<GitResult> {
-  return runProc("git", args, { cwd, timeoutMs });
-}
-
-function ok(result: GitResult): boolean {
-  return result.outcome === "exit" && result.code === 0;
-}
-
-function firstLine(text: string): string {
-  return text.trim().split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
-}
 
 /** Commits dirty work, or accepts an existing commit on the branch. */
 export async function ensureCommitted(
@@ -38,15 +33,13 @@ export async function ensureCommitted(
   // Compare against the *current* base branch, not the run's start ref:
   // the sync gate fast-forwards main into the branch, and those commits are
   // not the agent's work. `origin/main..HEAD` is empty for a no-op run.
+  // `--no-merges` excludes the sync merge itself, which would otherwise
+  // count a no-op run as having work.
   const baseBranch = await defaultBaseBranch(path);
-  const refExists = async (ref: string): Promise<boolean> => {
-    const result = await runProc("git", ["rev-parse", "--verify", `${ref}^{commit}`], { cwd: path, timeoutMs: 15_000 });
-    return result.outcome === "exit" && result.code === 0;
-  };
   let base = `origin/${baseBranch}`;
-  if (!(await refExists(base))) base = baseBranch;
-  if (!(await refExists(base))) base = baseRef ?? baseBranch;
-  const ahead = await runProc("git", ["rev-list", "--count", `${base}..HEAD`], {
+  if (!(await refExists(path, base))) base = baseBranch;
+  if (!(await refExists(path, base))) base = baseRef ?? baseBranch;
+  const ahead = await runProc("git", ["rev-list", "--no-merges", "--count", `${base}..HEAD`], {
     cwd: path,
     timeoutMs: 30_000,
   });
@@ -68,9 +61,10 @@ export async function mergeBranchIntoMain(
   branch: string,
 ): Promise<{ ok: boolean; detail?: string; mergeCommit?: string }> {
   return withMergeLock(topRoot, async () => {
+    const baseBranch = await defaultBaseBranch(topRoot);
     let failure: string | undefined;
-    const step = async (args: string[], cwd: string, what: string): Promise<boolean> => {
-      const result = await git(cwd, args);
+    const step = async (args: string[], cwd: string, what: string, timeoutMs = 30_000): Promise<boolean> => {
+      const result = await git(cwd, args, timeoutMs);
       if (ok(result)) return true;
       // Git reports merge conflicts on stdout ("CONFLICT ..."), not stderr,
       // so a stderr-only message renders as an opaque "exit 1".
@@ -83,14 +77,17 @@ export async function mergeBranchIntoMain(
       return false;
     };
     const fail = (detail?: string): { ok: boolean; detail?: string } => ({ ok: false, detail: detail ?? failure });
-    const pushRace = (out: GitResult): boolean =>
+    // A push that never got an exit (timeout/spawn-error) may or may not have
+    // landed; retrying is safe (merge + push are idempotent here).
+    const pushRetryable = (out: GitResult): boolean =>
+      out.outcome !== "exit" ||
       /non-fast-forward|fetch first|stale info|rejected/i.test(`${out.stdout}\n${out.stderr}`);
     try {
       // Retry loop for push races: another merger may land between our merge
       // and our push. Content conflicts fail immediately (retrying cannot
       // help); only a rejected push loops back to fetch and merge again.
       for (let attempt = 1; ; attempt += 1) {
-        await step(["fetch", "origin"], topRoot, "fetch");
+        await step(["fetch", "origin"], topRoot, "fetch", 60_000);
         const sync = await syncWorktreeWithMain(worktreeRoot, { fetch: false, abortOnConflict: true });
         if (!sync.ok) {
           return fail(
@@ -98,7 +95,7 @@ export async function mergeBranchIntoMain(
               `re-run the issue so the agent can resolve them; the branch keeps all committed work`,
           );
         }
-        if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge"))) {
+        if (!(await step(["merge", branch, "--no-ff", "-m", `merge ${branch}`], topRoot, "merge", 120_000))) {
           const files = await conflictedFiles(topRoot);
           if (files.length > 0) failure = `conflicts in: ${files.join(", ")}`;
           await abortMerge(topRoot);
@@ -108,12 +105,15 @@ export async function mergeBranchIntoMain(
         const build = await runMainBuild(topRoot);
         if (!build.ok) {
           process.stderr.write(`main build failed after merge: ${build.text}\n`);
+          // The merge is local-only (nothing pushed yet): roll main back so
+          // the next sync/merge starts clean instead of seeing a poisoned tip.
+          await git(topRoot, ["reset", "--hard", "ORIG_HEAD"], 30_000);
           return fail(`main build failed after merge: ${build.text}`);
         }
-        const push = await git(topRoot, ["push", "origin", "main"]);
+        const push = await git(topRoot, ["push", "origin", baseBranch], 60_000);
         if (ok(push)) break;
         const pushErr = `${firstLine(push.stderr)} (${push.outcome}${push.code === null ? "" : ` exit ${push.code}`})`;
-        if (attempt >= 3 || !pushRace(push)) return fail(`push failed: ${pushErr}`);
+        if (attempt >= 3 || !pushRetryable(push)) return fail(`push failed: ${pushErr}`);
         process.stderr.write(`merge ${branch}: push lost a race with another merger, retrying (${attempt}/3)\n`);
       }
       // Local main is the merge commit and the push just landed it, but
@@ -122,13 +122,13 @@ export async function mergeBranchIntoMain(
       // the next run's pre-run sync fast-forwards.
       await git(topRoot, ["fetch", "origin"], 60_000);
       const headCheck = await git(topRoot, ["rev-parse", "HEAD"], 15_000);
-      const originCheck = await git(topRoot, ["rev-parse", "--verify", "origin/main"], 15_000);
+      const originCheck = await git(topRoot, ["rev-parse", "--verify", `origin/${baseBranch}`], 15_000);
       if (
         ok(headCheck) && ok(originCheck) &&
         headCheck.stdout.trim() !== originCheck.stdout.trim()
       ) {
         process.stderr.write(
-          `merge ${branch}: pushed ${headCheck.stdout.trim().slice(0, 12)} but origin/main is ${originCheck.stdout.trim().slice(0, 12)} (another merger landed after); next run syncs\n`,
+          `merge ${branch}: pushed ${headCheck.stdout.trim().slice(0, 12)} but origin/${baseBranch} is ${originCheck.stdout.trim().slice(0, 12)} (another merger landed after); next run syncs\n`,
         );
       }
       // Delete the remote branch (may fail if it was never pushed — fine).

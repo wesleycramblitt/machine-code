@@ -1653,10 +1653,22 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         // Gates failed but we have retries left. Feed the failure output
         // back to the model as a new user message and continue the loop.
         const failure = gateFailureText(gateResult.results);
+        // Name what DID pass so the model can tell its breakage from the
+        // runner's: a sync-merge success means later logs ran on the merged
+        // tree; a sync failure means later gates were skipped, not green.
+        const passed = gateResult.results
+          .filter((r) => r.passed)
+          .map((r) => `- ${r.command}: ${r.output.trim().split("\n")[0]?.slice(0, 160) ?? ""}`)
+          .join("\n");
+        const skipped = gateResult.results.some((r) => !r.passed && (gates.find((g) => g.command === r.command)?.stopOnFailure))
+          ? "Later gates were skipped (they only run on a synced tree), not passed."
+          : "";
         const gateMsg =
           `## Acceptance gates failed (attempt ${gateAttempts}/${maxGateAttempts})\n\n` +
           `Your previous \`finish\` call is superseded — the run continues. Fix the code so the gates pass, then call \`finish\` again.\n\n` +
           `${failure}\n\n` +
+          (passed ? `Already passing this attempt:\n${passed}\n\n` : "") +
+          (skipped ? `${skipped}\n\n` : "") +
           `Do not call \`finish\` with outcome=completed until all acceptance gates pass.`;
         // The previous finish is superseded: clear it so the next attempt
         // does not end on its first turn via finishTurn. The gate message
@@ -1673,10 +1685,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         recorder.event("gate_retry", { attempt: gateAttempts, maxAttempts: maxGateAttempts, failure: failure.slice(0, 500) });
         continue;
       } else {
-        // Gates exhausted — block the run with the last failure.
+        // Gates exhausted — block the run with the last failure. Name the
+        // failed commands AND the tail of their output: command names alone
+        // ("vcs:sync") never say which files conflicted.
         lastGateFailure = gateFailureText(gateResult.results);
+        const failedNames = gateResult.results.filter((r) => !r.passed).map((r) => r.command).join(", ");
         status = "blocked";
-        error = `acceptance gates failed after ${maxGateAttempts} attempts: ${gateResult.results.filter((r) => !r.passed).map((r) => r.command).join(", ")}`;
+        error = `acceptance gates failed after ${maxGateAttempts} attempts: ${failedNames}\n${lastGateFailure.slice(0, 800)}`;
         finalText = finalText || "";
       }
     }

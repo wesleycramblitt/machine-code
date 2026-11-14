@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import { runProc } from "../proc.js";
 import { branchCheckedOutAt, branchExists, branchState, defaultBaseBranch, mainWorktreeRoot, removeWorktree, withMergeLock, type BranchState } from "../worktree.js";
-import { listRuns, reconcileRun, RunRecorder, type RunSummary } from "../state/runs.js";
+import { listAllRuns, listRuns, reconcileRun, RunRecorder, type RunSummary } from "../state/runs.js";
 import { findIssue, listIssues, moveIssue, writeIssue, type Issue, type IssueKind, type IssueStatus, parseKind, legalStatus, ISSUE_KINDS, statusesForKind } from "../plan/issues.js";
 import { overlapFootprints } from "../plan/overlap.js";
 import { runItemId } from "../plan/lifecycle.js";
@@ -97,13 +97,17 @@ export interface ActiveFileConflict {
  */
 export function activeFileConflicts(layout: Layout, issue: Issue): ActiveFileConflict[] {
   if (issue.files.length === 0) return [];
-  const active = listRuns(layout).filter(
-    (run) =>
-      runItemId(run) !== undefined &&
-      runItemId(run) !== issue.slug &&
-      ["created", "running", "awaiting_input"].includes(run.status) &&
-      ["created", "running", "awaiting_input"].includes(reconcileRun(run).status),
-  );
+  // All projects, filtered to this repo: the same checkout can be registered
+  // under two layouts, and listRuns(layout) only sees one of them.
+  const active = listAllRuns(layout.home)
+    .filter((run) => run.repoRoot === layout.repoRoot)
+    .filter(
+      (run) =>
+        runItemId(run) !== undefined &&
+        runItemId(run) !== issue.slug &&
+        ["created", "running", "awaiting_input"].includes(run.status) &&
+        ["created", "running", "awaiting_input"].includes(reconcileRun(run).status),
+    );
   const conflicts: ActiveFileConflict[] = [];
   for (const run of active) {
     const other = findIssue(layout, runItemId(run)!);
@@ -237,6 +241,27 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   if (head.code === 0 && head.stdout.trim()) updateIssueMeta(layout, slug, { commit: head.stdout.trim() });
   moveIssue(layout, slug, "done");
   await commitIssues(layout, `[COMPLETE] ${slug}`);
+  // The branch served its purpose: drop the worktree, the local branch, and
+  // the remote backup. Best-effort — the merge is published, so a leftover
+  // only costs disk, never work. (Retry approve to redo a failed cleanup:
+  // an already-merged branch skips straight to build + push + cleanup.)
+  try {
+    const checkedOut = await branchCheckedOutAt(root, branch);
+    if (checkedOut) {
+      const removed = await git(root, ["worktree", "remove", checkedOut]);
+      if (removed.code !== 0) {
+        process.stderr.write(`approve ${slug}: worktree remove failed: ${removed.stderr.trim()} (clean ${checkedOut} manually)\n`);
+      }
+    }
+    const deleted = await git(root, ["branch", "-d", branch]);
+    if (deleted.code !== 0) {
+      process.stderr.write(`approve ${slug}: branch delete failed: ${deleted.stderr.trim()}\n`);
+    } else {
+      await git(root, ["push", "origin", "--delete", branch]);
+    }
+  } catch (error) {
+    process.stderr.write(`approve ${slug}: cleanup failed: ${(error as Error).message}\n`);
+  }
 }
 
 /** Delete an issue file, branch, and worktree. */
@@ -252,6 +277,16 @@ export async function deleteIssue(layout: Layout, slug: string, opts: { force?: 
   for (const branch of branches) {
     if (await branchExists(root, branch)) {
       await git(root, ["branch", flag, branch]).catch(() => undefined);
+    }
+    // Best-effort: never strand origin/mc/* — a later issue with the same
+    // slug would otherwise resurrect the stale remote branch on create.
+    // Only when the local branch is actually gone; a kept (unmerged) local
+    // branch keeps its remote backup.
+    if (!(await branchExists(root, branch))) {
+      const remote = await git(root, ["ls-remote", "--heads", "origin", branch]);
+      if (remote.code === 0 && remote.stdout.trim() !== "") {
+        await git(root, ["push", "origin", "--delete", branch]).catch(() => undefined);
+      }
     }
   }
   await commitIssues(layout, `[DELETE] ${slug}`);

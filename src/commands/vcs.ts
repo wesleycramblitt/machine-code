@@ -7,29 +7,21 @@
  * and abort a genuinely unresolvable merge. None of these can reset arbitrary
  * history or touch paths outside the worktree.
  */
-import { runProc } from "../proc.js";
 import { resolveWithin, toRelative } from "../tools/safety.js";
-import { syncWorktreeWithMain } from "../tasks/sync.js";
+import {
+  conflictedFiles,
+  git,
+  mergeInProgress,
+  ok,
+  stagedConflictMarkers,
+  syncWorktreeWithMain,
+} from "../tasks/sync.js";
 import type { CommandSpec } from "./registry.js";
 
-type GitResult = Awaited<ReturnType<typeof runProc>>;
-
-async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<GitResult> {
-  return runProc("git", args, { cwd, timeoutMs });
-}
-
-function ok(result: GitResult): boolean {
-  return result.outcome === "exit" && result.code === 0;
-}
-
-async function mergeInProgress(cwd: string): Promise<boolean> {
-  return ok(await git(cwd, ["rev-parse", "--verify", "MERGE_HEAD"]));
-}
-
-async function unmergedFiles(cwd: string): Promise<string[]> {
-  const result = await git(cwd, ["diff", "--name-only", "--diff-filter=U"], 15_000);
-  if (!ok(result)) return [];
-  return result.stdout.trim().split("\n").map((line) => line.trim()).filter(Boolean);
+/** Line-start conflict markers still in a file's worktree content. */
+async function fileHasMarkers(cwd: string, rel: string): Promise<boolean> {
+  const result = await git(cwd, ["grep", "-l", "-e", "^<<<<<<< ", "-e", "^>>>>>>> ", "--", rel], 15_000);
+  return ok(result) && result.stdout.trim().length > 0;
 }
 
 /** The runner-owned gate. Not exposed to the agent's command map. */
@@ -63,7 +55,7 @@ export const vcsSyncCommand: CommandSpec = {
       ...result.conflicts.map((file) => `  vcs:resolve {path: "${file}", strategy: "edited"}`),
       "",
       "Call finish again when every conflict is resolved. vcs:sync will commit the merge and the build/test gates will run on the synced tree.",
-      "Use strategy \"ours\" or \"theirs\" only when one side is wholly correct. If the conflict is genuinely unresolvable, run vcs:merge-abort and report blocked with the exact files and reason.",
+      "Use strategy \"ours\" (your branch) or \"theirs\" (origin/main) only when one side is wholly correct. If the conflict is genuinely unresolvable, run vcs:merge-abort and report blocked with the exact files and reason.",
     ];
     return { text: lines.join("\n"), isError: true };
   },
@@ -71,7 +63,7 @@ export const vcsSyncCommand: CommandSpec = {
 
 export const vcsConflictsCommand: CommandSpec = {
   name: "vcs:conflicts",
-  description: "List files with unresolved merge conflicts and the current merge status.",
+  description: "List files with unresolved merge conflicts and the current merge status. If every path is resolved, says so (call finish to commit the merge).",
   binary: "git",
   args: () => [],
   schema: {},
@@ -81,10 +73,21 @@ export const vcsConflictsCommand: CommandSpec = {
     if (!(await mergeInProgress(ctx.root))) {
       return { text: "vcs:conflicts: no merge in progress", isError: false };
     }
-    const files = await unmergedFiles(ctx.root);
+    const files = await conflictedFiles(ctx.root);
     const status = await git(ctx.root, ["status", "--short"]);
     const body = status.stdout.trim();
     if (files.length === 0) {
+      // Staged-but-still-marked files look resolved to git; call them out so
+      // the agent edits them instead of finishing a marker-filled tree.
+      const marked = await stagedConflictMarkers(ctx.root);
+      if (marked.length > 0) {
+        return {
+          text:
+            `vcs:conflicts: ${marked.length} staged path(s) still contain conflict markers — keep editing, then vcs:resolve each again:\n${marked.join("\n")}` +
+            (body ? `\n\n${body}` : ""),
+          isError: false,
+        };
+      }
       return {
         text: "vcs:conflicts: merge in progress, all paths resolved. Call finish to complete the merge." +
           (body ? `\n${body}` : ""),
@@ -102,7 +105,8 @@ export const vcsResolveCommand: CommandSpec = {
   name: "vcs:resolve",
   description:
     "Mark one conflicted path resolved after editing it. strategy=edited stages your merged file; " +
-    "strategy=ours|theirs takes that side of the whole file. Only works during an in-progress merge.",
+    "strategy=ours takes your branch's side, strategy=theirs takes origin/main's side (the sync merges " +
+    "origin/main INTO your branch, so ours = yours). Only works during an in-progress merge.",
   binary: "git",
   args: () => [],
   schema: {
@@ -126,7 +130,7 @@ export const vcsResolveCommand: CommandSpec = {
     if (!rel || rel === "." || rel === ".git" || rel.startsWith(".git/")) {
       return { text: `vcs:resolve: refusing to operate on ${rel || "(worktree root)"}`, isError: true };
     }
-    const files = await unmergedFiles(ctx.root);
+    const files = await conflictedFiles(ctx.root);
     if (!files.includes(rel)) {
       return {
         text:
@@ -142,6 +146,16 @@ export const vcsResolveCommand: CommandSpec = {
       if (!ok(checkout)) {
         return { text: `vcs:resolve: could not take ${strategy} for ${rel}: ${checkout.stderr.trim() || checkout.stdout.trim()}`, isError: true };
       }
+    } else if (await fileHasMarkers(ctx.root, rel)) {
+      // Staging a still-marked file would clear its unmerged state while the
+      // conflict text remains — the merge would then commit markers as
+      // resolved. Refuse and send the agent back to the editor.
+      return {
+        text:
+          `vcs:resolve: ${rel} still contains conflict markers — finish editing it first (remove every <<<<<<< / ======= / >>>>>>> line), ` +
+          `then run vcs:resolve again.`,
+        isError: true,
+      };
     }
     const add = await git(ctx.root, ["add", "--", rel]);
     if (!ok(add)) {
@@ -155,7 +169,8 @@ export const vcsMergeAbortCommand: CommandSpec = {
   name: "vcs:merge-abort",
   description:
     "Abort the in-progress merge and restore the branch to its pre-sync state. " +
-    "Use only when the conflict is genuinely unresolvable; the branch keeps its committed work.",
+    "Use only when the conflict is genuinely unresolvable. After aborting, do NOT call finish with completed " +
+    "(that re-runs the sync and returns the same conflicts) — report blocked with the exact files and reason instead.",
   binary: "git",
   args: () => [],
   schema: {},
@@ -169,6 +184,6 @@ export const vcsMergeAbortCommand: CommandSpec = {
     if (!ok(result)) {
       return { text: `vcs:merge-abort failed: ${result.stderr.trim() || result.stdout.trim()}`, isError: true };
     }
-    return { text: "vcs:merge-abort: merge aborted; branch restored to its pre-sync state", isError: false };
+    return { text: "vcs:merge-abort: merge aborted; branch restored to its pre-sync state. Report blocked with the exact files and why — do not finish completed, the next sync would conflict the same way.", isError: false };
   },
 };
