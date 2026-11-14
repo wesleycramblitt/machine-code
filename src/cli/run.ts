@@ -908,7 +908,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
             { cwd: l.repoRoot, timeoutMs: 15_000 },
           );
           const diffText =
-            diff.outcome === "exit" && diff.code === 0 && diff.stdout.trim() ? diff.stdout.trim().slice(0, 6000) : "";
+            diff.outcome === "exit" && diff.code === 0 && diff.stdout.trim() ? diff.stdout.trim() : "";
           refs.push(
             `Reference ${depIssue.slug} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt.slice(0, 1500)}${statText ? `\n\nLanded change:\n${statText}` : ""}${diffText ? `\n\nDiff:\n${diffText}` : ""}`,
           );
