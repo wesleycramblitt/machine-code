@@ -126,6 +126,23 @@ function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
   return [...steps.slice(0, firstAssistant), ...recent];
 }
 
+/** ToolCallIds whose results survive in the kept transcript window. The
+ * evidence section skips these so nothing is shown twice. */
+export function keptToolCallIds(source: readonly AgentMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of transcriptMessages(source as unknown as MessageLike[])) {
+    const content = (message as MessageLike).content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (block && typeof block === "object") {
+        const b = block as Record<string, unknown>;
+        if (b.type === "toolResult" && typeof b.toolCallId === "string") ids.add(b.toolCallId);
+      }
+    }
+  }
+  return ids;
+}
+
 export interface RenderedPrompt {
   messages: AgentMessage[];
   chars: number;
@@ -140,17 +157,18 @@ export function renderPromptMessages(
   commandIndex?: string,
   symbolsMaxChars = 48_000,
   stateMaxChars = 30_000,
+  evidence?: string,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
   // Fixed prompt section order (prompt-cache stable):
   //   system → assembled context → map index → tool guide → command index
-  //     → transcript → workspace → symbols → run state.
+  //     → transcript → workspace → symbols → run state → evidence.
   // The stable prefix renders before the transcript so it stays byte-identical
   // across turns. The ~1KB map index names every directory with file counts;
   // deeper structure pulls via inspect or map overview.
-  // The per-turn symbols and run state sit *after* the transcript so they
-  // never shift the cache prefix.
+  // The per-turn symbols, run state, and evidence sit *after* the transcript
+  // so they never shift the cache prefix.
   const guide = TOOL_GUIDE;
   const startup = trimContextText(startupContext, overviewMaxChars);
   const stable = [startup, mapIndex, guide, commandIndex].filter(Boolean).join("\n\n");
@@ -158,6 +176,7 @@ export function renderPromptMessages(
     state.renderWorkspace(),
     state.renderSymbols(symbolsMaxChars),
     state.renderBlock(stateMaxChars),
+    evidence,
   ].filter(Boolean).join("\n\n");
   const out = [
     ...(system ? [system] : []),

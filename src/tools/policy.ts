@@ -26,6 +26,7 @@ export const TOOL_GUIDE = [
   '  Keyword search: `{"query": "someIdentifier"}` — add `"path": "src/file.ts"` to scope to one file',
   '  Regex fallback for multi-word patterns: `{"query": "pattern", "regex": true}` — single keywords work without regex',
   '  Never use `"path": "src"` with a keyword — that lists the directory instead of searching.',
+  "  Earlier answers reappear under `<evidence>`, re-read fresh from disk — do not re-ask for what is already there. Re-inspect only for a narrower slice or a file that changed since.",
   "",
   "### 3. Change with intent — named blocks, exact fences",
   "Code travels as a fenced block in your response, referenced by name — no JSON escaping, even with backslashes, quotes, or `$`.",

@@ -41,9 +41,11 @@ import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
 import { extractNamedBlocks, writeNamedBlocks } from "./tools/named-blocks.js";
 import { ProcessSupervisor } from "./processes/supervisor.js";
-import { renderPromptMessages } from "./context/render.js";
+import { renderPromptMessages, keptToolCallIds } from "./context/render.js";
 import { toolIndexBody } from "./context/references.js";
 import { findIssue } from "./plan/issues.js";
+import { buildEvidence, MAX_RETAINED_CALLS, type RetainedCall } from "./context/evidence.js";
+import { runCommand } from "./commands/registry.js";
 import type { FinishRequest } from "./tools/finish.js";
 import { gateFailureText, runGates, type GateResult, type GateSpec } from "./verify.js";
 import { vcsSyncCommand } from "./commands/vcs.js";
@@ -529,22 +531,22 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
    * pool = modelInputChars * ctxBudget.total (0.95).
    *
    * Fixed overhead (system/agent/tool guide/command index) gets ctxBudget.overhead
-   * of the pool. The remaining variable pool (symbols, map, state, context
-   * block) is split by the symbol-map, map, and state shares. The context
-   * block gets what's left.
+   * of the pool. The remaining variable pool (symbols, map, state, evidence,
+   * context block) is split by share. The context block gets what's left.
    */
-  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; contextBlock: number } => {
+  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; evidence: number; contextBlock: number } => {
     const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
     const variableShare = 1.0 - ctxBudget.overhead;
     const variablePool = Math.floor(pool * variableShare);
     const symbols = Math.max(2_048, Math.floor(variablePool * ctxBudget.symbols));
     const map = Math.max(1_024, Math.floor(variablePool * ctxBudget.map));
     const state = Math.max(4_096, Math.floor(variablePool * ctxBudget.state));
-    const contextBlock = Math.max(4_096, variablePool - symbols - map - state);
+    const evidence = Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence));
+    const contextBlock = Math.max(4_096, variablePool - symbols - map - state - evidence);
     if (hardCap !== undefined) {
-      return { symbols: Math.min(symbols, hardCap), map, state, contextBlock };
+      return { symbols: Math.min(symbols, hardCap), map, state, evidence, contextBlock };
     }
-    return { symbols, map, state, contextBlock };
+    return { symbols, map, state, evidence, contextBlock };
   };
 
   /** Reminder appended to the next prompt after a read-only turn.
@@ -604,6 +606,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastPromptChars = 0;
   /** Rendered prompt for the request being prepared, consumed by transformContext. */
   let pendingMessages: AgentMessage[] | null = null;
+  /** Re-served evidence for the prompt being prepared. */
+  let pendingEvidence: string | undefined;
 
   /** Does this run owe the user a code change? Read-only roles and pure
    * questions are exempt; a writable role answering anything else — an
@@ -772,6 +776,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const successfulToolCalls = new Set<string>();
     /** Successful read-only command results for the current file state. */
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
+    /** Distinct successful inspect calls, for re-served evidence. Insertion
+     * order is oldest first; re-asking refreshes recency. */
+    const retained = new Map<string, RetainedCall>();
     let changeEpoch = 0;
     /** Verbatim-retry escalation state (same tool+args+error across turns). */
     let lastFailSig = "";
@@ -888,6 +895,31 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       },
       input.agent.tools,
     );
+    // Rebuild the retained-call ledger from a resumed transcript so
+    // re-served evidence covers pre-resume reads (turn unknown).
+    for (const message of input.initialMessages ?? []) {
+      const content = (message as { content?: unknown }).content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
+        if (b.type !== "toolCall" || b.name !== "inspect" || typeof b.id !== "string") continue;
+        if (!b.arguments || typeof b.arguments !== "object") continue;
+        try {
+          const rawInspect = rawTools.find((t) => t.name === "inspect");
+          const prepared = (rawInspect?.prepareArguments?.(b.arguments) ?? b.arguments) as Record<string, unknown>;
+          const key = `inspect:${stableKey(prepared)}`;
+          retained.delete(key);
+          if (retained.size >= MAX_RETAINED_CALLS) {
+            const oldest = retained.keys().next();
+            if (!oldest.done) retained.delete(oldest.value);
+          }
+          retained.set(key, { id: b.id, params: prepared, turn: null });
+        } catch {
+          // Unparseable history never blocks the run.
+        }
+      }
+    }
     // One safety net: an exact repeat with the same arguments is a loop.
     // Everything else is left to the model and the prompt. The old
     // no-progress, next-action, read-path, and search-scope guards blocked
@@ -975,6 +1007,18 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               turn: memory.currentTurn(),
               text,
               preview,
+            });
+          }
+          if (!result.isError && tool.name === "inspect") {
+            retained.delete(key);
+            if (retained.size >= MAX_RETAINED_CALLS) {
+              const oldest = retained.keys().next();
+              if (!oldest.done) retained.delete(oldest.value);
+            }
+            retained.set(key, {
+              id,
+              params: params as Record<string, unknown>,
+              turn: memory.currentTurn(),
             });
           }
           return result;
@@ -1152,10 +1196,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           commandIndex,
           sBudget,
           stBudget,
+          pendingEvidence,
         ).messages);
       },
       prepareRequest: async ({ context }) => {
-        const renderFor = (row: CatalogueRow | null) => {
+        const renderFor = async (row: CatalogueRow | null) => {
           const agentPolicy = input.fullPolicy?.agents?.[input.agent.name];
           const budget = row ? contextBudget(row.context, agentPolicy?.expectedOutputTokens ?? 16_000) : null;
           lastBudget = budget;
@@ -1179,6 +1224,29 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
 
           // The last two steps replay in full; the symbol map plus notes
           // carry everything older worth keeping.
+          const keptIds = keptToolCallIds(context.messages);
+          const ordered = [...retained.values()].reverse();
+          const rawInspect = rawTools.find((t) => t.name === "inspect");
+          const freshDiff = async (): Promise<string> => {
+            try {
+              const result = await runCommand("core:diff", {}, {
+                root: input.toolRoot ?? input.root,
+                commands: input.commands,
+                processes,
+              });
+              if (result.isError) return "";
+              return result.text.trim();
+            } catch {
+              return "";
+            }
+          };
+          pendingEvidence = await buildEvidence({
+            retained: ordered,
+            inspect: rawInspect,
+            diff: freshDiff,
+            keptIds,
+            maxChars: budgets.evidence,
+          });
           const _rendered = renderPromptMessages(
             context.messages,
             memory,
@@ -1188,11 +1256,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             commandIndex,
             budgets.symbols,
             budgets.state,
+            pendingEvidence,
           );
           return { ..._rendered, messages: withRecordNudge(_rendered.messages) };
         };
 
-        let rendered = renderFor(currentRow);
+        let rendered = await renderFor(currentRow);
         pendingMessages = rendered.messages;
         lastPromptChars = rendered.chars;
         let chars = rendered.chars + toolChars;
@@ -1235,7 +1304,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         const model = input.models.getModel(currentRow.providerID, currentRow.id);
         // The new model may have a different window. Re-render the pack to its
         // budget and record the actual request size.
-        rendered = renderFor(currentRow);
+        rendered = await renderFor(currentRow);
         pendingMessages = rendered.messages;
         lastPromptChars = rendered.chars;
         chars = rendered.chars + toolChars;

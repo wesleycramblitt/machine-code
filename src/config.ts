@@ -130,6 +130,8 @@ export interface MachineConfig {
       map: number;
       /** Share of the variable pool (after overhead) allocated to the run-state block (0.0-1.0). */
       state: number;
+      /** Share of the variable pool (after overhead) allocated to re-served tool evidence (0.0-1.0). */
+      evidence: number;
     };
   };
   /** Repository map ([map]). */
@@ -314,6 +316,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         symbols: asNumber(budgetRaw.symbols) ?? 0.35,
         map: asNumber(budgetRaw.map) ?? 0.05,
         state: asNumber(budgetRaw.state) ?? 0.15,
+        evidence: asNumber(budgetRaw.evidence) ?? 0.10,
       },
     },
     map: {
