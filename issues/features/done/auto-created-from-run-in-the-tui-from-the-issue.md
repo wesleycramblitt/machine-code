@@ -1,5 +1,6 @@
 id: fc8f0b
 branch: mc/auto-created-from-run-in-the-tui-from-the-issue-fc8f0b
+commit: c8aa31763451ab8e5e95fc0a34cf179c365f6740
 acceptance: script:build
 
 Auto-created from run.
