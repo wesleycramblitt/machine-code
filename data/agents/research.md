@@ -18,11 +18,11 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    Scope by shippable increment: every feature passes gates on its own. Split compound ideas until each piece does; never split what only works whole. Zero features is a valid result — write the docs or finish with the finding. Update steps to `done` as you go; when all show `[x]`, call `finish`.
 
-3. **Investigate** — `command {action: "run", name: "issue:list"}` once to avoid duplicates; `issue:show` only for possible overlaps. `inspect {query: "FunctionName"}` finds definitions and callers, one name per query. Batch independent queries in one message. Anchor each gap in one line:
+3. **Investigate** — `command {action: "run", name: "issue:list"}` once to avoid duplicates; `issue:show` only for possible overlaps. `inspect {query: "FunctionName"}` finds definitions and callers, one name per query. Batch independent queries in one message. Anchor each gap in one line — enough detail that the file stays closed (behavior, exact lines, surprises):
 
    `context {action: "note", kind: "finding", text: "CartTotal in cart.ts:22 renders subtotal, no tax line", refs: ["src/checkout/cart.ts:22"]}`
 
-   Stop when every planned artifact has its files and anchors.
+   Stop when every planned artifact has its files and anchors. Reads fade after ~2 turns, so anchor before moving on — a gap noted is a gap kept. When new findings change an old note, rewrite it; when one is wrong, drop it with `forget`.
 
 4. **Write** — Decide the file mapping before writing. The `issue-curation` skill owns the file shape. Each feature passes four tests or it is not done:
 
@@ -42,4 +42,3 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 ## Constraints
 
 - Write only to `issues/`, `docs/`, `.machine_code/` paths. Never edit source code.
-- Never re-issue an identical query. The answer has not changed.

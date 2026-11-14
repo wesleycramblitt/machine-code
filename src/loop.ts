@@ -517,6 +517,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastOverviewChars = 0;
   let lastBudget: ContextBudget | null = null;
   let lastSymbolsChars = 0;
+  /** Consecutive turns with tool calls but no note, plan update, or edit.
+   * At three the next prompt carries a reminder (see withRecordNudge). */
+  let readOnlyStreak = 0;
   const ctxBudget = input.machine.context.budget;
 
   /**
@@ -540,6 +543,28 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       return { symbols: Math.min(symbols, hardCap), map, state, contextBlock };
     }
     return { symbols, map, state, contextBlock };
+  };
+
+  /** Reminder appended to the next prompt after three read-only turns.
+   * The mandate lives in the role prompts; this is the backstop that makes
+   * it real — prompt text alone did not hold (85 read-only turns observed). */
+  const RECORD_NUDGE =
+    "Three turns with reads and no note, plan update, or edit. " +
+    "Write down what you have learned so far (context note), update the plan, or edit — " +
+    "if the next step needs no new fact, edit instead of reading again.";
+  const withRecordNudge = (
+    messages: import("@earendil-works/pi-agent-core").AgentMessage[],
+  ): import("@earendil-works/pi-agent-core").AgentMessage[] => {
+    if (readOnlyStreak < 3) return messages;
+    recorder.event("record_nudge", { streak: readOnlyStreak });
+    return [
+      ...messages,
+      {
+        role: "user",
+        content: RECORD_NUDGE,
+        timestamp: Date.now(),
+      } as unknown as import("@earendil-works/pi-agent-core").AgentMessage,
+    ];
   };
 
   const initialChars =
@@ -1113,7 +1138,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           return rendered;
         }
         const { symbols: sBudget, state: stBudget } = computeBudgets(undefined, input.symbolsMaxChars);
-        return renderPromptMessages(
+        return withRecordNudge(renderPromptMessages(
           messages,
           memory,
           mapIndex,
@@ -1122,7 +1147,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           commandIndex,
           sBudget,
           stBudget,
-        ).messages;
+        ).messages);
       },
       prepareRequest: async ({ context }) => {
         const renderFor = (row: CatalogueRow | null) => {
@@ -1147,9 +1172,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const overviewBaseChars = input.contextText?.length ?? 0;
           lastOverviewChars = Math.min(overviewBaseChars, overviewMaxChars);
 
-          // The transcript is replayed whole; the symbol map (not the ledger)
-          // carries what the model has already seen.
-          return renderPromptMessages(
+          // The last two steps replay in full; the symbol map plus notes
+          // carry everything older worth keeping.
+          const _rendered = renderPromptMessages(
             context.messages,
             memory,
             mapIndex,
@@ -1159,6 +1184,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             budgets.symbols,
             budgets.state,
           );
+          return { ..._rendered, messages: withRecordNudge(_rendered.messages) };
         };
 
         let rendered = renderFor(currentRow);
@@ -1271,6 +1297,19 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const message = event.message as AssistantMessage;
           if (message.role === "assistant") {
             lastAssistant = message;
+            // Recording streak: a turn counts as recorded when it notes,
+            // plans, edits, writes, or finishes. Anything else with tool
+            // calls is a read-only turn; three in a row arm the reminder.
+            const turnCalls = message.content.filter((block) => block.type === "toolCall");
+            const recorded = turnCalls.some((block) => {
+              if (block.type !== "toolCall") return false;
+              if (block.name === "edit" || block.name === "write" || block.name === "finish") return true;
+              if (block.name !== "context") return false;
+              const action = (block.arguments as { action?: unknown } | undefined)?.action;
+              return action === "note" || action === "plan";
+            });
+            if (recorded) readOnlyStreak = 0;
+            else if (turnCalls.length > 0) readOnlyStreak += 1;
             const usage = message.usage ?? zeroUsage;
             const actual = usage.cost?.total;
             const actualContextTokens = usage.input + usage.cacheRead;

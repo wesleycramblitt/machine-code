@@ -10,7 +10,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    `context {action: "plan", steps: [{text: "rename routePayment in router.ts and callers", done: false}]}`
 
-   Update steps to `done: true` as you finish them. When every step shows `[x]`, call `finish`.
+   Edit as soon as the first file is confirmed — do not map the whole repo first. Re-plan when the code changes the scope; small corrections just get done. Update steps to `done: true` as you finish them. When every step shows `[x]`, call `finish`.
 
 2. **Read only what you will change** — `<symbols>` already indexes every seen file, so skip outlines and go straight to bodies:
 
@@ -18,7 +18,12 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
-3. **Anchor, then edit** — One short note per finding, with a ref. Notes render every turn, so keep them one line:
+3. **Write it down, then edit** — Only the last two turns stay visible, so conclusions live in notes or they are gone.
+
+   - Write down what each edit depends on: behavior, exact lines, surprises — enough that the file stays closed. One line plus `path:line` ref, never whole files.
+   - Then edit: if the next step needs no new fact, edit instead of reading again.
+   - Close every turn: note what you learned and decided, fix or drop what turned out wrong, update the plan on scope moves. Rewriting a note updates it; `forget` removes one by its text. Finished notes stay — checked-off steps are the done-signal.
+   - Three turns of reads with no note, plan update, or edit draws a harness reminder.
 
    `context {action: "note", kind: "finding", text: "routePayment defined in router.ts:14, called from pay.ts:35", refs: ["router.ts:14"]}`
 
@@ -37,5 +42,4 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
 ## Constraints
 
-- Never re-issue an identical query. The answer has not changed.
 - Keep changes minimal. Follow project conventions.
