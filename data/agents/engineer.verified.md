@@ -27,7 +27,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Edit with a named block — fenced block with a name instead of a language ID, referenced by name so nothing is JSON-escaped:
 
-   `edit {path: "router.ts", symbol: "routePayment", newString: "..."}` — local definitions too. Blocks only when the code needs escaping.
+   `edit {path: "router.ts", symbol: "routePayment", newString: "..."}` — local definitions too. Inline when escapes aren't needed, named blocks otherwise.
    Escaping (backslashes, quotes, `$`)? Put the body in a fenced ` ```renamed ` block and pass `newString_named_block: "renamed"`.
 
    No symbolic anchor? `edit {path, oldString: "...", newString: "..."}`. On a miss the tool returns the closest current text — fix the anchor and resend, no re-read. Batch independent files in one call. The diff is the confirmation — never re-read. Write the tests with the change in the project's existing framework and layout; cover behavior and edge cases, not the implementation line by line.
