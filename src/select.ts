@@ -217,9 +217,15 @@ function rejectReason(
   const def = input.agentDef;
   if (input.tier === "local" && row.providerID !== "ollama") return "paid-model";
   if (input.tier === "paid" && row.providerID === "ollama") return "local-model";
-  // Free (zero-cost) offers are for the local tier only; the paid tier should
-  // never select them — they are unreliable API giveaways, not production models.
-  if (input.tier === "paid" && (row.free === true || (row.pricing.input === 0 && row.pricing.output === 0))) return "free-model";
+  // Free (zero-cost) cloud offers are gated by selection.free_cloud_models_enabled.
+  // Off (default): no tier may select them — they are unreliable API giveaways,
+  // not production models. Local ollama rows are zero-price by nature and are
+  // never rejected here; they fail earlier on tier checks when mismatched.
+  if (
+    row.providerID !== "ollama" &&
+    !input.machine.selection.freeCloudModelsEnabled &&
+    (row.free === true || (row.pricing.input === 0 && row.pricing.output === 0))
+  ) return "free-model";
   if (!input.configuredProviders.has(row.providerID)) return "provider-not-configured";
   if (input.requireProvider && row.providerID !== input.requireProvider) return "provider-filtered";
   if (input.requireModel && !matchesModel(row, input.requireModel)) return "model-filtered";
@@ -482,7 +488,7 @@ export function pinViability(
   }
   const hints = [
     reasons.includes("local-model") ? "ollama needs --tier local" : "",
-    reasons.includes("free-model") ? "free offers need --tier local" : "",
+    reasons.includes("free-model") ? "free cloud offers need selection.free_cloud_models_enabled = true" : "",
     reasons.includes("vetoed") ? "model is vetoed (machine curation.toml)" : "",
     reasons.includes("provider-not-configured") ? "provider is not configured" : "",
     reasons.includes("not-in-runtime-catalog") ? "catalogue is stale; run: machine_code catalogue refresh" : "",

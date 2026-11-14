@@ -223,6 +223,7 @@ export function policyTemplate(kind: "machine" | "repo"): string {
     return `# machine_code machine config (global defaults; repo policy wins)
 [selection]
 tier = "paid"              # paid | local
+# free_cloud_models_enabled = false  # allow zero-price cloud offers (ollama is always selectable)
 # first_token_timeout_ms = 60000   # abandon a stalled call; cool it and retry
 # ollama_first_token_timeout_ms = 300000  # local Ollama waits far longer; it may be busy
 # min_fit = 7.0            # global role-weighted capability floor
@@ -278,6 +279,7 @@ export function cmdPolicy(argv: string[]): number {
       `${JSON.stringify(
         {
           tier: machine.selection.tier,
+          free_cloud_models_enabled: machine.selection.freeCloudModelsEnabled,
           providers: machine.providers,
           files: { machine: l.machineConfig, repo: l.policyFile },
         },
@@ -294,6 +296,7 @@ export function cmdPolicy(argv: string[]): number {
   }
 
   process.stdout.write(`selection tier: ${machine.selection.tier}\n`);
+  process.stdout.write(`free cloud models: ${machine.selection.freeCloudModelsEnabled ? "enabled" : "disabled"}\n`);
   const funded = [...fundedProviderIds(machine.providers)].sort();
   process.stdout.write(`funded providers: ${funded.join(", ") || "(none)"}\n`);
   const multipliers = Object.entries(machine.providers).filter(([, v]) => v.costMultiplier !== undefined);
