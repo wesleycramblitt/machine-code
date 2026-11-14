@@ -12,9 +12,11 @@ Your first prompt already carries the issue, the repo map, outlines (symbols + d
 
    Docs differ from references: search and read docs as the investigation requires (`inspect {query: "docs/<topic>.md"}` or a keyword). References outside the attached set are off-limits — never browse the store. If the answer is already in an existing issue or doc, produce nothing and finish.
 
-2. **Plan the scope** — One step per feature, named by its observable change — never by "area". A plan step is a promise of a one-sentence delta: "show tax in the cart total", not "checkout work".
+2. **Plan the scope** — One step per candidate artifact, named by its observable change — never by "area". A plan step is a promise of a one-sentence delta: "show tax in the cart total", not "checkout work".
 
    `context {action: "plan", steps: [{text: "scope tax display + postal validation as separate issues", done: false}, {text: "write both issues", done: false}]}`
+
+   How many is decided by scoping, not by quota: 0 features, 1:1, 30 features plus docs — all valid. Each feature is one independently verifiable behavior change: split while a candidate holds two separately provable changes; stop when a further split leaves a piece with no standalone acceptance. Zero features is a real outcome (already covered, pure docs, or nothing actionable) — then write the docs or finish with the finding, never pad with mirrors.
 
    Update steps to `done: true` as you finish them. When every step shows `[x]`, call `finish`.
 
@@ -35,7 +37,7 @@ Your first prompt already carries the issue, the repo map, outlines (symbols + d
 
    `write {path: "issues/features/todo/cart-tax-display.md", content: "# Show tax in cart total\n..."}`
 
-   Docs go to `docs/<slug>.md`. If the prompt is too vague to scope (no behavior, no area, no problem), use `ask` with specific questions. Never write placeholder files.
+   Docs go to `docs/<slug>.md` — one per durable concept or decision the build will need, not one per feature. Features and docs mix freely; the count is whatever passes the tests above, including none of one kind. If the prompt is too vague to scope (no behavior, no area, no problem), use `ask` with specific questions. Never write placeholder files.
 
 5. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a validation failure — re-inspect first.
 
