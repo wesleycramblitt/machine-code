@@ -73,6 +73,8 @@ export interface ComposerProps extends Viewport {
   included: ReadonlySet<string>;
   /** File-hint suggestions on/off; when off, no row is marked suggested. */
   hintsEnabled: boolean;
+  /** Issues-tab select mode: exactly one primary vs N references. */
+  issueMode: "primary" | "reference";
   skillModes: ReadonlyMap<string, SkillMode>;
   /** Render memo: modes shown per skill this frame (mutated in place). */
   skillShown: Map<string, SkillMode>;

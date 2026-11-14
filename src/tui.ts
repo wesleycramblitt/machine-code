@@ -274,6 +274,7 @@ export async function runTui(): Promise<void> {
     s.newRunSkillModes.clear();
     s.newRunContextExcluded.clear();
     s.newRunContextIncluded.clear();
+    s.newRunIssueMode = "primary";
     s.newRunHints = true;
     s.newRunPreviewCache = null;
     s.newRunParentId = null;
@@ -384,18 +385,17 @@ export async function runTui(): Promise<void> {
     const previousAgent = s.newrun.agent;
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
     s.newrun.agent = NEW_RUN_AGENTS[(index + 1) % NEW_RUN_AGENTS.length] ?? previousAgent;
-    // The main issue must match the agent (ideas↔research, features/bugs↔
-    // engineer). A switch that orphans the linked issue clears it instead
-    // of leaving a pair the run would refuse.
-    if (s.newrun.item) {
-      const linked = findIssue(layout(s.newRunRepo), s.newrun.item);
-      const wantsResearch = linked?.kind === "ideas";
-      const isResearch = s.newrun.agent === "research";
-      if (linked && wantsResearch !== isResearch) {
-        s.newrun.item = undefined;
-        notify(`unlinked ${linked.slug}: ${linked.kind} needs ${wantsResearch ? "research" : "engineer"}`);
-      }
+    // A new agent means a new selection: clear the main issue and every
+    // issue checkmark (primary and references) plus the select mode.
+    s.newrun.item = undefined;
+    for (const key of [...s.newRunContextIncluded]) {
+      if (key.startsWith("issue:")) s.newRunContextIncluded.delete(key);
     }
+    for (const key of [...s.newRunContextExcluded]) {
+      if (key.startsWith("issue:")) s.newRunContextExcluded.delete(key);
+    }
+    s.newRunIssueMode = "primary";
+    notify(`agent ${s.newrun.agent}; issue selection cleared`);
   };
 
   const cycleAmbiguity = () => {
@@ -1052,6 +1052,7 @@ export async function runTui(): Promise<void> {
         excluded: s.newRunContextExcluded,
         included: s.newRunContextIncluded,
         hintsEnabled: s.newRunHints,
+        issueMode: s.newRunIssueMode,
         skillModes: s.newRunSkillModes,
         skillShown: s.newRunSkillShown,
         preview: modelPreview(),
@@ -1387,7 +1388,11 @@ export async function runTui(): Promise<void> {
       return;
     }
     const previousPrompt = s.newrun.item ? findIssue(layout(s.newRunRepo), s.newrun.item)?.prompt ?? "" : "";
+    const previousRel = s.newrun.item ? findIssue(layout(s.newRunRepo), s.newrun.item)?.rel : undefined;
     s.newrun.item = issue.slug;
+    // Single main: drop the previous main's auto-include so it cannot linger
+    // as a phantom reference.
+    if (previousRel && previousRel !== issue.rel) s.newRunContextIncluded.delete(`issue:${previousRel}`);
     // The main issue decides the agent: a mismatched pair is never runnable,
     // so linking always follows the issue kind (ideas→research, else engineer).
     const wanted = issue.kind === "ideas" ? "research" : "engineer";

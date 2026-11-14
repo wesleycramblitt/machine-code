@@ -10,6 +10,7 @@ import { CTRL_D, CTRL_U, HALF_PAGE, modelReasonText } from "../../format.js";
 import { printable } from "../../format.js";
 import { loadAvailability } from "../../../availability.js";
 import { layout } from "../../../paths.js";
+import { findIssue } from "../../../plan/issues.js";
 import { NEW_RUN_CONTEXT_TABS } from "./types.js";
 import type { SkillMode } from "../../../context/references.js";
 import type { TuiState } from "../../state.js";
@@ -123,6 +124,13 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     return true;
   }
   if (data === "/") { s.newRunContextFiltering = true; ctx.draw(); return true; }
+  if (data === "r" && s.newRunContextSectionKey === "section:issues") {
+    s.newRunIssueMode = s.newRunIssueMode === "primary" ? "reference" : "primary";
+    s.newRunContextItem = 0;
+    s.newRunContextItemKey = null;
+    ctx.draw();
+    return true;
+  }
   if (data === "H") { s.newRunHints = !s.newRunHints; ctx.draw(); return true; }
   if (data === "\x1b") {
     if (s.newrun.prompt.trim()) {
@@ -155,6 +163,21 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === " ") {
     const key = s.newRunContextItemKeys[s.newRunContextItem];
     const available = s.newRunContextItemAvailable[s.newRunContextItem] === true;
+    // Primary mode: space links the row as the one main issue (replacing
+    // the previous main). Reference mode falls through to the toggle below.
+    if (
+      key && key.startsWith("issue:") &&
+      s.newRunContextSectionKey === "section:issues" &&
+      s.newRunIssueMode === "primary"
+    ) {
+      const rel = key.slice("issue:".length);
+      const slug = rel.split("/").pop()?.replace(/\.md$/, "") ?? "";
+      const issue = slug ? findIssue(layout(ctx.repoRoot), slug) : undefined;
+      if (issue) ctx.chooseIssue(issue);
+      else ctx.notify(`issue not found: ${rel}`);
+      ctx.draw();
+      return true;
+    }
     if (key && key.startsWith("skill:")) {
       // Three modes cycle: include (body inlined) → on-demand
       // (description only, pulled with the skill tool) → exclude.

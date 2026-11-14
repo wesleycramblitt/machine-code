@@ -167,6 +167,8 @@ export interface TuiState {
   newRunContextFiltering: boolean;
   newRunContextExcluded: Set<string>;
   newRunContextIncluded: Set<string>;
+  /** Issues-tab select mode: one primary work item vs N references. */
+  newRunIssueMode: "primary" | "reference";
   /** File-hint suggestions on/off for this run (default on). */
   newRunHints: boolean;
   /** Explicit per-skill mode choices (include | on-demand | exclude). */
@@ -308,6 +310,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunContextFiltering: false,
     newRunContextExcluded: new Set<string>(),
     newRunContextIncluded: new Set<string>(),
+    newRunIssueMode: "primary",
     newRunHints: true,
     newRunSkillModes: new Map<string, SkillMode>(),
     newRunSkillShown: new Map<string, SkillMode>(),

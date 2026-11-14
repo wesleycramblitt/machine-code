@@ -13,6 +13,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import {
   B, BL, C, D, G, GR, M, R, RED, W, Y, PANEL_BG, START_BG, WHITE,
+  PURPLE_FG,
   agentTone, background, command, commandBadge, contextTone, fit,
   fmtContext, fmtMoney, fmtTokens, joinCommands, modelPriceText, modelReasonLabel,
   modelReasonRank, modelReasonText, selected, trunc, visible,
@@ -41,6 +42,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const { contextFiltering } = props;
   const contextFilterRaw: string = props.contextFilter;
   const { excluded, included, skillModes, skillShown, preview, pickers } = props;
+  const issueMode = props.issueMode ?? "primary";
   let contextTab: number = props.contextTab;
   let contextItem = props.contextItem;
   const contextItemKey = props.contextItemKey;
@@ -123,9 +125,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const suggestedFiles = new Map(fileHints.map((hint) => [hint.path, hint]));
   const issueItems: ContextPanelItem[] = itemsFor(["issue"]);
   // Actionable issues for the selected agent (the main-issue candidates),
-  // plus done/researched issues as reference-only rows. References are
+  // plus done/researched issues as reference rows. References are
   // opt-in context; the run never attaches to them.
   const knownIssues = new Set(issueItems.map((item) => item.key));
+  const primaryIssueKeys = new Set<string>();
   for (const issue of listIssues(newRunLayout)) {
     // Filter by agent kind.
     if (run.agent === "research" && issue.kind !== "ideas") continue;
@@ -140,6 +143,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     // done/researched as references. Anything else (e.g. needs-human-review)
     // stays out of the run composer.
     if (!actionable && !referenceOnly) continue;
+    if (actionable) primaryIssueKeys.add(`issue:${issue.rel}`);
     const key = `issue:${issue.rel}`;
     if (knownIssues.has(key)) continue;
     let size = 0;
@@ -161,6 +165,12 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       counted: false,
     });
   }
+  // Primary mode shows exactly the primary-eligible rows; reference mode
+  // shows everything except the linked main issue.
+  const mainIssueKey = run.item ? `issue:${runIssue?.rel ?? ""}` : null;
+  const issuesSectionItems = issueMode === "primary"
+    ? issueItems.filter((item) => primaryIssueKeys.has(item.key))
+    : issueItems.filter((item) => item.key !== mainIssueKey);
   const fileItems: ContextPanelItem[] = itemsFor(["file"]);
   const knownFiles = new Set(fileItems.map((item) => item.key));
   // Paths that belong to other context sections; exclude from the file tab.
@@ -406,7 +416,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       counted: false,
     }));
   const sections = [
-    { label: "Issues", tone: contextTone("issue"), sectionKey: "section:issues", items: issueItems },
+    { label: "Issues", tone: contextTone("issue"), sectionKey: "section:issues", items: issuesSectionItems },
     { label: "Docs", tone: contextTone("docs"), sectionKey: "section:docs", items: docItems },
     { label: "References", tone: contextTone("reference"), sectionKey: "section:references", items: referenceItems },
     { label: "Files", tone: C, sectionKey: "section:files", items: fileItems },
@@ -524,7 +534,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     true,
   );
   const issueHint = activeSection.sectionKey === "section:issues"
-    ? panelLine(` ${D}${issueOutcome}${R}`, false, true)
+    ? panelLine(` ${D}${issueOutcome} · r mode: ${issueMode}${R}`, false, true)
     : "";
   const itemRoom = Math.max(1, Math.floor(bodyH * 0.28));
   const itemStart = Math.max(
@@ -540,6 +550,12 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const fixed = (item as { fixed?: boolean }).fixed === true;
     const available = isShownAvailable(item);
     const isExcluded = !fixed && !available && (sectionOff || excluded.has(item.key));
+    // Reference-mode issue includes get a purple check so they read apart
+    // from green primary/file keeps.
+    const isReferenceKeep =
+      activeSection.sectionKey === "section:issues" &&
+      issueMode === "reference" &&
+      included.has(item.key);
     // Fixed rows (agent prompt lines, core tools) are always sent and cannot
     // be toggled: the neutral dim dot reads as static text, not a checkbox.
     const mark = fixed
@@ -548,9 +564,11 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
         ? `${RED}✕${R}`
         : available
           ? `${D}·${R}`
-          : item.exists
-            ? `${G}✓${R}`
-            : `${Y}?${R}`;
+          : isReferenceKeep
+            ? `${PURPLE_FG}✓${R}`
+            : item.exists
+              ? `${G}✓${R}`
+              : `${Y}?${R}`;
     // Prompt lines carry no token count: they are counted:false and their
     // chars feed the section header total, not a per-row column.
     const showCount = !fixed || item.key.startsWith("core-tool:");
