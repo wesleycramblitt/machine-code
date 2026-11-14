@@ -96,6 +96,9 @@ export interface Issue {
   body: string;
   /** Other issue slugs this one depends on. */
   depends: string[];
+  /** Repo-relative files or globs this issue expects to touch. Used to
+   * serialize overlapping work before it can conflict at merge time. */
+  files: string[];
   tags: string[];
   /** Human-provided search terms (comma-separated phrases); an exact-match override for the ranker. */
   keywords: string[];
@@ -161,7 +164,7 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
 
 /** Metadata keys allowed in the condensed `key: value` header. Anything else
  * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
-const META_KEYS = new Set(["priority", "review", "tags", "keywords", "depends", "acceptance", "verify", "verification"]);
+const META_KEYS = new Set(["priority", "review", "tags", "keywords", "depends", "files", "acceptance", "verify", "verification"]);
 
 function stripQuotes(value: string): string {
   if (value.length >= 2) {
@@ -202,11 +205,35 @@ export function parseIssueFile(text: string): { front: Record<string, unknown>; 
 }
 
 function toSlugs(value: unknown): string[] {
-  if (typeof value === "string") return value.split(",").map((entry) => slugify(entry)).filter(Boolean);
-  if (Array.isArray(value)) {
-    return value.filter((entry) => typeof entry === "string").map((entry) => slugify(entry)).filter(Boolean);
-  }
-  return [];
+  // Filter empty entries BEFORE slugify: slugify("") is "untitled", so an
+  // empty `depends:` line used to become a phantom dependency on an issue
+  // named "untitled" and block every run that touched the file. A literal
+  // `undefined`/`null` (written by a template or a bad tool call) is also
+  // noise, not a slug.
+  const raw =
+    typeof value === "string"
+      ? value.split(",")
+      : Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : [];
+  return raw
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && !/^(undefined|null)$/i.test(entry))
+    .map((entry) => slugify(entry))
+    .filter(Boolean);
+}
+
+/** File footprints are paths/globs, not slugs: preserve their spelling. */
+function toFiles(value: unknown): string[] {
+  const raw =
+    typeof value === "string"
+      ? value.split(",")
+      : Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : [];
+  return raw
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && !/^(undefined|null)$/i.test(entry));
 }
 
 function toReview(value: unknown): ReviewMode {
@@ -273,7 +300,7 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
     lines.push(`review: ${front.review}`);
   }
   if (front.verification === "verified") lines.push("verification: verified");
-  for (const key of ["depends", "tags", "acceptance"] as const) {
+  for (const key of ["depends", "files", "tags", "acceptance"] as const) {
     const value = list(front[key]);
     if (value) lines.push(`${key}: ${value}`);
   }
@@ -350,6 +377,7 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
     prompt: typeof front.prompt === "string" && front.prompt.trim() ? front.prompt : body,
     body,
     depends: toSlugs(front.depends),
+    files: toFiles(front.files),
     tags:
       typeof front.tags === "string"
         ? front.tags.split(",").map((entry) => entry.trim()).filter(Boolean)
@@ -410,6 +438,7 @@ export interface NewIssueInput {
   prompt: string;
   priority?: string;
   depends?: string[];
+  files?: string[];
   tags?: string[];
   review?: ReviewMode;
   verification?: "direct" | "verified";
@@ -458,6 +487,7 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   const front: Record<string, unknown> = {
     ...(input.priority && input.priority !== "medium" ? { priority: input.priority } : {}),
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
+    ...(input.files && input.files.length > 0 ? { files: input.files } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
     ...(input.keywords && input.keywords.length > 0 ? { keywords: input.keywords } : {}),
     ...(acceptance.length > 0 ? { acceptance } : {}),

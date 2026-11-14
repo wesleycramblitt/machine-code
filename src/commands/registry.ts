@@ -15,6 +15,7 @@ import { referenceCommands } from "./reference.js";
 import { researchVerifyCommand } from "./research.js";
 import { runCommands } from "./runs.js";
 import { scriptCommands } from "./scripts.js";
+import { vcsConflictsCommand, vcsMergeAbortCommand, vcsResolveCommand } from "./vcs.js";
 import type { Layout } from "../paths.js";
 
 export interface CommandSpec {
@@ -273,6 +274,9 @@ const SPECS: CommandSpec[] = [
 export const CORE_COMMANDS: ReadonlyMap<string, CommandSpec> = new Map([
   ...SPECS.map((spec) => [spec.name, spec] as const),
   ["research:verify", researchVerifyCommand],
+  ["vcs:conflicts", vcsConflictsCommand],
+  ["vcs:resolve", vcsResolveCommand],
+  ["vcs:merge-abort", vcsMergeAbortCommand],
 ]);
 
 export interface CommandRunResult {

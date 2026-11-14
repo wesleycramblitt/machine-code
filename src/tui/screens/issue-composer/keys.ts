@@ -16,6 +16,7 @@ function setField(s: NewIssueSettings, field: string, value: string): void {
     case "acceptance": s.acceptance = value; break;
     case "tags": s.tags = value; break;
     case "depends": s.depends = value; break;
+    case "files": s.files = value; break;
     case "keywords": s.keywords = value; break;
   }
 }
@@ -26,6 +27,7 @@ function getField(s: NewIssueSettings, field: string): string {
     case "acceptance": return s.acceptance;
     case "tags": return s.tags;
     case "depends": return s.depends;
+    case "files": return s.files;
     case "keywords": return s.keywords;
   }
   return "";
@@ -117,7 +119,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   // ── Normal mode ──
   if (data === ":") { s.newIssueColon = true; ctx.draw(); return true; }
   if (data === "\x1b") {
-    if (s.newIssue.prompt.trim() || s.newIssue.tags.trim() || s.newIssue.keywords.trim() || s.newIssue.depends.trim() || s.newIssue.acceptance.trim()) {
+    if (s.newIssue.prompt.trim() || s.newIssue.tags.trim() || s.newIssue.keywords.trim() || s.newIssue.depends.trim() || s.newIssue.files.trim() || s.newIssue.acceptance.trim()) {
       s.newIssueConfirm = true;
       ctx.notify("discard unsaved issue? press y to discard and exit, esc to stay");
     } else {
@@ -161,6 +163,13 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     s.newIssueFieldEdit = "depends";
     s.newIssueFieldUndo = s.newIssue.depends;
     ctx.notify("edit depends (comma separated slugs), Enter to confirm, Esc to cancel");
+    ctx.draw();
+    return true;
+  }
+  if (data === "f") {
+    s.newIssueFieldEdit = "files";
+    s.newIssueFieldUndo = s.newIssue.files;
+    ctx.notify("edit files (comma separated paths or globs), Enter to confirm, Esc to cancel");
     ctx.draw();
     return true;
   }

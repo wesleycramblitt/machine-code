@@ -14,7 +14,7 @@ import { loadAvailability } from "../availability.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
 import { resolveAgent } from "../agents/config.js";
-import { resolveGates } from "../verify.js";
+import { resolveGates, withSyncGate } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
 import { slugify } from "../plan/slug.js";
 import {
@@ -33,7 +33,8 @@ import {
   type Issue,
   type IssueStatus,
 } from "../plan/issues.js";
-import { approveIssue, deleteIssue, issueToTaskPacket, unmetDepends } from "../tasks/issue.js";
+import { approveIssue, deleteIssue, issueToTaskPacket, unmetDepends, unknownDepends, activeFileConflicts } from "../tasks/issue.js";
+import { abortMergeIfInProgress, ensureCommitted, mergeBranchIntoMain } from "../tasks/merge.js";
 import { runItemId } from "../plan/lifecycle.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
 import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
@@ -116,7 +117,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
   if (sub === "create" || sub === "new") {
     const kindArg = positional[1];
     const slugArg = positional[2];
-    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|agent|human] [--verification direct|verified] [--depends a,b] [--tags a,b] [--acceptance a,b] [--status <dir>]');
+    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|human] [--verification direct|verified] [--depends a,b] [--files path,glob] [--tags a,b] [--acceptance a,b] [--status <dir>]');
     const kind = parseKind(kindArg);
     if (!kind) fail(`unknown kind ${JSON.stringify(kindArg)}; use ideas|features|bugs`);
     const slug = slugify(slugArg);
@@ -135,7 +136,8 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       verification: verificationFlag as "direct" | "verified",
       ...(statusFlag ? { status: statusFlag as IssueStatus } : {}),
       ...(flags.get("priority") ? { priority: flags.get("priority") } : {}),
-      ...(flags.get("depends") ? { depends: flags.get("depends")!.split(",").map((e) => slugify(e)) } : {}),
+      ...(flags.get("depends") ? { depends: flags.get("depends")!.split(",").map((e) => e.trim()).filter(Boolean).map((e) => slugify(e)) } : {}),
+      ...(flags.get("files") ? { files: flags.get("files")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
       ...(flags.get("tags") ? { tags: flags.get("tags")!.split(",").map((e) => e.trim()) } : {}),
       ...(flags.get("acceptance") ? { acceptance: flags.get("acceptance")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
       ...(flags.get("verify") ? { verify: flags.get("verify")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
@@ -243,6 +245,19 @@ export async function runIssueBuild(
     process.stderr.write(`machine_code: issue ${slug} depends on ${unmet.join(", ")} — build ${unmet.join(", ")} first\n`);
     return EXIT["blocked"];
   }
+  const unknown = unknownDepends(l, issue);
+  if (unknown.length > 0) {
+    process.stderr.write(`machine_code: ignoring unknown depends for ${slug}: ${unknown.join(", ")} (fix or remove them in the issue header)\n`);
+  }
+  const overlaps = activeFileConflicts(l, issue);
+  if (overlaps.length > 0) {
+    process.stderr.write(
+      `machine_code: issue ${slug} shares files with active work — ` +
+        overlaps.map((c) => `${c.slug} (run ${c.runId.slice(-8)}: ${c.files.join(", ")})`).join("; ") +
+        `; wait for it to finish or add depends: ${overlaps.map((c) => c.slug).join(", ")}\n`,
+    );
+    return EXIT["blocked"];
+  }
   assertNoActiveRun(l, slug, "build");
   const goal = issue.prompt.trim() || issue.title || slug;
   const packet = issueToTaskPacket(issue);
@@ -312,7 +327,7 @@ export async function runIssueBuild(
   // Resolve the engineer agent and gates, then run the loop directly.
   const modelCommands = allCommands(l);
   const gateCommands = allCommands(l, { scriptsRoot: toolRoot });
-  const gates = resolveGates(packet, gateCommands);
+  const gates = withSyncGate(resolveGates(packet, gateCommands), recorder.current.baseBranch);
   const resolved = resolveAgent(l, "engineer", {
     machineOverrides: runtime.machine.agents.engineer,
     runOverrides: {},
@@ -322,7 +337,7 @@ export async function runIssueBuild(
     `Implement this issue exactly:\n\n${JSON.stringify(packet, null, 2)}\n\n` +
     "Acceptance commands must pass. If the issue is wrong or a gate cannot run, report blocked with evidence.";
 
-  const result = await runLoop({
+  let result = await runLoop({
     models: runtime.models,
     catalogue: runtime.catalogue.models,
     configuredProviders: runtime.configuredProviders,
@@ -343,10 +358,55 @@ export async function runIssueBuild(
     gates,
     ...(packet.context.length > 0 ? { seedFiles: packet.context } : {}),
   });
-  recorder.finalize(result.status, result.error, result.finalText);
+
+  // Gates passed: commit the worktree, then merge only after every gate. A
+  // human-review issue stops at needs-human-review; approval performs the
+  // same final merge later.
   if (result.status === "completed") {
-    moveIssue(l, slug, issue.review === "human" ? "needs-human-review" : "done");
-  } else if (result.status === "blocked" || result.status === "failed") {
+    const branch = recorder.current.branch;
+    if (!branch) {
+      result = { ...result, status: "blocked", error: "run completed without a branch to merge" };
+    } else {
+      let commit: string | null = null;
+      try {
+        commit = await ensureCommitted(
+          toolRoot,
+          recorder.current.baseRef,
+          `mc(${slug}): ${goal}\n\nrun: ${recorder.id}\nissue: ${slug}`,
+        );
+      } catch (error) {
+        result = {
+          ...result,
+          status: "blocked",
+          error: `commit failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      if (!commit && result.status === "completed") {
+        result = { ...result, status: "blocked", error: "engineer produced no committable change" };
+      } else if (commit) {
+        recorder.patchSummary({ commit });
+        recorder.event("commit_created", { sha: commit, branch, issue: slug });
+        if (issue.review === "human") {
+          moveIssue(l, slug, "needs-human-review");
+        } else {
+          const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch);
+          if (merged.ok) {
+            recorder.event("branch_merged", { branch });
+            moveIssue(l, slug, "done");
+          } else {
+            moveIssue(l, slug, "blocked");
+            result = {
+              ...result,
+              status: "blocked",
+              error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}`,
+            };
+          }
+        }
+      }
+    }
+  }
+  if (result.status !== "completed") await abortMergeIfInProgress(toolRoot);
+  if (result.status === "blocked" || result.status === "failed") {
     if (result.lastGateFailure) {
       moveIssue(l, slug, "failed-gates");
     } else {
@@ -354,6 +414,7 @@ export async function runIssueBuild(
     }
   }
   await commitPlanningFiles(l, `[${kindTag(issue.kind)} BUILD] ${slug} (${result.status})`);
+  recorder.finalize(result.status, result.error, result.finalText);
   process.stdout.write(`build ${slug}: ${result.status}${result.error ? ` — ${result.error}` : ""}\n`);
   if (result.status === "completed") {
     process.stdout.write(`  next: ${slug} is done\n`);

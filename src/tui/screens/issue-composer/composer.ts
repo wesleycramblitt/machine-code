@@ -41,6 +41,7 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   above.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
   above.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
   above.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
+  above.push(fieldLine("f", "Files", settings.files, fieldEdit === "files", cols));
   above.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance", cols));
   if (settings.kind !== "ideas") {
     const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);

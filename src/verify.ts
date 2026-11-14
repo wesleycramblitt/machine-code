@@ -26,6 +26,23 @@ export interface GateSpec {
   command: string;
   args: Record<string, unknown>;
   required: boolean;
+  /** Stop the gate sequence when this gate fails (later gates would run on a
+   * tree that is not ready, e.g. build after an unresolved sync conflict). */
+  stopOnFailure?: boolean;
+}
+
+/** Runner-owned gate that merges the base branch into the worktree before
+ * build/test. It is injected by the run paths, not declared in the issue. */
+export const SYNC_GATE: GateSpec = {
+  command: "vcs:sync",
+  args: {},
+  required: true,
+  stopOnFailure: true,
+};
+
+/** Put the sync gate first: build/test must run on the tree that will land. */
+export function withSyncGate(gates: readonly GateSpec[], baseBranch?: string): GateSpec[] {
+  return [{ ...SYNC_GATE, args: baseBranch ? { base: baseBranch } : {} }, ...gates];
 }
 
 /**
@@ -71,6 +88,7 @@ export async function runGates(
       output,
       durationMs: Date.now() - start,
     });
+    if (isError && gate.stopOnFailure) break;
   }
   return { results, passed: results.every((r) => r.passed) };
 }

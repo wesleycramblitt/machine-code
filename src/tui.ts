@@ -317,6 +317,7 @@ export async function runTui(): Promise<void> {
       acceptance: defaultAcceptance("features", "direct"),
       tags: "",
       depends: "",
+      files: "",
       keywords: "",
       verification: "direct",
       review: "none",
@@ -723,6 +724,7 @@ export async function runTui(): Promise<void> {
     const acceptance = parseCsv(s.newIssue.acceptance);
     const tags = parseCsv(s.newIssue.tags);
     const depends = parseCsv(s.newIssue.depends);
+    const files = parseCsv(s.newIssue.files);
     const keywords = parseCsv(s.newIssue.keywords);
 
     try {
@@ -733,6 +735,7 @@ export async function runTui(): Promise<void> {
         priority: s.newIssue.priority,
         ...(tags.length > 0 ? { tags } : {}),
         ...(depends.length > 0 ? { depends } : {}),
+        ...(files.length > 0 ? { files } : {}),
         ...(acceptance.length > 0 ? { acceptance } : {}),
         ...(keywords.length > 0 ? { keywords } : {}),
         verification: s.newIssue.verification,
@@ -1188,6 +1191,7 @@ export async function runTui(): Promise<void> {
               priority: issue.priority,
               tags: issue.tags,
               depends: issue.depends,
+              files: issue.files,
               prompt: issue.prompt,
               acceptance: issue.acceptance,
             }

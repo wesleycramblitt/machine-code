@@ -25,6 +25,7 @@ export interface IssueHeader {
   priority: string;
   tags: string[];
   depends: string[];
+  files: string[];
   /** The issue file's prompt: the whole body text. */
   prompt: string;
   acceptance: string[];
@@ -108,6 +109,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
       const meta: string[] = [];
       if (issue.tags.length > 0) meta.push(`${B}${WHITE}Tags:${R} ${D}${issue.tags.join(", ")}${R}`);
       if (issue.depends.length > 0) meta.push(`${B}${WHITE}Depends:${R} ${D}${issue.depends.join(", ")}${R}`);
+      if (issue.files.length > 0) meta.push(`${B}${WHITE}Files:${R} ${D}${issue.files.join(", ")}${R}`);
       if (meta.length > 0) lines.push(` ${meta.join("    ")}`);
     }
     const attached = runs.filter((run) => runItemId(run) === slug);

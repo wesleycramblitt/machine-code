@@ -213,7 +213,7 @@ Usage:
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code plan                 Render the issues tree: kind → status dir → issue (--json)
   machine_code issue list           List issue files under issues/<kind>/<status>/<slug>.md (--json)
-  machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority N] [--review none|agent|human] [--verify a,b]
+  machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority N] [--review none|human] [--depends a,b] [--files path,glob] [--verify a,b]
                                      Scaffold an issue file under issues/
   machine_code issue show <slug>    Show an issue file
   machine_code issue move <slug> <todo|blocked|done|researched>  Move an issue

@@ -1885,10 +1885,15 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         // Reference-store writes are curated knowledge, not worktree
         // mutation: roles with knowledge:write may curate references even
         // when worktree mutation is off (research curates; it never edits
-        // source). Everything else non-readonly needs code:write.
-        const referenceWrite = params.name.startsWith("reference:") &&
-          (ctx.capabilities ?? []).includes("knowledge:write");
-        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite) {
+        // source). Conflict resolution is the same: a knowledge role may
+        // resolve an in-progress merge of its issue/doc files. The vcs
+        // commands themselves refuse to run outside an active merge and
+        // refuse paths that are not unmerged. Everything else non-readonly
+        // needs code:write.
+        const knowledgeWrite = (ctx.capabilities ?? []).includes("knowledge:write");
+        const referenceWrite = params.name.startsWith("reference:") && knowledgeWrite;
+        const mergeWrite = params.name.startsWith("vcs:") && knowledgeWrite;
+        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite) {
           return fail(`${params.name} mutates files; this role is read-only`);
         }
         const result: CommandRunResult = await runCommand(

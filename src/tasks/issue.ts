@@ -6,10 +6,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
 import { runProc } from "../proc.js";
-import { branchExists, branchState, defaultBaseBranch, mainWorktreeRoot, removeWorktree, withMergeLock, type BranchState } from "../worktree.js";
-import { listRuns, RunRecorder, type RunSummary } from "../state/runs.js";
+import { branchCheckedOutAt, branchExists, branchState, defaultBaseBranch, mainWorktreeRoot, removeWorktree, withMergeLock, type BranchState } from "../worktree.js";
+import { listRuns, reconcileRun, RunRecorder, type RunSummary } from "../state/runs.js";
 import { findIssue, listIssues, moveIssue, writeIssue, type Issue, type IssueKind, type IssueStatus, parseKind, legalStatus, ISSUE_KINDS, statusesForKind } from "../plan/issues.js";
+import { overlapFootprints } from "../plan/overlap.js";
+import { runItemId } from "../plan/lifecycle.js";
 import { runMainBuild } from "../commands/build.js";
+import { syncWorktreeWithMain } from "./sync.js";
 import { slugify } from "../plan/slug.js";
 import type { TaskPacket } from "../packet.js";
 
@@ -54,28 +57,79 @@ const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
 /** Depends slugs that are not done. Empty = clear to build. Enforced at
  * build/run start so same-file sequences actually serialize: the dependent
  * issue always builds on the dependency's merged result instead of racing it
- * and conflicting at merge time. */
+ * and conflicting at merge time. Unknown slugs are ignored here (a renamed or
+ * deleted dependency must not block work forever); callers surface them as a
+ * warning via `unknownDepends`. */
 export function unmetDepends(layout: Layout, issue: Issue): string[] {
-  const done = new Set(
-    listIssues(layout)
-      .filter((candidate) => candidate.status === "done")
+  const issues = listIssues(layout);
+  // A dependency is satisfied when its work has landed (`done`). A researched
+  // idea is also satisfied: it is a completed research artifact, not code, so
+  // it must never block a build forever.
+  const satisfied = new Set(
+    issues
+      .filter((candidate) => candidate.status === "done" || (candidate.kind === "ideas" && candidate.status === "researched"))
       .map((candidate) => candidate.slug),
   );
-  return issue.depends.filter((dep) => !done.has(dep));
+  const known = new Set(issues.map((candidate) => candidate.slug));
+  return issue.depends.filter((dep) => dep !== issue.slug && known.has(dep) && !satisfied.has(dep));
+}
+
+/** Depends slugs that do not name any issue (typo, rename, deletion). */
+export function unknownDepends(layout: Layout, issue: Issue): string[] {
+  const known = new Set(listIssues(layout).map((candidate) => candidate.slug));
+  return issue.depends.filter((dep) => dep !== issue.slug && !known.has(dep));
+}
+
+export interface ActiveFileConflict {
+  /** The other issue whose footprint overlaps. */
+  slug: string;
+  /** The active run working that issue. */
+  runId: string;
+  /** Overlapping footprints (human-readable). */
+  files: string[];
+}
+
+/**
+ * Issues currently being worked by another live run that declare an
+ * overlapping file footprint. `depends:` sequences issues that are queued
+ * together; this catches the case where they were queued without the edge
+ * and would otherwise edit the same files concurrently.
+ */
+export function activeFileConflicts(layout: Layout, issue: Issue): ActiveFileConflict[] {
+  if (issue.files.length === 0) return [];
+  const active = listRuns(layout).filter(
+    (run) =>
+      runItemId(run) !== undefined &&
+      runItemId(run) !== issue.slug &&
+      ["created", "running", "awaiting_input"].includes(run.status) &&
+      ["created", "running", "awaiting_input"].includes(reconcileRun(run).status),
+  );
+  const conflicts: ActiveFileConflict[] = [];
+  for (const run of active) {
+    const other = findIssue(layout, runItemId(run)!);
+    if (!other || other.files.length === 0) continue;
+    const files = overlapFootprints(issue.files, other.files);
+    if (files.length > 0) conflicts.push({ slug: other.slug, runId: run.id, files });
+  }
+  return conflicts;
 }
 
 export function planIssueWaves(layout: Layout, maxParallel: number): string[][] {
   const issues = listIssues(layout).filter((issue) => issue.kind !== "ideas" && issue.status === "todo");
-  const done = new Set(
-    listIssues(layout)
-      .filter((issue) => issue.status === "done")
+  const all = listIssues(layout);
+  const satisfied = new Set(
+    all
+      .filter((issue) => issue.status === "done" || (issue.kind === "ideas" && issue.status === "researched"))
       .map((issue) => issue.slug),
   );
+  const known = new Set(all.map((issue) => issue.slug));
   const pending = new Map(issues.map((issue) => [issue.slug, issue] as const));
   const waves: string[][] = [];
   while (pending.size > 0) {
     const ready = [...pending.values()]
-      .filter((issue) => issue.depends.every((dep) => done.has(dep)))
+      // Unknown dependencies are ignored, matching unmetDepends: a stale slug
+      // must not stall the whole wave forever.
+      .filter((issue) => issue.depends.every((dep) => dep === issue.slug || !known.has(dep) || satisfied.has(dep)))
       .sort(
         (a, b) =>
           (PRIORITY_RANK[a.priority] ?? 1) - (PRIORITY_RANK[b.priority] ?? 1) ||
@@ -85,7 +139,7 @@ export function planIssueWaves(layout: Layout, maxParallel: number): string[][] 
     if (ready.length === 0) break;
     waves.push(ready.map((issue) => issue.slug));
     for (const issue of ready) {
-      done.add(issue.slug);
+      satisfied.add(issue.slug);
       pending.delete(issue.slug);
     }
   }
@@ -145,6 +199,19 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   }
   if (state.code === "ahead") {
     await withMergeLock(root, async () => {
+      // Sync the feature branch with main first, exactly like the run's
+      // acceptance gate. If main moved after the run, this is where the
+      // conflict surfaces; approval has no agent to resolve it, so abort and
+      // send the issue back for a run instead of poisoning the worktree.
+      const worktree = await branchCheckedOutAt(root, branch);
+      if (worktree) {
+        const sync = await syncWorktreeWithMain(worktree, { abortOnConflict: true });
+        if (!sync.ok) {
+          throw new Error(
+            `sync of ${branch} with main failed: ${sync.detail}; re-run the issue so the agent can resolve it`,
+          );
+        }
+      }
       const merge = await git(root, ["merge", "--no-ff", branch, "-m", `Merge ${branch} (${slug})`]);
       if (merge.code !== 0) {
         throw new Error(`merge of ${branch} into ${baseBranch} failed: ${merge.stderr.trim()}; resolve it manually`);

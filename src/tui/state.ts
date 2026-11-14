@@ -43,6 +43,8 @@ export interface NewIssueSettings {
   tags: string;
   /** Comma-separated depends slugs. */
   depends: string;
+  /** Comma-separated repo-relative files/globs this issue expects to touch. */
+  files: string;
   /** Comma-separated keywords. */
   keywords: string;
   verification: "direct" | "verified";
@@ -317,6 +319,7 @@ export function createTuiState(repoRoot: string): TuiState {
       acceptance: "script:build",
       tags: "",
       depends: "",
+      files: "",
       keywords: "",
       verification: "direct",
       review: "none",

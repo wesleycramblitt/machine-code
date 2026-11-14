@@ -46,6 +46,7 @@ import { toolIndexBody } from "./context/references.js";
 import { findIssue } from "./plan/issues.js";
 import type { FinishRequest } from "./tools/finish.js";
 import { gateFailureText, runGates, type GateResult, type GateSpec } from "./verify.js";
+import { vcsSyncCommand } from "./commands/vcs.js";
 
 
 /** Default turn cap. 0 means no cap; set max_turns per role or run. */
@@ -1635,7 +1636,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       gateAttempts += 1;
 
       const gateRoot = input.toolRoot ?? input.root;
-      const gateResult = await runGates(gates, { root: gateRoot, commands: input.commands });
+      // vcs:sync is runner-owned: add it only to the gate command map so the
+      // agent can resolve conflicts but cannot start merges on its own.
+      const gateCommands = new Map(input.commands);
+      gateCommands.set(vcsSyncCommand.name, vcsSyncCommand);
+      const gateResult = await runGates(gates, { root: gateRoot, commands: gateCommands });
       recorder.event("gates", {
         attempt: gateAttempts,
         passed: gateResult.passed,
