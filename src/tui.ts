@@ -1387,12 +1387,11 @@ export async function runTui(): Promise<void> {
       return;
     }
     const previousPrompt = s.newrun.item ? findIssue(layout(s.newRunRepo), s.newrun.item)?.prompt ?? "" : "";
-    const hadItem = Boolean(s.newrun.item);
     s.newrun.item = issue.slug;
-    // A blank composer that was opened with `N` still starts as research. Once
-    // an issue is attached, default to the agent that does the work.
+    // The main issue decides the agent: a mismatched pair is never runnable,
+    // so linking always follows the issue kind (ideas→research, else engineer).
     const wanted = issue.kind === "ideas" ? "research" : "engineer";
-    if (!hadItem && s.newrun.agent !== wanted) {
+    if (s.newrun.agent !== wanted) {
       s.newrun.agent = wanted;
     }
     if (!s.newrun.prompt.trim() || (previousPrompt && s.newrun.prompt === previousPrompt)) {

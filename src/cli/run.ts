@@ -879,12 +879,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
       for (const ref of contextInclude?.issues ?? []) {
         const depIssue = findIssue(l, ref.split("/").pop()?.replace(/\.md$/, "") ?? ref);
         if (!depIssue || depIssue.slug === itemSlug) continue;
-        if (depIssue.status !== "done" && depIssue.status !== "researched") {
-          process.stderr.write(
-            `machine_code: ignoring reference ${depIssue.slug} (status ${depIssue.status}; references must be done or researched)\n`,
-          );
-          continue;
-        }
+        // Only done/researched issues are references. Other includes are
+        // plain context bodies (already inlined by assembly) — not references.
+        if (depIssue.status !== "done" && depIssue.status !== "researched") continue;
         if (depIssue.commit) {
           const changed = await runProc("git", ["diff", `${depIssue.commit}^1`, depIssue.commit, "--name-only"], {
             cwd: l.repoRoot,
