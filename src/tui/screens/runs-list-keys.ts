@@ -52,8 +52,9 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       : row;
     if (target?.kind !== "section" && target?.kind !== "repo" && target?.kind !== "issue") return false;
     if (!target.collapsible) return false;
-    if (s.collapsed.has(target.id)) s.collapsed.delete(target.id);
-    else s.collapsed.add(target.id);
+    // Rows carry their effective collapsed state (default plus overrides),
+    // so the override is just the inverse of what is on screen.
+    s.collapsed.set(target.id, !target.collapsed);
     const targetIndex = index.rows.findIndex((candidate) => candidate.id === target.id);
     if (targetIndex >= 0) s.runsSel = targetIndex;
     return true;
