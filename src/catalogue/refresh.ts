@@ -16,7 +16,8 @@ import { loadProviderDefinitions } from "../data.js";
 import { loadCatalogue } from "./load.js";
 import { fetchLiveListing } from "./discovery.js";
 import { classifyModel } from "./kind.js";
-import { applyModelOverrides, loadModelOverrides, type ModelOverride } from "./overlay.js";
+import { ollamaSupportsTools } from "../models/providers.js";
+import { applyModelOverrides, loadModelOverrides, revertSourcelessToolCall, type ModelOverride } from "./overlay.js";
 import {
   fetchOpenRouterBenchmarks,
   fetchOpenRouterModels,
@@ -309,12 +310,29 @@ export function buildCatalogueRow(model: Model<Api>, ctx: RowBuildContext): Cata
   const { orModels, orBenchmarks, canonicalIndex, canonicalMeta, curation, modelOverrides } = ctx;
   const row = rowFromModel(model);
 
-// A curation veto is a catalogue correction: the row is not a candidate
+  // Daemon truth for Ollama rows: a /api/show `tools` capability (or its
+  // absence) sets the default before file overrides are applied, so live
+  // capability flows into the catalogue instead of resting on default-true.
+  if (row.providerID === "ollama") {
+    const supported = ollamaSupportsTools(row.id);
+    if (supported !== undefined && supported !== row.toolCall) {
+      row.toolCall = supported;
+      row.capabilities.toolCall = supported;
+      const modes = new Set(row.modes);
+      if (supported) modes.add("tools");
+      else modes.delete("tools");
+      row.modes = [...modes];
+    }
+  }
+
+  // A curation veto is a catalogue correction: the row is not a candidate
 // anywhere. (config.toml vetoes, by contrast, filter at selection time.)
 const priorVeto =
   curation.models.get(row.key)?.veto === true ||
   curation.models.get(row.canonicalID ?? "")?.veto === true;
 if (priorVeto) return null;
+
+// Daemon truth for Ollama rows is applied by the caller (see below).
 
 // OpenRouter metadata overlay (capability truth + release date).
 const meta = row.providerID === "openrouter" ? orModels.get(row.id) : undefined;
@@ -619,6 +637,10 @@ export async function applyLiveListings(
   const freshKeys = new Set(rows.map((row) => row.key));
   // Carry over existing rows for live ids the fresh build missed.
   const prior = loadCatalogue(layout.catalogueFile);
+  // Override sources for the fossil check below: a carried-over row can
+  // fossilize a curated tool_call stamp whose file was deleted.
+  const carryCuration = loadCuration(layout);
+  const carryOverrides = loadModelOverrides();
   if (prior) {
     for (const row of prior.models) {
       const scope = live.get(row.providerID);
@@ -627,6 +649,17 @@ export async function applyLiveListings(
         dropped.push(row.key);
         continue;
       }
+      // A carried-over row can fossilize a curated tool_call stamp whose
+      // override file was deleted. Revert sourceless stamps to the live
+      // default (daemon capability for Ollama, generated default otherwise).
+      const asserted =
+        carryCuration.models.get(row.key)?.toolCall !== undefined ||
+        carryOverrides.get(row.key)?.toolCall !== undefined;
+      revertSourcelessToolCall(
+        row,
+        asserted,
+        row.providerID === "ollama" ? (ollamaSupportsTools(row.id) ?? true) : true,
+      );
       rows.push(row);
       freshKeys.add(row.key);
     }
