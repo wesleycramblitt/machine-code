@@ -39,8 +39,8 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
   if (data === "\x1b[B" || data === "j") { s.issueScroll += 1; ctx.draw(); return true; }
   if (data === "n") { startForIssue(); ctx.draw(); return true; }
   if (data === "e" && slug) {
-    const issue = findIssue(l, slug);
-    if (issue) ctx.openEditor(issue.path);
+    ctx.startEditIssue(slug, l.repoRoot);
+    ctx.draw();
     return true;
   }
   if (data === "a" && slug) {

@@ -103,8 +103,10 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   // ── Confirm discard ──
   if (s.newIssueConfirm) {
     if (data === "y" || data === "Y" || data === "\r" || data === "\n") {
+      const wasEditing = s.newIssueEdit !== null;
       s.newIssueConfirm = false;
-      s.screen = "list";
+      s.newIssueEdit = null;
+      s.screen = wasEditing ? "issue" : "list";
       ctx.draw();
       return true;
     }
@@ -123,13 +125,17 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
       s.newIssueConfirm = true;
       ctx.notify("discard unsaved issue? press y to discard and exit, esc to stay");
     } else {
-      s.screen = "list";
+      const wasEditing = s.newIssueEdit !== null;
+      s.newIssueEdit = null;
+      // Editing an empty composer exits back to the issue; creating exits to the list.
+      s.screen = wasEditing ? "issue" : "list";
     }
     ctx.draw();
     return true;
   }
   if (data === "e") { s.newIssueInsert = true; ctx.draw(); return true; }
   if (data === "k") {
+    if (s.newIssueEdit) { ctx.notify("kind cannot change when editing"); ctx.draw(); return true; }
     const idx = KIND_CYCLE.indexOf(s.newIssue.kind);
     s.newIssue.kind = KIND_CYCLE[(idx + 1) % KIND_CYCLE.length]!;
     s.newIssue.verification = "direct";
