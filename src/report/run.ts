@@ -403,44 +403,100 @@ function git(cwd: string, args: string[], timeout = 4_000): string {
   }).trim();
 }
 
-/** Best-effort working-tree summary for a run's worktree. */
-export function changesFor(worktree: string | undefined): ChangeSummary {
-  if (!worktree || !existsSync(worktree)) {
-    return { status: "", diffStat: "", recent: "", files: [], error: "no worktree" };
+/**
+ * Best-effort change summary for a run's worktree.
+ *
+ * Prefers the live worktree (uncommitted + untracked changes). When the
+ * worktree is gone (merged and pruned) or holds no uncommitted changes,
+ * `summary` unlocks the committed fallback: the branch's own changes
+ * (`baseRef..commit`, or `baseBranch..branch`) so the changes tab still shows
+ * what the feature bound at every stage.
+ */
+export function changesFor(worktree: string | undefined, summary?: RunSummary): ChangeSummary {
+  if (worktree && existsSync(worktree)) {
+    try {
+      const live = liveWorktreeChanges(worktree);
+      if (live.files.length > 0 || live.error) return live;
+    } catch {
+      // Fall through to the committed fallback.
+    }
   }
+  if (summary) return committedChanges(summary);
+  return { status: "", diffStat: "", recent: "", files: [], error: "no worktree" };
+}
+
+/** Uncommitted + untracked changes in a live worktree. */
+function liveWorktreeChanges(worktree: string): ChangeSummary {
+  const files: ChangeFile[] = [];
+  try {
+    // porcelain v1: "XY <path>" (renames become "XY orig -> new").
+    for (const line of git(worktree, ["status", "--porcelain=v1"]).split("\n")) {
+      if (line.trim() === "") continue;
+      const code = line.slice(0, 2);
+      let path = line.slice(3);
+      const arrow = path.indexOf(" -> ");
+      if (arrow >= 0) path = path.slice(arrow + 4);
+      if (!path) continue;
+      let diff = "";
+      try {
+        diff = git(worktree, ["diff", "--no-color", "HEAD", "--", path]);
+        // Untracked files have no diff vs HEAD; show them as a full add.
+        if (diff === "" && code.endsWith("?") && existsSync(join(worktree, path))) {
+          diff = readFileSync(join(worktree, path), "utf8")
+            .split("\n")
+            .map((l) => `+${l}`)
+            .join("\n");
+        }
+      } catch {
+        diff = "";
+      }
+      files.push({ path, code, diff });
+    }
+  } catch {
+    // Per-file diff is best-effort; the status lines still render.
+  }
+  return {
+    status: git(worktree, ["status", "--short", "--branch"]),
+    diffStat: git(worktree, ["diff", "--stat", "--no-color", "HEAD"]),
+    recent: git(worktree, ["log", "--oneline", "--no-color", "-5"]),
+    files,
+  };
+}
+
+/** Committed changes bound to the feature: the branch diff vs its base. */
+function committedChanges(summary: RunSummary): ChangeSummary {
+  const root = summary.repoRoot;
+  if (!existsSync(root)) {
+    return { status: "", diffStat: "", recent: "", files: [], error: "no repo" };
+  }
+  // baseRef..commit is exact; baseBranch..branch is the readable fallback for
+  // runs that recorded no commit sha.
+  const from = summary.baseRef ?? summary.baseBranch;
+  const to = summary.commit ?? summary.branch;
+  const range = from && to ? `${from}..${to}` : undefined;
   try {
     const files: ChangeFile[] = [];
-    try {
-      // porcelain v1: "XY <path>" (renames become "XY orig -> new").
-      for (const line of git(worktree, ["status", "--porcelain=v1"]).split("\n")) {
+    if (range) {
+      // name-status: "A\tpath", "M\tpath", "R100\torig\tnew".
+      for (const line of git(root, ["diff", "--name-status", "--no-color", range]).split("\n")) {
         if (line.trim() === "") continue;
-        const code = line.slice(0, 2);
-        let path = line.slice(3);
-        const arrow = path.indexOf(" -> ");
-        if (arrow >= 0) path = path.slice(arrow + 4);
+        const cols = line.split("\t");
+        const code = cols[0]!.slice(0, 2).trim();
+        const path = cols[cols.length - 1] ?? "";
         if (!path) continue;
         let diff = "";
         try {
-          diff = git(worktree, ["diff", "--no-color", "HEAD", "--", path]);
-          // Untracked files have no diff vs HEAD; show them as a full add.
-          if (diff === "" && code.endsWith("?") && existsSync(join(worktree, path))) {
-            diff = readFileSync(join(worktree, path), "utf8")
-              .split("\n")
-              .map((l) => `+${l}`)
-              .join("\n");
-          }
+          diff = git(root, ["diff", "--no-color", range, "--", path]);
         } catch {
           diff = "";
         }
-        files.push({ path, code, diff });
+        files.push({ path, code: code || "M", diff });
       }
-    } catch {
-      // Per-file diff is best-effort; the status lines still render.
     }
     return {
-      status: git(worktree, ["status", "--short", "--branch"]),
-      diffStat: git(worktree, ["diff", "--stat", "--no-color", "HEAD"]),
-      recent: git(worktree, ["log", "--oneline", "--no-color", "-5"]),
+      status: range ? `branch changes ${range}` : "no branch or commit recorded",
+      diffStat: range ? git(root, ["diff", "--stat", "--no-color", range]) : "",
+      recent: to ? git(root, ["log", "--oneline", "--no-color", "-5", to]) : "",
       files,
     };
   } catch (error) {
