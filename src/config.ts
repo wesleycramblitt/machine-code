@@ -48,9 +48,13 @@ export const DEFAULT_AVAILABILITY: AvailabilityConfig = {
 export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 60_000;
 
 /**
- * Ollama runs locally and is known to exist, but it may be busy with another
- * request (loading a model, finishing a long generation). Give it far longer
- * than remote providers before abandoning the call.
+ * Optional finite first-token timeout for Ollama (ms). Ollama runs locally
+ * and may be busy with another request (loading a model, finishing a long
+ * generation), so by default local calls wait without a first-token timeout:
+ * a queue wait is not an error. Users who want a finite bound set
+ * `ollama_first_token_timeout_ms`; when unset the value stays undefined and
+ * the call waits indefinitely (the run's own caps and Ctrl-C remain the
+ * bounds).
  */
 export const DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS = 300_000;
 
@@ -101,7 +105,7 @@ export interface MachineConfig {
   maxOutputTokens?: number;
   defaultMode?: PacketMode;
   /** Selection tier and per-call request guards ([selection]). */
-  selection: { tier: SelectionTier; firstTokenTimeoutMs: number; ollamaFirstTokenTimeoutMs: number };
+  selection: { tier: SelectionTier; firstTokenTimeoutMs: number; ollamaFirstTokenTimeoutMs: number | undefined };
   /** Cooldown recovery probes ([availability]). */
   availability: AvailabilityConfig;
   /** Per-provider billing adjustments ([providers.<id>]). */
@@ -287,8 +291,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
     selection: {
       tier: tierRaw as SelectionTier,
       firstTokenTimeoutMs: asNumber(selectionRaw.first_token_timeout_ms) ?? DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
-      ollamaFirstTokenTimeoutMs:
-        asNumber(selectionRaw.ollama_first_token_timeout_ms) ?? DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS,
+      ollamaFirstTokenTimeoutMs: asNumber(selectionRaw.ollama_first_token_timeout_ms),
     },
     availability: {
       probe: probeMode,
