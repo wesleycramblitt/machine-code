@@ -547,13 +547,16 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     return { symbols, map, state, contextBlock };
   };
 
-  /** Reminder appended to the next prompt after three read-only turns.
+  /** Reminder appended to the next prompt after a read-only turn.
    * The mandate lives in the role prompts; this is the backstop that makes
-   * it real — prompt text alone did not hold (85 read-only turns observed). */
-  const RECORD_NUDGE =
-    "Last turn had reads with no note, plan update, or edit. " +
-    "Write down what you have learned so far (context note), update the plan, or edit — " +
-    "if the next step needs no new fact, edit instead of reading again.";
+   * it real — prompt text alone did not hold (a run took 23 of these and
+   * still recorded 9 times in 39 turns). The streak count names the lapse
+   * so the fifth identical reminder reads differently from the first. */
+  const recordNudge = (streak: number): string =>
+    `${streak} turn${streak === 1 ? "" : "s"} since your last note, plan update, edit, or write ` +
+    `(workflow step 4: every turn ends with one). Stop reading and record: one context note ` +
+    `with what these reads established (behavior plus path:line), or update the plan, or edit — ` +
+    `if the next step needs no new fact, edit instead of reading again.`;
   const withRecordNudge = (
     messages: import("@earendil-works/pi-agent-core").AgentMessage[],
   ): import("@earendil-works/pi-agent-core").AgentMessage[] => {
@@ -563,7 +566,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       ...messages,
       {
         role: "user",
-        content: RECORD_NUDGE,
+        content: recordNudge(readOnlyStreak),
         timestamp: Date.now(),
       } as unknown as import("@earendil-works/pi-agent-core").AgentMessage,
     ];

@@ -1948,6 +1948,17 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         if (params.action === "describe") {
           return ok(describeCommand(params.name, ctx.commands));
         }
+        // Repo scripts (script:build, script:test, …) run in gates after
+        // finish — never by the model. Builds print nothing on success, so
+        // a model that can run them re-runs passing builds for reassurance
+        // and burns turns in a build loop. Gates call runCommand directly
+        // and are unaffected by this refusal.
+        if (params.name.startsWith("script:") && params.action === "run") {
+          return fail(
+            `${params.name} runs in gates after finish; models cannot run repo scripts. ` +
+            `Finish the change and the gates run it — gate output comes back to you if it fails.`,
+          );
+        }
         const spec = ctx.commands.get(params.name);
         // Reference-store writes are curated knowledge, not worktree
         // mutation: roles with knowledge:write may curate references even
