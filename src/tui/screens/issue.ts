@@ -26,6 +26,8 @@ export interface IssueHeader {
   tags: string[];
   depends: string[];
   files: string[];
+  branch: string;
+  commit?: string;
   /** The issue file's prompt: the whole body text. */
   prompt: string;
   acceptance: string[];
@@ -48,11 +50,11 @@ export interface IssueFrame {
 }
 
 /** Branch/worktree of the newest attached run; both are optional on RunSummary. */
-function worktreeOf(runs: readonly RunSummary[], slug: string): { branch: string; worktree: string } {
+function worktreeOf(runs: readonly RunSummary[], slug: string, fallbackBranch?: string): { branch: string; worktree: string } {
   const attached = sortRuns(runs.filter((run) => runItemId(run) === slug), "activity");
   const newest = attached[0];
   return {
-    branch: newest?.branch ?? `mc/${slug}`,
+    branch: newest?.branch ?? fallbackBranch ?? `mc/${slug}`,
     worktree: newest?.worktree ?? "—",
   };
 }
@@ -97,10 +99,13 @@ export function renderIssue(props: IssueProps): IssueFrame {
     lines.push(` ${badge}  ${tone}${slug}${R}  ${tone}[${statusText}]${R}`);
     if (issue) {
       // Line 2: branch/worktree with a color-encoded probe of the branch state.
-      const work = worktreeOf(runs, slug);
+      const work = worktreeOf(runs, slug, issue.branch);
       lines.push(` ${B}${WHITE}Branch:${R} ${D}${branchState?.branch ?? work.branch}${R}${branchNote(branchState)}    ${B}${WHITE}Worktree:${R} ${D}${work.worktree}${R}`);
       // Line 3: priority.
       lines.push(` ${B}${WHITE}Priority:${R} ${D}${issue.priority}${R}`);
+      if (issue.commit) {
+        lines.push(` ${B}${WHITE}Landed:${R} ${D}${issue.commit.slice(0, 12)}${R}`);
+      }
       // Prompt: the whole body, wrapped to the terminal width.
       lines.push(` ${B}${W}Prompt:${R}`);
       lines.push(...promptLines(issue.prompt, cols));

@@ -28,6 +28,7 @@
  * is no longer wanted.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { randomBytes, createHash } from "node:crypto";
 import { join, resolve, sep } from "node:path";
 import { parse } from "smol-toml";
 import type { Layout } from "../paths.js";
@@ -81,6 +82,27 @@ export const ISSUE_STATUS_LABELS: Record<DisplayStatus, string> = {
 
 export type ReviewMode = "none" | "human";
 
+/** Stable short id for an issue. New issues get random bytes; legacy issues
+ * get a deterministic id derived from kind+slug so their branch name never
+ * changes between reads. */
+export function newIssueId(): string {
+  return randomBytes(3).toString("hex");
+}
+
+export function issueId(kind: IssueKind, slug: string, existing?: string): string {
+  if (existing && /^[a-z0-9]{4,12}$/i.test(existing)) return existing.toLowerCase();
+  return legacyIssueId(kind, slug);
+}
+
+export function legacyIssueId(kind: IssueKind, slug: string): string {
+  return createHash("sha1").update(`${kind}:${slug}`).digest("hex").slice(0, 6);
+}
+
+/** The one feature branch for an issue. */
+export function issueBranchName(slug: string, id: string): string {
+  return `mc/${slug}-${id}`;
+}
+
 export interface Issue {
   kind: IssueKind;
   status: IssueStatus;
@@ -99,6 +121,14 @@ export interface Issue {
   /** Repo-relative files or globs this issue expects to touch. Used to
    * serialize overlapping work before it can conflict at merge time. */
   files: string[];
+  /** Stable short id appended to the human slug, so branch/worktree names
+   * never collide across two issues that slugify to the same text. */
+  id: string;
+  /** Feature branch for this issue. Generated once and reused by every run. */
+  branch: string;
+  /** Commit that landed the issue's work (merge commit on main). Survives
+   * branch/worktree pruning and is the only reference a later run needs. */
+  commit?: string;
   tags: string[];
   /** Human-provided search terms (comma-separated phrases); an exact-match override for the ranker. */
   keywords: string[];
@@ -164,7 +194,7 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
 
 /** Metadata keys allowed in the condensed `key: value` header. Anything else
  * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
-const META_KEYS = new Set(["priority", "review", "tags", "keywords", "depends", "files", "acceptance", "verify", "verification"]);
+const META_KEYS = new Set(["id", "branch", "commit", "priority", "review", "tags", "keywords", "depends", "files", "acceptance", "verify", "verification"]);
 
 function stripQuotes(value: string): string {
   if (value.length >= 2) {
@@ -293,6 +323,9 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
         ? value
         : "";
   const lines: string[] = [];
+  for (const key of ["id", "branch", "commit"] as const) {
+    if (typeof front[key] === "string" && front[key]) lines.push(`${key}: ${front[key]}`);
+  }
   if (typeof front.priority === "string" && front.priority && front.priority !== "medium") {
     lines.push(`priority: ${front.priority}`);
   }
@@ -365,6 +398,8 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
     return null;
   }
   const { front, body } = parseIssueFile(text);
+  const storedId = typeof front.id === "string" && front.id.trim() ? front.id.trim() : undefined;
+  const id = issueId(kind, slug, storedId);
   return {
     kind,
     status,
@@ -378,6 +413,16 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
     body,
     depends: toSlugs(front.depends),
     files: toFiles(front.files),
+    id,
+    // Legacy issues (no stored id) keep their historical `mc/<slug>` branch;
+    // new issues get the collision-free `mc/<slug>-<id>` name.
+    branch:
+      typeof front.branch === "string" && front.branch.trim()
+        ? front.branch.trim()
+        : storedId
+          ? issueBranchName(slug, id)
+          : `mc/${slug}`,
+    ...(typeof front.commit === "string" && front.commit.trim() ? { commit: front.commit.trim() } : {}),
     tags:
       typeof front.tags === "string"
         ? front.tags.split(",").map((entry) => entry.trim()).filter(Boolean)
@@ -437,6 +482,8 @@ export interface NewIssueInput {
   title?: string;
   prompt: string;
   priority?: string;
+  id?: string;
+  branch?: string;
   depends?: string[];
   files?: string[];
   tags?: string[];
@@ -466,6 +513,8 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     throw new Error(`invalid status ${JSON.stringify(status)} for ${input.kind}`);
   }
   const slug = slugify(input.slug) || "untitled";
+  const id = input.id ?? newIssueId();
+  const branch = input.branch ?? issueBranchName(slug, id);
   let verification = input.verification ?? "direct";
   if (verification === "verified" && !hasRepoScript(layout, "test")) verification = "direct";
   // Features and bugs carry an acceptance gate. Explicit acceptance wins;
@@ -485,6 +534,8 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     acceptance = [...acceptance, "script:test"];
   }
   const front: Record<string, unknown> = {
+    id,
+    branch,
     ...(input.priority && input.priority !== "medium" ? { priority: input.priority } : {}),
     ...(input.depends && input.depends.length > 0 ? { depends: input.depends } : {}),
     ...(input.files && input.files.length > 0 ? { files: input.files } : {}),
@@ -527,6 +578,23 @@ export function updateIssueReview(layout: Layout, slug: string, review: ReviewMo
   delete front.prompt;
   front.review = review;
   writeFileSync(issue.path, serializeIssueFile(front, nextBody), "utf8");
+  return readIssue(layout, issue.kind, issue.status, slug);
+}
+
+/** Update durable issue metadata (commit reference, branch) without touching
+ * the prompt body. Used when work lands and the branch/worktree are pruned. */
+export function updateIssueMeta(
+  layout: Layout,
+  slug: string,
+  patch: { commit?: string; branch?: string },
+): Issue | null {
+  const issue = findIssue(layout, slug);
+  if (!issue) return null;
+  const text = readFileSync(issue.path, "utf8");
+  const { front, body } = parseIssueFile(text);
+  if (patch.commit !== undefined) front.commit = patch.commit;
+  if (patch.branch !== undefined) front.branch = patch.branch;
+  writeFileSync(issue.path, serializeIssueFile(front, body), "utf8");
   return readIssue(layout, issue.kind, issue.status, slug);
 }
 

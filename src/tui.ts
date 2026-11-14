@@ -1192,6 +1192,8 @@ export async function runTui(): Promise<void> {
               tags: issue.tags,
               depends: issue.depends,
               files: issue.files,
+              branch: issue.branch,
+              ...(issue.commit ? { commit: issue.commit } : {}),
               prompt: issue.prompt,
               acceptance: issue.acceptance,
             }

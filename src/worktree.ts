@@ -324,6 +324,8 @@ export interface WorktreeRequest {
   kind: WorktreeKind;
   /** Issue slug for `kind === "issue"`; branch is `mc/<slug>`. */
   slug?: string;
+  /** Explicit feature branch override (the issue's durable branch name). */
+  branch?: string;
   /** Explicit base branch/ref override. */
   base?: string;
   /** Optional run supervisor for worktree git processes. */
@@ -410,7 +412,7 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
   const layout = req.layout;
   const mainRoot = await mainWorktreeRoot(layout.repoRoot);
   const path = join(layout.localDir, "worktrees", req.runId);
-  const branch = branchFor(req.kind, req.runId, req.slug);
+  const branch = req.branch?.trim() || branchFor(req.kind, req.runId, req.slug);
   const createdBranches: string[] = [];
 
   // Clean preflight always applies to the MAIN worktree.
@@ -449,6 +451,12 @@ async function createWorktreeBody(req: WorktreeRequest): Promise<WorktreeSpec> {
 
   if (await branchExists(mainRoot, branch)) {
     // Reuse the branch across runs (fresh worktree, same branch).
+    await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
+  } else if (
+    (await git(mainRoot, ["fetch", "origin", `${branch}:${branch}`])).code === 0 &&
+    (await branchExists(mainRoot, branch))
+  ) {
+    // Worktree pruned but branch survives on the remote: resume from it.
     await gitOrThrow(mainRoot, ["worktree", "add", path, branch], `worktree add ${branch}`);
   } else {
     await gitOrThrow(mainRoot, ["worktree", "add", "-b", branch, path, baseRef], `worktree add ${branch}`);

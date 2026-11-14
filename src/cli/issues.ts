@@ -287,7 +287,7 @@ export async function runIssueBuild(
 
   let toolRoot = l.repoRoot;
   try {
-    const reuse = reusableWorktreeOwner(listRuns(l), `mc/${slug}`, "engineer");
+    const reuse = reusableWorktreeOwner(listRuns(l), issue.branch, "engineer");
     if (reuse) {
       toolRoot = reuse.path;
       const refresh = await refreshReusedWorktree(reuse.path);
@@ -309,7 +309,7 @@ export async function runIssueBuild(
         runDir: recorder.dir,
         onEvent: (type, data) => recorder.event(type, data),
       });
-      const spec = await createWorktree({ layout: l, runId: recorder.id, kind: "issue", slug, processes: supervisor });
+      const spec = await createWorktree({ layout: l, runId: recorder.id, kind: "issue", slug, branch: issue.branch, processes: supervisor });
       toolRoot = spec.path;
       recorder.patchSummary({ worktree: spec.path, branch: spec.branch, baseBranch: spec.baseBranch, baseRef: spec.baseRef });
       recorder.event("worktree_created", { path: spec.path, branch: spec.branch, baseRef: spec.baseRef, baseBranch: spec.baseBranch });
@@ -386,12 +386,17 @@ export async function runIssueBuild(
       } else if (commit) {
         recorder.patchSummary({ commit });
         recorder.event("commit_created", { sha: commit, branch, issue: slug });
+        const { pushFeatureBranch } = await import("../tasks/sync.js");
+        const pushed = await pushFeatureBranch(toolRoot, branch);
+        recorder.event("branch_pushed", { branch, pushed });
         if (issue.review === "human") {
           moveIssue(l, slug, "needs-human-review");
         } else {
           const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch);
           if (merged.ok) {
-            recorder.event("branch_merged", { branch });
+            recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
+            const { updateIssueMeta } = await import("../plan/issues.js");
+            if (merged.mergeCommit) updateIssueMeta(l, slug, { commit: merged.mergeCommit });
             moveIssue(l, slug, "done");
           } else {
             moveIssue(l, slug, "blocked");

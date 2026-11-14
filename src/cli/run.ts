@@ -526,6 +526,19 @@ export async function cmdRun(argv: string[]): Promise<number> {
     const allRuns = listAllRuns(l.home);
     parentRun = allRuns.find((r) => r.id === parentFlag);
     if (!parentRun) fail(`no such parent run: ${parentFlag}`);
+    // Done issues are immutable: their branch/worktree are pruned and only
+    // the commit survives. Forking their old runs would resurrect dead
+    // branches, so refuse and point at the commit instead.
+    const parentItem = parentRun.itemId ?? parentRun.packetId;
+    if (parentItem) {
+      const parentIssue = findIssue(l, parentItem);
+      if (parentIssue && (parentIssue.status === "done" || parentIssue.status === "researched") && parentIssue.commit) {
+        fail(
+          `run ${parentFlag} belongs to done issue ${parentItem} (${parentIssue.commit.slice(0, 12)}); ` +
+            `start a new issue that depends on it instead of forking`,
+        );
+      }
+    }
     const byId = new Map(allRuns.map((run) => [run.id, run]));
     const seen = new Set<string>();
     let cursor: import("../state/runs.js").RunSummary | undefined = parentRun;
@@ -619,13 +632,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (mutating) {
     const issueWorktree = Boolean(itemSlug);
     // Reuse a terminal/paused worktree that already owns this issue branch.
-    // A fresh path cannot be created while mc/<slug> is checked out.
+    const issueBranch = attachedIssue?.branch;
+    // A fresh path cannot be created while the issue branch is checked out.
     const reuse = reusableWorktreeOwner(
       [
         ...parentChainRuns,
         ...listAllRuns(l.home).filter((run) => run.repoRoot === l.repoRoot),
       ],
-      issueWorktree ? `mc/${itemSlug}` : undefined,
+      issueWorktree ? (issueBranch ?? `mc/${itemSlug}`) : undefined,
       agentNameParsed,
     );
     if (reuse) {
@@ -664,6 +678,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
           runId: recorder.id,
           kind: issueWorktree ? "issue" : "run",
           ...(issueWorktree ? { slug: itemSlug } : {}),
+          ...(issueWorktree && attachedIssue?.branch ? { branch: attachedIssue.branch } : {}),
           base: baseFlag ?? (inheritWorktree && parentRun?.branch ? parentRun.branch : undefined),
           processes: worktreeProcesses,
         });
@@ -690,6 +705,13 @@ export async function cmdRun(argv: string[]): Promise<number> {
         }
         for (const branch of spec.createdBranches) {
           recorder.event("branch_created", { branch, base: spec.baseRef });
+        }
+        // Maintain a remote copy of the feature branch so an interrupted
+        // run loses no committed work.
+        if (issueWorktree) {
+          const { pushFeatureBranch } = await import("../tasks/sync.js");
+          const pushed = await pushFeatureBranch(spec.path, spec.branch);
+          recorder.event("branch_pushed", { branch: spec.branch, pushed });
         }
         recorder.event("worktree_created", {
           path: spec.path,
@@ -837,6 +859,33 @@ export async function cmdRun(argv: string[]): Promise<number> {
       recorder.event("branch_state_reported", { branch, ahead: aheadCount, dirty: Boolean(dirtyText) });
     } catch {
       // Best effort: continue the task from the issue.
+    }
+  }
+
+  // Done dependencies are immutable references: include the depended-on
+  // issue's prompt plus its landed diff summary inline, so the agent never
+  // needs git history tools to understand what already shipped.
+  if (attachedIssue && attachedIssue.depends.length > 0) {
+    try {
+      const refs: string[] = [];
+      for (const dep of attachedIssue.depends) {
+        const depIssue = findIssue(l, dep);
+        if (!depIssue || !depIssue.commit) continue;
+        const stat = await runProc("git", ["show", "--stat", "--oneline", depIssue.commit], {
+          cwd: l.repoRoot,
+          timeoutMs: 15_000,
+        });
+        const statText = stat.outcome === "exit" && stat.code === 0 ? stat.stdout.trim().slice(0, 2000) : "";
+        refs.push(
+          `Completed dependency ${dep} (${depIssue.commit.slice(0, 12)}):\n${depIssue.prompt.slice(0, 1500)}${statText ? `\n\nLanded change:\n${statText}` : ""}`,
+        );
+      }
+      if (refs.length > 0) {
+        request = `${request}\n\n${refs.join("\n\n")}`;
+        recorder.event("depends_context", { count: refs.length });
+      }
+    } catch {
+      // Best effort: missing context never blocks the run.
     }
   }
 
@@ -1082,13 +1131,21 @@ export async function cmdRun(argv: string[]): Promise<number> {
       } else if (commit) {
         recorder.patchSummary({ commit });
         recorder.event("commit_created", { sha: commit, branch: recorder.current.branch, issue: issue.slug });
+        // Keep a remote copy after every commit so interruption loses nothing.
+        if (toolRoot !== l.repoRoot && recorder.current.branch) {
+          const { pushFeatureBranch } = await import("../tasks/sync.js");
+          const pushed = await pushFeatureBranch(toolRoot, recorder.current.branch);
+          recorder.event("branch_pushed", { branch: recorder.current.branch, pushed });
+        }
         if (issue.kind === "ideas" || issue.review === "none" || flags.has("no-review")) {
           const branch = recorder.current.branch;
           if (branch) {
             const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch);
             if (merged.ok) {
-              recorder.event("branch_merged", { branch });
+              recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
               if (issue.kind !== "ideas") {
+                const { updateIssueMeta } = await import("../plan/issues.js");
+                if (merged.mergeCommit) updateIssueMeta(l, issue.slug, { commit: merged.mergeCommit });
                 moveIssue(l, issue.slug, "done");
                 await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
               }
@@ -1454,7 +1511,9 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
               if (branch) {
                 const merged = await mergeBranchIntoMain(l2.repoRoot, toolRoot, branch);
                 if (merged.ok) {
-                  recorder.event("branch_merged", { branch });
+                  recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
+                  const { updateIssueMeta } = await import("../plan/issues.js");
+                  if (merged.mergeCommit) updateIssueMeta(l2, resumeIssue.slug, { commit: merged.mergeCommit });
                   moveIssue(l2, resumeIssue.slug, "done");
                   await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} DONE] ${resumeIssue.slug}`);
                 }

@@ -146,11 +146,13 @@ export function planIssueWaves(layout: Layout, maxParallel: number): string[][] 
   return waves;
 }
 
-/** The issue's feature branch: `mc/<slug>`, or the newest engineer/build run's
- * branch for runs from before per-issue branches. Null when neither exists. */
+/** The issue's durable feature branch, or a legacy run branch.
+ * Null when neither exists. */
 export async function issueBranch(root: string, layout: Layout, slug: string): Promise<string | null> {
-  const branch = `mc/${slug}`;
-  if (await branchExists(root, branch)) return branch;
+  const issue = findIssue(layout, slug);
+  if (issue && (await branchExists(root, issue.branch))) return issue.branch;
+  // Legacy `mc/<slug>` branch from before per-issue ids.
+  if (await branchExists(root, `mc/${slug}`)) return `mc/${slug}`;
   const legacy = issueRuns(layout, slug).find(
     (run) => (run.agent === "engineer" || run.agent === "build") && run.worktree && typeof run.branch === "string",
   );
@@ -169,7 +171,8 @@ export interface IssueBranchState {
 
 export async function issueBranchState(layout: Layout, slug: string): Promise<IssueBranchState> {
   const root = await mainRoot(layout);
-  const branch = (await issueBranch(root, layout, slug)) ?? `mc/${slug}`;
+  const issue = findIssue(layout, slug);
+  const branch = (await issueBranch(root, layout, slug)) ?? issue?.branch ?? `mc/${slug}`;
   const baseBranch = await defaultBaseBranch(root);
   return { branch, state: await branchState(root, branch, baseBranch) };
 }
@@ -190,7 +193,7 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   const root = await mainRoot(layout);
   const baseBranch = await defaultBaseBranch(root);
   const branch = await issueBranch(root, layout, slug);
-  if (!branch) throw new Error(`no branch mc/${slug} to approve`);
+  if (!branch) throw new Error(`no branch for ${slug} to approve`);
   // Only approve built work: a branch identical to base has nothing to merge,
   // and an already-merged branch only needs the status move below.
   const state = await branchState(root, branch, baseBranch);
@@ -231,7 +234,7 @@ export async function deleteIssue(layout: Layout, slug: string, opts: { force?: 
   const root = await mainRoot(layout);
   const issue = findIssue(layout, slug);
   if (issue) rmSync(issue.path, { force: true });
-  const branches = new Set<string>([`mc/${slug}`]);
+  const branches = new Set<string>([issue?.branch ?? `mc/${slug}`]);
   for (const run of issueRuns(layout, slug)) {
     if ((run.agent === "engineer" || run.agent === "build") && typeof run.branch === "string") branches.add(run.branch);
   }

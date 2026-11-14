@@ -152,3 +152,14 @@ export async function syncWorktreeWithMain(
     conflicts: [],
   };
 }
+
+/** Best-effort push of the worktree's current branch to origin.
+ * Never throws: offline or unconfigured remotes must not fail a run. */
+export async function pushFeatureBranch(cwd: string, branch: string): Promise<boolean> {
+  try {
+    const result = await git(cwd, ["push", "-u", "origin", `${branch}:${branch}`], 60_000);
+    return ok(result);
+  } catch {
+    return false;
+  }
+}

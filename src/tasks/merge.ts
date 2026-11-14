@@ -66,7 +66,7 @@ export async function mergeBranchIntoMain(
   topRoot: string,
   worktreeRoot: string,
   branch: string,
-): Promise<{ ok: boolean; detail?: string }> {
+): Promise<{ ok: boolean; detail?: string; mergeCommit?: string }> {
   return withMergeLock(topRoot, async () => {
     let failure: string | undefined;
     const step = async (args: string[], cwd: string, what: string): Promise<boolean> => {
@@ -121,7 +121,9 @@ export async function mergeBranchIntoMain(
       // The worktree checks the branch out, so remove it before deleting.
       if (!(await step(["worktree", "remove", worktreeRoot], topRoot, "worktree remove"))) return fail();
       if (!(await step(["branch", "-D", branch], topRoot, "branch -D"))) return fail();
-      return { ok: true };
+      const head = await git(topRoot, ["rev-parse", "HEAD"], 15_000);
+      const mergeCommit = ok(head) ? head.stdout.trim() || undefined : undefined;
+      return { ok: true, mergeCommit };
     } catch (error) {
       const detail = `merge ${branch} failed: ${(error as Error).message}`;
       process.stderr.write(`${detail}\n`);
