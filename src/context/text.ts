@@ -51,23 +51,6 @@ export function excerpt(text: string, max = 180): string {
   return inline(lines.slice(0, 3).join(" "), max);
 }
 
-/** Body of an inspect read for the state block: the note must retain what
- * was read, not just a receipt — the transcript only keeps two steps, so
- * anything older survives only here and in the symbol map (names only).
- * Skips envelope and slice headers, keeps numbered body lines so the model
- * can re-anchor. Generous: the block budget evicts oldest-first. */
-export function readExcerpt(text: string, max = 2000): string {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim().length > 0)
-    .filter((line) => !/^<inspect query=/.test(line) && !/^<\/inspect>$/.test(line))
-    .filter((line) => !/^### .+?: \d+-\d+ of \d+ lines/.test(line.trim()))
-    .filter((line) => !/^path: .*\[match: path\]$/.test(line.trim()));
-  const joined = lines.join("\n").trim();
-  return joined.length <= max ? joined : `${joined.slice(0, Math.max(0, max - 1))}…`;
-}
-
 export function lineCount(text: string): number {
   return text.length === 0 ? 0 : text.split("\n").length;
 }
