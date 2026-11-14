@@ -738,6 +738,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let lastControlSeq = 0;
   let pauseRequested = false;
   let cancelRequested = false;
+  let interruptRequested = false;
   let finishRequested: FinishRequest | null = null;
   const controlTimer = setInterval(() => {
     const controlFile = join(recorder.dir, "control");
@@ -748,6 +749,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       lastControlSeq = req.seq;
       recorder.event("control", { action: req.action, seq: req.seq });
       if (req.action === "interrupt") {
+        interruptRequested = true;
         agent?.abort();
       } else if (req.action === "cancel") {
         cancelRequested = true;
@@ -1524,7 +1526,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               // ledger write failure must not break the run
             }
             // Error classification + availability update (M2).
-            if (message.stopReason === "error" && message.errorMessage) {
+            // Skipped when the user stopped the run: an interrupt is not a
+            // model failure and must not burn the model or pollute cooldowns.
+            if (message.stopReason === "error" && message.errorMessage && !interruptRequested && !cancelRequested && !pauseRequested) {
               try {
                 const classified = classifyError(new Error(message.errorMessage));
                 const provider = message.provider;
@@ -1619,7 +1623,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       await agent.waitForIdle();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!cancelRequested && !pauseRequested && !input.signal?.aborted) {
+      if (!cancelRequested && !pauseRequested && !interruptRequested && !input.signal?.aborted) {
         try {
           const classified = classifyError(new Error(message));
           recorder.event("error_classified", {
@@ -1656,7 +1660,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
       if (cancelRequested) return { status: "cancelled", finalText: "" };
       if (pauseRequested) return { status: "paused", finalText: "" };
-      if (input.signal?.aborted) return { status: "interrupted", finalText: "" };
+      if (interruptRequested || input.signal?.aborted) return { status: "interrupted", finalText: "" };
       return { status: "failed", finalText: "", error: message };
     } finally {
       input.signal?.removeEventListener("abort", onExternalAbort);
@@ -1749,7 +1753,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         status = "cancelled";
       } else if (pauseRequested) {
         status = "paused";
-      } else if (input.signal?.aborted) {
+      } else if (interruptRequested || input.signal?.aborted) {
         status = "interrupted";
       } else if (budgetExhausted) {
         status = "blocked";
@@ -1884,7 +1888,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     // Retry decision: rotate to the next eligible model on a retryable error.
     // Only reached when gates are not applicable or have already been handled.
     const la = lastAssistant as AssistantMessage | undefined;
-    if (status === "failed" && la?.errorMessage) {
+    if (status === "failed" && la?.errorMessage && !interruptRequested && !cancelRequested && !pauseRequested && !input.signal?.aborted) {
       let classified: ReturnType<typeof classifyError> | undefined;
       try {
         classified = classifyError(new Error(la.errorMessage));
