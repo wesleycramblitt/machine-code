@@ -1061,6 +1061,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
       commands: allCommands(l),
       requireProvider,
       requireModel,
+      // The --tier flag must reach the loop's own picks, not just the
+      // preflight: dropping it re-derives eligibility without the tier and
+      // kills a pinned local model on the funded gate.
+      ...(tierFlag ? { tier: tierFlag } : {}),
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
@@ -1101,6 +1105,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
       commands: allCommands(l),
       requireProvider,
       requireModel,
+      // The --tier flag must reach the loop's own picks, not just the
+      // preflight: dropping it re-derives eligibility without the tier and
+      // kills a pinned local model on the funded gate.
+      ...(tierFlag ? { tier: tierFlag } : {}),
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
@@ -1593,6 +1601,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     recorder,
     commands,
     requireModel,
+    ...(flags.get("tier") ? { tier: flags.get("tier") as "paid" | "local" } : {}),
     signal: abort.signal,
     initialMessages,
     startMode,
