@@ -15,7 +15,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { capText, isBinaryFile, numberLinesCapped, resolveWithin } from "./safety.js";
-import { buildRepoMap, nestedDefinitionRange, symbolRange, type MapFile, type RepoMap } from "../map/deterministic.js";
+import { buildRepoMap, nestedDefinitionRange, rangeAround, symbolRange, type MapFile, type RepoMap } from "../map/deterministic.js";
 import { suggestTaskFilesFromMap, type SuggestedFile } from "../map/suggest.js";
 import type { ToolContext } from "./index.js";
 
@@ -230,9 +230,6 @@ function fuzzyFiles(map: RepoMap, query: string, scope?: string): SuggestedFile[
   return out.slice(0, 24);
 }
 
-/** Bodies over this many lines are skipped in keyword-search evidence unless
- * detail=full: search evidence stays skimmable, targeted reads stay whole. */
-const BODY_LINE_CAP = 400;
 const FIND_BYTES_CAP = 128 * 1024;
 
 export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
@@ -455,20 +452,57 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
           if (detail !== "outline" && file) {
             try {
               const source = readFileSync(join(ctx.root, entry.path), "utf8");
-              const bodies: string[] = [];
+              const srcLines = source.split("\n");
+              // Locate windows: ±30 lines around each matched line, merged
+              // when overlapping, each labeled with its enclosing symbol.
+              // Anchors are literal query words plus the definition lines
+              // of the matched symbols (ranker matches are fuzzy; the
+              // definition line is always real). Keyword search answers
+              // "where", not "what" — bodies come from a symbol or file
+              // read next.
+              const words = query
+                .toLowerCase()
+                .split(/[^a-z0-9]+/)
+                .filter((w) => w.length >= 3);
+              const needles = words.length > 0 ? words : [query.toLowerCase()];
+              const hitLines = new Set<number>();
+              for (let i = 0; i < srcLines.length; i++) {
+                const line = srcLines[i]!.toLowerCase();
+                if (needles.some((t) => line.includes(t))) hitLines.add(i + 1);
+              }
               for (const name of Object.keys(entry.symbolVia).slice(0, 8)) {
-                const range = symbolRange(file, name) ?? nestedDefinitionRange(source.split("\n"), name);
-                if (!range || (range.end - range.start + 1 > BODY_LINE_CAP && detail !== "full")) continue;
-                const text = source.split("\n").slice(range.start - 1, range.end).map((line, i) => `${range.start + i}: ${line}`).join("\n");
+                const range = symbolRange(file, name) ?? nestedDefinitionRange(srcLines, name);
+                if (range) hitLines.add(range.start);
+              }
+              const windows: Array<{ start: number; end: number }> = [];
+              for (const hit of [...hitLines].sort((a, b) => a - b)) {
+                const start = Math.max(1, hit - 30);
+                const end = Math.min(srcLines.length, hit + 30);
+                const last = windows[windows.length - 1];
+                if (last && start <= last.end + 1) last.end = Math.max(last.end, end);
+                else windows.push({ start, end });
+              }
+              for (const window of windows) {
+                const center = Math.floor((window.start + window.end) / 2);
+                const enclosing = rangeAround(file, center);
+                const text = srcLines
+                  .slice(window.start - 1, window.end)
+                  .map((line, i) => `${window.start + i}: ${line}`)
+                  .join("\n");
                 const cost = Buffer.byteLength(text, "utf8");
                 if (used + cost > FIND_BYTES_CAP) break;
                 used += cost;
-                bodies.push(text);
+                parts.push(`### ${entry.path}: ${window.start}-${window.end} of ${srcLines.length} lines (in ${enclosing ? enclosing.name : "top level"})`);
+                parts.push(text);
               }
-              if (bodies.length > 0) parts.push(...bodies);
-              else if (detail === "summary") {
-                const head = source.split("\n").slice(0, 15).map((line, i) => `${i + 1}: ${line}`).join("\n");
-                parts.push(head, `… [${source.split("\n").length - 15} more lines; detail=full or query "${entry.path}:START-END"]`);
+              if (windows.length === 0 && detail === "summary" && srcLines.length <= 200) {
+                // Small file: the whole body is the answer.
+                const text = srcLines.map((line, i) => `${i + 1}: ${line}`).join("\n");
+                const cost = Buffer.byteLength(text, "utf8");
+                if (used + cost <= FIND_BYTES_CAP) {
+                  used += cost;
+                  parts.push(text);
+                }
               }
             } catch {
               // unreadable — header still stands

@@ -12,7 +12,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Edit as soon as the first file is confirmed — do not map the whole repo first. Re-plan when the code changes the scope; small corrections just get done. Update steps to `done: true` as you finish them. When every step shows `[x]`, call `finish`.
 
-2. **Read only what you will change** — `<symbols>` already indexes every seen file, so skip outlines and go straight to bodies:
+2. **Read only what you will change** — `<symbols>` already indexes every seen file, under 200 lines read the whole file; over 200 go outline, then one symbol body, then keyword locate, then page (200 lines minimum).
 
    `inspect {query: "src/router.ts", symbol: "routePayment"}` — one function body, ready to edit.
 
@@ -27,10 +27,12 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Edit with a named block — fenced block with a name instead of a language ID, referenced by name so nothing is JSON-escaped:
 
-   `edit {path: "router.ts", symbol: "routePayment", newString: "..."}` — local definitions resolve too.
-   Backslashes or `$` in the code? Put it in a fenced ` ```renamed ` block and pass `newString_named_block: "renamed"` instead.
+   `edit {path: "router.ts", symbol: "routePayment", newString_named_block: "renamed"}` — local definitions too. Inline `newString` only for one-line replacements.
+   ` ```renamed`
+   ` export function route(order, provider) { ... }`
+   ` ``` `
 
-   No symbolic anchor? `edit {path, oldString: "...", newString: "..."}`. On a miss the tool returns the closest current text — fix the anchor and resend, no re-read. Batch independent files in one call. The diff is the confirmation — never re-read. Do not create tests. Do not search for test files.
+   No symbolic anchor? `edit {path, oldString_named_block: "old", newString_named_block: "new"}` with two fenced blocks. On a miss the tool returns the closest current text — fix the anchor and resend, no re-read. Batch independent files in one call. The diff is the confirmation — never re-read. Do not create tests. Do not search for test files.
 
 4. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
 
