@@ -3,8 +3,9 @@
  *
  * Pure render of the work tree (repository → kind → issue → runs, or
  * repository → status). Row focus dimming, issue tones, dependency
- * suffixes, and the pending-answer affordance live here; the caller supplies
- * the prebuilt index plus a pending-question lookup.
+ * suffixes, dependency-chain gaps, and the pending-answer affordance live
+ * here; the caller supplies the prebuilt index plus a pending-question
+ * lookup.
  */
 import { B, BL, C, D, G, GR, M, PURPLE_BG, R, RED, W, WHITE, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
@@ -44,7 +45,13 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
   const lines: string[] = [];
   const selectedId = selectedRow?.id;
   let selectedEndLine = lines.length;
+  let prevKind: RunRow["kind"] | undefined;
   for (const row of index.rows) {
+    // Deps view: one empty gap line before each dependency chain root (never
+    // right under a section heading), so a chain reads as one connected
+    // block and the next independent chain starts a new one. Gap lines carry
+    // no text and are not cursor rows.
+    if (row.kind === "issue" && row.chainStart === true && prevKind !== "section") lines.push("");
     const isSelected = row.id === selectedId;
     const indent = "  ".repeat(row.depth);
     const rendered: string[] = [];
@@ -117,6 +124,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       selectedEndLine = lines.length + rendered.length - 1;
     }
     lines.push(...rendered);
+    prevKind = row.kind;
   }
   if (index.rows.length === 0) {
     lines.push("");

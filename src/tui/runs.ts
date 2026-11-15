@@ -95,6 +95,8 @@ export type RunRow =
       blockedBy?: string[];
       /** Depends slugs that name no issue (typo, rename, deletion); rendered as "· unknown dep …". */
       unknownDeps?: string[];
+      /** Deps view: true on the first row of each dependency chain; the runs-list renderer opens a gap line before it so one chain reads as one block. */
+      chainStart?: boolean;
       depth: number;
       parent?: string;
       collapsible: boolean;
@@ -296,7 +298,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
             RANK[effectiveStatus(b, repoRuns.filter((r) => runItemId(r) === b.slug))] ||
           a.slug.localeCompare(b.slug),
       );
-    const pushIssue = (issue: Issue, issueDepth: number, parentId: string): void => {
+    const pushIssue = (issue: Issue, issueDepth: number, parentId: string, chainStart = false): void => {
       const related = runsByItem.get(issue.slug) ?? [];
       const id = `issue:${issue.kind}:${issue.slug}`;
       const isCollapsed = collapsed.get(id) ?? false;
@@ -315,6 +317,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         review: issue.review,
         blockedBy,
         unknownDeps,
+        chainStart,
         depth: issueDepth,
         parent: parentId,
         collapsible: related.length > 0,
@@ -384,11 +387,14 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       }
     } else if (group === "deps") {
       // By dependencies: ready work first, then blocked issues nested under
-      // the dependency they wait on, one indent per hop. No kind or status
-      // headers — dependency chains cross kinds, and a row duplicated into
-      // two kind sections would fold from two row ids. Done issues and
-      // researched ideas are satisfied dependencies, so this view holds
-      // outstanding work only.
+      // the dependency they wait on. Blocked rows indent two steps per hop
+      // (+2 vs the +1 sibling step elsewhere) so nesting reads as blocked-on
+      // rather than as a sibling, and each chain root carries `chainStart`
+      // so the renderer opens a gap line between one chain and the next. No
+      // kind or status headers — dependency chains cross kinds, and a row
+      // duplicated into two kind sections would fold from two row ids. Done
+      // issues and researched ideas are satisfied dependencies, so this view
+      // holds outstanding work only.
       const deps = depsByRepo.get(repoRoot) ?? emptyDeps;
       const outstanding = issues.filter((issue) => !deps.satisfied.has(issue.slug));
       // First unmet dependency, using the same known-and-unsatisfied filter
@@ -427,19 +433,19 @@ export function buildRunIndex(options: RunOptions): RunIndex {
         } else if (cyclic.has(issue.slug)) cyclicList.push(issue);
         else ready.push(issue);
       }
-      const pushDepTree = (issue: Issue, issueDepth: number, parentId: string): void => {
-        pushIssue(issue, issueDepth, parentId);
+      const pushDepTree = (issue: Issue, issueDepth: number, parentId: string, chainStart: boolean): void => {
+        pushIssue(issue, issueDepth, parentId, chainStart);
         for (const child of sortIssues(childrenOf.get(issue.slug) ?? [])) {
-          pushDepTree(child, issueDepth + 1, `issue:${issue.kind}:${issue.slug}`);
+          pushDepTree(child, issueDepth + 2, `issue:${issue.kind}:${issue.slug}`, false);
         }
       };
       const readyId = `deps:ready:${repoRoot}`;
       if (pushSection(readyId, "Ready", ready.length, depth, "status")) {
-        for (const issue of sortIssues(ready)) pushDepTree(issue, depth + 1, readyId);
+        for (const issue of sortIssues(ready)) pushDepTree(issue, depth + 1, readyId, true);
       }
       const cyclicId = `deps:cyclic:${repoRoot}`;
       if (pushSection(cyclicId, "Cyclic", cyclicList.length, depth, "status")) {
-        for (const issue of sortIssues(cyclicList)) pushDepTree(issue, depth + 1, cyclicId);
+        for (const issue of sortIssues(cyclicList)) pushDepTree(issue, depth + 1, cyclicId, true);
       }
     }
 
