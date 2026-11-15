@@ -1,8 +1,8 @@
-priority: medium
-tags: tui
+commit: bc2fd68c36335bdf53ab65f05a2bcb9c4a272f6e
 files: src/tui/screens/run-detail/run-detail.ts
-keywords: Run Details, Overview, Summary, Changes, Thinking snippet, Activity snippet, Edit snippet
+tags: tui
 acceptance: script:build
+keywords: Run Details, Overview, Summary, Changes, Thinking snippet, Activity snippet, Edit snippet
 
 # Restructure the run details Overview tab
 
