@@ -142,8 +142,6 @@ export interface TuiState {
   timelineFollow: boolean;
   /** Show routine internals in the timeline. */
   timelineVerbose: boolean;
-  thinkingScroll: number;
-  thinkingFollow: boolean;
   childSel: number;
   expanded: Set<string>;
   changesCache: { runId: string; at: number; data: ChangeSummary } | null;
@@ -292,8 +290,6 @@ export function createTuiState(repoRoot: string): TuiState {
     eventCursor: 0,
     timelineFollow: true,
     timelineVerbose: false,
-    thinkingScroll: 0,
-    thinkingFollow: true,
     childSel: 0,
     expanded: new Set<string>(),
     changesCache: null,
