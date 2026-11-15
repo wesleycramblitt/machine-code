@@ -16,6 +16,7 @@ import { DEFAULT_THEME, type ThemeConfig } from "../config.js";
 import type { CatalogueRow } from "../catalogue/types.js";
 import type { AvailabilityState } from "../availability.js";
 import type { RunEvent, RunSummary } from "../state/runs.js";
+import type { TimelineEventLike } from "./timeline.js";
 
 /* ------------------------------------------------------- terminal control */
 
@@ -568,7 +569,10 @@ export function isEditToolEvent(event: RunEvent): boolean {
   return tool === "write" || tool === "edit";
 }
 
-export function editEventArgs(event: RunEvent): Record<string, unknown> {
+/** RunEvent (typed log record) or TimelineEventLike (grouped/rendered view). */
+export type TimelineEvent = RunEvent | TimelineEventLike;
+
+export function editEventArgs(event: TimelineEvent): Record<string, unknown> {
   const direct = (event as { args?: unknown }).args;
   if (direct !== undefined && direct !== null) return direct as Record<string, unknown>;
   const nested = (event as { call?: { args?: unknown } }).call?.args;
@@ -580,7 +584,7 @@ export function editEventArgs(event: RunEvent): Record<string, unknown> {
  * Timeline keeps full JSON; Overview uses this instead.
  * Capped so a giant write cannot flood the section.
  */
-export function editSummaryLines(event: RunEvent, width: number, maxLines = 30): string[] {
+export function editSummaryLines(event: TimelineEvent, width: number, maxLines = 30): string[] {
   const tool = String((event as { tool?: unknown }).tool ?? "edit");
   const args = editEventArgs(event);
   const path = typeof args.path === "string" ? args.path : "(unknown path)";
