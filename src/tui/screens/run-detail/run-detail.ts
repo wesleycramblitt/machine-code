@@ -687,8 +687,9 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       // outcome plus one snippet per detail section (thinking, activity,
       // changes) instead of duplicating their full bodies.
       if (s.error || s.status === "failed" || s.status === "blocked") {
-        lines.push(` ${B}${statusColor(s.status)}Status${R}`);
-        const statusText = s.error ?? s.status.toUpperCase();
+        lines.push(` ${B}${W}Status${R}`);
+        const statusLabel = `[${s.status.toUpperCase()}]`;
+        const statusText = s.error ? `${statusLabel} ${s.error}` : statusLabel;
         const statusTone = RED;
         for (const line of wrapText(statusText, cols - 4).slice(0, short ? 3 : 6)) {
           lines.push(`  ${statusTone}${line}${R}`);
@@ -696,7 +697,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       }
       if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
       lines.push(` ${B}${BL}Request${R}`);
-      for (const line of wrapText(s.request, cols - 4).slice(0, 10)) lines.push(`  ${W}${line}${R}`);
+      for (const line of wrapText(s.request, cols - 4).slice(0, 10)) lines.push(`  ${D}${line}${R}`);
       const lastThinking = thinking.length > 0 ? thinking[thinking.length - 1] : undefined;
       if (lastThinking) {
         lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Timeline${R}`);
@@ -712,7 +713,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         lines.push("", ` ${B}${C}Activity snippet${R}${activityLive} ${D}full log in Timeline${R}`);
         for (const event of recentActivity.slice(-10)) {
           const time = String(event.t ?? "").slice(11, 19);
-          lines.push(`  ${D}${time}${R} ${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}`);
+          lines.push(`  ${D}${time}${R} ${D}${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}${R}`);
         }
       }
       if (touched.length) {
