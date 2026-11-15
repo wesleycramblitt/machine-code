@@ -20,7 +20,6 @@ import {
 } from "../../timeline.js";
 import { scrollLines, selectableLines } from "../../scroll.js";
 import { contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ThinkingChunk } from "../../../report/run.js";
-import { readStateView, summarizeRun } from "../../../state/outcome.js";
 import { latestUnansweredQuestion, readInbox } from "../../../state/question.js";
 import { reconcileProcessRecords } from "../../../processes/reconcile.js";
 import { readLogTail } from "../../../processes/logs.js";
@@ -571,14 +570,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     // rendering agree.
     const relatedList = relatedRuns(props.scopedRuns, s);
     const thinking = thinkingChunks(ev);
-    const outcomeText =
-      s.summary ??
-      summarizeRun({
-        summary: s,
-        events: ev,
-        state: readStateView(detail.dir),
-        finalText: s.finalText,
-      }).text;
     const recentActivity = ev.filter((event) => isTimelineEvent(event, false)).slice(-8);
     // What the run is currently waiting on. The 1s redraw tick animates
     // the dots, so a live wait visibly advances instead of looking frozen.
@@ -652,7 +643,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               hint("X", "kill all", RED),
             ]
           : section === "overview" || section === "context"
-            ? [hint("j/k", "scroll"), hint("^D/^U", "page", Y)]
+            ? [hint("j/k", "scroll")]
             : section === "changes"
               ? [
                   hint("j/k", "select"),
@@ -693,8 +684,8 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     lines.push("", ...sectionBar, "");
     if (section === "overview") {
       // Lean overview: header already carries status/agent/cost. Show the
-      // outcome plus one snippet per detail section (thinking, edits,
-      // activity, changes) instead of duplicating their full bodies.
+      // outcome plus one snippet per detail section (thinking, activity,
+      // changes) instead of duplicating their full bodies.
       if (s.error || s.status === "failed" || s.status === "blocked") {
         lines.push(` ${B}${statusColor(s.status)}Status${R}`);
         const statusText = s.error ?? s.status.toUpperCase();
@@ -704,24 +695,12 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         }
       }
       if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
-      lines.push(` ${B}${G}Summary${R}`);
-      for (const rawLine of outcomeText.split("\n")) {
-        for (const line of wrapText(rawLine, cols - 4)) lines.push(`  ${W}${line}${R}`);
-      }
       lines.push(` ${B}${BL}Request${R}`);
-      for (const line of wrapText(s.request, cols - 4).slice(0, 3)) lines.push(`  ${W}${line}${R}`);
+      for (const line of wrapText(s.request, cols - 4).slice(0, 10)) lines.push(`  ${W}${line}${R}`);
       const lastThinking = thinking.length > 0 ? thinking[thinking.length - 1] : undefined;
       if (lastThinking) {
         lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Timeline${R}`);
-        for (const line of wrapText(lastThinking.text, cols - 4).slice(-3)) lines.push(`  ${D}${line}${R}`);
-      }
-      const snippetEdits = recentEditEvents(ev, 3);
-      if (snippetEdits.length > 0) {
-        lines.push("", ` ${B}${G}Edit snippet${R} ${D}latest ${snippetEdits.length} · full diffs in Timeline${R}`);
-        for (const editEvent of snippetEdits) {
-          const summary = editSummaryLines(editEvent, cols - 6);
-          lines.push(`  ${G}✎${R} ${W}${trunc(summary[0] ?? "edit", Math.max(16, cols - 8))}${R}`);
-        }
+        for (const line of wrapText(lastThinking.text, cols - 4).slice(-10)) lines.push(`  ${D}${line}${R}`);
       }
       if (recentActivity.length) {
         const activityLive =
@@ -731,14 +710,23 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               ? ` ${G}live${R}`
               : "";
         lines.push("", ` ${B}${C}Activity snippet${R}${activityLive} ${D}full log in Timeline${R}`);
-        for (const event of recentActivity.slice(-4)) {
+        for (const event of recentActivity.slice(-10)) {
           const time = String(event.t ?? "").slice(11, 19);
           lines.push(`  ${D}${time}${R} ${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}`);
         }
       }
-      lines.push("", ` ${B}${G}Changes${R} ${touched.length ? `${G}${touched.length}${R} ${D}path(s)${R}` : `${D}none yet${R}`}` +
-        (relatedList.length ? `  ${D}related${R}  ${M}${relatedList.length}${R}` : "") +
-        `  ${D}parent${R}  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
+      if (touched.length) {
+        lines.push("", ` ${B}${G}Changes${R}`);
+        for (const path of touched) lines.push(`  ${G}✎${R} ${W}${path}${R}`);
+      } else {
+        lines.push("", ` ${B}${G}Changes${R} ${D}none yet${R}`);
+      }
+      if (relatedList.length) {
+        lines.push(`  ${D}related${R}  ${M}${relatedList.length}${R}`);
+      }
+      if (s.parentRunId) {
+        lines.push(`  ${D}parent${R}  ${D}${s.parentRunId.slice(-8)}${R}`);
+      }
       if (context) {
         lines.push(`  ${D}context${R} ${C}${context.chars.toLocaleString()} chars / ${context.sources.length} sources${R}`);
       }
