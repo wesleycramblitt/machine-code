@@ -19,6 +19,7 @@ import { findIssue, kindTag, listIssues, updateIssueContents, writeIssue, type I
 import { effectiveStatus } from "./plan/lifecycle.js";
 import { orchestratorCounters } from "./orchestration/scheduler.js";
 import { readOrchestratorState, updateOrchestratorState, type OrchestratorSettings } from "./orchestration/store.js";
+import { createOrchestratorLoop } from "./orchestration/loop.js";
 import { isPidAlive, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
@@ -1067,8 +1068,12 @@ export async function runTui(): Promise<void> {
     const filteredRuns = runsListScreen ? scopedRuns : [];
     const workGroup = s.runsGroup === "all" || s.runsGroup === "category" || s.runsGroup === "deps";
     const issuesByRepo: Record<string, readonly Issue[]> = {};
+    // Repo rows of orchestrated repos carry the Orchestrating… badge; the
+    // store flag is the source of truth, re-read every frame like the issues.
+    const orchestratingRepos = new Set<string>();
     for (const root of new Set([l.repoRoot, ...filteredRuns.map((run) => run.repoRoot)])) {
       issuesByRepo[root] = listIssues(layout(root));
+      if (readOrchestratorState(layout(root)).active) orchestratingRepos.add(root);
     }
     const runIndex = buildRunIndex({
       runs: filteredRuns,
@@ -1078,6 +1083,7 @@ export async function runTui(): Promise<void> {
       attentionOnly: s.runsAttention,
       preferredRepo: l.repoRoot,
       ...(workGroup ? { issueRepo: l.repoRoot, issuesByRepo } : {}),
+      orchestratingRepos,
     });
     if (s.runsSel >= runIndex.selectable.length) s.runsSel = Math.max(0, runIndex.selectable.length - 1);
     const selectedRow = runIndex.selectable[s.runsSel];
@@ -1677,6 +1683,24 @@ export async function runTui(): Promise<void> {
     return preview;
   };
 
+  /* ------------------------------------------------------- orchestrator */
+
+  // The orchestrator ticks beside the 1s UI probes: ~5s scheduling passes
+  // that act only while a repo's persisted `active` flag is set. Start/Stop
+  // on the orchestration page watch/drop that repo; children spawned by
+  // earlier ticks keep running as normal tracked runs.
+  const orchestratorLoop = createOrchestratorLoop({
+    home: l.home,
+    launch,
+    changed: () => {
+      if (!s.newRunInsert) draw();
+    },
+  });
+  // Repos left active by a previous session resume scheduling on open.
+  for (const repoRoot of listProjects(l.home)) {
+    if (readOrchestratorState(layout(repoRoot)).active) orchestratorLoop.watch(repoRoot);
+  }
+
   /* ------------------------------------------------------------- input */
 
   const keyCtx: KeyServices = {
@@ -1687,8 +1711,8 @@ export async function runTui(): Promise<void> {
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
     startNewIssue, startEditIssue, submitNewIssue,
     agentIsolates, searchSeed,
-    startOrchestrator: (repoRoot) => updateOrchestratorState(layout(repoRoot), { active: true }),
-    stopOrchestrator: (repoRoot) => updateOrchestratorState(layout(repoRoot), { active: false }),
+    startOrchestrator: (repoRoot) => orchestratorLoop.watch(repoRoot),
+    stopOrchestrator: (repoRoot) => orchestratorLoop.drop(repoRoot),
     repoRoot: l.repoRoot,
   };
 

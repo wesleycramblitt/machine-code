@@ -6,7 +6,7 @@
  * suffixes, and the pending-answer affordance live here; the caller supplies
  * the prebuilt index plus a pending-question lookup.
  */
-import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
+import { B, BL, C, D, G, GR, M, PURPLE_BG, R, RED, W, WHITE, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
 import type { RunSummary } from "../../state/runs.js";
 import { windowedBody, type Viewport } from "./types.js";
@@ -49,7 +49,10 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
     const indent = "  ".repeat(row.depth);
     const rendered: string[] = [];
     if (row.kind === "repo") {
-      const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
+      // Repos under orchestration wear a purple badge right after the name;
+      // its width shrinks the cwd detail so the row stays on one line.
+      const badge = row.orchestrating ? ` ${PURPLE_BG}${WHITE}Orchestrating…${R} ` : "";
+      const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${badge}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16 - visible(badge)))}${R}`} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "section") {
       // Kind headers: brand-color background hugging the text, bold black/white label + count.
