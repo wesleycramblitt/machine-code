@@ -1,5 +1,6 @@
 id: 0c4b59
 branch: mc/i-referenced-a-recently-completed-issue-that-ref-0c4b59
+commit: 4804f11ae357ebfe1130b33a3a0149ffc83c18ee
 acceptance: script:build
 
 Auto-created from run.
