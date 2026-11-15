@@ -1,8 +1,8 @@
-priority: medium
-tags: tui
+commit: 5517b7602ab78c59cf99c3f469b7b9d8b6a7b4f0
 files: src/tui/runs.ts, src/tui/screens/runs-list.ts
-keywords: By dependencies, deps, grouped, RunGroup
+tags: tui
 acceptance: script:build
+keywords: By dependencies, deps, grouped, RunGroup
 
 # More spacing for dependent issues in the By-dependencies view
 
