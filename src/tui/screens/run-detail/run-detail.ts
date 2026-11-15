@@ -186,10 +186,11 @@ function renderModelCallBlock(
     cols: number;
     runDir: string;
     expandedEvent: boolean;
+    compact: boolean;
     thinkingByCall: Map<string, ThinkingChunk[]>;
   },
 ): void {
-  const { eventLines, cols, runDir, expandedEvent, thinkingByCall } = opts;
+  const { eventLines, cols, runDir, expandedEvent, compact, thinkingByCall } = opts;
   const members = group.members.map((index) => ev[index]!);
   const select = members.find((event) => String(event.type) === "model_select");
   const request = members.find((event) => String(event.type) === "model_request");
@@ -220,6 +221,32 @@ function renderModelCallBlock(
     eventLines.push(
       background(fit(`${WHITE}◌ ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
     );
+  }
+  // Collapse policy: a compact (non-tail) past block shows its result
+  // summary only — the header plus a one-line ok/ERR line — even when the
+  // user did not expand it. The newest block stays open to unfold live.
+  if (compact && !expandedEvent && end) {
+    const usage = (end.usage ?? {}) as { input?: number; output?: number };
+    const callChunks = typeof end.call === "number"
+      ? (thinkingByCall.get(`${group.attempt}:${end.call}`) ?? [])
+      : [];
+    const textChunk = callChunks
+      .filter((chunk) => chunk.kind === "text")
+      .map((chunk) => chunk.text)
+      .join("");
+    const output = (
+      typeof end.text === "string" && end.text.trim().length > 0
+        ? end.text
+        : textChunk
+    ).trim();
+    const first = output.split("\n").find((line) => line.trim().length > 0) ?? "";
+    eventLines.push(
+      `    ${end.isError ? RED : G}${end.isError ? "ERR" : "ok"}${R}` +
+        (output ? ` ${D}${trunc(first, Math.max(20, cols - 10))}${R}` : "") +
+        ` ${D}${usage.input ?? 0}→${usage.output ?? 0}${R}` +
+        ` ${D}(space to expand)${R}`,
+    );
+    return;
   }
   // Selection detail stays available under the block (expanded only).
   if (expandedEvent && select && Array.isArray(select.candidates)) {
@@ -419,9 +446,9 @@ function toolResultLines(
 function renderToolCallBlock(
   start: TimelineEventLike,
   completion: TimelineEventLike | undefined,
-  opts: { eventLines: string[]; cols: number; expandedEvent: boolean },
+  opts: { eventLines: string[]; cols: number; expandedEvent: boolean; compact: boolean },
 ): void {
-  const { eventLines, cols, expandedEvent } = opts;
+  const { eventLines, cols, expandedEvent, compact } = opts;
   const time = String(start.t ?? "").slice(11, 19);
   const tool = String(start.tool ?? "");
   const isEdit = tool === "write" || tool === "edit";
@@ -442,6 +469,20 @@ function renderToolCallBlock(
       PANEL_BG,
     ),
   );
+  // Collapse policy: a compact (non-tail) past block shows its result
+  // summary only — the header plus a one-line ok/ERR line. The request line
+  // and diff are elided so a long run scans as one header per call.
+  if (compact && !expandedEvent && completion && !running) {
+    const isError = !!completion.isError;
+    const all = printable(stripAnsi(resultText(completion.result))).split("\n").filter((line) => line.trim().length > 0);
+    const first = all[0] ?? "";
+    eventLines.push(
+      `    ${isError ? RED : G}${isError ? "ERR" : "ok"}${R}` +
+        (first ? ` ${D}${trunc(first, Math.max(20, cols - 10))}${R}` : "") +
+        ` ${D}(space to expand)${R}`,
+    );
+    return;
+  }
   // The request: one-line human args by default; key: value body expanded.
   eventLines.push(`    ${Y}→${R} ${D}request${R}${human ? ` ${W}${trunc(human, Math.max(12, cols - 8))}${R}` : ""}`);
   if (expandedEvent && args) {
@@ -704,6 +745,18 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       // the per-event renderer below; verbose mode makes every block plain,
       // so "v" keeps the raw rows.
       const groups = groupTimelineCalls(ev, timelineVerbose);
+      // The newest call block (last model or tool group) is the live tail:
+      // it renders its full body by default so output unfolds as it arrives.
+      // Collapse is derived at render time from the expanded set, never
+      // stored, so each older block auto-collapses once a new one starts.
+      let tailGroup = -1;
+      if (!timelineVerbose) {
+        for (let gi = groups.length - 1; gi >= 0; gi--) {
+          const k = groups[gi]!.kind;
+          if (k === "model" || k === "tool") { tailGroup = gi; break; }
+        }
+      }
+      const compact = !timelineVerbose;
       for (let gi = 0; gi < groups.length; gi++) {
         const group = groups[gi]!;
         // Rhythm: exactly one blank line between blocks, none inside. The
@@ -717,16 +770,20 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         // The cursor can rest on any rendered line (header or body); space
         // toggles the containing block's expansion. Block ids reuse the
         // block's first event index, so existing expanded sets keep working.
-        const expandedEvent = expanded.has(`${s.id}:${group.first}`);
+        // For the tail the set is inverted: present means the user collapsed
+        // the live block, absent means it stays open.
+        const userExpanded = expanded.has(`${s.id}:${group.first}`);
+        const isTail = gi === tailGroup;
+        const expandedEvent = isTail ? !userExpanded : userExpanded;
         const type = String(event.type);
         if (group.kind === "model") {
-          renderModelCallBlock(group, ev, { eventLines, cols, runDir: detail.dir, expandedEvent, thinkingByCall });
+          renderModelCallBlock(group, ev, { eventLines, cols, runDir: detail.dir, expandedEvent, compact, thinkingByCall });
           spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
           continue;
         }
         if (group.kind === "tool") {
           const completion = group.members.length > 1 ? ev[group.members[1]!] : undefined;
-          renderToolCallBlock(event, completion, { eventLines, cols, expandedEvent });
+          renderToolCallBlock(event, completion, { eventLines, cols, expandedEvent, compact });
           spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
           continue;
         }
