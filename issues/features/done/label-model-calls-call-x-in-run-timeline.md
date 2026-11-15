@@ -1,8 +1,9 @@
+commit: 2b5e90b9cd7cbb81c40e797697493e80efc1962d
 priority: high
-tags: tui
 files: src/tui/screens/run-detail/run-detail.ts
-keywords: Run Details, Timeline, Call, model call
+tags: tui
 acceptance: script:build
+keywords: Run Details, Timeline, Call, model call
 
 # Label each model call "Call x" with clear begin and end
 
