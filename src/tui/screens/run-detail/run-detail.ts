@@ -10,12 +10,13 @@
 import {
   B, BL, C, D, G, GR, M, R, RED, W, Y, SUBTAB_BG, ZEBRA_BG,
   ago, agentTone, background, command, contextTone, editSummaryLines, fit,
-  fmtMoney, fmtRunTokens, fmtTokens, icon, joinCommands, recentEditEvents,
-  progress, selected, statusColor, stripAnsi, trunc, visible, wrapText, wrapTokenList,
+  fmtMoney, fmtRunTokens, fmtTokens, icon, joinCommands, printable,
+  recentEditEvents, progress, selected, statusColor, stripAnsi, trunc, visible,
+  wrapText, wrapTokenList,
 } from "../../format.js";
 import {
-  describeTimelineEvent, describeToolArgs, isTimelineEvent, waitingForRun,
-  type TimelineEventLike,
+  describeTimelineEvent, describeToolArgs, describeToolBody, isTimelineEvent,
+  waitingForRun, type TimelineEventLike,
 } from "../../timeline.js";
 import { scrollLines, selectableLines } from "../../scroll.js";
 import { contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ThinkingChunk } from "../../../report/run.js";
@@ -303,11 +304,92 @@ function renderModelCallBlock(
 }
 
 /**
+ * Pull the human text out of a tool result: plain string, text-content
+ * blocks, a `{ text }` object, or a JSON fallback for exotic shapes. Tool
+ * results arrive as { content: [{ type: "text", text }] } from the loop.
+ */
+function resultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (Array.isArray(result)) {
+    const parts = result
+      .map((item) =>
+        item !== null && typeof item === "object" && typeof (item as { text?: unknown }).text === "string"
+          ? (item as { text: string }).text
+          : undefined,
+      )
+      .filter((part): part is string => part !== undefined);
+    if (parts.length > 0) return parts.join("\n");
+  }
+  if (result !== null && typeof result === "object" && typeof (result as { text?: unknown }).text === "string") {
+    return (result as { text: string }).text;
+  }
+  return JSON.stringify(result ?? "");
+}
+
+/** First lines of a body, with a note when lines were cut. */
+function headLines(lines: string[], cap: number): string[] {
+  if (lines.length <= cap) return lines;
+  return [...lines.slice(0, cap), `… ${lines.length - cap} more lines`];
+}
+
+/** Last lines of a body, with a note when lines were cut (command output). */
+function tailLines(lines: string[], cap: number): string[] {
+  if (lines.length <= cap) return lines;
+  return [`… ${lines.length - cap} earlier lines`, ...lines.slice(lines.length - cap)];
+}
+
+/**
+ * Expanded result body, shaped per tool: the text body for read/inspect/
+ * search/map/context/skill/artifact, a status line plus the output tail for
+ * commands, what changed (path, wrote-N note, diff lines) for write/edit,
+ * and the first lines for unknown tools. Errors surface the error message.
+ * Callers sanitize (printable/stripAnsi) and wrap to the terminal width.
+ */
+function toolResultLines(
+  tool: string,
+  result: unknown,
+  isError: boolean,
+  args: Record<string, unknown> | undefined,
+  completion: TimelineEventLike,
+): string[] {
+  const text = printable(stripAnsi(resultText(result))).trim();
+  const lines = text ? text.split("\n").filter((line) => line.trim().length > 0) : [];
+  if (isError) return lines.length > 0 ? lines : ["(error with no message)"];
+  if (lines.length === 0) return ["(empty result)"];
+  switch (tool) {
+    case "command":
+      return ["status: ok", ...tailLines(lines, 20)];
+    case "read":
+    case "inspect":
+    case "search":
+    case "map":
+    case "context":
+    case "skill":
+    case "artifact":
+      return headLines(lines, 24);
+    case "write":
+    case "edit": {
+      const out: string[] = [];
+      if (args && typeof args.path === "string") out.push(`changed: ${args.path}`);
+      const content = args && typeof args.content === "string" ? args.content : undefined;
+      if (content) {
+        out.push(`wrote ${content.split("\n").length} lines · ${fmtTokens(Buffer.byteLength(content, "utf8"))} chars`);
+      }
+      const diff = editSummaryLines(completion, 160, 20).slice(1);
+      return [...out, ...diff.slice(0, Math.max(0, 24 - out.length))];
+    }
+    default:
+      return headLines(lines, 12);
+  }
+}
+
+/**
  * One tool call as a single block: exactly one timestamped header naming the
  * tool and its outcome (ok/ERR, duration; "running…" while the completion is
- * missing), the request as a "→ request" body (human args, raw JSON when
- * expanded), and the response as a "← response" body (the diff for edits,
- * otherwise the result text).
+ * missing), the request as a "→ request" line (human args; the full key:
+ * value body when expanded), and the response as a "← response" body shaped
+ * per tool — the edit diff, the result text for read/search and friends, the
+ * error message in red on failure.
  */
 function renderToolCallBlock(
   start: TimelineEventLike,
@@ -327,10 +409,14 @@ function renderToolCallBlock(
         ? ` ${Y}running…${R}`
         : ` ${completion!.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof completion!.durationMs === "number" ? ` ${D}${completion!.durationMs}ms${R}` : ""}`),
   );
-  // The request: human args by default, raw JSON when expanded.
+  // The request: one-line human args by default; key: value body expanded.
   eventLines.push(`    ${Y}→${R} ${D}request${R}${human ? ` ${W}${trunc(human, Math.max(12, cols - 8))}${R}` : ""}`);
   if (expandedEvent && args) {
-    for (const line of wrapText(stripAnsi(JSON.stringify(args)), cols - 6)) eventLines.push(`      ${D}${line}${R}`);
+    for (const raw of describeToolBody(tool, args)) {
+      for (const wrapped of wrapText(printable(stripAnsi(raw)), Math.max(20, cols - 8))) {
+        eventLines.push(`      ${D}${wrapped}${R}`);
+      }
+    }
   }
   if (running) return;
   const result = completion!.result;
@@ -346,15 +432,19 @@ function renderToolCallBlock(
     }
   }
   if (showResult) {
-    const text = stripAnsi(typeof result === "string" ? result : JSON.stringify(result));
+    const isError = !!completion!.isError;
+    const all = printable(stripAnsi(resultText(result))).split("\n").filter((line) => line.trim().length > 0);
     if (expandedEvent) {
-      for (const line of text.split("\n")) {
-        for (const wrapped of wrapText(line, cols - 6)) eventLines.push(`      ${D}${wrapped}${R}`);
+      // Full body shaped per tool; errors read as errors in RED.
+      for (const raw of toolResultLines(tool, result, isError, args, completion!)) {
+        const tone = isError ? RED : isEdit && raw.startsWith("+") ? G : isEdit && raw.startsWith("-") ? RED : D;
+        for (const wrapped of wrapText(printable(stripAnsi(raw)), Math.max(20, cols - 8))) {
+          eventLines.push(`      ${tone}${wrapped}${R}`);
+        }
       }
     } else {
-      const preview = text.split("\n").filter((line) => line.trim().length > 0).slice(0, 3);
-      for (const line of preview) eventLines.push(`      ${trunc(line, Math.max(20, cols - 8))}`);
-      if (text.split("\n").length > 3) eventLines.push(`      ${D}… (${text.split("\n").length - 3} more; space to expand)${R}`);
+      for (const line of all.slice(0, 3)) eventLines.push(`      ${trunc(line, Math.max(20, cols - 8))}`);
+      if (all.length > 3) eventLines.push(`      ${D}… (${all.length - 3} more; space to expand)${R}`);
     }
   }
 }

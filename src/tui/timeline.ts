@@ -126,6 +126,132 @@ export function describeToolArgs(tool: string, args: Record<string, unknown> | n
   }
 }
 
+/**
+ * Clip one argument value for the key: value body: strings flatten to a
+ * single line (long ones keep a size note), arrays and objects preview the
+ * first entries with a count. Returns undefined for empty or absent values
+ * so the line is skipped entirely.
+ */
+function bodyClip(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const flat = value.replace(/\s+/g, " ").trim();
+    if (!flat) return undefined;
+    if (flat.length <= 120) return flat;
+    const note = value.includes("\n") ? `${value.split("\n").length} lines · ${value.length} chars` : `${value.length} chars`;
+    return `${flat.slice(0, 120)}… (${note})`;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
+  if (typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "empty";
+    const head = value.slice(0, 3).map((item) => bodyClip(item) ?? "…").join(", ");
+    return value.length > 3 ? `${head} … (${value.length} items)` : head;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return "empty";
+    const head = entries.slice(0, 3).map(([key, val]) => `${key}=${bodyClip(val) ?? "…"}`).join(", ");
+    return entries.length > 3 ? `${head} … (${entries.length} keys)` : head;
+  }
+  return undefined;
+}
+
+/**
+ * Multi-line human rendering of full tool args for the expanded run-detail
+ * body: one `key: value` line per argument, ordered by the same per-tool
+ * knowledge describeToolArgs uses. Long values carry a size note instead of
+ * flooding the screen; unknown tools get a compact pass over every key.
+ * Never a raw JSON blob — the run-detail screen expands args through this
+ * instead of JSON.stringify.
+ */
+export function describeToolBody(tool: string, args: Record<string, unknown> | null | undefined): string[] {
+  if (!args || typeof args !== "object") return [];
+  const lines: string[] = [];
+  const add = (key: string, value: unknown): void => {
+    const rendered = bodyClip(value);
+    if (rendered !== undefined) lines.push(`${key}: ${rendered}`);
+  };
+  switch (tool) {
+    case "read":
+      add("path", args.path);
+      add("symbol", args.symbol);
+      if (Array.isArray(args.symbols)) add("symbols", args.symbols.map(String).join(", "));
+      add("section", args.section);
+      if (args.offset !== undefined || args.limit !== undefined) {
+        add("range", `${typeof args.offset === "number" ? args.offset : 1}…${args.limit ?? "end"}`);
+      }
+      add("around", args.around);
+      if (args.regex) add("regex", args.regex);
+      break;
+    case "write":
+      add("path", args.path);
+      add("content", args.content);
+      break;
+    case "edit":
+      add("path", args.path);
+      if (args.replaceAll) add("replaceAll", true);
+      if (Array.isArray(args.edits)) add("hunks", args.edits.length);
+      else {
+        add("oldString", args.oldString);
+        add("newString", args.newString);
+      }
+      break;
+    case "map":
+      add("action", args.action ?? "overview");
+      add("pattern", args.pattern);
+      add("path", args.path);
+      add("detail", args.detail);
+      break;
+    case "search":
+      add("pattern", args.pattern);
+      add("mode", args.mode);
+      add("path", args.path);
+      if (args.regex) add("regex", args.regex);
+      break;
+    case "command":
+      add("action", args.action ?? "run");
+      add("name", args.name);
+      add("args", args.args);
+      break;
+    case "context":
+      add("action", args.action);
+      add("text", args.text);
+      add("kind", args.kind);
+      add("id", args.id ?? args.target);
+      break;
+    case "ask":
+      add("question", args.question);
+      add("options", args.options);
+      add("why", args.why);
+      break;
+    case "artifact":
+      add("action", args.action);
+      add("name", args.name);
+      add("kind", args.kind);
+      break;
+    case "skill":
+      add("action", args.action);
+      add("name", args.name);
+      break;
+    case "pr":
+      add("action", args.action);
+      if (typeof args.number === "number") add("number", `#${args.number}`);
+      add("title", args.title);
+      break;
+    default: {
+      // Compact pretty-print over every key, priority keys first so the
+      // useful ones lead (same order describeToolArgs prefers).
+      const priority = ["path", "name", "pattern", "query", "question", "command", "action", "target", "ref", "anchor", "file"];
+      const keys = Object.keys(args);
+      for (const key of [...keys.filter((k) => priority.includes(k)), ...keys.filter((k) => !priority.includes(k))]) {
+        add(key, args[key]);
+      }
+      break;
+    }
+  }
+  return lines;
+}
+
 /** One-line, ANSI-free description for the overview activity tail and CLI. */
 export function describeTimelineEvent(event: TimelineEventLike): string {
   const type = String(event.type ?? "event");
