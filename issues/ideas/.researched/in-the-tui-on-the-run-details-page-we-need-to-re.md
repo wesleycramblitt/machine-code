@@ -1,5 +1,6 @@
 id: a7ba3d
 branch: mc/in-the-tui-on-the-run-details-page-we-need-to-re-a7ba3d
+commit: 7f98ebcd41bfc686201d875d03d5db87d8942bd7
 acceptance: research:verify
 
 Auto-created from run.
