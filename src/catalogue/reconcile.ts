@@ -40,6 +40,34 @@ export interface ReconcileResult {
   added: string[];
   removed: string[];
   warnings: string[];
+  /** Per-provider listing freshness: last listing time, how the listing was
+   * served (live/static/unknown), and refreshes since. Saved to
+   * ~/.machine_code/availability.json by the caller. */
+  freshness: Map<string, ProviderFreshness>;
+}
+
+export interface ProviderFreshness {
+  /** Last time this provider's model listing was successfully fetched (ms since epoch). */
+  lastListingAt?: number;
+  /** "live" (fresh /models fetch), "static" (served from builtin rows), or "unknown" (never listed in this process). */
+  listingMode?: "live" | "static" | "unknown";
+  /** Refreshes since the last successful listing. */
+  refreshCount?: number;
+}
+
+/** Record/replace per-provider listing freshness. */
+function trackFreshness(freshness: Map<string, ProviderFreshness>, providerId: string, mode: "live" | "static" | "unknown", now: number): void {
+  const current = freshness.get(providerId);
+  if (mode === "live") {
+    freshness.set(providerId, { lastListingAt: now, listingMode: "live", refreshCount: 1 });
+    return;
+  }
+  const next: ProviderFreshness = {
+    ...(current ?? {}),
+    ...(mode === "unknown" ? { listingMode: "unknown", refreshCount: (current?.refreshCount ?? 0) + 1 } : {}),
+    ...(mode === "static" ? { listingMode: "static" } : {}),
+  };
+  freshness.set(providerId, next);
 }
 
 function readBenchmarkSnapshot(home: string): Map<string, Benchmarks> {
@@ -105,9 +133,13 @@ export async function reconcileCatalogue(
     return { changed: false, added, removed, warnings };
   }
 
-  const dynamicIds = new Set(
+  // Static/builtin rows are not exempt: when a provider can be listed live
+  // (dynamic discovery or live_listings) its rows are membership-checked like
+  // dynamic rows, so a renamed/retired id is pruned instead of failing
+  // every call until the next release. Unreachable providers keep their rows.
+  const listedIds = new Set(
     Object.entries(definitions)
-      .filter(([, def]) => def.discovery === "openai-compatible" || def.discovery === "ollama")
+      .filter(([, def]) => def.discovery === "openai-compatible" || def.discovery === "ollama" || def.liveListings)
       .map(([id]) => id)
       .filter((id) => active.has(id)),
   );
@@ -154,7 +186,29 @@ export async function reconcileCatalogue(
   /** provider -> live keys, or null when the listing cannot be trusted. */
   const trusted = new Map<string, Set<string> | null>();
 
-  for (const id of dynamicIds) {
+  const markLive = (id: string, live: Model<Api>[]) =>
+    trusted.set(id, new Set([...live].filter((m) => !isMetaModel(String(m.provider), m.id)).map((m) => `${id}/${m.id}`)));
+
+  for (const id of listedIds) {
+    const def = definitions.get(id);
+    if (!def) continue;
+    // Live listings (providers marked live_listings): membership is verified
+    // against a fresh /models fetch instead of pi-ai's static baseline, so
+    // retired models are pruned even though their static rows carry metadata.
+    if (def.liveListings && def.baseUrl && active.has(id)) {
+      const override = opts.liveListings?.get(id);
+      if (override !== undefined) {
+        trusted.set(id, override);
+        continue;
+      }
+      if (isFresh(id) !== true) {
+        // Stale listing: keep rows silently, as with dynamic discovery.
+        trusted.set(id, null);
+        continue;
+      }
+      markLive(id, liveByProvider.get(id) ?? []);
+      continue;
+    }
     if (isFresh(id) !== true) {
       // Stale or never-attempted listings (unconfigured key, offline host)
       // keep their rows silently; the run's own discovery warnings, if any,
@@ -162,35 +216,7 @@ export async function reconcileCatalogue(
       trusted.set(id, null);
       continue;
     }
-    const live = liveByProvider.get(id) ?? [];
-    trusted.set(id, new Set(live.filter((m) => !isMetaModel(String(m.provider), m.id)).map((m) => `${id}/${m.id}`)));
-  }
-  // Live listings (providers marked live_listings): membership is verified
-  // against a fresh /models fetch instead of pi-ai's static baseline, so
-  // retired models are pruned even though their static rows carry metadata.
-  // Unknown live ids are only reported — never built without metadata.
-  // Pass opts.liveListings in tests; production fetches (failures keep rows).
-  for (const [id, def] of Object.entries(definitions)) {
-    if (!def.liveListings || !def.baseUrl || !active.has(id)) continue;
-    const override = opts.liveListings?.get(id);
-    if (override !== undefined) {
-      trusted.set(id, override);
-      continue;
-    }
-    try {
-      const fetched = await fetchLiveListing({ baseUrl: def.baseUrl, envKeys: def.envKeys }, id);
-      if (!fetched.ok) {
-        if (fetched.reason === "failed") {
-          warnings.push(`live listing unavailable for ${id} (${fetched.error}); rows left alone`);
-        }
-        trusted.set(id, null);
-      } else {
-        trusted.set(id, new Set([...fetched.ids].filter((mid) => !isMetaModel(id, mid)).map((modelId) => `${id}/${modelId}`)));
-      }
-    } catch (error) {
-      warnings.push(`live listing failed for ${id} (${error instanceof Error ? error.message : String(error)}); rows left alone`);
-      trusted.set(id, null);
-    }
+    markLive(id, liveByProvider.get(id) ?? []);
   }
   if (orModels && active.has("openrouter")) {
     // A fetched public catalog is authoritative for removals.

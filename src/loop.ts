@@ -328,14 +328,26 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       triedModels.add(modelKey);
       return;
     }
-    const state = loadAvailability(input.home);
-    applyClassification(state, provider, modelKey, classified);
-    if (classified.permanent === true && input.catalogue.some((row) => row.key === modelKey)) {
-      const reason = `auto-vetoed: gone at runtime (${classified.message.slice(0, 140)})`;
-      if (addCurationVeto(input.home, modelKey, `${reason} (run ${input.recorder.current.id})`)) {
-        recorder.event("model_vetoed", { key: modelKey, reason });
+    // A permanent missing-model failure is recorded as a catalogue veto so
+    // the row stops being selected (see the catalogue veto path in
+    // applyClassification).
+    const persistVeto = (key: string, source: string): void => {
+      if (addCurationVeto(layout.curation, key, `${source} (run ${input.recorder.current.id})`)) {
+        recorder.event("model_vetoed", { key, reason: source });
       }
+    };
+  const state = loadAvailability(input.home);
+  const persisted = applyClassification(state, provider, modelKey, classified, persistVeto);
+  // A permanent missing-model failure is recorded as a catalogue veto so the
+  // row stops being selected (see the catalogue veto path in
+  // applyClassification). When the veto was not persisted, retry the catalogue
+  // path so a permanent failure is recorded once, not every cooldown cycle.
+  if (!persisted && classified.permanent === true && input.catalogue.some((row) => row.key === modelKey)) {
+    const reason = `auto-vetoed: gone at runtime (${classified.message.slice(0, 140)})`;
+    if (addCurationVeto(input.home, modelKey, `${reason} (run ${input.recorder.current.id})`)) {
+      recorder.event("model_vetoed", { key: modelKey, reason });
     }
+  }
     saveAvailability(input.home, state);
     Object.assign(availability, state);
   };
