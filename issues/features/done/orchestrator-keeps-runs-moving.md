@@ -1,9 +1,10 @@
+commit: a999b6f9954377b3e118a3fa775a01a972faaec6
 priority: high
-tags: orchestration, tui
 depends: orchestrator-settings-store-and-scheduler, orchestration-page
 files: src/orchestration/loop.ts, src/tui.ts, src/tui/runs.ts, src/tui/screens/runs-list.ts
-keywords: Orchestrating, setInterval, launch, run --item, purple badge
+tags: orchestration, tui
 acceptance: script:build
+keywords: Orchestrating, setInterval, launch, run --item, purple badge
 
 # Orchestrator keeps runs moving
 
