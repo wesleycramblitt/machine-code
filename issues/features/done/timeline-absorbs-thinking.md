@@ -1,9 +1,10 @@
+commit: b05de56ce7f44320b474b4b930ef315214c4c2a1
 priority: high
-tags: tui
 depends: orchestration-page, orchestrator-keeps-runs-moving
 files: src/tui/screens/run-detail/types.ts, src/tui/screens/run-detail/keys.ts, src/tui/screens/run-detail/run-detail.ts, src/tui/state.ts, src/tui.ts
-keywords: Run Details, Timeline, Thinking, full text in Thinking, full diffs in Thinking
+tags: tui
 acceptance: script:build
+keywords: Run Details, Timeline, Thinking, full text in Thinking, full diffs in Thinking
 
 # Run Details: fold the Thinking tab into Timeline and remove the tab
 
