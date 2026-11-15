@@ -16,6 +16,7 @@ import { DEFAULT_THEME, type ThemeConfig } from "../config.js";
 import type { CatalogueRow } from "../catalogue/types.js";
 import type { AvailabilityState } from "../availability.js";
 import type { RunEvent, RunSummary } from "../state/runs.js";
+import type { TimelineEventLike } from "./timeline.js";
 
 /* ------------------------------------------------------- terminal control */
 
@@ -52,7 +53,7 @@ export const START_BG = "\x1b[48;2;170;30;30m";
 export const UPDATE_BG = "\x1b[48;2;200;120;20m";
 /** Kind colors for the runs page, desaturated to sit with the muted green. */
 const KIND_RGB = {
-  purple: "139;124;170",
+  purple: "145;133;165", // muted lavender: bold WHITE on the band and badge-dark text both stay legible, without glowing
   yellow: "196;178;110",
   red: "190;110;110",
 } as const;
@@ -568,7 +569,10 @@ export function isEditToolEvent(event: RunEvent): boolean {
   return tool === "write" || tool === "edit";
 }
 
-export function editEventArgs(event: RunEvent): Record<string, unknown> {
+/** RunEvent (typed log record) or TimelineEventLike (grouped/rendered view). */
+export type TimelineEvent = RunEvent | TimelineEventLike;
+
+export function editEventArgs(event: TimelineEvent): Record<string, unknown> {
   const direct = (event as { args?: unknown }).args;
   if (direct !== undefined && direct !== null) return direct as Record<string, unknown>;
   const nested = (event as { call?: { args?: unknown } }).call?.args;
@@ -577,10 +581,10 @@ export function editEventArgs(event: RunEvent): Record<string, unknown> {
 
 /**
  * Human-readable edit rendering: path plus every hunk as -/+ diff lines.
- * Timeline keeps full JSON; Thinking and Overview use this instead.
+ * Timeline keeps full JSON; Overview uses this instead.
  * Capped so a giant write cannot flood the section.
  */
-export function editSummaryLines(event: RunEvent, width: number, maxLines = 30): string[] {
+export function editSummaryLines(event: TimelineEvent, width: number, maxLines = 30): string[] {
   const tool = String((event as { tool?: unknown }).tool ?? "edit");
   const args = editEventArgs(event);
   const path = typeof args.path === "string" ? args.path : "(unknown path)";

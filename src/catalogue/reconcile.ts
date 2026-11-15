@@ -26,7 +26,7 @@ import {
   loadCuration,
   type RowBuildContext,
 } from "./refresh.js";
-import { loadModelOverrides } from "./overlay.js";
+import { loadModelOverrides, revertSourcelessToolCall } from "./overlay.js";
 import { BENCHMARKS, type Benchmarks } from "./benchmarks.js";
 import { buildCanonicalIndex, normalizeModelSlug } from "./canonical.js";
 import { fetchOpenRouterModels, type OpenRouterModelMeta } from "./openrouter.js";
@@ -224,6 +224,9 @@ export async function reconcileCatalogue(
   }
 
   const keep: CatalogueRow[] = [];
+  // Curation sources for the fossil check below (kept rows can carry a
+  // tool_call stamp whose override file was deleted; re-derive those).
+  const { curation: keepCuration, modelOverrides: keepOverrides } = ctx;
   for (const row of doc.models) {
     const scope = trusted.get(row.providerID);
     if (scope === undefined) {
@@ -236,6 +239,13 @@ export async function reconcileCatalogue(
       continue;
     }
     if (scope.has(row.key)) {
+      const asserted =
+        keepCuration.models.get(row.key)?.toolCall !== undefined ||
+        keepOverrides.get(row.key)?.toolCall !== undefined;
+      // No daemon capabilities here (ids only), so a sourceless stamp
+      // reverts to the generated default; the next refresh with a live
+      // daemon listing sets the true value.
+      revertSourcelessToolCall(row, asserted, true);
       keep.push(row);
       continue;
     }

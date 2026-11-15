@@ -10,15 +10,14 @@ import type { RunEvent, RunSummary } from "../../../state/runs.js";
 import type { ChangeSummary } from "../../../report/run.js";
 import type { UiTheme } from "../../format.js";
 
-export type RunSection = "overview" | "timeline" | "processes" | "thinking" | "changes" | "related" | "context";
+export type RunSection = "overview" | "timeline" | "processes" | "changes" | "related" | "context";
 
-export const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "thinking", "changes", "related", "context"];
+export const RUN_SECTIONS: RunSection[] = ["overview", "timeline", "processes", "changes", "related", "context"];
 
 export const RUN_SECTION_LABEL: Record<RunSection, string> = {
   overview: "Overview",
   timeline: "Timeline",
   processes: "Processes",
-  thinking: "Thinking",
   changes: "Changes",
   related: "Related",
   context: "Context",
@@ -50,8 +49,6 @@ export interface RunDetailProps {
   eventCursor: number;
   timelineFollow: boolean;
   timelineVerbose: boolean;
-  thinkingScroll: number;
-  thinkingFollow: boolean;
   childSel: number;
   /** Selected changed-file row in the changes section (index into ChangeSummary.files). */
   changeSel: number;
@@ -74,7 +71,6 @@ export interface RunDetailFrame {
   processSel: number;
   eventSel: number;
   eventCursor: number;
-  thinkingScroll: number;
   childSel: number;
   changeSel: number;
   changeOpen: number | null;

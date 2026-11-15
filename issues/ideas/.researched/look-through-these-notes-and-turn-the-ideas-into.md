@@ -1,0 +1,8 @@
+id: e890b8
+branch: mc/look-through-these-notes-and-turn-the-ideas-into-e890b8
+commit: 4529e7ac12af846048e3cffa3ff82ce4e936805f
+acceptance: research:verify
+
+Auto-created from run.
+
+Look through these notes and turn the ideas into issues, do a light amount of research for each and plan accordingly. For style tasks, try to think of good ui/ux principles and color harmony. Run functionalityIgnore depends on for issues that don't exist. Currently it blocks on bogus issues that were deleted.Runs pagecolor encoding and sorting on priority color encoding on blocked issues (probably have "Blocked" in red, and then gray the issue out)more spacing for dependent issues, hard to see gapshow runs on dependencies filterRun DetailsTimelineEach model call should be labeled and encoded Call x. It should be clear where it begins and ends.The purple background is a little too loud, maybe use a muted color with better bolor haromny?Orchestration Models aren't showing up in orchestration page or changing with minFit. I wanted to confirm that the order in which runs kick off is: filter by available issues => then sort by: bug, feature, idea => secondary sort by highest priorityAlso, when orchestration starts, if there is already take the current number of active runs into consideration for the repo. It should do this already, but we should make sure.Ensure research and engineer agents have a way to access past run infomration. We'll be doing analysis of past runs. I lean on having a dedicated tool fro reading run data instead of giving it wildcard style access to runs.After some time, we should do full review of 50 -100 runs for continuous improvement. This hsould be a planned feature

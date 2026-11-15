@@ -1,29 +1,29 @@
 /**
  * machine_code — run detail screen.
  *
- * Pure render of one run across its sections (overview, timeline, thinking,
- * changes, processes, related, context). Derived data (pending question,
+ * Pure render of one run across its sections (overview, timeline, changes,
+ * processes, related, context). Derived data (pending question,
  * related runs, thinking chunks) is computed inside from the detail; the
  * caller supplies scroll/cursor state plus cached changes and receives
  * updated offsets back.
  */
 import {
-  B, BL, C, D, G, GR, M, R, RED, W, Y, SUBTAB_BG, ZEBRA_BG,
+  B, BL, C, D, G, GR, M, PANEL_BG, PURPLE_BG, R, RED, W, WHITE, Y, SUBTAB_BG, ZEBRA_BG,
   ago, agentTone, background, command, contextTone, editSummaryLines, fit,
-  fmtMoney, fmtRunTokens, fmtTokens, icon, isEditToolEvent, joinCommands, recentEditEvents,
-  progress, selected, statusColor, stripAnsi, trunc, visible, wrapText, wrapTokenList,
+  fmtMoney, fmtRunTokens, fmtTokens, icon, joinCommands, printable,
+  recentEditEvents, progress, selected, statusColor, stripAnsi, trunc, visible,
+  wrapText, wrapTokenList,
 } from "../../format.js";
 import {
-  describeTimelineEvent, describeToolArgs, isTimelineEvent, waitingForRun,
+  describeTimelineEvent, describeToolArgs, describeToolBody, isTimelineEvent,
+  waitingForRun, type TimelineEventLike,
 } from "../../timeline.js";
 import { scrollLines, selectableLines } from "../../scroll.js";
 import { contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ThinkingChunk } from "../../../report/run.js";
-import { readStateView, summarizeRun } from "../../../state/outcome.js";
 import { latestUnansweredQuestion, readInbox } from "../../../state/question.js";
 import { reconcileProcessRecords } from "../../../processes/reconcile.js";
 import { readLogTail } from "../../../processes/logs.js";
 import { CAPABILITY_AXES } from "../../../config.js";
-import type { RunEvent } from "../../../state/runs.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { clipLines } from "../types.js";
@@ -63,6 +63,478 @@ function fullPromptLines(runDir: string, inputFile: string, cols: number): strin
   return out;
 }
 
+/** One timeline call block: a model call or tool call grouped with its parts. */
+interface TimelineGroup {
+  kind: "model" | "tool" | "plain";
+  /** First event index — also the block id used for expansion state. */
+  first: number;
+  /** Member event indices in event order; the block renders as one unit. */
+  members: number[];
+  /** Attempt counter when the block starts (thinkingByCall key prefix). */
+  attempt: number;
+  /** Call ordinal for display (1-based model-call number). */
+  ordinal: number;
+}
+
+/** The tool call id, stringified; empty when the event carries none. */
+const toolCallIdOf = (event: TimelineEventLike): string => {
+  const id = (event as { toolCallId?: unknown }).toolCallId;
+  return typeof id === "string" ? id : typeof id === "number" ? String(id) : "";
+};
+
+/**
+ * Animated dots for live markers ("streaming…", "running…", "live"): the
+ * 1s redraw tick advances the pattern, the same cadence as waitingDots.
+ */
+const streamDots = (): string => ".".repeat(1 + (Math.floor(Date.now() / 500) % 3));
+
+/**
+ * Group events into call blocks before rendering: a model call is its
+ * select/request plus the matching model_call_end; a tool call is its start
+ * plus the tool_call completion sharing its toolCallId. Pairing follows the
+ * open-marker pattern of waitingForRun: a completion joins the most recent
+ * unmatched start (same toolCallId when both carry one, nearest unmatched
+ * start otherwise — resumed logs can drop ids). An unmatched completion
+ * becomes a completed block of its own; an unmatched start stays open
+ * (running). Everything else is a single-event block, and verbose mode makes
+ * every event single so the raw per-event rows survive there.
+ */
+function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): TimelineGroup[] {
+  const groups: TimelineGroup[] = [];
+  let attempt = 0;
+  let ordinal = 0;
+  /** Open model blocks keyed `${attempt}:${call}`, closed by their call end. */
+  const openModels = new Map<string, number>();
+  /** Unmatched tool starts, in event order; completions consume one. */
+  const openTools: Array<{ group: number; id: string; tool: string }> = [];
+  for (let i = 0; i < ev.length; i++) {
+    const event = ev[i]!;
+    if (event.type === "model_select" && event.call === 0) attempt += 1;
+    const type = String(event.type);
+    // Streaming deltas render coalesced inside their call block.
+    if (type === "model_delta" || !isTimelineEvent(event, verbose)) continue;
+    const call = typeof event.call === "number" ? event.call : undefined;
+    if (type === "model_select" || type === "model_request") {
+      const key = `${attempt}:${call ?? "?"}`;
+      const open = openModels.get(key);
+      if (open !== undefined) {
+        groups[open]!.members.push(i);
+        continue;
+      }
+      openModels.set(key, groups.length);
+      ordinal += 1;
+      groups.push({ kind: "model", first: i, members: [i], attempt, ordinal });
+    } else if (type === "model_call_end") {
+      const key = `${attempt}:${call ?? "?"}`;
+      const open = openModels.get(key);
+      if (open !== undefined) {
+        groups[open]!.members.push(i);
+        openModels.delete(key);
+      } else {
+        // Resumed logs: the completion arrives without its request.
+        ordinal += 1;
+        groups.push({ kind: "model", first: i, members: [i], attempt, ordinal });
+      }
+    } else if (type === "tool_call_start") {
+      openTools.push({
+        group: groups.length,
+        id: toolCallIdOf(event),
+        tool: String(event.tool ?? ""),
+      });
+      groups.push({ kind: "tool", first: i, members: [i], attempt, ordinal });
+    } else if (type === "tool_call") {
+      const id = toolCallIdOf(event);
+      const tool = String(event.tool ?? "");
+      let pick = -1;
+      if (id) {
+        for (let k = openTools.length - 1; k >= 0; k--) {
+          if (openTools[k]!.id === id) { pick = k; break; }
+        }
+      }
+      if (pick < 0) {
+        // No id to match (or the pair never met): nearest unmatched start,
+        // preferring the same tool.
+        for (let k = openTools.length - 1; k >= 0; k--) {
+          if (openTools[k]!.tool === tool) { pick = k; break; }
+        }
+        if (pick < 0 && openTools.length > 0) pick = openTools.length - 1;
+      }
+      if (pick >= 0) {
+        const match = openTools.splice(pick, 1)[0]!;
+        groups[match.group]!.members.push(i);
+      } else {
+        groups.push({ kind: "tool", first: i, members: [i], attempt, ordinal });
+      }
+    } else {
+      groups.push({ kind: "plain", first: i, members: [i], attempt, ordinal });
+    }
+  }
+  return groups;
+}
+
+/**
+ * One model call as a single block: exactly one timestamped header —
+ * provider/model, stop reason, tokens and cost from model_call_end, or the
+ * request's provider/model plus "streaming…" while the call is live — on a
+ * full-width purple band behind a two-character ◉/◌ gutter, so a scan of
+ * the timeline separates model calls from tool work without reading a
+ * word. The request body and the response (output/thinking) indent under
+ * the header; → marks request lines and ← marks response lines. The header
+ * leads with the call ordinal ("Call 1", "Call 2", … — group.ordinal, so the
+ * label holds across expansion/collapse), and an ended block closes with a
+ * dim "· end Call N" line, so where one call stops and the next starts is
+ * explicit even when both bands are purple. Expansion keeps the lazy
+ * full-prompt-file behavior.
+ */
+function renderModelCallBlock(
+  group: TimelineGroup,
+  ev: TimelineEventLike[],
+  opts: {
+    eventLines: string[];
+    cols: number;
+    runDir: string;
+    expandedEvent: boolean;
+    compact: boolean;
+    thinkingByCall: Map<string, ThinkingChunk[]>;
+  },
+): void {
+  const { eventLines, cols, runDir, expandedEvent, compact, thinkingByCall } = opts;
+  const members = group.members.map((index) => ev[index]!);
+  const select = members.find((event) => String(event.type) === "model_select");
+  const request = members.find((event) => String(event.type) === "model_request");
+  const end = members.find((event) => String(event.type) === "model_call_end");
+  const time = String(members[0]!.t ?? "").slice(11, 19);
+  if (end) {
+    const usage = (end.usage ?? {}) as { totalTokens?: number; input?: number; output?: number };
+    // Header band: purple behind white names makes model calls readable in
+    // a scan; tokens, cost, and stop reason keep their value tones.
+    eventLines.push(
+      background(
+        fit(
+          `${WHITE}◉ ${B}${WHITE}Call ${group.ordinal}${R} ${GR}${time}${R} ${B}${WHITE}${String(end.provider)}${R}/${B}${WHITE}${String(end.model)}${R} ${statusColor(String(end.stopReason))}${String(end.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}${D}tok${R} ${Y}${Number(end.cost ?? 0).toFixed(5)}${R}`,
+          cols,
+        ),
+        PURPLE_BG,
+      ),
+    );
+  } else if (select?.error) {
+    eventLines.push(
+      background(fit(`${WHITE}◉ ${B}${WHITE}Call ${group.ordinal}${R} ${GR}${time}${R} ${RED}select error ${String(select.error)}${R}`, cols), PURPLE_BG),
+    );
+  } else {
+    // Live call: name what the model is about to answer.
+    const provider = String(request?.provider ?? "");
+    const model = String(request?.model ?? "");
+    const name = provider || model ? `${provider}${provider && model ? "/" : ""}${model}` : "model";
+    eventLines.push(
+      background(fit(`${WHITE}◌ ${B}${WHITE}Call ${group.ordinal}${R} ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
+    );
+  }
+  // Collapse policy: a compact (non-tail) past block shows its result
+  // summary only — the header plus a one-line ok/ERR line — even when the
+  // user did not expand it. The newest block stays open to unfold live.
+  if (compact && !expandedEvent && end) {
+    const usage = (end.usage ?? {}) as { input?: number; output?: number };
+    const callChunks = typeof end.call === "number"
+      ? (thinkingByCall.get(`${group.attempt}:${end.call}`) ?? [])
+      : [];
+    const textChunk = callChunks
+      .filter((chunk) => chunk.kind === "text")
+      .map((chunk) => chunk.text)
+      .join("");
+    const output = (
+      typeof end.text === "string" && end.text.trim().length > 0
+        ? end.text
+        : textChunk
+    ).trim();
+    const first = output.split("\n").find((line) => line.trim().length > 0) ?? "";
+    eventLines.push(
+      `    ${end.isError ? RED : G}${end.isError ? "ERR" : "ok"}${R}` +
+        (output ? ` ${D}${trunc(first, Math.max(20, cols - 10))}${R}` : "") +
+        ` ${D}${usage.input ?? 0}→${usage.output ?? 0}${R}` +
+        ` ${D}(space to expand)${R}`,
+    );
+    eventLines.push(`    ${D}· end Call ${group.ordinal}${R}`);
+    return;
+  }
+  // Selection detail stays available under the block (expanded only).
+  if (expandedEvent && select && Array.isArray(select.candidates)) {
+    const estimate = (select.estimate ?? {}) as { inputTokens?: number; outputTokens?: number };
+    eventLines.push(`    ${BL}select${R} ${C}${String(select.key)}${R} ${D}${select.estimate ? `${estimate.inputTokens ?? 0}+${estimate.outputTokens ?? 0} tok` : ""}${R}`);
+    for (const candidate of select.candidates.slice(0, 4)) {
+      const chosen = candidate.key === select.key ? `${C}✓${R}` : " ";
+      eventLines.push(`    ${chosen} ${candidate.key} ${D}fit ${Number(candidate.fit ?? 0).toFixed(2)}${R}`);
+    }
+  }
+  if (request) {
+    const messages = Number(request.messages ?? 0);
+    const chars = Number(request.chars ?? 0);
+    const inputFile = typeof request.inputFile === "string" ? request.inputFile : "";
+    eventLines.push(`    ${BL}→${R} ${D}request${R} ${D}${messages} msg · ${fmtTokens(chars)} chars${R}${inputFile ? ` ${D}full prompt in file${R}` : ""}`);
+    // The event preview is head-only (log cap). When a full prompt file was
+    // recorded, expanding loads the exact text the model saw; otherwise fall
+    // back to the capped preview.
+    const full = expandedEvent && inputFile ? fullPromptLines(runDir, inputFile, cols) : null;
+    if (full !== null) {
+      eventLines.push(`    ${D}… full prompt ${chars.toLocaleString()} chars · ${full.length.toLocaleString()} lines · j/k scrolls${R}`);
+      for (const line of full) eventLines.push(`    ${D}${line}${R}`);
+    } else {
+      if (expandedEvent && inputFile) {
+        eventLines.push(`    ${Y}full prompt file missing (${inputFile}); showing capped preview${R}`);
+      }
+      const input = typeof request.input === "string" ? request.input : "";
+      if (input) {
+        const inputLines = input.split("\n");
+        while (inputLines.length > 0 && inputLines[inputLines.length - 1]!.trim() === "") inputLines.pop();
+        // The head is the repeating system prompt; the tail is the unique
+        // send for this call, so the preview shows the tail.
+        const shown = expandedEvent ? inputLines : inputLines.slice(-4);
+        if (!expandedEvent && inputLines.length > 4) {
+          eventLines.push(`    ${D}… ${inputLines.length - 4} head lines hidden (space to expand${inputFile ? "; full prompt in file" : ""})${R}`);
+        }
+        for (const line of shown) {
+          for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+        }
+      }
+    }
+    // Live streaming view: while this call has no model_call_end yet, its
+    // coalesced thinking/response text renders here as it arrives.
+    const liveChunks = typeof request.call === "number"
+      ? (thinkingByCall.get(`${group.attempt}:${request.call}`) ?? [])
+      : [];
+    for (const chunk of liveChunks) {
+      if (chunk.complete) continue;
+      const text = chunk.text.trim();
+      if (!text) continue;
+      const isThinking = chunk.kind === "thinking";
+      eventLines.push(`    ${M}${isThinking ? "thinking" : "output"}${R}${Y} live${streamDots()}${R}`);
+      for (const wrapped of wrapText(text, Math.max(30, cols - 6))) {
+        eventLines.push(`    ${isThinking ? D : W}${wrapped}${R}`);
+      }
+    }
+  }
+  if (!end) return;
+  // The response: final output plus thinking, keyed to this call.
+  const callChunks = typeof end.call === "number"
+    ? (thinkingByCall.get(`${group.attempt}:${end.call}`) ?? [])
+    : [];
+  const textChunk = callChunks
+    .filter((chunk) => chunk.kind === "text")
+    .map((chunk) => chunk.text)
+    .join("");
+  const output = (
+    typeof end.text === "string" && end.text.trim().length > 0
+      ? end.text
+      : textChunk
+  ).trim();
+  if (output) {
+    const outputLines = output.split("\n");
+    const shown = expandedEvent ? outputLines : outputLines.slice(0, 4);
+    const more =
+      !expandedEvent && outputLines.length > shown.length
+        ? ` ${D}(${outputLines.length - shown.length} more lines; space to expand)${R}`
+        : "";
+    eventLines.push(`    ${M}←${R} ${M}output${R}${more}`);
+    for (const line of shown) {
+      for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${W}${wrapped}${R}`);
+    }
+  }
+  const reasoning = callChunks
+    .filter((chunk) => chunk.kind === "thinking")
+    .map((chunk) => chunk.text)
+    .join("\n")
+    .trim();
+  if (reasoning) {
+    const reasoningLines = reasoning.split("\n");
+    const shown = expandedEvent ? reasoningLines : reasoningLines.slice(0, 4);
+    const more =
+      !expandedEvent && reasoningLines.length > shown.length
+        ? ` ${D}(${reasoningLines.length - shown.length} more lines; space to expand)${R}`
+        : "";
+    eventLines.push(`    ${M}←${R} ${M}thinking${R}${more}`);
+    for (const line of shown) {
+      for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+    }
+  }
+  const usage = (end.usage ?? {}) as { input?: number; output?: number };
+  if (expandedEvent) {
+    eventLines.push(`    ${D}input ${usage.input ?? 0}  output ${usage.output ?? 0}${R}`);
+  }
+  // Close marker: makes the block boundary explicit even when the next
+  // block opens with the same purple band.
+  eventLines.push(`    ${D}· end Call ${group.ordinal}${R}`);
+}
+
+/**
+ * Pull the human text out of a tool result: plain string, text-content
+ * blocks, a `{ text }` object, or a JSON fallback for exotic shapes. Tool
+ * results arrive as { content: [{ type: "text", text }] } from the loop.
+ */
+function resultText(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (Array.isArray(result)) {
+    const parts = result
+      .map((item) =>
+        item !== null && typeof item === "object" && typeof (item as { text?: unknown }).text === "string"
+          ? (item as { text: string }).text
+          : undefined,
+      )
+      .filter((part): part is string => part !== undefined);
+    if (parts.length > 0) return parts.join("\n");
+  }
+  if (result !== null && typeof result === "object" && typeof (result as { text?: unknown }).text === "string") {
+    return (result as { text: string }).text;
+  }
+  return JSON.stringify(result ?? "");
+}
+
+/** First lines of a body, with a note when lines were cut. */
+function headLines(lines: string[], cap: number): string[] {
+  if (lines.length <= cap) return lines;
+  return [...lines.slice(0, cap), `… ${lines.length - cap} more lines`];
+}
+
+/** Last lines of a body, with a note when lines were cut (command output). */
+function tailLines(lines: string[], cap: number): string[] {
+  if (lines.length <= cap) return lines;
+  return [`… ${lines.length - cap} earlier lines`, ...lines.slice(lines.length - cap)];
+}
+
+/**
+ * Expanded result body, shaped per tool: the text body for read/inspect/
+ * search/map/context/skill/artifact, a status line plus the output tail for
+ * commands, what changed (path, wrote-N note, diff lines) for write/edit,
+ * and the first lines for unknown tools. Errors surface the error message.
+ * Callers sanitize (printable/stripAnsi) and wrap to the terminal width.
+ */
+function toolResultLines(
+  tool: string,
+  result: unknown,
+  isError: boolean,
+  args: Record<string, unknown> | undefined,
+  completion: TimelineEventLike,
+): string[] {
+  const text = printable(stripAnsi(resultText(result))).trim();
+  const lines = text ? text.split("\n").filter((line) => line.trim().length > 0) : [];
+  if (isError) return lines.length > 0 ? lines : ["(error with no message)"];
+  if (lines.length === 0) return ["(empty result)"];
+  switch (tool) {
+    case "command":
+      return ["status: ok", ...tailLines(lines, 20)];
+    case "read":
+    case "inspect":
+    case "search":
+    case "map":
+    case "context":
+    case "skill":
+    case "artifact":
+      return headLines(lines, 24);
+    case "write":
+    case "edit": {
+      const out: string[] = [];
+      if (args && typeof args.path === "string") out.push(`changed: ${args.path}`);
+      const content = args && typeof args.content === "string" ? args.content : undefined;
+      if (content) {
+        out.push(`wrote ${content.split("\n").length} lines · ${fmtTokens(Buffer.byteLength(content, "utf8"))} chars`);
+      }
+      const diff = editSummaryLines(completion, 160, 20).slice(1);
+      return [...out, ...diff.slice(0, Math.max(0, 24 - out.length))];
+    }
+    default:
+      return headLines(lines, 12);
+  }
+}
+
+/**
+ * One tool call as a single block: exactly one timestamped header naming the
+ * tool and its outcome (ok/ERR, duration; "running…" while the completion is
+ * missing) on a full-width charcoal band behind a two-character gutter icon
+ * (✎ edits, ⚡ everything else), so tool work reads apart from model calls.
+ * The request as a "→ request" line (human args; the full key: value body
+ * when expanded), and the response as a "← response" body shaped per tool —
+ * the edit diff, the result text for read/search and friends, the error
+ * message in red on failure.
+ */
+function renderToolCallBlock(
+  start: TimelineEventLike,
+  completion: TimelineEventLike | undefined,
+  opts: { eventLines: string[]; cols: number; expandedEvent: boolean; compact: boolean },
+): void {
+  const { eventLines, cols, expandedEvent, compact } = opts;
+  const time = String(start.t ?? "").slice(11, 19);
+  const tool = String(start.tool ?? "");
+  const isEdit = tool === "write" || tool === "edit";
+  const args = (start.args ?? (start as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
+  const human = describeToolArgs(tool, args ?? undefined);
+  const running = completion === undefined;
+  // Header band: charcoal keeps tool work readable apart from purple model
+  // calls; name, outcome, and duration keep their tones.
+  eventLines.push(
+    background(
+      fit(
+        `${!running && isEdit ? `${G}✎ ` : `${Y}⚡ `}${GR}${time}${R} ${B}${W}${tool}${R}` +
+          (running
+            ? ` ${Y}running…${streamDots()}${R}`
+            : ` ${completion!.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof completion!.durationMs === "number" ? ` ${D}${completion!.durationMs}ms${R}` : ""}`),
+        cols,
+      ),
+      PANEL_BG,
+    ),
+  );
+  // Collapse policy: a compact (non-tail) past block shows its result
+  // summary only — the header plus a one-line ok/ERR line. The request line
+  // and diff are elided so a long run scans as one header per call.
+  if (compact && !expandedEvent && completion && !running) {
+    const isError = !!completion.isError;
+    const all = printable(stripAnsi(resultText(completion.result))).split("\n").filter((line) => line.trim().length > 0);
+    const first = all[0] ?? "";
+    eventLines.push(
+      `    ${isError ? RED : G}${isError ? "ERR" : "ok"}${R}` +
+        (first ? ` ${D}${trunc(first, Math.max(20, cols - 10))}${R}` : "") +
+        ` ${D}(space to expand)${R}`,
+    );
+    return;
+  }
+  // The request: one-line human args by default; key: value body expanded.
+  eventLines.push(`    ${Y}→${R} ${D}request${R}${human ? ` ${W}${trunc(human, Math.max(12, cols - 8))}${R}` : ""}`);
+  if (expandedEvent && args) {
+    for (const raw of describeToolBody(tool, args)) {
+      for (const wrapped of wrapText(printable(stripAnsi(raw)), Math.max(20, cols - 8))) {
+        eventLines.push(`      ${D}${wrapped}${R}`);
+      }
+    }
+  }
+  if (running) return;
+  const result = completion!.result;
+  const showDiff = isEdit && !expandedEvent;
+  const showResult = result !== undefined && (expandedEvent || !isEdit);
+  if (!showDiff && !showResult) return;
+  eventLines.push(`    ${completion!.isError ? RED : G}←${R} ${D}response${R}`);
+  if (showDiff) {
+    // The diff is the meat of an edit; the raw result ("ok") is not.
+    for (const line of editSummaryLines(completion!, cols - 6, 5).slice(1)) {
+      const tone = line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
+      eventLines.push(`    ${tone}${trunc(line, Math.max(16, cols - 8))}${R}`);
+    }
+  }
+  if (showResult) {
+    const isError = !!completion!.isError;
+    const all = printable(stripAnsi(resultText(result))).split("\n").filter((line) => line.trim().length > 0);
+    if (expandedEvent) {
+      // Full body shaped per tool; errors read as errors in RED.
+      for (const raw of toolResultLines(tool, result, isError, args, completion!)) {
+        const tone = isError ? RED : isEdit && raw.startsWith("+") ? G : isEdit && raw.startsWith("-") ? RED : D;
+        for (const wrapped of wrapText(printable(stripAnsi(raw)), Math.max(20, cols - 8))) {
+          eventLines.push(`      ${tone}${wrapped}${R}`);
+        }
+      }
+    } else {
+      for (const line of all.slice(0, 3)) eventLines.push(`      ${trunc(line, Math.max(20, cols - 8))}`);
+      if (all.length > 3) eventLines.push(`      ${D}… (${all.length - 3} more; space to expand)${R}`);
+    }
+  }
+}
+
 export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   const { cols, short, bodyH, theme } = props;
   const detail = props.detail;
@@ -74,8 +546,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   let eventCursor = props.eventCursor;
   const timelineFollow = props.timelineFollow;
   const timelineVerbose = props.timelineVerbose;
-  let thinkingScroll = props.thinkingScroll;
-  const thinkingFollow = props.thinkingFollow;
   let childSel = props.childSel;
   let changeSel = props.changeSel;
   let changeOpen = props.changeOpen;
@@ -100,14 +570,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     // rendering agree.
     const relatedList = relatedRuns(props.scopedRuns, s);
     const thinking = thinkingChunks(ev);
-    const outcomeText =
-      s.summary ??
-      summarizeRun({
-        summary: s,
-        events: ev,
-        state: readStateView(detail.dir),
-        finalText: s.finalText,
-      }).text;
     const recentActivity = ev.filter((event) => isTimelineEvent(event, false)).slice(-8);
     // What the run is currently waiting on. The 1s redraw tick animates
     // the dots, so a live wait visibly advances instead of looking frozen.
@@ -181,7 +643,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               hint("X", "kill all", RED),
             ]
           : section === "overview" || section === "context"
-            ? [hint("j/k", "scroll"), hint("^D/^U", "page", Y)]
+            ? [hint("j/k", "scroll")]
             : section === "changes"
               ? [
                   hint("j/k", "select"),
@@ -222,35 +684,24 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     lines.push("", ...sectionBar, "");
     if (section === "overview") {
       // Lean overview: header already carries status/agent/cost. Show the
-      // outcome plus one snippet per detail section (thinking, edits,
-      // activity, changes) instead of duplicating their full bodies.
+      // outcome plus one snippet per detail section (thinking, activity,
+      // changes) instead of duplicating their full bodies.
       if (s.error || s.status === "failed" || s.status === "blocked") {
-        lines.push(` ${B}${statusColor(s.status)}Status${R}`);
-        const statusText = s.error ?? s.status.toUpperCase();
+        lines.push(` ${B}${W}Status${R}`);
+        const statusLabel = `[${s.status.toUpperCase()}]`;
+        const statusText = s.error ? `${statusLabel} ${s.error}` : statusLabel;
         const statusTone = RED;
         for (const line of wrapText(statusText, cols - 4).slice(0, short ? 3 : 6)) {
           lines.push(`  ${statusTone}${line}${R}`);
         }
       }
       if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
-      lines.push(` ${B}${G}Summary${R}`);
-      for (const rawLine of outcomeText.split("\n")) {
-        for (const line of wrapText(rawLine, cols - 4)) lines.push(`  ${W}${line}${R}`);
-      }
       lines.push(` ${B}${BL}Request${R}`);
-      for (const line of wrapText(s.request, cols - 4).slice(0, 3)) lines.push(`  ${W}${line}${R}`);
+      for (const line of wrapText(s.request, cols - 4).slice(0, 10)) lines.push(`  ${D}${line}${R}`);
       const lastThinking = thinking.length > 0 ? thinking[thinking.length - 1] : undefined;
       if (lastThinking) {
-        lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Thinking${R}`);
-        for (const line of wrapText(lastThinking.text, cols - 4).slice(-3)) lines.push(`  ${D}${line}${R}`);
-      }
-      const snippetEdits = recentEditEvents(ev, 3);
-      if (snippetEdits.length > 0) {
-        lines.push("", ` ${B}${G}Edit snippet${R} ${D}latest ${snippetEdits.length} · full diffs in Thinking${R}`);
-        for (const editEvent of snippetEdits) {
-          const summary = editSummaryLines(editEvent, cols - 6);
-          lines.push(`  ${G}✎${R} ${W}${trunc(summary[0] ?? "edit", Math.max(16, cols - 8))}${R}`);
-        }
+        lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Timeline${R}`);
+        for (const line of wrapText(lastThinking.text, cols - 4).slice(-10)) lines.push(`  ${D}${line}${R}`);
       }
       if (recentActivity.length) {
         const activityLive =
@@ -260,14 +711,23 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               ? ` ${G}live${R}`
               : "";
         lines.push("", ` ${B}${C}Activity snippet${R}${activityLive} ${D}full log in Timeline${R}`);
-        for (const event of recentActivity.slice(-4)) {
+        for (const event of recentActivity.slice(-10)) {
           const time = String(event.t ?? "").slice(11, 19);
-          lines.push(`  ${D}${time}${R} ${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}`);
+          lines.push(`  ${D}${time}${R} ${D}${trunc(describeTimelineEvent(event), Math.max(12, cols - 12))}${R}`);
         }
       }
-      lines.push("", ` ${B}${G}Changes${R} ${touched.length ? `${G}${touched.length}${R} ${D}path(s)${R}` : `${D}none yet${R}`}` +
-        (relatedList.length ? `  ${D}related${R}  ${M}${relatedList.length}${R}` : "") +
-        `  ${D}parent${R}  ${s.parentRunId ? `${D}${s.parentRunId.slice(-8)}${R}` : `${D}none${R}`}`);
+      if (touched.length) {
+        lines.push("", ` ${B}${G}Changes${R}`);
+        for (const path of touched) lines.push(`  ${G}✎${R} ${W}${path}${R}`);
+      } else {
+        lines.push("", ` ${B}${G}Changes${R} ${D}none yet${R}`);
+      }
+      if (relatedList.length) {
+        lines.push(`  ${D}related${R}  ${M}${relatedList.length}${R}`);
+      }
+      if (s.parentRunId) {
+        lines.push(`  ${D}parent${R}  ${D}${s.parentRunId.slice(-8)}${R}`);
+      }
       if (context) {
         lines.push(`  ${D}context${R} ${C}${context.chars.toLocaleString()} chars / ${context.sources.length} sources${R}`);
       }
@@ -276,23 +736,59 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       body = clipLines(w.lines, bodyH);
     } else if (section === "timeline") {
       const eventLines: string[] = [];
-      const starts: number[] = [];
-      /** Visible events in render order, for zebra striping. */
-      const visibleOrder: number[] = [];
-      let timelineAttempt = 0;
-      for (let i = 0; i < ev.length; i++) {
-        starts[i] = eventLines.length;
-        const event = ev[i]!;
-        if (event.type === "model_select" && event.call === 0) timelineAttempt += 1;
-        if (!isTimelineEvent(event, timelineVerbose)) continue;
-        visibleOrder.push(i);
+      /**
+       * Rendered line span per call block, for cursor mapping and zebra:
+       * band is the header line (kept free of stripes), expanded marks
+       * bodies that read as one canvas. Blank separators join no span.
+       */
+      const spans: Array<{ start: number; end: number; rep: number; band: number; expanded: boolean }> = [];
+      // One block per call: a model call carries its select/request/end as a
+      // unit, a tool call its start/completion. Plain blocks fall through to
+      // the per-event renderer below; verbose mode makes every block plain,
+      // so "v" keeps the raw rows.
+      const groups = groupTimelineCalls(ev, timelineVerbose);
+      // The newest call block (last model or tool group) is the live tail:
+      // it renders its full body by default so output unfolds as it arrives.
+      // Collapse is derived at render time from the expanded set, never
+      // stored, so each older block auto-collapses once a new one starts.
+      let tailGroup = -1;
+      if (!timelineVerbose) {
+        for (let gi = groups.length - 1; gi >= 0; gi--) {
+          const k = groups[gi]!.kind;
+          if (k === "model" || k === "tool") { tailGroup = gi; break; }
+        }
+      }
+      const compact = !timelineVerbose;
+      for (let gi = 0; gi < groups.length; gi++) {
+        const group = groups[gi]!;
+        // Rhythm: exactly one blank line between blocks, none inside. The
+        // separator sits outside every span, so stripes and cursor mapping
+        // skip it.
+        if (gi > 0) eventLines.push("");
+        const start = eventLines.length;
+        const event = ev[group.first]!;
         const prefix = " ";
         const time = String(event.t ?? "").slice(11, 19);
-        // Selection is a single line, not a whole block. The cursor can rest
-        // on any rendered line (header or body); the cursor row gets color in
-        // the post-pass. Space toggles the containing event's expansion.
-        const expandedEvent = expanded.has(`${s.id}:${i}`);
+        // The cursor can rest on any rendered line (header or body); space
+        // toggles the containing block's expansion. Block ids reuse the
+        // block's first event index, so existing expanded sets keep working.
+        // For the tail the set is inverted: present means the user collapsed
+        // the live block, absent means it stays open.
+        const userExpanded = expanded.has(`${s.id}:${group.first}`);
+        const isTail = gi === tailGroup;
+        const expandedEvent = isTail ? !userExpanded : userExpanded;
         const type = String(event.type);
+        if (group.kind === "model") {
+          renderModelCallBlock(group, ev, { eventLines, cols, runDir: detail.dir, expandedEvent, compact, thinkingByCall });
+          spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
+          continue;
+        }
+        if (group.kind === "tool") {
+          const completion = group.members.length > 1 ? ev[group.members[1]!] : undefined;
+          renderToolCallBlock(event, completion, { eventLines, cols, expandedEvent, compact });
+          spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
+          continue;
+        }
         if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}`);
         else if (type === "model_select") {
           if (event.error) eventLines.push(`${prefix} ${GR}${time}${R} ${RED}select error ${String(event.error)}${R}`);
@@ -337,12 +833,28 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               }
             }
           }
+          // Live streaming view: while this call has no model_call_end yet,
+          // its coalesced thinking/response text renders here as it arrives —
+          // the old Thinking tab's live view, now inside the timeline.
+          const openCallChunks = typeof event.call === "number"
+            ? (thinkingByCall.get(`${group.attempt}:${event.call}`) ?? [])
+            : [];
+          for (const chunk of openCallChunks) {
+            if (chunk.complete) continue;
+            const text = chunk.text.trim();
+            if (!text) continue;
+            const isThinking = chunk.kind === "thinking";
+            eventLines.push(`    ${M}${isThinking ? "thinking" : "output"}${R}${Y} live${streamDots()}${R}`);
+            for (const wrapped of wrapText(text, Math.max(30, cols - 6))) {
+              eventLines.push(`    ${isThinking ? D : W}${wrapped}${R}`);
+            }
+          }
         } else if (type === "model_call_end") {
           const usage = (event.usage ?? {}) as { totalTokens?: number; input?: number; output?: number };
           eventLines.push(`${prefix} ${GR}${time}${R} ${M}◉${R} ${W}${String(event.provider)}${R}/${String(event.model)} ${statusColor(String(event.stopReason))}${String(event.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}tok ${Y}$${Number(event.cost ?? 0).toFixed(5)}${R}`);
           const callChunks =
             typeof event.call === "number"
-              ? (thinkingByCall.get(`${timelineAttempt}:${event.call}`) ?? [])
+              ? (thinkingByCall.get(`${group.attempt}:${event.call}`) ?? [])
               : [];
           const textChunk = callChunks
             .filter((chunk) => chunk.kind === "text")
@@ -386,8 +898,9 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             eventLines.push(`    ${D}input ${usage.input ?? 0}  output ${usage.output ?? 0}${R}`);
           }
         } else if (type === "model_delta") {
-          // Streaming deltas are coalesced by the Thinking section; showing
-          // each chunk here split the response into unreadable fragments.
+          // Streaming deltas render coalesced under the call's input row
+          // (live view); showing each raw chunk here splits the response
+          // into unreadable fragments.
         } else if (type === "tool_call_start") {
           const startArgs = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
           const human = describeToolArgs(String(event.tool ?? ""), startArgs ?? undefined);
@@ -471,27 +984,23 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         eventSel = Math.max(0, Math.min(eventSel, eventLines.length - 1));
         // Follow: pin the cursor to the newest rendered line.
         if (timelineFollow) eventSel = eventLines.length - 1;
-        // Which event contains the cursor line.
+        // Which block contains the cursor line: eventCursor maps back to the
+        // block's first event, so space/enter toggle the whole call block.
         eventCursor = -1;
-        for (let order = 0; order < visibleOrder.length; order++) {
-          const evIdx = visibleOrder[order]!;
-          const nextIdx = visibleOrder[order + 1];
-          const blockStart = starts[evIdx] ?? 0;
-          const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
-          if (eventSel >= blockStart && eventSel < blockEnd) {
-            eventCursor = evIdx;
+        for (const span of spans) {
+          if (eventSel >= span.start && eventSel < span.end) {
+            eventCursor = span.rep;
             break;
           }
         }
-        // Zebra stripes across every other block, skipping the cursor row.
-        for (let order = 0; order < visibleOrder.length; order++) {
-          const evIdx = visibleOrder[order]!;
-          if (order % 2 === 0) continue;
-          const nextIdx = visibleOrder[order + 1];
-          const blockStart = starts[evIdx] ?? 0;
-          const blockEnd = nextIdx !== undefined ? (starts[nextIdx] ?? eventLines.length) : eventLines.length;
-          for (let line = blockStart; line < blockEnd; line++) {
-            if (line === eventSel) continue;
+        // Zebra stripes across every other block. Header bands keep their
+        // own paint (a stripe would erase it), expanded bodies read as one
+        // canvas, and the cursor row wins (selected applies after this).
+        for (let g = 0; g < spans.length; g++) {
+          const span = spans[g]!;
+          if (g % 2 === 0 || span.expanded) continue;
+          for (let line = span.start; line < span.end; line++) {
+            if (line === eventSel || line === span.band) continue;
             eventLines[line] = background(fit(eventLines[line]!, cols), ZEBRA_BG);
           }
         }
@@ -505,54 +1014,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         if (timeWait) lines.push(timeWait);
         body = clipLines(lines, bodyH);
       }
-    } else if (section === "thinking") {
-      // Human-readable output: assistant text interleaved with edit/write
-      // calls rendered as -/+ diff snippets (not raw JSON). Timeline keeps
-      // the full details; this section stays skimmable.
-      const thinkingLines: string[] = [];
-      type ThinkingEntry =
-        | { at: string; kind: "thinking" | "text"; call?: number; complete: boolean; text: string }
-        | { at: string; kind: "edit"; event: RunEvent };
-      const entries: ThinkingEntry[] = [];
-      for (const chunk of thinking) {
-        entries.push({ at: chunk.at, kind: chunk.kind, call: chunk.call, complete: chunk.complete, text: chunk.text });
-      }
-      for (const event of ev) {
-        if (event.type !== "tool_call" || !isEditToolEvent(event)) continue;
-        entries.push({ at: String(event.t ?? ""), kind: "edit", event });
-      }
-      entries.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-      for (const entry of entries) {
-        if (entry.kind === "edit") {
-          const summary = editSummaryLines(entry.event, cols - 6);
-          const failed = Boolean((entry.event as { isError?: unknown }).isError);
-          thinkingLines.push(
-            ` ${GR}${String(entry.at).slice(11, 19)}${R} ${G}✎ edit${R}${failed ? ` ${RED}ERR${R}` : ""} ${W}${trunc(summary[0] ?? "edit", Math.max(16, cols - 24))}${R}`,
-          );
-          for (const line of summary.slice(1)) {
-            const tone = line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
-            thinkingLines.push(`   ${tone}${trunc(line, Math.max(16, cols - 8))}${R}`);
-          }
-          thinkingLines.push("");
-          continue;
-        }
-        const label = entry.kind === "thinking" ? `${M}thinking${R}` : `${C}response${R}`;
-        const live = entry.complete ? "" : `${Y} live${R}`;
-        thinkingLines.push(` ${GR}${String(entry.at).slice(11, 19)}${R} ${D}call ${entry.call ?? "?"}${R} ${label}${live}`);
-        for (const line of wrapText(entry.text, Math.max(20, cols - 6))) thinkingLines.push(` ${entry.kind === "thinking" ? D : W}${line}${R}`);
-        thinkingLines.push("");
-      }
-      if (thinkingLines.length === 0) thinkingLines.push(` ${D}No assistant text recorded yet.${R}`);
-      // In follow mode the eye is on the bottom line, so pin the wait
-      // there too — the header copy covers the top of the viewport.
-      const thinkWait =
-        waiting && thinkingFollow && waiting.kind !== "input" && waiting.kind !== "paused" ? waitingLine() : null;
-      const viewport = bodyH - lines.length - (thinkWait ? 1 : 0);
-      if (thinkingFollow) thinkingScroll = Math.max(0, thinkingLines.length - viewport);
-      thinkingScroll = Math.max(0, Math.min(thinkingScroll, Math.max(0, thinkingLines.length - viewport)));
-      lines.push(...thinkingLines.slice(thinkingScroll, thinkingScroll + viewport));
-      if (thinkWait) lines.push(thinkWait);
-      body = clipLines(lines, bodyH);
     } else if (section === "changes") {
       const changes = props.changes;
       const files = changes.files;
@@ -680,7 +1141,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     processSel,
     eventSel,
     eventCursor,
-    thinkingScroll,
     childSel,
     changeSel,
     changeOpen,

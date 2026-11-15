@@ -24,7 +24,7 @@ import type { ForkedRunSettings } from "./fork.js";
 import type { ModelPickerEntry } from "./format.js";
 
 export type Page = "runs" | "models" | "spend" | "settings";
-export type Screen = "list" | "run" | "newrun" | "newissue" | "answer" | "correct" | "model" | "delete" | "issue";
+export type Screen = "list" | "run" | "newrun" | "newissue" | "answer" | "correct" | "model" | "delete" | "issue" | "orchestrate";
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
 export type RunsRepoScope = "all" | "cwd";
 
@@ -111,9 +111,17 @@ export interface TuiState {
   selectedRunId: string | null;
   selectedIssueSlug: string | null;
   selectedIssueRepo: string | null;
+  /** Repo root for the orchestration page (null = none open). */
+  orchestrateRepo: string | null;
   issueScroll: number;
   /** Cached branch probe for the open issue screen (null when none is open). */
   issueBranch: { slug: string; repoRoot: string; runsSig: string; state: IssueBranchState | null } | null;
+  /** Selected settings row on the orchestration page. */
+  orchestrateSel: number;
+  /** `:` starts the two-key `:!` start/stop command. */
+  orchestrateColon: boolean;
+  /** Resolved model preview cache: names per role, keyed by repo+tier+floors. */
+  orchestratePreview: { key: string; at: number; engineer: string | null; research: string | null } | null;
   /** Run or issue awaiting final confirmation on the delete screen. */
   deleteTarget: DeleteTarget | undefined;
   deleteReturn: Screen;
@@ -134,8 +142,6 @@ export interface TuiState {
   timelineFollow: boolean;
   /** Show routine internals in the timeline. */
   timelineVerbose: boolean;
-  thinkingScroll: number;
-  thinkingFollow: boolean;
   childSel: number;
   expanded: Set<string>;
   changesCache: { runId: string; at: number; data: ChangeSummary } | null;
@@ -267,6 +273,10 @@ export function createTuiState(repoRoot: string): TuiState {
     selectedIssueRepo: null,
     issueScroll: 0,
     issueBranch: null,
+    orchestrateRepo: null,
+    orchestrateSel: 0,
+    orchestrateColon: false,
+    orchestratePreview: null,
     deleteTarget: undefined,
     deleteReturn: "list",
     deletingRuns: new Set<string>(),
@@ -280,8 +290,6 @@ export function createTuiState(repoRoot: string): TuiState {
     eventCursor: 0,
     timelineFollow: true,
     timelineVerbose: false,
-    thinkingScroll: 0,
-    thinkingFollow: true,
     childSel: 0,
     expanded: new Set<string>(),
     changesCache: null,

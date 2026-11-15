@@ -2,11 +2,12 @@
  * machine_code — runs list screen.
  *
  * Pure render of the work tree (repository → kind → issue → runs, or
- * repository → status). Row focus dimming, issue tones, and the
- * pending-answer affordance live here; the caller supplies the prebuilt
- * index plus a pending-question lookup.
+ * repository → status). Row focus dimming, issue tones, dependency
+ * suffixes, dependency-chain gaps, and the pending-answer affordance live
+ * here; the caller supplies the prebuilt index plus a pending-question
+ * lookup.
  */
-import { B, BL, C, D, G, GR, M, R, RED, W, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
+import { B, BL, C, D, G, GR, M, PURPLE_BG, R, RED, W, WHITE, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
 import type { RunSummary } from "../../state/runs.js";
 import { windowedBody, type Viewport } from "./types.js";
@@ -44,12 +45,21 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
   const lines: string[] = [];
   const selectedId = selectedRow?.id;
   let selectedEndLine = lines.length;
+  let prevKind: RunRow["kind"] | undefined;
   for (const row of index.rows) {
+    // Deps view: one empty gap line before each dependency chain root (never
+    // right under a section heading), so a chain reads as one connected
+    // block and the next independent chain starts a new one. Gap lines carry
+    // no text and are not cursor rows.
+    if (row.kind === "issue" && row.chainStart === true && prevKind !== "section") lines.push("");
     const isSelected = row.id === selectedId;
     const indent = "  ".repeat(row.depth);
     const rendered: string[] = [];
     if (row.kind === "repo") {
-      const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16))}${R}`} ${D}(${row.count})${R}`;
+      // Repos under orchestration wear a purple badge right after the name;
+      // its width shrinks the cwd detail so the row stays on one line.
+      const badge = row.orchestrating ? ` ${PURPLE_BG}${WHITE}Orchestrating…${R} ` : "";
+      const text = ` ${row.collapsed ? "▸" : "▾"} ${B}${W}${row.label}${R}${badge}${narrow ? "" : `  ${D}${trunc(row.repoRoot, Math.max(20, cols - row.label.length - 16 - visible(badge)))}${R}`} ${D}(${row.count})${R}`;
       rendered.push(isSelected ? selected(text, true) : background(fit(text, cols), theme.sectionBg));
     } else if (row.kind === "section") {
       // Kind headers: brand-color background hugging the text, bold black/white label + count.
@@ -70,10 +80,21 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const review = row.review !== "none" ? ` ${D}· review ${row.review}${R}` : "";
       const priorityTone = PRIORITY_TONE[row.priority] ?? D;
       const priority = row.priority && row.priority !== "medium" ? ` ${priorityTone}· ${row.priority}${R}` : "";
+      // One dim dependency suffix after priority/review: a slug naming no
+      // issue shows as unknown (a typo is not waiting on real work), the rest
+      // as blocked. Clean rows stay clean.
+      const blockedBy = row.blockedBy ?? [];
+      const unknownDeps = row.unknownDeps ?? [];
+      let depText = "";
+      if (unknownDeps.length === 1) depText = `· unknown dep ${unknownDeps[0]}`;
+      else if (unknownDeps.length > 1) depText = `· unknown deps ${unknownDeps.length}`;
+      else if (blockedBy.length === 1) depText = `· blocked by ${blockedBy[0]}`;
+      else if (blockedBy.length > 1) depText = `· blocked by ${blockedBy.length}`;
+      const deps = depText ? ` ${D}${depText}${R}` : "";
       const title = row.title
-        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 25))}${R}`
+        ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 25 - depText.length))}${R}`
         : "";
-      const text = ` ${indent}${folded}${slugTone}${style.glyph}${R} ${slugTone}${row.slug}${R}${priority}${review}${title}`;
+      const text = ` ${indent}${folded}${slugTone}${style.glyph}${R} ${slugTone}${row.slug}${R}${priority}${review}${deps}${title}`;
       rendered.push(selected(text, isSelected));
     } else {
       const run = row.run;
@@ -103,6 +124,7 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       selectedEndLine = lines.length + rendered.length - 1;
     }
     lines.push(...rendered);
+    prevKind = row.kind;
   }
   if (index.rows.length === 0) {
     lines.push("");

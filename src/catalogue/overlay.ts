@@ -123,6 +123,30 @@ export function applyModelOverrides(row: CatalogueRow, override: ModelOverride):
   return curated;
 }
 
+/**
+ * Drop a `tool_call` curated stamp whose source is gone (override file
+ * deleted, entry removed), reverting the field to the live default.
+ * Without this, deleting an override file leaves its effect fossilized in
+ * carried-over rows forever — nothing ever re-derives the field. Returns
+ * true when it changed the row. File overrides applied afterwards still win.
+ */
+export function revertSourcelessToolCall(
+  row: { toolCall: boolean; capabilities: { toolCall: boolean }; modes: string[]; provenance: { curated: string[] } },
+  hasSource: boolean,
+  liveDefault: boolean,
+): boolean {
+  if (!row.provenance.curated.includes("tool_call")) return false;
+  if (hasSource) return false;
+  row.toolCall = liveDefault;
+  row.capabilities.toolCall = liveDefault;
+  const modes = new Set(row.modes);
+  if (liveDefault) modes.add("tools");
+  else modes.delete("tools");
+  row.modes = [...modes];
+  row.provenance.curated = row.provenance.curated.filter((c) => c !== "tool_call");
+  return true;
+}
+
 export function loadModelOverrides(): Map<string, ModelOverride> {
   const file = dataPath("model-overrides.toml");
   if (!existsSync(file)) return new Map();

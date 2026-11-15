@@ -69,6 +69,7 @@ async function fetchOllamaModels(
       };
       const capabilities = info.capabilities ?? [];
       if (!capabilities.includes("completion")) return null;
+      ollamaTools.set(name, { ok: capabilities.includes("tools"), at: Date.now() });
       const modelInfo = info.model_info ?? {};
       const context = Object.entries(modelInfo)
         .find(([key]) => key.endsWith(".context_length"))?.[1];
@@ -93,6 +94,16 @@ async function fetchOllamaModels(
     }
   }));
   return results.filter((model): model is Model<"openai-completions"> => model !== null);
+}
+
+/** Last daemon-reported tool-call support per Ollama model id. Mirrors the
+ * fetchStatus pattern: pi-ai's model type carries no tool-use flag, so the
+ * /api/show `tools` capability rides alongside instead. */
+const ollamaTools = new Map<string, { ok: boolean; at: number }>();
+
+/** Daemon-reported tool support for an Ollama model, if ever fetched. */
+export function ollamaSupportsTools(id: string): boolean | undefined {
+  return ollamaTools.get(id)?.ok;
 }
 
 /** Last listing outcome per dynamic provider id. True only after a fetch
