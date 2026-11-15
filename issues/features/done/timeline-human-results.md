@@ -1,8 +1,9 @@
-tags: tui
+commit: 842b12556b2be7c43a457367040b8ba4f679be25
 depends: timeline-absorbs-thinking, timeline-call-blocks
 files: src/tui/timeline.ts, src/tui/screens/run-detail/run-detail.ts
-keywords: Timeline, describeToolArgs, ERR, ok, space to expand
+tags: tui
 acceptance: script:build
+keywords: Timeline, describeToolArgs, ERR, ok, space to expand
 
 # Run Details: human-readable tool args and results in Timeline
 
