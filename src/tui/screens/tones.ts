@@ -5,10 +5,17 @@
  * slugs from these one source so the two pages cannot drift. Rendering
  * helpers stay in format.ts; these tables are issue semantics.
  */
-import { AMBER, B, D, PURPLE_BG, PURPLE_FG, RED, RED_BG, RED_FG, ROSE, SKY, SLATE, YELLOW_BG, YELLOW_FG, R } from "../format.js";
+import { AMBER, B, D, PURPLE_BG, PURPLE_FG, RED, RED_BG, RED_FG, SKY, SLATE, YELLOW_BG, YELLOW_FG, R } from "../format.js";
 import type { DisplayStatus, IssueKind } from "../../plan/issues.js";
 
 const DONE_STYLE = { tone: D, glyph: "✓" };
+
+/**
+ * Low-saturation red for blocked issues: reads as red at a glance but sits
+ * with the muted palette, and stays distinct from the bug brand (RED_FG) so
+ * a blocked bug slug is not mistaken for a live one.
+ */
+const BLOCKED_TONE = "\x1b[38;2;190;96;96m";
 
 /** Directory-status colors for non-terminal states; done/researched use gray. */
 export const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: string }> = {
@@ -19,7 +26,7 @@ export const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: st
   "needs-human-review": { tone: AMBER, glyph: "◷" },
   "failed-gates": { tone: RED, glyph: "✗" },
   "failed-human-review": { tone: RED, glyph: "✗" },
-  blocked: { tone: ROSE, glyph: "⏸" },
+  blocked: { tone: BLOCKED_TONE, glyph: "⏸" },
   done: DONE_STYLE,
 };
 

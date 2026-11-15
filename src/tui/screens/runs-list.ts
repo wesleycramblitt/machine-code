@@ -7,7 +7,7 @@
  * here; the caller supplies the prebuilt index plus a pending-question
  * lookup.
  */
-import { B, BL, C, D, G, GR, M, PURPLE_BG, R, RED, W, WHITE, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
+import { B, BL, C, D, DIM, G, GR, M, PURPLE_BG, R, RED, W, WHITE, Y, ago, agentTone, background, command, dim, fit, fmtMoney, fmtTokens, icon, joinCommands, pad, runIdFromEvent, selected, trunc, visible } from "../format.js";
 import { RUN_GROUP_LABELS, repoLabel, type RunGroup, type RunIndex, type RunRow } from "../runs.js";
 import type { RunSummary } from "../../state/runs.js";
 import { windowedBody, type Viewport } from "./types.js";
@@ -33,7 +33,8 @@ export interface RunsListFrame {
   scroll: number;
 }
 
-const PRIORITY_TONE: Record<string, string> = { high: D, medium: D, low: D };
+/** Priority is one color axis: red draws the eye, gray is neutral, dim recedes. */
+const PRIORITY_TONE: Record<string, string> = { high: RED, medium: D, low: DIM };
 
 /** Run slug as shown on the runs page, e.g. "RUN 739-aaas". */
 function runSlugText(run: RunSummary): string {
@@ -94,7 +95,11 @@ export function renderRunsList(props: RunsListProps): RunsListFrame {
       const title = row.title
         ? ` ${D}— ${trunc(row.title, Math.max(12, cols - indent.length - row.slug.length - 25 - depText.length))}${R}`
         : "";
-      const text = ` ${indent}${folded}${slugTone}${style.glyph}${R} ${slugTone}${row.slug}${R}${priority}${review}${deps}${title}`;
+      // Blocked issues recede: the row body is dimmed (dim keeps any
+      // background fills) while the glyph keeps the red blocked tone, so a
+      // blocked issue reads as the dimmed, red-marked outlier.
+      const rest = `${slugTone}${row.slug}${R}${priority}${review}${deps}${title}`;
+      const text = ` ${indent}${folded}${slugTone}${style.glyph}${R} ${row.effective === "blocked" ? dim(rest) : rest}`;
       rendered.push(selected(text, isSelected));
     } else {
       const run = row.run;
