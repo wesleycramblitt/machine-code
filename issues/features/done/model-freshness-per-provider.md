@@ -1,8 +1,9 @@
+commit: a1e0c334b4a76891180e88b9ecc1d9c753857de1
 priority: low
-tags: models, catalogue, freshness
 files: src/catalogue/reconcile.ts, src/catalogue/refresh.ts, src/models.ts, src/availability.ts, src/cli/system.ts, src/tui/screens/models.ts
-keywords: catalogue refresh, reconcile, stale model, model id changed, temporary model, freshness, missing-model, permanent veto, data freshness
+tags: models, catalogue, freshness
 acceptance: script:build
+keywords: catalogue refresh, reconcile, stale model, model id changed, temporary model, freshness, missing-model, permanent veto, data freshness
 
 # Keep per-provider model listings fresh; retire stale/renamed ids
 
