@@ -1,9 +1,9 @@
-priority: medium
+commit: 76a57e12773267764593fa4d0bf5a944c54e57cf
 depends: deps-view-spacing
-tags: tui
 files: src/tui/screens/runs-list.ts, src/tui/screens/tones.ts
-keywords: priority, blocked, gray, runs list, PRIORITY_TONE
+tags: tui
 acceptance: script:build
+keywords: priority, blocked, gray, runs list, PRIORITY_TONE
 
 # Color-encode priority and gray out blocked issues on the runs list
 
