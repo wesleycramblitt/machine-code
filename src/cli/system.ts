@@ -161,6 +161,19 @@ export async function cmdInstall(argv: string[]): Promise<number> {
 /* --------------------------------------------------------------- providers */
 
 
+/** Human-readable per-provider listing freshness for `cmdProviders`. */
+function listingLabel(health: import("../availability.js").ProviderHealth | undefined): string {
+  if (!health?.listingMode) return "-";
+  if (health.listingMode === "live") return "live";
+  if (health.listingMode === "static") return "static";
+  // unknown: no fresh listing obtained this run. A persisted lastListingAt means
+  // it used to be live but is now unreachable; refreshCount counts consecutive
+  // failed/unknown reconciles.
+  const unreachable = health.lastListingAt ? "stale" : "unreachable";
+  const n = health.refreshCount ?? 0;
+  return n > 1 ? `${unreachable} ${n}×` : unreachable;
+}
+
 export function cmdProviders(): number {
   const models = createModelsCollection();
   const statuses = providerStatuses(models);
@@ -176,9 +189,11 @@ export function cmdProviders(): number {
   for (const row of catalogue?.models ?? []) {
     catalogueCounts.set(row.providerID, (catalogueCounts.get(row.providerID) ?? 0) + 1);
   }
+  // Per-provider listing freshness persisted by reconcile at the last run.
+  const availability = loadAvailability(l.home);
   const configured = statuses.filter((s) => s.configured);
   process.stdout.write("Providers (key sources are environment variable names; values are never shown):\n\n");
-  process.stdout.write(`  ${"status".padEnd(13)} ${"provider".padEnd(24)} ${"models".padStart(6)}  ${"funding".padEnd(9)} ${"modes".padEnd(20)} ${"price range $/M".padEnd(30)} keys\n`);
+  process.stdout.write(`  ${"status".padEnd(13)} ${"provider".padEnd(24)} ${"models".padStart(6)}  ${"funding".padEnd(9)} ${"modes".padEnd(20)} ${"listing".padEnd(14)} ${"price range $/M".padEnd(30)} keys\n`);
   for (const s of statuses) {
     const mark = s.configured ? "configured  " : "unconfigured";
     const keys = s.envKeys.length > 0 ? s.envKeys.join(", ") : "(no env key — OAuth or ambient)";
@@ -187,6 +202,7 @@ export function cmdProviders(): number {
     const cp = catalogue?.providers?.[s.id];
     const funding = funded.has(s.id) ? "funded" : "unfunded";
     const modes = cp?.modes?.join("/") ?? "-";
+    const listing = listingLabel(availability.providers[s.id]);
     const fmt = (n: number) => String(Number(n.toFixed(6)));
     const price = cp?.pricing
       ? `in ${fmt(cp.pricing.minInput ?? 0)}–${fmt(cp.pricing.maxInput ?? 0)}, out ${fmt(cp.pricing.minOutput ?? 0)}–${fmt(cp.pricing.maxOutput ?? 0)}`
@@ -194,7 +210,7 @@ export function cmdProviders(): number {
         ? "free"
         : "-";
     process.stdout.write(
-      `  ${mark.padEnd(13)} ${s.id.padEnd(24)} ${String(count).padStart(6)}  ${funding.padEnd(9)} ${modes.padEnd(20)} ${price.padEnd(30)} ${keys}${source}\n`,
+      `  ${mark.padEnd(13)} ${s.id.padEnd(24)} ${String(count).padStart(6)}  ${funding.padEnd(9)} ${modes.padEnd(20)} ${listing.padEnd(14)} ${price.padEnd(30)} ${keys}${source}\n`,
     );
   }
   const notes: string[] = [];

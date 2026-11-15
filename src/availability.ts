@@ -329,18 +329,9 @@ export function applyClassification(
   providerId: string,
   modelKey: string,
   classified: ClassifiedError,
-  persistVeto: (key: string, source: string) => void | null,
-): boolean {
+): void {
   if (classified.disableProvider) disableProvider(state, providerId);
   if (classified.needsAuth) markNeedsAuth(state, providerId);
-  // A permanent missing-model failure is recorded as a catalogue veto so the
-  // row stops being selected (see the catalogue veto path in the caller).
-  // Scoped to model-targeted errors: a proxy 404ing the whole endpoint must
-  // not veto every model on the path.
-  if (classified.permanent === true && classified.target === "model") {
-    persistVeto?.(modelKey, `runtime: ${classified.message.slice(0, 140)}`);
-    return true;
-  }
   if (!(classified.cooldownMs > 0 || classified.retryable)) return;
   if (classified.target === "model") {
     state.models[modelKey] = { ...(state.models[modelKey] ?? {}), lastErrorKind: classified.kind };
