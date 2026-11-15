@@ -54,6 +54,8 @@ export type RunRow =
       id: string;
       repoRoot: string;
       label: string;
+      /** True while the orchestrator is active for this repo (store flag). */
+      orchestrating: boolean;
       count: number;
       depth: number;
       collapsible: boolean;
@@ -105,6 +107,8 @@ export interface RunOptions {
   issueRepo?: string;
   /** Issues by repo root; the expandable issue tree is built per repo. */
   issuesByRepo?: Readonly<Record<string, readonly Issue[]>>;
+  /** Repo roots with an active orchestrator; their repo rows show an Orchestrating… badge. */
+  orchestratingRepos?: ReadonlySet<string>;
   group?: RunGroup;
   /** Explicit user collapse overrides by row id; a row not listed uses its default. */
   collapsed?: ReadonlyMap<string, boolean>;
@@ -244,6 +248,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       id,
       repoRoot,
       label: repoLabel(repoRoot),
+      orchestrating: options.orchestratingRepos?.has(repoRoot) ?? false,
       count,
       depth: 0,
       collapsible: true,
