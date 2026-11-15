@@ -1,5 +1,6 @@
 id: e890b8
 branch: mc/look-through-these-notes-and-turn-the-ideas-into-e890b8
+commit: 4529e7ac12af846048e3cffa3ff82ce4e936805f
 acceptance: research:verify
 
 Auto-created from run.
