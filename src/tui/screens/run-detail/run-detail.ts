@@ -175,8 +175,12 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
  * full-width purple band behind a two-character ◉/◌ gutter, so a scan of
  * the timeline separates model calls from tool work without reading a
  * word. The request body and the response (output/thinking) indent under
- * the header; → marks request lines and ← marks response lines. Expansion
- * keeps the lazy full-prompt-file behavior.
+ * the header; → marks request lines and ← marks response lines. The header
+ * leads with the call ordinal ("Call 1", "Call 2", … — group.attempt, so the
+ * label holds across expansion/collapse), and an ended block closes with a
+ * dim "· end Call N" line, so where one call stops and the next starts is
+ * explicit even when both bands are purple. Expansion keeps the lazy
+ * full-prompt-file behavior.
  */
 function renderModelCallBlock(
   group: TimelineGroup,
@@ -203,7 +207,7 @@ function renderModelCallBlock(
     eventLines.push(
       background(
         fit(
-          `${WHITE}◉ ${GR}${time}${R} ${B}${WHITE}${String(end.provider)}${R}/${B}${WHITE}${String(end.model)}${R} ${statusColor(String(end.stopReason))}${String(end.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}${D}tok${R} ${Y}${Number(end.cost ?? 0).toFixed(5)}${R}`,
+          `${WHITE}◉ ${B}${WHITE}Call ${group.attempt}${R} ${GR}${time}${R} ${B}${WHITE}${String(end.provider)}${R}/${B}${WHITE}${String(end.model)}${R} ${statusColor(String(end.stopReason))}${String(end.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}${D}tok${R} ${Y}${Number(end.cost ?? 0).toFixed(5)}${R}`,
           cols,
         ),
         PURPLE_BG,
@@ -211,7 +215,7 @@ function renderModelCallBlock(
     );
   } else if (select?.error) {
     eventLines.push(
-      background(fit(`${WHITE}◉ ${GR}${time}${R} ${RED}select error ${String(select.error)}${R}`, cols), PURPLE_BG),
+      background(fit(`${WHITE}◉ ${B}${WHITE}Call ${group.attempt}${R} ${GR}${time}${R} ${RED}select error ${String(select.error)}${R}`, cols), PURPLE_BG),
     );
   } else {
     // Live call: name what the model is about to answer.
@@ -219,7 +223,7 @@ function renderModelCallBlock(
     const model = String(request?.model ?? "");
     const name = provider || model ? `${provider}${provider && model ? "/" : ""}${model}` : "model";
     eventLines.push(
-      background(fit(`${WHITE}◌ ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
+      background(fit(`${WHITE}◌ ${B}${WHITE}Call ${group.attempt}${R} ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
     );
   }
   // Collapse policy: a compact (non-tail) past block shows its result
@@ -246,6 +250,7 @@ function renderModelCallBlock(
         ` ${D}${usage.input ?? 0}→${usage.output ?? 0}${R}` +
         ` ${D}(space to expand)${R}`,
     );
+    eventLines.push(`    ${D}· end Call ${group.attempt}${R}`);
     return;
   }
   // Selection detail stays available under the block (expanded only).
@@ -351,6 +356,9 @@ function renderModelCallBlock(
   if (expandedEvent) {
     eventLines.push(`    ${D}input ${usage.input ?? 0}  output ${usage.output ?? 0}${R}`);
   }
+  // Close marker: makes the block boundary explicit even when the next
+  // block opens with the same purple band.
+  eventLines.push(`    ${D}· end Call ${group.attempt}${R}`);
 }
 
 /**
