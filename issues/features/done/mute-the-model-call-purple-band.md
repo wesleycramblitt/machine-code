@@ -1,8 +1,9 @@
+commit: 9dfd2b29687359711ffb3601efb1d3008fae7499
 priority: low
-tags: tui
 files: src/tui/format.ts
-keywords: PURPLE_BG, KIND_RGB, model call, timeline band
+tags: tui
 acceptance: script:build
+keywords: PURPLE_BG, KIND_RGB, model call, timeline band
 
 # Mute the purple model-call band for better color harmony
 
