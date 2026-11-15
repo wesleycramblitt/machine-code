@@ -300,7 +300,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const attachedIssue = itemSlug ? findIssue(l, itemSlug) : null;
   if (attachedIssue) {
     contextInclude = contextInclude ?? {};
-    contextInclude.files = [...new Set([...(contextInclude.files ?? []), attachedIssue.rel])];
+    contextInclude.issues = [...new Set([...(contextInclude.issues ?? []), attachedIssue.rel])];
   }
   // Suggestions are context files. Small ones inline whole into the run's
   // file set (and become seeded symbol-map entries with outlines); everything
