@@ -1,8 +1,9 @@
-tags: tui
+commit: 03ab3fc5ec56bb0b422a7b848f2953daeadfb685
 depends: timeline-absorbs-thinking
 files: src/tui/screens/run-detail/run-detail.ts, src/tui/timeline.ts
-keywords: Timeline, tool_call_start, tool_call, model_call_end, space to expand
+tags: tui
 acceptance: script:build
+keywords: Timeline, tool_call_start, tool_call, model_call_end, space to expand
 
 # Run Details: one timestamped block per call — request and response together
 
