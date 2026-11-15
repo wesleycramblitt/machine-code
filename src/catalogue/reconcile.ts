@@ -40,6 +40,34 @@ export interface ReconcileResult {
   added: string[];
   removed: string[];
   warnings: string[];
+  /** Per-provider listing freshness: last listing time, how the listing was
+   * served (live/static/unknown), and refreshes since. Saved to
+   * ~/.machine_code/availability.json by the caller. */
+  freshness: Map<string, ProviderFreshness>;
+}
+
+export interface ProviderFreshness {
+  /** Last time this provider's model listing was successfully fetched (ms since epoch). */
+  lastListingAt?: number;
+  /** "live" (fresh /models fetch), "static" (served from builtin rows), or "unknown" (never listed in this process). */
+  listingMode?: "live" | "static" | "unknown";
+  /** Refreshes since the last successful listing. */
+  refreshCount?: number;
+}
+
+/** Record/replace per-provider listing freshness. */
+function trackFreshness(freshness: Map<string, ProviderFreshness>, providerId: string, mode: "live" | "static" | "unknown", now: number): void {
+  const current = freshness.get(providerId);
+  if (mode === "live") {
+    freshness.set(providerId, { lastListingAt: now, listingMode: "live", refreshCount: 1 });
+    return;
+  }
+  const next: ProviderFreshness = {
+    ...(current ?? {}),
+    ...(mode === "unknown" ? { listingMode: "unknown", refreshCount: (current?.refreshCount ?? 0) + 1 } : {}),
+    ...(mode === "static" ? { listingMode: "static" } : {}),
+  };
+  freshness.set(providerId, next);
 }
 
 function readBenchmarkSnapshot(home: string): Map<string, Benchmarks> {
@@ -85,8 +113,10 @@ export async function reconcileCatalogue(
   const warnings: string[] = [];
   const added: string[] = [];
   const removed: string[] = [];
+  const freshness = new Map<string, ProviderFreshness>();
+  const now = Date.now();
   const doc = loadCatalogue(layout.catalogueFile);
-  if (!doc) return { changed: false, added, removed, warnings };
+  if (!doc) return { changed: false, added, removed, warnings, freshness };
 
   const definitions = loadProviderDefinitions();
   const active = new Set<string>();
@@ -102,9 +132,13 @@ export async function reconcileCatalogue(
     }
   } catch (error) {
     warnings.push(`could not list providers (${(error as Error).message}); catalogue left alone`);
-    return { changed: false, added, removed, warnings };
+    return { changed: false, added, removed, warnings, freshness };
   }
 
+  // Dynamic discovery providers (openai-compatible/ollama) whose listings are
+  // fetched live this process. Static/builtin rows for these providers are
+  // membership-checked the same way below, so a renamed/retired id is pruned
+  // instead of failing every call until the next release.
   const dynamicIds = new Set(
     Object.entries(definitions)
       .filter(([, def]) => def.discovery === "openai-compatible" || def.discovery === "ollama")
@@ -154,27 +188,33 @@ export async function reconcileCatalogue(
   /** provider -> live keys, or null when the listing cannot be trusted. */
   const trusted = new Map<string, Set<string> | null>();
 
+  // Dynamic discovery providers: verify membership against the listing fetched
+  // this process. Static/builtin rows for these providers are checked the same
+  // way, so a renamed/retired id is pruned instead of failing every call until
+  // the next release. Unreachable providers keep their rows.
   for (const id of dynamicIds) {
     if (isFresh(id) !== true) {
       // Stale or never-attempted listings (unconfigured key, offline host)
       // keep their rows silently; the run's own discovery warnings, if any,
       // already reported the underlying failure.
       trusted.set(id, null);
+      trackFreshness(freshness, id, "unknown", now);
       continue;
     }
     const live = liveByProvider.get(id) ?? [];
     trusted.set(id, new Set(live.filter((m) => !isMetaModel(String(m.provider), m.id)).map((m) => `${id}/${m.id}`)));
+    trackFreshness(freshness, id, "live", now);
   }
-  // Live listings (providers marked live_listings): membership is verified
-  // against a fresh /models fetch instead of pi-ai's static baseline, so
-  // retired models are pruned even though their static rows carry metadata.
-  // Unknown live ids are only reported — never built without metadata.
-  // Pass opts.liveListings in tests; production fetches (failures keep rows).
+  // Live-listing providers (marked live_listings): membership is verified
+  // against a fresh /models fetch, so retired models are pruned even though
+  // their static rows carry metadata. Pass opts.liveListings in tests;
+  // production fetches (failures keep rows).
   for (const [id, def] of Object.entries(definitions)) {
     if (!def.liveListings || !def.baseUrl || !active.has(id)) continue;
     const override = opts.liveListings?.get(id);
     if (override !== undefined) {
       trusted.set(id, override);
+      trackFreshness(freshness, id, override === null ? "unknown" : "live", now);
       continue;
     }
     try {
@@ -184,17 +224,25 @@ export async function reconcileCatalogue(
           warnings.push(`live listing unavailable for ${id} (${fetched.error}); rows left alone`);
         }
         trusted.set(id, null);
+        trackFreshness(freshness, id, "unknown", now);
       } else {
         trusted.set(id, new Set([...fetched.ids].filter((mid) => !isMetaModel(id, mid)).map((modelId) => `${id}/${modelId}`)));
+        trackFreshness(freshness, id, "live", now);
       }
     } catch (error) {
       warnings.push(`live listing failed for ${id} (${error instanceof Error ? error.message : String(error)}); rows left alone`);
       trusted.set(id, null);
+      trackFreshness(freshness, id, "unknown", now);
     }
   }
   if (orModels && active.has("openrouter")) {
     // A fetched public catalog is authoritative for removals.
     trusted.set("openrouter", new Set([...orModels.keys()].filter((id) => !isMetaModel("openrouter", id)).map((id) => `openrouter/${id}`)));
+    trackFreshness(freshness, "openrouter", "live", now);
+  }
+  // Providers never reconciled this run serve static/builtin rows.
+  for (const provider of active) {
+    if (!freshness.has(provider)) trackFreshness(freshness, provider, "static", now);
   }
 
   const keep: CatalogueRow[] = [];
@@ -290,7 +338,7 @@ export async function reconcileCatalogue(
   }
 
   if (added.length === 0 && removed.length === 0) {
-    return { changed: false, added, removed, warnings };
+    return { changed: false, added, removed, warnings, freshness };
   }
   const document = assembleDocument(keep);
   try {
@@ -298,7 +346,7 @@ export async function reconcileCatalogue(
     writeFileSync(layout.catalogueFile, `${JSON.stringify(document, null, 2)}\n`, "utf8");
   } catch (error) {
     warnings.push(`could not write catalogue (${(error as Error).message})`);
-    return { changed: false, added, removed, warnings };
+    return { changed: false, added, removed, warnings, freshness };
   }
-  return { changed: true, added, removed, warnings };
+  return { changed: true, added, removed, warnings, freshness };
 }

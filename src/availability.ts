@@ -55,6 +55,13 @@ export interface ProviderHealth {
   cooldownUntil?: number;
   /** Current tier index (0-based). */
   tier?: number;
+  /** Last time this provider's model listing was successfully fetched (ms since epoch). */
+  lastListingAt?: number;
+  /** How the current listing was served: "live" (fresh /models fetch), "static"
+   * (served from builtin rows), or "unknown" (never listed in this process). */
+  listingMode?: "live" | "static" | "unknown";
+  /** Refreshes since the last successful listing. */
+  refreshCount?: number;
 }
 
 export interface ModelHealth {

@@ -111,6 +111,16 @@ export async function loadRuntime(l: ReturnType<typeof layout>): Promise<Runtime
         for (const key of reconciled.removed) process.stderr.write(`catalogue: -${key}\n`);
         catalogue = loadCatalogue(l.catalogueFile) ?? catalogue;
       }
+      // Persist per-provider listing freshness so `machine_code providers` and
+      // the models browser can show whether a listing is live-verified or
+      // static, and how long a provider has been unreachable.
+      if (reconciled.freshness.size > 0) {
+        const avail = loadAvailability(l.home);
+        for (const [id, fr] of reconciled.freshness) {
+          avail.providers[id] = { ...(avail.providers[id] ?? {}), ...fr };
+        }
+        saveAvailability(l.home, avail);
+      }
     } catch (error) {
       process.stderr.write(`warning: catalogue reconcile failed (${(error as Error).message}); using cached catalogue\n`);
     }

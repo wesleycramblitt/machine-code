@@ -330,6 +330,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
     const state = loadAvailability(input.home);
     applyClassification(state, provider, modelKey, classified);
+    // A permanent missing-model failure is recorded as a catalogue veto so the
+    // row stops being selected (see the catalogue veto path).
     if (classified.permanent === true && input.catalogue.some((row) => row.key === modelKey)) {
       const reason = `auto-vetoed: gone at runtime (${classified.message.slice(0, 140)})`;
       if (addCurationVeto(input.home, modelKey, `${reason} (run ${input.recorder.current.id})`)) {
