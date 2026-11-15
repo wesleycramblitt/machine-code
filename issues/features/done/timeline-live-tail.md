@@ -1,8 +1,9 @@
-tags: tui
+commit: e57084189f5ef1302bd34a17ca8c6989dc7750b9
 depends: timeline-absorbs-thinking, timeline-call-blocks, timeline-human-results, timeline-visual-grammar, orchestration-page, orchestrator-keeps-runs-moving
 files: src/tui/screens/run-detail/run-detail.ts, src/tui/screens/run-detail/keys.ts, src/tui/state.ts, src/tui.ts
-keywords: Timeline, follow ON, following latest event, space, expand, space to expand
+tags: tui
 acceptance: script:build
+keywords: Timeline, follow ON, following latest event, space, expand, space to expand
 
 # Run Details: live tail — only the newest call stays expanded
 
