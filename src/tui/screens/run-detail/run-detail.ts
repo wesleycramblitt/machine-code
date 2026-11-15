@@ -73,6 +73,8 @@ interface TimelineGroup {
   members: number[];
   /** Attempt counter when the block starts (thinkingByCall key prefix). */
   attempt: number;
+  /** Call ordinal for display (1-based model-call number). */
+  ordinal: number;
 }
 
 /** The tool call id, stringified; empty when the event carries none. */
@@ -101,6 +103,7 @@ const streamDots = (): string => ".".repeat(1 + (Math.floor(Date.now() / 500) % 
 function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): TimelineGroup[] {
   const groups: TimelineGroup[] = [];
   let attempt = 0;
+  let ordinal = 0;
   /** Open model blocks keyed `${attempt}:${call}`, closed by their call end. */
   const openModels = new Map<string, number>();
   /** Unmatched tool starts, in event order; completions consume one. */
@@ -120,7 +123,8 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
         continue;
       }
       openModels.set(key, groups.length);
-      groups.push({ kind: "model", first: i, members: [i], attempt });
+      ordinal += 1;
+      groups.push({ kind: "model", first: i, members: [i], attempt, ordinal });
     } else if (type === "model_call_end") {
       const key = `${attempt}:${call ?? "?"}`;
       const open = openModels.get(key);
@@ -129,7 +133,8 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
         openModels.delete(key);
       } else {
         // Resumed logs: the completion arrives without its request.
-        groups.push({ kind: "model", first: i, members: [i], attempt });
+        ordinal += 1;
+        groups.push({ kind: "model", first: i, members: [i], attempt, ordinal });
       }
     } else if (type === "tool_call_start") {
       openTools.push({
@@ -137,7 +142,7 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
         id: toolCallIdOf(event),
         tool: String(event.tool ?? ""),
       });
-      groups.push({ kind: "tool", first: i, members: [i], attempt });
+      groups.push({ kind: "tool", first: i, members: [i], attempt, ordinal });
     } else if (type === "tool_call") {
       const id = toolCallIdOf(event);
       const tool = String(event.tool ?? "");
@@ -159,10 +164,10 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
         const match = openTools.splice(pick, 1)[0]!;
         groups[match.group]!.members.push(i);
       } else {
-        groups.push({ kind: "tool", first: i, members: [i], attempt });
+        groups.push({ kind: "tool", first: i, members: [i], attempt, ordinal });
       }
     } else {
-      groups.push({ kind: "plain", first: i, members: [i], attempt });
+      groups.push({ kind: "plain", first: i, members: [i], attempt, ordinal });
     }
   }
   return groups;
@@ -176,7 +181,7 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
  * the timeline separates model calls from tool work without reading a
  * word. The request body and the response (output/thinking) indent under
  * the header; → marks request lines and ← marks response lines. The header
- * leads with the call ordinal ("Call 1", "Call 2", … — group.attempt, so the
+ * leads with the call ordinal ("Call 1", "Call 2", … — group.ordinal, so the
  * label holds across expansion/collapse), and an ended block closes with a
  * dim "· end Call N" line, so where one call stops and the next starts is
  * explicit even when both bands are purple. Expansion keeps the lazy
@@ -207,7 +212,7 @@ function renderModelCallBlock(
     eventLines.push(
       background(
         fit(
-          `${WHITE}◉ ${B}${WHITE}Call ${group.attempt}${R} ${GR}${time}${R} ${B}${WHITE}${String(end.provider)}${R}/${B}${WHITE}${String(end.model)}${R} ${statusColor(String(end.stopReason))}${String(end.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}${D}tok${R} ${Y}${Number(end.cost ?? 0).toFixed(5)}${R}`,
+          `${WHITE}◉ ${B}${WHITE}Call ${group.ordinal}${R} ${GR}${time}${R} ${B}${WHITE}${String(end.provider)}${R}/${B}${WHITE}${String(end.model)}${R} ${statusColor(String(end.stopReason))}${String(end.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}${D}tok${R} ${Y}${Number(end.cost ?? 0).toFixed(5)}${R}`,
           cols,
         ),
         PURPLE_BG,
@@ -215,7 +220,7 @@ function renderModelCallBlock(
     );
   } else if (select?.error) {
     eventLines.push(
-      background(fit(`${WHITE}◉ ${B}${WHITE}Call ${group.attempt}${R} ${GR}${time}${R} ${RED}select error ${String(select.error)}${R}`, cols), PURPLE_BG),
+      background(fit(`${WHITE}◉ ${B}${WHITE}Call ${group.ordinal}${R} ${GR}${time}${R} ${RED}select error ${String(select.error)}${R}`, cols), PURPLE_BG),
     );
   } else {
     // Live call: name what the model is about to answer.
@@ -223,7 +228,7 @@ function renderModelCallBlock(
     const model = String(request?.model ?? "");
     const name = provider || model ? `${provider}${provider && model ? "/" : ""}${model}` : "model";
     eventLines.push(
-      background(fit(`${WHITE}◌ ${B}${WHITE}Call ${group.attempt}${R} ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
+      background(fit(`${WHITE}◌ ${B}${WHITE}Call ${group.ordinal}${R} ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
     );
   }
   // Collapse policy: a compact (non-tail) past block shows its result
@@ -250,7 +255,7 @@ function renderModelCallBlock(
         ` ${D}${usage.input ?? 0}→${usage.output ?? 0}${R}` +
         ` ${D}(space to expand)${R}`,
     );
-    eventLines.push(`    ${D}· end Call ${group.attempt}${R}`);
+    eventLines.push(`    ${D}· end Call ${group.ordinal}${R}`);
     return;
   }
   // Selection detail stays available under the block (expanded only).
@@ -358,7 +363,7 @@ function renderModelCallBlock(
   }
   // Close marker: makes the block boundary explicit even when the next
   // block opens with the same purple band.
-  eventLines.push(`    ${D}· end Call ${group.attempt}${R}`);
+  eventLines.push(`    ${D}· end Call ${group.ordinal}${R}`);
 }
 
 /**
