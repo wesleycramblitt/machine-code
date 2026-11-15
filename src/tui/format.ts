@@ -53,7 +53,7 @@ export const START_BG = "\x1b[48;2;170;30;30m";
 export const UPDATE_BG = "\x1b[48;2;200;120;20m";
 /** Kind colors for the runs page, desaturated to sit with the muted green. */
 const KIND_RGB = {
-  purple: "139;124;170",
+  purple: "145;133;165", // muted lavender: bold WHITE on the band and badge-dark text both stay legible, without glowing
   yellow: "196;178;110",
   red: "190;110;110",
 } as const;
