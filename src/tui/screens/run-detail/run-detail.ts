@@ -8,7 +8,7 @@
  * updated offsets back.
  */
 import {
-  B, BL, C, D, G, GR, M, R, RED, W, Y, SUBTAB_BG, ZEBRA_BG,
+  B, BL, C, D, G, GR, M, PANEL_BG, PURPLE_BG, R, RED, W, WHITE, Y, SUBTAB_BG, ZEBRA_BG,
   ago, agentTone, background, command, contextTone, editSummaryLines, fit,
   fmtMoney, fmtRunTokens, fmtTokens, icon, joinCommands, printable,
   recentEditEvents, progress, selected, statusColor, stripAnsi, trunc, visible,
@@ -80,6 +80,12 @@ const toolCallIdOf = (event: TimelineEventLike): string => {
   const id = (event as { toolCallId?: unknown }).toolCallId;
   return typeof id === "string" ? id : typeof id === "number" ? String(id) : "";
 };
+
+/**
+ * Animated dots for live markers ("streaming…", "running…", "live"): the
+ * 1s redraw tick advances the pattern, the same cadence as waitingDots.
+ */
+const streamDots = (): string => ".".repeat(1 + (Math.floor(Date.now() / 500) % 3));
 
 /**
  * Group events into call blocks before rendering: a model call is its
@@ -165,9 +171,12 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
 /**
  * One model call as a single block: exactly one timestamped header —
  * provider/model, stop reason, tokens and cost from model_call_end, or the
- * request's provider/model plus "streaming…" while the call is live — with
- * the request body and the response (output/thinking) nested inside.
- * Expansion keeps the lazy full-prompt-file behavior.
+ * request's provider/model plus "streaming…" while the call is live — on a
+ * full-width purple band behind a two-character ◉/◌ gutter, so a scan of
+ * the timeline separates model calls from tool work without reading a
+ * word. The request body and the response (output/thinking) indent under
+ * the header; → marks request lines and ← marks response lines. Expansion
+ * keeps the lazy full-prompt-file behavior.
  */
 function renderModelCallBlock(
   group: TimelineGroup,
@@ -188,15 +197,29 @@ function renderModelCallBlock(
   const time = String(members[0]!.t ?? "").slice(11, 19);
   if (end) {
     const usage = (end.usage ?? {}) as { totalTokens?: number; input?: number; output?: number };
-    eventLines.push(` ${GR}${time}${R} ${M}◉${R} ${W}${String(end.provider)}${R}/${String(end.model)} ${statusColor(String(end.stopReason))}${String(end.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}tok ${Y}${Number(end.cost ?? 0).toFixed(5)}${R}`);
+    // Header band: purple behind white names makes model calls readable in
+    // a scan; tokens, cost, and stop reason keep their value tones.
+    eventLines.push(
+      background(
+        fit(
+          `${WHITE}◉ ${GR}${time}${R} ${B}${WHITE}${String(end.provider)}${R}/${B}${WHITE}${String(end.model)}${R} ${statusColor(String(end.stopReason))}${String(end.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}${D}tok${R} ${Y}${Number(end.cost ?? 0).toFixed(5)}${R}`,
+          cols,
+        ),
+        PURPLE_BG,
+      ),
+    );
   } else if (select?.error) {
-    eventLines.push(` ${GR}${time}${R} ${RED}select error ${String(select.error)}${R}`);
+    eventLines.push(
+      background(fit(`${WHITE}◉ ${GR}${time}${R} ${RED}select error ${String(select.error)}${R}`, cols), PURPLE_BG),
+    );
   } else {
     // Live call: name what the model is about to answer.
     const provider = String(request?.provider ?? "");
     const model = String(request?.model ?? "");
     const name = provider || model ? `${provider}${provider && model ? "/" : ""}${model}` : "model";
-    eventLines.push(` ${GR}${time}${R} ${BL}◌${R} ${C}${name}${R} ${Y}streaming…${R}`);
+    eventLines.push(
+      background(fit(`${WHITE}◌ ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
+    );
   }
   // Selection detail stays available under the block (expanded only).
   if (expandedEvent && select && Array.isArray(select.candidates)) {
@@ -248,7 +271,7 @@ function renderModelCallBlock(
       const text = chunk.text.trim();
       if (!text) continue;
       const isThinking = chunk.kind === "thinking";
-      eventLines.push(`    ${M}${isThinking ? "thinking" : "output"}${R}${Y} live${R}`);
+      eventLines.push(`    ${M}${isThinking ? "thinking" : "output"}${R}${Y} live${streamDots()}${R}`);
       for (const wrapped of wrapText(text, Math.max(30, cols - 6))) {
         eventLines.push(`    ${isThinking ? D : W}${wrapped}${R}`);
       }
@@ -386,10 +409,12 @@ function toolResultLines(
 /**
  * One tool call as a single block: exactly one timestamped header naming the
  * tool and its outcome (ok/ERR, duration; "running…" while the completion is
- * missing), the request as a "→ request" line (human args; the full key:
- * value body when expanded), and the response as a "← response" body shaped
- * per tool — the edit diff, the result text for read/search and friends, the
- * error message in red on failure.
+ * missing) on a full-width charcoal band behind a two-character gutter icon
+ * (✎ edits, ⚡ everything else), so tool work reads apart from model calls.
+ * The request as a "→ request" line (human args; the full key: value body
+ * when expanded), and the response as a "← response" body shaped per tool —
+ * the edit diff, the result text for read/search and friends, the error
+ * message in red on failure.
  */
 function renderToolCallBlock(
   start: TimelineEventLike,
@@ -403,11 +428,19 @@ function renderToolCallBlock(
   const args = (start.args ?? (start as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
   const human = describeToolArgs(tool, args ?? undefined);
   const running = completion === undefined;
+  // Header band: charcoal keeps tool work readable apart from purple model
+  // calls; name, outcome, and duration keep their tones.
   eventLines.push(
-    ` ${GR}${time}${R} ${!running && isEdit ? `${G}✎${R}` : `${Y}⚡${R}`} ${B}${tool}${R}` +
-      (running
-        ? ` ${Y}running…${R}`
-        : ` ${completion!.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof completion!.durationMs === "number" ? ` ${D}${completion!.durationMs}ms${R}` : ""}`),
+    background(
+      fit(
+        `${!running && isEdit ? `${G}✎ ` : `${Y}⚡ `}${GR}${time}${R} ${B}${W}${tool}${R}` +
+          (running
+            ? ` ${Y}running…${streamDots()}${R}`
+            : ` ${completion!.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof completion!.durationMs === "number" ? ` ${D}${completion!.durationMs}ms${R}` : ""}`),
+        cols,
+      ),
+      PANEL_BG,
+    ),
   );
   // The request: one-line human args by default; key: value body expanded.
   eventLines.push(`    ${Y}→${R} ${D}request${R}${human ? ` ${W}${trunc(human, Math.max(12, cols - 8))}${R}` : ""}`);
@@ -660,13 +693,23 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       body = clipLines(w.lines, bodyH);
     } else if (section === "timeline") {
       const eventLines: string[] = [];
-      /** Rendered line span per call block, for cursor mapping and zebra. */
-      const spans: Array<{ start: number; end: number; rep: number }> = [];
+      /**
+       * Rendered line span per call block, for cursor mapping and zebra:
+       * band is the header line (kept free of stripes), expanded marks
+       * bodies that read as one canvas. Blank separators join no span.
+       */
+      const spans: Array<{ start: number; end: number; rep: number; band: number; expanded: boolean }> = [];
       // One block per call: a model call carries its select/request/end as a
       // unit, a tool call its start/completion. Plain blocks fall through to
       // the per-event renderer below; verbose mode makes every block plain,
       // so "v" keeps the raw rows.
-      for (const group of groupTimelineCalls(ev, timelineVerbose)) {
+      const groups = groupTimelineCalls(ev, timelineVerbose);
+      for (let gi = 0; gi < groups.length; gi++) {
+        const group = groups[gi]!;
+        // Rhythm: exactly one blank line between blocks, none inside. The
+        // separator sits outside every span, so stripes and cursor mapping
+        // skip it.
+        if (gi > 0) eventLines.push("");
         const start = eventLines.length;
         const event = ev[group.first]!;
         const prefix = " ";
@@ -678,13 +721,13 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         const type = String(event.type);
         if (group.kind === "model") {
           renderModelCallBlock(group, ev, { eventLines, cols, runDir: detail.dir, expandedEvent, thinkingByCall });
-          spans.push({ start, end: eventLines.length, rep: group.first });
+          spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
           continue;
         }
         if (group.kind === "tool") {
           const completion = group.members.length > 1 ? ev[group.members[1]!] : undefined;
           renderToolCallBlock(event, completion, { eventLines, cols, expandedEvent });
-          spans.push({ start, end: eventLines.length, rep: group.first });
+          spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
           continue;
         }
         if (type === "run_start") eventLines.push(`${prefix} ${GR}${time}${R} ${C}▶ start${R} ${agentTone(String(event.agent))}${event.agent}${R}`);
@@ -742,7 +785,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             const text = chunk.text.trim();
             if (!text) continue;
             const isThinking = chunk.kind === "thinking";
-            eventLines.push(`    ${M}${isThinking ? "thinking" : "output"}${R}${Y} live${R}`);
+            eventLines.push(`    ${M}${isThinking ? "thinking" : "output"}${R}${Y} live${streamDots()}${R}`);
             for (const wrapped of wrapText(text, Math.max(30, cols - 6))) {
               eventLines.push(`    ${isThinking ? D : W}${wrapped}${R}`);
             }
@@ -891,12 +934,14 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             break;
           }
         }
-        // Zebra stripes across every other block, skipping the cursor row.
+        // Zebra stripes across every other block. Header bands keep their
+        // own paint (a stripe would erase it), expanded bodies read as one
+        // canvas, and the cursor row wins (selected applies after this).
         for (let g = 0; g < spans.length; g++) {
-          if (g % 2 === 0) continue;
           const span = spans[g]!;
+          if (g % 2 === 0 || span.expanded) continue;
           for (let line = span.start; line < span.end; line++) {
-            if (line === eventSel) continue;
+            if (line === eventSel || line === span.band) continue;
             eventLines[line] = background(fit(eventLines[line]!, cols), ZEBRA_BG);
           }
         }
