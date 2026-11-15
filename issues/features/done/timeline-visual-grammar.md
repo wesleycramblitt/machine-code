@@ -1,8 +1,9 @@
-tags: tui
+commit: 38128c7c47a7069e1a845e1611f73d8bccba1abb
 depends: timeline-absorbs-thinking, timeline-call-blocks, timeline-human-results
 files: src/tui/screens/run-detail/run-detail.ts, src/tui/format.ts
-keywords: Timeline, zebra, background, selected, gutter
+tags: tui
 acceptance: script:build
+keywords: Timeline, zebra, background, selected, gutter
 
 # Run Details: timeline visual grammar — call kinds read at a glance
 
