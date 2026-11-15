@@ -25,7 +25,6 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   if (data === "j" || data === "\x1b[B") {
     if (s.runSection === "timeline") { s.timelineFollow = false; s.eventSel++; }
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel++; }
-    else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll++; }
     else if (s.runSection === "changes") {
       // Diff open: j/k page the diff; otherwise they move the file cursor.
       if (s.changeOpen !== null) s.runScroll++;
@@ -39,7 +38,6 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   if (data === "k" || data === "\x1b[A") {
     if (s.runSection === "timeline") { s.timelineFollow = false; s.eventSel--; }
     else if (s.runSection === "processes") { s.processFollow = false; s.processSel = Math.max(0, s.processSel - 1); }
-    else if (s.runSection === "thinking") { s.thinkingFollow = false; s.thinkingScroll = Math.max(0, s.thinkingScroll - 1); }
     else if (s.runSection === "changes") {
       if (s.changeOpen !== null) s.runScroll = Math.max(0, s.runScroll - 1);
       else s.changeSel = Math.max(0, s.changeSel - 1);
@@ -61,7 +59,6 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
       s.timelineFollow = true;
       s.eventSel = -1; // sentinel: render snaps the cursor to the last line
     }
-    s.thinkingFollow = true;
     ctx.draw();
   };
   if (data === "h" || data === "\x1b[D") { moveSection(-1); return true; }
@@ -171,7 +168,6 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     return true;
   }
   if (data === "g") {
-    s.thinkingFollow = true;
     if (s.runSection === "timeline") {
       s.timelineFollow = true;
       s.eventSel = -1;

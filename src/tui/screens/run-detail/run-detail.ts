@@ -1,8 +1,8 @@
 /**
  * machine_code — run detail screen.
  *
- * Pure render of one run across its sections (overview, timeline, thinking,
- * changes, processes, related, context). Derived data (pending question,
+ * Pure render of one run across its sections (overview, timeline, changes,
+ * processes, related, context). Derived data (pending question,
  * related runs, thinking chunks) is computed inside from the detail; the
  * caller supplies scroll/cursor state plus cached changes and receives
  * updated offsets back.
@@ -10,7 +10,7 @@
 import {
   B, BL, C, D, G, GR, M, R, RED, W, Y, SUBTAB_BG, ZEBRA_BG,
   ago, agentTone, background, command, contextTone, editSummaryLines, fit,
-  fmtMoney, fmtRunTokens, fmtTokens, icon, isEditToolEvent, joinCommands, recentEditEvents,
+  fmtMoney, fmtRunTokens, fmtTokens, icon, joinCommands, recentEditEvents,
   progress, selected, statusColor, stripAnsi, trunc, visible, wrapText, wrapTokenList,
 } from "../../format.js";
 import {
@@ -23,7 +23,6 @@ import { latestUnansweredQuestion, readInbox } from "../../../state/question.js"
 import { reconcileProcessRecords } from "../../../processes/reconcile.js";
 import { readLogTail } from "../../../processes/logs.js";
 import { CAPABILITY_AXES } from "../../../config.js";
-import type { RunEvent } from "../../../state/runs.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { clipLines } from "../types.js";
@@ -74,8 +73,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   let eventCursor = props.eventCursor;
   const timelineFollow = props.timelineFollow;
   const timelineVerbose = props.timelineVerbose;
-  let thinkingScroll = props.thinkingScroll;
-  const thinkingFollow = props.thinkingFollow;
   let childSel = props.childSel;
   let changeSel = props.changeSel;
   let changeOpen = props.changeOpen;
@@ -241,12 +238,12 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       for (const line of wrapText(s.request, cols - 4).slice(0, 3)) lines.push(`  ${W}${line}${R}`);
       const lastThinking = thinking.length > 0 ? thinking[thinking.length - 1] : undefined;
       if (lastThinking) {
-        lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Thinking${R}`);
+        lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Timeline${R}`);
         for (const line of wrapText(lastThinking.text, cols - 4).slice(-3)) lines.push(`  ${D}${line}${R}`);
       }
       const snippetEdits = recentEditEvents(ev, 3);
       if (snippetEdits.length > 0) {
-        lines.push("", ` ${B}${G}Edit snippet${R} ${D}latest ${snippetEdits.length} · full diffs in Thinking${R}`);
+        lines.push("", ` ${B}${G}Edit snippet${R} ${D}latest ${snippetEdits.length} · full diffs in Timeline${R}`);
         for (const editEvent of snippetEdits) {
           const summary = editSummaryLines(editEvent, cols - 6);
           lines.push(`  ${G}✎${R} ${W}${trunc(summary[0] ?? "edit", Math.max(16, cols - 8))}${R}`);
@@ -337,6 +334,22 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               }
             }
           }
+          // Live streaming view: while this call has no model_call_end yet,
+          // its coalesced thinking/response text renders here as it arrives —
+          // the old Thinking tab's live view, now inside the timeline.
+          const openCallChunks = typeof event.call === "number"
+            ? (thinkingByCall.get(`${timelineAttempt}:${event.call}`) ?? [])
+            : [];
+          for (const chunk of openCallChunks) {
+            if (chunk.complete) continue;
+            const text = chunk.text.trim();
+            if (!text) continue;
+            const isThinking = chunk.kind === "thinking";
+            eventLines.push(`    ${M}${isThinking ? "thinking" : "output"}${R}${Y} live${R}`);
+            for (const wrapped of wrapText(text, Math.max(30, cols - 6))) {
+              eventLines.push(`    ${isThinking ? D : W}${wrapped}${R}`);
+            }
+          }
         } else if (type === "model_call_end") {
           const usage = (event.usage ?? {}) as { totalTokens?: number; input?: number; output?: number };
           eventLines.push(`${prefix} ${GR}${time}${R} ${M}◉${R} ${W}${String(event.provider)}${R}/${String(event.model)} ${statusColor(String(event.stopReason))}${String(event.stopReason)}${R} ${G}${fmtTokens(Number(usage.totalTokens ?? 0))}${R}tok ${Y}$${Number(event.cost ?? 0).toFixed(5)}${R}`);
@@ -386,8 +399,9 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             eventLines.push(`    ${D}input ${usage.input ?? 0}  output ${usage.output ?? 0}${R}`);
           }
         } else if (type === "model_delta") {
-          // Streaming deltas are coalesced by the Thinking section; showing
-          // each chunk here split the response into unreadable fragments.
+          // Streaming deltas render coalesced under the call's input row
+          // (live view); showing each raw chunk here splits the response
+          // into unreadable fragments.
         } else if (type === "tool_call_start") {
           const startArgs = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
           const human = describeToolArgs(String(event.tool ?? ""), startArgs ?? undefined);
@@ -505,54 +519,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         if (timeWait) lines.push(timeWait);
         body = clipLines(lines, bodyH);
       }
-    } else if (section === "thinking") {
-      // Human-readable output: assistant text interleaved with edit/write
-      // calls rendered as -/+ diff snippets (not raw JSON). Timeline keeps
-      // the full details; this section stays skimmable.
-      const thinkingLines: string[] = [];
-      type ThinkingEntry =
-        | { at: string; kind: "thinking" | "text"; call?: number; complete: boolean; text: string }
-        | { at: string; kind: "edit"; event: RunEvent };
-      const entries: ThinkingEntry[] = [];
-      for (const chunk of thinking) {
-        entries.push({ at: chunk.at, kind: chunk.kind, call: chunk.call, complete: chunk.complete, text: chunk.text });
-      }
-      for (const event of ev) {
-        if (event.type !== "tool_call" || !isEditToolEvent(event)) continue;
-        entries.push({ at: String(event.t ?? ""), kind: "edit", event });
-      }
-      entries.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-      for (const entry of entries) {
-        if (entry.kind === "edit") {
-          const summary = editSummaryLines(entry.event, cols - 6);
-          const failed = Boolean((entry.event as { isError?: unknown }).isError);
-          thinkingLines.push(
-            ` ${GR}${String(entry.at).slice(11, 19)}${R} ${G}✎ edit${R}${failed ? ` ${RED}ERR${R}` : ""} ${W}${trunc(summary[0] ?? "edit", Math.max(16, cols - 24))}${R}`,
-          );
-          for (const line of summary.slice(1)) {
-            const tone = line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
-            thinkingLines.push(`   ${tone}${trunc(line, Math.max(16, cols - 8))}${R}`);
-          }
-          thinkingLines.push("");
-          continue;
-        }
-        const label = entry.kind === "thinking" ? `${M}thinking${R}` : `${C}response${R}`;
-        const live = entry.complete ? "" : `${Y} live${R}`;
-        thinkingLines.push(` ${GR}${String(entry.at).slice(11, 19)}${R} ${D}call ${entry.call ?? "?"}${R} ${label}${live}`);
-        for (const line of wrapText(entry.text, Math.max(20, cols - 6))) thinkingLines.push(` ${entry.kind === "thinking" ? D : W}${line}${R}`);
-        thinkingLines.push("");
-      }
-      if (thinkingLines.length === 0) thinkingLines.push(` ${D}No assistant text recorded yet.${R}`);
-      // In follow mode the eye is on the bottom line, so pin the wait
-      // there too — the header copy covers the top of the viewport.
-      const thinkWait =
-        waiting && thinkingFollow && waiting.kind !== "input" && waiting.kind !== "paused" ? waitingLine() : null;
-      const viewport = bodyH - lines.length - (thinkWait ? 1 : 0);
-      if (thinkingFollow) thinkingScroll = Math.max(0, thinkingLines.length - viewport);
-      thinkingScroll = Math.max(0, Math.min(thinkingScroll, Math.max(0, thinkingLines.length - viewport)));
-      lines.push(...thinkingLines.slice(thinkingScroll, thinkingScroll + viewport));
-      if (thinkWait) lines.push(thinkWait);
-      body = clipLines(lines, bodyH);
     } else if (section === "changes") {
       const changes = props.changes;
       const files = changes.files;
@@ -680,7 +646,6 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     processSel,
     eventSel,
     eventCursor,
-    thinkingScroll,
     childSel,
     changeSel,
     changeOpen,

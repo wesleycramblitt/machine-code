@@ -577,7 +577,7 @@ export function editEventArgs(event: RunEvent): Record<string, unknown> {
 
 /**
  * Human-readable edit rendering: path plus every hunk as -/+ diff lines.
- * Timeline keeps full JSON; Thinking and Overview use this instead.
+ * Timeline keeps full JSON; Overview uses this instead.
  * Capped so a giant write cannot flood the section.
  */
 export function editSummaryLines(event: RunEvent, width: number, maxLines = 30): string[] {
