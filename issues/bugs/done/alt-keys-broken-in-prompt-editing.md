@@ -1,8 +1,9 @@
+commit: 9899f1899af61689d472d958bfeef8080c9273a0
 priority: high
-tags: tui, input
 files: src/tui.ts, src/tui/format.ts, src/tui/edit.ts, src/tui/screens/composer/keys.ts, src/tui/screens/issue-composer/keys.ts, src/tui/screens/models-keys.ts
-keywords: Alt+d, Alt+f, Alt+b, editLine, depends, word delete, splitKeys, new issue page, new run page
+tags: tui, input
 acceptance: script:build
+keywords: Alt+d, Alt+f, Alt+b, editLine, depends, word delete, splitKeys, new issue page, new run page
 
 # Alt-modified keys break prompt editing (Alt+d jumps to the depends field)
 
