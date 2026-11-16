@@ -3,7 +3,7 @@
  *
  * Typed, path-scoped commands for the reference skill: web fetch, PDF
  * extraction, bundle indexing, and (best-effort) web search. The index writer
- * may only touch ~/.machine_code/references/ and .machine_code/references/links.toml.
+ * may only touch ~/.machine_code/references/ and references/.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -66,7 +66,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   // reference:index — write a bundle to the scoped reference dir.
   out.set("reference:index", {
     name: "reference:index",
-    description: "Write a reference bundle (markdown with front-matter) to the scoped reference directory. Only writes under ~/.machine_code/references/ or .machine_code/references/.",
+    description: "Write a reference bundle (markdown with front-matter) to the scoped reference directory. Only writes under ~/.machine_code/references/ or references/.",
     binary: "node",
     args: () => [],
     schema: {
@@ -80,7 +80,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const content = typeof args.content === "string" ? args.content : "";
       if (!rel || !content) return { text: "reference:index requires path and content", isError: true };
       // Determine the reference root: machine-wide or repo.
-      const repoRef = join(ctx.root, ".machine_code", "references");
+      const repoRef = join(ctx.root, "references");
       const machineRef = referenceStore(layout);
       // Allow writes only under these two roots.
       const roots = [repoRef, machineRef];
@@ -99,7 +99,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       writeFileSync(target, content, "utf8");
       // Update links.toml if writing to repo refs.
       if (root === repoRef) {
-        const linksFile = join(ctx.root, ".machine_code", "references", "links.toml");
+        const linksFile = join(ctx.root, "references", "links.toml");
         if (!existsSync(linksFile)) {
           mkdirSync(dirname(linksFile), { recursive: true });
           writeFileSync(linksFile, "# machine_code reference links\n", "utf8");

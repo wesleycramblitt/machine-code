@@ -3,7 +3,7 @@
  *
  * A deterministic gate for research runs: checks that the run produced at
  * least one new file in the research output paths (issues/, docs/,
- * .machine_code/references/). Replaces the fragile "Outcome: researched"
+ * references/). Replaces the fragile "Outcome: researched"
  * text-match system with a hard git check.
  */
 
@@ -30,12 +30,12 @@ import { layout } from "../paths.js";
 import { listIssues, type Issue } from "../plan/issues.js";
 import { overlapFootprints } from "../plan/overlap.js";
 
-const RESEARCH_PATHS = ["issues/", "docs/", ".machine_code/references/"];
+const RESEARCH_PATHS = ["issues/", "docs/", "references/"];
 
 export const researchVerifyCommand: CommandSpec = {
   name: "research:verify",
   description:
-    "Verify that a research run produced at least one new file in issues/, docs/, or .machine_code/references/. " +
+    "Verify that a research run produced at least one new file in issues/, docs/, or references/. " +
     "Exit 0 if new files exist, 1 if nothing was created.",
   binary: "git",
   args: () => [],
@@ -97,7 +97,7 @@ export const researchVerifyCommand: CommandSpec = {
 
       if (unique.length === 0) {
         return {
-          text: "research:verify failed — no new or modified files in issues/, docs/, or .machine_code/references/",
+          text: "research:verify failed — no new or modified files in issues/, docs/, or references/",
           isError: true,
         };
       }
