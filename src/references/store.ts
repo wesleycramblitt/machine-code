@@ -41,8 +41,8 @@ export function referenceStore(layout: Layout): string {
   return join(layout.home, "references");
 }
 
-export function referenceView(layout: Layout): string {
-  return join(layout.repoRoot, "references");
+export function referenceView(layout: Layout, projectRoot = layout.repoRoot): string {
+  return join(projectRoot, "references");
 }
 
 function stripKnownRoots(value: string): string {
@@ -55,7 +55,11 @@ function stripKnownRoots(value: string): string {
 }
 
 /** Resolve a citation, bundle key, or store-relative path. */
-export function resolveReferencePath(layout: Layout, value: string): ReferencePath | null {
+export function resolveReferencePath(
+  layout: Layout,
+  value: string,
+  projectRoot = layout.repoRoot,
+): ReferencePath | null {
   let raw = value.trim();
   if (!raw || /^[a-z]+:\/\//i.test(raw)) return null;
   const hash = raw.indexOf("#");
@@ -79,7 +83,7 @@ export function resolveReferencePath(layout: Layout, value: string): ReferencePa
   }
   // Not in the machine-level store, or the file doesn't exist there —
   // try the repo-level view (`references/`).
-  for (const root of [referenceView(layout)]) {
+  for (const root of [referenceView(layout, projectRoot)]) {
     const candidate = resolve(root, rel);
     if ((candidate === root || candidate.startsWith(root + sep)) && existsSync(candidate)) {
       return { abs: candidate, rel: relative(root, candidate), ...(anchor ? { anchor } : {}) };
@@ -138,8 +142,13 @@ function capped(text: string, cap: number): { text: string; truncated: boolean }
 }
 
 /** Read one cited store file, optionally narrowed to a heading anchor. */
-export function readReference(layout: Layout, value: string, cap = READ_CAP): ReferenceReadResult {
-  const target = resolveReferencePath(layout, value);
+export function readReference(
+  layout: Layout,
+  value: string,
+  cap = READ_CAP,
+  projectRoot = layout.repoRoot,
+): ReferenceReadResult {
+  const target = resolveReferencePath(layout, value, projectRoot);
   if (!target) return { ok: false, error: `reference is outside the store: ${value}` };
   if (target.rel.split("/").includes("raw")) {
     return { ok: false, error: "raw/ is archival; read the indexed content file instead" };
@@ -173,12 +182,12 @@ export function readReference(layout: Layout, value: string, cap = READ_CAP): Re
 }
 
 /** Search the cheap index layer, never bundle content or raw files. */
-export function findReferences(layout: Layout, query: string, limit = 20): string {
+export function findReferences(layout: Layout, query: string, limit = 20, projectRoot = layout.repoRoot): string {
   const q = query.trim().toLowerCase();
   if (!q) return "reference:find requires query";
   const files: string[] = [];
   const store = referenceStore(layout);
-  const view = referenceView(layout);
+  const view = referenceView(layout, projectRoot);
 
   // Exact symbol/API matches are the most useful result, so scan api-index
   // files before the broader topic map and catalog.
@@ -249,12 +258,13 @@ export function writeReference(
   path: string,
   content: string,
   scope: "store" | "project" = "project",
+  projectRoot = layout.repoRoot,
 ): { ok: true; path: string } | { ok: false; error: string } {
   let rel = stripKnownRoots(path.trim());
   if (!rel || rel.split("/").includes("..") || isAbsolute(rel)) {
     return { ok: false, error: `reference path escapes the store: ${path}` };
   }
-  const root = scope === "project" ? referenceView(layout) : referenceStore(layout);
+  const root = scope === "project" ? referenceView(layout, projectRoot) : referenceStore(layout);
   const abs = resolve(root, rel);
   if (abs !== root && !abs.startsWith(root + sep)) {
     return { ok: false, error: `reference path escapes the store: ${path}` };
@@ -280,7 +290,7 @@ function indexScript(layout: Layout): string | undefined {
 }
 
 /** Regenerate the store catalog/topics/api-index and an optional project view. */
-export function reindexReferences(layout: Layout, check = false): string {
+export function reindexReferences(layout: Layout, check = false, projectRoot = layout.repoRoot): string {
   const script = indexScript(layout);
   if (!script) return "reference:reindex: reference-index.py not found";
   const store = referenceStore(layout);
@@ -290,7 +300,7 @@ export function reindexReferences(layout: Layout, check = false): string {
   });
   const parts = [run.stdout?.trim(), run.stderr?.trim()].filter(Boolean);
   if (run.status !== 0) return `reference:reindex failed: ${parts.join("\n") || `exit ${run.status}`}`;
-  const view = referenceView(layout);
+  const view = referenceView(layout, projectRoot);
   if (existsSync(join(view, "links.yaml"))) {
     const viewRun = spawnSync("python3", [script, "view", view, ...(check ? ["--check"] : [])], {
       encoding: "utf8",
@@ -305,8 +315,8 @@ export function reindexReferences(layout: Layout, check = false): string {
   return parts.filter(Boolean).join("\n") || "reference indexes up to date";
 }
 
-export function referenceFileSize(layout: Layout, value: string): number {
-  const target = resolveReferencePath(layout, value);
+export function referenceFileSize(layout: Layout, value: string, projectRoot = layout.repoRoot): number {
+  const target = resolveReferencePath(layout, value, projectRoot);
   if (!target || !existsSync(target.abs)) return 0;
   try {
     return statSync(target.abs).size;
