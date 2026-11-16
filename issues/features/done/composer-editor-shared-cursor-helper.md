@@ -1,9 +1,9 @@
+commit: 7cef83e8c77006331b24bdc6d2eee1b89bfe8be7
 priority: high
-tags: tui
 files: src/tui/edit.ts, src/tui/state.ts
-keywords: newRunCursor, newIssueCursor, cursor editing, edit helper
+tags: tui
 acceptance: script:build
-depends: 
+keywords: newRunCursor, newIssueCursor, cursor editing, edit helper
 
 # Shared cursor-based text editing helper for TUI composers
 
