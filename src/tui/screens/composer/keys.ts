@@ -7,7 +7,7 @@
  * with app services on the context. Returns true when consumed.
  */
 import { CTRL_D, CTRL_U, HALF_PAGE, modelReasonText } from "../../format.js";
-import { printable } from "../../format.js";
+import { editLine } from "../../edit.js";
 import { loadAvailability } from "../../../availability.js";
 import { layout } from "../../../paths.js";
 import { ENGINEER_WORK_STATUSES, findIssue } from "../../../plan/issues.js";
@@ -54,15 +54,10 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
       ctx.draw();
       return true;
     }
-    if (data === "\x7f" || data === "\b") {
-      s.modelPickText = s.modelPickText.slice(0, -1);
-      s.modelPickEntries = ctx.pickerModels();
-      s.modelPickSel = 0;
-      ctx.draw();
-      return true;
-    }
-    if (!data.startsWith("\x1b")) {
-      s.modelPickText += printable(data);
+    {
+      const edited = editLine({ text: s.modelPickText, cursor: s.modelPickCursor }, data);
+      s.modelPickText = edited.text;
+      s.modelPickCursor = edited.cursor;
       s.modelPickEntries = ctx.pickerModels();
       s.modelPickSel = 0;
       ctx.draw();
@@ -76,8 +71,14 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     if (data === "\x1b[A" || data === "k") { s.itemPickSel = Math.max(0, s.itemPickSel - 1); ctx.draw(); return true; }
     if (data === "\x1b[B" || data === "j") { const list = ctx.pickerIssues(); s.itemPickSel = Math.min(Math.max(0, list.length - 1), s.itemPickSel + 1); ctx.draw(); return true; }
     if (data === "\r" || data === "\n") { const list = ctx.pickerIssues(); const picked = list[s.itemPickSel]; if (picked) ctx.chooseIssue(picked); ctx.draw(); return true; }
-    if (data === "\x7f" || data === "\b") { s.itemPickText = s.itemPickText.slice(0, -1); s.itemPickSel = 0; ctx.draw(); return true; }
-    if (!data.startsWith("\x1b")) { s.itemPickText += printable(data); s.itemPickSel = 0; ctx.draw(); return true; }
+    {
+      const edited = editLine({ text: s.itemPickText, cursor: s.itemPickCursor }, data);
+      s.itemPickText = edited.text;
+      s.itemPickCursor = edited.cursor;
+      s.itemPickSel = 0;
+      ctx.draw();
+      return true;
+    }
     ctx.draw();
     return true;
   }
@@ -85,11 +86,13 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     if (data === "\x1b") { s.newRunInsert = false; ctx.draw(); return true; }
     if (data === "\r" || data === "\n") {
       s.newrun.prompt += "\n";
-    } else if (data === "\x7f" || data === "\b") {
-      s.newrun.prompt = s.newrun.prompt.slice(0, -1);
-    } else if (!data.startsWith("\x1b")) {
-      s.newrun.prompt += printable(data);
+      s.newRunCursor = s.newrun.prompt.length;
+    } else {
+      const edited = editLine({ text: s.newrun.prompt, cursor: s.newRunCursor }, data);
+      s.newrun.prompt = edited.text;
+      s.newRunCursor = edited.cursor;
       if (s.newrun.prompt.length > 12_000) s.newrun.prompt = s.newrun.prompt.slice(0, 12_000);
+      if (s.newRunCursor > s.newrun.prompt.length) s.newRunCursor = s.newrun.prompt.length;
     }
     ctx.draw();
     return true;
@@ -118,8 +121,15 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (s.newRunContextFiltering) {
     if (data === "\x1b") { s.newRunContextFiltering = false; s.newRunContextFilter = ""; s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
     if (data === "\r" || data === "\n") { s.newRunContextFiltering = false; s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
-    if (data === "\x7f" || data === "\b") { s.newRunContextFilter = s.newRunContextFilter.slice(0, -1); s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
-    if (!data.startsWith("\x1b")) { s.newRunContextFilter += printable(data); s.newRunContextItem = 0; s.newRunContextItemKey = null; ctx.draw(); return true; }
+    {
+      const edited = editLine({ text: s.newRunContextFilter, cursor: s.newRunContextFilterCursor }, data);
+      s.newRunContextFilter = edited.text;
+      s.newRunContextFilterCursor = edited.cursor;
+      s.newRunContextItem = 0;
+      s.newRunContextItemKey = null;
+      ctx.draw();
+      return true;
+    }
     ctx.draw();
     return true;
   }
