@@ -1,5 +1,6 @@
 id: b6f9dd
 branch: mc/my-research-agent-can-t-finish-because-of-these-b6f9dd
+commit: e7590ae622d89bd9377ab5e37bb66a5dcc20e1da
 acceptance: script:build
 
 Auto-created from run.
