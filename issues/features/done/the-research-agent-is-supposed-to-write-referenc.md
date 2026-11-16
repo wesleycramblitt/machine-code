@@ -1,5 +1,6 @@
 id: 2a97ab
 branch: mc/the-research-agent-is-supposed-to-write-referenc-2a97ab
+commit: 1ce413a7f4ccfa87e4ba8457eb24ac28a150efed
 acceptance: script:build
 
 Auto-created from run.
