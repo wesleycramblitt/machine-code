@@ -4,14 +4,14 @@
 
 name = "engineer"
 order = 2
-tools = ["context", "inspect", "write", "edit", "glob", "command", "ask", "skill", "finish"]
+tools = ["context", "inspect", "write", "edit", "glob", "command", "ask", "skill", "runData", "finish"]
 readonly = false
 modes = ["direct", "verified"]
 default_mode = "direct"
 blurb = "plans + builds a feature/bug in one run"
 approval = "human"
 ambiguity = "precise"
-capabilities = ["code:read", "context:inherit", "code:write"]
+capabilities = ["code:read", "context:inherit", "code:write", "run:read"]
 
 [mode.direct]
 verification = "direct"

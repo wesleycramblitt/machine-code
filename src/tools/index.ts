@@ -8,6 +8,7 @@
  */
 import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { runDataTool } from "./run-data.js";
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
@@ -2260,6 +2261,7 @@ export type CoreToolName =
   | "inspect"
   | "ask"
   | "skill"
+  | "runData"
   | "finish";
 
 export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): AgentTool[] {
@@ -2274,6 +2276,7 @@ export function coreTools(ctx: ToolContext, allowed: readonly CoreToolName[]): A
     inspect: inspectTool(ctx),
     ask: ctx.ask ? askTool(ctx.ask) : askUnavailable(),
     skill: ctx.skills ? skillTool(ctx.skills) : skillUnavailable(),
+    runData: runDataTool(ctx),
     ...(ctx.finish
       ? { finish: finishTool({ onFinish: ctx.finish }) }
       : { finish: finishUnavailable() }),
