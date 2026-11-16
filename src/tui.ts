@@ -113,15 +113,10 @@ import { commitPlanningFiles } from "./tasks/planning.js";
 
 const NEW_RUN_AGENTS = [...AGENT_NAMES];
 
-/**
- * Min-fit ladder for `f` on the new-run page. Pure numbers in 0.25 steps
- * from 4 up to 8.5, then wraps back to 4. No duplicates — `findIndex`
- * always hits the first match, so repeated values create infinite loops.
- */
-const NEW_RUN_MIN_FITS: number[] = Array.from(
-  { length: Math.round((8.5 - 4) / 0.25) + 1 },
-  (_, i) => 4 + i * 0.25,
-);
+/** MinFit cycle bounds on the new-run page: `f` adds 0.25 and wraps at max. */
+const MIN_FIT_MIN = 4;
+const MIN_FIT_MAX = 8.5;
+const MIN_FIT_STEP = 0.25;
 
 
 
@@ -482,8 +477,11 @@ export async function runTui(): Promise<void> {
   };
 
   const cycleMinFit = () => {
-    const index = NEW_RUN_MIN_FITS.findIndex((value) => value === s.newrun.minFit);
-    s.newrun.minFit = NEW_RUN_MIN_FITS[(index + 1) % NEW_RUN_MIN_FITS.length];
+    // Start from the explicit override, or the agent's configured default when
+    // none is set, so `f` adds 0.25 to what is showing instead of resetting.
+    const current = s.newrun.minFit ?? agentDefFor(s.newRunRepo).minFit ?? MIN_FIT_MIN;
+    const next = current + MIN_FIT_STEP;
+    s.newrun.minFit = next > MIN_FIT_MAX ? MIN_FIT_MIN : next;
   };
 
   const cycleFloors = () => {
