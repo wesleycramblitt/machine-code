@@ -565,7 +565,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // rows, skills, tools, prompt lines) sink to the bottom so opted-in
   // content never reorders them. Selecting never re-sorts by itself.
   const shownItems = props.sortMode === "recent"
-    ? [...filteredItems].sort((a, b) => (b.mtime ?? -1) - (a.mtime ?? -1))
+    ? [...filteredItems].sort((a, b) => ((b as ContextPanelItem).mtime ?? -1) - ((a as ContextPanelItem).mtime ?? -1))
     : props.sortMode === "selected"
       ? [...filteredItems].sort((a, b) => {
           const rank = (item: ContextPanelItem): number => {
