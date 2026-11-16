@@ -1,5 +1,6 @@
 id: d74362
 branch: mc/on-the-new-run-page-make-the-minfit-cycle-smarte-d74362
+commit: 6b231754268852c81d8c7bb1196123ec10e497fb
 acceptance: script:build
 
 Auto-created from run.
