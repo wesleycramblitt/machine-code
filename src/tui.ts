@@ -1274,7 +1274,7 @@ export async function runTui(): Promise<void> {
       const frame = renderSpend({
         cols, narrow, bodyH, theme, toast: s.toast,
         home: l.home,
-        daysWindow: s.spendDaysWindow,
+        hoursWindow: s.spendHoursWindow,
         groupBy: s.spendBy,
         scroll: s.spendScroll,
       });

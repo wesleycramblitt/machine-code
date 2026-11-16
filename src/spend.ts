@@ -67,6 +67,8 @@ export interface SpendSummary {
 export interface SpendQuery {
   /** Include records whose UTC day is within the last N days. */
   days?: number;
+  /** Include records within the last N hours (takes precedence over days). */
+  hours?: number;
   provider?: string;
   model?: string;
   agent?: string;
@@ -95,8 +97,12 @@ function matches(rec: SpendRecord, query: SpendQuery): boolean {
   if (query.agent && rec.agent !== query.agent) return false;
   if (query.project && rec.repoRoot !== query.project) return false;
   if (query.model && !(rec.model === query.model || `${rec.provider}/${rec.model}` === query.model)) return false;
-  if (query.days !== undefined) {
-    const cutoff = Date.now() - query.days * 24 * 60 * 60 * 1000;
+  const cutoff = query.hours !== undefined
+    ? Date.now() - query.hours * 60 * 60 * 1000
+    : query.days !== undefined
+      ? Date.now() - query.days * 24 * 60 * 60 * 1000
+      : undefined;
+  if (cutoff !== undefined) {
     const t = new Date(rec.t).getTime();
     if (!Number.isFinite(t) || t < cutoff) return false;
   }
