@@ -19,6 +19,7 @@ import {
   modelReasonRank, modelReasonText, selected, trunc, visible,
   wrapCommands, wrapText, wrapTokenList,
 } from "../../format.js";
+import { withCursor } from "../../edit.js";
 import { layout } from "../../../paths.js";
 import { ENGINEER_WORK_STATUSES, findIssue, listIssues, singleLine, ISSUE_KINDS } from "../../../plan/issues.js";
 import { resolveAgent } from "../../../agents/config.js";
@@ -664,9 +665,9 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const boxWidth = panelWidth;
   const inner = Math.max(12, boxWidth - 2);
   const promptText = run.prompt || (insert ? "" : run.item ? "Press :! to run the issue" : "Press p to type the task");
-  // Include the cursor before wrapping so a freshly typed trailing space is
-  // not trimmed away until the next keystroke.
-  const promptLines = wrapText(insert ? `${promptText}▌` : promptText, Math.max(8, inner - 3));
+  // Splice the cursor block at the caret column before wrapping so it lands
+  // on the caret's wrapped line; at end of text it still guards a trailing space.
+  const promptLines = wrapText(insert ? withCursor(promptText, cursor) : promptText, Math.max(8, inner - 3));
   const promptActions = insert
     ? joinCommands([
         command("Esc", "Done", undefined, Y),

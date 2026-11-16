@@ -1212,6 +1212,7 @@ export async function runTui(): Promise<void> {
         colon: s.newIssueColon,
         confirm: s.newIssueConfirm,
         fieldEdit: s.newIssueFieldEdit,
+        fieldCursor: s.newIssueFieldCursor,
         editing: !!s.newIssueEdit,
       });
       body = frame.body;

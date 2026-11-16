@@ -106,3 +106,17 @@ export function editLine({ text, cursor }: EditLine, data: string): EditLine {
       return { text: text.slice(0, cursor) + data + text.slice(cursor), cursor: cursor + data.length };
   }
 }
+
+/**
+ * Splice the drawn cursor block into `text` at column `cursor`.
+ *
+ * Render-side twin of `editLine`: the composers wrap AFTER splicing so the
+ * block lands on the caret's wrapped line, at the caret's column. At end of
+ * text the block comes to rest after the last character — exactly where the
+ * next keystroke lands — which also keeps a freshly typed trailing space
+ * untrimmed by the wrap's trimEnd.
+ */
+export function withCursor(text: string, cursor: number, block = "▌"): string {
+  const at = clamp(text, cursor);
+  return text.slice(0, at) + block + text.slice(at);
+}

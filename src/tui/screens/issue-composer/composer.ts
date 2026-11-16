@@ -20,34 +20,51 @@ import {
   PURPLE_FG, YELLOW_FG, RED_FG,
   command, commandBadge, fit, joinCommands, trunc, visible, wrapText,
 } from "../../format.js";
+import { withCursor } from "../../edit.js";
 import type { IssueComposerFrame, IssueComposerProps } from "./types.js";
 
-/** Render an inline editable field line: `Label[key]: value` */
-function fieldLine(key: string, label: string, value: string, isEditing: boolean, cols: number): string {
-  const cursor = isEditing ? `${GR}▌${R}` : "";
-  const prefix = ` ${B}${label}${R}[${C}${key}${R}]:${cursor}`;
-  const display = value.trim() || `${D}(none)${R}`;
+/**
+ * Render an inline editable field line: `Label[key]: value`.
+ *
+ * `caret` is the cursor column inside `value` while the field is edited
+ * inline, or null for a static line. While editing, the block is spliced at
+ * the caret and long values are windowed so the block always stays visible.
+ */
+function fieldLine(key: string, label: string, value: string, caret: number | null, cols: number): string {
+  const block = `${GR}▌${R}`;
+  const prefix = ` ${B}${label}${R}[${C}${key}${R}]:`;
   const maxVal = Math.max(10, cols - visible(prefix) - 3);
+  if (caret === null) {
+    const display = value.trim() || `${D}(none)${R}`;
+    return `${prefix}${trunc(display, maxVal)}`;
+  }
+  const at = Math.max(0, Math.min(value.length, caret));
+  // A `maxVal - 1` value window keeps the block column at maxVal - 2 or
+  // less, so trunc neither cuts the block nor replaces it with "…".
+  const start = Math.max(0, at - (maxVal - 2));
+  const end = Math.min(value.length, start + Math.max(1, maxVal - 1));
+  const windowed = value.slice(start, end);
+  const display = windowed === "" ? `${block}${D}(none)${R}` : withCursor(windowed, at - start, block);
   return `${prefix}${trunc(display, maxVal)}`;
 }
 
 export function renderIssueComposer(props: IssueComposerProps): IssueComposerFrame {
-  const { cols, bodyH, theme, toast, settings, insert, confirm, fieldEdit, editing } = props;
+  const { cols, bodyH, theme, toast, settings, insert, cursor, confirm, fieldEdit, fieldCursor, editing } = props;
   const boxWidth = Math.max(20, cols - 2);
   const inner = Math.max(12, boxWidth - 2);
 
   // ── Above (field lines — scroll away when terminal is short) ──
   const above: string[] = [];
-  above.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags", cols));
-  above.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords", cols));
-  above.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends", cols));
-  above.push(fieldLine("f", "Files", settings.files, fieldEdit === "files", cols));
-  above.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance", cols));
+  above.push(fieldLine("t", "Tags", settings.tags, fieldEdit === "tags" ? fieldCursor : null, cols));
+  above.push(fieldLine("w", "Keywords", settings.keywords, fieldEdit === "keywords" ? fieldCursor : null, cols));
+  above.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends" ? fieldCursor : null, cols));
+  above.push(fieldLine("f", "Files", settings.files, fieldEdit === "files" ? fieldCursor : null, cols));
+  above.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance" ? fieldCursor : null, cols));
   if (settings.kind !== "ideas") {
     const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
-    above.push(fieldLine("v", "Verification", verLabel, fieldEdit === "verification", cols));
+    above.push(fieldLine("v", "Verification", verLabel, fieldEdit === "verification" ? fieldCursor : null, cols));
   }
-  above.push(fieldLine("r", "Review", settings.review === "human" ? "Human" : "None", fieldEdit === "review", cols));
+  above.push(fieldLine("r", "Review", settings.review === "human" ? "Human" : "None", fieldEdit === "review" ? fieldCursor : null, cols));
 
   // ── Block (pinned to bottom: prompt box + bottom bar) ──
   const block: string[] = [];
@@ -58,7 +75,7 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
 
   let displayLines: string[];
   if (insert) {
-    displayLines = wrapText(`${promptText}${GR}▌${R}`, Math.max(8, inner - 3));
+    displayLines = wrapText(withCursor(promptText, cursor, `${GR}▌${R}`), Math.max(8, inner - 3));
   } else if (emptyPrompt) {
     displayLines = [` ${D}Edit body${R}[${C}e${R}]`];
   } else {
