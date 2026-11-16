@@ -1,9 +1,10 @@
+commit: 0b7215f0a9e0447e2653c467a97623843f5dfe98
 priority: high
-tags: tui
-files: src/tui/screens/issue-composer/keys.ts
-keywords: newIssueInsert, prompt editing, newIssueCursor, newIssueFieldEdit
-acceptance: script:build
 depends: composer-editor-shared-cursor-helper
+files: src/tui/screens/issue-composer/keys.ts
+tags: tui
+acceptance: script:build
+keywords: newIssueInsert, prompt editing, newIssueCursor, newIssueFieldEdit
 
 # Cursor editing for the new-issue composer fields
 
