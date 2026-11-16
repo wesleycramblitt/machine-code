@@ -14,15 +14,15 @@ export function handleSpendKeys(s: TuiState, ctx: KeyServices, data: string): bo
   if (data === CTRL_U) { s.spendScroll = Math.max(0, s.spendScroll - HALF_PAGE); ctx.draw(); return true; }
   if (data === CTRL_D) { s.spendScroll += HALF_PAGE; ctx.draw(); return true; }
   if (data === "g") {
-    const values: Array<"provider" | "model" | "day" | "agent"> = ["provider", "model", "day", "agent"];
+    const values: Array<"provider" | "model" | "day" | "agent" | "project"> = ["provider", "model", "day", "agent", "project"];
     s.spendBy = values[(values.indexOf(s.spendBy) + 1) % values.length]!;
     s.spendScroll = 0;
     ctx.draw();
     return true;
   }
   if (data === "d") {
-    const values = [7, 30, 90, 0];
-    s.spendDaysWindow = values[(values.indexOf(s.spendDaysWindow) + 1) % values.length]!;
+    const values = [1, 12, 24, 24 * 7, 24 * 30, 24 * 90, 0];
+    s.spendHoursWindow = values[(values.indexOf(s.spendHoursWindow) + 1) % values.length]!;
     s.spendScroll = 0;
     ctx.draw();
     return true;

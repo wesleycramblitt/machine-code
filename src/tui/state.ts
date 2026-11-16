@@ -103,8 +103,9 @@ export interface TuiState {
   /** Catalogue + provider cache: the 1MB models.json stays parsed across frames. */
   catalogueCache: { mtime: number; doc: CatalogueDocument | null } | null;
   statusesCache: { at: number; statuses: ProviderStatus[] } | null;
-  spendDaysWindow: number;
-  spendBy: "provider" | "model" | "day" | "agent";
+  /** Spend window in hours; 0 means all time. */
+  spendHoursWindow: number;
+  spendBy: "provider" | "model" | "day" | "agent" | "project";
   spendScroll: number;
   settingsSel: number;
   settingsScroll: number;
@@ -271,7 +272,7 @@ export function createTuiState(repoRoot: string): TuiState {
     selectedModelKey: null,
     catalogueCache: null,
     statusesCache: null,
-    spendDaysWindow: 30,
+    spendHoursWindow: 24,
     spendBy: "provider",
     spendScroll: 0,
     settingsSel: 0,
