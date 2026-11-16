@@ -70,6 +70,8 @@ export interface NewRunSeed {
   skills?: string[];
   /** Issue slug. */
   item?: string;
+  /** Issue slugs to pre-select as reference context on the new run. */
+  references?: string[];
 }
 
 
