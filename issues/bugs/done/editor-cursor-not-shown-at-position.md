@@ -1,8 +1,9 @@
+commit: ee4cc5b21bd2f46abbd0adc3b7d201627bbd7fad
 priority: high
-tags: tui, rendering
 files: src/tui/screens/composer/composer.ts, src/tui/screens/issue-composer/composer.ts
-keywords: cursor, ▌, prompt, insert mode, field edit, renderComposer, renderIssueComposer
+tags: tui, rendering
 acceptance: script:build
+keywords: cursor, ▌, prompt, insert mode, field edit, renderComposer, renderIssueComposer
 
 # Editor cursor is always shown at the end of the text, never at the cursor position
 
