@@ -97,12 +97,12 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       }
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, content, "utf8");
-      // Update links.toml if writing to repo refs.
+      // Update links.yaml if writing to repo refs.
       if (root === repoRef) {
-        const linksFile = join(ctx.root, "references", "links.toml");
+        const linksFile = join(ctx.root, "references", "links.yaml");
         if (!existsSync(linksFile)) {
           mkdirSync(dirname(linksFile), { recursive: true });
-          writeFileSync(linksFile, "# machine_code reference links\n", "utf8");
+          writeFileSync(linksFile, `store: ${referenceStore(layout)}\nlinks: []\n`, "utf8");
         }
       }
       return { text: `indexed: ${target}`, isError: false };
