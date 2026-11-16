@@ -18,6 +18,7 @@ import type { IssueBranchState } from "../tasks/issue.js";
 import type { SkillMode } from "../context/references.js";
 import type { ModelSort } from "../catalogue/query.js";
 import type { RunGroup } from "./runs.js";
+import type { ComposerSortMode } from "./screens/composer/types.js";
 import type { DeleteTarget } from "./screens/delete.js";
 import type { RunSection } from "./screens/run-detail/types.js";
 import type { ForkedRunSettings } from "./fork.js";
@@ -189,8 +190,10 @@ export interface TuiState {
   newRunContextIncluded: Set<string>;
   /** Issues-tab select mode: one primary work item vs N references. */
   newRunIssueMode: "primary" | "reference";
-  /** Issues-tab manual sort: selected-first when true, build order otherwise. */
-  newRunSortSelected: boolean;
+  /** Sort mode for the active context tab: default build order, selected-first, or recent-first. */
+  newRunSortMode: ComposerSortMode;
+  /** References-tab scope: false filters to the repo view (references/) only. */
+  newRunReferencesAll: boolean;
   /** Explicit per-skill mode choices (include | on-demand | exclude). */
   newRunSkillModes: Map<string, SkillMode>;
   /** Modes as rendered this frame (single source for space-cycling). */
@@ -341,7 +344,8 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunContextExcluded: new Set<string>(),
     newRunContextIncluded: new Set<string>(),
     newRunIssueMode: "primary",
-    newRunSortSelected: false,
+    newRunSortMode: "default",
+    newRunReferencesAll: true,
     newRunSkillModes: new Map<string, SkillMode>(),
     newRunSkillShown: new Map<string, SkillMode>(),
     newRunRequiredSkills: [],

@@ -331,7 +331,11 @@ export interface ReferenceEntry {
   /** Store-relative target path. */
   path: string;
   bytes: number;
+  /** File mtime (ms since epoch) driving the recent sort. */
+  mtime: number;
   exists: boolean;
+  /** True when the bundle lives under the repo view (references/), not the machine store. */
+  repo: boolean;
 }
 
 const LIST_CAP = 500;
@@ -349,12 +353,22 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
     if (seen.has(citation) || out.length >= LIST_CAP) return;
     seen.add(citation);
     let bytes = 0;
+    let mtime = 0;
     try {
-      bytes = statSync(abs).size;
+      const st = statSync(abs);
+      bytes = st.size;
+      mtime = st.mtimeMs;
     } catch {
       // keep the row visible with an unknown size
     }
-    out.push({ citation, path: relative(root, abs), bytes, exists: existsSync(abs) });
+    out.push({
+      citation,
+      path: relative(root, abs),
+      bytes,
+      mtime,
+      exists: existsSync(abs),
+      repo: root === referenceView(layout),
+    });
   };
   for (const root of [store, referenceView(layout)]) {
     if (!existsSync(root)) continue;

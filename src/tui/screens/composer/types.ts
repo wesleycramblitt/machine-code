@@ -25,7 +25,12 @@ export interface ContextPanelItem {
   fixed?: boolean;
   available?: boolean;
   counted?: boolean;
+  /** File mtime (ms since epoch) driving the recent sort; undefined items sink to the bottom. */
+  mtime?: number;
 }
+
+/** Context-tab sort modes cycled by `s`. */
+export type ComposerSortMode = "default" | "selected" | "recent";
 
 export type ComposerRun = ForkedRunSettings;
 
@@ -71,8 +76,10 @@ export interface ComposerProps extends Viewport {
   contextFiltering: boolean;
   excluded: ReadonlySet<string>;
   included: ReadonlySet<string>;
-  /** Issues-tab manual sort: selected-first when true, build order otherwise. */
-  sortSelected: boolean;
+  /** Context-tab sort mode: build order, selected-first, or recent-first. */
+  sortMode: ComposerSortMode;
+  /** References-tab scope: false filters to the repo view (references/) only. */
+  referencesAll: boolean;
   /** Issues-tab select mode: exactly one primary vs N references. */
   issueMode: "primary" | "reference";
   skillModes: ReadonlyMap<string, SkillMode>;
