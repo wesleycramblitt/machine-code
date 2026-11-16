@@ -111,6 +111,23 @@ export function runnableIssues(
       if (issue.depends.some((dep) => dep !== issue.slug && known.has(dep) && !satisfied.has(dep))) return false;
       // Already being worked, or its files overlap a running orchestrator issue.
       if (activeItems.has(issue.slug)) return false;
+      // A researched idea has no retry ladder: once the orchestrator has
+      // started research on it (slug in the dispatch ledger), do not relaunch
+      // a duplicate — unless that research never produced a result (it
+      // hard-failed or was cancelled), which leaves the idea genuinely
+      // unresearched and fit to try again. Features and bugs are untouched:
+      // their failed-work statuses legitimately re-dispatch after a run ends.
+      if (
+        issue.kind === "ideas" &&
+        startedSlugs.includes(issue.slug) &&
+        !runs.some(
+          (run) =>
+            runItemId(run) === issue.slug &&
+            (RUN_FAILURE_STATES.includes(run.status) || run.status === "cancelled"),
+        )
+      ) {
+        return false;
+      }
       return overlapFootprints(issue.files, runningFootprints).length === 0;
     })
     .sort(
