@@ -89,12 +89,14 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "issue") {
+      const agent = row.itemKind === "ideas" ? "research" : "engineer";
       if (row.effective === "done") {
-        ctx.notify(`${row.slug} is done; move it back to todo before a new run`);
+        // A done issue cannot be a run's main item; open the new run page
+        // with it pre-selected as a reference issue instead.
+        ctx.startNewRun(undefined, repoForRow(row), { agent, references: [row.slug] });
         ctx.draw();
         return true;
       }
-      const agent = row.itemKind === "ideas" ? "research" : "engineer";
       ctx.startNewRun(undefined, repoForRow(row), { agent, item: row.slug });
       ctx.draw();
       return true;
