@@ -1,8 +1,9 @@
+commit: b7b3c7fe21fd24e38dbeff1a58df9c1377c35f29
 priority: high
-tags: tools, agents
 files: src/tools/index.ts, src/tools/run-data.ts
-keywords: readRun, listRuns, Run Summary, past runs, run data
+tags: tools, agents
 acceptance: script:build
+keywords: readRun, listRuns, Run Summary, past runs, run data
 
 # Give research and engineer agents a dedicated tool to read past runs
 
