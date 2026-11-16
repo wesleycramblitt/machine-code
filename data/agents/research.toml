@@ -4,13 +4,13 @@
 
 name = "research"
 order = 1
-tools = ["context", "inspect", "glob", "command", "ask", "skill", "runData", "write", "finish"]
+tools = ["context", "inspect", "glob", "command", "ask", "skill", "runData", "write", "webFetch", "finish"]
 readonly = false
 modes = []
 blurb = "Turn ideas into curated references, documents, and/or features/bugs"
 approval = ""
 ambiguity = "strict"
-capabilities = ["code:read", "context:inherit", "knowledge:write", "run:read"]
+capabilities = ["code:read", "context:inherit", "knowledge:write", "run:read", "web:fetch"]
 allowed_paths = ["issues/", "docs/", ".machine_code/"]
 
 [selection]

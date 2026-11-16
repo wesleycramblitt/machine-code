@@ -20,7 +20,8 @@ export type Capability =
   | "review:write"
   | "knowledge:write"
   | "context:inherit"
-  | "run:read";
+  | "run:read"
+  | "web:fetch";
 
 export const ALL_CAPABILITIES: readonly Capability[] = [
   "code:read",
@@ -31,6 +32,7 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   "knowledge:write",
   "context:inherit",
   "run:read",
+  "web:fetch",
 ];
 
 export function capabilitiesFor(role: AgentName, config: AgentConfig): Capability[] {
