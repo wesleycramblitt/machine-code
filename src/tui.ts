@@ -222,7 +222,7 @@ export async function runTui(): Promise<void> {
     if (status !== null) notify(status === 0 ? `edited ${basename(file)}` : `editor exited ${status}`);
   };
 
-  const launch = (args: string[], repoRoot = l.repoRoot) => {
+  const launch = (args: string[], repoRoot = l.repoRoot, trackJump = true) => {
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
     try {
       const child = spawn(process.execPath, [cliPath, ...args], {
@@ -232,7 +232,10 @@ export async function runTui(): Promise<void> {
         env: process.env,
       });
       child.unref();
-      s.pendingRunAt = Date.now();
+      // Direct starts jump to the new run when its record appears. Backend
+      // starts (the orchestrator spawning one run per issue) must not jump —
+      // the screen would yank focus mid-typing.
+      if (trackJump) s.pendingRunAt = Date.now();
       return true;
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error));
@@ -1687,7 +1690,9 @@ export async function runTui(): Promise<void> {
   // earlier ticks keep running as normal tracked runs.
   const orchestratorLoop = createOrchestratorLoop({
     home: l.home,
-    launch,
+    // The orchestrator spawns runs in the background; suppress the jump so a
+    // freshly started run never yanks focus away from the page being edited.
+    launch: (args, repoRoot) => launch(args, repoRoot, false),
     changed: () => {
       if (!s.newRunInsert) draw();
     },
