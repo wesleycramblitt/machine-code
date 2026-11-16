@@ -4,7 +4,7 @@
  * Prompt editing, field cycling/editing, and `:!` submit.
  * Modeled closely on the new-run composer key handler.
  */
-import { printable } from "../../format.js";
+import { editLine } from "../../edit.js";
 import type { TuiState, NewIssueSettings } from "../../state.js";
 import type { KeyServices } from "../keys.js";
 
@@ -59,18 +59,12 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
       ctx.draw();
       return true;
     }
-    if (data === "\x7f" || data === "\b") {
-      const cur = getField(s.newIssue, s.newIssueFieldEdit);
-      setField(s.newIssue, s.newIssueFieldEdit, cur.slice(0, -1));
-      ctx.draw();
-      return true;
-    }
-    if (!data.startsWith("\x1b")) {
-      const cur = getField(s.newIssue, s.newIssueFieldEdit);
-      if (cur.length < 512) setField(s.newIssue, s.newIssueFieldEdit, `${cur}${printable(data)}`);
-      ctx.draw();
-      return true;
-    }
+    const cur = getField(s.newIssue, s.newIssueFieldEdit);
+    let { text, cursor } = editLine({ text: cur, cursor: s.newIssueFieldCursor }, data);
+    if (text.length > 512) text = text.slice(0, 512);
+    cursor = Math.min(cursor, text.length);
+    setField(s.newIssue, s.newIssueFieldEdit, text);
+    s.newIssueFieldCursor = cursor;
     ctx.draw();
     return true;
   }
@@ -78,14 +72,12 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   // ── Insert mode (prompt editing) ──
   if (s.newIssueInsert) {
     if (data === "\x1b") { s.newIssueInsert = false; ctx.draw(); return true; }
-    if (data === "\r" || data === "\n") {
-      s.newIssue.prompt += "\n";
-    } else if (data === "\x7f" || data === "\b") {
-      s.newIssue.prompt = s.newIssue.prompt.slice(0, -1);
-    } else if (!data.startsWith("\x1b")) {
-      s.newIssue.prompt += printable(data);
-      if (s.newIssue.prompt.length > 12_000) s.newIssue.prompt = s.newIssue.prompt.slice(0, 12_000);
-    }
+    if (data === "\r" || data === "\n") data = "\n";
+    let { text, cursor } = editLine({ text: s.newIssue.prompt, cursor: s.newIssueCursor }, data);
+    if (text.length > 12_000) text = text.slice(0, 12_000);
+    cursor = Math.min(cursor, text.length);
+    s.newIssue.prompt = text;
+    s.newIssueCursor = cursor;
     ctx.draw();
     return true;
   }
@@ -133,7 +125,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
-  if (data === "e") { s.newIssueInsert = true; ctx.draw(); return true; }
+  if (data === "e") { s.newIssueInsert = true; s.newIssueCursor = s.newIssue.prompt.length; ctx.draw(); return true; }
   if (data === "k") {
     if (s.newIssueEdit) { ctx.notify("kind cannot change when editing"); ctx.draw(); return true; }
     const idx = KIND_CYCLE.indexOf(s.newIssue.kind);
@@ -154,6 +146,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   if (data === "a") {
     s.newIssueFieldEdit = "acceptance";
     s.newIssueFieldUndo = s.newIssue.acceptance;
+    s.newIssueFieldCursor = s.newIssue.acceptance.length;
     ctx.notify("edit acceptance gates (comma separated), Enter to confirm, Esc to cancel");
     ctx.draw();
     return true;
@@ -161,6 +154,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   if (data === "t") {
     s.newIssueFieldEdit = "tags";
     s.newIssueFieldUndo = s.newIssue.tags;
+    s.newIssueFieldCursor = s.newIssue.tags.length;
     ctx.notify("edit tags (comma separated), Enter to confirm, Esc to cancel");
     ctx.draw();
     return true;
@@ -168,6 +162,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   if (data === "d") {
     s.newIssueFieldEdit = "depends";
     s.newIssueFieldUndo = s.newIssue.depends;
+    s.newIssueFieldCursor = s.newIssue.depends.length;
     ctx.notify("edit depends (comma separated slugs), Enter to confirm, Esc to cancel");
     ctx.draw();
     return true;
@@ -175,6 +170,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   if (data === "f") {
     s.newIssueFieldEdit = "files";
     s.newIssueFieldUndo = s.newIssue.files;
+    s.newIssueFieldCursor = s.newIssue.files.length;
     ctx.notify("edit files (comma separated paths or globs), Enter to confirm, Esc to cancel");
     ctx.draw();
     return true;
@@ -182,6 +178,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
   if (data === "w") {
     s.newIssueFieldEdit = "keywords";
     s.newIssueFieldUndo = s.newIssue.keywords;
+    s.newIssueFieldCursor = s.newIssue.keywords.length;
     ctx.notify("edit keywords (comma separated), Enter to confirm, Esc to cancel");
     ctx.draw();
     return true;
