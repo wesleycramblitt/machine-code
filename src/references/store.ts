@@ -331,7 +331,11 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
   const store = referenceStore(layout);
   const out: ReferenceEntry[] = [];
   const seen = new Set<string>();
-  const push = (citation: string, abs: string): void => {
+  // The machine-level store only writes under ~/.machine_code/references/,
+  // so a citation from the machine store cannot come from the repo view.
+  // The repo view (references/) is inside the worktree; the same bundle
+  // layout applies to both, so scan each root separately.
+  const push = (citation: string, abs: string, root: string): void => {
     if (seen.has(citation) || out.length >= LIST_CAP) return;
     seen.add(citation);
     let bytes = 0;
@@ -340,12 +344,13 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
     } catch {
       // keep the row visible with an unknown size
     }
-    out.push({ citation, path: relative(store, abs), bytes, exists: existsSync(abs) });
+    out.push({ citation, path: relative(root, abs), bytes, exists: existsSync(abs) });
   };
-  if (existsSync(store)) {
+  for (const root of [store, referenceView(layout)]) {
+    if (!existsSync(root)) continue;
     let products: string[] = [];
     try {
-      products = readdirSync(store, { withFileTypes: true })
+      products = readdirSync(root, { withFileTypes: true })
         .filter((entry) => entry.isDirectory())
         .map((entry) => entry.name)
         .sort();
@@ -355,7 +360,7 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
     for (const product of products) {
       let versions: string[] = [];
       try {
-        versions = readdirSync(join(store, product), { withFileTypes: true })
+        versions = readdirSync(join(root, product), { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
           .map((entry) => entry.name)
           .sort();
@@ -363,17 +368,17 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
         versions = [];
       }
       for (const version of versions) {
-        const index = join(store, product, version, "index.md");
-        if (existsSync(index)) push(`${product}/${version}`, index);
+        const index = join(root, product, version, "index.md");
+        if (existsSync(index)) push(`${product}/${version}`, index, root);
         else {
-          const manifest = join(store, product, version, "manifest.yaml");
-          if (existsSync(manifest)) push(`${product}/${version}`, manifest);
+          const manifest = join(root, product, version, "manifest.yaml");
+          if (existsSync(manifest)) push(`${product}/${version}`, manifest, root);
         }
       }
     }
     for (const name of ["index.md", "topics.yaml"]) {
-      const file = join(store, name);
-      if (existsSync(file)) push(name, file);
+      const file = join(root, name);
+      if (existsSync(file)) push(name, file, root);
     }
   }
   return out.sort((a, b) => (a.citation < b.citation ? -1 : 1));
