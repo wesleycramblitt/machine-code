@@ -152,9 +152,13 @@ export interface TuiState {
   itemPick: "newrun" | null;
   itemPickSel: number;
   itemPickText: string;
+  /** Cursor column (code units) inside the issue-picker filter text. */
+  itemPickCursor: number;
   modelPick: "newrun" | null;
   modelPickSel: number;
   modelPickText: string;
+  /** Cursor column (code units) inside the model-picker filter text. */
+  modelPickCursor: number;
   /** Picker sort: role fit (default) or estimated per-call price. */
   modelPickSort: "fit" | "price";
   modelPickEntries: ModelPickerEntry[];
@@ -175,6 +179,8 @@ export interface TuiState {
   newRunContextSectionKey: string;
   /** `/` filters the active context tab's rows by substring. */
   newRunContextFilter: string;
+  /** Cursor column (code units) inside the context-tab filter text. */
+  newRunContextFilterCursor: number;
   newRunContextFiltering: boolean;
   newRunContextExcluded: Set<string>;
   newRunContextIncluded: Set<string>;
@@ -217,6 +223,8 @@ export interface TuiState {
   newIssueColon: boolean;
   /** Name of the field being edited inline (null = not editing). */
   newIssueFieldEdit: string | null;
+  /** Cursor column (code units) inside the field being edited inline. */
+  newIssueFieldCursor: number;
   /** Original value of the field being edited, for cancel. */
   newIssueFieldUndo: string | undefined;
   /** Edit target: slug/kind/status of the issue being updated (null = creating). */
@@ -307,9 +315,11 @@ export function createTuiState(repoRoot: string): TuiState {
     itemPick: null,
     itemPickSel: 0,
     itemPickText: "",
+    itemPickCursor: 0,
     modelPick: null,
     modelPickSel: 0,
     modelPickText: "",
+    modelPickCursor: 0,
     modelPickSort: "fit",
     modelPickEntries: [],
     newRunInsert: false,
@@ -323,6 +333,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunContextItemAvailable: [],
     newRunContextSectionKey: "",
     newRunContextFilter: "",
+    newRunContextFilterCursor: 0,
     newRunContextFiltering: false,
     newRunContextExcluded: new Set<string>(),
     newRunContextIncluded: new Set<string>(),
@@ -350,6 +361,7 @@ export function createTuiState(repoRoot: string): TuiState {
     newIssueCursor: 0,
     newIssueColon: false,
     newIssueFieldEdit: null,
+    newIssueFieldCursor: 0,
     newIssueFieldUndo: undefined,
     newIssueEdit: null,
     answerText: "",
