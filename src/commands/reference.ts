@@ -121,11 +121,11 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
     readonly: true,
     timeoutMs: 30_000,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const query = typeof args.query === "string" ? args.query : "";
       if (!query.trim()) return { text: "reference:find requires query", isError: true };
       const limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit ?? 20))));
-      return { text: findReferences(layout, query, limit), isError: false };
+      return { text: findReferences(layout, query, limit, ctx.root), isError: false };
     },
   });
 
@@ -141,11 +141,11 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
     readonly: true,
     timeoutMs: 30_000,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const path = typeof args.path === "string" ? args.path : "";
       if (!path.trim()) return { text: "reference:read requires path", isError: true };
       const cap = Math.max(1_024, Math.min(64 * 1_024, Math.floor(Number(args.limit ?? 12 * 1_024))));
-      const result = readReference(layout, path, cap);
+      const result = readReference(layout, path, cap, ctx.root);
       if (!result.ok) return { text: result.error, isError: true };
       const citation = `${result.path}${result.anchor ? `#${result.anchor}` : ""}`;
       return { text: `${citation}\n\n${result.text}`, isError: false };
@@ -165,12 +165,12 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
     readonly: false,
     timeoutMs: 30_000,
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const path = typeof args.path === "string" ? args.path : "";
       const content = typeof args.content === "string" ? args.content : "";
       if (!path.trim() || !content) return { text: "reference:write requires path and content", isError: true };
       const scope = args.scope === "store" ? "store" : "project";
-      const result = writeReference(layout, path, content, scope);
+      const result = writeReference(layout, path, content, scope, ctx.root);
       if (!result.ok) return { text: result.error, isError: true };
       return { text: `wrote: ${result.path}\nNext: run reference:reindex.`, isError: false };
     },
@@ -187,8 +187,8 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
     readonly: false,
     timeoutMs: 120_000,
-    handler: async (args) => {
-      const result = reindexReferences(layout, args.check === true);
+    handler: async (args, ctx) => {
+      const result = reindexReferences(layout, args.check === true, ctx.root);
       return { text: result, isError: /failed|not found|required/i.test(result) };
     },
   });
