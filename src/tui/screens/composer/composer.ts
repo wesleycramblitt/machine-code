@@ -373,8 +373,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // Row order stays fixed per section (build order) regardless of include/
   // exclude/mode state: the render marks (✓ / ✕ / · / mode tags) convey state,
   // so re-sorting would only make rows and the cursor jump on toggle.
-  const floorText = run.floors === "role" ? `role${ap ? ` ${ap.minFit}` : ""}` : run.floors;
-  const fitText = run.minFit === undefined ? `role${ap ? ` ${ap.minFit}` : ""}` : String(run.minFit);
+  // No "role" terminology: the floor/fit panes show the plain effective number
+  // (agent default when no explicit override is set).
+  const floorText = run.floors === "role" ? (ap ? String(ap.minFit) : run.floors) : run.floors;
+  const fitText = run.minFit === undefined ? (ap ? String(ap.minFit) : "?") : String(run.minFit);
   const estimateCost = preview.estimate
     ? fmtMoney(
         ((preview.estimate as { inputTokens: number }).inputTokens * (preview.model?.pricing.input ?? 0) +
