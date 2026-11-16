@@ -57,11 +57,11 @@ export function resolveGates(
   return packet.acceptance.map((a) => ({ command: a.command, args: a.args ?? {}, required: true }));
 }
 
-/** Capped failure log for the repair pass. Exit code is the contract. */
+/** Full failure log for the repair pass. Exit code is the contract. */
 export function gateFailureText(results: readonly GateResult[]): string {
   return results
     .filter((result) => !result.passed)
-    .map((result) => `$ ${result.command}\n${result.output.trim().slice(-3_000) || "(no output)"}`)
+    .map((result) => `$ ${result.command}\n${result.output.trim() || "(no output)"}`)
     .join("\n\n");
 }
 
