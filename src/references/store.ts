@@ -42,7 +42,7 @@ export function referenceStore(layout: Layout): string {
 }
 
 export function referenceView(layout: Layout): string {
-  return join(layout.repoDir, "references");
+  return join(layout.repoRoot, "references");
 }
 
 function stripKnownRoots(value: string): string {
