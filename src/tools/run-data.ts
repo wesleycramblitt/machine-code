@@ -65,16 +65,16 @@ function resolveLayout(ctx: ToolContext, repo: string | undefined): Layout | nul
 
 /** Find a run by id: the target project first, else across all registered
  *  projects, accepting a unique id suffix. Mirrors run:show's findRun. */
-function findRun(layout: Layout, home: string, id: string): { layout: Layout; summary: RunSummary } | null {
-  const local = readRun(layout, id);
-  if (local) return { layout, summary: local.summary };
-  for (const project of listProjects(home)) {
+function findRun(base: Layout, id: string): { layout: Layout; summary: RunSummary } | null {
+  const local = readRun(base, id);
+  if (local) return { layout: base, summary: local.summary };
+  for (const project of listProjects(home())) {
     const rl = layout(project);
     const r = readRun(rl, id);
     if (r) return { layout: rl, summary: r.summary };
   }
   if (id.length >= 4) {
-    const matches = listAllRuns(home).filter((run) => run.id.endsWith(id) || run.id.includes(id));
+    const matches = listAllRuns(home()).filter((run) => run.id.endsWith(id) || run.id.includes(id));
     if (matches.length === 1) {
       const rl = layout(matches[0]!.repoRoot);
       const r = readRun(rl, matches[0]!.id);
@@ -142,15 +142,14 @@ export function runDataTool(ctx: ToolContext): AgentTool<typeof RunDataParams> {
         }
         const select = resolveLayout(ctx, params.repo);
         if (!select) return fail(`no registered project matching repo "${params.repo}"`);
-        const home = homeOf(ctx);
         if (params.action === "list") {
           const limit = Math.max(1, Math.min(50, Math.floor(Number(params.limit) || 20)));
-          return ok(listText(select, home, limit));
+          return ok(listText(select, limit));
         }
         const id = params.id?.trim() ?? "";
         if (!id) return fail("read requires a run id");
         if (!ID_RE.test(id)) return fail(`invalid run id: ${id}`);
-        const found = findRun(select, home, id);
+        const found = findRun(select, id);
         if (!found) return fail(`no run ${id}`);
         return ok(readText(found));
       } catch (error) {
