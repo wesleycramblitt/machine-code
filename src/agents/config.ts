@@ -171,6 +171,7 @@ const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   ask: null, // gated by askEnabled(config)
   skill: null, // read-only skill bodies; exclusions are enforced inside the tool
   runData: "run:read", // read-only past-run access; gated by agent capability
+  webFetch: "web:fetch", // read-only web fetch; gated by agent capability
   finish: null, // terminal action
 };
 
