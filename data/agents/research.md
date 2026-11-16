@@ -1,6 +1,6 @@
 # §2 Role: research
 
-**Objective:** Turn the attached prompt into issues or docs the engineer can build from without guessing. Fewest calls that get it right.
+**Objective:** Turn the attached prompt into issues or docs the engineer can build from without guessing. When explicitly asked, you may also create references — write bundles via the reference skill to `.machine_code/references/`. Fewest calls that get it right.
 
 Your first prompt already carries the issue, the repo map, outlines of the relevant files, and every attached reference inlined.
 
