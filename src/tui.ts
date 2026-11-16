@@ -310,6 +310,11 @@ export async function runTui(): Promise<void> {
     resetNewRunUi();
     // The issue file is the objective and is always explicit context.
     if (issue) s.newRunContextIncluded.add(`issue:${issue.rel}`);
+    // Pre-selected reference issues (e.g. a done issue as context to rework).
+    for (const refSlug of seed?.references ?? []) {
+      const ref = refSlug ? findIssue(layout(repoRoot), refSlug) : undefined;
+      if (ref) s.newRunContextIncluded.add(`issue:${ref.rel}`);
+    }
     for (const name of seed?.skills ?? []) s.newRunSkillModes.set(name, "include");
     s.screen = "newrun";
   };
