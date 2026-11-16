@@ -499,7 +499,15 @@ export function wrapTokenList(tokens: readonly string[], width: number, gap: str
   return lines.map((line) => (visible(line) > width ? trunc(line, width) : line));
 }
 
-/** Split a raw stdin read into keypresses, keeping ANSI sequences intact. */
+/**
+ * Split a raw stdin read into keypresses, keeping ANSI sequences intact.
+ *
+ * Alt+key arrives as an escape-prefixed pair (`\x1bd` for Alt+d). Keep such a
+ * pair together so editors receive one key instead of a bare ESC (which would
+ * exit insert mode) followed by a plain letter (which would fire a normal-mode
+ * command). A lone ESC — the pair cut off at the end of the read — still
+ * yields a bare `"\x1b"`.
+ */
 export function splitKeys(input: string): string[] {
   const keys: string[] = [];
   let index = 0;
@@ -511,6 +519,10 @@ export function splitKeys(input: string): string[] {
         while (end < input.length && !/[@-~]/.test(input[end]!)) end += 1;
         keys.push(input.slice(index, end + 1));
         index = end + 1;
+      } else if (next !== undefined && next !== "\x1b" && next >= " ") {
+        // Alt+key: escape plus one printable character travels as one key.
+        keys.push(input.slice(index, index + 2));
+        index += 2;
       } else {
         keys.push("\x1b");
         index += 1;
