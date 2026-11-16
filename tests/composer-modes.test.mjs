@@ -219,7 +219,7 @@ describe("composer issue modes", () => {
     try {
       const s = stubState(root, { newRunContextSectionKey: "section:files" });
       handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
-      assert.equal(s.newRunSortSelected, true);
+      assert.equal(s.newRunSortMode, "selected");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -253,6 +253,8 @@ function stubState(root, overrides = {}) {
     newRunContextItemAvailable: [],
     newRunContextSectionKey: "section:issues",
     newRunIssueMode: "primary",
+    newRunSortMode: "default",
+    newRunReferencesAll: true,
     newRunContextIncluded: new Set(),
     newRunContextExcluded: new Set(),
     newrun: baseRun("engineer"),
@@ -288,13 +290,13 @@ describe("composer issue keys", () => {
         newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
         newRunContextItem: 0,
       });
-      assert.equal(s.newRunSortSelected, undefined);
+      assert.equal(s.newRunSortMode, "default");
       handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
-      assert.equal(s.newRunSortSelected, true);
+      assert.equal(s.newRunSortMode, "selected");
       assert.equal(s.newRunContextItem, 0);
       assert.equal(s.newRunContextItemKey, null);
       handleComposerKeys(s, { draw: () => {}, repoRoot: root }, "s");
-      assert.equal(s.newRunSortSelected, false);
+      assert.equal(s.newRunSortMode, "recent");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -148,8 +148,11 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (!actionable && !referenceOnly) continue;
     const key = `issue:${issue.rel}`;
     let size = 0;
+    let mtime = 0;
     try {
-      size = statSync(join(newRunLayout.repoRoot, issue.rel)).size;
+      const st = statSync(join(newRunLayout.repoRoot, issue.rel));
+      size = st.size;
+      mtime = st.mtimeMs;
     } catch {
       // keep the row visible with an unknown size
     }
@@ -164,6 +167,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       key,
       available: true,
       counted: false,
+      mtime,
     });
   }
   // Both modes list everything; the mode only changes what space does and
@@ -194,6 +198,16 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // per-tab at render time. Selecting never re-sorts by itself.
   const issuesSectionItems = issueItems;
   const fileItems: ContextPanelItem[] = itemsFor(["file"]);
+  // Map rows carry real mtimes so the recent sort orders files, not the
+  // arbitrary scan order of the map.
+  for (const item of fileItems) {
+    const abs = join(repoRoot, item.key.slice("file:".length));
+    try {
+      item.mtime = statSync(abs).mtimeMs;
+    } catch {
+      // missing file: undefined mtime sinks it in the recent sort
+    }
+  }
   const knownFiles = new Set(fileItems.map((item) => item.key));
   // Paths that belong to other context sections; exclude from the file tab.
   const excludedFilePrefixes = [
@@ -211,6 +225,12 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       : hint.matched.length > 0
         ? `suggested: ${hint.matched.slice(0, 3).join(", ")}`
         : "suggested";
+    let mtime = 0;
+    try {
+      mtime = statSync(join(repoRoot, file.path)).mtimeMs;
+    } catch {
+      // missing file: mtime 0 sinks it in the recent sort
+    }
     fileItems.push({
       text: `${file.path} · ${hintLabel}`,
       chars: file.bytes,
@@ -218,6 +238,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       key,
       available: true,
       counted: false,
+      mtime,
     });
   }
   // Attached references first, then every store bundle as
@@ -233,6 +254,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (attachedCitations.has(entry.citation)) continue;
     const rel = entry.path.split("#")[0];
     if (attachedPaths.has(rel) || attachedPaths.has(entry.citation)) continue;
+    // Repo-only scope hides machine-store bundles, so `references/` reads
+    // like the project's own knowledge base. Attached references keep their
+    // row either way: once opted in they stay visible.
+    if (!props.referencesAll && !entry.repo && !included.has(`reference:${entry.citation}`)) continue;
     referenceItems.push({
       text: `${entry.citation} · available`,
       chars: Math.min(entry.bytes, 8 * 1024),
@@ -240,6 +265,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       key: `reference:${entry.citation}`,
       available: true,
       counted: false,
+      mtime: entry.mtime,
     });
   }
   const scriptItems: ContextPanelItem[] = itemsFor(["script"]);
@@ -248,10 +274,13 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     const key = `script:${artifact.name}`;
     if (knownScripts.has(key)) continue;
     let size = 0;
+    let mtime = 0;
     const path = artifactPath(newRunLayout, artifact);
     if (path) {
       try {
-        size = statSync(path).size;
+        const st = statSync(path);
+        size = st.size;
+        mtime = st.mtimeMs;
       } catch {
         // keep the row visible with an unknown size
       }
@@ -263,6 +292,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       key,
       available: true,
       counted: false,
+      mtime,
     });
   }
   const docItems: ContextPanelItem[] = itemsFor(["docs"]);
@@ -271,6 +301,12 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (!file.path.startsWith("docs/")) continue;
     const key = `docs:${file.path}`;
     if (knownDocs.has(key)) continue;
+    let mtime = 0;
+    try {
+      mtime = statSync(join(repoRoot, file.path)).mtimeMs;
+    } catch {
+      // missing file: mtime 0 sinks it in the recent sort
+    }
     docItems.push({
       text: `${file.path} · available`,
       chars: file.bytes,
@@ -278,6 +314,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       key,
       available: true,
       counted: false,
+      mtime,
     });
   }
   const skillSources = ctx.sources.filter((source) => source.kind === "skill");
@@ -522,20 +559,24 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const filteredItems = contextFilter
     ? activeSection.items.filter((item) => item.text.toLowerCase().includes(contextFilter))
     : activeSection.items;
-  // Manual sort only (`s`): fixed rows stay pinned, then the main issue,
-  // then other includes, then the rest — stable within groups. Selecting
-  // never re-sorts by itself.
-  const shownItems = props.sortSelected
-    ? [...filteredItems].sort((a, b) => {
-        const rank = (item: ContextPanelItem): number => {
-          if ((item as { fixed?: boolean }).fixed) return 0;
-          if (item.key === mainIssueKey) return 1;
-          if (included.has(item.key)) return 2;
-          return 3;
-        };
-        return rank(a) - rank(b);
-      })
-    : filteredItems;
+  // Sort by active mode (`s`): selected keeps fixed rows pinned, then the
+  // main issue, then other includes, then the rest — stable within groups.
+  // Recent sorts by file mtime, newest first; rows without an mtime (fixed
+  // rows, skills, tools, prompt lines) sink to the bottom so opted-in
+  // content never reorders them. Selecting never re-sorts by itself.
+  const shownItems = props.sortMode === "recent"
+    ? [...filteredItems].sort((a, b) => (b.mtime ?? -1) - (a.mtime ?? -1))
+    : props.sortMode === "selected"
+      ? [...filteredItems].sort((a, b) => {
+          const rank = (item: ContextPanelItem): number => {
+            if ((item as { fixed?: boolean }).fixed) return 0;
+            if (item.key === mainIssueKey) return 1;
+            if (included.has(item.key)) return 2;
+            return 3;
+          };
+          return rank(a) - rank(b);
+        })
+      : filteredItems;
   contextItemKeys = shownItems.map((item) => item.key);
   contextItemAvailable = shownItems.map(
     (item) => (item as { available?: boolean }).available === true,
@@ -639,7 +680,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const modeCommand = sectionKey === "section:issues"
     ? command("r", "Mode", issueMode === "primary" ? "primary" : "reference", C)
     : "";
-  const sortCommand = command("s", "Sort", props.sortSelected ? "selected" : "default", C);
+  const sortCommand = command("s", "Sort", props.sortMode, C);
+  const refFilterCommand = sectionKey === "section:references"
+    ? command("R", "Refs", props.referencesAll ? "all" : "repo", props.referencesAll ? G : C)
+    : "";
   const contextCommands = panelLine(
     joinCommands([
       compact("h/l", "tabs", Y),
@@ -648,6 +692,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       spaceCommand,
       modeCommand,
       sortCommand,
+      refFilterCommand,
     ]),
     false,
     true,

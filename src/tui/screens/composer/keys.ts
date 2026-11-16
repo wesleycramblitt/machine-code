@@ -141,8 +141,19 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     ctx.draw();
     return true;
   }
+  // `s` cycles the context-tab sort: build order → selected-first → recent.
   if (data === "s") {
-    s.newRunSortSelected = !s.newRunSortSelected;
+    s.newRunSortMode =
+      s.newRunSortMode === "default" ? "selected" :
+      s.newRunSortMode === "selected" ? "recent" : "default";
+    s.newRunContextItem = 0;
+    s.newRunContextItemKey = null;
+    ctx.draw();
+    return true;
+  }
+  // `R` toggles the references-tab scope: repo view only vs all (machine included).
+  if (data === "R" && s.newRunContextSectionKey === "section:references") {
+    s.newRunReferencesAll = !s.newRunReferencesAll;
     s.newRunContextItem = 0;
     s.newRunContextItemKey = null;
     ctx.draw();
