@@ -1,9 +1,10 @@
+commit: 918a84aee9661c1e422bc0f8eb2b193411d3164d
 priority: high
-tags: tui
-files: src/tui/screens/composer/keys.ts
-keywords: newRunInsert, prompt editing, newRunCursor, modelPickText, itemPickText, newRunContextFilter
-acceptance: script:build
 depends: composer-editor-shared-cursor-helper
+files: src/tui/screens/composer/keys.ts
+tags: tui
+acceptance: script:build
+keywords: newRunInsert, prompt editing, newRunCursor, modelPickText, itemPickText, newRunContextFilter
 
 # Cursor editing for the new-run composer fields
 
