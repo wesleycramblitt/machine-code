@@ -248,7 +248,7 @@ export function writeReference(
   layout: Layout,
   path: string,
   content: string,
-  scope: "store" | "project" = "store",
+  scope: "store" | "project" = "project",
 ): { ok: true; path: string } | { ok: false; error: string } {
   let rel = stripKnownRoots(path.trim());
   if (!rel || rel.split("/").includes("..") || isAbsolute(rel)) {

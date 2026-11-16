@@ -155,13 +155,13 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   // reference:write — create one bundle file under the store or project view.
   out.set("reference:write", {
     name: "reference:write",
-    description: "Write one file under the reference store (default) or project view. Use for manifest.yaml, content/*.md, index.md, and links.yaml. Run reference:reindex afterwards.",
+    description: "Write one file under the project view (default, local references/) or the machine reference store. Use for manifest.yaml, content/*.md, index.md, and links.yaml. Run reference:reindex afterwards.",
     binary: "node",
     args: () => [],
     schema: {
       path: { type: "string", required: true, description: "Path relative to the store or project view." },
       content: { type: "string", required: true, description: "File content." },
-      scope: { type: "string", description: "store (default) or project." },
+      scope: { type: "string", description: "project (default) or store." },
     },
     readonly: false,
     timeoutMs: 30_000,
@@ -169,7 +169,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const path = typeof args.path === "string" ? args.path : "";
       const content = typeof args.content === "string" ? args.content : "";
       if (!path.trim() || !content) return { text: "reference:write requires path and content", isError: true };
-      const scope = args.scope === "project" ? "project" : "store";
+      const scope = args.scope === "store" ? "store" : "project";
       const result = writeReference(layout, path, content, scope);
       if (!result.ok) return { text: result.error, isError: true };
       return { text: `wrote: ${result.path}\nNext: run reference:reindex.`, isError: false };
