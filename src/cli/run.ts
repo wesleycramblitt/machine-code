@@ -1188,11 +1188,18 @@ export async function cmdRun(argv: string[]): Promise<number> {
                 await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
               }
             } else {
+              // A failed merge into main is a gate-style failure, not a
+              // terminal re-dispatch: record the conflict on the issue so the
+              // orchestrated continuation run starts "with the error message"
+              // (the assembled context carries the ## Gate failure section)
+              // instead of re-warming context from scratch.
+              const mergeErr = `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}`;
               if (issue.kind !== "ideas") {
-                moveIssue(l, issue.slug, "blocked");
-                await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${issue.slug}`);
+                appendIssueGateFailure(issue.path, mergeErr, gateFailureAttempts(issue.body) + 1);
+                moveIssue(l, issue.slug, "failed-gates");
+                await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
               }
-              result = { ...result, status: "blocked", error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}` };
+              result = { ...result, status: "blocked", error: mergeErr };
             }
           }
         } else {
@@ -1649,11 +1656,15 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
                   await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} DONE] ${resumeIssue.slug}`);
                 }
               } else {
-                result = {
-                  ...result,
-                  status: "blocked",
-                  error: `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}`,
-                };
+                // Same gate-style handling as the direct path above: the merge
+                // failure is appended to the issue so the continued run sees it.
+                const mergeErr = `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}`;
+                if (resumeIssue.kind !== "ideas") {
+                  appendIssueGateFailure(resumeIssue.path, mergeErr, gateFailureAttempts(resumeIssue.body) + 1);
+                  moveIssue(l2, resumeIssue.slug, "failed-gates");
+                  await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} FAILED GATES] ${resumeIssue.slug}`);
+                }
+                result = { ...result, status: "blocked", error: mergeErr };
               }
             }
           } else {
