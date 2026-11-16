@@ -27,6 +27,8 @@ export interface IssueComposerProps extends Viewport {
   confirm: boolean;
   /** Name of the field being edited inline, if any. */
   fieldEdit: string | null;
+  /** Cursor column (code units) inside the field being edited (valid while fieldEdit is set). */
+  fieldCursor: number;
   /** True when editing an existing issue (orange Update badge). */
   editing?: boolean;
 }
