@@ -18,6 +18,8 @@ import { resolveGates, withSyncGate } from "../verify.js";
 import { allCommands } from "../commands/registry.js";
 import { slugify } from "../plan/slug.js";
 import {
+  appendIssueGateFailure,
+  gateFailureAttempts,
   findIssue,
   listIssues,
   writeIssue,
@@ -391,7 +393,17 @@ export async function runIssueBuild(
         };
       }
       if (!commit && result.status === "completed") {
-        result = { ...result, status: "blocked", error: "engineer produced no committable change" };
+        // A completed engineer run with nothing to commit means the model
+        // ended without making changes. Record the reason on the issue and
+        // route it through failed-gates so the orchestrator re-dispatches it
+        // with context instead of leaving it silently parked in todo/.
+        const noChange = "engineer produced no committable change";
+        if (issue.kind !== "ideas") {
+          appendIssueGateFailure(issue.path, noChange, gateFailureAttempts(issue.body) + 1);
+          moveIssue(l, slug, "failed-gates");
+          await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${slug}`);
+        }
+        result = { ...result, status: "blocked", error: noChange };
       } else if (commit) {
         recorder.patchSummary({ commit });
         recorder.event("commit_created", { sha: commit, branch, issue: slug });

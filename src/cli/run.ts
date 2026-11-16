@@ -1164,7 +1164,17 @@ export async function cmdRun(argv: string[]): Promise<number> {
         if (agentNameParsed === "research" && (outcome === "curated" || outcome === "done")) {
           recorder.event("research_no_commit_expected", { outcome });
         } else {
-          result = { ...result, status: "blocked", error: `${agentNameParsed} produced no committable change` };
+          const noChange = `${agentNameParsed} produced no committable change`;
+          // A completed engineer run with nothing to commit means the model
+          // ended without making changes. Same handling as a failed merge:
+          // record the reason on the issue and move it to failed-gates so the
+          // orchestrated continuation re-dispatches with context.
+          if (agentNameParsed === "engineer" && issue.kind !== "ideas") {
+            appendIssueGateFailure(issue.path, noChange, gateFailureAttempts(issue.body) + 1);
+            moveIssue(l, issue.slug, "failed-gates");
+            await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
+          }
+          result = { ...result, status: "blocked", error: noChange };
         }
       } else if (commit) {
         recorder.patchSummary({ commit });
@@ -1672,7 +1682,13 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
             await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} NEEDS HUMAN REVIEW] ${resumeIssue.slug}`);
           }
         } else if (resumeAgent === "engineer") {
-          result = { ...result, status: "blocked", error: "engineer produced no committable change" };
+          const noChange = "engineer produced no committable change";
+          if (resumeIssue.kind !== "ideas") {
+            appendIssueGateFailure(resumeIssue.path, noChange, gateFailureAttempts(resumeIssue.body) + 1);
+            moveIssue(l2, resumeIssue.slug, "failed-gates");
+            await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} FAILED GATES] ${resumeIssue.slug}`);
+          }
+          result = { ...result, status: "blocked", error: noChange };
         } else {
           const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
           if (outcome !== "curated" && outcome !== "done") {
