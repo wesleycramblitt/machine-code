@@ -1,5 +1,6 @@
 id: fabd10
 branch: mc/i-wanted-to-ensure-that-when-the-research-agent-fabd10
+commit: 901fb48fdc1c3b7a3e3b859f3531ad3bc3162895
 acceptance: script:build
 
 Auto-created from run.
