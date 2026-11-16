@@ -78,9 +78,8 @@ export function resolveReferencePath(layout: Layout, value: string): ReferencePa
     return { abs, rel: relative(storeRoot, abs), ...(anchor ? { anchor } : {}) };
   }
   // Not in the machine-level store, or the file doesn't exist there —
-  // try the repo-level view (`.machine_code/references/`) and then the
-  // repo's own `references/` directory.
-  for (const root of [referenceView(layout), join(layout.repoDir, "references")]) {
+  // try the repo-level view (`references/`).
+  for (const root of [referenceView(layout)]) {
     const candidate = resolve(root, rel);
     if ((candidate === root || candidate.startsWith(root + sep)) && existsSync(candidate)) {
       return { abs: candidate, rel: relative(root, candidate), ...(anchor ? { anchor } : {}) };
