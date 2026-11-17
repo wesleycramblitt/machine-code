@@ -1,5 +1,6 @@
 id: 487cd4
 branch: mc/when-orchestrating-when-a-run-becomes-blocked-on-487cd4
+commit: 0337be96a3c3a62f09561c185979066ce7a710aa
 acceptance: research:verify
 
 Auto-created from run.
