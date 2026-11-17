@@ -1,5 +1,6 @@
 id: 4766dd
 branch: mc/add-a-feature-on-each-issue-to-reset-the-branch-4766dd
+commit: 22cd344f23b49d983428960bf3fc999a49616104
 acceptance: script:build
 
 Auto-created from run.
