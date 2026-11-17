@@ -76,17 +76,35 @@ export function resolveReferencePath(
 
   // A bare bundle key resolves to its hand-authored topic map.
   // Two-part keys are <product>/<version>; one-part keys are flat bundles
-  // with no version dir (e.g. mc-26-3-ui-ux).
+  // with no version dir (e.g. mc-26-3-ui-ux) or a product with a single
+  // version (e.g. minecraft-java -> minecraft-java/26.3).
   const parts = rel.split("/").filter(Boolean);
-  if (
+  const isBareKey =
     (parts.length === 2 || parts.length === 1) &&
     !rel.endsWith(".md") &&
-    !rel.endsWith(".yaml")
-  ) {
+    !rel.endsWith(".yaml");
+  if (isBareKey) {
     rel = `${rel}/index.md`;
   }
 
   const storeRoot = referenceStore(layout);
+  // Product-only fallback: <product>/index.md does not exist when the
+  // product has version dirs. If there is exactly one version and it holds
+  // an index.md, resolve to it instead of failing.
+  if (parts.length === 1 && isBareKey) {
+    const single = (() => {
+      try {
+        const entries = readdirSync(join(storeRoot, parts[0]!), { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => e.name);
+        const withIndex = entries.filter((v) => existsSync(join(storeRoot, parts[0]!, v, "index.md")));
+        return withIndex.length === 1 ? withIndex[0] : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+    if (single) rel = `${parts[0]}/${single}/index.md`;
+  }
   const abs = isAbsolute(rel) ? resolve(rel) : resolve(storeRoot, rel);
   const inStore = abs === storeRoot || abs.startsWith(storeRoot + sep);
   if (inStore && existsSync(abs)) {
@@ -215,6 +233,8 @@ export function findReferences(layout: Layout, query: string, limit = 20, projec
       // Flat bundle with no version dir (e.g. mc-26-3-ui-ux).
       const flatApi = join(store, product, "api-index.md");
       if (existsSync(flatApi)) files.push(flatApi);
+      const flatIndex = join(store, product, "index.md");
+      if (existsSync(flatIndex)) files.push(flatIndex);
       let versions: string[] = [];
       try {
         versions = readdirSync(join(store, product), { withFileTypes: true })
@@ -226,6 +246,8 @@ export function findReferences(layout: Layout, query: string, limit = 20, projec
       for (const version of versions) {
         const api = join(store, product, version, "api-index.md");
         if (existsSync(api)) files.push(api);
+        const bundleIndex = join(store, product, version, "index.md");
+        if (existsSync(bundleIndex)) files.push(bundleIndex);
       }
     }
   }
