@@ -1231,6 +1231,17 @@ export async function cmdRun(argv: string[]): Promise<number> {
         moveIssue(l, issue.slug, "failed-gates");
         await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
       }
+    } else {
+      // A hard-blocked run (no gate failure to retry) is terminal until a
+      // human unblocks it: move the issue to blocked/ so the orchestrator
+      // stops re-dispatching it. Skip when the status transitions earlier in
+      // this run already rerouted it to a retryable directory such as
+      // failed-gates.
+      const issue = findIssue(l, itemSlug);
+      if (issue && issue.kind !== "ideas" && issue.status !== "failed-gates") {
+        moveIssue(l, issue.slug, "blocked");
+        await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${issue.slug}`);
+      }
     }
   }
   // A blocked run may have left a sync merge half-resolved. Abort it so the
@@ -1710,6 +1721,17 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
       appendIssueGateFailure(resumeIssue.path, gateFail, gateFailureAttempts(resumeIssue.body) + 1);
       moveIssue(l2, resumeIssue.slug, "failed-gates");
       await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} FAILED GATES] ${resumeIssue.slug}`);
+    } else if (resumeIssue.kind !== "ideas") {
+      // A hard-blocked run (no gate failure to retry) is terminal until a
+      // human unblocks it: move the issue to blocked/ so the orchestrator
+      // stops re-dispatching it. Skip when the status transitions earlier in
+      // this run already rerouted it to a retryable directory such as
+      // failed-gates.
+      const resumed = findIssue(l2, resumeIssue.slug);
+      if (resumed && resumed.status !== "failed-gates") {
+        moveIssue(l2, resumeIssue.slug, "blocked");
+        await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} BLOCKED] ${resumeIssue.slug}`);
+      }
     }
   }
 
