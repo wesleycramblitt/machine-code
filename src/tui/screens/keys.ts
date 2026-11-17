@@ -23,6 +23,10 @@ export interface KeyServices {
   interrupt: (summary: RunSummary | undefined) => void;
   startCorrect: (summary: RunSummary | undefined) => void;
   submitCorrection: () => void;
+  /** Open the prompt-injection composer for a run. */
+  startPrompt: (summary: RunSummary | undefined) => void;
+  /** Inject the typed prompt: control message while running, transcript append when not. */
+  submitPrompt: () => void;
   runDetailData: () => RunDetail | null;
   pendingForRun: (run: RunSummary | undefined) => unknown;
   cycleAgent: () => void;

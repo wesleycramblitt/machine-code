@@ -136,6 +136,7 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   if (data === "a") { ctx.answerRun(detail.summary); ctx.draw(); return true; }
   if (data === "i") { ctx.interrupt(detail.summary); ctx.draw(); return true; }
   if (data === "c") { ctx.startCorrect(detail.summary); ctx.draw(); return true; }
+  if (data === "p") { ctx.startPrompt(detail.summary); ctx.draw(); return true; }
 
   if (data === "D") {
     s.deleteTarget = { kind: "run", run: detail.summary };

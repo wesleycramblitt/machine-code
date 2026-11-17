@@ -750,6 +750,19 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       if (typeof req.seq !== "number" || req.seq <= lastControlSeq) return;
       lastControlSeq = req.seq;
       recorder.event("control", { action: req.action, seq: req.seq });
+      if (req.action === "prompt") {
+        const rawPrompt = (req as { prompt?: unknown }).prompt;
+        const prompt = typeof rawPrompt === "string" ? rawPrompt : "";
+        if (prompt.trim()) {
+          // Inject the prompt as a user message so the next request carries it
+          // (same mechanism the gate-failure append uses below).
+          const msgs = agent?.state.messages ?? carriedMessages ?? [];
+          carriedMessages = [
+            ...msgs,
+            { role: "user", content: prompt, timestamp: Date.now() },
+          ];
+        }
+      }
       if (req.action === "interrupt") {
         interruptRequested = true;
         agent?.abort();

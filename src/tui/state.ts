@@ -25,7 +25,7 @@ import type { ForkedRunSettings } from "./fork.js";
 import type { ModelPickerEntry } from "./format.js";
 
 export type Page = "runs" | "models" | "spend" | "settings";
-export type Screen = "list" | "run" | "newrun" | "newissue" | "answer" | "correct" | "model" | "delete" | "issue" | "orchestrate";
+export type Screen = "list" | "run" | "newrun" | "newissue" | "answer" | "correct" | "prompt" | "model" | "delete" | "issue" | "orchestrate";
 /** Runs list repo scope: every known repo, or the TUI cwd only. */
 export type RunsRepoScope = "all" | "cwd";
 
@@ -244,6 +244,8 @@ export interface TuiState {
   answerPage: number;
   answerOverflow: boolean;
   correctText: string;
+  /** Prompt text typed on the prompt-injection screen. */
+  promptText: string;
   searchMode: boolean;
   searchText: string;
   toast: string;
@@ -381,6 +383,7 @@ export function createTuiState(repoRoot: string): TuiState {
     answerPage: 10,
     answerOverflow: false,
     correctText: "",
+    promptText: "",
     searchMode: false,
     searchText: "",
     toast: "",
