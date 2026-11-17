@@ -317,10 +317,15 @@ export function writeReference(
 }
 
 function indexScript(layout: Layout): string | undefined {
+  // The repo's own script is the authoritative implementation: it stays in
+  // sync with store.ts and references.ts in this tree. External copies shadow
+  // it today and were in danger of going stale, so prefer the shipped one and
+  // fall back to external copies only if it is missing.
+  const shipped = join(packageDataDir(), "scripts", "reference-index.py");
+  if (existsSync(shipped)) return shipped;
   const candidates = [
     join(layout.home, "skills", "reference-index", "reference-index.py"),
     join(process.env.HOME ?? "", ".config", "opencode", "skills", "reference-index", "reference-index.py"),
-    join(packageDataDir(), "scripts", "reference-index.py"),
   ];
   return candidates.find((candidate) => existsSync(candidate));
 }
