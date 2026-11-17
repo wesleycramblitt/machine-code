@@ -43,6 +43,28 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
     ctx.draw();
     return true;
   }
+  if (data === "r") {
+    // `r` arms the two-key `rb` reset: the next `b` (or another `r`) toggles.
+    s.issueResetArm = !s.issueResetArm;
+    ctx.draw();
+    return true;
+  }
+  if (data === "b" && s.issueResetArm && slug) {
+    s.issueResetArm = false;
+    void (async () => {
+      const state = await probeIssueBranch(l, slug);
+      if (s.issueBranch?.slug === slug && s.issueBranch.repoRoot === l.repoRoot) {
+        s.issueBranch = { ...s.issueBranch, state };
+      }
+      ctx.draw();
+      if (!state || state.state.code === "missing") {
+        ctx.notify(`no branch for ${slug} to reset`);
+        return;
+      }
+      spawnCli(["issue", "reset", slug], `reset ${slug} branch queued`);
+    })();
+    return true;
+  }
   if (data === "a" && slug) {
     const issue = findIssue(l, slug);
     if (!issue) { ctx.draw(); return true; }

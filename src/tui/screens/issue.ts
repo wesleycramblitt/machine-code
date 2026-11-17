@@ -137,6 +137,11 @@ export function renderIssue(props: IssueProps): IssueFrame {
         && branchState !== null && isApprovable(branchState)
         ? [command("a", "Approve", undefined, G)]
         : []),
+      // Reset wipes a branch back to origin/main; offered only when one
+      // exists (the branch probe found it missing or unknown otherwise).
+      ...(branchState !== null && branchState.state.code !== "missing"
+        ? [command("rb", "Reset Branch", undefined, Y)]
+        : []),
       command("d", "Delete", undefined, RED),
     ]),
     secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",

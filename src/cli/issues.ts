@@ -35,7 +35,7 @@ import {
   type Issue,
   type IssueStatus,
 } from "../plan/issues.js";
-import { approveIssue, deleteIssue, issueToTaskPacket, unmetDepends, unknownDepends, activeFileConflicts } from "../tasks/issue.js";
+import { approveIssue, deleteIssue, issueToTaskPacket, resetIssueBranch, unmetDepends, unknownDepends, activeFileConflicts } from "../tasks/issue.js";
 import { abortMergeIfInProgress, ensureCommitted, mergeBranchIntoMain } from "../tasks/merge.js";
 import { runItemId } from "../plan/lifecycle.js";
 import { commitPlanningFiles } from "../tasks/planning.js";
@@ -205,6 +205,22 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const child = spawn(process.execPath, [process.argv[1]!, ...args], { stdio: "inherit" });
     const code = await new Promise<number>((resolve) => child.on("exit", (c) => resolve(c ?? 1)));
     return code;
+  }
+
+  if (sub === "reset") {
+    const slug = positional[1];
+    if (!slug) fail("usage: machine_code issue reset <slug>");
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    assertNoActiveRun(l, cleaned, "reset");
+    const result = await resetIssueBranch(l, cleaned);
+    if (!result.ok) {
+      process.stderr.write(`reset ${cleaned}: ${result.detail}\n`);
+      return 1;
+    }
+    process.stdout.write(`${result.detail}\n`);
+    return 0;
   }
 
   if (sub === "list" || sub === "ls" || sub === undefined) {
