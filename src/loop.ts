@@ -751,9 +751,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       lastControlSeq = req.seq;
       recorder.event("control", { action: req.action, seq: req.seq });
       if (req.action === "prompt") {
-        const prompt = typeof (req as { prompt?: unknown }).prompt === "string"
-          ? (req as { prompt?: string }).prompt
-          : "";
+        const rawPrompt = (req as { prompt?: unknown }).prompt;
+        const prompt = typeof rawPrompt === "string" ? rawPrompt : "";
         if (prompt.trim()) {
           // Inject the prompt as a user message so the next request carries it
           // (same mechanism the gate-failure append uses below).
