@@ -1,9 +1,9 @@
-priority: medium
-tags: tui, cli
+commit: 8062fbc114a9753ecfa0ce12facf9873f88d1ac1
 depends: orchestrator-auto-block-on-blocked-run
 files: src/tui/screens/issue-keys.ts, src/cli/issues.ts, src/tui/screens/issue.ts
-keywords: Blocked, blocked, block, unblock
+tags: tui, cli
 acceptance: script:build
+keywords: Blocked, blocked, block, unblock
 
 # Manually block and unblock an issue
 
