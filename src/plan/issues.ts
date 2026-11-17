@@ -57,7 +57,6 @@ export const ENGINEER_WORK_STATUSES: readonly EngineerStatus[] = [
   "todo",
   "failed-gates",
   "failed-human-review",
-  "blocked",
 ];
 /** Display-only status for a todo item with a live run. */
 export type DisplayStatus = IssueStatus | "in-progress";
