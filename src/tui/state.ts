@@ -124,6 +124,8 @@ export interface TuiState {
   orchestrateSel: number;
   /** `:` starts the two-key `:!` start/stop command. */
   orchestrateColon: boolean;
+  /** `r` armed: the next `b` resets the open issue's branch to origin main. */
+  issueResetArm: boolean;
   /** Resolved model preview cache: names per role, keyed by repo+tier+floors. */
   orchestratePreview: { key: string; at: number; engineer: string | null; research: string | null } | null;
   /** Run or issue awaiting final confirmation on the delete screen. */
@@ -290,6 +292,7 @@ export function createTuiState(repoRoot: string): TuiState {
     orchestrateRepo: null,
     orchestrateSel: 0,
     orchestrateColon: false,
+    issueResetArm: false,
     orchestratePreview: null,
     deleteTarget: undefined,
     deleteReturn: "list",

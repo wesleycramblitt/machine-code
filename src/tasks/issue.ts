@@ -49,6 +49,46 @@ async function commitIssues(layout: Layout, message: string): Promise<void> {
   await git(root, ["commit", "-qm", message]).catch(() => undefined);
 }
 
+export interface ResetResult {
+  ok: boolean;
+  branch: string | null;
+  detail: string;
+}
+
+/**
+ * Reset an issue's feature branch to the remote base branch and force-push,
+ * discarding the branch's local and remote work. The local branch is pointed
+ * at `origin/<base>` (hard reset across the branch's worktree when it is
+ * checked out, else an update-ref from the main worktree) and pushed with
+ * --force so the remote copy matches. A no-op when the branch does not exist.
+ * The caller must confirm no run is actively building on the issue first.
+ */
+export async function resetIssueBranch(layout: Layout, slug: string): Promise<ResetResult> {
+  const root = await mainRoot(layout);
+  const branch = await issueBranch(root, layout, slug);
+  if (!branch || !(await branchExists(root, branch))) {
+    return { ok: false, branch: null, detail: `no branch for ${slug}` };
+  }
+  const baseBranch = await defaultBaseBranch(root);
+  const fetch = await git(root, ["fetch", "origin", `refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`]);
+  if (fetch.code !== 0) {
+    return { ok: false, branch, detail: `fetch of origin/${baseBranch} failed` };
+  }
+  const checkout = await branchCheckedOutAt(root, branch);
+  const cwd = checkout ?? root;
+  const target = `origin/${baseBranch}`;
+  const reset = await git(cwd, ["reset", "--hard", target]);
+  if (reset.code !== 0) {
+    return { ok: false, branch, detail: `reset failed: ${reset.stderr.trim() || reset.stdout.trim()}` };
+  }
+  const push = await git(root, ["push", "--force", "origin", `${branch}:${branch}`]);
+  return {
+    ok: push.code === 0,
+    branch,
+    detail: push.code === 0 ? `reset ${branch} to ${target} and pushed` : `push failed: ${push.stderr.trim() || push.stdout.trim()}`,
+  };
+}
+
 /**
  * Bulild waves: issues in ready/ with all deps satisfied.
  */
