@@ -13,6 +13,11 @@
  *       api-index.md        generated symbol -> citation map
  *       content/*.md        small cited files
  *       raw/                archival originals; never read by agents
+ *     <product>/             flat bundle with no version dir (e.g. mc-26-3-ui-ux)
+ *       manifest.yaml
+ *       index.md
+ *       api-index.md
+ *       content/*.md
  *
  * Agents resolve a topic or symbol through the indexes, then read exactly one
  * `content/file.md#anchor`. The store is outside the worktree, so reference
@@ -70,8 +75,14 @@ export function resolveReferencePath(
   if (rel.split("/").includes("..")) return null;
 
   // A bare bundle key resolves to its hand-authored topic map.
+  // Two-part keys are <product>/<version>; one-part keys are flat bundles
+  // with no version dir (e.g. mc-26-3-ui-ux).
   const parts = rel.split("/").filter(Boolean);
-  if (parts.length === 2 && !rel.endsWith(".md") && !rel.endsWith(".yaml")) {
+  if (
+    (parts.length === 2 || parts.length === 1) &&
+    !rel.endsWith(".md") &&
+    !rel.endsWith(".yaml")
+  ) {
     rel = `${rel}/index.md`;
   }
 
@@ -201,6 +212,9 @@ export function findReferences(layout: Layout, query: string, limit = 20, projec
       products = [];
     }
     for (const product of products) {
+      // Flat bundle with no version dir (e.g. mc-26-3-ui-ux).
+      const flatApi = join(store, product, "api-index.md");
+      if (existsSync(flatApi)) files.push(flatApi);
       let versions: string[] = [];
       try {
         versions = readdirSync(join(store, product), { withFileTypes: true })
@@ -382,6 +396,13 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
       products = [];
     }
     for (const product of products) {
+      // Flat bundle with no version dir (e.g. mc-26-3-ui-ux).
+      const flatIndex = join(root, product, "index.md");
+      if (existsSync(flatIndex)) push(product, flatIndex, root);
+      else {
+        const flatManifest = join(root, product, "manifest.yaml");
+        if (existsSync(flatManifest)) push(product, flatManifest, root);
+      }
       let versions: string[] = [];
       try {
         versions = readdirSync(join(root, product), { withFileTypes: true })
