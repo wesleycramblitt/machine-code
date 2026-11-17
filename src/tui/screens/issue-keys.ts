@@ -65,6 +65,17 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
     })();
     return true;
   }
+  if (data === "b" && slug) {
+    // `b` toggles block/unblock for features and bugs. Ideas have no blocked
+    // status, so the key does nothing for them.
+    const issue = findIssue(l, slug);
+    if (issue && issue.kind !== "ideas") {
+      spawnCli(["issue", issue.status === "blocked" ? "unblock" : "block", slug],
+        issue.status === "blocked" ? `unblock ${slug} queued` : `block ${slug} queued`);
+    }
+    ctx.draw();
+    return true;
+  }
   if (data === "a" && slug) {
     const issue = findIssue(l, slug);
     if (!issue) { ctx.draw(); return true; }
