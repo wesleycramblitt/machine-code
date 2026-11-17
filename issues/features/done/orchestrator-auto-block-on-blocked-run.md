@@ -1,8 +1,9 @@
+commit: 9ea8c6b6172d57e9d955f0a7d0d09213cd9a3124
 priority: high
-tags: orchestrator, lifecycle
 files: src/tasks/issue.ts, src/state/outcome.ts, src/plan/issues.ts, src/orchestration/scheduler.ts
-keywords: blocked, Blocked, ENGINEER_WORK_STATUSES, outcome, blocked run
+tags: orchestrator, lifecycle
 acceptance: script:build
+keywords: blocked, Blocked, ENGINEER_WORK_STATUSES, outcome, blocked run
 
 # Stop re-dispatching an issue whose run ends blocked
 
