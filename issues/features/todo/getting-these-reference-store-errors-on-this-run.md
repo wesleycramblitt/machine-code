@@ -44,3 +44,55 @@ Getting these reference store errors on this run. It should be reading the refer
 
 
 Figure out if something is wrong with our reference retrieval system. I attached the reference to that run with the engineer agent.
+
+---
+
+## Diagnosis: reference retrieval system is healthy; the bundle was never in the store
+
+There is no code bug here. The bare `minecraft-java` reference bundle does not
+exist in `~/.machine_code/references/`. That is why the run's `reference:find`
+calls for `HeaderAndFooterLayout`, `CycleButton`, `AbstractSliderButton`, and
+`ScrollableLayout` all returned "no reference index matches" and the agent
+could not read it.
+
+**What is in the store** (confirmed by `reference:find`):
+
+- `minecraft-java-fabric/26.2`
+- `minecraft-java-mob-ai/26.3`
+- `minecraft-java-neoforge/26.1`
+- `minecraft-java-forge/1.20.1`
+- `minecraft-java-local-inference/2026.10.07`
+
+There is no `minecraft-java/<version>/` product directory.
+
+**Evidence the bundle is absent, not just unreindexed:**
+
+- `reference:read minecraft-java/index.md` -> `reference not found: minecraft-java/index.md`
+- `reference:read minecraft-java/26.2/content/...` -> `not found` (the version
+  26.2 lives under `minecraft-java-fabric`, which is a different bundle)
+- `reference:reindex` exits 0 and rebuilds the catalog normally — so the index
+  is current, and it simply has nothing for a bare `minecraft-java`.
+
+**Two triggers compounded in the interrupted run:**
+
+1. The attached reference was never extracted/written into the store under a
+   `minecraft-java/` directory, so no index and no content exists for it. This is
+   the actual failure. Re-attaching the bundle (via `reference:write` or the
+   attach flow writing under `~/.machine_code/references/minecraft-java/
+   content/`) and running `reference:reindex` fixes it.
+2. The agent then mis-called `reference:read` with a `store:` argument. The
+   schema (src/commands/reference.ts:138) accepts only `path` and `limit`, so
+   the extra key was rejected as `unknown store`. That is an agent usage error
+   and a symptom of #1 — the agent reached for `reference:read` with a raw store
+   path only after `reference:find` returned nothing.
+
+**Why `reference:find` cannot find the symbols even after the bundle exists:**
+`findReferences` (src/references/store.ts:185) scans only `index.md`,
+`topics.yaml`, and per-bundle `api-index.md`. It never searches `content/*.md`.
+The vanilla-layout symbols the run wanted live in `content/*.md` and only become
+findable once `reference:reindex` has generated their `api-index.md`. So the
+correct flow after the bundle is in place is: write the bundle, run
+`reference:reindex`, then `reference:find` / `reference:read` work.
+
+**Conclusion:** no change to `src/` is required. The fix is operational: place
+the `minecraft-java` bundle in the store and reindex it.
