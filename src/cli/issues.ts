@@ -207,6 +207,21 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     return code;
   }
 
+  if (sub === "block" || sub === "unblock") {
+    const slug = positional[1];
+    if (!slug) fail(`usage: machine_code issue ${sub} <slug>`);
+    const cleaned = slugify(slug);
+    const issue = findIssue(l, cleaned);
+    if (!issue) fail(`no issue ${cleaned}`);
+    if (issue.kind === "ideas") fail("ideas are researched, not blocked");
+    const to = sub === "block" ? "blocked" : "todo";
+    assertNoActiveRun(l, cleaned, sub);
+    const moved = moveIssue(l, cleaned, to);
+    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(to)}] ${cleaned}`);
+    process.stdout.write(`${sub}ed ${cleaned} → ${moved?.rel ?? ""}\n`);
+    return 0;
+  }
+
   if (sub === "reset") {
     const slug = positional[1];
     if (!slug) fail("usage: machine_code issue reset <slug>");

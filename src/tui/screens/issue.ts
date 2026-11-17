@@ -142,6 +142,10 @@ export function renderIssue(props: IssueProps): IssueFrame {
       ...(branchState !== null && branchState.state.code !== "missing"
         ? [command("rb", "Reset Branch", undefined, Y)]
         : []),
+      // Block/unblock: only features and bugs have a blocked status.
+      ...(issue && issue.kind !== "ideas"
+        ? [command("b", issue.status === "blocked" ? "Unblock" : "Block", undefined, issue.status === "blocked" ? G : Y)]
+        : []),
       command("d", "Delete", undefined, RED),
     ]),
     secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",
