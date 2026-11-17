@@ -105,7 +105,8 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
           writeFileSync(linksFile, `store: ${referenceStore(layout)}\nlinks: []\n`, "utf8");
         }
       }
-      return { text: `indexed: ${target}`, isError: false };
+      const reindexed = reindexReferences(layout, false, ctx.root);
+      return { text: `indexed: ${target}\n${reindexed}`, isError: /failed|not found|required/i.test(reindexed) };
     },
   });
 
@@ -155,7 +156,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   // reference:write — create one bundle file under the store or project view.
   out.set("reference:write", {
     name: "reference:write",
-    description: "Write one file under the project view (default, local references/) or the machine reference store. Use for manifest.yaml, content/*.md, index.md, and links.yaml. Run reference:reindex afterwards.",
+    description: "Write one file under the project view (default, local references/) or the machine reference store. Use for manifest.yaml, content/*.md, index.md, and links.yaml. Regenerates the index afterwards.",
     binary: "node",
     args: () => [],
     schema: {
@@ -172,7 +173,8 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const scope = args.scope === "store" ? "store" : "project";
       const result = writeReference(layout, path, content, scope, ctx.root);
       if (!result.ok) return { text: result.error, isError: true };
-      return { text: `wrote: ${result.path}\nNext: run reference:reindex.`, isError: false };
+      const reindexed = reindexReferences(layout, false, ctx.root);
+      return { text: `wrote: ${result.path}\n${reindexed}`, isError: /failed|not found|required/i.test(reindexed) };
     },
   });
 
