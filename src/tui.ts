@@ -20,9 +20,10 @@ import { effectiveStatus } from "./plan/lifecycle.js";
 import { orchestratorCounters } from "./orchestration/scheduler.js";
 import { readOrchestratorState, updateOrchestratorState, type OrchestratorSettings } from "./orchestration/store.js";
 import { createOrchestratorLoop } from "./orchestration/loop.js";
-import { isPidAlive, listAllRuns, listProjects, readRun, type RunEvent, type RunSummary } from "./state/runs.js";
+import { isPidAlive, listAllRuns, listProjects, readRun, sendControl, type RunEvent, type RunSummary } from "./state/runs.js";
 import { summarizeRun, readStateView } from "./state/outcome.js";
 import { appendInbox, latestUnansweredQuestion, readInbox } from "./state/question.js";
+import { injectPrompt } from "./state/transcript.js";
 import { headerCounts, sortRuns } from "./tui/status.js";
 import {
   RUN_GROUPS,
@@ -44,6 +45,7 @@ import { TABS, renderFooterRows, renderHeader, rightHeaderPath } from "./tui/scr
 import { renderComposer } from "./tui/screens/composer/composer.js";
 import { handleAnswerKeys } from "./tui/screens/answer-keys.js";
 import { handleCorrectKeys } from "./tui/screens/correct-keys.js";
+import { handlePromptKeys } from "./tui/screens/prompt-keys.js";
 import { handleDeleteKeys } from "./tui/screens/delete-keys.js";
 import { handleIssueKeys } from "./tui/screens/issue-keys.js";
 import { handleSettingsKeys } from "./tui/screens/settings-keys.js";
@@ -58,6 +60,7 @@ import { renderIssueComposer } from "./tui/screens/issue-composer/composer.js";
 import { handleIssueComposerKeys } from "./tui/screens/issue-composer/keys.js";
 import { handleRunKeys } from "./tui/screens/run-detail/keys.js";
 import { renderCorrect } from "./tui/screens/correct.js";
+import { renderPrompt } from "./tui/screens/prompt.js";
 import { renderRunDetail } from "./tui/screens/run-detail/run-detail.js";
 import { RUN_SECTIONS, RUN_SECTION_LABEL, type RunSection } from "./tui/screens/run-detail/types.js";
 import { renderRunsList } from "./tui/screens/runs-list.js";
@@ -948,6 +951,29 @@ export async function runTui(): Promise<void> {
     }
   };
 
+  const startPrompt = (summary: RunSummary | undefined) => {
+    if (!summary) return;
+    s.selectedRunId = summary.id;
+    s.promptText = "";
+    s.screen = "prompt";
+  };
+
+  const submitPrompt = () => {
+    const detail = runDetailData();
+    if (!detail || s.promptText.trim().length === 0) { notify("type a prompt"); return; }
+    const prompt = s.promptText;
+    if (detail.summary.status === "running") {
+      // Live run: deliver via the control file so the running process picks it up.
+      sendControl(detail.summary.repoRoot, detail.summary.id, "prompt", { prompt });
+      notify("prompt injected into running run");
+    } else {
+      // Interrupted/paused: append to the transcript; fires as the next resume turn.
+      if (injectPrompt(detail.dir, prompt)) notify("prompt queued for the next resume");
+      else notify("run has no transcript to inject into");
+    }
+    s.screen = "run";
+  };
+
   const runDetailData = (): RunDetail | null => (s.selectedRunId ? findRunDetail(s.selectedRunId) : null);
 
   const currentChanges = (detail: RunDetail): ChangeSummary => {
@@ -1450,6 +1476,21 @@ export async function runTui(): Promise<void> {
       secondary = frame.secondary;
     }
 
+    /* ------------------------------------------------------------ prompt */
+    else if (s.screen === "prompt") {
+      const detail = runDetailData();
+      const frame = renderPrompt({
+        cols,
+        bodyH,
+        promptText: s.promptText,
+        runId: detail ? detail.summary.id : "",
+        running: detail ? detail.summary.status === "running" : false,
+      });
+      body = frame.body;
+      actions = frame.actions;
+      secondary = frame.secondary;
+    }
+
     if (runDetailHeader && runCwd) header[1] = rightHeaderPath(cols, runCwd);
 
     /* ------------------------------------------------------------ compose */
@@ -1714,7 +1755,7 @@ export async function runTui(): Promise<void> {
 
   const keyCtx: KeyServices = {
     draw, notify, launch, openEditor, startNewRun, forkRun, resumeRun, answerRun,
-    interrupt, startCorrect, submitCorrection, runDetailData, pendingForRun,
+    interrupt, startCorrect, submitCorrection, startPrompt, submitPrompt, runDetailData, pendingForRun,
     cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier,
     startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
@@ -1735,6 +1776,7 @@ export async function runTui(): Promise<void> {
     if (s.screen === "delete") return handleDeleteKeys(s, keyCtx, data);
     if (s.screen === "answer") return handleAnswerKeys(s, keyCtx, data);
     if (s.screen === "correct") return handleCorrectKeys(s, keyCtx, data);
+    if (s.screen === "prompt") return handlePromptKeys(s, keyCtx, data);
     if (s.screen === "newissue") return handleIssueComposerKeys(s, keyCtx, data);
     if (s.screen === "newrun") return handleComposerKeys(s, keyCtx, data);
     if (s.screen === "orchestrate") return handleOrchestrateKeys(s, keyCtx, data);

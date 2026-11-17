@@ -63,7 +63,7 @@ export function isPidAlive(pid: number): boolean {
 export function sendControl(
   repoRoot: string,
   runId: string,
-  action: "interrupt" | "cancel" | "pause",
+  action: "interrupt" | "cancel" | "pause" | "prompt",
   data: Record<string, unknown> = {},
 ): number {
   const dir = join(repoRoot, ".machine_code", "local", "runs", runId);

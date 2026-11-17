@@ -57,6 +57,21 @@ export function saveTranscript(
   });
 }
 
+/**
+ * Inject a user prompt message at the tail of a run's transcript. Used to
+ * give an interrupted/paused run an instruction that fires as the next turn
+ * on resume: repairResumeTail treats a user tail as directly continuable, so
+ * no synthetic resume prompt is appended on top. Returns false when the run
+ * has no transcript yet (nothing to inject into) or the file is malformed.
+ */
+export function injectPrompt(runDir: string, prompt: string): boolean {
+  const transcript = loadTranscript(runDir);
+  if (!transcript) return false;
+  transcript.messages.push({ role: "user", content: prompt, timestamp: Date.now() } as TranscriptMessage);
+  saveTranscript(runDir, { agent: transcript.agent, request: transcript.request, messages: transcript.messages });
+  return true;
+}
+
 export function loadTranscript(runDir: string): TranscriptFile | null {
   const file = transcriptPath(runDir);
   if (!existsSync(file)) return null;
