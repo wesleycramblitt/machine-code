@@ -536,7 +536,12 @@ export async function cmdDelete(argv: string[]): Promise<number> {
   const slugArg = positional[0];
   if (!slugArg) fail("usage: machine_code delete <slug> [--force]");
   const l = layout();
-  const slug = slugify(slugArg);
+  // Resolve the exact stored slug first: the TUI passes the issue's slug
+  // verbatim, and a hand-authored/legacy file name may not be slugify-stable
+  // (slugify would miss it and leave the delete a silent no-op). Fall back to
+  // slugify only for forgiving free-text CLI input.
+  const exact = findIssue(l, slugArg);
+  const slug = exact ? exact.slug : slugify(slugArg);
   if (!findIssue(l, slug)) fail(`no issue ${slug}`);
   const force = flags.has("force");
   assertNoActiveRun(l, slug, "delete", force);
