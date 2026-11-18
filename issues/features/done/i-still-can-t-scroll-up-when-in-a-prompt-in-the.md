@@ -1,5 +1,6 @@
 id: 57d717
 branch: mc/i-still-can-t-scroll-up-when-in-a-prompt-in-the-57d717
+commit: 7b2202ffaa49d9edb826691a574769515682fd95
 acceptance: script:build
 
 Auto-created from run.
