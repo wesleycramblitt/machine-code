@@ -144,6 +144,9 @@ export function runnableIssues(
  * clamped at 0. A run holds its slot until it leaves the active states —
  * hard failures (`failed`/`blocked`) and completions free it; acceptance-
  * gate failures inside a live run do not.
+ *
+ * `interrupted` runs are excluded: after a process restart no live worker
+ * backs them, so they must not block new dispatches.
  */
 export function freeSlots(
   settings: Pick<OrchestratorSettings, "processes">,
@@ -151,6 +154,8 @@ export function freeSlots(
   startedRunIds: readonly string[],
 ): number {
   const ledger = new Set(startedRunIds);
-  const active = runs.filter((run) => ledger.has(run.id) && isActiveStatus(run.status)).length;
+  const active = runs.filter(
+    (run) => ledger.has(run.id) && isActiveStatus(run.status) && run.status !== "interrupted",
+  ).length;
   return Math.max(0, settings.processes - active);
 }
