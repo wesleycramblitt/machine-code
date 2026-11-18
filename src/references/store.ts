@@ -110,6 +110,50 @@ export function resolveReferencePath(
   if (inStore && existsSync(abs)) {
     return { abs, rel: relative(storeRoot, abs), ...(anchor ? { anchor } : {}) };
   }
+  // A full content citation (<product>/<version>/content/<file> or
+  // <product>/unversioned/content/<file>) may not exist verbatim when the
+  // product has a single version dir. Resolve it against the store layout:
+  // product dir, then the single version dir, then the content path. The
+  // `unversioned` segment is the canonical name for that single version.
+  if (parts.length >= 3 && !rel.includes("/raw/")) {
+    const product = parts[0]!;
+    const versionOrUnversioned = parts[1]!;
+    const rest = parts.slice(2).join("/");
+    const candidates: string[] = [];
+    if (versionOrUnversioned === "unversioned") {
+      // <product>/unversioned/content/<file> — find the single version dir.
+      try {
+        const entries = readdirSync(join(storeRoot, product), { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => e.name);
+        if (entries.length === 1) {
+          candidates.push(`${product}/${entries[0]}/${rest}`);
+        }
+      } catch {
+        // product dir missing; fall through
+      }
+    } else {
+      // <product>/<version>/content/<file> — try the version as written, then
+      // fall back to the single version dir if the written one is absent.
+      candidates.push(rel);
+      try {
+        const entries = readdirSync(join(storeRoot, product), { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => e.name);
+        if (entries.length === 1 && entries[0] !== versionOrUnversioned) {
+          candidates.push(`${product}/${entries[0]}/${rest}`);
+        }
+      } catch {
+        // product dir missing; fall through
+      }
+    }
+    for (const candidate of candidates) {
+      const candidateAbs = resolve(storeRoot, candidate);
+      if (existsSync(candidateAbs)) {
+        return { abs: candidateAbs, rel: relative(storeRoot, candidateAbs), ...(anchor ? { anchor } : {}) };
+      }
+    }
+  }
   // Not in the machine-level store, or the file doesn't exist there —
   // try the repo-level view (`references/`).
   for (const root of [referenceView(layout, projectRoot)]) {
