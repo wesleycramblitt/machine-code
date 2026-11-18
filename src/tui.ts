@@ -239,6 +239,20 @@ export async function runTui(): Promise<void> {
       // starts (the orchestrator spawning one run per issue) must not jump —
       // the screen would yank focus mid-typing.
       if (trackJump) s.pendingRunAt = Date.now();
+      // The child CLI validates the request (issue existence, agent/kind,
+      // depends, same-file conflicts) and exits nonzero before any run record
+      // exists. With stdio ignored a plain spawn would hide that failure and
+      // leave the run screen waiting forever for a record that never appears.
+      // Report the exit so the user still sees why the run did not start.
+      child.on("exit", (code) => {
+        if (code === 0 || code === null) return;
+        if (s.pendingRunAt > 0) s.pendingRunAt = 0;
+        if (s.pendingFastTimer) {
+          clearInterval(s.pendingFastTimer);
+          s.pendingFastTimer = null;
+        }
+        notify(`run child exited ${code}; see the CLI output for the reason`);
+      });
       return true;
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error));
