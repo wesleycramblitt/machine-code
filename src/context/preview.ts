@@ -12,7 +12,7 @@ import { packageDataDir } from "../data.js";
 import { listIssues, singleLine } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
-import { resolveSkillMode, skillIndexBody, skillMetas, type SkillMode } from "./references.js";
+import { parseArtifactReferences, resolveSkillMode, skillIndexBody, skillMetas, type SkillMode } from "./references.js";
 import { CONTEXT_RENDER_ORDER, SECTION_KINDS, dropRank, isSkillIndex } from "./plan.js";
 import { parseIncludeRange, parentIndexLine, sliceRangeBody } from "./assemble.js";
 import { blockOverhead, sectionForKind } from "./budget.js";
@@ -156,7 +156,25 @@ export function previewContext(
     const exists = inside && existsSync(abs);
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
     sources.push({ kind: "issue", ref: path, origin: "explicit", depth: 0, chars: size, exists });
-    if (!exists) warnings.push(`issue ${path} is missing or outside the repo`);
+    if (!exists) {
+      warnings.push(`issue ${path} is missing or outside the repo`);
+      continue;
+    }
+    // An issue's `mc:context` block names artifacts it expects the run to
+    // inherit. Mirror assembleContext: attach its references (and any other
+    // explicit artifacts) so the composer shows them as already attached.
+    let body = "";
+    try {
+      body = readFileSync(abs, "utf8");
+    } catch {
+      // Unreadable metadata: nothing to attach, the issue still renders.
+    }
+    if (body) {
+      const attached = parseArtifactReferences(body);
+      for (const ref of attached.references) {
+        if (!references.includes(ref)) references.push(ref);
+      }
+    }
   }
 
   for (const path of options.docs ?? []) {
