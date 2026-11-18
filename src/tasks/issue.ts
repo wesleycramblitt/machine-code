@@ -40,6 +40,7 @@ export function issueToTaskPacket(issue: Issue): TaskPacket {
     acceptance: issue.verify.map((command) => ({ command })),
     verification: issue.verification,
     ...(issue.keywords.length > 0 ? { keywords: [...issue.keywords] } : {}),
+    ...(issue.references.length > 0 ? { references: [...issue.references] } : {}),
   };
 }
 

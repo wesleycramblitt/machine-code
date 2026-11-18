@@ -21,4 +21,6 @@ export interface TaskPacket {
   verification?: "direct" | "verified";
   /** Human-provided search phrases from the issue's `keywords:` header. */
   keywords?: string[];
+  /** Exact central-store citations from the issue's `references:` header. */
+  references?: string[];
 }
