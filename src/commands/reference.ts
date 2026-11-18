@@ -138,12 +138,13 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     args: () => [],
     schema: {
       path: { type: "string", required: true, description: "Store-relative path or bundle key, with optional #anchor." },
+      query: { type: "string", description: "Alias for path; agents commonly cite with query=." },
       limit: { type: "number", description: "Max bytes returned (default 12 KiB)." },
     },
     readonly: true,
     timeoutMs: 30_000,
     handler: async (args, ctx) => {
-      const path = typeof args.path === "string" ? args.path : "";
+      const path = typeof args.query === "string" ? args.query : typeof args.path === "string" ? args.path : "";
       if (!path.trim()) return { text: "reference:read requires path", isError: true };
       const cap = Math.max(1_024, Math.min(64 * 1_024, Math.floor(Number(args.limit ?? 12 * 1_024))));
       const result = readReference(layout, path, cap, ctx.root);
