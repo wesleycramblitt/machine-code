@@ -66,6 +66,10 @@ export const LSP_SERVERS: readonly LspServerSpec[] = [
     name: "Rust",
     binary: "rust-analyzer",
     args: [],
+    // rust-analyzer is a stdio server: it ignores --version and blocks on
+    // stdin, so a probe would hang for the full 2s timeout. Presence on PATH
+    // is enough, as for the other stdio-only servers (python, java, json).
+    versionArgs: [],
     extensions: [".rs"],
     languageIds: { "*": "rust" },
     install: "rustup component add rust-analyzer",
