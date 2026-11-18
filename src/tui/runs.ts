@@ -291,13 +291,27 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       list.push(run);
       runsByItem.set(itemId, list);
     }
+    const lastActivity = (issue: Issue): number => {
+      let latest = 0;
+      for (const run of runsByItem.get(issue.slug) ?? []) {
+        const t = new Date(run.lastActivityAt ?? run.startedAt).getTime();
+        if (Number.isFinite(t) && t > latest) latest = t;
+      }
+      return latest;
+    };
     const sortIssues = (list: readonly Issue[]): Issue[] =>
-      [...list].sort(
-        (a, b) =>
-          RANK[effectiveStatus(a, repoRuns.filter((r) => runItemId(r) === a.slug))] -
-            RANK[effectiveStatus(b, repoRuns.filter((r) => runItemId(r) === b.slug))] ||
-          a.slug.localeCompare(b.slug),
-      );
+      [...list].sort((a, b) => {
+        const aStatus = effectiveStatus(a, repoRuns.filter((r) => runItemId(r) === a.slug));
+        const bStatus = effectiveStatus(b, repoRuns.filter((r) => runItemId(r) === b.slug));
+        const rank = RANK[aStatus] - RANK[bStatus];
+        if (rank !== 0) return rank;
+        // Done and researched are terminal: list the most recently active first.
+        if (aStatus === "done" || aStatus === "researched") {
+          const byActivity = lastActivity(b) - lastActivity(a);
+          if (byActivity !== 0) return byActivity;
+        }
+        return a.slug.localeCompare(b.slug);
+      });
     const pushIssue = (issue: Issue, issueDepth: number, parentId: string, chainStart = false): void => {
       const related = runsByItem.get(issue.slug) ?? [];
       const id = `issue:${issue.kind}:${issue.slug}`;
