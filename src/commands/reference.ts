@@ -110,36 +110,52 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
   });
 
-  // reference:find — search the cheap index layer (catalog/topics/api-index).
+  // reference:find — search the index layer, and on demand bundle content/code.
   out.set("reference:find", {
     name: "reference:find",
-    description: "Find reference bundles or exact content/file#anchor citations from the store's index.md, topics.yaml, and api-index.md. Never searches content or raw files.",
+    description: "Find reference bundles or exact content/file#anchor citations. Index tier (default): scans api-index.md, index.md, topics.yaml — never content or raw files. Deeper tiers need bundle: ('product' or 'product/version'): content: searches content/** bodies, code: searches non-index bundle files like vendored source repos. raw/ and .git/ are never searched.",
     binary: "node",
     args: () => [],
     schema: {
-      query: { type: "string", required: true, description: "Topic, symbol, product, or phrase." },
+      query: { type: "string", required: true, description: "Topic, symbol, product, or phrase. Raw regex when regex: is set (content/code tiers)." },
       limit: { type: "number", description: "Max index matches (default 20)." },
+      bundle: { type: "string", description: "Scope to one bundle, e.g. 'minecraft-java/26.3'. Required for content:/code:." },
+      content: { type: "boolean", description: "Also search content/** bodies in the bundle." },
+      code: { type: "boolean", description: "Also search non-index bundle files (source repos, data)." },
+      regex: { type: "boolean", description: "Treat query as a raw regex for the content/code tiers." },
     },
     readonly: true,
-    timeoutMs: 30_000,
+    timeoutMs: 60_000,
     handler: async (args, ctx) => {
       const query = typeof args.query === "string" ? args.query : "";
       if (!query.trim()) return { text: "reference:find requires query", isError: true };
       const limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit ?? 20))));
-      return { text: findReferences(layout, query, limit, ctx.root), isError: false };
+      const bundle = typeof args.bundle === "string" && args.bundle.trim() ? args.bundle.trim() : undefined;
+      return {
+        text: findReferences(layout, query, limit, ctx.root, {
+          ...(bundle ? { bundle } : {}),
+          ...(args.content === true ? { content: true } : {}),
+          ...(args.code === true ? { code: true } : {}),
+          ...(args.regex === true ? { regex: true } : {}),
+        }),
+        isError: false,
+      };
     },
   });
 
   // reference:read — read one cited content file and optional anchor.
   out.set("reference:read", {
     name: "reference:read",
-    description: "Read exactly one store citation, e.g. 'glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions'. Rejects raw/ and paths outside the store.",
+    description: "Read exactly one store citation, e.g. 'glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions'. Rejects raw/ and paths outside the store. Bundle-relative content/… citations resolve when unambiguous. A bundle or content directory reads as a capped listing (discovery). outline: lists headings+anchors; offset:/lines: page long files.",
     binary: "node",
     args: () => [],
     schema: {
-      path: { type: "string", required: true, description: "Store-relative path or bundle key, with optional #anchor." },
+      path: { type: "string", required: true, description: "Store-relative path, bundle key, or directory, with optional #anchor." },
       query: { type: "string", description: "Alias for path; agents commonly cite with query=." },
       limit: { type: "number", description: "Max bytes returned (default 12 KiB)." },
+      offset: { type: "number", description: "1-based first line of the body (file or anchored section)." },
+      lines: { type: "number", description: "Max lines from offset. Byte cap still applies." },
+      outline: { type: "boolean", description: "List headings with their #anchors instead of body text." },
     },
     readonly: true,
     timeoutMs: 30_000,
@@ -147,7 +163,19 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const path = typeof args.query === "string" ? args.query : typeof args.path === "string" ? args.path : "";
       if (!path.trim()) return { text: "reference:read requires path", isError: true };
       const cap = Math.max(1_024, Math.min(64 * 1_024, Math.floor(Number(args.limit ?? 12 * 1_024))));
-      const result = readReference(layout, path, cap, ctx.root);
+      const readOpts: { offset?: number; lines?: number; outline?: boolean } = {};
+      if (args.offset !== undefined) {
+        const offset = Math.floor(Number(args.offset));
+        if (!Number.isFinite(offset) || offset < 1) return { text: "reference:read requires offset >= 1", isError: true };
+        readOpts.offset = offset;
+      }
+      if (args.lines !== undefined) {
+        const lines = Math.floor(Number(args.lines));
+        if (!Number.isFinite(lines) || lines < 1) return { text: "reference:read requires lines >= 1", isError: true };
+        readOpts.lines = lines;
+      }
+      if (args.outline === true) readOpts.outline = true;
+      const result = readReference(layout, path, cap, ctx.root, readOpts);
       if (!result.ok) return { text: result.error, isError: true };
       const citation = `${result.path}${result.anchor ? `#${result.anchor}` : ""}`;
       return { text: `${citation}\n\n${result.text}`, isError: false };

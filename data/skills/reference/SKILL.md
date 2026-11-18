@@ -24,11 +24,21 @@ references/
 
 ## Find and read
 
-1. Run `reference:find` with a topic, symbol, product, or phrase.
+1. Run `reference:find` with a topic, symbol, product, or phrase. This scans
+   the index layer only — never content or raw files.
 2. Follow the returned citation with `reference:read` (`path#anchor`).
+   Bundle-relative `content/…` citations resolve when unambiguous; anything
+   ambiguous names its candidates instead of guessing.
 3. Cite the exact `~/.machine_code/references/<product>/<version>/content/file.md#anchor`
    and version. Do not crawl `raw/` or guess anchors.
-4. If the index has no plausible match, search the web with `reference:search`,
+4. Go deeper inside one bundle (`bundle: '<product>/<version>'`, required for
+   these tiers): `reference:find` with `content: true` greps `content/**`
+   bodies, `code: true` greps non-index bundle files such as a vendored source
+   repo (`regex: true` for raw patterns). `reference:read` on a bundle or
+   content directory returns a capped listing for discovery, `outline: true`
+   lists a file's headings with their `#anchors`, and `offset:`/`lines:` page
+   long files. `.git/` and `raw/` are never searched, listed, or read.
+5. If the index has no plausible match, search the web with `reference:search`,
    fetch a source with `reference:browser`, or extract a PDF with
    `reference:pdf-extract`.
 

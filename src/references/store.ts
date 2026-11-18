@@ -224,17 +224,172 @@ function capped(text: string, cap: number): { text: string; truncated: boolean }
   return { text: text.slice(0, cap).replace(/\s+$/, "") + "\n…[truncated]", truncated: true };
 }
 
+export interface ReferenceSearchOptions {
+  /** `product` or `product/version`. Required for the content/code tiers. */
+  bundle?: string;
+  /** Search `content/**` bodies in addition to the index layer. */
+  content?: boolean;
+  /**
+   * Search non-index bundle files (source repos, data) — everything except
+   * `raw/` and `.git/`. This is the explicit opt-in for full-repo lookup; the
+   * archival `raw/` dirs stay out of every tier.
+   */
+  code?: boolean;
+  /** Treat the query as a raw regex (grep semantics) instead of fixed text. */
+  regex?: boolean;
+  /** Max matches returned. */
+  limit?: number;
+}
+
+const SEARCH_CAP_CHARS = 12 * 1024;
+
+/** rg over one bundle's content and/or code files. Index hits stay in findReferences. */
+export function searchReferenceFiles(
+  storeRoot: string,
+  query: string,
+  opts: ReferenceSearchOptions = {},
+): string {
+  const q = query.trim();
+  if (!q) return "reference:find requires query";
+  if (!opts.bundle?.trim()) {
+    return "reference:find needs bundle: for content/code search, e.g. bundle 'minecraft-java/26.3'";
+  }
+  const resolved = resolveReferenceBundle(storeRoot, opts.bundle);
+  if ("error" in resolved) return resolved.error;
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(opts.limit ?? 20))));
+  const args = [
+    "-n",
+    "--no-heading",
+    "--color",
+    "never",
+    "-i",
+    "-C",
+    "2",
+    "--max-count",
+    String(Math.min(limit * 3, 60)),
+    // Bare names match at any depth (gitignore semantics); slashed patterns
+    // anchor at the store root, so bundle-nested dirs need the **/ form.
+    "-g",
+    "!.git",
+    "-g",
+    "!raw",
+  ];
+  if (opts.content && !opts.code) args.push("-g", "**/content/**");
+  if (opts.code && !opts.content) {
+    args.push("-g", "!**/content/**", "-g", "!index.md", "-g", "!api-index.md", "-g", "!manifest.yaml", "-g", "!topics.yaml");
+  }
+  if (opts.regex) args.push("-e", q);
+  else args.push("-F", "-e", q);
+  args.push("--", resolved.rel);
+  const run = spawnSync("rg", args, {
+    cwd: storeRoot,
+    encoding: "utf8",
+    timeout: 60_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (run.error) return `reference:find code search failed: ${(run.error as Error).message}`;
+  // rg exit 1 with no output = no matches. Anything else nonzero is a real error.
+  if (run.status !== 0 && run.status !== 1) {
+    const detail = run.stderr?.trim() || `exit ${run.status ?? "?"}`;
+    return `reference:find code search failed: ${detail}`;
+  }
+  const text = (run.stdout ?? "").trimEnd();
+  if (!text) {
+    const tiers = [opts.content ? "content" : "", opts.code ? "code" : ""].filter(Boolean).join("+");
+    return `no ${tiers} matches for "${q}" in ${resolved.rel}`;
+  }
+  const lines = text.split("\n");
+  const capped = lines.slice(0, limit * 5);
+  const tail = capped.length < lines.length ? `\n…[${lines.length - capped.length} more lines; narrow with bundle:, content:, or a tighter query]` : "";
+  const head = `search ${resolved.rel} (${[opts.content ? "content" : "", opts.code ? "code" : ""].filter(Boolean).join("+") || "index"}):\n`;
+  const body = capped.join("\n");
+  const out = `${head}${body}${tail}`;
+  return out.length > SEARCH_CAP_CHARS ? `${out.slice(0, SEARCH_CAP_CHARS)}\n…[truncated]` : out;
+}
+
+export interface ReferenceReadOptions {
+  /** 1-based first line of the selected body (whole file or anchored section). */
+  offset?: number;
+  /** Max lines from offset. The byte cap still applies on top. */
+  lines?: number;
+  /** Return the heading outline (title + anchor per heading) instead of body text. */
+  outline?: boolean;
+}
+
+const LIST_DIR_CAP = 300;
+const LIST_DIR_DEPTH = 4;
+
+/** Capped recursive listing for bundle directories (source-repo discovery). */
+function listReferenceDir(abs: string, rel: string): string {
+  const out: string[] = [];
+  let truncated = false;
+  const walk = (dir: string, prefix: string, depth: number): void => {
+    if (out.length >= LIST_DIR_CAP || depth > LIST_DIR_DEPTH) {
+      truncated = truncated || out.length >= LIST_DIR_CAP;
+      return;
+    }
+    let entries: Array<{ name: string; isDir: boolean }>;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.name !== ".git" && e.name !== "raw")
+        .map((e) => ({ name: e.name, isDir: e.isDirectory() }))
+        .sort((a, b) => (a.isDir === b.isDir ? (a.name < b.name ? -1 : 1) : a.isDir ? -1 : 1));
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= LIST_DIR_CAP) {
+        truncated = true;
+        return;
+      }
+      out.push(`${prefix}${entry.name}${entry.isDir ? "/" : ""}`);
+      if (entry.isDir) walk(join(dir, entry.name), `${prefix}${entry.name}/`, depth + 1);
+    }
+  };
+  walk(abs, rel ? `${rel}/` : "", 0);
+  const tail = truncated ? `\n…[listing capped at ${LIST_DIR_CAP} entries; read a subdirectory to narrow]` : "";
+  return `dir ${rel || "."} (${out.length} entries):\n${out.join("\n")}${tail}`;
+}
+
+/** Heading outline with the anchors `reference:read` accepts. */
+function outlineSections(text: string): string {
+  const rows: string[] = [];
+  const lines = text.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const match = /^(#{1,6})\s+(.*?)\s*$/.exec(lines[index]!);
+    if (!match) continue;
+    const parsed = anchorOf(match[2]!);
+    rows.push(`${"  ".repeat(match[1]!.length - 1)}${parsed.title} -> #${parsed.anchor} (line ${index + 1})`);
+  }
+  return rows.length > 0 ? rows.join("\n") : "(no headings)";
+}
+
 /** Read one cited store file, optionally narrowed to a heading anchor. */
 export function readReference(
   layout: Layout,
   value: string,
   cap = READ_CAP,
   projectRoot = layout.repoRoot,
+  opts: ReferenceReadOptions = {},
 ): ReferenceReadResult {
   const target = resolveReferencePath(layout, value, projectRoot);
   if (!target) return { ok: false, error: `reference is outside the store: ${value}` };
   if (target.rel.split("/").includes("raw")) {
     return { ok: false, error: "raw/ is archival; read the indexed content file instead" };
+  }
+  if (target.rel.split("/").includes(".git")) {
+    return { ok: false, error: "refusing .git/ metadata; read the checked-out source file instead" };
+  }
+  let isDir = false;
+  try {
+    isDir = statSync(target.abs).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (isDir) {
+    if (target.anchor) return { ok: false, error: `cannot anchor into a directory: ${target.rel}` };
+    const text = listReferenceDir(target.abs, target.rel);
+    return { ok: true, path: target.rel, text, bytes: Buffer.byteLength(text, "utf8"), truncated: text.includes("…[listing capped") };
   }
   if (!existsSync(target.abs)) {
     const candidates = matchReferenceSuffix(referenceStore(layout), target.rel);
@@ -257,6 +412,18 @@ export function readReference(
       return { ok: false, error: `anchor "${target.anchor}" not found in ${target.rel}. Anchors: ${known}` };
     }
     body = section.text;
+  }
+  if (opts.outline === true) {
+    const outline = outlineSections(body);
+    return { ok: true, path: target.rel, ...(target.anchor ? { anchor: target.anchor } : {}), text: outline, bytes: Buffer.byteLength(text, "utf8"), truncated: false };
+  }
+  const offset = Math.max(1, Math.floor(Number(opts.offset ?? 1)));
+  const maxLines = opts.lines === undefined ? undefined : Math.max(1, Math.floor(Number(opts.lines)));
+  if ((offset > 1 || maxLines !== undefined) && Number.isFinite(offset) && (maxLines === undefined || Number.isFinite(maxLines))) {
+    const all = body.split("\n");
+    const slice = maxLines === undefined ? all.slice(offset - 1) : all.slice(offset - 1, offset - 1 + maxLines);
+    const tag = `<lines ${offset}-${offset + slice.length - 1} of ${all.length}>\n`;
+    body = slice.length > 0 ? `${tag}${slice.join("\n")}` : `${tag}(empty range)`;
   }
   const clipped = capped(body, cap);
   return {
@@ -315,9 +482,103 @@ export function matchReferenceSuffix(storeRoot: string, rel: string): string[] {
   return out.sort();
 }
 
-/** Search the cheap index layer, never bundle content or raw files. */export function findReferences(layout: Layout, query: string, limit = 20, projectRoot = layout.repoRoot): string {
+/**
+ * Resolve a `product` or `product/version` bundle name to its store dir.
+ * A bare product with exactly one version dir resolves to that version, and a
+ * flat bundle (index.md at the product root, no version dir) resolves to the
+ * product dir — the same rules bare citation keys follow.
+ */
+export function resolveReferenceBundle(
+  storeRoot: string,
+  bundle: string,
+): { dir: string; rel: string } | { error: string } {
+  const raw = bundle.trim().replace(/^~\//, "").replace(/^references\//, "");
+  if (!raw || raw.split("/").includes("..")) return { error: `unknown bundle: ${bundle}` };
+  const parts = raw.split("/").filter(Boolean);
+  if (parts.length < 1 || parts.length > 2) return { error: `unknown bundle: ${bundle}` };
+  const product = parts[0]!;
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(join(storeRoot, product), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return { error: `unknown bundle: ${bundle}` };
+  }
+  if (parts.length === 2) {
+    const version = parts[1]!;
+    if (!entries.includes(version)) return { error: `unknown bundle: ${bundle}` };
+    return { dir: resolve(storeRoot, product, version), rel: `${product}/${version}` };
+  }
+  if (existsSync(join(storeRoot, product, "index.md"))) {
+    return { dir: resolve(storeRoot, product), rel: product };
+  }
+  const withIndex = entries.filter((version) => existsSync(join(storeRoot, product, version, "index.md")));
+  if (withIndex.length === 1) {
+    return { dir: resolve(storeRoot, product, withIndex[0]!), rel: `${product}/${withIndex[0]!}` };
+  }
+  return { error: `unknown bundle: ${bundle}` };
+}
+
+export interface ReferenceFindOptions {
+  /** Scope the index scan (and content/code tiers) to one `product` or `product/version` bundle. */
+  bundle?: string;
+  /** Search `content/**` bodies in addition to the index layer. Needs bundle:. */
+  content?: boolean;
+  /** Search non-index bundle files (source repos, data). Needs bundle:. Never touches `raw/`. */
+  code?: boolean;
+  /** Treat the query as a raw regex for the content/code tiers (index tier stays substring). */
+  regex?: boolean;
+  /** Skip the index layer; content/code tiers only. */
+  index?: boolean;
+}
+
+/** Search the cheap index layer, never bundle content or raw files. */
+export function findReferences(
+  layout: Layout,
+  query: string,
+  limit = 20,
+  projectRoot = layout.repoRoot,
+  opts: ReferenceFindOptions = {},
+): string {
   const q = query.trim().toLowerCase();
   if (!q) return "reference:find requires query";
+  const store = referenceStore(layout);
+  const view = referenceView(layout, projectRoot);
+  let bundleRel: string | undefined;
+  if (opts.bundle?.trim()) {
+    const resolved = resolveReferenceBundle(store, opts.bundle);
+    if ("error" in resolved) return resolved.error;
+    bundleRel = resolved.rel;
+  }
+  const out: string[] = [];
+
+  if (opts.index !== false) {
+    out.push(findIndexMatches(layout, query, limit, projectRoot, bundleRel));
+  }
+  if (opts.content === true || opts.code === true) {
+    out.push(
+      searchReferenceFiles(store, query, {
+        bundle: bundleRel ?? opts.bundle,
+        content: opts.content,
+        code: opts.code,
+        regex: opts.regex,
+        limit,
+      }),
+    );
+  }
+  return out.filter(Boolean).join("\n");
+}
+
+/** Substring scan over the index layer (api-index, index, topics, catalog). */
+function findIndexMatches(
+  layout: Layout,
+  query: string,
+  limit: number,
+  projectRoot: string,
+  bundleRel: string | undefined,
+): string {
+  const q = query.trim().toLowerCase();
   const files: string[] = [];
   const store = referenceStore(layout);
   const view = referenceView(layout, projectRoot);
@@ -367,13 +628,14 @@ export function matchReferenceSuffix(storeRoot: string, rel: string): string[] {
   const seen = new Set<string>();
   for (const file of files) {
     if (hits.length >= Math.min(FIND_CAP, limit)) break;
+    const rel = relative(store, file);
+    if (bundleRel !== undefined && !(rel === bundleRel || rel.startsWith(`${bundleRel}/`))) continue;
     let text = "";
     try {
       text = readFileSync(file, "utf8");
     } catch {
       continue;
     }
-    const rel = relative(store, file);
     let topic = "";
     for (const raw of text.split("\n")) {
       const line = raw.trim();
