@@ -1,8 +1,9 @@
+commit: 2b69a106381c28a6704daf9ff7e99b796e837938
 priority: high
-tags: references
 files: src/references/store.ts
-keywords: reference:read, reference store, minecraft-java, unversioned, citation, findReferences, readReference
+tags: references
 acceptance: script:build
+keywords: reference:read, reference store, minecraft-java, unversioned, citation, findReferences, readReference
 
 # Resolve full reference content citations (minecraft-java read path)
 
