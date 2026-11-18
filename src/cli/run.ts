@@ -1121,18 +1121,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     });
   }
 
-  // Research that completed means gates passed. The research:verify gate
-  // already checked for new files in issues/, docs/, .machine_code/references/.
-  // Move any parent idea to researched and commit the new artifacts.
-  if (result.status === "completed" && itemSlug && agentNameParsed === "research") {
-    const issue = findIssue(l, itemSlug);
-    if (issue?.kind === "ideas" && issue.status === "needs-research") {
-      moveIssue(l, issue.slug, "researched");
-      await commitPlanningFiles(l, `[${kindTag(issue.kind)} RESEARCHED] ${issue.slug}`);
-      recorder.event("idea_researched", { slug: issue.slug });
-    }
-  }
-
   // Gates ran inside the loop (or inside executeIssue for the orchestrate
   // path). If the result is "completed" the gates passed. Commit, merge, and
   // move the issue through its lifecycle. If the direct-exec loop returned
@@ -1193,6 +1181,14 @@ export async function cmdRun(argv: string[]): Promise<number> {
               recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
               const { updateIssueMeta } = await import("../plan/issues.js");
               if (merged.mergeCommit) updateIssueMeta(l, issue.slug, { commit: merged.mergeCommit });
+              // The idea is researched only once its branch lands on main.
+              // Marking it earlier would leave it researched when a merge
+              // failure blocks the run without main having the changes.
+              if (issue.kind === "ideas") {
+                moveIssue(l, issue.slug, "researched");
+                await commitPlanningFiles(l, `[${kindTag(issue.kind)} RESEARCHED] ${issue.slug}`);
+                recorder.event("idea_researched", { slug: issue.slug });
+              }
               if (issue.kind !== "ideas") {
                 moveIssue(l, issue.slug, "done");
                 await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
