@@ -27,6 +27,7 @@ import { layout } from "../paths.js";
 import { listIssues } from "../plan/issues.js";
 import type { Issue } from "../plan/issues.js";
 import { agentForIssue, runItemId } from "../plan/lifecycle.js";
+import { overlapFootprints } from "../plan/overlap.js";
 import { listAllRuns } from "../state/runs.js";
 import { freeSlots, runnableIssues } from "./scheduler.js";
 import { readOrchestratorState, updateOrchestratorState, type OrchestratorSettings } from "./store.js";
@@ -150,9 +151,18 @@ export function createOrchestratorLoop(services: OrchestratorServices): Orchestr
         (issue) => !pendingSlugs.has(issue.slug),
       );
 
+      // Same-tick footprint guard: runnableIssues excludes issues that overlap
+      // work already running from an earlier tick, but a freshly spawned issue
+      // has no run record yet, so its footprint is invisible to the rest of the
+      // batch. Accumulate each dispatch's files here and skip issues that
+      // overlap one launched earlier in this pass, so a batch never over-starts
+      // on the same files — the runner would block the second run, wasting a
+      // slot and dropping that issue from the queue until it clears.
+      const launchedFiles = new Set<string>();
       let started = 0;
       for (const issue of queue) {
         if (started >= slots) break;
+        if (overlapFootprints(issue.files, [...launchedFiles]).length > 0) continue;
         const args = [
           "run",
           "--agent", agentForIssue(issue),
@@ -164,6 +174,7 @@ export function createOrchestratorLoop(services: OrchestratorServices): Orchestr
         // the remaining ones on the same error.
         if (!services.launch(args, repoRoot)) break;
         pendingSlugs.set(issue.slug, now);
+        for (const file of issue.files) launchedFiles.add(file);
         started += 1;
       }
       if (pendingSlugs.size === 0) pending.delete(repoRoot);
