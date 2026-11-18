@@ -1,5 +1,6 @@
 id: 68561b
 branch: mc/sometimes-typing-in-the-new-run-prompt-is-very-s-68561b
+commit: 3293605c703746697c39ff25c1057d5468981c13
 acceptance: script:build
 
 Auto-created from run.
