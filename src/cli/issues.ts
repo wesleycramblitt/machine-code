@@ -43,9 +43,13 @@ import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
 
 const ACTIVE_RUN_STATUSES = new Set(["created", "running", "awaiting_input"]);
 
-/** One mutating issue operation at a time: merge/delete/build must not race a live run. */
+/** One mutating issue operation at a time: merge/delete/build must not race a live run.
+ * Research runs never count: deleting an issue removes only the issue file and
+ * engineer/build branches, which a research run owns neither (deleteIssue in
+ * tasks/issue.ts). A research run's record survives the delete. */
 function activeIssueRuns(l: ReturnType<typeof layout>, slug: string) {
   return listRuns(l)
+    .filter((run) => run.agent !== "research")
     .filter((run) => runItemId(run) === slug && ACTIVE_RUN_STATUSES.has(run.status))
     .filter((run) => ACTIVE_RUN_STATUSES.has(reconcileRun(run).status));
 }
