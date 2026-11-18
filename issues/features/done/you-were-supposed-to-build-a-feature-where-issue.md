@@ -1,5 +1,6 @@
 id: c9fff8
 branch: mc/you-were-supposed-to-build-a-feature-where-issue-c9fff8
+commit: cb57a86ffcd4ca90479427d26b5a4261efb97847
 acceptance: script:build
 
 Auto-created from run.
