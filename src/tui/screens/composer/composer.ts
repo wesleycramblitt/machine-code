@@ -742,7 +742,14 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       : ` ${agentControls}${" ".repeat(Math.max(1, boxWidth - visible(agentControls) - visible(runControls) - 1))}${runControls}`;
   const availableForPrompt = Math.max(3, bodyH - summary.length - (promptHint ? 7 : 6));
   const promptHeight = Math.max(3, Math.min(16, availableForPrompt, Math.floor(bodyH * 0.5)));
-  const shownPrompt = promptLines.slice(-promptHeight);
+  // In insert mode keep the caret line visible: when it moves above the
+  // window bottom, scroll the window up with it (tail-pin otherwise).
+  let promptTop = Math.max(0, promptLines.length - promptHeight);
+  if (insert) {
+    const caretLine = promptLines.findIndex((line) => line.includes("▌"));
+    if (caretLine >= 0) promptTop = Math.max(0, Math.min(caretLine, promptLines.length - promptHeight));
+  }
+  const shownPrompt = promptLines.slice(promptTop, promptTop + promptHeight);
   const promptBox = [
     ` ${D}┌${"─".repeat(inner)}┐${R}`,
     ...shownPrompt.map((line) => ` ${D}│${R} ${W}${fit(line, inner - 2)}${R} ${D}│${R}`),
