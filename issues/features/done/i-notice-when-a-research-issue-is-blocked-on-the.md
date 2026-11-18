@@ -1,5 +1,6 @@
 id: 742a64
 branch: mc/i-notice-when-a-research-issue-is-blocked-on-the-742a64
+commit: 050fd87fca9d600aeae6e3f68fe00375eca387d3
 acceptance: script:build
 
 Auto-created from run.
