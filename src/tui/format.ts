@@ -515,10 +515,22 @@ export function splitKeys(input: string): string[] {
     if (input[index] === "\x1b") {
       const next = input[index + 1];
       if (next === "[" || next === "O") {
+        // CSI or SS3 sequence: consume through the final byte in [@-~].
+        // If the chunk ends before the terminator, the sequence is
+        // incomplete — keep it intact (do not split it into raw chars)
+        // so a later chunk can complete it. An unterminated CSI is
+        // dropped rather than emitted as garbage that would corrupt
+        // the editor's cursor.
         let end = index + 2;
         while (end < input.length && !/[@-~]/.test(input[end]!)) end += 1;
-        keys.push(input.slice(index, end + 1));
-        index = end + 1;
+        if (end < input.length) {
+          keys.push(input.slice(index, end + 1));
+          index = end + 1;
+        } else {
+          // Unterminated: treat as a lone escape (ignored by the editor).
+          keys.push("\x1b");
+          index += 1;
+        }
       } else if (next !== undefined && next !== "\x1b" && next >= " ") {
         // Alt+key: escape plus one printable character travels as one key.
         keys.push(input.slice(index, index + 2));
