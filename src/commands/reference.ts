@@ -146,7 +146,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   // reference:read — read one cited content file and optional anchor.
   out.set("reference:read", {
     name: "reference:read",
-    description: "Read exactly one store citation, e.g. 'glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions'. Rejects raw/ and paths outside the store. Bundle-relative content/… citations resolve when unambiguous. A bundle or content directory reads as a capped listing (discovery). outline: lists headings+anchors; offset:/lines: page long files.",
+    description: "Read exactly one store citation: pass the full citation reference:find returned as path= (e.g. 'glsl/4.60.8/content/glsl-8-3-common-functions.md#8-3-common-functions'). The bundle:/content:/code: selectors live on reference:find, not here. A bundle or content directory reads as a capped listing (discovery). outline: lists headings+anchors; offset:/lines: page long files. Rejects raw/ and paths outside the store.",
     binary: "node",
     args: () => [],
     schema: {

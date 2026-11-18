@@ -294,6 +294,31 @@ export interface CommandContext {
   changedFiles?: () => string[];
 }
 
+/** Param-confusion redirects: find and read share one workflow and models carry
+ * one command's params to the other (observed: bundle:/content: on read,
+ * path: on find). Name the right command outright instead of dumping schema. */
+const REFERENCE_PARAM_HOME: Record<string, string> = {
+  bundle: "reference:find",
+  content: "reference:find",
+  code: "reference:find",
+  regex: "reference:find",
+  offset: "reference:read",
+  lines: "reference:read",
+  outline: "reference:read",
+  path: "reference:read",
+};
+
+function redirectHint(name: string, unknown: string[]): string {
+  if (!name.startsWith("reference:")) return "";
+  const misplaced = [...new Set(unknown.filter((key) => REFERENCE_PARAM_HOME[key] && REFERENCE_PARAM_HOME[key] !== name))];
+  if (misplaced.length === 0) return "";
+  const homes = [...new Set(misplaced.map((key) => REFERENCE_PARAM_HOME[key]!))];
+  const retry = name === "reference:read"
+    ? " Pass the citation reference:find returned as path=."
+    : "";
+  return ` ${misplaced.join(", ")} belong${misplaced.length === 1 ? "s" : ""} on ${homes.join(" /")}.${retry}`;
+}
+
 /** Levenshtein distance, capped by the caller. Command names are short, so the
  * quadratic table is cheap and keeps "did you mean" honest. */
 function editDistance(a: string, b: string): number {
@@ -378,7 +403,7 @@ export async function runCommand(
       : "";
     return {
       text:
-        `bad arguments for ${name}: unknown ${unknown.join(", ")}.${shellHint} ` +
+        `bad arguments for ${name}: unknown ${unknown.join(", ")}.${shellHint}${redirectHint(name, unknown)} ` +
         `Schema: ${JSON.stringify(spec.schema)}`,
       isError: true,
     };

@@ -517,6 +517,9 @@ export function resolveReferenceBundle(
   if (withIndex.length === 1) {
     return { dir: resolve(storeRoot, product, withIndex[0]!), rel: `${product}/${withIndex[0]!}` };
   }
+  if (withIndex.length > 1) {
+    return { error: `ambiguous bundle: ${bundle} — did you mean ${withIndex.slice(0, 5).map((v) => `${product}/${v}`).join(", ")}?` };
+  }
   return { error: `unknown bundle: ${bundle}` };
 }
 

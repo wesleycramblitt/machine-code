@@ -27,6 +27,9 @@ references/
 1. Run `reference:find` with a topic, symbol, product, or phrase. This scans
    the index layer only — never content or raw files.
 2. Follow the returned citation with `reference:read` (`path#anchor`).
+   `reference:read` takes `path=` only — the `bundle:`/`content:`/`code:`
+   selectors belong on `reference:find`. When in doubt, describe the command
+   first (`command` tool, `describe` action).
    Bundle-relative `content/…` citations resolve when unambiguous; anything
    ambiguous names its candidates instead of guessing.
 3. Cite the exact `~/.machine_code/references/<product>/<version>/content/file.md#anchor`

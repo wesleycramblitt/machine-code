@@ -19,6 +19,8 @@ import {
   resolveReferenceBundle,
   searchReferenceFiles,
 } from "../dist/references/store.js";
+import { runCommand } from "../dist/commands/registry.js";
+import { referenceCommands } from "../dist/commands/reference.js";
 
 const rgAvailable = (() => {
   try {
@@ -67,6 +69,8 @@ before(() => {
   write("home/references/acme-widgets/2.0/.git/config", "[core]\n");
   write("home/references/other-lib/1.0/index.md", "# Other\n");
   write("home/references/other-lib/1.0/content/guide.md", "# Guide\n\n## Widget {#widget}\n\nAnother widget.\n");
+  write("home/references/multi/1.0/index.md", "# Multi 1\n");
+  write("home/references/multi/2.0/index.md", "# Multi 2\n");
   assert.ok(existsSync(store));
 });
 
@@ -84,6 +88,12 @@ describe("resolveReferenceBundle", () => {
     const store = join(layout.home, "references");
     assert.ok("error" in resolveReferenceBundle(store, "nope"));
     assert.ok("error" in resolveReferenceBundle(store, "acme-widgets/9.9"));
+  });
+  it("names versions when a bare product is ambiguous", () => {
+    const store = join(layout.home, "references");
+    const r = resolveReferenceBundle(store, "multi");
+    assert.ok("error" in r);
+    assert.match(r.error, /multi\/1\.0.*multi\/2\.0|multi\/2\.0.*multi\/1\.0/);
   });
 });
 
@@ -164,5 +174,25 @@ describe("tiered find", () => {
       regex: true,
     });
     assert.match(out, /widget\.java/);
+  });
+});
+
+describe("reference param redirects", () => {
+  const ctx = () => ({ root: join(dir, "proj"), commands: referenceCommands(layout) });
+  it("read with find params redirects to find", async () => {
+    const r = await runCommand("reference:read", { bundle: "acme-widgets", content: true }, ctx());
+    assert.ok(r.isError);
+    assert.match(r.text, /belong[s]? on reference:find/);
+    assert.match(r.text, /as path=/);
+  });
+  it("find with read params redirects to read", async () => {
+    const r = await runCommand("reference:find", { query: "widget", offset: 3 }, ctx());
+    assert.ok(r.isError);
+    assert.match(r.text, /belong[s]? on reference:read/);
+  });
+  it("unrelated unknown params get no redirect", async () => {
+    const r = await runCommand("reference:find", { query: "widget", depth: 2 }, ctx());
+    assert.ok(r.isError);
+    assert.doesNotMatch(r.text, /belong on/);
   });
 });
