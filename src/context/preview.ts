@@ -13,6 +13,7 @@ import { listIssues, singleLine } from "../plan/issues.js";
 import { isSecretPath } from "../tools/safety.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "../artifacts/registry.js";
 import { parseArtifactReferences, resolveSkillMode, skillIndexBody, skillMetas, type SkillMode } from "./references.js";
+import { referenceFileSize } from "../references/store.js";
 import { CONTEXT_RENDER_ORDER, SECTION_KINDS, dropRank, isSkillIndex } from "./plan.js";
 import { parseIncludeRange, parentIndexLine, sliceRangeBody } from "./assemble.js";
 import { blockOverhead, sectionForKind } from "./budget.js";
@@ -78,6 +79,12 @@ export interface PreviewContextOptions {
   docs?: string[];
   /** Explicit repo-relative issue files selected in the composer. */
   issues?: string[];
+  /**
+   * Explicit store citations selected in the composer (or seeded from the
+   * issue's `references:` metadata). Measured like the assembler measures
+   * them so the composer shows the real cost.
+   */
+  references?: string[];
   /** Mode default skills (e.g. from `defaultSkillsFor`); missing ones are skipped silently. */
   defaultSkills?: string[];
   /** Parent run and its ancestors, nearest first (same shape as assembleContext). */
@@ -185,6 +192,17 @@ export function previewContext(
     const size = exists ? capFor(abs, Number.MAX_SAFE_INTEGER) : 0;
     sources.push({ kind: "docs", ref: path, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) warnings.push(`docs ${path} is missing or outside the repo`);
+  }
+
+  for (const citation of options.references ?? []) {
+    const size = referenceFileSize(layout, citation, layout.repoRoot);
+    const exists = size > 0;
+    sources.push({ kind: "reference", ref: citation, origin: "explicit", depth: 0, chars: size, exists });
+    if (!exists) {
+      warnings.push(`reference ${citation} is missing or outside the store`);
+      continue;
+    }
+    if (!references.includes(citation)) references.push(citation);
   }
 
   // No whole-tree issues aggregate: the agent sees explicitly linked and

@@ -101,7 +101,7 @@ import { filterModels, groupModels, siblingOffers, type ModelSort } from "./cata
 import type { CatalogueDocument, CatalogueRow } from "./catalogue/types.js";
 import { previewContext, artifactPreview, type ContextPreview } from "./context/preview.js";
 import { contextBudget } from "./context/budget.js";
-import { skillMetas, defaultSkillsFor, resolveSkillMode, type SkillMode } from "./context/references.js";
+import { skillMetas, defaultSkillsFor, resolveSkillMode, parseArtifactReferences, type SkillMode } from "./context/references.js";
 import { listReferenceEntries } from "./references/store.js";
 import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChunks, touchedPaths, type ChangeSummary, type ThinkingChunk } from "./report/run.js";
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
@@ -328,6 +328,19 @@ export async function runTui(): Promise<void> {
     resetNewRunUi();
     // The issue file is the objective and is always explicit context.
     if (issue) s.newRunContextIncluded.add(`issue:${issue.rel}`);
+    // An issue with `references:` metadata (or an mc:context block) auto-attaches
+    // those store citations plus the skill body that reads them. This mirrors
+    // the CLI backstop in run.ts so the composer shows and previews them
+    // instead of silently adding them at launch.
+    const cited = new Set<string>();
+    for (const ref of issue?.references ?? []) cited.add(ref);
+    try {
+      for (const ref of parseArtifactReferences(issue?.body ?? "").references) cited.add(ref);
+    } catch {
+      // Unparsable block: the CLI warns at build; the composer stays clean.
+    }
+    for (const citation of cited) s.newRunContextIncluded.add(`reference:${citation}`);
+    if (cited.size > 0 && !s.newRunSkillModes.has("reference")) s.newRunSkillModes.set("reference", "include");
     // Pre-selected reference issues (e.g. a done issue as context to rework).
     for (const refSlug of seed?.references ?? []) {
       const ref = refSlug ? findIssue(layout(repoRoot), refSlug) : undefined;
@@ -563,7 +576,8 @@ export async function runTui(): Promise<void> {
     const skillModesKey = [...s.newRunSkillModes.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${k}=${v}`).join(",");
     const includedFilesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("file:")).sort().join(",");
     const includedIssuesKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("issue:")).sort().join(",");
-    const previewKey = `${s.newRunRepo}\0${s.newrun.item ?? ""}\0${s.newrun.agent}\0${skillModesKey}\0${includedFilesKey}\0${includedIssuesKey}`;
+    const includedRefsKey = [...s.newRunContextIncluded].filter((key) => key.startsWith("reference:")).sort().join(",");
+    const previewKey = `${s.newRunRepo}\0${s.newrun.item ?? ""}\0${s.newrun.agent}\0${skillModesKey}\0${includedFilesKey}\0${includedIssuesKey}\0${includedRefsKey}`;
     const previewTtl = s.newRunInsert ? 60_000 : 5_000;
     if (
       !s.newRunPreviewCache ||
@@ -587,6 +601,9 @@ export async function runTui(): Promise<void> {
           docs: [...s.newRunContextIncluded]
             .filter((key) => key.startsWith("docs:"))
             .map((key) => key.slice("docs:".length)),
+          references: [...s.newRunContextIncluded]
+            .filter((key) => key.startsWith("reference:"))
+            .map((key) => key.slice("reference:".length)),
           defaultSkills: defaultSkillsFor({
             agent: s.newrun.agent,
             verification: newRunIssue?.verification ?? "direct",
