@@ -1,5 +1,6 @@
 id: 3c66c9
 branch: mc/reference-the-completed-attached-issue-i-still-c-3c66c9
+commit: 83602fb205c50eac5aa51ddecde58839c875aaac
 acceptance: script:build
 
 Auto-created from run.
