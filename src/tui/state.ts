@@ -253,6 +253,10 @@ export interface TuiState {
   pendingRunAt: number;
   /** Fast repaints while waiting for a fresh run record. */
   pendingFastTimer: ReturnType<typeof setInterval> | null;
+  /** Tailed child stderr while waiting for a fresh run record (startup diagnostics). */
+  pendingRunStderr: string;
+  /** Slow-startup notice already shown for the pending run. */
+  pendingRunWarned: boolean;
 }
 
 export function createTuiState(repoRoot: string): TuiState {
@@ -390,5 +394,7 @@ export function createTuiState(repoRoot: string): TuiState {
     toastAt: 0,
     pendingRunAt: 0,
     pendingFastTimer: null,
+    pendingRunStderr: "",
+    pendingRunWarned: false,
   };
 }

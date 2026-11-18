@@ -228,30 +228,63 @@ export async function runTui(): Promise<void> {
   const launch = (args: string[], repoRoot = l.repoRoot, trackJump = true) => {
     const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
     try {
+      // Pipe the child's stderr (capped) instead of ignoring it: a child that
+      // dies before writing any run record would otherwise leave the run
+      // screen waiting forever with no explanation. The pipe is drained
+      // continuously so output can never block the child.
       const child = spawn(process.execPath, [cliPath, ...args], {
         cwd: repoRoot,
         detached: true,
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "pipe"],
         env: process.env,
       });
       child.unref();
+      s.pendingRunStderr = "";
+      s.pendingRunWarned = false;
       // Direct starts jump to the new run when its record appears. Backend
       // starts (the orchestrator spawning one run per issue) must not jump —
       // the screen would yank focus mid-typing.
       if (trackJump) s.pendingRunAt = Date.now();
-      // The child CLI validates the request (issue existence, agent/kind,
-      // depends, same-file conflicts) and exits nonzero before any run record
-      // exists. With stdio ignored a plain spawn would hide that failure and
-      // leave the run screen waiting forever for a record that never appears.
-      // Report the exit so the user still sees why the run did not start.
-      child.on("exit", (code) => {
-        if (code === 0 || code === null) return;
+      child.stderr?.on("data", (chunk: Buffer) => {
+        s.pendingRunStderr = `${s.pendingRunStderr}${chunk.toString()}`.slice(-8_192);
+      });
+      const stopPendingWatch = (): void => {
         if (s.pendingRunAt > 0) s.pendingRunAt = 0;
         if (s.pendingFastTimer) {
           clearInterval(s.pendingFastTimer);
           s.pendingFastTimer = null;
         }
-        notify(`run child exited ${code}; see the CLI output for the reason`);
+      };
+      child.on("error", (error) => {
+        if (!trackJump) {
+          notify(`run child failed to spawn: ${error.message}`);
+          return;
+        }
+        if (s.pendingRunAt === 0) return;
+        stopPendingWatch();
+        s.pendingRunStderr = `run child failed to spawn: ${error.message}`;
+        notify(`run child failed to spawn: ${error.message}`);
+      });
+      // The child CLI validates the request (issue existence, agent/kind,
+      // depends, same-file conflicts) and can exit before any run record
+      // exists. Report the exit with the child's own stderr tail so the user
+      // sees why the run did not start. Once the record is picked up
+      // (pendingRunAt cleared) run-screen failures belong to the run detail.
+      child.on("exit", (code) => {
+        if (!trackJump) {
+          if (code !== 0 && code !== null) notify(`background run child exited ${code}`);
+          return;
+        }
+        if (s.pendingRunAt === 0) return;
+        stopPendingWatch();
+        const tail = s.pendingRunStderr.trim().split("\n").filter(Boolean).slice(-6).join("\n");
+        if (code === 0 || code === null) {
+          s.pendingRunStderr = "run child exited cleanly but no run record appeared.";
+          notify("run child exited without creating a run record");
+          return;
+        }
+        if (!tail) s.pendingRunStderr = `run child exited ${code} with no output.`;
+        notify(`run child exited ${code}${tail ? `: ${tail.slice(0, 300)}` : ""}`);
       });
       return true;
     } catch (error) {
@@ -818,12 +851,7 @@ export async function runTui(): Promise<void> {
       // until the record resolves so the run-details s.screen opens promptly.
       if (s.pendingFastTimer) clearInterval(s.pendingFastTimer);
       s.pendingFastTimer = setInterval(() => {
-        if (s.pendingRunAt === 0) {
-          if (s.pendingFastTimer) clearInterval(s.pendingFastTimer);
-          s.pendingFastTimer = null;
-          return;
-        }
-        if (Date.now() - s.pendingRunAt > 15_000) {
+        if (s.pendingRunAt === 0 || s.pendingRunWarned) {
           if (s.pendingFastTimer) clearInterval(s.pendingFastTimer);
           s.pendingFastTimer = null;
           return;
@@ -1050,7 +1078,10 @@ export async function runTui(): Promise<void> {
     if (s.toast && Date.now() - s.toastAt > 8_000) s.toast = "";
 
     // Resolve a newly launched run before the header is built, so the first
-    // frame already shows the run-detail chrome.
+    // frame already shows the run-detail chrome. The watch never silently
+    // gives up while the placeholder is on screen: slow first starts
+    // (worktree, fetch, catalogue) can take minutes, and dropping the watch
+    // is what stranded users on "awaiting record" forever.
     if (s.pendingRunAt > 0) {
       const fresh = allRuns
         .filter((run) => new Date(run.startedAt).getTime() >= s.pendingRunAt - 1_500)
@@ -1061,9 +1092,20 @@ export async function runTui(): Promise<void> {
         s.screen = "run";
         s.page = "runs";
         s.pendingRunAt = 0;
+        s.pendingRunStderr = "";
+        s.pendingRunWarned = false;
         notify(`opened new run ${fresh.id.slice(-8)}`);
-      } else if (Date.now() - s.pendingRunAt > 15_000) {
+      } else if (s.screen !== "run" || s.selectedRunId !== null) {
+        // User navigated away from the placeholder; stop watching quietly.
+        // The next launch re-arms the watch.
         s.pendingRunAt = 0;
+      } else if (Date.now() - s.pendingRunAt > 30_000 && !s.pendingRunWarned) {
+        s.pendingRunWarned = true;
+        if (s.pendingFastTimer) {
+          clearInterval(s.pendingFastTimer);
+          s.pendingFastTimer = null;
+        }
+        notify("still no run record after 30s — first starts can take minutes (worktree, fetch, catalogue); staying here keeps watching");
       }
     }
 
@@ -1404,7 +1446,14 @@ export async function runTui(): Promise<void> {
     else if (s.page === "runs" && s.screen === "run") {
       const detail = runDetailData();
       if (!detail) {
-        body = ["   Run starting... (awaiting record)"]; // placeholder while pending
+        if (s.pendingRunAt > 0) {
+          const waiting = Math.max(0, Math.round((Date.now() - s.pendingRunAt) / 1000));
+          body = [`   Run starting... (awaiting record, ${waiting}s)`, "   Slow first starts are normal (worktree, fetch, catalogue)."];
+        } else if (s.pendingRunStderr) {
+          body = ["   Run did not start:", ...s.pendingRunStderr.split("\n").slice(-8).map((line) => `   ${line}`)];
+        } else {
+          body = ["   Run starting... (awaiting record)"]; // placeholder while pending
+        }
           actions = ""; // no actions until run appears
       } else {
         const frame = renderRunDetail({
