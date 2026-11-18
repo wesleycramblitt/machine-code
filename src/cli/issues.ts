@@ -68,9 +68,9 @@ export async function cmdApprove(argv: string[]): Promise<number> {
   const target = argv[0];
   if (!target) fail("usage: machine_code approve <slug>");
   const l = layout();
-  const slug = slugify(target);
-  const issue = findIssue(l, slug);
-  if (!issue) fail(`no issue ${slug}`);
+  const issue = findIssue(l, target);
+  if (!issue) fail(`no issue ${target}`);
+  const slug = issue.slug;
   if (issue.kind === "ideas") fail(`ideas are researched, not approved: ${slug}`);
   if (issue.status !== "needs-human-review" && issue.status !== "done") {
     fail(`${slug} is ${issue.status}; build it before approving`);
@@ -158,51 +158,48 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const slug = positional[1];
     const to = positional[2];
     if (!slug || !to) fail("usage: machine_code issue move <slug> <status>");
-    const cleaned = slugify(slug);
-    const issue = findIssue(l, cleaned);
-    if (!issue) fail(`no issue ${cleaned}`);
+    const issue = findIssue(l, slug);
+    if (!issue) fail(`no issue ${slug}`);
     if (!legalStatus(issue.kind, to)) fail(`invalid status ${JSON.stringify(to)} for ${issue.kind}`);
-    const moved = moveIssue(l, cleaned, to as IssueStatus);
+    const moved = moveIssue(l, issue.slug, to as IssueStatus);
     const status = to as IssueStatus;
-    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(status)}] ${cleaned}`);
-    process.stdout.write(`moved ${cleaned} → ${moved?.rel ?? ""}\n`);
+    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(status)}] ${issue.slug}`);
+    process.stdout.write(`moved ${issue.slug} → ${moved?.rel ?? ""}\n`);
     return 0;
   }
 
   if (sub === "reject") {
     const slug = positional[1];
     if (!slug) fail("usage: machine_code issue reject <slug>");
-    const cleaned = slugify(slug);
-    const issue = findIssue(l, cleaned);
-    if (!issue) fail(`no issue ${cleaned}`);
+    const issue = findIssue(l, slug);
+    if (!issue) fail(`no issue ${slug}`);
     if (issue.kind === "ideas") fail("ideas are researched, not reviewed");
     if (issue.status !== "needs-human-review") {
-      fail(`issue ${cleaned} is ${issue.status}; reject requires needs-human-review`);
+      fail(`issue ${issue.slug} is ${issue.status}; reject requires needs-human-review`);
     }
-    moveIssue(l, cleaned, "failed-human-review");
-    await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED HUMAN REVIEW] ${cleaned}`);
-    process.stdout.write(`rejected ${cleaned} → failed-human-review\n`);
+    moveIssue(l, issue.slug, "failed-human-review");
+    await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED HUMAN REVIEW] ${issue.slug}`);
+    process.stdout.write(`rejected ${issue.slug} → failed-human-review\n`);
     return 0;
   }
 
   if (sub === "run") {
     const slug = positional[1];
     if (!slug) fail("usage: machine_code issue run <slug> [--agent research|engineer]");
-    const cleaned = slugify(slug);
-    const issue = findIssue(l, cleaned);
-    if (!issue) fail(`no issue ${cleaned}`);
+    const issue = findIssue(l, slug);
+    if (!issue) fail(`no issue ${slug}`);
     const explicitAgent = flags.get("agent");
     // The default run for a feature/bug is the full build: gates, optional
     // review, commit, and status move. Ideas default to research.
     if (explicitAgent === undefined && issue.kind !== "ideas") {
-      const args = [cleaned];
+      const args = [issue.slug];
       const model = flags.get("model");
       if (model) args.push("--model", model);
       if (flags.has("no-review")) args.push("--no-review");
       return cmdBuild(args);
     }
     const agent = explicitAgent ?? (issue.kind === "ideas" ? "research" : "engineer");
-    const args = ["run", "--agent", agent, "--item", cleaned];
+    const args = ["run", "--agent", agent, "--item", issue.slug];
     const model = flags.get("model");
     if (model) args.push("--model", model);
     args.push(issue.prompt);
@@ -214,28 +211,26 @@ export async function cmdIssue(argv: string[]): Promise<number> {
   if (sub === "block" || sub === "unblock") {
     const slug = positional[1];
     if (!slug) fail(`usage: machine_code issue ${sub} <slug>`);
-    const cleaned = slugify(slug);
-    const issue = findIssue(l, cleaned);
-    if (!issue) fail(`no issue ${cleaned}`);
+    const issue = findIssue(l, slug);
+    if (!issue) fail(`no issue ${slug}`);
     if (issue.kind === "ideas") fail("ideas are researched, not blocked");
     const to = sub === "block" ? "blocked" : "todo";
-    assertNoActiveRun(l, cleaned, sub);
-    const moved = moveIssue(l, cleaned, to);
-    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(to)}] ${cleaned}`);
-    process.stdout.write(`${sub}ed ${cleaned} → ${moved?.rel ?? ""}\n`);
+    assertNoActiveRun(l, issue.slug, sub);
+    const moved = moveIssue(l, issue.slug, to);
+    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(to)}] ${issue.slug}`);
+    process.stdout.write(`${sub}ed ${issue.slug} → ${moved?.rel ?? ""}\n`);
     return 0;
   }
 
   if (sub === "reset") {
     const slug = positional[1];
     if (!slug) fail("usage: machine_code issue reset <slug>");
-    const cleaned = slugify(slug);
-    const issue = findIssue(l, cleaned);
-    if (!issue) fail(`no issue ${cleaned}`);
-    assertNoActiveRun(l, cleaned, "reset");
-    const result = await resetIssueBranch(l, cleaned);
+    const issue = findIssue(l, slug);
+    if (!issue) fail(`no issue ${slug}`);
+    assertNoActiveRun(l, issue.slug, "reset");
+    const result = await resetIssueBranch(l, issue.slug);
     if (!result.ok) {
-      process.stderr.write(`reset ${cleaned}: ${result.detail}\n`);
+      process.stderr.write(`reset ${issue.slug}: ${result.detail}\n`);
       return 1;
     }
     process.stdout.write(`${result.detail}\n`);
@@ -259,7 +254,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
   }
 
   const showSlug = sub === "show" || sub === "get" ? positional[1] : sub;
-  const issue = findIssue(l, slugify(showSlug ?? ""));
+  const issue = findIssue(l, showSlug ?? "");
   if (!issue) fail(`no issue ${showSlug ?? "(none)"} (run \`machine_code issue list\`)`);
   process.stdout.write(
     `${issue.rel}\npriority ${issue.priority} · review ${issue.review}` +

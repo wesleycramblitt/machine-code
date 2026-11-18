@@ -146,10 +146,15 @@ export async function cmdRun(argv: string[]): Promise<number> {
     }
   }
 
-  let itemSlug = itemFlag !== undefined ? slugify(itemFlag) : undefined;
+  // The --item flag names an existing issue file verbatim: look it up as
+  // given first (hand-created slugs like trade_with.md survive), with the
+  // slugified form as fallback inside findIssue. Never rewrite the flag
+  // before lookup — that is what turned trade_with into a missing trade-with.
+  let itemSlug = itemFlag;
   if (itemSlug) {
     const issue = findIssue(l, itemSlug);
     if (!issue) fail(`no issue ${itemSlug} — create one with \`machine_code issue create features|bugs ${itemSlug} "..."\``);
+    itemSlug = issue.slug;
     // An issue decides its agent unless --agent overrides it.
     const issueAgent = normalizedAgent ?? (issue.kind === "ideas" ? "research" : "engineer");
     // Agent must match the issue kind.

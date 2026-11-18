@@ -487,7 +487,15 @@ export function listIssues(layout: Layout): Issue[] {
 
 /** Find an issue by slug across all kinds and statuses. */
 export function findIssue(layout: Layout, slug: string): Issue | null {
-  return listIssues(layout).find((entry) => entry.slug === slug) ?? null;
+  const direct = listIssues(layout).find((entry) => entry.slug === slug) ?? null;
+  if (direct) return direct;
+  // Hand-created files keep their raw slugs (`trade_with.md`), while every
+  // CLI flag used to be slugified up front (`trade-with`) before lookup —
+  // rewriting the name and then failing to find it. Try the slugified form
+  // as a fallback so exact user input always resolves when it exists.
+  const cleaned = slugify(slug);
+  if (!cleaned || cleaned === slug) return null;
+  return listIssues(layout).find((entry) => entry.slug === cleaned) ?? null;
 }
 
 export interface NewIssueInput {
