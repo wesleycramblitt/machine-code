@@ -12,13 +12,16 @@
  * - `\x01` ctrl+a — start of line
  * - `\x05` ctrl+e — end of line
  * - `\x02` / `\x06` ctrl+b / ctrl+f — one character left/right
- * - `\x1bp` / `\x1bf` alt+b / alt+f — one word left/right
+ * - `\x1bp` / `\x1bf` alt+b / alt+f — one word left/right (meta form)
+ * - `\x1bb` / `\x1bf` alt+b / alt+f — one word left/right (Alt+letter form)
+ * - `\x1b[1;3D` / `\x1b[1;3C` alt+left / alt+right — one word left/right (CSI form)
  * - `\x04` ctrl+d — delete the character under the cursor
  * - `\x1bd` alt+d — delete to the end of the current word
  * - `\x08` / `\x7f` backspace — delete the character before the cursor
  * - `\x0b` ctrl+k — delete to end of line
  * - `\x15` ctrl+u — delete to start of line
  * - `\x1b[D` / `\x1b[C` left/right arrow — one character left/right
+ * - `\x1b[A` / `\x1b[B` up/down arrow — move between lines of a multiline text
  * - any other displayable character — insert at the cursor
  */
 
@@ -37,9 +40,14 @@ const CTRL_K = "\x0b";
 const CTRL_U = "\x15";
 const ALT_B = "\x1bp";
 const ALT_F = "\x1bf";
+const ALT_B2 = "\x1bb";
 const ALT_D = "\x1bd";
+const ALT_LEFT = "\x1b[1;3D";
+const ALT_RIGHT = "\x1b[1;3C";
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
 const BACKSPACE = "\x7f";
 
 /** Clamp a cursor column into the string's valid range (0..length). */
@@ -66,6 +74,49 @@ function wordEnd(text: string, at: number): number {
 }
 
 /**
+ * Move the cursor one line up (`delta = -1`) or down (`delta = 1`) in a
+ * multiline text, preserving the horizontal column where the target line is
+ * long enough. Returns the unchanged line when there is no line to move to.
+ */
+function moveLine(text: string, cursor: number, delta: number): EditLine {
+  const lineStart = (line: number): number => {
+    let start = 0;
+    for (let i = 0; i < line; i++) {
+      const nl = text.indexOf("\n", start);
+      if (nl === -1) return text.length;
+      start = nl + 1;
+    }
+    return start;
+  };
+  const lineEnd = (line: number): number => {
+    let start = lineStart(line);
+    const nl = text.indexOf("\n", start);
+    return nl === -1 ? text.length : nl;
+  };
+  // Current line index and column within it.
+  let line = 0;
+  let col = 0;
+  {
+    let start = 0;
+    while (true) {
+      const nl = text.indexOf("\n", start);
+      if (nl === -1 || cursor <= nl) {
+        col = cursor - start;
+        break;
+      }
+      start = nl + 1;
+      line += 1;
+    }
+  }
+  const target = line + delta;
+  if (target < 0) return { text, cursor: 0 };
+  const targetStart = lineStart(target);
+  if (targetStart >= text.length && target > 0) return { text, cursor };
+  const targetLen = lineEnd(target) - targetStart;
+  return { text, cursor: targetStart + Math.min(col, targetLen) };
+}
+
+/**
  * Apply one `data` key to an edit line and return the new `{ text, cursor }`.
  * Unrecognised escape sequences leave the line unchanged so callers never
  * corrupt the editor with an arrow or modifier they did not handle.
@@ -82,9 +133,15 @@ export function editLine({ text, cursor }: EditLine, data: string): EditLine {
     case CTRL_F:
     case RIGHT:
       return { text, cursor: Math.min(text.length, cursor + 1) };
+    case UP:
+    case DOWN:
+      return moveLine(text, cursor, data === UP ? -1 : 1);
     case ALT_B:
+    case ALT_B2:
+    case ALT_LEFT:
       return { text, cursor: wordStart(text, cursor) };
     case ALT_F:
+    case ALT_RIGHT:
       return { text, cursor: wordEnd(text, cursor) };
     case CTRL_D:
       if (cursor >= text.length) return { text, cursor };
