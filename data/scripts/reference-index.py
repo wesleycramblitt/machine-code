@@ -296,7 +296,11 @@ def build_api_index(bundle) -> str:
     rows = []
     for f in bundle["files"]:
         anchor = f["headings"][0][2] if f["headings"] else ""
-        loc = f["rel"] + (f"#{anchor}" if anchor else "")
+        # Store-relative, like topics.yaml refs: the api-index is read from the
+        # store root, so a bundle-relative `content/...` pointer is not a
+        # usable `reference:read` path. Identity is the bundle key because that
+        # is what a link names.
+        loc = f"{bundle['key']}/{f['rel']}" + (f"#{anchor}" if anchor else "")
         for symbol in as_list(f["meta"].get("symbols")):
             rows.append((str(symbol), loc))
     rows.sort(key=lambda r: r[0].lower())

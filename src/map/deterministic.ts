@@ -157,10 +157,17 @@ async function gitInfo(root: string, processes?: ProcessSupervisor): Promise<Git
   return { head: head.stdout.trim(), statusRaw: status.stdout, dirty };
 }
 
-async function listFiles(root: string, processes?: ProcessSupervisor): Promise<string[]> {
-  const git = await gitInfo(root, processes);
+async function listFiles(
+  root: string,
+  processes?: ProcessSupervisor,
+  git?: GitInfo | null,
+): Promise<string[]> {
+  // The caller (buildRepoMap) passes its own gitInfo result so one map build
+  // shells out to git once for HEAD+status instead of twice. Undefined keeps
+  // the old behavior for any future caller: compute it here.
+  const info = git !== undefined ? git : await gitInfo(root, processes);
   const out = new Set<string>();
-  if (git) {
+  if (info) {
     const tracked = await mapProc("git", ["-C", root, "ls-files", "-z"], { cwd: root, timeoutMs: 20_000 }, processes);
     const untracked = await mapProc(
       "git",
@@ -690,7 +697,7 @@ export interface BuiltMap {
 
 export async function buildRepoMap(root: string, options: BuildMapOptions = {}): Promise<BuiltMap> {
   const git = await gitInfo(root, options.processes);
-  const paths = await listFiles(root, options.processes);
+  const paths = await listFiles(root, options.processes, git);
   const stats: Array<{ path: string; bytes: number; mtimeMs: number }> = [];
   for (const path of paths) {
     try {

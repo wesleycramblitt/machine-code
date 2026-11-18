@@ -162,6 +162,16 @@ export function resolveReferencePath(
       return { abs: candidate, rel: relative(root, candidate), ...(anchor ? { anchor } : {}) };
     }
   }
+  // Bundle-relative citations (`content/...` as printed in older api-index
+  // rows and hand-authored topic maps) are not store paths. Resolve an
+  // unambiguous suffix match; ambiguity falls through to the not-found
+  // error below, which names the candidates.
+  if (rel.includes("/")) {
+    const matches = matchReferenceSuffix(storeRoot, rel);
+    if (matches.length === 1) {
+      return { abs: resolve(storeRoot, matches[0]!), rel: matches[0]!, ...(anchor ? { anchor } : {}) };
+    }
+  }
   // Return the machine store path even if it doesn't exist — the caller
   // (readReference) does its own existence check and produces a better
   // error message for missing files.
@@ -226,7 +236,12 @@ export function readReference(
   if (target.rel.split("/").includes("raw")) {
     return { ok: false, error: "raw/ is archival; read the indexed content file instead" };
   }
-  if (!existsSync(target.abs)) return { ok: false, error: `reference not found: ${target.rel}` };
+  if (!existsSync(target.abs)) {
+    const candidates = matchReferenceSuffix(referenceStore(layout), target.rel);
+    const hint =
+      candidates.length > 0 ? ` Did you mean ${candidates.slice(0, 3).join(", ")}?` : "";
+    return { ok: false, error: `reference not found: ${target.rel}.${hint}` };
+  }
   let text: string;
   try {
     text = readFileSync(target.abs, "utf8");
@@ -254,8 +269,53 @@ export function readReference(
   };
 }
 
-/** Search the cheap index layer, never bundle content or raw files. */
-export function findReferences(layout: Layout, query: string, limit = 20, projectRoot = layout.repoRoot): string {
+/**
+ * Bundle-relative fallback: api-index rows and hand-authored topic maps cite
+ * files as `content/...` relative to their bundle, which is not a store path.
+ * Match such a value as a suffix against real bundle files (flat bundles and
+ * version dirs alike, `raw/` excluded). Callers auto-resolve only an
+ * unambiguous single match; ambiguity is reported, never guessed.
+ */
+export function matchReferenceSuffix(storeRoot: string, rel: string): string[] {
+  if (!rel.includes("/") || rel.split("/").includes("..")) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let products: string[] = [];
+  try {
+    products = readdirSync(storeRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  const consider = (candidate: string): void => {
+    if (candidate.split("/").includes("raw")) return;
+    try {
+      if (!statSync(resolve(storeRoot, candidate)).isFile()) return;
+    } catch {
+      return;
+    }
+    if (!seen.has(candidate)) {
+      seen.add(candidate);
+      out.push(candidate);
+    }
+  };
+  for (const product of products) {
+    consider(`${product}/${rel}`);
+    let versions: string[] = [];
+    try {
+      versions = readdirSync(join(storeRoot, product), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+    } catch {
+      continue;
+    }
+    for (const version of versions) consider(`${product}/${version}/${rel}`);
+  }
+  return out.sort();
+}
+
+/** Search the cheap index layer, never bundle content or raw files. */export function findReferences(layout: Layout, query: string, limit = 20, projectRoot = layout.repoRoot): string {
   const q = query.trim().toLowerCase();
   if (!q) return "reference:find requires query";
   const files: string[] = [];
