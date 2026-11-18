@@ -9,7 +9,7 @@
  */
 import { readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { readCachedMap, type MapSymbol, type RepoMap } from "./deterministic.js";
+import { readCachedMap, type MapFile, type MapSymbol, type RepoMap } from "./deterministic.js";
 
 /** Common suffixes stripped so "deletion" and "delete" compare equal. */
 const SUFFIXES = ["ations", "ation", "ments", "ment", "ings", "ing", "ions", "ion", "ed"];
@@ -525,16 +525,21 @@ export function extractPhrases(text: string, limit = 24): string[] {
 const dirnameOf = (path: string): string =>
   path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
 
-export function suggestHints(args: {
-  map: RepoMap;
-  request: string;
-  repoRoot?: string;
-  limit?: number;
-  exclude?: readonly string[];
-}): FileHint[] {
-  const { map, request } = args;
-  const limit = args.limit ?? 10;
-  const excluded = new Set(args.exclude ?? []);
+/** Map-keyed (object identity) index cache so per-frame hint scans reuse the
+ *  request-independent structures. The map object identity is stable while the
+ *  map file is unchanged (see readCachedMap), so the WeakMap hits on every
+ *  keystroke instead of rebuilding O(repo) maps. */
+const hintIndexCache = new WeakMap<
+  RepoMap,
+  { byPath: Map<string, MapFile>; importedBy: Map<string, string[]>; codeFiles: MapFile[]; symbolIndex: Map<string, string[]> }
+>();
+
+function buildHintIndex(map: RepoMap): {
+  byPath: Map<string, MapFile>;
+  importedBy: Map<string, string[]>;
+  codeFiles: MapFile[];
+  symbolIndex: Map<string, string[]>;
+} {
   const byPath = new Map(map.files.map((file) => [file.path, file]));
   // Reverse imports once: who depends on each file.
   const importedBy = new Map<string, string[]>();
@@ -545,6 +550,37 @@ export function suggestHints(args: {
       importedBy.set(imported, list);
     }
   }
+  const codeFiles = map.files.filter((file) =>
+    /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i.test(file.path),
+  );
+  const symbolIndex = new Map<string, string[]>();
+  for (const file of codeFiles) {
+    for (const symbol of file.symbols) {
+      const key = symbol.name.toLowerCase();
+      const list = symbolIndex.get(key) ?? [];
+      if (!list.includes(file.path)) list.push(file.path);
+      symbolIndex.set(key, list);
+    }
+  }
+  return { byPath, importedBy, codeFiles, symbolIndex };
+}
+
+export function suggestHints(args: {
+  map: RepoMap;
+  request: string;
+  repoRoot?: string;
+  limit?: number;
+  exclude?: readonly string[];
+}): FileHint[] {
+  const { map, request } = args;
+  const limit = args.limit ?? 10;
+  const excluded = new Set(args.exclude ?? []);
+  let index = hintIndexCache.get(map);
+  if (!index) {
+    index = buildHintIndex(map);
+    hintIndexCache.set(map, index);
+  }
+  const { byPath, importedBy, codeFiles, symbolIndex } = index;
   const out: FileHint[] = [];
   // Rank index for every file with code hits: cited paths reuse the ranker's
   // own keyword/symbol linkage instead of arriving keyword-less (and
@@ -595,18 +631,6 @@ export function suggestHints(args: {
   // Pins: exact evidence, never ranked. Citations name files; symbol
   // mentions name definitions; literal phrases name rendered strings. Each
   // is decisive on its own — no score can outrank a direct name.
-  const codeFiles = map.files.filter((file) =>
-    /\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|c|h|cc|cpp|cs)$/i.test(file.path),
-  );
-  const symbolIndex = new Map<string, string[]>();
-  for (const file of codeFiles) {
-    for (const symbol of file.symbols) {
-      const key = symbol.name.toLowerCase();
-      const list = symbolIndex.get(key) ?? [];
-      if (!list.includes(file.path)) list.push(file.path);
-      symbolIndex.set(key, list);
-    }
-  }
   const MAX_HINTS = 10;
   const pin = (
     path: string,

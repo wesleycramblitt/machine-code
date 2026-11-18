@@ -120,9 +120,27 @@ export function mapCachePath(root: string): string {
   return join(root, ".machine_code", "local", "cache", "map.json");
 }
 
-/** Read the cached map synchronously for TUI previews (never rebuilds). */
+let cachedMapEntry: { key: string; root: string; map: RepoMap | null } | null = null;
+
+/** Read the cached map synchronously for TUI previews (never rebuilds).
+ *  Returns the same object identity while the map file is unchanged (keyed on
+ *  mtime+size), so per-frame callers can hold request-independent indices in a
+ *  WeakMap keyed on the map and still hit them on every keystroke. */
 export function readCachedMap(root: string): RepoMap | null {
-  return readMap(mapCachePath(root))?.map ?? null;
+  const file = mapCachePath(root);
+  let key: string;
+  try {
+    const stat = statSync(file);
+    key = `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    key = "";
+  }
+  if (cachedMapEntry && cachedMapEntry.root === root && cachedMapEntry.key === key) {
+    return cachedMapEntry.map;
+  }
+  const map = readMap(file)?.map ?? null;
+  cachedMapEntry = { key, root, map };
+  return map;
 }
 
 /**
