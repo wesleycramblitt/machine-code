@@ -1,5 +1,6 @@
 id: 60a560
 branch: mc/add-a-references-metadata-field-to-issues-it-can-60a560
+commit: f9ad7a0c1baad469f2ff19a3e2e4e9459cf46842
 acceptance: script:build
 
 Auto-created from run.
