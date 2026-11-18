@@ -1,5 +1,6 @@
 id: af62f9
 branch: mc/when-typing-in-prompts-in-the-tui-on-the-new-run-af62f9
+commit: cb5e3fe914dc4b102501cd5d948f436b0ec75c90
 acceptance: script:build
 
 Auto-created from run.
