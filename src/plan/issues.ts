@@ -131,6 +131,9 @@ export interface Issue {
   tags: string[];
   /** Human-provided search terms (comma-separated phrases); an exact-match override for the ranker. */
   keywords: string[];
+  /** Exact central-store citations (`product/version/content/file.md#anchor`)
+   * linked into any run created from this issue. */
+  references: string[];
   review: ReviewMode;
   /** direct: code only; verified: code + tests. */
   verification: "direct" | "verified";
@@ -193,7 +196,7 @@ export function safeIssuePath(layout: Layout, rel: string): string | null {
 
 /** Metadata keys allowed in the condensed `key: value` header. Anything else
  * (e.g. `Fix: the parser`) is body text, so a bare prompt never misparses. */
-const META_KEYS = new Set(["id", "branch", "commit", "priority", "review", "tags", "keywords", "depends", "files", "acceptance", "verify", "verification"]);
+const META_KEYS = new Set(["id", "branch", "commit", "priority", "review", "tags", "keywords", "references", "depends", "files", "acceptance", "verify", "verification"]);
 
 function stripQuotes(value: string): string {
   if (value.length >= 2) {
@@ -342,6 +345,12 @@ function serializeIssueFile(front: Record<string, unknown>, body: string): strin
   } else if (typeof front.keywords === "string" && front.keywords.trim()) {
     lines.push(`keywords: ${front.keywords.trim()}`);
   }
+  if (Array.isArray(front.references)) {
+    const kept = front.references.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+    if (kept.length > 0) lines.push(`references: ${kept.join(", ")}`);
+  } else if (typeof front.references === "string" && front.references.trim()) {
+    lines.push(`references: ${front.references.trim()}`);
+  }
   // `verify` is the legacy alias for `acceptance`; normalize on write unless
   // `acceptance` is already set.
   if (!list(front.acceptance) && list(front.verify)) lines.push(`acceptance: ${list(front.verify)}`);
@@ -436,6 +445,13 @@ export function readIssue(layout: Layout, kind: IssueKind, status: IssueStatus, 
         : Array.isArray(front.keywords)
           ? front.keywords.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean)
           : [],
+    // References are exact store citations, never slugified.
+    references:
+      typeof front.references === "string"
+        ? front.references.split(",").map((entry) => entry.trim()).filter(Boolean)
+        : Array.isArray(front.references)
+          ? front.references.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean)
+          : [],
     review: toReview(front.review),
     verification: front.verification === "verified" ? "verified" : "direct",
     verify: toAcceptance(front),
@@ -491,6 +507,8 @@ export interface NewIssueInput {
   acceptance?: string[];
   verify?: string[];
   keywords?: string[];
+  /** Exact central-store citations linked into any run created from this issue. */
+  references?: string[];
   body?: string;
 }
 
@@ -540,6 +558,7 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
     ...(input.files && input.files.length > 0 ? { files: input.files } : {}),
     ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
     ...(input.keywords && input.keywords.length > 0 ? { keywords: input.keywords } : {}),
+    ...(input.references && input.references.length > 0 ? { references: input.references } : {}),
     ...(acceptance.length > 0 ? { acceptance } : {}),
     ...(verification === "verified" ? { verification } : {}),
     ...(input.review && input.review !== "none" ? { review: input.review } : {}),

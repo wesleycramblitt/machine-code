@@ -301,6 +301,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (attachedIssue) {
     contextInclude = contextInclude ?? {};
     contextInclude.issues = [...new Set([...(contextInclude.issues ?? []), attachedIssue.rel])];
+    // The issue's `references:` metadata auto-links those central-store
+    // citations into this run's context.
+    if (attachedIssue.references.length > 0) {
+      contextInclude.references = [...new Set([...(contextInclude.references ?? []), ...attachedIssue.references])];
+    }
   }
   // Suggestions are context files. Small ones inline whole into the run's
   // file set (and become seeded symbol-map entries with outlines); everything
@@ -935,6 +940,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // leaving it one on-demand pull away (models never pull it).
       ...(agentNameParsed === "engineer" && verification === "verified"
         ? { "verified-testing": "include" as const }
+        : {}),
+      // An issue with `references:` needs the reference-resolving skill body
+      // inlined so the run knows how to read those citations.
+      ...((attachedIssue?.references?.length ?? 0) > 0
+        ? { reference: "include" as const }
         : {}),
       ...skillModeOverrides,
     },
