@@ -83,7 +83,14 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   }
 
   const promptHeight = Math.max(3, Math.min(14, Math.floor(bodyH * 0.5)));
-  const shownPrompt = displayLines.slice(-promptHeight);
+  // In insert mode keep the caret line visible: when it moves above the
+  // window bottom, scroll the window up with it (tail-pin otherwise).
+  let promptTop = Math.max(0, displayLines.length - promptHeight);
+  if (insert) {
+    const caretLine = displayLines.findIndex((line) => line.includes("▌"));
+    if (caretLine >= 0) promptTop = Math.max(0, Math.min(caretLine, displayLines.length - promptHeight));
+  }
+  const shownPrompt = displayLines.slice(promptTop, promptTop + promptHeight);
 
   block.push(
     ` ${D}┌${"─".repeat(inner)}┐${R}`,
