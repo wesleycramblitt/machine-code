@@ -195,4 +195,13 @@ describe("reference param redirects", () => {
     assert.ok(r.isError);
     assert.doesNotMatch(r.text, /belong on/);
   });
+  it("tier shorthand maps to content/code tiers", async () => {
+    const ctx = () => ({ root: join(dir, "proj"), commands: referenceCommands(layout) });
+    const content = await runCommand("reference:find", { query: "sprocket", bundle: "acme-widgets", tier: "content" }, ctx());
+    assert.ok(!content.isError);
+    assert.match(content.text, /content\/guide\.md:\d+:/);
+    const bad = await runCommand("reference:find", { query: "sprocket", bundle: "acme-widgets", tier: "deep" }, ctx());
+    assert.ok(bad.isError);
+    assert.match(bad.text, /unknown tier/);
+  });
 });

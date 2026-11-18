@@ -302,6 +302,7 @@ const REFERENCE_PARAM_HOME: Record<string, string> = {
   content: "reference:find",
   code: "reference:find",
   regex: "reference:find",
+  tier: "reference:find",
   offset: "reference:read",
   lines: "reference:read",
   outline: "reference:read",

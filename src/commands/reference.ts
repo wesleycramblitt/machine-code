@@ -122,6 +122,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       bundle: { type: "string", description: "Scope to one bundle, e.g. 'minecraft-java/26.3'. Required for content:/code:." },
       content: { type: "boolean", description: "Also search content/** bodies in the bundle." },
       code: { type: "boolean", description: "Also search non-index bundle files (source repos, data)." },
+      tier: { type: "string", description: "Shorthand for the tiers: 'content', 'code', or 'all'. Equivalent to the content:/code: flags." },
       regex: { type: "boolean", description: "Treat query as a raw regex for the content/code tiers." },
     },
     readonly: true,
@@ -131,11 +132,17 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       if (!query.trim()) return { text: "reference:find requires query", isError: true };
       const limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit ?? 20))));
       const bundle = typeof args.bundle === "string" && args.bundle.trim() ? args.bundle.trim() : undefined;
+      const tier = typeof args.tier === "string" ? args.tier.trim().toLowerCase() : "";
+      if (tier && !["content", "code", "all", "both", "index"].includes(tier)) {
+        return { text: `reference:find: unknown tier '${args.tier}'. Use tier 'content', 'code', or 'all'.`, isError: true };
+      }
+      const content = args.content === true || tier === "content" || tier === "all" || tier === "both";
+      const code = args.code === true || tier === "code" || tier === "all" || tier === "both";
       return {
         text: findReferences(layout, query, limit, ctx.root, {
           ...(bundle ? { bundle } : {}),
-          ...(args.content === true ? { content: true } : {}),
-          ...(args.code === true ? { code: true } : {}),
+          ...(content ? { content: true } : {}),
+          ...(code ? { code: true } : {}),
           ...(args.regex === true ? { regex: true } : {}),
         }),
         isError: false,
