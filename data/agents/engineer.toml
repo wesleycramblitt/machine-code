@@ -20,7 +20,7 @@ verification = "direct"
 verification = "verified"
 
 [selection]
-min_fit = 6.5
+min_fit = 5.5
 
 [selection.axes]
 code = 5.5
