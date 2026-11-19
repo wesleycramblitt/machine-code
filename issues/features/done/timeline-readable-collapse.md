@@ -1,6 +1,7 @@
+commit: ba514b843f5d05912bcc9299dcbfa2f7cdb6994d
 files: src/tui/screens/run-detail/run-detail.ts
-keywords: timeline, collapse, tail, output, thinking, run detail
 acceptance: script:build
+keywords: timeline, collapse, tail, output, thinking, run detail
 
 # Timeline collapse shows a readable tail, not one line
 
