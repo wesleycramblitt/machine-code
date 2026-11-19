@@ -1,5 +1,6 @@
 id: 1d188d
 branch: mc/on-the-run-details-page-in-the-tui-when-viewing-1d188d
+commit: 7c0d985c0a002bcb44cefff8cbadbe8198a1f103
 acceptance: research:verify
 
 Auto-created from run.
