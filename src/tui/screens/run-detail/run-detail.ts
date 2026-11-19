@@ -186,6 +186,16 @@ function groupTimelineCalls(ev: TimelineEventLike[], verbose: boolean): Timeline
  * explicit even when both bands are purple. Expansion keeps the lazy
  * full-prompt-file behavior.
  */
+/** Sub-section expansion sink passed to block renderers for long, segmented
+ * bodies (prompt sections, multi-file tool calls). `record` captures the
+ * rendered line span each sub-section covers so the cursor can be mapped back
+ * to its toggle key. */
+interface SubSink {
+  prefix: string;
+  expanded: ReadonlySet<string>;
+  record: (key: string, start: number, end: number) => void;
+}
+
 function renderModelCallBlock(
   group: TimelineGroup,
   ev: TimelineEventLike[],
@@ -196,9 +206,10 @@ function renderModelCallBlock(
     expandedEvent: boolean;
     compact: boolean;
     thinkingByCall: Map<string, ThinkingChunk[]>;
+    subs?: SubSink;
   },
 ): void {
-  const { eventLines, cols, runDir, expandedEvent, compact, thinkingByCall } = opts;
+  const { eventLines, cols, runDir, expandedEvent, compact, thinkingByCall, subs } = opts;
   const members = group.members.map((index) => ev[index]!);
   const select = members.find((event) => String(event.type) === "model_select");
   const request = members.find((event) => String(event.type) === "model_request");
@@ -309,19 +320,36 @@ function renderModelCallBlock(
           const parts = sections.map((s) => `${s.kind} ${s.size}`);
           eventLines.push(`    ${D}${parts.join(" · ")}${R}`);
         }
+      } else if (sections.length > 0) {
+        // Expanded: one collapsed sub-section per context section, each with
+        // its own toggle so a large model input opens only the part of
+        // interest instead of one flat wall.
+        eventLines.push(`    ${BL}↧${R} ${D}… full prompt ${chars.toLocaleString()} chars · ${sections.length} sections${R} ${D}(space toggles a section)${R}`);
+        for (const [i, section] of sections.entries()) {
+          const subKey = `${subs!.prefix}${i}`;
+          const headerStart = eventLines.length;
+          const isOpen = subs!.expanded.has(subKey);
+          eventLines.push(
+            `    ${isOpen ? `${D}▾` : `${G}▸`}${R} ${W}${section.kind}:${section.source}${R} ${D}${section.size}${R}`,
+          );
+          if (isOpen) {
+            const bodyLines = section.body.split("\n");
+            const shown = bodyLines.slice(0, 40);
+            for (const line of shown) {
+              for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+            }
+            if (bodyLines.length > 40) {
+              eventLines.push(`    ${D}… ${bodyLines.length - 40} more lines${R}`);
+            }
+          }
+          subs!.record(subKey, headerStart, eventLines.length);
+        }
       } else {
-        // Expanded: show per-section content instead of one wall.
-        eventLines.push(`    ${D}… full prompt ${chars.toLocaleString()} chars · ${sections.length} sections${R}`);
-        for (const section of sections) {
-          eventLines.push(`    ${D}▸ ${section.kind}:${section.source} ${section.size}${R}`);
-          const bodyLines = section.body.split("\n");
-          const shown = bodyLines.slice(0, 40);
-          for (const line of shown) {
-            for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
-          }
-          if (bodyLines.length > 40) {
-            eventLines.push(`    ${D}… ${bodyLines.length - 40} more lines${R}`);
-          }
+        // Expanded, no paragraph-facing sections: keep the raw text dump.
+        eventLines.push(`    ${D}… full prompt ${chars.toLocaleString()} chars${R}`);
+        const shown = promptText.split("\n");
+        for (const line of shown) {
+          for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
         }
       }
     } else {
@@ -519,12 +547,39 @@ function toolResultLines(
  * the edit diff, the result text for read/search and friends, the error
  * message in red on failure.
  */
+/**
+ * Diff-style lines for one edited file's hunks: `- old` / `+ new` pairs, or a
+ * `+ content` dump for a write-new-file entry. Empty when this file carries no
+ * hunks.
+ */
+function editFileLines(file: Record<string, unknown>, cols: number): string[] {
+  const out: string[] = [];
+  const pushPair = (oldText: unknown, newText: unknown): void => {
+    for (const line of String(oldText ?? "").split("\n").filter((l) => l.trim().length > 0)) {
+      for (const wrapped of wrapText(line, Math.max(20, cols - 8))) out.push(`- ${wrapped}`);
+    }
+    for (const line of String(newText ?? "").split("\n").filter((l) => l.trim().length > 0)) {
+      for (const wrapped of wrapText(line, Math.max(20, cols - 8))) out.push(`+ ${wrapped}`);
+    }
+  };
+  if (Array.isArray(file.edits)) {
+    for (const hunk of file.edits as Array<Record<string, unknown>>) pushPair(hunk.oldString, hunk.newString);
+  } else if (file.oldString !== undefined || file.newString !== undefined) {
+    pushPair(file.oldString, file.newString);
+  } else if (typeof file.content === "string") {
+    for (const line of file.content.split("\n").filter((l) => l.trim().length > 0)) {
+      for (const wrapped of wrapText(line, Math.max(20, cols - 8))) out.push(`+ ${wrapped}`);
+    }
+  }
+  return out;
+}
+
 function renderToolCallBlock(
   start: TimelineEventLike,
   completion: TimelineEventLike | undefined,
-  opts: { eventLines: string[]; cols: number; expandedEvent: boolean; compact: boolean },
+  opts: { eventLines: string[]; cols: number; expandedEvent: boolean; compact: boolean; subs?: SubSink },
 ): void {
-  const { eventLines, cols, expandedEvent, compact } = opts;
+  const { eventLines, cols, expandedEvent, compact, subs } = opts;
   const time = String(start.t ?? "").slice(11, 19);
   const tool = String(start.tool ?? "");
   const isEdit = tool === "write" || tool === "edit";
@@ -566,7 +621,39 @@ function renderToolCallBlock(
   }
   // The request: one-line human args by default; key: value body expanded.
   eventLines.push(`    ${Y}→${R} ${D}request${R}${human ? ` ${W}${trunc(human, Math.max(12, cols - 8))}${R}` : ""}`);
-  if (expandedEvent && args) {
+  const fileArgs = expandedEvent && args && Array.isArray(args.files) && subs
+    ? (args.files as Array<Record<string, unknown>>)
+    : null;
+  if (fileArgs && fileArgs.length > 0) {
+    // Expanded: one collapsed sub-section per touched file, each with its own
+    // toggle, instead of one flat request/response wall.
+    eventLines.push(`    ${BL}↧${R} ${D}${fileArgs.length} files${R} ${D}(space toggles a file)${R}`);
+    for (const [i, file] of fileArgs.entries()) {
+      const subKey = `${subs!.prefix}${i}`;
+      const headerStart = eventLines.length;
+      const isOpen = subs!.expanded.has(subKey);
+      const path = typeof file.path === "string" ? file.path : "?";
+      const label = isEdit ? `diff ${path}` : path;
+      const hunks = isEdit
+        ? Array.isArray(file.edits)
+          ? (file.edits as unknown[]).length
+          : file.oldString !== undefined
+            ? 1
+            : 0
+        : 0;
+      eventLines.push(`    ${isOpen ? `${D}▾` : `${G}▸`}${R} ${W}${trunc(label, Math.max(16, cols - 12))}${R}${hunks > 0 ? ` ${D}· ${hunks} ${hunks === 1 ? "hunk" : "hunks"}${R}` : ""}`);
+      if (isOpen) {
+        const body = isEdit ? editFileLines(file, cols) : describeToolBody(tool, file);
+        for (const raw of body) {
+          const tone = isEdit && raw.startsWith("+") ? G : isEdit && raw.startsWith("-") ? RED : D;
+          for (const wrapped of wrapText(printable(stripAnsi(raw)), Math.max(20, cols - 8))) {
+            eventLines.push(`      ${tone}${wrapped}${R}`);
+          }
+        }
+      }
+      subs!.record(subKey, headerStart, eventLines.length);
+    }
+  } else if (expandedEvent && args) {
     for (const raw of describeToolBody(tool, args)) {
       for (const wrapped of wrapText(printable(stripAnsi(raw)), Math.max(20, cols - 8))) {
         eventLines.push(`      ${D}${wrapped}${R}`);
@@ -614,6 +701,10 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   const processFollow = props.processFollow;
   let eventSel = props.eventSel;
   let eventCursor = props.eventCursor;
+  // Sub-section toggle key under the cursor (one prompt section or one tool
+  // file), or null. Set by the timeline render so space toggles only that
+  // segment rather than the whole call block.
+  let eventSubKey: string | null = null;
   const timelineFollow = props.timelineFollow;
   const timelineVerbose = !props.timelineHumanReadable;
   let childSel = props.childSel;
@@ -829,6 +920,10 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         }
       }
       const compact = !timelineVerbose;
+      // Sub-sections rendered inside expanded blocks (prompt sections, tool
+      // files) record their line spans here so the cursor maps back to the
+      // sub-section's toggle key; space on a sub-section toggles only it.
+      const subList: Array<{ key: string; start: number; end: number }> = [];
       for (let gi = 0; gi < groups.length; gi++) {
         const group = groups[gi]!;
         // Rhythm: exactly one blank line between blocks, none inside. The
@@ -849,13 +944,23 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
         const expandedEvent = isTail ? !userExpanded : userExpanded;
         const type = String(event.type);
         if (group.kind === "model") {
-          renderModelCallBlock(group, ev, { eventLines, cols, runDir: detail.dir, expandedEvent, compact, thinkingByCall });
+          const subs: SubSink = {
+            prefix: `${s.id}:${group.first}:`,
+            expanded,
+            record: (key, start, end) => subList.push({ key, start, end }),
+          };
+          renderModelCallBlock(group, ev, { eventLines, cols, runDir: detail.dir, expandedEvent, compact, thinkingByCall, subs });
           spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
           continue;
         }
         if (group.kind === "tool") {
           const completion = group.members.length > 1 ? ev[group.members[1]!] : undefined;
-          renderToolCallBlock(event, completion, { eventLines, cols, expandedEvent, compact });
+          const subs: SubSink = {
+            prefix: `${s.id}:${group.first}:`,
+            expanded,
+            record: (key, start, end) => subList.push({ key, start, end }),
+          };
+          renderToolCallBlock(event, completion, { eventLines, cols, expandedEvent, compact, subs });
           spans.push({ start, end: eventLines.length, rep: group.first, band: start, expanded: expandedEvent });
           continue;
         }
@@ -1067,6 +1172,13 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             break;
           }
         }
+        // When the cursor rests on an expanded block's sub-section (one prompt
+        // section or one tool file), expose its toggle key so space toggles
+        // only that segment rather than the whole block.
+        eventSubKey = null;
+        for (const sub of subList) {
+          if (eventSel >= sub.start && eventSel < sub.end) { eventSubKey = sub.key; break; }
+        }
         // Zebra stripes across every other block. Header bands keep their
         // own paint (a stripe would erase it), expanded bodies read as one
         // canvas, and the cursor row wins (selected applies after this).
@@ -1215,6 +1327,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     processSel,
     eventSel,
     eventCursor,
+    eventSubKey,
     childSel,
     changeSel,
     changeOpen,
