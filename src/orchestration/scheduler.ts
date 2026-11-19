@@ -91,7 +91,10 @@ export function runnableIssues(
   );
   const activeItems = new Set(
     runs
-      .filter((run) => isActiveStatus(run.status))
+      // `interrupted` frees its slot (freeSlots) so it must free its issue
+      // and footprint here too: no live worker backs it, and keeping it in
+      // the set blocks re-dispatch forever after a restart.
+      .filter((run) => isActiveStatus(run.status) && run.status !== "interrupted")
       .map((run) => runItemId(run))
       .filter((item): item is string => item !== undefined),
   );
