@@ -82,10 +82,11 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
     return true;
   }
   if (s.runSection === "timeline" && data === "v") {
-    s.timelineVerbose = !s.timelineVerbose;
+    s.timelineHumanReadable = !s.timelineHumanReadable;
+    s.timelineVerbose = !s.timelineHumanReadable;
     s.timelineFollow = true;
     s.eventSel = -1;
-    ctx.notify(s.timelineVerbose ? "showing all events" : "showing key events");
+    ctx.notify(s.timelineHumanReadable ? "human readable ON" : "human readable OFF");
     ctx.draw();
     return true;
   }
