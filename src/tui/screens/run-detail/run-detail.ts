@@ -564,7 +564,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
   let eventSel = props.eventSel;
   let eventCursor = props.eventCursor;
   const timelineFollow = props.timelineFollow;
-  const timelineVerbose = props.timelineVerbose;
+  const timelineVerbose = !props.timelineHumanReadable;
   let childSel = props.childSel;
   let changeSel = props.changeSel;
   let changeOpen = props.changeOpen;
@@ -650,7 +650,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             hint("j/k", "move", Y),
             hint("space", "expand", G),
             hint("F", `follow ${timelineFollow ? "ON" : "OFF"}`, Y),
-            hint("v", timelineVerbose ? "all" : "key events"),
+            hint("v", props.timelineHumanReadable ? "human readable ON" : "human readable OFF"),
           ]
         : section === "processes"
           ? [

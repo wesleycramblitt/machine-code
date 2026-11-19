@@ -1468,6 +1468,7 @@ export async function runTui(): Promise<void> {
           eventCursor: s.eventCursor,
           timelineFollow: s.timelineFollow,
           timelineVerbose: s.timelineVerbose,
+          timelineHumanReadable: s.timelineHumanReadable,
           childSel: s.childSel,
           changeSel: s.changeSel,
           changeOpen: s.changeOpen,
