@@ -1,7 +1,8 @@
-files: src/tui/screens/run-detail/run-detail.ts, src/tui/screens/run-detail/keys.ts, src/tui/state.ts
+commit: f529bab9ef622b5ba4b519d1ed3d3095030078ca
 depends: timeline-readable-collapse
-keywords: timeline, human readable, verbose, mode, toggle, run detail, v
+files: src/tui/screens/run-detail/run-detail.ts, src/tui/screens/run-detail/keys.ts, src/tui/state.ts
 acceptance: script:build
+keywords: timeline, human readable, verbose, mode, toggle, run detail, v
 
 # Human-readable / raw mode toggle for the timeline
 
