@@ -288,10 +288,42 @@ function renderModelCallBlock(
     // The event preview is head-only (log cap). When a full prompt file was
     // recorded, expanding loads the exact text the model saw; otherwise fall
     // back to the capped preview.
-    const full = expandedEvent && inputFile ? fullPromptLines(runDir, inputFile, cols) : null;
-    if (full !== null) {
-      eventLines.push(`    ${D}… full prompt ${chars.toLocaleString()} chars · ${full.length.toLocaleString()} lines · j/k scrolls${R}`);
-      for (const line of full) eventLines.push(`    ${D}${line}${R}`);
+    const promptText = inputFile
+      ? (() => {
+          const abs = join(runDir, inputFile);
+          if (!abs.startsWith(runDir) || !existsSync(abs)) return null;
+          try { return readFileSync(abs, "utf8"); } catch { return null; }
+        })()
+      : null;
+    const sections = promptText ? contextSections(promptText).slice(0, 20) : [];
+    if (promptText !== null) {
+      // Collapsed: show tail of the raw text + one dim line per section.
+      const textLines = promptText.split("\n");
+      while (textLines.length > 0 && textLines[textLines.length - 1]!.trim() === "") textLines.pop();
+      if (!expandedEvent) {
+        eventLines.push(`    ${D}… full prompt ${chars.toLocaleString()} chars · ${sections.length} sections · space to expand${R}`);
+        for (const line of textLines.slice(-4)) {
+          for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+        }
+        if (sections.length > 0) {
+          const parts = sections.map((s) => `${s.kind} ${s.size}`);
+          eventLines.push(`    ${D}${parts.join(" · ")}${R}`);
+        }
+      } else {
+        // Expanded: show per-section content instead of one wall.
+        eventLines.push(`    ${D}… full prompt ${chars.toLocaleString()} chars · ${sections.length} sections${R}`);
+        for (const section of sections) {
+          eventLines.push(`    ${D}▸ ${section.kind}:${section.source} ${section.size}${R}`);
+          const bodyLines = section.body.split("\n");
+          const shown = bodyLines.slice(0, 40);
+          for (const line of shown) {
+            for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
+          }
+          if (bodyLines.length > 40) {
+            eventLines.push(`    ${D}… ${bodyLines.length - 40} more lines${R}`);
+          }
+        }
+      }
     } else {
       if (expandedEvent && inputFile) {
         eventLines.push(`    ${Y}full prompt file missing (${inputFile}); showing capped preview${R}`);
@@ -400,6 +432,24 @@ function resultText(result: unknown): string {
     return (result as { text: string }).text;
   }
   return JSON.stringify(result ?? "");
+}
+
+/** Parse a prompt text into {kind, source, body, size} context sections. */
+interface PromptSection { kind: string; source: string; body: string; size: string; }
+
+function contextSections(promptText: string): PromptSection[] {
+  const out: PromptSection[] = [];
+  // Match <context-block kind="..." source="..." ...>body</context-block>
+  const blockRe = /<context-block\s+kind="([^"]*)"\s+source="([^"]*)"[^>]*>([\s\S]*?)<\/context-block>/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockRe.exec(promptText)) !== null) {
+    const kind = match[1]!;
+    const source = match[2]!;
+    const body = match[3]!.trim();
+    const size = body.length >= 1024 ? `${(body.length / 1024).toFixed(1)}k` : `${body.length}`;
+    out.push({ kind, source, body: body.slice(0, 24_000), size: `${size} chars` });
+  }
+  return out;
 }
 
 /** First lines of a body, with a note when lines were cut. */
@@ -531,7 +581,8 @@ function renderToolCallBlock(
   eventLines.push(`    ${completion!.isError ? RED : G}←${R} ${D}response${R}`);
   if (showDiff) {
     // The diff is the meat of an edit; the raw result ("ok") is not.
-    for (const line of editSummaryLines(completion!, cols - 6, 5).slice(1)) {
+    const maxDiffLines = expandedEvent ? cols - 6 : 5;
+    for (const line of editSummaryLines(completion!, cols - 6, maxDiffLines).slice(1)) {
       const tone = line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
       eventLines.push(`    ${tone}${trunc(line, Math.max(16, cols - 8))}${R}`);
     }
@@ -924,9 +975,10 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
           const startArgs = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
           const human = describeToolArgs(String(event.tool ?? ""), startArgs ?? undefined);
           eventLines.push(`${prefix} ${GR}${time}${R} ${Y}⚡${R} ${B}${String(event.tool)}${R}${human ? ` ${D}${trunc(human, Math.max(12, cols - 24))}${R}` : ` ${D}calling…${R}`}`);
-          if (expandedEvent && event.args) {
-            const argsText = stripAnsi(JSON.stringify(event.args));
-            for (const line of wrapText(argsText, cols - 6)) eventLines.push(`    ${D}${line}${R}`);
+          if (expandedEvent && startArgs) {
+            for (const raw of describeToolBody(String(event.tool ?? ""), startArgs)) {
+              for (const wrapped of wrapText(printable(stripAnsi(raw)), cols - 8)) eventLines.push(`      ${D}${wrapped}${R}`);
+            }
           }
         } else if (type === "tool_call") {
           const toolName = String(event.tool ?? "");
@@ -935,11 +987,13 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
           const human = describeToolArgs(toolName, callArgs);
           eventLines.push(`${prefix} ${GR}${time}${R} ${isEdit ? `${G}✎${R}` : `${Y}⚡${R}`} ${B}${toolName}${R} ${event.isError ? `${RED}ERR${R}` : `${G}ok${R}`}${typeof event.durationMs === "number" ? ` ${D}${event.durationMs}ms${R}` : ""}${human ? ` ${D}${trunc(human, Math.max(12, cols - 32))}${R}` : ""}`);
           if (expandedEvent && callArgs) {
-            for (const line of wrapText(JSON.stringify(callArgs), cols - 6)) eventLines.push(`    ${D}${line}${R}`);
+            for (const raw of describeToolBody(toolName, callArgs)) {
+              for (const wrapped of wrapText(printable(stripAnsi(raw)), cols - 6)) eventLines.push(`    ${D}${wrapped}${R}`);
+            }
           }
-          if (isEdit && !expandedEvent) {
-            // The diff is the meat of an edit; the raw result ("ok") is not.
-            for (const line of editSummaryLines(event, cols - 6, 5).slice(1)) {
+          if (isEdit) {
+            const maxDiffLines = expandedEvent ? cols - 6 : 5;
+            for (const line of editSummaryLines(event, cols - 6, maxDiffLines).slice(1)) {
               const tone = line.startsWith("+") ? G : line.startsWith("-") ? RED : D;
               eventLines.push(`    ${tone}${trunc(line, Math.max(16, cols - 8))}${R}`);
             }

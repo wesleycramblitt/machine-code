@@ -188,12 +188,33 @@ export function describeToolBody(tool: string, args: Record<string, unknown> | n
       add("content", args.content);
       break;
     case "edit":
-      add("path", args.path);
-      if (args.replaceAll) add("replaceAll", true);
-      if (Array.isArray(args.edits)) add("hunks", args.edits.length);
-      else {
-        add("oldString", args.oldString);
-        add("newString", args.newString);
+      if (Array.isArray(args.files)) {
+        add("files", args.files.map((f: Record<string, unknown>) => typeof f.path === "string" ? f.path : "?").join(", "));
+        add("totalHunks", args.files.reduce((n: number, f: Record<string, unknown>) => n + (Array.isArray(f.edits) ? f.edits.length : (f.oldString !== undefined ? 1 : 0)), 0));
+      } else {
+        add("path", args.path);
+        if (args.replaceAll) add("replaceAll", true);
+        if (Array.isArray(args.edits)) add("hunks", args.edits.length);
+        else {
+          add("oldString", args.oldString);
+          add("newString", args.newString);
+        }
+      }
+      break;
+    case "inspect":
+      if (Array.isArray(args.files)) {
+        add("files", args.files.map((f: Record<string, unknown>) => typeof f.path === "string" ? f.path : "?").join(", "));
+      } else {
+        add("query", args.query);
+        add("path", args.path);
+        add("symbol", args.symbol);
+        add("section", args.section);
+        add("detail", args.detail);
+        if (args.offset !== undefined || args.limit !== undefined) {
+          add("range", `${typeof args.offset === "number" ? args.offset : 1}…${args.limit ?? "end"}`);
+        }
+        add("around", args.around);
+        if (args.regex) add("regex", args.regex);
       }
       break;
     case "map":
