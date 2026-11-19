@@ -73,6 +73,8 @@ export interface RunDetailFrame {
   processSel: number;
   eventSel: number;
   eventCursor: number;
+  /** Sub-section toggle key under the cursor (null = whole block toggle). */
+  eventSubKey: string | null;
   childSel: number;
   changeSel: number;
   changeOpen: number | null;

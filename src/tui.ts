@@ -1485,6 +1485,7 @@ export async function runTui(): Promise<void> {
         s.processSel = frame.processSel;
         s.eventSel = frame.eventSel;
         s.eventCursor = frame.eventCursor;
+        s.eventSubKey = frame.eventSubKey;
         s.childSel = frame.childSel;
         s.changeSel = frame.changeSel;
         s.changeOpen = frame.changeOpen;

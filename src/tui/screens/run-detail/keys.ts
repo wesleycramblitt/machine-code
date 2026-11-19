@@ -67,8 +67,10 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   const toggleEvent = () => {
     if (s.runSection !== "timeline") return true;
     s.timelineFollow = false;
-    if (s.eventCursor < 0) return true;
-    const key = eventKey(detail.summary.id, s.eventCursor);
+    // A sub-section key (one prompt section or one tool file) wins over the
+    // whole-block key: space on a sub-section toggles only that segment.
+    const key = s.eventSubKey ?? (s.eventCursor < 0 ? null : eventKey(detail.summary.id, s.eventCursor));
+    if (key === null) return true;
     if (s.expanded.has(key)) s.expanded.delete(key); else s.expanded.add(key);
   };
   if (data === " ") { toggleEvent(); ctx.draw(); return true; }

@@ -144,6 +144,8 @@ export interface TuiState {
   eventSel: number;
   /** Event index currently under the cursor row (float). */
   eventCursor: number;
+  /** Sub-section toggle key under the cursor (null = whole-block toggle). */
+  eventSubKey: string | null;
   /** Follow the newest timeline event; j/k turns it off. */
   timelineFollow: boolean;
   /** Show routine internals in the timeline. */
@@ -313,6 +315,7 @@ export function createTuiState(repoRoot: string): TuiState {
     processFollow: false,
     eventSel: 0,
     eventCursor: 0,
+    eventSubKey: null,
     timelineFollow: true,
     timelineVerbose: false,
     timelineHumanReadable: true,
