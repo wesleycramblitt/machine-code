@@ -160,6 +160,16 @@ export function editLine({ text, cursor }: EditLine, data: string): EditLine {
       // Escape sequences we do not recognise are ignored; displayable
       // characters (any non-escape payload) insert at the cursor.
       if (data.startsWith("\x1b")) return { text, cursor };
+      // A raw read can coalesce several keypresses into one chunk (for
+      // example holding backspace emits many `\x7f` bytes at once). Every
+      // multi-byte terminal key sequence starts with `\x1b`, so a chunk
+      // without one is only single-char keys: fold each code point through
+      // the rules above instead of inserting the raw bytes as literal text.
+      if (data.length > 1) {
+        let out: EditLine = { text, cursor };
+        for (const ch of data) out = editLine(out, ch);
+        return out;
+      }
       return { text: text.slice(0, cursor) + data + text.slice(cursor), cursor: cursor + data.length };
   }
 }
