@@ -49,6 +49,8 @@ export interface RunDetailProps {
   eventCursor: number;
   timelineFollow: boolean;
   timelineVerbose: boolean;
+  /** True renders the timeline human-readable; false shows raw per-event records. */
+  timelineHumanReadable: boolean;
   childSel: number;
   /** Selected changed-file row in the changes section (index into ChangeSummary.files). */
   changeSel: number;
