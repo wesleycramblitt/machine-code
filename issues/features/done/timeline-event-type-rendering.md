@@ -1,7 +1,8 @@
-files: src/tui/screens/run-detail/run-detail.ts, src/tui/timeline.ts, src/tui/format.ts
+commit: 6c99dde5a5efc0457eed2e4013ea016dbaf3b64e
 depends: timeline-readable-collapse, timeline-human-readable-mode
-keywords: timeline, input, context, edit, diff, tool args, human readable, inspect
+files: src/tui/screens/run-detail/run-detail.ts, src/tui/timeline.ts, src/tui/format.ts
 acceptance: script:build
+keywords: timeline, input, context, edit, diff, tool args, human readable, inspect
 
 # Per-event-type readable rendering: inputs show caller-unique content, edits show diffs
 
