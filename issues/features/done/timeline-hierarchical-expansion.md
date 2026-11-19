@@ -1,7 +1,8 @@
-files: src/tui/screens/run-detail/run-detail.ts
+commit: cbe51db4556702b4f3ddb7ee1aa793c2fbebc73f
 depends: timeline-readable-collapse, timeline-human-readable-mode, timeline-event-type-rendering
-keywords: timeline, expandable, nested, sub-section, inspect, edit, many files, hierarchical
+files: src/tui/screens/run-detail/run-detail.ts
 acceptance: script:build
+keywords: timeline, expandable, nested, sub-section, inspect, edit, many files, hierarchical
 
 # Expanded long events segment into expandable sub-sections
 
