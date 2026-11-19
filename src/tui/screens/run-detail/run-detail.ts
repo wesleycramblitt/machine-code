@@ -230,9 +230,11 @@ function renderModelCallBlock(
       background(fit(`${WHITE}◌ ${B}${WHITE}Call ${group.ordinal}${R} ${GR}${time}${R} ${B}${WHITE}${name}${R} ${Y}streaming…${streamDots()}${R}`, cols), PURPLE_BG),
     );
   }
-  // Collapse policy: a compact (non-tail) past block shows its result
-  // summary only — the header plus a one-line ok/ERR line — even when the
-  // user did not expand it. The newest block stays open to unfold live.
+  // Collapse policy: a compact (non-tail) past block shows the tail of the
+  // final output (or thinking when there is no text output) — the last ~15
+  // lines — with a dim "··· N earlier lines" note when earlier lines were
+  // cut. Finishing output thus scrolls up out of view instead of vanishing
+  // to one ok/ERR line. The newest block stays open to unfold live.
   if (compact && !expandedEvent && end) {
     const usage = (end.usage ?? {}) as { input?: number; output?: number };
     const callChunks = typeof end.call === "number"
@@ -242,18 +244,30 @@ function renderModelCallBlock(
       .filter((chunk) => chunk.kind === "text")
       .map((chunk) => chunk.text)
       .join("");
+    const reasoning = callChunks
+      .filter((chunk) => chunk.kind === "thinking")
+      .map((chunk) => chunk.text)
+      .join("\n")
+      .trim();
     const output = (
       typeof end.text === "string" && end.text.trim().length > 0
         ? end.text
         : textChunk
     ).trim();
-    const first = output.split("\n").find((line) => line.trim().length > 0) ?? "";
-    eventLines.push(
-      `    ${end.isError ? RED : G}${end.isError ? "ERR" : "ok"}${R}` +
-        (output ? ` ${D}${trunc(first, Math.max(20, cols - 10))}${R}` : "") +
-        ` ${D}${usage.input ?? 0}→${usage.output ?? 0}${R}` +
-        ` ${D}(space to expand)${R}`,
-    );
+    const body = (output || reasoning).trim();
+    const bodyLines = body
+      ? body.split("\n").filter((line) => line.trim().length > 0)
+      : [];
+    if (bodyLines.length > 0) {
+      const tail = tailLines(bodyLines, 15);
+      eventLines.push(`    ${end.isError ? RED : G}${end.isError ? "ERR" : "ok"}${R} ${D}${usage.input ?? 0}→${usage.output ?? 0}${R} ${D}(space to expand)${R}`);
+      eventLines.push(`    ${D}· ${output ? "output" : "thinking"} tail${R}`);
+      for (const line of tail) {
+        for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${W}${wrapped}${R}`);
+      }
+    } else {
+      eventLines.push(`    ${end.isError ? RED : G}${end.isError ? "ERR" : "ok"}${R} ${D}${usage.input ?? 0}→${usage.output ?? 0}${R} ${D}(space to expand)${R}`);
+    }
     eventLines.push(`    ${D}· end Call ${group.ordinal}${R}`);
     return;
   }
@@ -481,18 +495,23 @@ function renderToolCallBlock(
       PANEL_BG,
     ),
   );
-  // Collapse policy: a compact (non-tail) past block shows its result
-  // summary only — the header plus a one-line ok/ERR line. The request line
-  // and diff are elided so a long run scans as one header per call.
+  // Collapse policy: a compact (non-tail) past block shows the tail of its
+  // result body — the last ~12 lines — with a "· N earlier lines" note when
+  // earlier lines were cut. The request/→ and response/← label stay so the
+  // block still reads as a block, not a floating line.
   if (compact && !expandedEvent && completion && !running) {
     const isError = !!completion.isError;
     const all = printable(stripAnsi(resultText(completion.result))).split("\n").filter((line) => line.trim().length > 0);
-    const first = all[0] ?? "";
-    eventLines.push(
-      `    ${isError ? RED : G}${isError ? "ERR" : "ok"}${R}` +
-        (first ? ` ${D}${trunc(first, Math.max(20, cols - 10))}${R}` : "") +
-        ` ${D}(space to expand)${R}`,
-    );
+    eventLines.push(`    ${Y}→${R} ${D}request${R}${human ? ` ${W}${trunc(human, Math.max(12, cols - 8))}${R}` : ""}`);
+    eventLines.push(`    ${isError ? RED : G}←${R} ${D}response${R}`);
+    if (all.length > 0) {
+      const tail = tailLines(all, 12);
+      const tone = isError ? RED : D;
+      for (const line of tail) {
+        for (const wrapped of wrapText(trunc(line, Math.max(20, cols - 8)), Math.max(20, cols - 8))) eventLines.push(`      ${tone}${wrapped}${R}`);
+      }
+    }
+    eventLines.push(`    ${isError ? RED : G}${isError ? "ERR" : "ok"}${R} ${D}(space to expand)${R}`);
     return;
   }
   // The request: one-line human args by default; key: value body expanded.
@@ -866,13 +885,13 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
               : textChunk
           ).trim();
           if (output) {
-            const outputLines = output.split("\n");
-            const shown = expandedEvent ? outputLines : outputLines.slice(0, 4);
-            const more =
-              !expandedEvent && outputLines.length > shown.length
-                ? ` ${D}(${outputLines.length - shown.length} more lines; space to expand)${R}`
-                : "";
-            eventLines.push(`    ${M}output${R}${more}`);
+            const outputLines = output.split("\n").filter((line) => line.trim().length > 0);
+            const shown = expandedEvent ? outputLines : tailLines(outputLines, 15);
+            if (!expandedEvent && outputLines.length > shown.length) {
+              eventLines.push(`    ${M}output${R} ${D}(${outputLines.length - shown.length + 1} earlier lines)${R}`);
+            } else {
+              eventLines.push(`    ${M}output${R}`);
+            }
             for (const line of shown) {
               for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${W}${wrapped}${R}`);
             }
@@ -883,13 +902,13 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
             .join("\n")
             .trim();
           if (reasoning) {
-            const reasoningLines = reasoning.split("\n");
-            const shown = expandedEvent ? reasoningLines : reasoningLines.slice(0, 4);
-            const more =
-              !expandedEvent && reasoningLines.length > shown.length
-                ? ` ${D}(${reasoningLines.length - shown.length} more lines; space to expand)${R}`
-                : "";
-            eventLines.push(`    ${M}thinking${R}${more}`);
+            const reasoningLines = reasoning.split("\n").filter((line) => line.trim().length > 0);
+            const shown = expandedEvent ? reasoningLines : tailLines(reasoningLines, 10);
+            if (!expandedEvent && reasoningLines.length > shown.length) {
+              eventLines.push(`    ${M}thinking${R} ${D}(${reasoningLines.length - shown.length + 1} earlier lines)${R}`);
+            } else {
+              eventLines.push(`    ${M}thinking${R}`);
+            }
             for (const line of shown) {
               for (const wrapped of wrapText(line, Math.max(30, cols - 6))) eventLines.push(`    ${D}${wrapped}${R}`);
             }
@@ -933,9 +952,10 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
                 for (const wrapped of wrapText(line, cols - 6)) eventLines.push(`    ${G}→${R} ${wrapped}`);
               }
             } else {
-              const preview = text.split("\n").filter((line) => line.trim().length > 0).slice(0, 3);
+              const lines = text.split("\n").filter((line) => line.trim().length > 0);
+              const preview = tailLines(lines, 10);
               for (const line of preview) eventLines.push(`    ${G}→${R} ${trunc(line, Math.max(20, cols - 8))}`);
-              if (text.split("\n").length > 3) eventLines.push(`    ${D}… (${text.split("\n").length - 3} more; space to expand)${R}`);
+              if (lines.length > preview.length) eventLines.push(`    ${D}… (${lines.length - preview.length} more; space to expand)${R}`);
             }
           }
         } else if (type === "gates") {
