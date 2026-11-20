@@ -714,7 +714,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const promptText = run.prompt || (insert ? "" : run.item ? "Press :! to run the issue" : "Press p to type the task");
   // Splice the cursor block at the caret column before wrapping so it lands
   // on the caret's wrapped line; at end of text it still guards a trailing space.
-  const promptLines = wrapText(insert ? withCursor(promptText, cursor) : promptText, Math.max(8, inner - 3));
+  const promptLines = wrapText(run.prompt || insert ? withCursor(promptText, cursor) : promptText, Math.max(8, inner - 3));
   const promptActions = insert
     ? joinCommands([
         command("Esc", "Done", undefined, Y),
@@ -742,13 +742,11 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       : ` ${agentControls}${" ".repeat(Math.max(1, boxWidth - visible(agentControls) - visible(runControls) - 1))}${runControls}`;
   const availableForPrompt = Math.max(3, bodyH - summary.length - (promptHint ? 7 : 6));
   const promptHeight = Math.max(3, Math.min(16, availableForPrompt, Math.floor(bodyH * 0.5)));
-  // In insert mode keep the caret line visible: when it moves above the
-  // window bottom, scroll the window up with it (tail-pin otherwise).
+  // Keep the caret line visible: when it moves above the window bottom,
+  // scroll the window up with it (tail-pin otherwise).
   let promptTop = Math.max(0, promptLines.length - promptHeight);
-  if (insert) {
-    const caretLine = promptLines.findIndex((line) => line.includes("▌"));
-    if (caretLine >= 0) promptTop = Math.max(0, Math.min(caretLine, promptLines.length - promptHeight));
-  }
+  const caretLine = promptLines.findIndex((line) => line.includes("▌"));
+  if (caretLine >= 0) promptTop = Math.max(0, Math.min(caretLine, promptLines.length - promptHeight));
   const shownPrompt = promptLines.slice(promptTop, promptTop + promptHeight);
   const promptBox = [
     ` ${D}┌${"─".repeat(inner)}┐${R}`,

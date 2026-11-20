@@ -74,22 +74,18 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const emptyPrompt = !promptText.trim() && !insert;
 
   let displayLines: string[];
-  if (insert) {
-    displayLines = wrapText(withCursor(promptText, cursor, `${GR}▌${R}`), Math.max(8, inner - 3));
-  } else if (emptyPrompt) {
+  if (emptyPrompt) {
     displayLines = [` ${D}Edit body${R}[${C}e${R}]`];
   } else {
-    displayLines = wrapText(promptText, Math.max(8, inner - 3));
+    displayLines = wrapText(withCursor(promptText, cursor, `${GR}▌${R}`), Math.max(8, inner - 3));
   }
 
   const promptHeight = Math.max(3, Math.min(14, Math.floor(bodyH * 0.5)));
-  // In insert mode keep the caret line visible: when it moves above the
-  // window bottom, scroll the window up with it (tail-pin otherwise).
+  // Keep the caret line visible: when it moves above the window bottom,
+  // scroll the window up with it (tail-pin otherwise).
   let promptTop = Math.max(0, displayLines.length - promptHeight);
-  if (insert) {
-    const caretLine = displayLines.findIndex((line) => line.includes("▌"));
-    if (caretLine >= 0) promptTop = Math.max(0, Math.min(caretLine, displayLines.length - promptHeight));
-  }
+  const caretLine = displayLines.findIndex((line) => line.includes("▌"));
+  if (caretLine >= 0) promptTop = Math.max(0, Math.min(caretLine, displayLines.length - promptHeight));
   const shownPrompt = displayLines.slice(promptTop, promptTop + promptHeight);
 
   block.push(
