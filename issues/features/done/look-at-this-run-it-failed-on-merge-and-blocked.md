@@ -1,5 +1,6 @@
 id: 0cb5e4
 branch: mc/look-at-this-run-it-failed-on-merge-and-blocked-0cb5e4
+commit: 32dc5561b0105dcf6284cb5c585ad7b40cafb62b
 acceptance: script:build
 
 Auto-created from run.
