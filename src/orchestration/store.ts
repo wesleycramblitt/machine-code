@@ -5,7 +5,7 @@
  * `.machine_code/local/orchestrator.json` (`layout(repoRoot).localDir`, which
  * is gitignored — see src/paths.ts). One JSON document:
  *
- *   - `settings` — worker count, model tier (`"paid" | "local"`: the run
+ *   - `settings` — worker count, model tier (`"paid" | "free" | "local"`: the run
  *     system's values; the TUI labels "paid" as "cloud"), and the two
  *     min-fit floors on the 4–8.5 / 0.25 ladder.
  *   - `active` — whether the orchestrator is running for this repo.
@@ -27,7 +27,7 @@ import { writeJsonAtomic } from "../state/run-schema.js";
 export type OrchestratorProcesses = 1 | 2 | 4 | 8;
 
 /** Model tier the run system accepts (`run --tier`, composer). The TUI labels "paid" as "cloud". */
-export type OrchestratorTier = "paid" | "local";
+export type OrchestratorTier = "paid" | "free" | "local";
 
 export interface OrchestratorSettings {
   /** Worker processes the orchestrator keeps busy. */
@@ -79,7 +79,7 @@ function isProcesses(value: unknown): value is OrchestratorProcesses {
 }
 
 function isTier(value: unknown): value is OrchestratorTier {
-  return value === "paid" || value === "local";
+  return value === "paid" || value === "free" || value === "local";
 }
 
 function isMinFit(value: unknown): value is number {
