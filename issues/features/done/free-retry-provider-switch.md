@@ -1,6 +1,7 @@
+commit: 05212d69e793cd84656c50e3c78dc2c52974c18c
 files: src/loop.ts
-keywords: rate limit, retry, provider switch, blocked run
 acceptance: script:build
+keywords: rate limit, retry, provider switch, blocked run
 
 # Free-mode retry: switch provider on hard limits, block when empty
 
