@@ -84,7 +84,7 @@ import { loadMachineConfig, CAPABILITY_AXES, SELECTION_TIERS, type MachineConfig
 import { axisWeights, capabilityFit, effectiveCallCost, estimateTokens, isMetaRouter, modelStatus, pickWithContext, resolveSelectionContext } from "./select.js";
 
 import { loadAvailability, saveAvailability, type AvailabilityState } from "./availability.js";
-import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "./availability/probe.js";
+import { applyProbeResult, probeTarget, targetFor } from "./availability/probe.js";
 import { latestProcessRecords } from "./processes/registry.js";
 import { skillListItems, toolListItems, tokensForChars } from "./tui/tools.js";
 import { toolSchemaChars } from "./tools/schema.js";
@@ -702,7 +702,7 @@ export async function runTui(): Promise<void> {
     };
     let result = select(s.newrun.model);
     if ("error" in result && s.newrun.model) {
-      // A fork or an earlier pick can leave a pin that is now cooling,
+      // A fork or an earlier pick can leave a pin that is now unavailable,
       // unfunded, or below this agent's floors. Prefer auto-selection over a
       // dead end, and say what happened.
       const pinned = s.newrun.model;
@@ -2017,40 +2017,7 @@ export async function runTui(): Promise<void> {
   };
   void drawWithPicker;
 
-  let availabilityProbeAt = Date.now();
-  setInterval(() => {
-    if (Date.now() - availabilityProbeAt > 60_000) {
-      availabilityProbeAt = Date.now();
-      void (async () => {
-        try {
-          const machine = loadMachineConfig(l);
-          const catalogue = loadCatalogue(l.catalogueFile);
-          if (!catalogue) return;
-          const state = loadAvailability(l.home);
-          const configured = new Set(
-            providerStatuses(createModelsCollection())
-              .filter((status) => status.configured)
-              .map((status) => status.id),
-          );
-          const results = await probeCoolingModels({
-            rows: catalogue.models,
-            state,
-            config: machine.availability,
-            configuredProviders: configured,
-          });
-          if (results.length > 0) {
-            saveAvailability(l.home, state);
-            if (!s.newRunInsert) draw();
-          }
-        } catch {
-          // background availability refresh must never break the TUI
-        }
-      })();
-    }
-    // The composer repaints on input; background refreshes would only steal
-    // frames from typing.
-    if (!s.newRunInsert) draw();
-  }, 1_000);
+  // No automatic availability probe timer: probes are manual evidence only.
   process.stdout.on("resize", draw);
   draw();
   await new Promise(() => { /* run until exit */ });

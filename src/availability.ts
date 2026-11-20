@@ -2,9 +2,8 @@
  * machine_code — provider/model availability and error classification.
  *
  * Persisted in ~/.machine_code/availability.json under a lock. Insufficient
- * funds disables a provider until manual re-enable. Temporary failures cool
- * models/providers on 1m→5m→30m→2h→12h→1d→7d→30d, honoring Retry-After up
- * to 30 days; success resets the tier.
+ * funds disables a provider until manual re-enable. Temporary failures write
+ * no exclusion: probes record evidence only and selection stays eligible.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,9 +27,9 @@ export interface ClassifiedError {
   kind: ErrorKind;
   message: string;
   retryable: boolean;
-  /** Suggested cooldown in ms; 0 means no cooldown (or manual action). */
+  /** Unused cooldown hint; always 0 now that cooldowns are removed. */
   cooldownMs: number;
-  /** Whether the model should be cooled (vs the provider). */
+  /** Legacy target; ignored now that cooldowns are removed. */
   target: "model" | "provider" | "none";
   /** Whether to disable the provider entirely until manual re-enable. */
   disableProvider: boolean;
@@ -39,22 +38,15 @@ export interface ClassifiedError {
   /**
    * The model itself is gone (410 Gone, EOL, 404, deprecated) as opposed to
    * temporarily unavailable. Callers may persist this as a catalogue veto so
-   * the row disappears instead of burning a call every cooldown cycle.
+   * the row disappears instead of burning a call every retry.
    * Auth/quota failures never set this: a broken credential is not a dead model.
    */
   permanent?: boolean;
 }
 
-const COOLDOWN_TIERS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000, 24 * 60 * 60_000, 7 * 24 * 60 * 60_000, 30 * 24 * 60 * 60_000];
-const MAX_COOLDOWN = 30 * 24 * 60 * 60_000;
-
 export interface ProviderHealth {
   disabled?: boolean;
   needsAuth?: boolean;
-  /** Cooldown expiry (ms since epoch). */
-  cooldownUntil?: number;
-  /** Current tier index (0-based). */
-  tier?: number;
   /** Last time this provider's model listing was successfully fetched (ms since epoch). */
   lastListingAt?: number;
   /** How the current listing was served: "live" (fresh /models fetch), "static"
@@ -65,13 +57,11 @@ export interface ProviderHealth {
 }
 
 export interface ModelHealth {
-  cooldownUntil?: number;
-  tier?: number;
   /** Last probe timestamp (ms since epoch). */
   lastProbeAt?: number;
   /** Last probe status; kept as a string to avoid a types cycle. */
   lastProbeResult?: string;
-  /** Classified error that caused the current cooldown. */
+  /** Last classified error kind observed for this model. */
   lastErrorKind?: string;
 }
 
@@ -89,10 +79,17 @@ export function loadAvailability(home: string): AvailabilityState {
   if (!existsSync(file)) return { providers: {}, models: {} };
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as AvailabilityState;
-    return {
-      providers: parsed.providers ?? {},
-      models: parsed.models ?? {},
-    };
+    const providers: Record<string, ProviderHealth> = {};
+    for (const [id, h] of Object.entries(parsed.providers ?? {})) {
+      const known = h as ProviderHealth;
+      providers[id] = { disabled: known.disabled, needsAuth: known.needsAuth, lastListingAt: known.lastListingAt, listingMode: known.listingMode, refreshCount: known.refreshCount };
+    }
+    const models: Record<string, ModelHealth> = {};
+    for (const [key, h] of Object.entries(parsed.models ?? {})) {
+      const known = h as ModelHealth;
+      models[key] = { lastProbeAt: known.lastProbeAt, lastProbeResult: known.lastProbeResult, lastErrorKind: known.lastErrorKind };
+    }
+    return { providers, models };
   } catch {
     return { providers: {}, models: {} };
   }
@@ -110,16 +107,6 @@ export function providerNeedsAuth(state: AvailabilityState, providerId: string):
   return state.providers[providerId]?.needsAuth === true;
 }
 
-export function isProviderCooling(state: AvailabilityState, providerId: string): boolean {
-  const until = state.providers[providerId]?.cooldownUntil;
-  return typeof until === "number" && until > Date.now();
-}
-
-export function isModelCooling(state: AvailabilityState, key: string): boolean {
-  const until = state.models[key]?.cooldownUntil;
-  return typeof until === "number" && until > Date.now();
-}
-
 export function disableProvider(state: AvailabilityState, providerId: string): void {
   state.providers[providerId] = { ...(state.providers[providerId] ?? {}), disabled: true };
 }
@@ -129,59 +116,11 @@ export function enableProvider(state: AvailabilityState, providerId: string): vo
   if (h) {
     h.disabled = false;
     h.needsAuth = false;
-    h.cooldownUntil = 0;
-    h.tier = 0;
   }
 }
 
 export function markNeedsAuth(state: AvailabilityState, providerId: string): void {
   state.providers[providerId] = { ...(state.providers[providerId] ?? {}), needsAuth: true };
-}
-
-export function coolModel(state: AvailabilityState, key: string, retryAfterMs?: number): number {
-  const h = state.models[key] ?? {};
-  const tier = h.tier ?? 0;
-  let ms = retryAfterMs && retryAfterMs > 0 ? Math.min(retryAfterMs, MAX_COOLDOWN) : COOLDOWN_TIERS[Math.min(tier, COOLDOWN_TIERS.length - 1)]!;
-  const until = Date.now() + ms;
-  state.models[key] = { ...h, cooldownUntil: until, tier: Math.min(tier + 1, COOLDOWN_TIERS.length - 1) };
-  return until;
-}
-
-export function coolProvider(state: AvailabilityState, providerId: string, retryAfterMs?: number): number {
-  const h = state.providers[providerId] ?? {};
-  const tier = h.tier ?? 0;
-  let ms = retryAfterMs && retryAfterMs > 0 ? Math.min(retryAfterMs, MAX_COOLDOWN) : COOLDOWN_TIERS[Math.min(tier, COOLDOWN_TIERS.length - 1)]!;
-  const until = Date.now() + ms;
-  state.providers[providerId] = { ...h, cooldownUntil: until, tier: Math.min(tier + 1, COOLDOWN_TIERS.length - 1) };
-  return until;
-}
-
-export function clearModelCooldown(state: AvailabilityState, key: string): void {
-  const h = state.models[key];
-  if (h) {
-    h.cooldownUntil = 0;
-    h.tier = 0;
-  }
-}
-
-export function clearProviderCooldown(state: AvailabilityState, providerId: string): void {
-  const h = state.providers[providerId];
-  if (h) {
-    h.cooldownUntil = 0;
-    h.tier = 0;
-  }
-}
-
-/** Reset a model's tier on success. */
-export function resetModelTier(state: AvailabilityState, key: string): void {
-  const h = state.models[key];
-  if (h) h.tier = 0;
-}
-
-/** Reset a provider's tier on success: a healthy call clears the escalation. */
-export function resetProviderTier(state: AvailabilityState, providerId: string): void {
-  const h = state.providers[providerId];
-  if (h) h.tier = 0;
 }
 
 /** Classify a provider error. */
@@ -233,7 +172,7 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   ) {
     // "Provider returned error" is OpenRouter's generic wrapper for an
     // upstream model failure. It is not a provider-wide limit. Only explicit
-    // account/plan/workspace limits cool the whole provider.
+    // account/plan/workspace limits mark the whole provider.
     const isProvider =
       msg.includes("organization") ||
       msg.includes("account") ||
@@ -248,20 +187,19 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
       kind: isProvider ? "rate-limit-provider" : "rate-limit-model",
       message: msg,
       retryable: true,
-      cooldownMs: 0, // caller applies tier schedule
+      cooldownMs: 0,
       target: isProvider ? "provider" : "model",
       disableProvider: false,
       needsAuth: false,
     };
   }
-  // End-of-life / gone model: cool it for a week and let the one bounded
-  // retry pick another model. Permanent: the listing should drop the row.
+  // End-of-life / gone model. Permanent: the listing should drop the row.
   if (code === 410 || /\b410\b/.test(msg) || msg.includes("end of life") || msg.includes("no longer available")) {
     return {
       kind: "missing-model",
       message: msg,
       retryable: true,
-      cooldownMs: 7 * 24 * 60 * 60_000,
+      cooldownMs: 0,
       target: "model",
       disableProvider: false,
       needsAuth: false,
@@ -269,26 +207,24 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
     };
   }
   // Upstream says the model is unavailable (OpenRouter 400 server_error). It is
-  // a model-specific outage, not a one-minute rate limit: cool it long enough
-  // that the next run does not waste a call on it.
+  // a model-specific outage. Permanent is false; retry logic decides exclusion.
   if (msg.includes("model is unavailable") || msg.includes("model unavailable") || msg.includes("no available model")) {
     return {
       kind: "missing-model",
       message: msg,
       retryable: true,
-      cooldownMs: 60 * 60_000,
+      cooldownMs: 0,
       target: "model",
       disableProvider: false,
       needsAuth: false,
     };
   }
   // Missing/deprecated model. Permanent: the row should not come back on the
-  // next refresh — record a veto instead of cooling forever.
+  // next refresh — record a veto instead of retrying it forever.
   if (code === 404 || msg.includes("model not found") || msg.includes("does not exist") || msg.includes("deprecated")) {
     return { kind: "missing-model", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false, permanent: true };
   }
-  // Provider stall: no headers/first token in time. Retry elsewhere and let the
-  // model's cooldown tier escalate on repeated stalls.
+  // Provider stall: no headers/first token in time. Retry elsewhere.
   if (msg.includes("timed out") || msg.includes("timeout") || msg.includes("no stream event")) {
     return { kind: "timeout", message: msg, retryable: true, cooldownMs: 0, target: "model", disableProvider: false, needsAuth: false };
   }
@@ -310,19 +246,18 @@ export function classifyError(error: unknown, status?: number): ClassifiedError 
   }
   // Malformed response
   if (msg.includes("malformed") || msg.includes("invalid json") || msg.includes("parse error")) {
-    return { kind: "malformed", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
+    return { kind: "malformed", message: msg, retryable: true, cooldownMs: 0, target: "model", disableProvider: false, needsAuth: false };
   }
   // Symbol-map index exceeds budget — harness-internal, not recoverable by retry
   if (msg.includes("symbol map alone exceeds")) {
     return { kind: "symbols-exceeded", message: msg, retryable: false, cooldownMs: 0, target: "none", disableProvider: false, needsAuth: false };
   }
-  return { kind: "unknown", message: msg, retryable: true, cooldownMs: COOLDOWN_TIERS[0]!, target: "model", disableProvider: false, needsAuth: false };
+  return { kind: "unknown", message: msg, retryable: true, cooldownMs: 0, target: "model", disableProvider: false, needsAuth: false };
 }
 
 /**
- * Apply a classified error to availability state. Rate-limit/quota errors
- * carry cooldownMs 0 to mean "use the tier schedule", so retryable errors are
- * cooled even without a Retry-After hint.
+ * Apply a classified error to availability state. Only auth and disable
+ * effects persist; temporary failures write no exclusion.
  */
 export function applyClassification(
   state: AvailabilityState,
@@ -332,13 +267,6 @@ export function applyClassification(
 ): void {
   if (classified.disableProvider) disableProvider(state, providerId);
   if (classified.needsAuth) markNeedsAuth(state, providerId);
-  if (!(classified.cooldownMs > 0 || classified.retryable)) return;
-  if (classified.target === "model") {
-    state.models[modelKey] = { ...(state.models[modelKey] ?? {}), lastErrorKind: classified.kind };
-    coolModel(state, modelKey, classified.cooldownMs || undefined);
-  } else if (classified.target === "provider") {
-    coolProvider(state, providerId, classified.cooldownMs || undefined);
-  }
 }
 
 /** Parse Retry-After header value (seconds or HTTP date) into ms. */

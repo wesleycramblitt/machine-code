@@ -10,15 +10,11 @@ import type { CatalogueRow } from "../catalogue/types.js";
 import type { AvailabilityConfig } from "../config.js";
 import { loadProviderDefinitions } from "../data.js";
 import {
-  clearModelCooldown,
-  coolModel,
-  isModelCooling,
   markNeedsAuth,
-  resetModelTier,
   type AvailabilityState,
 } from "../availability.js";
 
-export type ProbeStatus = "ready" | "cooling" | "unavailable" | "auth" | "unknown" | "skipped";
+export type ProbeStatus = "ready" | "unavailable" | "auth" | "unknown" | "skipped";
 
 export interface ProbeTarget {
   key: string;
@@ -108,7 +104,7 @@ function statusResult(
   };
   if (response.status === 401 || response.status === 403) return { ...base, status: "auth" };
   if (response.status === 429) {
-    return { ...base, status: "cooling", ...(retryAfterMs(response) ? { retryAfterMs: retryAfterMs(response) } : {}) };
+    return { ...base, status: "unavailable", ...(retryAfterMs(response) ? { retryAfterMs: retryAfterMs(response) } : {}) };
   }
   if (response.status >= 500) return { ...base, status: "unavailable", message: message ?? `HTTP ${response.status}` };
   return { ...base, status: "unavailable", message: message ?? `HTTP ${response.status}` };
@@ -367,8 +363,6 @@ async function probeTargetBody(
   return metadataProbe(target, config);
 }
 
-const RATE_LIMIT_KINDS = new Set(["rate-limit-model", "rate-limit-provider", "free-limit", "quota", "timeout"]);
-
 export function applyProbeResult(state: AvailabilityState, result: ProbeResult): void {
   const health = state.models[result.key] ?? {};
   state.models[result.key] = {
@@ -377,24 +371,14 @@ export function applyProbeResult(state: AvailabilityState, result: ProbeResult):
     lastProbeResult: result.status,
   };
   if (result.status === "ready") {
-    // Metadata can prove the model exists, but it cannot prove that a
-    // rate-limit or timeout cooldown has actually cleared.
-    if (result.source === "metadata" && health.lastErrorKind && RATE_LIMIT_KINDS.has(health.lastErrorKind)) {
-      return;
-    }
-    clearModelCooldown(state, result.key);
-    resetModelTier(state, result.key);
     const cleared = state.models[result.key];
     if (cleared) delete cleared.lastErrorKind;
     return;
   }
   if (result.status === "auth") {
     markNeedsAuth(state, result.providerID);
-    return;
   }
-  if (result.status === "cooling" || result.status === "unavailable") {
-    coolModel(state, result.key, result.retryAfterMs);
-  }
+  // Probes are evidence only: unavailable/unknown results never exclude.
 }
 
 export function targetFor(row: CatalogueRow): ProbeTarget {
@@ -406,41 +390,5 @@ export function targetFor(row: CatalogueRow): ProbeTarget {
   };
 }
 
-export function coolingTargets(
-  rows: readonly CatalogueRow[],
-  state: AvailabilityState,
-  configuredProviders: ReadonlySet<string>,
-): ProbeTarget[] {
-  return rows
-    .filter((row) => configuredProviders.has(row.providerID) && isModelCooling(state, row.key))
-    .map(targetFor);
-}
+/** Manual-evidence probe helper. No automatic timer may exclude a model. */
 
-/** Probe every currently cooling, configured model and apply the evidence. */
-export async function probeCoolingModels(args: {
-  rows: readonly CatalogueRow[];
-  state: AvailabilityState;
-  config: AvailabilityConfig;
-  configuredProviders: ReadonlySet<string>;
-  /** Manual probes may ignore the per-model interval. */
-  force?: boolean;
-}): Promise<ProbeResult[]> {
-  if (args.config.probe === "off") return [];
-  const targets = coolingTargets(args.rows, args.state, args.configuredProviders);
-  const results: ProbeResult[] = [];
-  const now = Date.now();
-  for (const target of targets) {
-    const last = args.state.models[target.key]?.lastProbeAt;
-    if (!args.force && last && now - last < args.config.intervalMs) continue;
-    // Spread automatic probes slightly so a restart or timer tick does not
-    // fan out every cooling model at the same instant. Manual probes skip it.
-    if (!args.force && targets.length > 1) {
-      const jitter = Math.floor(Math.random() * 250);
-      if (jitter > 0) await new Promise((resolve) => setTimeout(resolve, jitter));
-    }
-    const result = await probeTarget(target, args.config, args.state);
-    applyProbeResult(args.state, result);
-    results.push(result);
-  }
-  return results;
-}

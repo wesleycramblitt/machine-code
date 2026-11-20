@@ -32,7 +32,7 @@ import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability } from "../availability.js";
-import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
+import { applyProbeResult, probeTarget, targetFor } from "../availability/probe.js";
 
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
@@ -348,7 +348,7 @@ export async function cmdCatalogueRefresh(snapshot = false): Promise<number> {
 export async function cmdProvider(argv: string[]): Promise<number> {
   const sub = argv[0];
   const name = argv[1];
-  if (!sub || !name) fail("usage: machine_code provider disable|enable|cooldown <name> [minutes]|cooldown clear <name>");
+  if (!sub || !name) fail("usage: machine_code provider disable|enable <name>");
   const l = layout();
   const avail = await import("../availability.js");
   const state = avail.loadAvailability(l.home);
@@ -359,22 +359,9 @@ export async function cmdProvider(argv: string[]): Promise<number> {
   } else if (sub === "enable") {
     avail.enableProvider(state, name);
     avail.saveAvailability(l.home, state);
-    process.stdout.write(`provider ${name} enabled; cooldowns cleared\n`);
-  } else if (sub === "cooldown" && (argv[2] === "clear" || argv[1] === "clear")) {
-    // Accept both `cooldown clear <name>` (documented) and `cooldown <name> clear`.
-    const target = argv[1] === "clear" ? argv[2] : name;
-    if (!target) fail("usage: machine_code provider disable|enable|cooldown <name> [minutes]|cooldown clear <name>");
-    avail.clearProviderCooldown(state, target);
-    avail.saveAvailability(l.home, state);
-    process.stdout.write(`provider ${target} cooldown cleared\n`);
-  } else if (sub === "cooldown") {
-    const minutes = argv[2] === undefined ? 60 : Number(argv[2]);
-    if (!Number.isFinite(minutes) || minutes <= 0) fail("provider cooldown needs a positive number of minutes");
-    const until = avail.coolProvider(state, name, minutes * 60_000);
-    avail.saveAvailability(l.home, state);
-    process.stdout.write(`provider ${name} cooled for ${minutes}m (until ${new Date(until).toISOString()})\n`);
+    process.stdout.write(`provider ${name} enabled\n`);
   } else {
-    fail("usage: machine_code provider disable|enable|cooldown clear <name>");
+    fail("usage: machine_code provider disable|enable <name>");
   }
   return 0;
 }
@@ -385,37 +372,6 @@ export async function cmdAvailability(argv: string[]): Promise<number> {
   const l = layout();
   const machine = loadMachineConfig(l);
   const state = loadAvailability(l.home);
-  const catalogue = loadCatalogue(l.catalogueFile);
-  if (!catalogue) fail("no catalogue; run machine_code catalogue refresh");
-  const configured = new Set(providerStatuses(createModelsCollection()).filter((p) => p.configured).map((p) => p.id));
-  const now = Date.now();
-  if (flags.has("probe")) {
-    const targets = probeCoolingCandidates(catalogue.models, state, configured);
-    if (targets.length === 0) {
-      process.stdout.write("no cooling models to probe\n");
-      return 0;
-    }
-    const results = [];
-    for (const target of targets) {
-      const result = await probeTarget(target, machine.availability, state);
-      applyProbeResult(state, result);
-      results.push(result);
-    }
-    saveAvailability(l.home, state);
-    if (flags.has("json")) {
-      process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
-      return 0;
-    }
-    for (const result of results) {
-      process.stdout.write(
-        `${result.key}  ${result.status}  ${result.source}  ${result.latencyMs}ms` +
-          `${result.retryAfterMs ? `  retry ${Math.ceil(result.retryAfterMs / 1000)}s` : ""}` +
-          `${result.message ? `  ${result.message}` : ""}\n`,
-      );
-    }
-    return 0;
-  }
-
   if (flags.has("json")) {
     process.stdout.write(`${JSON.stringify({ config: machine.availability, state }, null, 2)}\n`);
     return 0;
@@ -423,43 +379,20 @@ export async function cmdAvailability(argv: string[]): Promise<number> {
   process.stdout.write(
     `probe ${machine.availability.probe}  interval ${Math.round(machine.availability.intervalMs / 1000)}s  timeout ${Math.round(machine.availability.timeoutMs / 1000)}s\n`,
   );
-  const cooling = Object.entries(state.models)
-    .filter(([, health]) => typeof health.cooldownUntil === "number" && health.cooldownUntil > now)
-    .sort(([a], [b]) => (a < b ? -1 : 1));
-  if (cooling.length === 0) {
-    process.stdout.write("no cooling models\n");
+  const providers = Object.entries(state.providers).filter(([, health]) => health.disabled || health.needsAuth);
+  if (providers.length === 0) {
+    process.stdout.write("no provider issues\n");
   } else {
-    process.stdout.write("cooling models:\n");
-    for (const [key, health] of cooling) {
-      process.stdout.write(
-        `  ${key}  until ${new Date(health.cooldownUntil!).toISOString()}  tier ${health.tier ?? 0}` +
-          `${health.lastProbeResult ? `  last ${health.lastProbeResult}` : ""}\n`,
-      );
-    }
-  }
-  const providers = Object.entries(state.providers).filter(([, health]) => health.disabled || health.needsAuth || (health.cooldownUntil ?? 0) > now);
-  if (providers.length > 0) {
     process.stdout.write("provider health:\n");
     for (const [id, health] of providers.sort(([a], [b]) => (a < b ? -1 : 1))) {
       const bits = [
         health.disabled ? "disabled" : "",
         health.needsAuth ? "needs-auth" : "",
-        (health.cooldownUntil ?? 0) > now ? `cooling until ${new Date(health.cooldownUntil!).toISOString()}` : "",
       ].filter(Boolean);
       process.stdout.write(`  ${id}  ${bits.join(" · ")}\n`);
     }
   }
   return 0;
-}
-
-export function probeCoolingCandidates(
-  rows: readonly CatalogueRow[],
-  state: ReturnType<typeof loadAvailability>,
-  configured: ReadonlySet<string>,
-) {
-  return rows
-    .filter((row) => configured.has(row.providerID) && (state.models[row.key]?.cooldownUntil ?? 0) > Date.now())
-    .map(targetFor);
 }
 
 export async function cmdModel(argv: string[]): Promise<number> {
@@ -502,17 +435,6 @@ export async function cmdModel(argv: string[]): Promise<number> {
     );
     return 0;
   }
-  if (argv[0] !== "cooldown" || argv[1] !== "clear" || !argv[2]) {
-    fail("usage: machine_code model show <key|name> | model probe <key|name> | model cooldown clear <id>");
-  }
-  const id = argv[2];
-  const l = layout();
-  const avail = await import("../availability.js");
-  const state = avail.loadAvailability(l.home);
-  avail.clearModelCooldown(state, id);
-  avail.resetModelTier(state, id);
-  avail.saveAvailability(l.home, state);
-  process.stdout.write(`model ${id} cooldown cleared\n`);
-  return 0;
+  fail("usage: machine_code model show <key|name> | model probe <key|name>");
 }
 

@@ -19,7 +19,7 @@ import { createAssistantMessageEventStream, type Api, type AssistantMessage, typ
 import { effectiveOutputCeiling, DEFAULT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_OLLAMA_FIRST_TOKEN_TIMEOUT_MS, type MachineConfig } from "./config.js";
 import { estimateCallCost } from "./catalogue/scoring.js";
 import { estimateTokens, pickWithContext, providerMultiplier, relaxPinForFailure, resolveSelectionContext } from "./select.js";
-import { applyClassification, classifyError, loadAvailability, resetModelTier, resetProviderTier, saveAvailability } from "./availability.js";
+import { applyClassification, classifyError, loadAvailability, saveAvailability } from "./availability.js";
 import { fundedProviderIds } from "./data.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import type { AgentDef, AgentName } from "./agents.js";
@@ -297,7 +297,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const configuredProviders = input.configuredProviders;
   const fundedProviders = fundedProviderIds(input.machine.providers);
   // Callers normally load this, but a direct run must still respect persisted
-  // cooldowns. Loading here also keeps the in-memory state current.
+  // availability. Loading here also keeps the in-memory state current.
   const availability = input.availability ?? loadAvailability(input.home);
   const triedModels = new Set<string>();
 
@@ -423,12 +423,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     Object.assign(availability, state);
   };
 
-  const resetSuccessState = (provider: string, modelKey: string): void => {
-    const state = loadAvailability(input.home);
-    resetModelTier(state, modelKey);
-    resetProviderTier(state, provider);
-    saveAvailability(input.home, state);
-    Object.assign(availability, state);
+  const resetSuccessState = (_provider: string, _modelKey: string): void => {
+    // Success performs no availability write: temporary failures never exclude.
   };
 
   // A `--model`/`--provider` pin starts as a hard filter but relaxes to a
@@ -1237,7 +1233,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         };
         /** Unbounded local (ollama) calls never set a first-token timer; a
          * queue wait is not an error. Remote calls keep the finite timer and
-         * abandon on a stall, cooling the model and rotating as today. */
+         * abandon on a stall, rotating to the next model as today. */
         const timer =
           firstTokenTimeoutMs === undefined
             ? undefined
@@ -1637,7 +1633,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             }
             // Error classification + availability update (M2).
             // Skipped when the user stopped the run: an interrupt is not a
-            // model failure and must not burn the model or pollute cooldowns.
+            // model failure and must not record any exclusion.
             if (message.stopReason === "error" && message.errorMessage && !interruptRequested && !cancelRequested && !pauseRequested) {
               try {
                 const classified = classifyError(new Error(message.errorMessage));

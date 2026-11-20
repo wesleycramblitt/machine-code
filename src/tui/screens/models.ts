@@ -89,8 +89,6 @@ export function renderModelsList(props: ModelsListProps): ModelsListFrame {
     }
   }
   if (sel >= stops.length) sel = Math.max(0, stops.length - 1);
-  const modelsAvail = loadAvailability(props.home);
-  const now = Date.now();
   let selectedLine = 0;
   for (let s = 0; s < stops.length; s++) {
     const stop = stops[s]!;
@@ -112,15 +110,9 @@ export function renderModelsList(props: ModelsListProps): ModelsListFrame {
     const row = stop.row!;
     {
       const free = row.free || (row.pricing.input === 0 && row.pricing.output === 0) ? ` ${G}free${R}` : "";
-      const cooling = (() => {
-        if (probing.has(row.key)) return ` ${C}…${R}`;
-        const phase = modelsAvail.models[row.key];
-        if (!phase?.cooldownUntil || phase.cooldownUntil <= now) return "";
-        const minutes = Math.max(1, Math.ceil((phase.cooldownUntil - now) / 60_000));
-        return ` ${Y}⏱${minutes >= 60 ? `${Math.ceil(minutes / 60)}h` : `${minutes}m`}${R}`;
-      })();
+      const pending = probing.has(row.key) ? ` ${C}…${R}` : "";
       const axes = narrow ? "" : ` ${D}R${row.scores.reasoning.toFixed(1)} C${row.scores.code.toFixed(1)} A${row.scores.agentic.toFixed(1)} G${row.scores.general.toFixed(1)}${R}`;
-      const left = `   ${row.coding === false ? `${GR}○${R}` : `${G}●${R}`} ${BL}${trunc(row.name, narrow ? 20 : 30)}${R}${free}${cooling}`;
+      const left = `   ${row.coding === false ? `${GR}○${R}` : `${G}●${R}`} ${BL}${trunc(row.name, narrow ? 20 : 30)}${R}${free}${pending}`;
       const right = `${D}${fmtContext(row.context)}${R} ${D}cap${R} ${row.scores.capability.toFixed(1)}${axes} ${Y}$${row.pricing.input}${R}/${Y}$${row.pricing.output}${R}`;
       lines.push(selected(` ${narrow ? trunc(left, Math.max(18, cols - 18)) + " " + right : pad(left, Math.max(26, cols - visible(right) - 2)) + right}`, isSelected));
     }
@@ -200,25 +192,19 @@ export function renderModelDetail(props: ModelDetailProps): ModelDetailFrame | n
   const availabilityState = loadAvailability(props.home);
   const modelHealth = availabilityState.models[model.key];
   const providerHealth = availabilityState.providers[model.providerID];
-  const coolingUntil = modelHealth?.cooldownUntil ?? 0;
   const lastProbe = modelHealth?.lastProbeResult;
   const probeTone =
-    lastProbe === "ready" ? G : lastProbe === "cooling" ? Y : lastProbe === "unknown" || lastProbe === "skipped" ? D : RED;
+    lastProbe === "ready" ? G : lastProbe === "unknown" || lastProbe === "skipped" ? D : RED;
   const healthText = probing
     ? `${C}probing${R}`
-    : coolingUntil > Date.now()
-      ? `${Y}cooling ${Math.max(1, Math.ceil((coolingUntil - Date.now()) / 60_000))}m${R}`
-      : lastProbe
-        ? `${probeTone}${lastProbe}${R}`
-        : `${D}not probed${R}`;
+    : lastProbe
+      ? `${probeTone}${lastProbe}${R}`
+      : `${D}not probed${R}`;
   lines.push("", ` ${B}${C}Availability${R}`);
   lines.push(`   ${healthText}${modelHealth?.lastProbeAt ? ` ${D}· ${ago(new Date(modelHealth.lastProbeAt).toISOString())}${R}` : ""}`);
   const providerBits = [
     providerHealth?.disabled ? `${RED}funds${R}` : "",
     providerHealth?.needsAuth ? `${RED}auth${R}` : "",
-    (providerHealth?.cooldownUntil ?? 0) > Date.now()
-      ? `${Y}provider cooling ${Math.max(1, Math.ceil(((providerHealth?.cooldownUntil ?? 0) - Date.now()) / 60_000))}m${R}`
-      : "",
   ].filter(Boolean);
   if (providerBits.length > 0) lines.push(`   provider ${model.providerID} · ${providerBits.join(" · ")}`);
   lines.push("", ` ${B}${C}Providers offering this model${R}`);
