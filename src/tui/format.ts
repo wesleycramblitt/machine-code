@@ -150,8 +150,6 @@ export interface ModelPickerEntry {
 }
 
 const MODEL_REASON_RANK: Record<string, number> = {
-  "model-cooling": 0,
-  "provider-cooling": 1,
   "provider-disabled": 2,
   "provider-needs-auth": 3,
   "unfunded-provider": 4,
@@ -185,8 +183,6 @@ export function modelReasonLabel(reason: string | undefined): string {
     case "invalid-pricing": return "invalid price";
     case "provider-disabled": return "provider disabled";
     case "provider-needs-auth": return "needs auth";
-    case "provider-cooling": return "provider cooling";
-    case "model-cooling": return "cooling";
     case "non-coding-model": return "not coding";
     case "router-model": return "router";
     case "no-tool-support": return "no tools";
@@ -206,16 +202,8 @@ export function modelPriceText(row: CatalogueRow): string {
   return ` ${D}$${row.pricing.input}/$${row.pricing.output}${R}`;
 }
 
-export function modelReasonText(entry: ModelPickerEntry, availability: AvailabilityState): string {
+export function modelReasonText(entry: ModelPickerEntry, _availability: AvailabilityState): string {
   if (entry.eligible) return "";
-  if (entry.reason === "model-cooling" || entry.reason === "provider-cooling") {
-    const until = Math.max(
-      availability.models[entry.row.key]?.cooldownUntil ?? 0,
-      availability.providers[entry.row.providerID]?.cooldownUntil ?? 0,
-    );
-    const mins = until > Date.now() ? Math.max(1, Math.ceil((until - Date.now()) / 60_000)) : 0;
-    return mins > 0 ? `cooling ${mins}m` : "cooling";
-  }
   return modelReasonLabel(entry.reason);
 }
 

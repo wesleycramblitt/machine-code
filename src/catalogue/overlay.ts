@@ -156,7 +156,7 @@ export function loadModelOverrides(): Map<string, ModelOverride> {
 
 /**
  * Record an automatically detected dead model as a curation veto so refresh
- * drops the row instead of cooling it forever. Appends a dated, sourced
+ * drops the row instead of retrying it forever. Appends a dated, sourced
  * stanza; never rewrites the file (user comments and ordering survive), and
  * never duplicates a key that already has a stanza. Returns true when a
  * stanza was added. Never throws.

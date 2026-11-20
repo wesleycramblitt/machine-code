@@ -42,7 +42,7 @@ import { gateFailureText, resolveGates, withSyncGate, type GateSpec } from "../v
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, defaultBaseBranch, resolveBaseRef, mainWorktreeRoot, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability } from "../availability.js";
-import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
+import { applyProbeResult, probeTarget, targetFor } from "../availability/probe.js";
 
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
@@ -430,24 +430,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
   }
 
-  // Probe cooling models with free metadata before a run record exists. A
-  // recovered model can rejoin selection; if nothing is ready, block here
-  // instead of starting a run that cannot make its first call.
   const availabilityState = loadAvailability(l.home);
-  const probeResults = await probeCoolingModels({
-    rows: catalogueDoc.models,
-    state: availabilityState,
-    config: machine.availability,
-    configuredProviders,
-  });
-  if (probeResults.length > 0) saveAvailability(l.home, availabilityState);
-  for (const result of probeResults) {
-    if (result.status === "ready") {
-      process.stderr.write(`availability: ${result.key} recovered\n`);
-    } else if (result.status === "unavailable" || result.status === "auth") {
-      process.stderr.write(`availability: ${result.key} ${result.status}${result.message ? ` (${result.message})` : ""}\n`);
-    }
-  }
   const agentDefObj = agentDef(l, agentNameParsed === "" ? "engineer" : agentNameParsed);
   // Every pick on this path goes through one selection context so preflight,
   // the loop, the TUI preview, and the models dry-run enforce the same
@@ -477,7 +460,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if ("error" in preflight && (requireModel || requireProvider)) {
     // A pin that can never work is a user error, not a preference: silently
     // falling back to auto-selection has picked paid models the user never
-    // asked for. Transient states (cooling, floors, funding) keep the old
+    // asked for. Transient states (floors, funding) keep the old
     // fallback below.
     const viability = pinViability(selection, {
       agent: agentNameParsed,
@@ -609,21 +592,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       skipped: explicitFileInclude ? "explicit-include" : "disabled",
     });
   }
-  for (const result of probeResults) {
-    recorder.event("availability_probe", {
-      key: result.key,
-      provider: result.providerID,
-      status: result.status,
-      source: result.source,
-      latencyMs: result.latencyMs,
-      ...(result.message ? { message: result.message } : {}),
-    });
-    if (result.status === "ready") {
-      recorder.event("availability_cooldown_cleared", { key: result.key });
-    } else if (result.status === "cooling" || result.status === "unavailable") {
-      recorder.event("availability_cooldown_extended", { key: result.key, retryAfterMs: result.retryAfterMs });
-    }
-  }
+  // Availability probes are manual evidence only; no automatic probe runs here.
 
   // Build runs work in an isolated worktree. Review reads the worktree it
   // inspects. Research gets a temporary worktree on the main branch so the

@@ -33,7 +33,7 @@ import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability } from "../availability.js";
-import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
+import { applyProbeResult, probeTarget, targetFor } from "../availability/probe.js";
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
 import { reconcileProcessRecords } from "../processes/reconcile.js";
