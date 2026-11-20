@@ -221,6 +221,7 @@ export function assembleDocument(rows: CatalogueRow[]): CatalogueDocument {
             ...(def.discovery ? { discovery: def.discovery } : {}),
             ...(def.baseUrl ? { baseUrl: def.baseUrl } : {}),
             ...(def.funded !== undefined ? { funded: def.funded } : {}),
+            ...(def.freeSupported === true ? { freeSupported: true as const } : {}),
             ...(def.modes ? { modes: def.modes } : {}),
             ...(def.billing ? { billing: def.billing } : {}),
             ...(def.costMultiplier !== undefined ? { costMultiplier: def.costMultiplier } : {}),

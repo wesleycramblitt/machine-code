@@ -5,6 +5,7 @@ id = "opencode"
 name = "OpenCode"
 env_keys = ["OPENCODE_API_KEY"]
 funded = true
+free_supported = false
 modes = ["usage"]
 
 [billing]
