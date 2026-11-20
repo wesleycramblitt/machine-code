@@ -5,6 +5,7 @@ id = "openrouter"
 name = "OpenRouter"
 env_keys = ["OPENROUTER_API_KEY"]
 funded = true
+# Free calls through this setup are supported here (assume_free works only when true).
 free_supported = true
 modes = ["usage"]
 

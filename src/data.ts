@@ -82,7 +82,7 @@ export interface ProviderDefinition {
   disabled?: boolean;
   /** Paid rows usable without a machine override. */
   funded?: boolean;
-  /** Provider publishes free-tier offers (free_supported in TOML). Default false. */
+  /** Whether this provider supports free-mode calls through this setup (default false). */
   freeSupported?: boolean;
   /** Billing/access modes: usage, subscription, free. */
   modes?: string[];
@@ -139,8 +139,8 @@ function providerDefinition(value: RawProvider): ProviderDefinition {
     ...(typeof value.disabled === "boolean" ? { disabled: value.disabled } : {}),
     ...(value.assume_free === true ? { assumeFree: true as const } : {}),
     ...(value.live_listings === true ? { liveListings: true as const } : {}),
-    ...(value.free_supported === true ? { freeSupported: true as const } : {}),
     ...(typeof value.funded === "boolean" ? { funded: value.funded } : {}),
+    ...(typeof value.free_supported === "boolean" ? { freeSupported: value.free_supported } : {}),
     ...(Array.isArray(value.modes)
       ? { modes: value.modes.filter((v): v is string => typeof v === "string") }
       : {}),

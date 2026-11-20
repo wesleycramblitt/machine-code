@@ -5,6 +5,7 @@ id = "opencode-go"
 name = "OpenCode Go"
 env_keys = ["OPENCODE_API_KEY"]
 funded = true
+# Free calls through this setup are supported here (assume_free works only when true).
 free_supported = false
 modes = ["subscription", "usage"]
 cost_multiplier = 0.5

@@ -65,7 +65,7 @@ export interface CatalogueProvider {
   discovery?: string;
   baseUrl?: string;
   funded?: boolean;
-  /** Provider publishes free-tier offers (free_supported in provider TOML). */
+  /** Whether this provider supports free-mode calls through this setup. */
   freeSupported?: boolean;
   /** Billing/access modes: usage, subscription, free. */
   modes?: string[];
