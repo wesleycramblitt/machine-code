@@ -34,7 +34,7 @@ import { defaultSkillsFor } from "../context/references.js";
 import { allCommands } from "../commands/registry.js";
 import { createWorktree, removeWorktree, pruneWorktrees, recreateWorktreeFromBranch, branchExists, branchCheckedOutAt, mainWorktreeRoot, reusableWorktreeOwner, WorktreeError } from "../worktree.js";
 import { loadAvailability, saveAvailability } from "../availability.js";
-import { applyProbeResult, probeCoolingModels, probeTarget, targetFor } from "../availability/probe.js";
+import { applyProbeResult, probeTarget, targetFor } from "../availability/probe.js";
 
 import { latestProcessRecords } from "../processes/registry.js";
 import { readLogTail } from "../processes/logs.js";
@@ -213,13 +213,11 @@ Usage:
   machine_code prune [--days N]     Remove old run dirs and worktrees (default 7 days)
   machine_code worktree list        List run worktrees and branches
   machine_code worktree remove <run-id> [--delete-branch] [--force]
-  machine_code provider disable|enable <name>
-  machine_code provider cooldown <name> [minutes] | cooldown clear <name>
+    machine_code provider disable|enable <name>
   machine_code model show <key|name>   Inspect axes, offers, providers for a model
   machine_code model probe <key|name>  Probe model availability (free metadata)
-  machine_code model cooldown clear <id>
-  machine_code availability [--probe] [--free-only] [--json]
-                                    Show or probe cooling model availability
+  machine_code availability [--json]
+                                     Show provider availability
   machine_code tui                 Launch the TUI (default when interactive)
   machine_code plan                 Render the issues tree: kind → status dir → issue (--json)
   machine_code issue list           List issue files under issues/<kind>/<status>/<slug>.md (--json)

@@ -43,7 +43,7 @@ export const DEFAULT_AVAILABILITY: AvailabilityConfig = {
 
 /**
  * Abandon a provider call that has produced no stream event within this many
- * milliseconds. The model is cooled and the loop's bounded retry picks another.
+ * milliseconds. The loop's bounded retry picks another.
  */
 export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 60_000;
 
@@ -112,7 +112,7 @@ export interface MachineConfig {
     /** Allow zero-price cloud offers in selection (default false). Local ollama rows are always exempt. */
     freeCloudModelsEnabled: boolean;
   };
-  /** Cooldown recovery probes ([availability]). */
+  /** Availability probes ([availability]). */
   availability: AvailabilityConfig;
   /** Per-provider billing adjustments ([providers.<id>]). */
   providers: Record<string, ProviderCost>;

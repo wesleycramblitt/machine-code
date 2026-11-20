@@ -21,7 +21,7 @@ import { estimateCallCost, type AxisScores } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
 import { isFreeModel } from "./catalogue/query.js";
 import type { AvailabilityState } from "./availability.js";
-import { isProviderDisabled, isProviderCooling, isModelCooling, providerNeedsAuth } from "./availability.js";
+import { isProviderDisabled, providerNeedsAuth } from "./availability.js";
 import type { Layout } from "./paths.js";
 import { loadProviderDefinitions } from "./data.js";
 
@@ -253,8 +253,6 @@ function rejectReason(
   if (avail) {
     if (isProviderDisabled(avail, row.providerID)) return "provider-disabled";
     if (providerNeedsAuth(avail, row.providerID)) return "provider-needs-auth";
-    if (isProviderCooling(avail, row.providerID)) return "provider-cooling";
-    if (isModelCooling(avail, row.key)) return "model-cooling";
   }
   if (row.coding === false) return "non-coding-model";
   if (isMetaRouter(row)) return "router-model";
@@ -463,7 +461,7 @@ export function pickWithContext(
   return pick(toPickInput(ctx, parts));
 }
 
-/** Rejection reasons that mean the pin itself can never work (vs transient states like cooling or funding). */
+/** Rejection reasons that mean the pin itself can never work (vs transient states like floors or funding). */
 const HARD_PIN_REASONS = new Set([
   "model-filtered",
   "provider-filtered",
@@ -480,7 +478,7 @@ const HARD_PIN_REASONS = new Set([
  * Is a pin viable, or dead on arrival? Scopes the catalogue to the pin and
  * picks: a pin whose rows all fail on hard scoping reasons should fail
  * loudly instead of relaxing into an auto-pick the user never asked for.
- * Pins failing on transient/policy reasons (cooling, floors, funding)
+ * Pins failing on transient/policy reasons (floors, funding)
  * return ok:true so the caller keeps the relax-and-fallback path.
  */
 export function pinViability(

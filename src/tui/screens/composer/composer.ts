@@ -767,11 +767,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       const row = entry.row;
       const chosen = row.key === run.model;
       const free = row.free && run.tier === "local" ? ` ${G}FREE${R}` : "";
-      const status = entry.eligible
-        ? `${G}✓${R}`
-        : entry.reason === "model-cooling" || entry.reason === "provider-cooling"
-          ? `${Y}⏸${R}`
-          : `${RED}✕${R}`;
+      const status = entry.eligible ? `${G}✓${R}` : `${RED}✕${R}`;
       const reason = entry.eligible ? "" : ` ${D}${modelReasonText(entry, availability)}${R}`;
       const line = ` ${chosen ? `${C}▸` : " "} ${status} ${C}${row.key}${R} ${D}fit ${entry.fit.toFixed(2)}${R}${modelPriceText(row)}${free}${reason}`;
       entries.push(selected(line, modelPickSel === i + 1));
@@ -820,7 +816,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       command("Esc", "Close", undefined, GR),
     ]);
     secondary =
-      `${D}${list.length} model(s) · ✓ eligible · ⏸ cooling · ✕ ineligible` +
+      `${D}${list.length} model(s) · ✓ eligible · ✕ ineligible` +
       `${modelText ? ` · “${modelText}”` : ""}${R}` +
       `${toast ? ` · ${Y}${toast}${R}` : ""}`;
   } else if (itemPickActive) {
