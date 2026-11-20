@@ -1,6 +1,7 @@
+commit: 4a052ed414d477422d97deff6a6f6219dd909eb1
 files: src/availability.ts, src/availability/probe.ts, src/cli/models.ts
-keywords: cooldown, cooling, availability, probe
 acceptance: script:build
+keywords: cooldown, cooling, availability, probe
 
 # Remove the cooldown feature
 
