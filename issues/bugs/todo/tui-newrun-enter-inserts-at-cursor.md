@@ -1,3 +1,4 @@
+depends: tui-alt-keys-swallowed-by-shortcuts
 tags: tui
 files: src/tui/screens/composer/keys.ts
 keywords: new-run composer, prompt, Enter, cursor

@@ -1,4 +1,4 @@
-depends: tui-newrun-enter-inserts-at-cursor
+depends: tui-newrun-enter-inserts-at-cursor, tui-alt-keys-swallowed-by-shortcuts
 tags: tui
 files: src/tui.ts, src/tui/screens/composer/keys.ts, src/tui/screens/issue-composer/keys.ts
 keywords: new-run composer, new-issue composer, EDITOR, prompt, vim
