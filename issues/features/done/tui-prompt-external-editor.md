@@ -1,8 +1,9 @@
+commit: 2269db73fe52c1d02bdfe0805d3f7e5bf69e07d1
 depends: tui-newrun-enter-inserts-at-cursor, tui-alt-keys-swallowed-by-shortcuts
-tags: tui
 files: src/tui.ts, src/tui/screens/composer/keys.ts, src/tui/screens/issue-composer/keys.ts
-keywords: new-run composer, new-issue composer, EDITOR, prompt, vim
+tags: tui
 acceptance: script:build
+keywords: new-run composer, new-issue composer, EDITOR, prompt, vim
 
 # Edit TUI prompts in $EDITOR for real vim
 
