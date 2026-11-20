@@ -1,6 +1,7 @@
+commit: e3c44211560da29656585f3c8caef69051e66ba7
 files: src/config.ts, src/orchestration/store.ts
-keywords: SelectionTier, OrchestratorTier, selection tier
 acceptance: script:build
+keywords: SelectionTier, OrchestratorTier, selection tier
 
 # Add Free to tier types and machine config
 
