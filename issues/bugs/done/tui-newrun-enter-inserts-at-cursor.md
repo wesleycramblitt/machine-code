@@ -1,8 +1,9 @@
+commit: 5a77d92a2972e083748f6a0c8407fa735c1263cb
 depends: tui-alt-keys-swallowed-by-shortcuts
-tags: tui
 files: src/tui/screens/composer/keys.ts
-keywords: new-run composer, prompt, Enter, cursor
+tags: tui
 acceptance: script:build
+keywords: new-run composer, prompt, Enter, cursor
 
 # New-run Enter inserts newline at cursor
 
