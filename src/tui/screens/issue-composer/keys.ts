@@ -125,6 +125,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
+  if (data === "E") { const next = ctx.editPromptExternally(s.newIssue.prompt, "machine_code-issue-"); s.newIssue.prompt = next.slice(0, 12000); s.newIssueCursor = s.newIssue.prompt.length; ctx.draw(); return true; }
   if (data === "e") { s.newIssueInsert = true; s.newIssueCursor = s.newIssue.prompt.length; ctx.draw(); return true; }
   if (data === "k") {
     if (s.newIssueEdit) { ctx.notify("kind cannot change when editing"); ctx.draw(); return true; }
