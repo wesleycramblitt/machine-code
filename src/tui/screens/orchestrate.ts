@@ -29,7 +29,7 @@ export interface OrchestrateProps extends Viewport {
 
 export function renderOrchestrate(props: OrchestrateProps): { body: string[]; actions: string; secondary: string } {
   const { cols, narrow, bodyH, theme, toast, repoRoot, active, settings, sel, counters, preview } = props;
-  const tierLabel = settings.tier === "paid" ? "cloud" : "local";
+  const tierLabel = settings.tier === "paid" ? "cloud" : settings.tier;
 
   const settingRow = (index: number, label: string, value: string): string => {
     const picked = index === sel;

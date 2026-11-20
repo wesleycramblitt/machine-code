@@ -1,6 +1,7 @@
+commit: e086087fbb70d852011216d7bb4a1c8745667129
 files: src/select.ts, src/catalogue/query.ts
-keywords: free tier, free model, pick, minFit
 acceptance: script:build
+keywords: free tier, free model, pick, minFit
 
 # Strict Free-mode model selection
 
