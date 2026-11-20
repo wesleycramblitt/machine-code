@@ -140,8 +140,11 @@ Usage:
                                     context. Engineer runs use an isolated worktree:
                                     [--item <slug>] [--base <ref>]
                                     Agent config overrides:
-                                    [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
-                                    [--min-fit N] [--min-capability N]
+                                     [--approval human|agent] [--ambiguity strict|precise|adaptive|autonomous]
+                                     [--tier paid|free|local] [--tier2 none|paid|free|local]
+                                     tier2 is the fallback when tier one finds
+                                     no eligible model; none disables it
+                                     [--min-fit N] [--min-capability N]
                                     [--min-axes code=6.5,agentic=7]
                                     [--max-price $/M] [--max-input-price $/M] [--max-output-price $/M]
                                     [--model <key>] is a preference: auto-selection

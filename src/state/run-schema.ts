@@ -99,7 +99,9 @@ export interface RunCost {
 
 /** Selection settings captured at run start so a fork can reproduce them. */
 export interface RunSettingsSnapshot {
-  tier?: "free" | "paid";
+  tier?: import("../config.js").SelectionTier;
+  /** Fallback tier used when tier-one selection finds no eligible model. Absent means none. */
+  tier2?: import("../config.js").SelectionTier;
   /** Explicit model pin. Absent means the selector chose the model. */
   model?: string;
   /** Explicit minimum fit; null is an explicit zero. */
@@ -213,7 +215,8 @@ function migrateRunSettings(value: unknown): RunSettingsSnapshot | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const r = value as Record<string, unknown>;
   const out: RunSettingsSnapshot = {};
-  if (r.tier === "free" || r.tier === "paid") out.tier = r.tier;
+  if (r.tier === "free" || r.tier === "paid" || r.tier === "local") out.tier = r.tier;
+  if (r.tier2 === "free" || r.tier2 === "paid" || r.tier2 === "local") out.tier2 = r.tier2;
   if (typeof r.model === "string" && r.model.trim().length > 0) out.model = r.model;
   if (typeof r.minFit === "number" && Number.isFinite(r.minFit)) out.minFit = r.minFit;
   else if (r.minFit === null) out.minFit = null;

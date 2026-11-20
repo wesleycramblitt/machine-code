@@ -2,7 +2,7 @@
  * machine_code — orchestration page.
  *
  * Per-repo orchestration control screen: status, editable settings (worker
- * count, model tier, per-role min-fit floors), the resolved model preview,
+ * count, model tier + fallback tier, per-role min-fit floors), the resolved model preview,
  * and live counters over orchestrator-started runs. Pure render — state and
  * settings come from the caller; the key handler persists edits through the
  * orchestrator store (src/orchestration/store.ts).
@@ -20,7 +20,7 @@ export interface OrchestrateProps extends Viewport {
   /** Whether the orchestrator is running for this repo (store `active`). */
   active: boolean;
   settings: OrchestratorSettings;
-  /** Selected settings row (0..3). */
+  /** Selected settings row (0..4). */
   sel: number;
   counters: { running: number; awaiting: number; failed: number };
   /** Resolved model name per role; null when the picker found nothing eligible. */
@@ -30,6 +30,7 @@ export interface OrchestrateProps extends Viewport {
 export function renderOrchestrate(props: OrchestrateProps): { body: string[]; actions: string; secondary: string } {
   const { cols, narrow, bodyH, theme, toast, repoRoot, active, settings, sel, counters, preview } = props;
   const tierLabel = settings.tier === "paid" ? "cloud" : settings.tier;
+  const tier2Label = settings.tier2 === "none" ? "none" : settings.tier2 === "paid" ? "cloud" : settings.tier2;
 
   const settingRow = (index: number, label: string, value: string): string => {
     const picked = index === sel;
@@ -49,8 +50,9 @@ export function renderOrchestrate(props: OrchestrateProps): { body: string[]; ac
     ` ${B}Settings${R} ${D}(←/→ change, j/k select)${R}`,
     settingRow(0, "processes", String(settings.processes)),
     settingRow(1, "tier", tierLabel),
-    settingRow(2, "engineer minFit", settings.engineerMinFit.toFixed(2)),
-    settingRow(3, "research minFit", settings.researchMinFit.toFixed(2)),
+    settingRow(2, "tier2", tier2Label),
+    settingRow(3, "engineer minFit", settings.engineerMinFit.toFixed(2)),
+    settingRow(4, "research minFit", settings.researchMinFit.toFixed(2)),
     "",
     ` ${B}Models${R}`,
     modelLine("engineer", preview.engineer),

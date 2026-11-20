@@ -328,6 +328,7 @@ export async function runTui(): Promise<void> {
       approval: "human",
       ambiguity: "precise",
       tier: "paid",
+      tier2: "none",
       // No explicit floor: the run enforces the agent's own configured
       // minFit. `f` sets an explicit override when you want one.
       minFit: undefined,
@@ -593,8 +594,16 @@ export async function runTui(): Promise<void> {
   const cycleTier = () => {
     const tiers: NewRunState["tier"][] = ["paid", "free", "local"];
     s.newrun.tier = tiers[(tiers.indexOf(s.newrun.tier) + 1) % tiers.length]!;
+    // The fallback can never equal the primary tier.
+    if (s.newrun.tier2 === s.newrun.tier) s.newrun.tier2 = "none";
     // minFit is untouched: undefined keeps following the agent's configured
     // floor, an explicit `f` value stays exactly as set.
+  };
+
+  const cycleTier2 = () => {
+    // Fallback tier: none disables it; it can never equal the primary tier.
+    const tiers = (["paid", "free", "local", "none"] as const).filter((tier) => tier !== s.newrun.tier);
+    s.newrun.tier2 = tiers[(tiers.indexOf(s.newrun.tier2) + 1) % tiers.length]!;
   };
 
   const agentDefFor = (repoRoot = l.repoRoot): any => {
@@ -709,13 +718,13 @@ export async function runTui(): Promise<void> {
     // picker shows exactly what the run will enforce (floors, tier, pin).
     // No runtime filter here — the preview must not veto rows the refreshed
     // run collection may still instantiate; the run enforces staleness.
-    const select = (requireModel?: string) => {
+    const select = (requireModel?: string, tier?: NewRunState["tier2"]) => {
       const ctx = resolveSelectionContext({
         role: s.newrun.agent,
         layout: newRunLayout,
         machine,
         def: effectiveDefForRun(agentDefFor(s.newRunRepo)),
-        ...(s.newrun.tier ? { tier: s.newrun.tier } : {}),
+        tier: tier && tier !== "none" ? tier : s.newrun.tier,
         ...(requireModel ? { pin: { model: requireModel } } : {}),
       });
       return pickWithContext(ctx, {
@@ -741,7 +750,13 @@ export async function runTui(): Promise<void> {
         result = fallback;
       }
     }
-    if ("error" in result) {
+    if ("error" in result && s.newrun.tier2 !== "none" && s.newrun.tier2 !== s.newrun.tier) {
+    const tier2pick = select(s.newrun.model, s.newrun.tier2);
+    if (!("error" in tier2pick)) {
+      result = tier2pick;
+    }
+  }
+  if ("error" in result) {
       const reasons = Object.entries(result.rejectedByReason)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
@@ -793,6 +808,7 @@ export async function runTui(): Promise<void> {
       "--agent", s.newrun.agent,
       ...(s.newrun.model ? ["--model", s.newrun.model] : []),
       "--tier", s.newrun.tier,
+      ...(s.newrun.tier2 !== "none" && s.newrun.tier2 !== s.newrun.tier ? ["--tier2", s.newrun.tier2] : []),
       "--approval", s.newrun.approval,
       "--ambiguity", s.newrun.ambiguity,
       ...(s.newRunParentId ? ["--parent", s.newRunParentId] : []),
@@ -1792,7 +1808,7 @@ export async function runTui(): Promise<void> {
 
   /**
    * Resolved model preview for the orchestration page: one model name per
-   * role for the current tier + minFit, resolved the same way the composer
+   * role for the current tier (+ fallback) + minFit, resolved the same way the composer
    * preview resolves its model (resolveSelectionContext + pickWithContext).
    * Names are cached briefly so background redraws stay cheap; null means
    * the picker found no eligible model.
@@ -1803,32 +1819,38 @@ export async function runTui(): Promise<void> {
     configuredProviders: ReadonlySet<string>,
   ): { engineer: string | null; research: string | null } => {
     const key = `${repoRoot}\0${settings.tier}\0${settings.engineerMinFit}\0${settings.researchMinFit}`;
-    if (s.orchestratePreview && s.orchestratePreview.key === key && Date.now() - s.orchestratePreview.at < 5_000) {
+    if (s.orchestratePreview && settings.tier2 === "none" && s.orchestratePreview.key === key && Date.now() - s.orchestratePreview.at < 5_000) {
       return { engineer: s.orchestratePreview.engineer, research: s.orchestratePreview.research };
     }
     const resolve = (role: string, minFit: number): string | null => {
+      // The orchestrator passes --tier2 to its runs, so preview the same
+      // sequence: tier one, then the fallback when tier one is exhausted.
+      const tiers = [settings.tier, ...(settings.tier2 !== "none" && settings.tier2 !== settings.tier ? [settings.tier2] : [])];
       try {
         const orchLayout = layout(repoRoot);
         const machine = loadMachineConfig(orchLayout);
         const catalogue = loadCatalogue(orchLayout.catalogueFile);
-        const ctx = resolveSelectionContext({
-          role,
-          layout: orchLayout,
-          machine,
-          def: agentDef(orchLayout, role),
-          tier: settings.tier,
-          floors: { minFit },
-        });
-        const pick = pickWithContext(ctx, {
-          agent: role,
-          machine,
-          catalogue: catalogue?.models ?? [],
-          configuredProviders,
-          availability: loadAvailability(l.home),
-          fundedProviders: fundedProviderIds(machine.providers),
-          contextChars: 0,
-        });
-        return "error" in pick ? null : pick.selected.name;
+        for (const tier of tiers) {
+          const ctx = resolveSelectionContext({
+            role,
+            layout: orchLayout,
+            machine,
+            def: agentDef(orchLayout, role),
+            tier,
+            floors: { minFit },
+          });
+          const pick = pickWithContext(ctx, {
+            agent: role,
+            machine,
+            catalogue: catalogue?.models ?? [],
+            configuredProviders,
+            availability: loadAvailability(l.home),
+            fundedProviders: fundedProviderIds(machine.providers),
+            contextChars: 0,
+          });
+          if (!("error" in pick)) return pick.selected.name;
+        }
+        return null;
       } catch {
         return null;
       }
@@ -1866,7 +1888,7 @@ export async function runTui(): Promise<void> {
   const keyCtx: KeyServices = {
     draw, notify, launch, openEditor, editPromptExternally, startNewRun, forkRun, resumeRun, answerRun,
     interrupt, startCorrect, submitCorrection, startPrompt, submitPrompt, runDetailData, pendingForRun,
-    cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier,
+    cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier, cycleTier2,
     startIssuePicker, pickerIssues, chooseIssue,
     pickerModels, startModelPicker, buildNewRunArgs, submitNewRun,
     startNewIssue, startEditIssue, submitNewIssue,

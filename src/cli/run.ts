@@ -101,6 +101,15 @@ export async function cmdRun(argv: string[]): Promise<number> {
   let requireModel = flags.get("model");
   const tierFlag = flags.get("tier") as "paid" | "free" | "local" | undefined;
   if (tierFlag !== undefined && tierFlag !== "paid" && tierFlag !== "free" && tierFlag !== "local") fail("--tier must be paid|free|local");
+  const tier2Flag = flags.get("tier2") as "none" | "paid" | "free" | "local" | undefined;
+  if (tier2Flag !== undefined && tier2Flag !== "none" && tier2Flag !== "paid" && tier2Flag !== "free" && tier2Flag !== "local") {
+    fail("--tier2 must be none|paid|free|local");
+  }
+  if (tier2Flag !== undefined && tier2Flag !== "none" && tierFlag !== undefined && tier2Flag === tierFlag) {
+    fail("--tier2 cannot equal --tier");
+  }
+  // The effective fallback: none disables it, and it can never equal tier one.
+  const tier2 = tier2Flag === "none" || tier2Flag === undefined || tier2Flag === tierFlag ? undefined : tier2Flag;
   if (flags.get("packet") !== undefined) {
     fail("--packet was removed; attach the run to an issue with --item <slug>");
   }
@@ -495,10 +504,26 @@ export async function cmdRun(argv: string[]): Promise<number> {
       preflight = relaxed;
     }
   }
+  if ("error" in preflight && tier2) {
+    const fallback = pickWithContext({ ...selection, tier: tier2, requireModel, requireProvider }, {
+      agent: agentNameParsed,
+      machine,
+      catalogue: catalogueDoc.models,
+      configuredProviders,
+      availability: availabilityState,
+      fundedProviders: fundedProviderIds(machine.providers),
+      contextChars: request.length,
+    });
+    if (!("error" in fallback)) {
+      preflight = fallback;
+    }
+  }
   if ("error" in preflight) {
     fail(`no model is ready before run start: ${preflight.error}${preflight.rejected[0] ? ` (${preflight.rejected[0].key}: ${preflight.rejected[0].reason})` : ""}`);
   }
   const runSettings: import("../state/run-schema.js").RunSettingsSnapshot = {
+    ...(tierFlag ? { tier: tierFlag } : {}),
+    ...(tier2 ? { tier2 } : {}),
     ...(requireModel ? { model: preflight.selected.key } : {}),
     ...(minFit !== undefined ? { minFit: Number(minFit) } : {}),
     ...(minAxesSnapshot ? { minAxes: minAxesSnapshot } : {}),
@@ -1050,6 +1075,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // preflight: dropping it re-derives eligibility without the tier and
       // kills a pinned local model on the funded gate.
       ...(tierFlag ? { tier: tierFlag } : {}),
+      ...(tier2 ? { tier2 } : {}),
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
@@ -1094,6 +1120,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // preflight: dropping it re-derives eligibility without the tier and
       // kills a pinned local model on the funded gate.
       ...(tierFlag ? { tier: tierFlag } : {}),
+      ...(tier2 ? { tier2 } : {}),
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
@@ -1342,6 +1369,8 @@ export async function cmdFork(argv: string[]): Promise<number> {
     ...(flags.has("inherit-worktree") && parentWorktreePath(parent, found.layout.localDir)
       ? ["--inherit-worktree"]
       : []),
+    ...(flags.get("tier") ? ["--tier", flags.get("tier")!] : parent.settings?.tier ? ["--tier", parent.settings.tier] : []),
+    ...(flags.get("tier2") ? ["--tier2", flags.get("tier2")!] : parent.settings?.tier2 ? ["--tier2", parent.settings.tier2] : []),
     objective,
   ];
   const child = spawn(process.execPath, [cliPath, ...args], {
@@ -1577,6 +1606,21 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
       ? withSyncGate(resumeGatesRaw, recorder.current.baseBranch)
       : resumeGatesRaw;
 
+  // Resume restarts the tier sequence: tier one first, fallback only if
+  // exhausted. An explicit --tier/--tier2 overrides the stored snapshot;
+  // "none" disables a stored fallback. Tier two never equals tier one here
+  // either — the loop drops an equal tier2 to none.
+  const resumeTierFlag = flags.get("tier");
+  const resumeTier2Flag = flags.get("tier2") as "none" | "paid" | "free" | "local" | undefined;
+  if (resumeTier2Flag !== undefined && resumeTier2Flag !== "none" && resumeTier2Flag !== "paid" && resumeTier2Flag !== "free" && resumeTier2Flag !== "local") {
+    fail("--tier2 must be none|paid|free|local");
+  }
+  const resumeTier = (resumeTierFlag ?? s.settings?.tier) as "paid" | "free" | "local" | undefined;
+  if (resumeTierFlag !== undefined && resumeTier !== "paid" && resumeTier !== "free" && resumeTier !== "local") {
+    fail("--tier must be paid|free|local");
+  }
+  const rawResumeTier2 = resumeTier2Flag === "none" ? undefined : (resumeTier2Flag ?? s.settings?.tier2);
+  const resumeTier2 = rawResumeTier2 !== resumeTier ? rawResumeTier2 : undefined;
   const resolved = resolveAgent(l2, resumeAgent, {
     machineOverrides: machine.agents[resumeAgent],
     // Resume carries the issue's verification forward so the mode-specific
@@ -1610,7 +1654,8 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     recorder,
     commands,
     requireModel,
-    ...(flags.get("tier") ? { tier: flags.get("tier") as "paid" | "free" | "local" } : {}),
+    ...(resumeTier ? { tier: resumeTier } : {}),
+    ...(resumeTier2 ? { tier2: resumeTier2 as "paid" | "free" | "local" } : {}),
     signal: abort.signal,
     initialMessages,
     startMode,
@@ -1828,6 +1873,9 @@ export async function cmdCorrect(argv: string[]): Promise<number> {
   args.push("--agent", normalizeAgentName(parent.agent));
   if (parent.itemId) args.push("--item", parent.itemId);
   if (flags.get("tier")) args.push("--tier", flags.get("tier")!);
+  else if (parent.settings?.tier) args.push("--tier", parent.settings.tier);
+  if (flags.get("tier2")) args.push("--tier2", flags.get("tier2")!);
+  else if (parent.settings?.tier2) args.push("--tier2", parent.settings.tier2);
   args.push(correction);
   const child = spawn(process.execPath, [cliPath, ...args], {
     cwd: parent.repoRoot,

@@ -1,4 +1,5 @@
 import { AGENT_NAMES } from "../agents.js";
+import { SELECTION_TIERS, type FallbackTier, type SelectionTier } from "../config.js";
 import type { AgentConfig } from "../agents/config.js";
 import type { CatalogueDocument, CatalogueRow } from "../catalogue/types.js";
 import type { RunEvent, RunSummary } from "../state/runs.js";
@@ -15,7 +16,9 @@ export interface ForkedRunSettings {
   model?: string;
   approval: "human" | "agent";
   ambiguity: "strict" | "precise" | "adaptive" | "autonomous";
-  tier: "paid" | "free" | "local";
+  tier: SelectionTier;
+  /** Fallback tier when tier-one selection finds no eligible model; "none" disables it. */
+  tier2: FallbackTier;
   /** undefined = role policy; null = explicit zero. */
   minFit: number | null | undefined;
   floors: "role" | "strict" | "off";
@@ -84,7 +87,14 @@ export function forkSettingsFromRun(input: {
     row && (!configuredProviders || configuredProviders.has(row.providerID))
       ? row.key
       : undefined;
-  const tier: "paid" | "free" | "local" = "paid";
+  const tier: SelectionTier = oneOf(settings?.tier, SELECTION_TIERS, "paid");
+  const tier2Raw = (settings as { tier2?: unknown } | undefined)?.tier2;
+  const parsedTier2: FallbackTier =
+    typeof tier2Raw === "string" && (SELECTION_TIERS as readonly string[]).includes(tier2Raw)
+      ? (tier2Raw as SelectionTier)
+      : "none";
+  // The fallback can never equal the primary tier.
+  const tier2: FallbackTier = parsedTier2 === tier ? "none" : parsedTier2;
   const axes = settings?.minAxes;
   const hasAxes = Boolean(axes && Object.keys(axes).length > 0);
   const allZero = hasAxes && Object.values(axes!).every((value) => value === 0);
@@ -96,6 +106,7 @@ export function forkSettingsFromRun(input: {
     approval: oneOf(summary.approval ?? cfg.approval, APPROVALS, defaults.approval),
     ambiguity: oneOf(summary.ambiguity ?? cfg.ambiguity, AMBIGUITIES, defaults.ambiguity),
     tier,
+    tier2,
     kind: (settings && (settings as any).kind) ? (settings as any).kind : "features",
     priority: (settings && (settings as any).priority) ? (settings as any).priority : "medium",
     tags: (settings && (settings as any).tags) ? (settings as any).tags : [],

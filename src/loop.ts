@@ -130,6 +130,8 @@ export interface RunLoopInput {
   seedRanges?: Array<{ path: string; range: [number, number] }>;
   /** Selection tier (paid filters out ollama/free; local only allows ollama). */
   tier?: import("./config.js").SelectionTier;
+  /** Fallback tier when tier-one selection finds no eligible model. Absent or equal to tier means none. */
+  tier2?: import("./config.js").SelectionTier;
   /** Layout + full policy: enable the task tool (delegation). */
   layout?: Layout;
   fullPolicy?: import("./config.js").Policy;
@@ -443,8 +445,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     hasRuntimeModel: (providerID: string, id: string) => input.models.getModel(providerID, id) !== undefined,
   });
 
-  const selectFor = (chars: number) =>
-    pickWithContext(selection, {
+  // Tier two activates only when tier-one selection finds no eligible
+  // model: the pick retries on the fallback tier with the same floors, pin,
+  // and exclusion list. Every attempt restarts at tier one (resume included)
+  // because all picks flow through here.
+  const fallbackTier = input.tier2 && input.tier2 !== selection.tier ? input.tier2 : undefined;
+  const selectFor = (chars: number) => {
+    const parts = {
       agent: input.agent.name,
       machine: input.machine,
       catalogue:
@@ -455,7 +462,31 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       availability,
       fundedProviders,
       contextChars: chars,
+    };
+    const first = pickWithContext(selection, parts);
+    if (!("error" in first) || !fallbackTier) return first;
+    const retry = pickWithContext({ ...selection, tier: fallbackTier }, parts);
+    if ("error" in retry) {
+      const rejectedByReason: Record<string, number> = { ...first.rejectedByReason };
+      for (const [reason, count] of Object.entries(retry.rejectedByReason)) {
+        rejectedByReason[reason] = (rejectedByReason[reason] ?? 0) + count;
+      }
+      return {
+        error:
+          `${first.error} (tier ${selection.tier ?? "default"} exhausted; ` +
+          `fallback ${fallbackTier} also has no eligible model: ${retry.error})`,
+        rejected: [...first.rejected, ...retry.rejected],
+        rejectedCount: first.rejectedCount + retry.rejectedCount,
+        rejectedByReason,
+      };
+    }
+    recorder.event("tier_fallback", {
+      from: selection.tier ?? "default",
+      to: fallbackTier,
+      reason: first.error,
     });
+    return retry;
+  };
 
   /**
    * A `--model`/`--provider` pin is a preference. Once the pinned model has

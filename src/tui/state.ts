@@ -327,6 +327,7 @@ export function createTuiState(repoRoot: string): TuiState {
       approval: "human",
       ambiguity: "precise",
       tier: "paid",
+      tier2: "none",
       minFit: undefined,
       floors: "role",
       prompt: "",

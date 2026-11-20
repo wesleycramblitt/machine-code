@@ -426,7 +426,7 @@ export function commandBadge(label: string, key: string, background: string, for
 
 /** Stable role colors used wherever an agent name is shown. */
 /** Tone for selection tier display. */
-export function tierTone(tier: "paid" | "local"): string {
+export function tierTone(tier: "paid" | "free" | "local" | "none"): string {
   return tier === "paid" ? G : BL;
 }
 
