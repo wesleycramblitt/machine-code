@@ -84,16 +84,14 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   }
   if (s.newRunInsert) {
     if (data === "\x1b") { s.newRunInsert = false; ctx.draw(); return true; }
-    if (data === "\r" || data === "\n") {
-      s.newrun.prompt += "\n";
-      s.newRunCursor = s.newrun.prompt.length;
-    } else {
-      const edited = editLine({ text: s.newrun.prompt, cursor: s.newRunCursor }, data);
-      s.newrun.prompt = edited.text;
-      s.newRunCursor = edited.cursor;
-      if (s.newrun.prompt.length > 12_000) s.newrun.prompt = s.newrun.prompt.slice(0, 12_000);
-      if (s.newRunCursor > s.newrun.prompt.length) s.newRunCursor = s.newrun.prompt.length;
-    }
+    if (data === "\r" || data === "\n") data = "\n";
+    const edited = editLine({ text: s.newrun.prompt, cursor: s.newRunCursor }, data);
+    let text = edited.text;
+    let cursor = edited.cursor;
+    if (text.length > 12_000) text = text.slice(0, 12_000);
+    cursor = Math.min(cursor, text.length);
+    s.newrun.prompt = text;
+    s.newRunCursor = cursor;
     ctx.draw();
     return true;
   }
