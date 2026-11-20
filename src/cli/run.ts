@@ -501,6 +501,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     fail(`no model is ready before run start: ${preflight.error}${preflight.rejected[0] ? ` (${preflight.rejected[0].key}: ${preflight.rejected[0].reason})` : ""}`);
   }
   const runSettings: import("../state/run-schema.js").RunSettingsSnapshot = {
+    tier: selectionTier,
     ...(requireModel ? { model: preflight.selected.key } : {}),
     ...(minFit !== undefined ? { minFit: Number(minFit) } : {}),
     ...(minAxesSnapshot ? { minAxes: minAxesSnapshot } : {}),
@@ -1385,7 +1386,9 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   if (resumeTierFlag !== undefined && resumeTierFlag !== "paid" && resumeTierFlag !== "free" && resumeTierFlag !== "local") {
     fail("--tier must be paid|free|local");
   }
-  const resumeTier = (resumeTierFlag ?? machine.selection.tier) as "paid" | "free" | "local";
+  const recordedTier = s.settings?.tier;
+  const resumeTier =
+    resumeTierFlag ?? (recordedTier === "paid" || recordedTier === "free" || recordedTier === "local" ? recordedTier : machine.selection.tier);
 
   // Worktree: reuse, recreate from branch, or (with --recreate) start fresh.
   // Sync main first so a recreated worktree starts from current upstream.
