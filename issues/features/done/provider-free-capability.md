@@ -1,6 +1,7 @@
+commit: 60f8bdf22e2886d1719451e26fb6d42464c66372
 files: data/providers/openrouter.toml, data/providers/opencode.toml, src/data.ts, src/catalogue/refresh.ts
-keywords: assumeFree, free models, provider definition
 acceptance: script:build
+keywords: assumeFree, free models, provider definition
 
 # Mark which providers support free mode
 
