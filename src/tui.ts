@@ -1921,16 +1921,89 @@ export async function runTui(): Promise<void> {
     draw();
   };
 
+  let pending = "";
+  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushPending = (): void => {
+    if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; }
+    if (pending !== "") { pending = ""; handleKey(String.fromCharCode(27)); }
+  };
   stdin.on("data", (chunk: string) => {
+    const ESC = String.fromCharCode(27);
+    const tailIncomplete = (tail: string): boolean => {
+      if (tail.length === 0 || tail.charCodeAt(0) !== 27) return false;
+      if (tail.length === 1) return true;
+      const second = tail.charCodeAt(1);
+      if (second === 91) {
+        if (tail.length === 2) return true;
+        for (let i = 2; i < tail.length; i++) {
+          const c = tail.charCodeAt(i);
+          if ((c >= 48 && c <= 57) || c === 59) continue;
+          return false;
+        }
+        return true;
+      }
+      if (second === 79) return tail.length < 3;
+      return false;
+    };
+    let data = pending !== "" ? pending + chunk : chunk;
+    if (pending !== "") { pending = ""; if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; } }
+    if (data === ESC) {
+      pending = data;
+      if (pendingTimer !== null) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(flushPending, 60);
+      return;
+    }
+    if (data.charCodeAt(0) === 27 && tailIncomplete(data)) {
+      pending = data;
+      if (pendingTimer !== null) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(flushPending, 60);
+      return;
+    }
+    const escAt = data.indexOf(ESC);
+    const lastEsc = data.lastIndexOf(ESC);
+    if (escAt >= 0 && (data.charCodeAt(0) !== 27 || tailIncomplete(data) === false) && lastEsc > 0) {
+      const tail = data.slice(lastEsc);
+      if (tailIncomplete(tail)) {
+        const head = data.slice(0, lastEsc);
+        if (head !== "") {
+          const headTextEntry =
+            s.screen === "answer" ||
+            s.screen === "correct" ||
+            s.screen === "prompt" ||
+            s.searchMode ||
+            (s.screen === "newrun" && (s.newRunInsert || s.modelPick !== null || s.itemPick !== null || s.newRunContextFiltering)) ||
+            (s.screen === "newissue" && (s.newIssueInsert || s.newIssueFieldEdit !== null));
+          if (headTextEntry && head.indexOf(ESC) === -1) handleKey(head);
+          else for (const key of splitKeys(head)) handleKey(key);
+        }
+        pending = tail;
+        if (pendingTimer !== null) clearTimeout(pendingTimer);
+        pendingTimer = setTimeout(flushPending, 60);
+        return;
+      }
+    }
+    if (data !== chunk) {
+      const textEntry2 =
+        s.screen === "answer" ||
+        s.screen === "correct" ||
+        s.screen === "prompt" ||
+        s.searchMode ||
+        (s.screen === "newrun" && (s.newRunInsert || s.modelPick !== null || s.itemPick !== null || s.newRunContextFiltering)) ||
+        (s.screen === "newissue" && (s.newIssueInsert || s.newIssueFieldEdit !== null));
+      if (textEntry2 && data.indexOf(ESC) === -1) handleKey(data);
+      else for (const key of splitKeys(data)) handleKey(key);
+      return;
+    }
     // Terminal key repeat can deliver several keys in one read. Text entry
     // accepts the whole chunk (so pastes stay intact); navigation replays each
     // key so held j/k never get dropped.
     const textEntry =
       s.screen === "answer" ||
       s.screen === "correct" ||
+      s.screen === "prompt" ||
       s.searchMode ||
-      (s.screen === "newrun" && s.newRunInsert) ||
-      (s.screen === "newissue" && (s.newIssueInsert || s.newIssueFieldEdit));
+      (s.screen === "newrun" && (s.newRunInsert || s.modelPick !== null || s.itemPick !== null || s.newRunContextFiltering)) ||
+      (s.screen === "newissue" && (s.newIssueInsert || s.newIssueFieldEdit !== null));
     if (textEntry && !chunk.includes("\x1b")) handleKey(chunk);
     else for (const key of splitKeys(chunk)) handleKey(key);
   });
