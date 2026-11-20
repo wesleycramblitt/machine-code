@@ -161,6 +161,7 @@ export function cmdModels(argv: string[]): number {
       role: agent,
       layout: l,
       machine,
+      tier: machine.selection.tier,
       floors: {
         ...(fitOverride !== undefined ? { minFit: fitOverride } : {}),
         ...(override !== undefined ? { minCapability: override } : {}),

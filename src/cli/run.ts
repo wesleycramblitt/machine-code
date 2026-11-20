@@ -222,6 +222,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (request.length === 0) request = issue.prompt || issue.title || itemSlug;
   }
   const { machine, models, catalogue: catalogueDoc, configuredProviders } = await loadRuntime(l);
+  // `[selection] tier` is the machine default; `--tier` overrides it for one run.
+  const selectionTier = tierFlag ?? machine.selection.tier;
   const minFit = flags.get("min-fit");
   if (minFit !== undefined) {
     const n = Number(minFit);
@@ -442,7 +444,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     machine,
     def: agentDefObj,
     floors: floorOverrides,
-    ...(tierFlag ? { tier: tierFlag } : {}),
+    tier: selectionTier,
     pin: {
       ...(requireModel ? { model: requireModel } : {}),
       ...(requireProvider ? { provider: requireProvider } : {}),
@@ -1049,7 +1051,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // The --tier flag must reach the loop's own picks, not just the
       // preflight: dropping it re-derives eligibility without the tier and
       // kills a pinned local model on the funded gate.
-      ...(tierFlag ? { tier: tierFlag } : {}),
+      tier: selectionTier,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
@@ -1093,7 +1095,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // The --tier flag must reach the loop's own picks, not just the
       // preflight: dropping it re-derives eligibility without the tier and
       // kills a pinned local model on the funded gate.
-      ...(tierFlag ? { tier: tierFlag } : {}),
+      tier: selectionTier,
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
@@ -1379,6 +1381,11 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
 
   const runtime = await loadRuntime(l2);
   const { machine, models, catalogue, configuredProviders } = runtime;
+  const resumeTierFlag = flags.get("tier");
+  if (resumeTierFlag !== undefined && resumeTierFlag !== "paid" && resumeTierFlag !== "free" && resumeTierFlag !== "local") {
+    fail("--tier must be paid|free|local");
+  }
+  const resumeTier = (resumeTierFlag ?? machine.selection.tier) as "paid" | "free" | "local";
 
   // Worktree: reuse, recreate from branch, or (with --recreate) start fresh.
   // Sync main first so a recreated worktree starts from current upstream.
@@ -1610,7 +1617,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     recorder,
     commands,
     requireModel,
-    ...(flags.get("tier") ? { tier: flags.get("tier") as "paid" | "free" | "local" } : {}),
+    tier: resumeTier,
     signal: abort.signal,
     initialMessages,
     startMode,
