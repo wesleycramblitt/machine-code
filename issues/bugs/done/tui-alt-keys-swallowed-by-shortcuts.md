@@ -1,7 +1,8 @@
-acceptance: script:build
+commit: 975f78b03c28fa85e02a4410be786f0546c44006
 files: src/tui/screens/issue-composer/keys.ts, src/tui/screens/composer/keys.ts, src/tui/edit.ts
-keywords: Alt+d, depends, delete word, insert mode, field edit
 tags: tui
+acceptance: script:build
+keywords: Alt+d, depends, delete word, insert mode, field edit
 
 # Alt edit keys fire page shortcuts instead of editing
 
