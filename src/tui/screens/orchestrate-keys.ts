@@ -60,7 +60,10 @@ export function handleOrchestrateKeys(s: TuiState, ctx: KeyServices, data: strin
       const next = ORCHESTRATOR_PROCESSES[(index + dir + ORCHESTRATOR_PROCESSES.length) % ORCHESTRATOR_PROCESSES.length]!;
       updateOrchestratorState(repoLayout, { settings: { processes: next } });
     } else if (s.orchestrateSel === 1) {
-      updateOrchestratorState(repoLayout, { settings: { tier: settings.tier === "paid" ? "local" : "paid" } });
+      const order = ["paid", "free", "local"] as const;
+      const index = order.indexOf(settings.tier);
+      const next = order[(index + dir + order.length) % order.length]!;
+      updateOrchestratorState(repoLayout, { settings: { tier: next } });
     } else {
       // Min-fit floors cycle the shared 4–8.5 / 0.25 ladder.
       const engineer = s.orchestrateSel === 2;

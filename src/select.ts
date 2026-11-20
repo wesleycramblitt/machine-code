@@ -4,20 +4,22 @@
  * Every provider call runs pick(): estimate input as context chars ÷ 4 and
  * output as the agent's fixed expected output; hard-filter; sort eligible
  * candidates by estimated per-call cost ascending (cheapest first), with ties
- * broken by fit descending. No stickiness, no learned estimates.
+ * broken by fit descending (free tier sorts by fit descending: all
+ * candidates cost zero). No stickiness, no learned estimates.
  * Every pick is logged by the caller.
  *
  * Capability is multi-dimensional. A row carries four axis scores
  * (reasoning, code, agentic, general); `pick` hard-filters on the role-weighted
  * `minFit` (the primary gate), an optional neutral `minCapability` safety floor,
  * and optional per-axis floors. It then uses the same role-weighted axis mix
- * for the fit display, but the selection order is purely cost-based.
+ * for the fit display, but paid/local selection order is purely cost-based.
  */
 import type { CapabilityAxis, MachineConfig, SelectionTier } from "./config.js";
 import { agentDef, roleWeights, type AgentDef, type AgentName } from "./agents.js";
 import { CAPABILITY_AXES } from "./config.js";
 import { estimateCallCost, type AxisScores } from "./catalogue/scoring.js";
 import type { CatalogueRow } from "./catalogue/types.js";
+import { isFreeModel } from "./catalogue/query.js";
 import type { AvailabilityState } from "./availability.js";
 import { isProviderDisabled, providerNeedsAuth } from "./availability.js";
 import type { Layout } from "./paths.js";
@@ -92,7 +94,7 @@ export interface PickResult {
   estimate: PickEstimate;
   /** All eligible candidates after filtering, before the display cap. */
   eligibleCount: number;
-  /** Top candidates after filtering, ascending cost (cheapest first), max 5. */
+  /** Top candidates after filtering, max 5 (cost order; free tier fit order). */
   candidates: CandidateScore[];
   rejectedCount: number;
   /** Rejection counts by reason, across the whole catalogue. */
@@ -125,7 +127,7 @@ export interface PickInput {
   hasRuntimeModel?: (providerID: string, id: string) => boolean;
   /** Provider/model availability state (M2). */
   availability?: AvailabilityState;
-  /** Selection tier: "paid" filters out ollama; "local" only allows ollama. */
+  /** Selection tier: "paid" filters out ollama; "local" only allows ollama; "free" only allows free rows. */
   tier?: SelectionTier;
 }
 
@@ -215,16 +217,22 @@ function rejectReason(
   weights: AxisWeights,
 ): string | null {
   const def = input.agentDef;
+  const isFreeTier = input.tier === "free";
   if (input.tier === "local" && row.providerID !== "ollama") return "paid-model";
   if (input.tier === "paid" && row.providerID === "ollama") return "local-model";
+  // Free tier selects only zero-price rows on free-supported providers.
+  if (isFreeTier && !isFreeModel(row)) return "paid-model";
+  if (isFreeTier && loadProviderDefinitions()[row.providerID]?.freeSupported !== true) return "provider-free-unsupported";
   // Free (zero-cost) cloud offers are gated by selection.free_cloud_models_enabled.
-  // Off (default): no tier may select them — they are unreliable API giveaways,
+  // Off (default): no paid tier may select them — they are unreliable API giveaways,
   // not production models. Local ollama rows are zero-price by nature and are
   // never rejected here; they fail earlier on tier checks when mismatched.
+  // Free tier bypasses this gate: it selects only free rows by construction.
   if (
+    !isFreeTier &&
     row.providerID !== "ollama" &&
     !input.machine.selection.freeCloudModelsEnabled &&
-    (row.free === true || (row.pricing.input === 0 && row.pricing.output === 0))
+    isFreeModel(row)
   ) return "free-model";
   if (!input.configuredProviders.has(row.providerID)) return "provider-not-configured";
   if (input.requireProvider && row.providerID !== input.requireProvider) return "provider-filtered";
@@ -234,8 +242,9 @@ function rejectReason(
   // Hard spend ceiling ($ per 1M tokens, machine price_caps or --max-price).
   // Compared against the effective billed rate (after provider multipliers),
   // so subscription discounts count toward the cap. Unset side = no ceiling.
+  // Free tier has no spend: skip price caps.
   const caps = input.machine.priceCaps;
-  if (caps && (caps.input !== undefined || caps.output !== undefined)) {
+  if (!isFreeTier && caps && (caps.input !== undefined || caps.output !== undefined)) {
     const mult = providerMultiplier(input.machine, row.providerID);
     if (caps.input !== undefined && row.pricing.input * mult > caps.input) return "over-price-cap";
     if (caps.output !== undefined && row.pricing.output * mult > caps.output) return "over-price-cap";
@@ -249,14 +258,15 @@ function rejectReason(
   if (isMetaRouter(row)) return "router-model";
   if (def.toolCall && !row.toolCall) return "no-tool-support";
   // Local tier models (Ollama) are zero-cost and don't need a funded provider.
-  if (input.tier !== "local" && input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
+  // Free tier calls have no spend either.
+  if (!isFreeTier && input.tier !== "local" && input.fundedProviders && !input.fundedProviders.has(row.providerID)) return "unfunded-provider";
   if (def.minFit > 0 && capabilityFit(row.scores, weights) < def.minFit) {
     return "below-min-fit";
   }
   if (def.minCapability > 0 && row.scores.capability < def.minCapability) {
     return "below-min-capability";
   }
-  // Per-axis floors are for paid tier only; local models use metadata-based
+  // Per-axis floors skip local only; local models use metadata-based
   // scores in the 3-6 range and would almost always fail the paid-tier floors.
   if (input.tier !== "local") {
     for (const axis of CAPABILITY_AXES) {
@@ -312,12 +322,20 @@ export function pick(input: PickInput): PickResult | PickFailure {
     candidates.push({ key: row.key, fit, estimatedCost: cost });
   }
 
-  // Sort by cost ascending, ties broken by fit descending, then key ascending.
-  candidates.sort((a, b) => {
-    if (a.estimatedCost !== b.estimatedCost) return a.estimatedCost - b.estimatedCost;
-    if (b.fit !== a.fit) return b.fit - a.fit;
-    return a.key.localeCompare(b.key);
-  });
+  // Free tier: all candidates cost zero, so sort by fit descending.
+  // Paid/local: sort by cost ascending, ties broken by fit descending.
+  if (input.tier === "free") {
+    candidates.sort((a, b) => {
+      if (b.fit !== a.fit) return b.fit - a.fit;
+      return a.key.localeCompare(b.key);
+    });
+  } else {
+    candidates.sort((a, b) => {
+      if (a.estimatedCost !== b.estimatedCost) return a.estimatedCost - b.estimatedCost;
+      if (b.fit !== a.fit) return b.fit - a.fit;
+      return a.key.localeCompare(b.key);
+    });
+  }
   const top = candidates.slice(0, 5);
 
   if (candidates.length === 0) {
@@ -448,6 +466,8 @@ const HARD_PIN_REASONS = new Set([
   "model-filtered",
   "provider-filtered",
   "local-model",
+  "paid-model",
+  "provider-free-unsupported",
   "free-model",
   "vetoed",
   "provider-not-configured",
@@ -486,6 +506,8 @@ export function pinViability(
   }
   const hints = [
     reasons.includes("local-model") ? "ollama needs --tier local" : "",
+    reasons.includes("paid-model") ? "free tier selects only zero-price rows" : "",
+    reasons.includes("provider-free-unsupported") ? "provider has no free tier support" : "",
     reasons.includes("free-model") ? "free cloud offers need selection.free_cloud_models_enabled = true" : "",
     reasons.includes("vetoed") ? "model is vetoed (machine curation.toml)" : "",
     reasons.includes("provider-not-configured") ? "provider is not configured" : "",

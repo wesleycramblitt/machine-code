@@ -302,6 +302,52 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const triedModels = new Set<string>();
 
   /**
+   * Free-tier retry keeps an in-attempt exclusion set only, never persisted.
+   * A failed free model is excluded for the rest of the run attempt; a
+   * provider-wide hard error excludes every model on that provider so the
+   * next pick moves to another free-supported provider. Paid and local retry
+   * behavior is unchanged.
+   */
+  const isFreeRow = (row: { providerID: string; free?: boolean; pricing: { input: number; output: number } }): boolean =>
+    row.providerID !== "ollama" && (row.free === true || (row.pricing.input === 0 && row.pricing.output === 0));
+  const isFreeMode = (): boolean => input.machine.selection.freeCloudModelsEnabled === true;
+  const isProviderWideHardError = (classified: ReturnType<typeof classifyError>): boolean => {
+    if (classified.kind === "rate-limit-provider") return true;
+    if (classified.kind === "funds" || classified.kind === "quota") {
+      const msg = classified.message;
+      return (
+        msg.includes("organization") ||
+        msg.includes("account") ||
+        msg.includes("quota") ||
+        msg.includes("monthly") ||
+        msg.includes("plan limit") ||
+        msg.includes("workspace") ||
+        msg.includes("provider-wide") ||
+        msg.includes("provider wide")
+      );
+    }
+    return false;
+  };
+  const freeProviderIDs = (): string[] => {
+    const ids = new Set<string>();
+    for (const row of input.catalogue) {
+      if (isFreeRow(row)) ids.add(row.providerID);
+    }
+    return [...ids].sort();
+  };
+  const freeRowsExhausted = (): boolean => {
+    if (!isFreeMode()) return false;
+    const freeRows = input.catalogue.filter((row) => isFreeRow(row));
+    if (freeRows.length === 0) return false;
+    return freeRows.every((row) => triedModels.has(row.key) || availability.providers[row.providerID]?.needsAuth === true || availability.providers[row.providerID]?.disabled === true);
+  };
+  const freeExhaustionError = (): string => {
+    const providers = freeProviderIDs();
+    const named = providers.length > 0 ? providers.join(", ") : "unknown";
+    return "free models exhausted on provider" + (providers.length === 1 ? "" : "s") + " (" + named + "); last error kind: " + String(lastErrorKind ?? "unknown") + "; last error: " + String(lastFailure ?? "unknown");
+  };
+
+  /**
    * First-token timeout for one provider call (ms), or undefined for no
    * first-token timeout. Remote providers keep the finite default so a stall
    * is abandoned and rotated. Ollama is local and may sit queued behind
@@ -321,6 +367,41 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     modelKey: string,
     classified: ReturnType<typeof classifyError>,
   ): void => {
+    const failedRow = input.catalogue.find((row) => row.key === modelKey);
+    if (isFreeMode() && failedRow && isFreeRow(failedRow)) {
+      // Free tier: in-attempt exclusion only, never persisted. Provider-wide
+      // hard errors exclude every model on that provider so the next pick
+      // moves to another free-supported provider. Per-model limits, route
+      // noise (timeout/network/5xx), and other errors exclude only the
+      // failing model.
+      if (classified.needsAuth) {
+        try {
+          const state = loadAvailability(input.home);
+          state.providers[provider] = { ...(state.providers[provider] ?? {}), needsAuth: true };
+          saveAvailability(input.home, state);
+          Object.assign(availability, state);
+        } catch {
+          // availability write failure must not stop rotation
+        }
+      }
+      if (classified.permanent === true) {
+        const reason = "auto-vetoed: gone at runtime (" + classified.message.slice(0, 140) + ")";
+        try {
+          if (addCurationVeto(input.home, modelKey, reason + " (run " + input.recorder.current.id + ")")) {
+            recorder.event("model_vetoed", { key: modelKey, reason });
+          }
+        } catch {
+          // veto failure must not stop rotation
+        }
+      }
+      if (isProviderWideHardError(classified)) {
+        for (const row of input.catalogue) {
+          if (row.providerID === provider) triedModels.add(row.key);
+        }
+      }
+      triedModels.add(modelKey);
+      return;
+    }
     if (classified.kind === "funds") {
       for (const row of input.catalogue) {
         if (row.providerID === provider) triedModels.add(row.key);
@@ -597,6 +678,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   };
 
   let lastFailure: string | undefined;
+  let lastErrorKind: string | undefined;
   let lastAssistant: AssistantMessage | undefined;
   let totalTokens = 0;
   let turns = 0;
@@ -816,6 +898,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           ? `all eligible models failed (${triedModels.size} tried); last error: ${lastFailure ?? first.error}`
           : first.error;
       recorder.event("model_select", { error, rejected: first.rejected, rejectedByReason: first.rejectedByReason });
+      if (triedModels.size > 0 && freeRowsExhausted()) {
+        const exhaustionError = freeExhaustionError();
+        recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure, lastErrorKind: lastErrorKind });
+        clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+        return { status: "blocked", finalText: "", error: exhaustionError };
+      }
       recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure });
       clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
       return { status: "failed", finalText: "", error };
@@ -828,6 +916,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       triedModels.add(currentRow.key);
       relaxPin(currentRow.key, currentRow.providerID);
       lastFailure = error;
+      lastErrorKind = "missing-runtime-model";
+      if (freeRowsExhausted()) {
+        const exhaustionError = freeExhaustionError();
+        recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure, lastErrorKind: lastErrorKind });
+        clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+        return { status: "blocked", finalText: "", error: exhaustionError };
+      }
       recorder.event("retry", {
         failedModel: currentRow.key,
         kind: "missing-runtime-model",
@@ -1546,6 +1641,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
                 const key = currentRow?.key ?? `${provider}/${message.model}`;
                 applyErrorState(provider, key, classified);
                 appliedError = { key, message: message.errorMessage };
+                lastErrorKind = classified.kind;
                 recorder.event("error_classified", {
                   kind: classified.kind,
                   target: classified.target,
@@ -1657,8 +1753,42 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             }
             relaxPin(failedKey, provider);
             lastFailure = message;
+            lastErrorKind = classified.kind;
+            if (freeRowsExhausted()) {
+              const exhaustionError = freeExhaustionError();
+              recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure, lastErrorKind: lastErrorKind });
+              clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+              return { status: "blocked", finalText: "", error: exhaustionError };
+            }
             recorder.event("retry", {
               failedModel: failedKey || "(unknown)",
+              kind: classified.kind,
+              attempt: triedModels.size,
+            });
+            continue;
+          }
+          if (isFreeMode() && currentRow && isFreeRow(currentRow) && (classified.kind === "auth" || (classified.kind === "missing-model" && classified.permanent === true))) {
+            const freeProvider = currentRow?.providerID ?? "";
+            const freeFailedKey = currentRow?.key ?? "";
+            if (freeProvider && freeFailedKey) {
+              try {
+                applyErrorState(freeProvider, freeFailedKey, classified);
+              } catch {
+                // availability write failure must not stop rotation
+              }
+              triedModels.add(freeFailedKey);
+            }
+            relaxPin(freeFailedKey, freeProvider);
+            lastFailure = message;
+            lastErrorKind = classified.kind;
+            if (freeRowsExhausted()) {
+              const exhaustionError = freeExhaustionError();
+              recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure, lastErrorKind: lastErrorKind });
+              clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+              return { status: "blocked", finalText: "", error: exhaustionError };
+            }
+            recorder.event("retry", {
+              failedModel: freeFailedKey || "(unknown)",
               kind: classified.kind,
               attempt: triedModels.size,
             });
@@ -1730,6 +1860,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         triedModels.add(failedKey);
         relaxPin(failedKey, provider);
         lastFailure = message;
+        lastErrorKind = "malformed";
+        if (freeRowsExhausted()) {
+          const exhaustionError = freeExhaustionError();
+          recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure, lastErrorKind: lastErrorKind });
+          clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+          return { status: "blocked", finalText: "", error: exhaustionError };
+        }
         try {
           const classified = classifyError(new Error(`malformed response: ${message}`));
           applyErrorState(provider, failedKey, classified);
@@ -1919,6 +2056,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         triedModels.add(failedModel);
         relaxPin(failedModel, la.provider);
         lastFailure = la.errorMessage;
+        lastErrorKind = classified.kind;
+        if (freeRowsExhausted()) {
+          const exhaustionError = freeExhaustionError();
+          recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure, lastErrorKind: lastErrorKind });
+          clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+          return { status: "blocked", finalText: "", error: exhaustionError };
+        }
         // Carry the whole conversation into the replacement agent: a switch
         // is a new model on the same run, not a fresh run.
         carriedMessages = agent?.state.messages ?? carriedMessages;
@@ -1929,6 +2073,35 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           carriedMessages: carriedMessages?.length ?? 0,
         });
         continue; // retry on another model, same conversation
+      }
+      if (isFreeMode() && currentRow && isFreeRow(currentRow) && classified !== undefined && !classified.retryable && (classified.kind === "auth" || (classified.kind === "missing-model" && classified.permanent === true))) {
+        const authFailedKey = currentRow?.key ?? la.provider + "/" + la.model;
+        if (!appliedError || appliedError.key !== authFailedKey || appliedError.message !== la.errorMessage) {
+          try {
+            applyErrorState(la.provider, authFailedKey, classified);
+          } catch {
+            // availability write failure must not stop rotation
+          }
+        }
+        const authFailedModel = currentRow?.key ?? authFailedKey;
+        triedModels.add(authFailedModel);
+        relaxPin(authFailedModel, la.provider);
+        lastFailure = la.errorMessage;
+        lastErrorKind = classified.kind;
+        if (freeRowsExhausted()) {
+          const exhaustionError = freeExhaustionError();
+          recorder.event("retry_exhausted", { tried: [...triedModels], lastError: lastFailure, lastErrorKind: lastErrorKind });
+          clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+          return { status: "blocked", finalText: "", error: exhaustionError };
+        }
+        carriedMessages = agent?.state.messages ?? carriedMessages;
+        recorder.event("retry", {
+          failedModel: authFailedModel,
+          kind: classified.kind,
+          attempt: triedModels.size,
+          carriedMessages: carriedMessages?.length ?? 0,
+        });
+        continue;
       }
     }
 

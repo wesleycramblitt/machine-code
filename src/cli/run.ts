@@ -99,7 +99,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
   }
   let requireProvider = flags.get("provider");
   let requireModel = flags.get("model");
-  const tierFlag = flags.get("tier") as "paid" | "local" | undefined;
+  const tierFlag = flags.get("tier") as "paid" | "free" | "local" | undefined;
+  if (tierFlag !== undefined && tierFlag !== "paid" && tierFlag !== "free" && tierFlag !== "local") fail("--tier must be paid|free|local");
   if (flags.get("packet") !== undefined) {
     fail("--packet was removed; attach the run to an issue with --item <slug>");
   }
@@ -1609,7 +1610,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     recorder,
     commands,
     requireModel,
-    ...(flags.get("tier") ? { tier: flags.get("tier") as "paid" | "local" } : {}),
+    ...(flags.get("tier") ? { tier: flags.get("tier") as "paid" | "free" | "local" } : {}),
     signal: abort.signal,
     initialMessages,
     startMode,

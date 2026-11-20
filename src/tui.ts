@@ -563,7 +563,7 @@ export async function runTui(): Promise<void> {
   };
 
   const cycleTier = () => {
-    const tiers: NewRunState["tier"][] = ["paid", "local"];
+    const tiers: NewRunState["tier"][] = ["paid", "free", "local"];
     s.newrun.tier = tiers[(tiers.indexOf(s.newrun.tier) + 1) % tiers.length]!;
     // minFit is untouched: undefined keeps following the agent's configured
     // floor, an explicit `f` value stays exactly as set.
