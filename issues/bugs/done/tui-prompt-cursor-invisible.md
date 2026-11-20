@@ -1,7 +1,8 @@
-acceptance: script:build
+commit: 90d75e081525339b8c3111c090e6a7d80b1f7554
 files: src/tui/screens/issue-composer/composer.ts, src/tui/screens/composer/composer.ts
-keywords: prompt box, Edit body, insert mode
 tags: tui
+acceptance: script:build
+keywords: prompt box, Edit body, insert mode
 
 # Prompt caret disappears except at end of text
 
