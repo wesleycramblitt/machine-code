@@ -253,12 +253,15 @@ export class RunRecorder {
       this.summary = existing;
       this.finalized = false;
       // A resumed run is live again; derive a fresh summary on its next
-      // finalize instead of showing the previous lifecycle's outcome. Terminal
-      // runs are reopened only to append approval/closure evidence, so keep
-      // their existing summary.
-      if (!isTerminalStatus(existing.status)) {
+      // finalize instead of showing the previous lifecycle's outcome. Only
+      // completed/cancelled are truly terminal for reopen — blocked/failed
+      // are resumed for a new lifecycle and must not keep the old Blocked/
+      // Failed headline, error, or stopReason.
+      if (existing.status !== "completed" && existing.status !== "cancelled") {
         this.summary.summary = undefined;
         this.summary.stopReason = undefined;
+        this.summary.error = undefined;
+        this.summary.endedAt = undefined;
       }
       // Consume any stale control request: it was already handled by the
       // previous owner (e.g. the pause that preceded this resume). Without
@@ -423,6 +426,7 @@ export class RunRecorder {
     this.summary.endedAt = new Date().toISOString();
     this.summary.lastActivityAt = this.summary.endedAt;
     if (error) this.summary.error = error;
+    else this.summary.error = undefined;
     if (finalText && finalText.trim().length > 0) {
       this.summary.finalText = finalText.length > 8000 ? finalText.slice(0, 8000) + "\n…[truncated]" : finalText;
     }
