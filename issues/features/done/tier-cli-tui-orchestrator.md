@@ -1,6 +1,7 @@
+commit: 52e384278c9aff8ff79ed11d5a0476f68e463d70
 files: src/cli/run.ts, src/cli/common.ts, src/tui.ts, src/tui/screens/orchestrate.ts, src/tui/screens/orchestrate-keys.ts
-keywords: tier flag, new run, orchestration, free tier
 acceptance: script:build
+keywords: tier flag, new run, orchestration, free tier
 
 # Expose Free tier in CLI, TUI, and orchestrator
 
