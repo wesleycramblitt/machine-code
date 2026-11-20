@@ -104,7 +104,8 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   const priorityLabel = settings.priority.charAt(0).toUpperCase() + settings.priority.slice(1);
   const priorityToken = command("p", "Priority", priorityLabel, priorityColor);
 
-  const leftSide = joinCommands([kindToken, priorityToken]);
+  const editorToken = command("E", "Editor", undefined, M);
+  const leftSide = joinCommands([kindToken, priorityToken, editorToken]);
   const createBadge = editing
     ? commandBadge("Update", ":!", UPDATE_BG, WHITE)
     : commandBadge("Create", ":!", START_BG, WHITE);
