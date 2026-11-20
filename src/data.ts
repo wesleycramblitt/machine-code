@@ -82,6 +82,8 @@ export interface ProviderDefinition {
   disabled?: boolean;
   /** Paid rows usable without a machine override. */
   funded?: boolean;
+  /** Whether this provider supports free-mode calls through this setup (default false). */
+  freeSupported?: boolean;
   /** Billing/access modes: usage, subscription, free. */
   modes?: string[];
   billing?: ProviderBilling;
@@ -107,6 +109,7 @@ interface RawProvider {
   keyless?: unknown;
   disabled?: unknown;
   funded?: unknown;
+  free_supported?: unknown;
   modes?: unknown;
   cost_multiplier?: unknown;
   live_listings?: unknown;
@@ -137,6 +140,7 @@ function providerDefinition(value: RawProvider): ProviderDefinition {
     ...(value.assume_free === true ? { assumeFree: true as const } : {}),
     ...(value.live_listings === true ? { liveListings: true as const } : {}),
     ...(typeof value.funded === "boolean" ? { funded: value.funded } : {}),
+    ...(typeof value.free_supported === "boolean" ? { freeSupported: value.free_supported } : {}),
     ...(Array.isArray(value.modes)
       ? { modes: value.modes.filter((v): v is string => typeof v === "string") }
       : {}),

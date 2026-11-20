@@ -65,6 +65,8 @@ export interface CatalogueProvider {
   discovery?: string;
   baseUrl?: string;
   funded?: boolean;
+  /** Whether this provider supports free-mode calls through this setup. */
+  freeSupported?: boolean;
   /** Billing/access modes: usage, subscription, free. */
   modes?: string[];
   billing?: {
