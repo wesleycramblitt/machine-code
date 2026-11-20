@@ -17,7 +17,7 @@ import type { TuiState } from "../state.js";
 import type { KeyServices } from "./keys.js";
 
 /** Editable settings rows on the orchestration page, in render order. */
-const ORCHESTRATE_ROWS = 4;
+const ORCHESTRATE_ROWS = 5;
 
 export function handleOrchestrateKeys(s: TuiState, ctx: KeyServices, data: string): boolean {
   if (s.orchestrateColon) {
@@ -63,10 +63,18 @@ export function handleOrchestrateKeys(s: TuiState, ctx: KeyServices, data: strin
       const order = ["paid", "free", "local"] as const;
       const index = order.indexOf(settings.tier);
       const next = order[(index + dir + order.length) % order.length]!;
-      updateOrchestratorState(repoLayout, { settings: { tier: next } });
+      updateOrchestratorState(repoLayout, {
+        settings: { tier: next, ...(settings.tier2 === next ? { tier2: "none" as const } : {}) },
+      });
+    } else if (s.orchestrateSel === 2) {
+      // Fallback tier: none disables it; it can never equal the primary tier.
+      const order = (["none", "paid", "free", "local"] as const).filter((tier) => tier !== settings.tier);
+      const index = Math.max(0, order.indexOf(settings.tier2));
+      const next = order[(index + dir + order.length) % order.length]!;
+      updateOrchestratorState(repoLayout, { settings: { tier2: next } });
     } else {
       // Min-fit floors cycle the shared 4–8.5 / 0.25 ladder.
-      const engineer = s.orchestrateSel === 2;
+      const engineer = s.orchestrateSel === 3;
       const value = engineer ? settings.engineerMinFit : settings.researchMinFit;
       const index = ORCHESTRATOR_MIN_FITS.findIndex((fit) => fit === value);
       const next = ORCHESTRATOR_MIN_FITS[(index + dir + ORCHESTRATOR_MIN_FITS.length) % ORCHESTRATOR_MIN_FITS.length]!;

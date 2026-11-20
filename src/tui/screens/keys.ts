@@ -35,6 +35,8 @@ export interface KeyServices {
   cycleMinFit: () => void;
   cycleFloors: () => void;
   cycleTier: () => void;
+  /** Cycle the fallback tier (never equal to the primary tier). */
+  cycleTier2: () => void;
   startIssuePicker: () => void;
   pickerIssues: () => Issue[];
   chooseIssue: (issue: Issue) => void;

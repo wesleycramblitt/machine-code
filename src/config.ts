@@ -26,6 +26,10 @@ export type PacketMode = "direct" | "verified" | "redundant";
 export type SelectionTier = "paid" | "free" | "local";
 export const SELECTION_TIERS: readonly SelectionTier[] = ["paid", "free", "local"];
 
+/** Fallback tier for runs and orchestrations: "none" disables it, otherwise the selector retries an exhausted tier-one pick on this tier. */
+export type FallbackTier = "none" | SelectionTier;
+export const FALLBACK_TIERS: readonly FallbackTier[] = ["none", "paid", "free", "local"];
+
 export type AvailabilityProbeMode = "off" | "metadata";
 
 export interface AvailabilityConfig {

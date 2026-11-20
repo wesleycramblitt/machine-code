@@ -167,6 +167,7 @@ export function createOrchestratorLoop(services: OrchestratorServices): Orchestr
           "run",
           "--agent", agentForIssue(issue),
           "--tier", state.settings.tier,
+          ...(state.settings.tier2 !== "none" ? ["--tier2", state.settings.tier2] : []),
           "--min-fit", String(minFitForRole(state.settings, issue)),
           "--item", issue.slug,
         ];

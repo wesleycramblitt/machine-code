@@ -5,9 +5,9 @@
  * `.machine_code/local/orchestrator.json` (`layout(repoRoot).localDir`, which
  * is gitignored — see src/paths.ts). One JSON document:
  *
- *   - `settings` — worker count, model tier (`"paid" | "free" | "local"`: the run
- *     system's values; the TUI labels "paid" as "cloud"), and the two
- *     min-fit floors on the 4–8.5 / 0.25 ladder.
+  *   - `settings` — worker count, model tier (`"paid" | "free" | "local"`: the run
+  *     system's values; the TUI labels "paid" as "cloud"), the fallback tier
+  *     (`"none"` disables it), and the two min-fit floors on the 4–8.5 / 0.25 ladder.
  *   - `active` — whether the orchestrator is running for this repo.
  *   - `startedRunIds` — ledger of run ids the orchestrator started, so
  *     counters and slot math only count orchestrator-owned runs.
@@ -21,6 +21,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "../paths.js";
+import type { FallbackTier } from "../config.js";
 import { writeJsonAtomic } from "../state/run-schema.js";
 
 /** Concurrency levels the orchestrator can run. */
@@ -34,6 +35,8 @@ export interface OrchestratorSettings {
   processes: OrchestratorProcesses;
   /** Tier of models the orchestrator's agents run on. */
   tier: OrchestratorTier;
+  /** Fallback tier when tier-one selection finds no eligible model. `"none"` disables it. */
+  tier2: FallbackTier;
   /** Minimum model fit an engineer agent must clear to pick up work. */
   engineerMinFit: number;
   /** Minimum model fit a research agent must clear. */
@@ -60,6 +63,7 @@ export const ORCHESTRATOR_MIN_FITS: readonly number[] = Array.from(
 const DEFAULT_SETTINGS: OrchestratorSettings = {
   processes: 1,
   tier: "paid",
+  tier2: "none",
   engineerMinFit: 6,
   researchMinFit: 6,
 };
@@ -80,6 +84,10 @@ function isProcesses(value: unknown): value is OrchestratorProcesses {
 
 function isTier(value: unknown): value is OrchestratorTier {
   return value === "paid" || value === "free" || value === "local";
+}
+
+function isTier2(value: unknown): value is FallbackTier {
+  return value === "none" || value === "paid" || value === "free" || value === "local";
 }
 
 function isMinFit(value: unknown): value is number {
@@ -103,6 +111,7 @@ export function readOrchestratorState(repo: Layout): OrchestratorState {
       settings: {
         processes: isProcesses(settings.processes) ? settings.processes : defaults.settings.processes,
         tier: isTier(settings.tier) ? settings.tier : defaults.settings.tier,
+        tier2: isTier2(settings.tier2) ? settings.tier2 : defaults.settings.tier2,
         engineerMinFit: isMinFit(settings.engineerMinFit) ? settings.engineerMinFit : defaults.settings.engineerMinFit,
         researchMinFit: isMinFit(settings.researchMinFit) ? settings.researchMinFit : defaults.settings.researchMinFit,
       },

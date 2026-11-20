@@ -455,8 +455,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   })();
   const tierTone = run.tier === "paid" ? G : BL;
   const tierLabel = run.tier === "paid" ? "Paid" : run.tier === "free" ? "Free" : "Local";
+  const tier2Label = run.tier2 === "none" ? "None" : run.tier2 === "paid" ? "Paid" : run.tier2 === "free" ? "Free" : "Local";
+  const tier2Tone = run.tier2 === "none" ? D : tierTone;
   const minimumsText = trunc(
-    `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}  ${command("t", "tier", tierLabel, tierTone)}${R}`,
+    `${D}${command("f", "fit", fitText, C)}  ${command("F", "floors", floorsText, M)}  ${command("t", "tier", tierLabel, tierTone)}  ${command("T", "tier2", tier2Label, tier2Tone)}${R}`,
     Math.max(10, cols - 1),
   );
   const minimumsInfo = ` ${" ".repeat(Math.max(0, cols - visible(minimumsText) - 1))}${minimumsText}`;
