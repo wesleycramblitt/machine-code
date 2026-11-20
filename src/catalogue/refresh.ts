@@ -221,6 +221,7 @@ export function assembleDocument(rows: CatalogueRow[]): CatalogueDocument {
             ...(def.discovery ? { discovery: def.discovery } : {}),
             ...(def.baseUrl ? { baseUrl: def.baseUrl } : {}),
             ...(def.funded !== undefined ? { funded: def.funded } : {}),
+            ...(def.freeSupported !== undefined ? { freeSupported: def.freeSupported } : {}),
             ...(def.modes ? { modes: def.modes } : {}),
             ...(def.billing ? { billing: def.billing } : {}),
             ...(def.costMultiplier !== undefined ? { costMultiplier: def.costMultiplier } : {}),
@@ -271,13 +272,15 @@ export function hasListingMetadata(model: { contextWindow?: unknown; maxTokens?:
  * Zero out pricing for providers the machine uses only on free tier
  * ([provider] assume_free in the machine override). Runs at refresh time so
  * quota-only accounts see those rows as free instead of list-priced.
+ * Only providers with free_supported = true qualify; assume_free cannot
+ * enable free use on a provider that forbids it.
  * Returns the touched row keys.
  */
 export function applyAssumedFree(
   rows: CatalogueRow[],
-  defs: Record<string, { assumeFree?: boolean }>,
+  defs: Record<string, { assumeFree?: boolean; freeSupported?: boolean }>,
 ): string[] {
-  const free = new Set(Object.entries(defs).filter(([, d]) => d.assumeFree === true).map(([id]) => id));
+  const free = new Set(Object.entries(defs).filter(([, d]) => d.assumeFree === true && d.freeSupported === true).map(([id]) => id));
   if (free.size === 0) return [];
   const touched: string[] = [];
   for (const row of rows) {
