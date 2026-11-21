@@ -222,6 +222,18 @@ export function isSecretPath(relPath: string): boolean {
   return SECRET_GLOBS.some((glob) => globToRegExp(glob.slice(1)).test(relPath));
 }
 
+/** True when a worktree-relative path is under issues/. Raw writes there are
+ * blocked; agents must use issue:create and issue:update instead. */
+export function isIssuesPath(relPath: string): boolean {
+  const p = relPath.replaceAll("\\", "/").replace(/^\.\//, "");
+  return p === "issues" || p.startsWith("issues/");
+}
+
+/** Error text for blocked issues/ writes; names the correct commands. */
+export function issuesWriteError(callerPath: string): string {
+  return `direct writes under issues/ are blocked (got: ${callerPath}); use issue:create or issue:update instead`;
+}
+
 /**
  * Match ripgrep-like globs against a path. A glob without "/" matches the
  * basename at any depth; a glob with "/" matches the relative path.
