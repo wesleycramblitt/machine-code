@@ -23,7 +23,9 @@ import {
   expandGlobBraces,
   globToRegExp,
   isBinaryFile,
+  isIssuesPath,
   isSecretPath,
+  issuesWriteError,
   missingFileHint,
   numberLinesCapped,
   resolveWithin,
@@ -201,6 +203,9 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
         }
         if (isSecretPath(toRelative(ctx.root, abs))) {
           return fail(`refusing to write a secret file: ${params.path}`);
+        }
+        if (isIssuesPath(toRelative(ctx.root, abs))) {
+          return fail(issuesWriteError(params.path));
         }
         mkdirSync(dirname(abs), { recursive: true });
         const resolved = resolveContent(params.content, params.content_named_block, ctx.namedBlocksDir);
@@ -721,6 +726,9 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksD
   assertRegularFile(abs);
   if (isSecretPath(toRelative(root, abs))) {
     return { error: `refusing to edit a secret file: ${spec.path}` };
+  }
+  if (isIssuesPath(toRelative(root, abs))) {
+    return { error: issuesWriteError(spec.path) };
   }
   const raw = readFileSync(abs, "utf8");
   const lines = raw.split("\n");

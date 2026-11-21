@@ -159,6 +159,8 @@ export function testPromptLine(
 }
 
 /** Per-tool capability requirements (null = no capability beyond the base allowlist). */
+/** Commands that curate issue files; handlers require the issue:write capability (research only). */
+export const ISSUE_WRITE_COMMANDS: readonly string[] = ["issue:create", "issue:update"];
 const TOOL_CAPABILITY: Record<CoreToolName, Capability | null> = {
   map: "code:read",
   inspect: "code:read",
@@ -225,6 +227,9 @@ export function resolveAgent(
   let tools = def.tools.filter((t) => {
     if (t === "ask") return askEnabled(config);
     if (t === "write") return capSet.has("code:write") || capSet.has("knowledge:write");
+    // Tool-guarded curation: issue files are curated via issue:* commands
+    // (issue:write, research only), never raw edit; edit stays code:write.
+    if (t === "edit") return capSet.has("code:write");
     const needed = TOOL_CAPABILITY[t];
     if (needed && !capSet.has(needed)) return false;
     return true;

@@ -95,6 +95,27 @@ export const researchVerifyCommand: CommandSpec = {
       ];
       const unique = [...new Set(all)].filter(Boolean);
 
+      // Tool-guarded curation: issue files must live in a status directory.
+      // A bare kind dir (e.g. issues/features/foo.md) is misplaced.
+      const allowedIssuePrefixes = [
+        "issues/ideas/",
+        "issues/features/todo/",
+        "issues/features/blocked/",
+        "issues/features/done/",
+        "issues/bugs/todo/",
+        "issues/bugs/blocked/",
+        "issues/bugs/done/",
+      ];
+      const misplaced = unique.filter(
+        (f) => f.startsWith("issues/") && !allowedIssuePrefixes.some((p) => f.startsWith(p)),
+      );
+      if (misplaced.length > 0) {
+        return {
+          text: `research:verify failed — issues must live in todo, blocked, done, or ideas dirs: ${misplaced.join(", ")}`,
+          isError: true,
+        };
+      }
+
       if (unique.length === 0) {
         return {
           text: "research:verify failed — no new or modified files in issues/, docs/, or references/",
