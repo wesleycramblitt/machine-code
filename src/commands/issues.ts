@@ -1,13 +1,34 @@
 /**
- * machine_code — issue commands: list and show issue files.
+ * machine_code — issue commands: list, show, create, update, delete.
  *
- * Gives the agent a simple, typed way to discover and read issues without
- * using inspect or glob. The research workflow already has the active issue
- * in context — these commands are for finding sibling issues, reading the
- * full body of a referenced issue, and discovering what exists.
+ * Agents create and change issues only through issue:create, issue:update,
+ * and issue:delete. The handlers reuse the plan layer (writeIssue,
+ * updateIssueContents, updateIssueMeta, moveIssue) and accept only legal
+ * directories computed by issueDir. Raw write/edit tools must not target
+ * issues/ paths directly.
+ *
+ * Roles: research may call issue:create and issue:update. Engineer must not
+ * call issue:create, issue:update, or issue:delete.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { basename, dirname, join, relative, sep } from "node:path";
+import { layout } from "../paths.js";
+import {
+  findIssue,
+  issueDir,
+  legalStatus,
+  listIssues,
+  moveIssue,
+  parseKind,
+  safeIssuePath,
+  statusesForKind,
+  updateIssueContents,
+  updateIssueMeta,
+  writeIssue,
+  ISSUE_KINDS,
+  type IssueStatus,
+} from "../plan/issues.js";
+import { slugify } from "../plan/slug.js";
 import type { CommandSpec } from "./registry.js";
 
 const ISSUE_DIRS = [
@@ -45,6 +66,45 @@ function findIssueFile(root: string, slug: string): { path: string; text: string
     if (existsSync(full)) return { path: join(dir, `${slug}.md`), text: readFileSync(full, "utf8") };
   }
   return null;
+}
+
+function asString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function asList(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    const out = value.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean);
+    return out;
+  }
+  if (typeof value === "string") {
+    const out = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+    return out;
+  }
+  return undefined;
+}
+
+function normalizeRel(raw: string): string {
+  return raw.replace(/\\/g, "/").replace(/^\.\//, "").trim();
+}
+
+function expectedRelFor(repoRoot: string, kind: "ideas" | "features" | "bugs", status: IssueStatus, slug: string): string {
+  const abs = join(issueDir(layout(repoRoot), kind, status), `${slug}.md`);
+  return relative(repoRoot, abs).split(sep).join("/");
+}
+
+function legalIssueDirs(repoRoot: string): Set<string> {
+  const out = new Set<string>();
+  for (const kind of ISSUE_KINDS) {
+    for (const status of statusesForKind(kind)) {
+      const abs = issueDir(layout(repoRoot), kind, status);
+      out.add(relative(repoRoot, abs).split(sep).join("/"));
+    }
+  }
+  return out;
 }
 
 export function issueCommands(root: string): CommandSpec[] {
@@ -140,6 +200,238 @@ export function issueCommands(root: string): CommandSpec[] {
         const header = [`path: ${issuePath}`];
         for (const [k, v] of Object.entries(meta)) header.push(`${k}: ${v}`);
         return { text: `${header.join("\n")}\n\n${issueText!}`, isError: false };
+      },
+    },
+    {
+      name: "issue:create",
+      description:
+        "Create one issue via the plan layer. Research role may call this; engineer role must not. Rejects bad kinds, bad statuses, and bad paths. Only legal dirs from issueDir are accepted.",
+      binary: "fs",
+      args: () => [],
+      schema: {
+        kind: { type: "string", required: true, description: "ideas | features | bugs." },
+        slug: { type: "string", description: "Issue slug (filename without .md). Defaults from path or to untitled." },
+        prompt: { type: "string", description: "Issue prompt (the body). Defaults to the slug." },
+        status: { type: "string", description: "Status dir (default needs-research for ideas, todo otherwise)." },
+        title: { type: "string", description: "Optional heading above the prompt." },
+        priority: { type: "string", description: "low | medium | high." },
+        depends: { type: "string", description: "Comma-separated dependency slugs." },
+        files: { type: "string", description: "Comma-separated repo paths or globs." },
+        tags: { type: "string", description: "Comma-separated tags." },
+        acceptance: { type: "string", description: "Comma-separated gate commands." },
+        verify: { type: "string", description: "Legacy alias for acceptance." },
+        verification: { type: "string", description: "direct | verified." },
+        review: { type: "string", description: "none | human." },
+        keywords: { type: "string", description: "Comma-separated search phrases." },
+        references: { type: "string", description: "Comma-separated exact store citations." },
+        path: { type: "string", description: "Optional explicit repo-relative path. Must equal the legal issueDir path." },
+      },
+      readonly: false,
+      timeoutMs: 10_000,
+      handler: async (args, ctx) => {
+        const kindRaw = asString(args.kind);
+        if (!kindRaw) return { text: "issue:create requires kind (ideas | features | bugs)", isError: true };
+        const kind = parseKind(kindRaw);
+        if (!kind) return { text: `bad kind ${JSON.stringify(kindRaw)}; use ideas | features | bugs`, isError: true };
+        const statusRaw = asString(args.status) ?? (kind === "ideas" ? "needs-research" : "todo");
+        if (!legalStatus(kind, statusRaw)) {
+          return { text: `bad status ${JSON.stringify(statusRaw)} for ${kind}`, isError: true };
+        }
+        const status = statusRaw as IssueStatus;
+        const pathRaw = asString(args.path);
+        const slug = slugify(asString(args.slug) ?? (pathRaw ? basename(normalizeRel(pathRaw), ".md") : "untitled")) || "untitled";
+        if (!slug) return { text: "bad slug: slug becomes empty", isError: true };
+        const l = layout(ctx.root);
+        if (findIssue(l, slug)) return { text: `issue ${slug} already exists`, isError: true };
+        if (pathRaw) {
+          const norm = normalizeRel(pathRaw);
+          if (!safeIssuePath(l, norm)) return { text: `bad path ${JSON.stringify(pathRaw)}: escapes the worktree`, isError: true };
+          if (!norm.startsWith("issues/") || !norm.endsWith(".md")) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal issues/ dirs from issueDir`, isError: true };
+          }
+          const expected = expectedRelFor(ctx.root, kind, status, slug);
+          if (norm !== expected) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: expected ${expected} (legal dirs come from issueDir)`, isError: true };
+          }
+        }
+        const prompt = asString(args.prompt) ?? slug;
+        const reviewRaw = asString(args.review) ?? "none";
+        if (reviewRaw !== "none" && reviewRaw !== "human") return { text: "--review must be none|human", isError: true };
+        const verificationRaw = asString(args.verification) ?? "direct";
+        if (verificationRaw !== "direct" && verificationRaw !== "verified") {
+          return { text: "--verification must be direct|verified", isError: true };
+        }
+        try {
+          const created = writeIssue(l, {
+            kind,
+            status,
+            slug,
+            prompt,
+            ...(asString(args.title) ? { title: asString(args.title)! } : {}),
+            ...(asString(args.priority) ? { priority: asString(args.priority)! } : {}),
+            ...(asList(args.depends) ? { depends: asList(args.depends)! } : {}),
+            ...(asList(args.files) ? { files: asList(args.files)! } : {}),
+            ...(asList(args.tags) ? { tags: asList(args.tags)! } : {}),
+            ...(asList(args.acceptance) ? { acceptance: asList(args.acceptance)! } : {}),
+            ...(asList(args.verify) ? { verify: asList(args.verify)! } : {}),
+            ...(asList(args.keywords) ? { keywords: asList(args.keywords)! } : {}),
+            ...(asList(args.references) ? { references: asList(args.references)! } : {}),
+            verification: verificationRaw as "direct" | "verified",
+            review: reviewRaw as "none" | "human",
+          });
+          return { text: `created ${created.rel}`, isError: false };
+        } catch (error) {
+          return { text: (error as Error).message, isError: true };
+        }
+      },
+    },
+    {
+      name: "issue:update",
+      description:
+        "Update one issue via the plan layer. Research role may call this; engineer role must not. Rejects bad statuses and bad paths.",
+      binary: "fs",
+      args: () => [],
+      schema: {
+        slug: { type: "string", description: "Issue slug." },
+        path: { type: "string", description: "Explicit repo-relative issue path. Must be a legal issueDir path." },
+        prompt: { type: "string", description: "New prompt body." },
+        status: { type: "string", description: "Move the issue to this status." },
+        priority: { type: "string", description: "low | medium | high." },
+        depends: { type: "string", description: "Comma-separated dependency slugs." },
+        files: { type: "string", description: "Comma-separated repo paths or globs." },
+        tags: { type: "string", description: "Comma-separated tags." },
+        acceptance: { type: "string", description: "Comma-separated gate commands." },
+        verification: { type: "string", description: "direct | verified." },
+        review: { type: "string", description: "none | human." },
+        keywords: { type: "string", description: "Comma-separated search phrases." },
+        commit: { type: "string", description: "Landing commit reference." },
+        branch: { type: "string", description: "Feature branch name." },
+      },
+      readonly: false,
+      timeoutMs: 10_000,
+      handler: async (args, ctx) => {
+        const l = layout(ctx.root);
+        const slugRaw = asString(args.slug);
+        const pathRaw = asString(args.path);
+        if (!slugRaw && !pathRaw) return { text: "issue:update requires slug or path", isError: true };
+        let slug = slugRaw ? slugify(slugRaw) : "";
+        if (pathRaw) {
+          const norm = normalizeRel(pathRaw);
+          if (!safeIssuePath(l, norm)) return { text: `bad path ${JSON.stringify(pathRaw)}: escapes the worktree`, isError: true };
+          if (!norm.startsWith("issues/") || !norm.endsWith(".md")) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal issues/ dirs from issueDir`, isError: true };
+          }
+          const dir = dirname(norm);
+          if (!legalIssueDirs(ctx.root).has(dir)) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: ${dir} is not a legal issueDir`, isError: true };
+          }
+          const byPath = listIssues(l).find((entry) => entry.rel === norm);
+          if (!byPath) return { text: `issue not found: ${pathRaw}`, isError: true };
+          if (slug && byPath.slug !== slug) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: does not match slug ${slug}`, isError: true };
+          }
+          slug = byPath.slug;
+        }
+        const issue = findIssue(l, slug);
+        if (!issue) return { text: `issue not found: ${slug}`, isError: true };
+        const statusRaw = asString(args.status);
+        if (statusRaw && !legalStatus(issue.kind, statusRaw)) {
+          return { text: `bad status ${JSON.stringify(statusRaw)} for ${issue.kind}`, isError: true };
+        }
+        const verificationRaw = asString(args.verification);
+        if (verificationRaw && verificationRaw !== "direct" && verificationRaw !== "verified") {
+          return { text: "--verification must be direct|verified", isError: true };
+        }
+        const reviewRaw = asString(args.review);
+        if (reviewRaw && reviewRaw !== "none" && reviewRaw !== "human") {
+          return { text: "--review must be none|human", isError: true };
+        }
+        try {
+          let current = issue.slug;
+          const hasContents =
+            args.prompt !== undefined ||
+            args.priority !== undefined ||
+            args.tags !== undefined ||
+            args.depends !== undefined ||
+            args.files !== undefined ||
+            args.acceptance !== undefined ||
+            args.keywords !== undefined ||
+            verificationRaw !== undefined ||
+            reviewRaw !== undefined;
+          if (hasContents) {
+            const updated = updateIssueContents(l, current, {
+              prompt: asString(args.prompt) ?? issue.body,
+              ...(args.priority !== undefined ? { priority: asString(args.priority) ?? "" } : {}),
+              ...(args.tags !== undefined ? { tags: asList(args.tags) ?? [] } : {}),
+              ...(args.depends !== undefined ? { depends: asList(args.depends) ?? [] } : {}),
+              ...(args.files !== undefined ? { files: asList(args.files) ?? [] } : {}),
+              ...(args.acceptance !== undefined ? { acceptance: asList(args.acceptance) ?? [] } : {}),
+              ...(args.keywords !== undefined ? { keywords: asList(args.keywords) ?? [] } : {}),
+              ...(verificationRaw ? { verification: verificationRaw as "direct" | "verified" } : {}),
+              ...(reviewRaw ? { review: reviewRaw as "none" | "human" } : {}),
+            });
+            if (!updated) return { text: `issue not found: ${slug}`, isError: true };
+          }
+          const commitRaw = asString(args.commit);
+          const branchRaw = asString(args.branch);
+          if (commitRaw !== undefined || branchRaw !== undefined) {
+            const updated = updateIssueMeta(l, current, {
+              ...(commitRaw !== undefined ? { commit: commitRaw } : {}),
+              ...(branchRaw !== undefined ? { branch: branchRaw } : {}),
+            });
+            if (!updated) return { text: `issue not found: ${slug}`, isError: true };
+          }
+          if (statusRaw && statusRaw !== issue.status) {
+            const moved = moveIssue(l, current, statusRaw as IssueStatus);
+            if (!moved) return { text: `issue not found: ${slug}`, isError: true };
+            return { text: `updated ${moved.rel}`, isError: false };
+          }
+          const refreshed = findIssue(l, current);
+          return { text: `updated ${refreshed ? refreshed.rel : current}`, isError: false };
+        } catch (error) {
+          return { text: (error as Error).message, isError: true };
+        }
+      },
+    },
+    {
+      name: "issue:delete",
+      description:
+        "Delete one issue file. Neither research nor engineer roles may call this in normal work. Rejects bad paths.",
+      binary: "fs",
+      args: () => [],
+      schema: {
+        slug: { type: "string", description: "Issue slug." },
+        path: { type: "string", description: "Explicit repo-relative issue path. Must be a legal issueDir path." },
+      },
+      readonly: false,
+      timeoutMs: 10_000,
+      handler: async (args, ctx) => {
+        const l = layout(ctx.root);
+        const slugRaw = asString(args.slug);
+        const pathRaw = asString(args.path);
+        if (!slugRaw && !pathRaw) return { text: "issue:delete requires slug or path", isError: true };
+        let slug = slugRaw ? slugify(slugRaw) : "";
+        if (pathRaw) {
+          const norm = normalizeRel(pathRaw);
+          if (!safeIssuePath(l, norm)) return { text: `bad path ${JSON.stringify(pathRaw)}: escapes the worktree`, isError: true };
+          if (!norm.startsWith("issues/") || !norm.endsWith(".md")) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal issues/ dirs from issueDir`, isError: true };
+          }
+          const dir = dirname(norm);
+          if (!legalIssueDirs(ctx.root).has(dir)) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: ${dir} is not a legal issueDir`, isError: true };
+          }
+          const byPath = listIssues(l).find((entry) => entry.rel === norm);
+          if (!byPath) return { text: `issue not found: ${pathRaw}`, isError: true };
+          if (slug && byPath.slug !== slug) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: does not match slug ${slug}`, isError: true };
+          }
+          slug = byPath.slug;
+        }
+        const issue = findIssue(l, slug);
+        if (!issue) return { text: `issue not found: ${slug}`, isError: true };
+        rmSync(issue.path, { force: true });
+        return { text: `deleted ${issue.rel}`, isError: false };
       },
     },
   ];
