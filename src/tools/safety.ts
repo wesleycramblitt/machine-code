@@ -222,16 +222,16 @@ export function isSecretPath(relPath: string): boolean {
   return SECRET_GLOBS.some((glob) => globToRegExp(glob.slice(1)).test(relPath));
 }
 
-/** True when a worktree-relative path is under issues/. Raw writes there are
- * blocked; agents must use issue:create and issue:update instead. */
+/** True when a worktree-relative path is under .machine_code/issues/. Raw
+ * writes there are blocked; agents must use issue:create and issue:update. */
 export function isIssuesPath(relPath: string): boolean {
   const p = relPath.replaceAll("\\", "/").replace(/^\.\//, "");
-  return p === "issues" || p.startsWith("issues/");
+  return p === ".machine_code/issues" || p.startsWith(".machine_code/issues/");
 }
 
-/** Error text for blocked issues/ writes; names the correct commands. */
+/** Error text for blocked .machine_code/issues/ writes; names the correct commands. */
 export function issuesWriteError(callerPath: string): string {
-  return `direct writes under issues/ are blocked (got: ${callerPath}); use issue:create or issue:update instead`;
+  return `direct writes under .machine_code/issues/ are blocked (got: ${callerPath}); use issue:create or issue:update instead`;
 }
 
 /**

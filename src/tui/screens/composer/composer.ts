@@ -211,7 +211,7 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   const knownFiles = new Set(fileItems.map((item) => item.key));
   // Paths that belong to other context sections; exclude from the file tab.
   const excludedFilePrefixes = [
-    "issues/", ".machine_code/skills/", ".machine_code/tools/",
+    ".machine_code/issues/", ".machine_code/skills/", ".machine_code/tools/",
     ".machine_code/scripts/", ".machine_code/references/",
     "docs/", "node_modules/", ".git/",
   ];

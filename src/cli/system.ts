@@ -90,12 +90,16 @@ export function cmdInit(): number {
   mkdirSync(l.localDir, { recursive: true });
   mkdirSync(join(l.home, "catalogue"), { recursive: true });
 
-  // The local-state ignore rule must exist before anything writes there.
+  // The .machine_code ignore rule must exist before anything writes there:
+  // issues live under .machine_code/issues/ and must never enter git history.
   const gitignore = join(l.repoRoot, ".gitignore");
-  const rule = ".machine_code/local/";
+  const rule = ".machine_code/";
   let ignored = false;
   if (existsSync(gitignore)) {
-    ignored = readFileSync(gitignore, "utf8").split("\n").some((line) => line.trim() === rule);
+    ignored = readFileSync(gitignore, "utf8").split("\n").some((line) => {
+      const t = line.trim();
+      return t === rule || t === ".machine_code" || t === "/.machine_code/" || t === "/.machine_code";
+    });
   }
   if (!ignored) {
     writeFileSync(gitignore, `${existsSync(gitignore) ? readFileSync(gitignore, "utf8").replace(/\n*$/, "\n") : ""}${rule}\n`, "utf8");

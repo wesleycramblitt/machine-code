@@ -8,7 +8,7 @@
  *   deps      repository → Ready/Cyclic sections → issues nested under the
  *             dependency they wait on → runs
  *
- * Status is a directory: the row set comes from `issues/<kind>/<status>/`.
+ * Status is a directory: the row set comes from `.machine_code/issues/<kind>/<status>/`.
  * The issue file is the work item; there are no packet rows.
  */
 import { basename } from "node:path";

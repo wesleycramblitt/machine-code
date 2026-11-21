@@ -1,14 +1,14 @@
 ---
 name: issue-curation
-description: Use when creating or updating issues under issues/. Issue files are markdown whose text is the prompt; status is the directory.
+description: Use when creating or updating issues under .machine_code/issues/. Issue files are markdown whose text is the prompt; status is the directory.
 ---
 
 # Issue curation
 
-`issues/` is the single work tree. Each file is one work item:
+`.machine_code/issues/` is the single work tree (local-only, never committed). Each file is one work item:
 
 ```
-issues/
+.machine_code/issues/
   ideas/<slug>.md              # needs research
   ideas/.researched/<slug>.md  # researched
   features/{todo,blocked,done}/<slug>.md
@@ -19,7 +19,7 @@ Status is a directory: the item's status is where it lives.
 
 ## File shape
 
-Plain markdown. Optional `key: value` header lines at the top (only non-defaults), a blank line, then the prompt body. See `issues/_template.md`.
+Plain markdown. Optional `key: value` header lines at the top (only non-defaults), a blank line, then the prompt body. See `.machine_code/issues/_template.md`.
 
 ```
 priority: medium
@@ -63,7 +63,7 @@ These waste turns. Do not create them.
 ## Procedure
 
 1. Find the item with `issue:list`, then read it with `issue:show`.
-2. Create with `issue:create` and change with `issue:update`. Pass the header fields as command args and the prompt as `prompt`. Never raw-write or raw-edit `issues/`.
+2. Create with `issue:create` and change with `issue:update`. Pass the header fields as command args and the prompt as `prompt`. Never raw-write or raw-edit `.machine_code/issues/`.
 3. Never update the run's own issue: the harness owns its status and body. Other issues may be created or changed, including status moves.
 
 ## Research workflow: curating issues from investigation

@@ -164,8 +164,8 @@ const SPECS: CommandSpec[] = [
       if (!path) return { text: "core:mkdir requires path", isError: true };
       const target = commandPath(ctx.root, path);
       if ("error" in target) return { text: target.error, isError: true };
-      if (target.rel === "issues" || target.rel.startsWith("issues/")) {
-        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      if (target.rel === ".machine_code/issues" || target.rel.startsWith(".machine_code/issues/")) {
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
       }
       if (existsSync(target.abs)) {
         return statSync(target.abs).isDirectory()
@@ -196,8 +196,8 @@ const SPECS: CommandSpec[] = [
       const dst = commandPath(ctx.root, to);
       if ("error" in src) return { text: src.error, isError: true };
       if ("error" in dst) return { text: dst.error, isError: true };
-      if (src.rel === "issues" || src.rel.startsWith("issues/") || dst.rel === "issues" || dst.rel.startsWith("issues/")) {
-        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      if (src.rel === ".machine_code/issues" || src.rel.startsWith(".machine_code/issues/") || dst.rel === ".machine_code/issues" || dst.rel.startsWith(".machine_code/issues/")) {
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
       }
       if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
       if (existsSync(dst.abs) && !asBool(args.force)) {
@@ -235,8 +235,8 @@ const SPECS: CommandSpec[] = [
       const dst = commandPath(ctx.root, to);
       if ("error" in src) return { text: src.error, isError: true };
       if ("error" in dst) return { text: dst.error, isError: true };
-      if (src.rel === "issues" || src.rel.startsWith("issues/") || dst.rel === "issues" || dst.rel.startsWith("issues/")) {
-        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      if (src.rel === ".machine_code/issues" || src.rel.startsWith(".machine_code/issues/") || dst.rel === ".machine_code/issues" || dst.rel.startsWith(".machine_code/issues/")) {
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
       }
       if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
       const source = statSync(src.abs);
@@ -268,8 +268,8 @@ const SPECS: CommandSpec[] = [
       if (!path) return { text: "core:delete requires path", isError: true };
       const target = commandPath(ctx.root, path);
       if ("error" in target) return { text: target.error, isError: true };
-      if (target.rel === "issues" || target.rel.startsWith("issues/")) {
-        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      if (target.rel === ".machine_code/issues" || target.rel.startsWith(".machine_code/issues/")) {
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
       }
       if (!existsSync(target.abs)) return { text: `path does not exist: ${target.rel}`, isError: true };
       const stat = statSync(target.abs);
@@ -298,6 +298,8 @@ export interface CommandRunResult {
 
 export interface CommandContext {
   root: string;
+  /** Main repo root for shared state (issues live here even from a worktree). */
+  repoRoot?: string;
   /** Loaded commands (core + profiles). Falls back to CORE_COMMANDS. */
   commands?: ReadonlyMap<string, CommandSpec>;
   /** When present, spawned commands are recorded by the run supervisor. */
@@ -306,6 +308,8 @@ export interface CommandContext {
   changedFiles?: () => string[];
   /** Repo-relative issue file attached to this run; the harness owns it. */
   issuePath?: string;
+  /** Run directory for run-scoped state (e.g. the pre-run issue snapshot). */
+  runDir?: string;
 }
 
 /** Param-confusion redirects: find and read share one workflow and models carry

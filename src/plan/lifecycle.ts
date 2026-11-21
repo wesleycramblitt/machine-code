@@ -2,7 +2,7 @@
  * machine_code — issue lifecycle.
  *
  * Status is the directory: an issue's status field here is derived from where
- * it lives (`issues/<kind>/<status>/<slug>.md`), and runs attached to it move
+ * it lives (`.machine_code/issues/<kind>/<status>/<slug>.md`), and runs attached to it move
  * it between directories when they change state.
  */
 import type { RunSummary } from "../state/runs.js";

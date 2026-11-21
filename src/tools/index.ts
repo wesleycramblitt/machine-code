@@ -88,6 +88,8 @@ export interface ToolContext {
   allowedPaths?: readonly string[];
   /** Directory where named code blocks from the assistant response are stored. */
   namedBlocksDir?: string;
+  /** Run directory for run-scoped tracking (e.g. changed-issue log). */
+  runDir?: string;
 }
 
 function ok(text: string): AgentToolResult<undefined> {
@@ -199,8 +201,8 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
         }
         const abs = resolveWithin(ctx.root, params.path);
         const writeRel = toRelative(ctx.root, abs).replace(/\\/g, "/");
-        if (writeRel === "issues" || writeRel.startsWith("issues/")) {
-          return fail(`raw write to issues/ is forbidden; use issue:create or issue:update`);
+        if (writeRel === ".machine_code/issues" || writeRel.startsWith(".machine_code/issues/")) {
+          return fail(`raw write to .machine_code/issues/ is forbidden; use issue:create or issue:update`);
         }
         if (isSecretPath(toRelative(ctx.root, abs))) {
           return fail(`refusing to write a secret file: ${params.path}`);
@@ -926,8 +928,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           for (const p of pathsToCheck) {
             const normalized = p.replace(/\\/g, "/").replace(/^\.\//, "");
-            if (normalized === "issues" || normalized.startsWith("issues/")) {
-              return fail(`raw edit of issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
+            if (normalized === ".machine_code/issues" || normalized.startsWith(".machine_code/issues/")) {
+              return fail(`raw edit of .machine_code/issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
             }
             const match = ctx.allowedPaths.some(
               (allowed) => normalized === allowed || normalized.startsWith(allowed.endsWith("/") ? allowed : allowed + "/"),
@@ -948,8 +950,8 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           for (const p of pathsToCheck) {
             const normalized = p.replace(/\\/g, "/").replace(/^\.\//, "");
-            if (normalized === "issues" || normalized.startsWith("issues/")) {
-              return fail(`raw edit of issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
+            if (normalized === ".machine_code/issues" || normalized.startsWith(".machine_code/issues/")) {
+              return fail(`raw edit of .machine_code/issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
             }
           }
         }
@@ -2013,9 +2015,11 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
           params.args ?? {},
           {
             root: ctx.root,
+            ...(ctx.repoRoot ? { repoRoot: ctx.repoRoot } : {}),
             commands: ctx.commands,
             processes: ctx.processes,
             ...(ctx.issuePath ? { issuePath: ctx.issuePath } : {}),
+            ...(ctx.runDir ? { runDir: ctx.runDir } : {}),
             changedFiles: ctx.state
               ? () => {
                   const seen = new Set<string>();

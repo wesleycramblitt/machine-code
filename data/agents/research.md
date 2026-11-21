@@ -56,4 +56,4 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
 ## Constraints
 
-- Write files only under `docs/`, `references/`, and `.machine_code/`. Curate issues only through `issue:create` and `issue:update`; never raw-write `issues/`. Never edit source code.
+- Write files only under `docs/`, `references/`, and `.machine_code/`. Curate issues only through `issue:create` and `issue:update`; never raw-write `.machine_code/issues/`. Never edit source code.

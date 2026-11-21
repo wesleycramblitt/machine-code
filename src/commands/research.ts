@@ -2,9 +2,9 @@
  * machine_code — research verification command.
  *
  * A deterministic gate for research runs: checks that the run produced at
- * least one new file in the research output paths (issues/, docs/,
- * references/). Replaces the fragile "Outcome: researched"
- * text-match system with a hard git check.
+ * least one new file in the research output paths (.machine_code/issues/,
+ * docs/, references/). Issue changes are tracked in the run dir;
+ * docs/references use a hard git check.
  */
 
 /**
@@ -16,26 +16,29 @@ export function matchChangedIssue(allIssues: Issue[], file: string): Issue | und
   const exact = allIssues.find((issue) => issue.rel === file);
   if (exact) return exact;
   const parts = file.split("/");
-  if (parts[0] !== "issues" || parts.length < 3) return undefined;
+  if (parts[0] !== ".machine_code" || parts[1] !== "issues" || parts.length < 4) return undefined;
   const name = parts[parts.length - 1] ?? "";
   return allIssues.find(
     (issue) =>
-      issue.kind === parts[1] &&
+      issue.kind === parts[2] &&
       issue.rel.split("/").pop() === name,
   );
 }
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { CommandSpec } from "./registry.js";
 import { layout } from "../paths.js";
 import { listIssues, type Issue } from "../plan/issues.js";
 import { overlapFootprints } from "../plan/overlap.js";
 
-const RESEARCH_PATHS = ["issues/", "docs/", "references/"];
+const GIT_PATHS = ["docs/", "references/"];
+const ISSUE_PREFIX = ".machine_code/issues/";
 
 export const researchVerifyCommand: CommandSpec = {
   name: "research:verify",
   description:
-    "Verify that a research run produced at least one new file in issues/, docs/, or references/. " +
+    "Verify that a research run produced at least one new file in .machine_code/issues/, docs/, or references/. " +
     "Exit 0 if new files exist, 1 if nothing was created.",
   binary: "git",
   args: () => [],
@@ -44,21 +47,33 @@ export const researchVerifyCommand: CommandSpec = {
   timeoutMs: 10_000,
   handler: async (_args, ctx) => {
     try {
-      // Changed files (new + modified) in research output paths.
-      const untracked = execFileSync("git", [
-        "-C", ctx.root,
-        "ls-files", "--others", "--exclude-standard", ...RESEARCH_PATHS,
-      ], { encoding: "utf8", timeout: 5_000 }).trim();
-      // Staged changes (new or modified files).
-      const staged = execFileSync("git", [
-        "-C", ctx.root,
-        "diff", "--cached", "--name-only", "--diff-filter=ACMR", "--", ...RESEARCH_PATHS,
-      ], { encoding: "utf8", timeout: 5_000 }).trim();
-      // Unstaged working-tree changes (modified files not yet staged).
-      const unstaged = execFileSync("git", [
-        "-C", ctx.root,
-        "diff", "--name-only", "--diff-filter=M", "--", ...RESEARCH_PATHS,
-      ], { encoding: "utf8", timeout: 5_000 }).trim();
+      // Issue changes are tracked by the issue commands in the run dir
+      // (issues live outside git). Docs/references still use git.
+      let trackedIssues: string[] = [];
+      if (ctx.runDir) {
+        const log = join(ctx.runDir, "issues-changed.json");
+        if (existsSync(log)) {
+          try {
+            const parsed: unknown = JSON.parse(readFileSync(log, "utf8"));
+            if (Array.isArray(parsed)) {
+              trackedIssues = parsed.filter((e): e is string => typeof e === "string");
+            }
+          } catch {
+            trackedIssues = [];
+          }
+        }
+      }
+      const gitRoot = ctx.root;
+      const gitOut = (argv: string[]): string => {
+        try {
+          return execFileSync("git", ["-C", gitRoot, ...argv], { encoding: "utf8", timeout: 5_000 }).trim();
+        } catch {
+          return "";
+        }
+      };
+      const untracked = gitOut(["ls-files", "--others", "--exclude-standard", ...GIT_PATHS]);
+      const staged = gitOut(["diff", "--cached", "--name-only", "--diff-filter=ACMR", "--", ...GIT_PATHS]);
+      const unstaged = gitOut(["diff", "--name-only", "--diff-filter=M", "--", ...GIT_PATHS]);
       // Files committed during the run (research commit workflow). Compare
       // against the merge-base with origin/main so a sync merge commit does
       // not hide the branch's own changes; fall back to HEAD~1 offline.
@@ -66,7 +81,7 @@ export const researchVerifyCommand: CommandSpec = {
       try {
         let committedRange = "HEAD~1";
         try {
-          const base = execFileSync("git", ["-C", ctx.root, "merge-base", "HEAD", "origin/main"], {
+          const base = execFileSync("git", ["-C", gitRoot, "merge-base", "HEAD", "origin/main"], {
             encoding: "utf8",
             timeout: 5_000,
             stdio: ["ignore", "pipe", "ignore"],
@@ -76,18 +91,19 @@ export const researchVerifyCommand: CommandSpec = {
           // No origin/main (offline or no remote): keep the HEAD~1 fallback.
         }
         committed = execFileSync("git", [
-          "-C", ctx.root,
-          "diff", committedRange, "--name-only", "--diff-filter=ACMR", "--", ...RESEARCH_PATHS,
+          "-C", gitRoot,
+          "diff", committedRange, "--name-only", "--diff-filter=ACMR", "--", ...GIT_PATHS,
         ], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim()
           .split("\n")
           .filter(Boolean)
-          .filter((f) => RESEARCH_PATHS.some((p) => f.startsWith(p)));
+          .filter((f) => GIT_PATHS.some((p) => f.startsWith(p)));
       } catch {
         // Single-commit repos have no HEAD~1; untracked/staged checks still work.
         committed = [];
       }
 
       const all = [
+        ...trackedIssues,
         ...untracked.split("\n").filter(Boolean),
         ...staged.split("\n").filter(Boolean),
         ...unstaged.split("\n").filter(Boolean),
@@ -96,18 +112,18 @@ export const researchVerifyCommand: CommandSpec = {
       const unique = [...new Set(all)].filter(Boolean);
 
       // Tool-guarded curation: issue files must live in a status directory.
-      // A bare kind dir (e.g. issues/features/foo.md) is misplaced.
+      // A bare kind dir (e.g. .machine_code/issues/features/foo.md) is misplaced.
       const allowedIssuePrefixes = [
-        "issues/ideas/",
-        "issues/features/todo/",
-        "issues/features/blocked/",
-        "issues/features/done/",
-        "issues/bugs/todo/",
-        "issues/bugs/blocked/",
-        "issues/bugs/done/",
+        ".machine_code/issues/ideas/",
+        ".machine_code/issues/features/todo/",
+        ".machine_code/issues/features/blocked/",
+        ".machine_code/issues/features/done/",
+        ".machine_code/issues/bugs/todo/",
+        ".machine_code/issues/bugs/blocked/",
+        ".machine_code/issues/bugs/done/",
       ];
       const misplaced = unique.filter(
-        (f) => f.startsWith("issues/") && !allowedIssuePrefixes.some((p) => f.startsWith(p)),
+        (f) => f.startsWith(ISSUE_PREFIX) && !allowedIssuePrefixes.some((p) => f.startsWith(p)),
       );
       if (misplaced.length > 0) {
         return {
@@ -118,7 +134,7 @@ export const researchVerifyCommand: CommandSpec = {
 
       if (unique.length === 0) {
         return {
-          text: "research:verify failed — no new or modified files in issues/, docs/, or references/",
+          text: "research:verify failed — no new or modified files in .machine_code/issues/, docs/, or references/",
           isError: true,
         };
       }
@@ -128,7 +144,7 @@ export const researchVerifyCommand: CommandSpec = {
       // with another pending issue and neither depends on the other, they
       // would race on parallel branches and conflict at merge time. Enforce
       // the edge while the research agent can still fix it.
-      const allIssues = listIssues(layout(ctx.root));
+      const allIssues = listIssues(layout(ctx.repoRoot ?? ctx.root));
       const changedIssues = [...new Set(unique.map((file) => matchChangedIssue(allIssues, file)).filter((issue) => issue !== undefined))];
       const pending = allIssues.filter((issue) => issue.kind !== "ideas" && issue.status !== "done");
       const violations: string[] = [];

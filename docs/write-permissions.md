@@ -52,15 +52,14 @@ wholesale (same as other agent fields).
 name = "research"
 tools = ["context", "inspect", "map", "glob", "command", "ask", "skill", "write", "finish"]
 capabilities = ["code:read", "context:inherit", "knowledge:write"]
-allowed_paths = ["issues/", "docs/", ".machine_code/"]
+allowed_paths = ["docs/", "references/", ".machine_code/"]
 ```
 
-The research agent can only write or edit files under `issues/`, `docs/`, and
-`.machine_code/`. Trying to write to `src/main.ts` or the worktree root will
+The research agent can only write or edit files under `docs/`, `references/`, and `.machine_code/` (issues via issue commands only). Trying to write to `src/main.ts` or the worktree root will
 fail with:
 
 ```
-write is restricted to: issues/, docs/, .machine_code/ for this role; got: src/main.ts
+write is restricted to: docs/, references/, .machine_code/ for this role; got: src/main.ts
 ```
 
 ### Example: engineer agent (no restrictions)

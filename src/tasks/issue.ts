@@ -44,12 +44,6 @@ export function issueToTaskPacket(issue: Issue): TaskPacket {
   };
 }
 
-async function commitIssues(layout: Layout, message: string): Promise<void> {
-  const root = await mainRoot(layout);
-  await git(root, ["add", "issues"]);
-  await git(root, ["commit", "-qm", message]).catch(() => undefined);
-}
-
 export interface ResetResult {
   ok: boolean;
   branch: string | null;
@@ -281,7 +275,6 @@ export async function approveIssue(layout: Layout, slug: string): Promise<void> 
   const { updateIssueMeta } = await import("../plan/issues.js");
   if (head.code === 0 && head.stdout.trim()) updateIssueMeta(layout, slug, { commit: head.stdout.trim() });
   moveIssue(layout, slug, "done");
-  await commitIssues(layout, `[COMPLETE] ${slug}`);
   // The branch served its purpose: drop the worktree, the local branch, and
   // the remote backup. Best-effort — the merge is published, so a leftover
   // only costs disk, never work. (Retry approve to redo a failed cleanup:
@@ -330,7 +323,6 @@ export async function deleteIssue(layout: Layout, slug: string, opts: { force?: 
       }
     }
   }
-  await commitIssues(layout, `[DELETE] ${slug}`);
 }
 
 export { parseKind, legalStatus };

@@ -148,7 +148,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
         : []),
       command("d", "Delete", undefined, RED),
     ]),
-    secondary: slug ? `${D}${issue?.rel ?? `issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",
+    secondary: slug ? `${D}${issue?.rel ?? `.machine_code/issues/${slug}`}${toast ? ` · ${Y}${toast}${R}` : ""}${R}` : "",
   };
 }
 

@@ -42,13 +42,13 @@ describe("issue depends parsing", () => {
     const { root } = repo();
     try {
       const l = layout(root);
-      mkdirSync(join(root, "issues/features/todo"), { recursive: true });
+      mkdirSync(join(root, ".machine_code/issues/features/todo"), { recursive: true });
       writeFileSync(
-        join(root, "issues/features/todo/empty-dep.md"),
+        join(root, ".machine_code/issues/features/todo/empty-dep.md"),
         "depends:\n\n# Empty dependency\n\nBody.\n",
       );
       writeFileSync(
-        join(root, "issues/features/todo/undefined-dep.md"),
+        join(root, ".machine_code/issues/features/todo/undefined-dep.md"),
         "depends: undefined\n\n# Undefined dependency\n\nBody.\n",
       );
       const issue = readIssue(l, "features", "todo", "empty-dep");
@@ -383,9 +383,9 @@ describe("research:verify kind-precise matching", () => {
       writeIssue(l, { kind: "features", slug: "shared", prompt: "F" });
       writeIssue(l, { kind: "bugs", slug: "shared", prompt: "B" });
       const all = listIssues(l);
-      assert.equal(matchChangedIssue(all, "issues/features/todo/shared.md")?.kind, "features");
-      assert.equal(matchChangedIssue(all, "issues/bugs/todo/shared.md")?.kind, "bugs");
-      assert.equal(matchChangedIssue(all, "issues/features/todo/other.md"), undefined);
+      assert.equal(matchChangedIssue(all, ".machine_code/issues/features/todo/shared.md")?.kind, "features");
+      assert.equal(matchChangedIssue(all, ".machine_code/issues/bugs/todo/shared.md")?.kind, "bugs");
+      assert.equal(matchChangedIssue(all, ".machine_code/issues/features/todo/other.md"), undefined);
       assert.equal(matchChangedIssue(all, "src/loop.ts"), undefined);
     } finally {
       rmSync(root, { recursive: true, force: true });

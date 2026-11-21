@@ -23,15 +23,15 @@ const GREEN_MARK = "\x1b[38;2;78;201;107m✓";
 
 function scratchRepo() {
   const root = mkdtempSync(join(tmpdir(), "mc-composer-"));
-  mkdirSync(join(root, "issues/features/todo"), { recursive: true });
-  mkdirSync(join(root, "issues/features/done"), { recursive: true });
-  mkdirSync(join(root, "issues/ideas"), { recursive: true });
-  writeFileSync(join(root, "issues/features/todo/a-todo.md"), "files: src/a.ts\n\n# Todo A\n\nDo A.\n");
+  mkdirSync(join(root, ".machine_code/issues/features/todo"), { recursive: true });
+  mkdirSync(join(root, ".machine_code/issues/features/done"), { recursive: true });
+  mkdirSync(join(root, ".machine_code/issues/ideas"), { recursive: true });
+  writeFileSync(join(root, ".machine_code/issues/features/todo/a-todo.md"), "files: src/a.ts\n\n# Todo A\n\nDo A.\n");
   writeFileSync(
-    join(root, "issues/features/done/b-done.md"),
+    join(root, ".machine_code/issues/features/done/b-done.md"),
     "id: abc123\nbranch: mc/b-done-abc123\ncommit: deadbeef1234\n\n# Done B\n\nDid B.\n",
   );
-  writeFileSync(join(root, "issues/ideas/c-idea.md"), "# Idea C\n\nExplore C.\n");
+  writeFileSync(join(root, ".machine_code/issues/ideas/c-idea.md"), "# Idea C\n\nExplore C.\n");
   return root;
 }
 
@@ -108,7 +108,7 @@ describe("composer issue modes", () => {
     try {
       const frame = render(root, { agent: "engineer", issueMode: "reference" });
       assert.deepEqual(slugs(frame), ["a-todo", "b-done"]);
-      const main = render(root, { agent: "engineer", item: "a-todo", issueMode: "reference", included: ["issue:issues/features/todo/a-todo.md"] });
+      const main = render(root, { agent: "engineer", item: "a-todo", issueMode: "reference", included: ["issue:.machine_code/issues/features/todo/a-todo.md"] });
       assert.deepEqual(slugs(main), ["a-todo", "b-done"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -122,7 +122,7 @@ describe("composer issue modes", () => {
         const frame = render(root, {
           agent: "engineer",
           issueMode,
-          included: ["issue:issues/features/done/b-done.md"],
+          included: ["issue:.machine_code/issues/features/done/b-done.md"],
         });
         const lines = [...(frame.bottomAlign?.above ?? []), ...(frame.bottomAlign?.block ?? [])].join("\n");
         const bLine = lines.split("\n").find((l) => l.includes("b-done"));
@@ -133,7 +133,7 @@ describe("composer issue modes", () => {
         agent: "engineer",
         item: "a-todo",
         issueMode: "primary",
-        included: ["issue:issues/features/todo/a-todo.md"],
+        included: ["issue:.machine_code/issues/features/todo/a-todo.md"],
       });
       const pLines = [...(primary.bottomAlign?.above ?? []), ...(primary.bottomAlign?.block ?? [])].join("\n");
       const aLine = pLines.split("\n").find((l) => l.includes("a-todo"));
@@ -161,7 +161,7 @@ describe("composer issue modes", () => {
       const after = render(root, {
         agent: "engineer",
         issueMode: "reference",
-        included: ["issue:issues/features/todo/a-todo.md", "issue:issues/features/done/b-done.md"],
+        included: ["issue:.machine_code/issues/features/todo/a-todo.md", "issue:.machine_code/issues/features/done/b-done.md"],
       });
       assert.deepEqual(slugs(after), slugs(before), "order stable across selection");
       const lines = [...(after.bottomAlign?.above ?? []), ...(after.bottomAlign?.block ?? [])].join("\n");
@@ -177,13 +177,13 @@ describe("composer issue modes", () => {
       const plain = render(root, {
         agent: "engineer",
         issueMode: "reference",
-        included: ["issue:issues/features/done/b-done.md"],
+        included: ["issue:.machine_code/issues/features/done/b-done.md"],
       });
       assert.deepEqual(slugs(plain), ["a-todo", "b-done"]);
       const sorted = render(root, {
         agent: "engineer",
         issueMode: "reference",
-        included: ["issue:issues/features/done/b-done.md"],
+        included: ["issue:.machine_code/issues/features/done/b-done.md"],
         sorted: true,
       });
       assert.deepEqual(slugs(sorted), ["b-done", "a-todo"]);
@@ -200,8 +200,8 @@ describe("composer issue modes", () => {
         item: "b-done",
         issueMode: "reference",
         included: [
-          "issue:issues/features/done/b-done.md",
-          "issue:issues/features/todo/a-todo.md",
+          "issue:.machine_code/issues/features/done/b-done.md",
+          "issue:.machine_code/issues/features/todo/a-todo.md",
         ],
         sorted: true,
       });
@@ -268,7 +268,7 @@ describe("composer issue keys", () => {
     const root = scratchRepo();
     try {
       const s = stubState(root, {
-        newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
+        newRunContextItemKeys: ["issue:.machine_code/issues/features/todo/a-todo.md"],
         newRunContextItemAvailable: [true],
         newRunContextItem: 0,
       });
@@ -287,7 +287,7 @@ describe("composer issue keys", () => {
     const root = scratchRepo();
     try {
       const s = stubState(root, {
-        newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
+        newRunContextItemKeys: ["issue:.machine_code/issues/features/todo/a-todo.md"],
         newRunContextItem: 0,
       });
       assert.equal(s.newRunSortMode, "default");
@@ -306,7 +306,7 @@ describe("composer issue keys", () => {
     const root = scratchRepo();
     try {
       const s = stubState(root, {
-        newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
+        newRunContextItemKeys: ["issue:.machine_code/issues/features/todo/a-todo.md"],
         newRunContextItemAvailable: [true],
       });
       let linked = null;
@@ -328,7 +328,7 @@ describe("composer issue keys", () => {
     const root = scratchRepo();
     try {
       const s = stubState(root, {
-        newRunContextItemKeys: ["issue:issues/features/done/b-done.md"],
+        newRunContextItemKeys: ["issue:.machine_code/issues/features/done/b-done.md"],
         newRunContextItemAvailable: [true],
       });
       let linked = null;
@@ -354,7 +354,7 @@ describe("composer issue keys", () => {
       const s = stubState(root, {
         newRunIssueMode: "reference",
         newrun: { ...baseRun("engineer"), item: "a-todo" },
-        newRunContextItemKeys: ["issue:issues/features/todo/a-todo.md"],
+        newRunContextItemKeys: ["issue:.machine_code/issues/features/todo/a-todo.md"],
         newRunContextItemAvailable: [true],
       });
       let linked = null;
@@ -370,7 +370,7 @@ describe("composer issue keys", () => {
       const handled = handleComposerKeys(s, ctx, " ");
       assert.equal(handled, true);
       assert.equal(linked, null);
-      assert.ok(!s.newRunContextIncluded.has("issue:issues/features/todo/a-todo.md"));
+      assert.ok(!s.newRunContextIncluded.has("issue:.machine_code/issues/features/todo/a-todo.md"));
       assert.ok(notes.some((m) => m.includes("main issue")), `notified, got: ${notes.join("; ")}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -382,7 +382,7 @@ describe("composer issue keys", () => {
     try {
       const s = stubState(root, {
         newRunIssueMode: "reference",
-        newRunContextItemKeys: ["issue:issues/features/done/b-done.md"],
+        newRunContextItemKeys: ["issue:.machine_code/issues/features/done/b-done.md"],
         newRunContextItemAvailable: [true],
       });
       let linked = null;
@@ -393,9 +393,9 @@ describe("composer issue keys", () => {
       };
       handleComposerKeys(s, ctx, " ");
       assert.equal(linked, null);
-      assert.ok(s.newRunContextIncluded.has("issue:issues/features/done/b-done.md"));
+      assert.ok(s.newRunContextIncluded.has("issue:.machine_code/issues/features/done/b-done.md"));
       handleComposerKeys(s, ctx, " ");
-      assert.ok(!s.newRunContextIncluded.has("issue:issues/features/done/b-done.md"));
+      assert.ok(!s.newRunContextIncluded.has("issue:.machine_code/issues/features/done/b-done.md"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

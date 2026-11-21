@@ -26,8 +26,6 @@ import {
   moveIssue,
   parseKind,
   legalStatus,
-  kindTag,
-  statusTag,
   ISSUE_KIND_LABELS,
   ISSUE_KINDS,
   ISSUE_STATUS_LABELS,
@@ -38,7 +36,6 @@ import {
 import { approveIssue, deleteIssue, issueToTaskPacket, resetIssueBranch, unmetDepends, unknownDepends, activeFileConflicts } from "../tasks/issue.js";
 import { abortMergeIfInProgress, ensureCommitted, mergeBranchIntoMain } from "../tasks/merge.js";
 import { runItemId } from "../plan/lifecycle.js";
-import { commitPlanningFiles } from "../tasks/planning.js";
 import { fail, parseFlags, loadRuntime, EXIT } from "./common.js";
 
 const ACTIVE_RUN_STATUSES = new Set(["created", "running", "awaiting_input"]);
@@ -149,7 +146,6 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       ...(flags.get("verify") ? { verify: flags.get("verify")!.split(",").map((e) => e.trim()).filter(Boolean) } : {}),
       review: reviewFlag as "none" | "human",
     });
-    await commitPlanningFiles(l, `[NEW ${kindTag(kind)}] ${slug}`);
     process.stdout.write(`created ${issue.rel}\n`);
     return 0;
   }
@@ -163,7 +159,6 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     if (!legalStatus(issue.kind, to)) fail(`invalid status ${JSON.stringify(to)} for ${issue.kind}`);
     const moved = moveIssue(l, issue.slug, to as IssueStatus);
     const status = to as IssueStatus;
-    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(status)}] ${issue.slug}`);
     process.stdout.write(`moved ${issue.slug} → ${moved?.rel ?? ""}\n`);
     return 0;
   }
@@ -178,7 +173,6 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       fail(`issue ${issue.slug} is ${issue.status}; reject requires needs-human-review`);
     }
     moveIssue(l, issue.slug, "failed-human-review");
-    await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED HUMAN REVIEW] ${issue.slug}`);
     process.stdout.write(`rejected ${issue.slug} → failed-human-review\n`);
     return 0;
   }
@@ -217,7 +211,6 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     const to = sub === "block" ? "blocked" : "todo";
     assertNoActiveRun(l, issue.slug, sub);
     const moved = moveIssue(l, issue.slug, to);
-    await commitPlanningFiles(l, `[${kindTag(issue.kind)} ${statusTag(to)}] ${issue.slug}`);
     process.stdout.write(`${sub}ed ${issue.slug} → ${moved?.rel ?? ""}\n`);
     return 0;
   }
@@ -358,7 +351,6 @@ export async function runIssueBuild(
     if (error instanceof WorktreeError) {
       recorder.finalize("blocked", `${error.code}: ${error.message}`);
       moveIssue(l, slug, "blocked");
-      await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${slug}`);
       return EXIT["blocked"];
     }
     throw error;
@@ -431,7 +423,6 @@ export async function runIssueBuild(
         if (issue.kind !== "ideas") {
           appendIssueGateFailure(issue.path, noChange, gateFailureAttempts(issue.body) + 1);
           moveIssue(l, slug, "failed-gates");
-          await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${slug}`);
         }
         result = { ...result, status: "blocked", error: noChange };
       } else if (commit) {
@@ -469,7 +460,6 @@ export async function runIssueBuild(
       moveIssue(l, slug, "blocked");
     }
   }
-  await commitPlanningFiles(l, `[${kindTag(issue.kind)} BUILD] ${slug} (${result.status})`);
   recorder.finalize(result.status, result.error, result.finalText);
   process.stdout.write(`build ${slug}: ${result.status}${result.error ? ` — ${result.error}` : ""}\n`);
   if (result.status === "completed") {
@@ -506,8 +496,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
   let issue = findIssue(l, slug);
   if (!issue) {
     issue = writeIssue(l, { kind: "features", slug, prompt: joined });
-    await commitPlanningFiles(l, `[NEW FEATURE] ${slug}`);
-    process.stderr.write(`self-scoped as ${slug} → issues/features/todo/${slug}.md\n`);
+    process.stderr.write(`self-scoped as ${slug} → .machine_code/issues/features/todo/${slug}.md\n`);
   } else {
     if (issue.kind === "ideas") fail(`ideas are researched first: machine_code issue run ${slug}`);
     if (issue.status === "done") fail(`issue ${slug} is already done`);

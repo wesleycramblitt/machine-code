@@ -5,12 +5,13 @@
  * and issue:delete. The handlers reuse the plan layer (writeIssue,
  * updateIssueContents, updateIssueMeta, moveIssue) and accept only legal
  * directories computed by issueDir. Raw write/edit tools must not target
- * issues/ paths directly.
+ * .machine_code/issues/ paths directly. Issues are local-only and never
+ * committed.
  *
  * Roles: research may call issue:create and issue:update. Engineer must not
  * call issue:create, issue:update, or issue:delete.
  */
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { layout } from "../paths.js";
 import {
@@ -32,14 +33,14 @@ import { slugify } from "../plan/slug.js";
 import type { CommandSpec } from "./registry.js";
 
 const ISSUE_DIRS = [
-  "issues/ideas",
-  "issues/ideas/.researched",
-  "issues/features/todo",
-  "issues/features/blocked",
-  "issues/features/done",
-  "issues/bugs/todo",
-  "issues/bugs/blocked",
-  "issues/bugs/done",
+  ".machine_code/issues/ideas",
+  ".machine_code/issues/ideas/.researched",
+  ".machine_code/issues/features/todo",
+  ".machine_code/issues/features/blocked",
+  ".machine_code/issues/features/done",
+  ".machine_code/issues/bugs/todo",
+  ".machine_code/issues/bugs/blocked",
+  ".machine_code/issues/bugs/done",
 ];
 
 /** Extract header fields from an issue file (plain `key: value` lines at the top). */
@@ -107,6 +108,26 @@ function legalIssueDirs(repoRoot: string): Set<string> {
   return out;
 }
 
+/** Append an issue rel to the run's changed-issue log for research:verify. */
+function recordChangedIssue(ctx: { runDir?: string }, rel: string): void {
+  if (!ctx.runDir || !rel) return;
+  const file = join(ctx.runDir, "issues-changed.json");
+  let list: string[] = [];
+  try {
+    const raw = readFileSync(file, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) list = parsed.filter((e): e is string => typeof e === "string");
+  } catch {
+    list = [];
+  }
+  if (!list.includes(rel)) list.push(rel);
+  try {
+    writeFileSync(file, JSON.stringify(list), "utf8");
+  } catch {
+    // Tracking is best-effort; the gate reports an empty change set clearly.
+  }
+}
+
 export function issueCommands(root: string): CommandSpec[] {
   return [
     {
@@ -128,14 +149,14 @@ export function issueCommands(root: string): CommandSpec[] {
 
         for (const dir of ISSUE_DIRS) {
           // Derive kind/status from directory path
-          const parts = dir.replace("issues/", "").split("/");
+          const parts = dir.replace(".machine_code/issues/", "").split("/");
           const kind = parts[0]!;
           const status = parts.length > 1 ? parts[1]! : kind === "ideas" ? "needs-research" : "todo";
 
           if (kindFilter && kind !== kindFilter) continue;
           if (statusFilter && status !== statusFilter) continue;
 
-          const fullDir = join(ctx.root, dir);
+          const fullDir = join((ctx.repoRoot ?? ctx.root), dir);
           if (!existsSync(fullDir)) continue;
 
           let names: string[] = [];
@@ -149,7 +170,7 @@ export function issueCommands(root: string): CommandSpec[] {
           if (names.length === 0) continue;
 
           for (const slug of names) {
-            const issuePath = join(ctx.root, dir, `${slug}.md`);
+            const issuePath = join((ctx.repoRoot ?? ctx.root), dir, `${slug}.md`);
             const text = existsSync(issuePath) ? readFileSync(issuePath, "utf8") : "";
             const meta = frontMatter(text);
             const firstLine = text.split("\n").find((l) => l.startsWith("# "));
@@ -171,7 +192,7 @@ export function issueCommands(root: string): CommandSpec[] {
       args: () => [],
       schema: {
         slug: { type: "string", description: "Issue slug (the filename without .md). Use issue:list to discover slugs." },
-        path: { type: "string", description: "Explicit repo-relative path (issues/.../slug.md). Overrides slug." },
+        path: { type: "string", description: "Explicit repo-relative path (.machine_code/issues/.../slug.md). Overrides slug." },
       },
       readonly: true,
       timeoutMs: 10_000,
@@ -183,12 +204,12 @@ export function issueCommands(root: string): CommandSpec[] {
         let issueText: string | null = null;
 
         if (path) {
-          const full = join(ctx.root, path);
+          const full = join((ctx.repoRoot ?? ctx.root), path);
           if (!existsSync(full)) return { text: `file not found: ${path}`, isError: true };
           issuePath = path;
           issueText = readFileSync(full, "utf8");
         } else if (slug) {
-          const found = findIssueFile(ctx.root, slug);
+          const found = findIssueFile((ctx.repoRoot ?? ctx.root), slug);
           if (!found) return { text: `issue not found: ${slug}. Use issue:list to find slugs.`, isError: true };
           issuePath = found.path;
           issueText = found.text;
@@ -241,15 +262,15 @@ export function issueCommands(root: string): CommandSpec[] {
         const pathRaw = asString(args.path);
         const slug = slugify(asString(args.slug) ?? (pathRaw ? basename(normalizeRel(pathRaw), ".md") : "untitled")) || "untitled";
         if (!slug) return { text: "bad slug: slug becomes empty", isError: true };
-        const l = layout(ctx.root);
+        const l = layout((ctx.repoRoot ?? ctx.root));
         if (findIssue(l, slug)) return { text: `issue ${slug} already exists`, isError: true };
         if (pathRaw) {
           const norm = normalizeRel(pathRaw);
           if (!safeIssuePath(l, norm)) return { text: `bad path ${JSON.stringify(pathRaw)}: escapes the worktree`, isError: true };
-          if (!norm.startsWith("issues/") || !norm.endsWith(".md")) {
-            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal issues/ dirs from issueDir`, isError: true };
+          if (!norm.startsWith(".machine_code/issues/") || !norm.endsWith(".md")) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal .machine_code/issues/ dirs from issueDir`, isError: true };
           }
-          const expected = expectedRelFor(ctx.root, kind, status, slug);
+          const expected = expectedRelFor((ctx.repoRoot ?? ctx.root), kind, status, slug);
           if (norm !== expected) {
             return { text: `bad path ${JSON.stringify(pathRaw)}: expected ${expected} (legal dirs come from issueDir)`, isError: true };
           }
@@ -279,6 +300,7 @@ export function issueCommands(root: string): CommandSpec[] {
             verification: verificationRaw as "direct" | "verified",
             review: reviewRaw as "none" | "human",
           });
+          recordChangedIssue(ctx, created.rel);
           return { text: `created ${created.rel}`, isError: false };
         } catch (error) {
           return { text: (error as Error).message, isError: true };
@@ -310,7 +332,7 @@ export function issueCommands(root: string): CommandSpec[] {
       readonly: false,
       timeoutMs: 10_000,
       handler: async (args, ctx) => {
-        const l = layout(ctx.root);
+        const l = layout((ctx.repoRoot ?? ctx.root));
         const slugRaw = asString(args.slug);
         const pathRaw = asString(args.path);
         if (!slugRaw && !pathRaw) return { text: "issue:update requires slug or path", isError: true };
@@ -318,11 +340,11 @@ export function issueCommands(root: string): CommandSpec[] {
         if (pathRaw) {
           const norm = normalizeRel(pathRaw);
           if (!safeIssuePath(l, norm)) return { text: `bad path ${JSON.stringify(pathRaw)}: escapes the worktree`, isError: true };
-          if (!norm.startsWith("issues/") || !norm.endsWith(".md")) {
-            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal issues/ dirs from issueDir`, isError: true };
+          if (!norm.startsWith(".machine_code/issues/") || !norm.endsWith(".md")) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal .machine_code/issues/ dirs from issueDir`, isError: true };
           }
           const dir = dirname(norm);
-          if (!legalIssueDirs(ctx.root).has(dir)) {
+          if (!legalIssueDirs((ctx.repoRoot ?? ctx.root)).has(dir)) {
             return { text: `bad path ${JSON.stringify(pathRaw)}: ${dir} is not a legal issueDir`, isError: true };
           }
           const byPath = listIssues(l).find((entry) => entry.rel === norm);
@@ -387,9 +409,11 @@ export function issueCommands(root: string): CommandSpec[] {
           if (statusRaw && statusRaw !== issue.status) {
             const moved = moveIssue(l, current, statusRaw as IssueStatus);
             if (!moved) return { text: `issue not found: ${slug}`, isError: true };
+            recordChangedIssue(ctx, moved.rel);
             return { text: `updated ${moved.rel}`, isError: false };
           }
           const refreshed = findIssue(l, current);
+          if (refreshed) recordChangedIssue(ctx, refreshed.rel);
           return { text: `updated ${refreshed ? refreshed.rel : current}`, isError: false };
         } catch (error) {
           return { text: (error as Error).message, isError: true };
@@ -409,7 +433,7 @@ export function issueCommands(root: string): CommandSpec[] {
       readonly: false,
       timeoutMs: 10_000,
       handler: async (args, ctx) => {
-        const l = layout(ctx.root);
+        const l = layout((ctx.repoRoot ?? ctx.root));
         const slugRaw = asString(args.slug);
         const pathRaw = asString(args.path);
         if (!slugRaw && !pathRaw) return { text: "issue:delete requires slug or path", isError: true };
@@ -417,11 +441,11 @@ export function issueCommands(root: string): CommandSpec[] {
         if (pathRaw) {
           const norm = normalizeRel(pathRaw);
           if (!safeIssuePath(l, norm)) return { text: `bad path ${JSON.stringify(pathRaw)}: escapes the worktree`, isError: true };
-          if (!norm.startsWith("issues/") || !norm.endsWith(".md")) {
-            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal issues/ dirs from issueDir`, isError: true };
+          if (!norm.startsWith(".machine_code/issues/") || !norm.endsWith(".md")) {
+            return { text: `bad path ${JSON.stringify(pathRaw)}: only legal .machine_code/issues/ dirs from issueDir`, isError: true };
           }
           const dir = dirname(norm);
-          if (!legalIssueDirs(ctx.root).has(dir)) {
+          if (!legalIssueDirs((ctx.repoRoot ?? ctx.root)).has(dir)) {
             return { text: `bad path ${JSON.stringify(pathRaw)}: ${dir} is not a legal issueDir`, isError: true };
           }
           const byPath = listIssues(l).find((entry) => entry.rel === norm);
@@ -437,6 +461,7 @@ export function issueCommands(root: string): CommandSpec[] {
           return { text: `refusing to delete the run's own issue (${issue.rel})`, isError: true };
         }
         rmSync(issue.path, { force: true });
+        recordChangedIssue(ctx, issue.rel);
         return { text: `deleted ${issue.rel}`, isError: false };
       },
     },

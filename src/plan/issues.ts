@@ -1,9 +1,9 @@
 /**
- * machine_code — issues: the single work tree.
+ * machine_code — issues: the single work tree (local-only, never committed).
  *
  * Status is the directory:
  *
- *   issues/
+ *   .machine_code/issues/
  *     ideas/
  *       <slug>.md              needs research
  *       .researched/<slug>.md  researched
@@ -34,7 +34,7 @@ import { parse } from "smol-toml";
 import type { Layout } from "../paths.js";
 import { slugify } from "./slug.js";
 
-export const ISSUES_DIR = "issues";
+export const ISSUES_DIR = ".machine_code/issues";
 export const ISSUE_KINDS = ["ideas", "features", "bugs"] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
 
@@ -532,7 +532,30 @@ export function hasRepoScript(layout: Layout, name: string): boolean {
   return false;
 }
 
+/** Issues live under .machine_code/issues/ and must never enter git history.
+ * Auto-append the ignore rule once, then proceed. */
+export function ensureMachineCodeIgnored(repoRoot: string): void {
+  const file = join(repoRoot, ".gitignore");
+  let text = "";
+  try {
+    if (existsSync(file)) text = readFileSync(file, "utf8");
+  } catch {
+    text = "";
+  }
+  const has = text.split("\n").some((line) => {
+    const t = line.trim();
+    return t === ".machine_code/" || t === ".machine_code" || t === "/.machine_code/" || t === "/.machine_code";
+  });
+  if (has) return;
+  try {
+    writeFileSync(file, `${text.replace(/\n*$/, "\n")}.machine_code/\n`, "utf8");
+  } catch {
+    // Best-effort; a missing rule does not block issue creation.
+  }
+}
+
 export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
+  ensureMachineCodeIgnored(layout.repoRoot);
   const status = input.status ?? (input.kind === "ideas" ? "needs-research" : "todo");
   if (!legalStatus(input.kind, status)) {
     throw new Error(`invalid status ${JSON.stringify(status)} for ${input.kind}`);

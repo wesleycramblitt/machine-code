@@ -314,7 +314,7 @@ machine_code batch --max-parallel 4
 machine_code batch --auto-approve   # merge gates-gated issues; human-gated never auto-merge
 ```
 
-`batch` plans priority/dependency-ordered waves over `issues/` and builds todo
+`batch` plans priority/dependency-ordered waves over `.machine_code/issues/` and builds todo
 issues in parallel child processes. Each build runs in an isolated
 `mc/<slug>` worktree, executes the issue's `verify` gates, and — when the
 issue's `review` value is `agent` — an independent Review run. `--dry-run`
@@ -367,7 +367,7 @@ machine_code delete <slug>
 ```
 
 - `issue list` shows the issues tree; `issue create <kind> <slug> "<prompt>"`
-  scaffolds `issues/<kind>/<status>/<slug>.md`.
+  scaffolds `.machine_code/issues/<kind>/<status>/<slug>.md`.
 - `issue move <slug> <todo|needs-agent-review|needs-human-review|failed-gates|failed-agent-review|failed-human-review|blocked|done|researched>` moves it between status
   dirs; one issue = one file-level change.
 - `build <slug>` creates
@@ -467,7 +467,7 @@ Suggested context files come from the deterministic map's file docs, symbol
 docs, and section headings; they appear in the Files tab and can be toggled.
 The CLI attaches the same suggestions when no explicit context include is
 given. The
-**Issues** subtab lists `issues/` files; `space` includes one explicitly. The
+**Issues** subtab lists `.machine_code/issues/` files; `space` includes one explicitly. The
 **Files** subtab lists repo files; press `space` on a file to include it
 explicitly. The **Skills** subtab lists every installed skill; `space` cycles
 description-only, full body, and excluded. The **Tools** subtab lists every
@@ -586,7 +586,7 @@ continue; stop only when no defensible choice exists.
 Research holds only `context`, `inspect`, `glob`, `ask`,
 `skill`, `write`, `todo`, and `finish`. It reads one idea, asks until the
 scope is precise, and writes concrete features/bugs as issue files under
-`issues/features/todo/` or `issues/bugs/todo/`. Engineer holds `context`,
+`.machine_code/issues/features/todo/` or `.machine_code/issues/bugs/todo/`. Engineer holds `context`,
 `inspect`, `write`, `edit`, `glob`, `ask`, `artifact`, `skill`,
 `todo`, and `finish`; it edits in one run in a `mc/<slug>` worktree and never
 runs build/test scripts. Review is read-only, holds `finish`, and judges the
@@ -617,7 +617,7 @@ move to `failed-agent-review` or `failed-human-review`, so `approve` cannot
 merge rejected work.
 
 An issue is one deliverable: one file-level change and at most **three**
-verify commands in `issues/<kind>/todo/<slug>.md`. Split anything bigger into
+verify commands in `.machine_code/issues/<kind>/todo/<slug>.md`. Split anything bigger into
 several issues joined by `depends`. Set `review = "agent"` for consequential
 work and `review = "human"` when it must not auto-merge; otherwise `none`
 (gates only) applies.
@@ -687,4 +687,4 @@ External material belongs in the reference store
 A project `docs/` folder is for notes that a human or an issue attaches
 explicitly; it is not injected.
 
-Remaining work: [issues/](issues/).
+Remaining work: [.machine_code/issues/](.machine_code/issues/).

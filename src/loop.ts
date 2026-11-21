@@ -1019,6 +1019,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       state: memory,
       repoRoot: input.root,
       namedBlocksDir,
+      runDir: recorder.dir,
       ...(issuePath ? { issuePath } : {}),
       finish: (result) => {
         finishRequested = result;
@@ -2008,7 +2009,12 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         // No scripts dir: gates referencing script:* fail with unknown
         // command, the same as a missing script anywhere else.
       }
-      const gateResult = await runGates(gates, { root: gateRoot, commands: gateCommands });
+      const gateResult = await runGates(gates, {
+        root: gateRoot,
+        repoRoot: input.root,
+        runDir: recorder.dir,
+        commands: gateCommands,
+      });
       recorder.event("gates", {
         attempt: gateAttempts,
         passed: gateResult.passed,

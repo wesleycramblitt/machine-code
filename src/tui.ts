@@ -108,7 +108,6 @@ import { changesFor, contextUsage, readContextManifest, relatedRuns, thinkingChu
 import { artifactPath, listArtifacts, type ArtifactDef } from "./artifacts/registry.js";
 import { readCachedMap, renderMapIndex, symbolCount } from "./map/deterministic.js";
 import { serverAvailable } from "./lsp/index.js";
-import { commitPlanningFiles } from "./tasks/planning.js";
 
 /* Terminal primitives live in ./tui/format.js; imported above. */
 
@@ -943,10 +942,8 @@ export async function runTui(): Promise<void> {
         s.selectedIssueRepo = s.newIssueRepo;
         s.screen = "issue";
         s.page = "runs";
-        void commitPlanningFiles(issueLayout, `[UPDATE ${kindTag(updated.kind)}] ${slug}`, true).then((committed) => {
-          notify(committed ? `issue ${slug} updated and pushed` : `issue ${slug} updated (no changes to commit)`);
-          draw();
-        }).catch(() => {});
+        notify(`issue ${slug} updated`);
+        draw();
       } catch (error) {
         notify(`failed to update issue: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -974,19 +971,10 @@ export async function runTui(): Promise<void> {
         verification: s.newIssue.verification,
         ...(s.newIssue.review === "human" ? { review: "human" as const } : {}),
       });
-      // Commit happens in the background; screen closes immediately.
+      // Issues are local-only; no commit.
       s.screen = "list";
-      void commitPlanningFiles(issueLayout, `[NEW ${kindTag(s.newIssue.kind)}] ${slug}`, true).then((committed) => {
-        if (committed) {
-          notify(`issue ${slug} created and pushed`);
-          draw();
-        } else {
-          notify(`issue ${slug} created (no changes to commit)`);
-          draw();
-        }
-      }).catch(() => {
-        // Commit failure is not critical — the issue file exists.
-      });
+      notify(`issue ${slug} created`);
+      draw();
     } catch (error) {
       notify(`failed to create issue: ${error instanceof Error ? error.message : String(error)}`);
     }

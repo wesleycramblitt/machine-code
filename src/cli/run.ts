@@ -29,7 +29,6 @@ import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueVerification, findIssue, gateFailureAttempts, kindTag, moveIssue, writeIssue } from "../plan/issues.js";
 import { suggestHints, suggestTaskFilesFromMap, suggestionText, withKeywordTerms } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
-import { commitPlanningFiles } from "../tasks/planning.js";
 import { issueToTaskPacket, unmetDepends, unknownDepends, activeFileConflicts } from "../tasks/issue.js";
 import { abortMergeIfInProgress, ensureCommitted, mergeBranchIntoMain } from "../tasks/merge.js";
 import { slugify } from "../plan/slug.js";
@@ -224,7 +223,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // Commit (and push) immediately so the new issue lives on origin/main
       // before the branch is created — otherwise it exists only in the local
       // main, and the post-run merge back upstream diverges and refuses.
-      await commitPlanningFiles(l, `[NEW FEATURE] ${autoSlug}`, true);
       autoCreatedIssue = true;
     }
     itemSlug = issue.slug;
@@ -1174,7 +1172,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
           if (agentNameParsed === "engineer" && issue.kind !== "ideas") {
             appendIssueGateFailure(issue.path, noChange, gateFailureAttempts(issue.body) + 1);
             moveIssue(l, issue.slug, "failed-gates");
-            await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
           }
           result = { ...result, status: "blocked", error: noChange };
         }
@@ -1200,12 +1197,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
               // failure blocks the run without main having the changes.
               if (issue.kind === "ideas") {
                 moveIssue(l, issue.slug, "researched");
-                await commitPlanningFiles(l, `[${kindTag(issue.kind)} RESEARCHED] ${issue.slug}`);
                 recorder.event("idea_researched", { slug: issue.slug });
               }
               if (issue.kind !== "ideas") {
                 moveIssue(l, issue.slug, "done");
-                await commitPlanningFiles(l, `[${kindTag(issue.kind)} DONE] ${issue.slug}`);
               }
             } else {
               // A failed merge into main is a gate-style failure, not a
@@ -1217,14 +1212,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
               if (issue.kind !== "ideas") {
                 appendIssueGateFailure(issue.path, mergeErr, gateFailureAttempts(issue.body) + 1);
                 moveIssue(l, issue.slug, "failed-gates");
-                await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
               }
               result = { ...result, status: "blocked", error: mergeErr };
             }
           }
         } else {
           moveIssue(l, issue.slug, "needs-human-review");
-          await commitPlanningFiles(l, `[${kindTag(issue.kind)} NEEDS HUMAN REVIEW] ${issue.slug}`);
         }
       }
     }
@@ -1239,7 +1232,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       if (issue) {
         appendIssueGateFailure(issue.path, gateFail, gateFailureAttempts(issue.body) + 1);
         moveIssue(l, issue.slug, "failed-gates");
-        await commitPlanningFiles(l, `[${kindTag(issue.kind)} FAILED GATES] ${issue.slug}`);
       }
     } else {
       // A hard-blocked run (no gate failure to retry) is terminal until a
@@ -1250,7 +1242,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const issue = findIssue(l, itemSlug);
       if (issue && issue.kind !== "ideas" && issue.status !== "failed-gates") {
         moveIssue(l, issue.slug, "blocked");
-        await commitPlanningFiles(l, `[${kindTag(issue.kind)} BLOCKED] ${issue.slug}`);
       }
     }
   }
@@ -1259,7 +1250,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (result.status !== "completed") await abortMergeIfInProgress(toolRoot);
   recorder.finalize(result.status, result.error, result.finalText);
   if (agentNameParsed === "research") {
-    await commitPlanningFiles(l, `[RESEARCH RUN] ${recorder.id.slice(-8)}`);
   }
   printRunOutcome(result, recorder);
   if (machine.notify.webhookUrl || machine.notify.command) {
@@ -1699,12 +1689,10 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
                 if (merged.mergeCommit) updateIssueMeta(l2, resumeIssue.slug, { commit: merged.mergeCommit });
                 if (resumeIssue.kind === "ideas") {
                   moveIssue(l2, resumeIssue.slug, "researched");
-                  await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} RESEARCHED] ${resumeIssue.slug}`);
                   recorder.event("idea_researched", { slug: resumeIssue.slug });
                 }
                 if (resumeIssue.kind !== "ideas") {
                   moveIssue(l2, resumeIssue.slug, "done");
-                  await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} DONE] ${resumeIssue.slug}`);
                 }
               } else {
                 // Same gate-style handling as the direct path above: the merge
@@ -1713,21 +1701,18 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
                 if (resumeIssue.kind !== "ideas") {
                   appendIssueGateFailure(resumeIssue.path, mergeErr, gateFailureAttempts(resumeIssue.body) + 1);
                   moveIssue(l2, resumeIssue.slug, "failed-gates");
-                  await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} FAILED GATES] ${resumeIssue.slug}`);
                 }
                 result = { ...result, status: "blocked", error: mergeErr };
               }
             }
           } else {
             moveIssue(l2, resumeIssue.slug, "needs-human-review");
-            await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} NEEDS HUMAN REVIEW] ${resumeIssue.slug}`);
           }
         } else if (resumeAgent === "engineer") {
           const noChange = "engineer produced no committable change";
           if (resumeIssue.kind !== "ideas") {
             appendIssueGateFailure(resumeIssue.path, noChange, gateFailureAttempts(resumeIssue.body) + 1);
             moveIssue(l2, resumeIssue.slug, "failed-gates");
-            await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} FAILED GATES] ${resumeIssue.slug}`);
           }
           result = { ...result, status: "blocked", error: noChange };
         } else {
@@ -1750,7 +1735,6 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     if (gateFail) {
       appendIssueGateFailure(resumeIssue.path, gateFail, gateFailureAttempts(resumeIssue.body) + 1);
       moveIssue(l2, resumeIssue.slug, "failed-gates");
-      await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} FAILED GATES] ${resumeIssue.slug}`);
     } else if (resumeIssue.kind !== "ideas") {
       // A hard-blocked run (no gate failure to retry) is terminal until a
       // human unblocks it: move the issue to blocked/ so the orchestrator
@@ -1760,7 +1744,6 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
       const resumed = findIssue(l2, resumeIssue.slug);
       if (resumed && resumed.status !== "failed-gates") {
         moveIssue(l2, resumeIssue.slug, "blocked");
-        await commitPlanningFiles(l2, `[${kindTag(resumeIssue.kind)} BLOCKED] ${resumeIssue.slug}`);
       }
     }
   }

@@ -106,8 +106,8 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       ctx.startNewRun(undefined, repoForRow(row), {
         agent,
         prompt: row.issueKind === "ideas"
-          ? "Pick an idea under issues/ideas/ and turn it into features and bugs."
-          : "Pick a feature or bug under issues/features/ or issues/bugs/ and implement it.",
+          ? "Pick an idea under .machine_code/issues/ideas/ and turn it into features and bugs."
+          : "Pick a feature or bug under .machine_code/issues/features/ or .machine_code/issues/bugs/ and implement it.",
       });
       ctx.draw();
       return true;

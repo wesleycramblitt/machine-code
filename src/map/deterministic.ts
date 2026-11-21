@@ -149,7 +149,7 @@ export function readCachedMap(root: string): RepoMap | null {
  * deliberately not a list of "boring" folders: docs, data, and anything else
  * that can contain code stays in the map.
  */
-const MAP_NON_CODE_DIRS = [".machine_code", ".opencode", "issues"] as const;
+const MAP_NON_CODE_DIRS = [".machine_code", ".opencode"] as const;
 
 function excludedPath(path: string): boolean {
   if (isSecretPath(path)) return true;
