@@ -580,7 +580,8 @@ Every rendered prompt ends with generated `Config:` and `Tools:` lines. The
 config line names the preset, verification, ask
 availability, and approval mode. The tools line is the exact post-filter list,
 so a role never sees a tool it cannot call. When `ask` is unavailable, the
-ambiguity policy says to stop and report the question instead of asking.
+ambiguity policy says to decide from evidence, record the assumption, and
+continue; stop only when no defensible choice exists.
 
 Research holds only `context`, `inspect`, `glob`, `ask`,
 `skill`, `write`, `todo`, and `finish`. It reads one idea, asks until the

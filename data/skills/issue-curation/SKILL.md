@@ -56,7 +56,7 @@ These waste turns. Do not create them.
 
 - **Mirroring.** If the research prompt is "add settings caching" and the issue says "add settings caching" with no delta, you added nothing. Value comes from *why* it matters, *what* changes, and *how* to verify it.
 - **Implementation instead of behavior.** "Add an AppConfig class with load/save methods" tells how, not what. "Settings persist across restarts and load lazily" tells what — the engineer chooses the how.
-- **Vague scope.** "Refactor the layout engine" — what is wrong with it? What does success look like? If you cannot name the files or acceptance, use `ask` to get specifics before writing an issue.
+- **Vague scope.** "Refactor the layout engine" — what is wrong with it? What does success look like? If you cannot name the files or acceptance, follow the `requirements` skill before writing an issue.
 - **Filler.** An issue that adds no behavior, fixes no bug, and documents nothing familiar. Delete or omit it.
 - **Non-issues.** "Add a comment explaining X." Docs are useful — put them in `docs/`, not in issues.
 
@@ -86,7 +86,7 @@ When the research goal is to create scoped feature/bug issues from a prompt, the
    - **Map files to issues before writing.** List which files each issue will touch. When two issues touch the same files, they MUST be ordered with `depends:` — the narrower or foundational one first — because parallel branches editing the same files cannot auto-merge. Issues with disjoint footprints stay parallel (no `depends:`). Same rule for follow-ons: schema/record first, then the code that uses it; migration first, then callers; API first, then client. `research:verify` rejects overlapping `files:` without a `depends:` edge, so fix the header before finishing.
 4. **Name the concrete delta.** What behavior changes? What files will the engineer touch? This does not need to be a precise edit list — `"the issue screen status line needs to show the run phase"` is enough — but it must name the observable change.
 5. **Write each issue.** Follow the file shape above. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
-6. **If the prompt is too vague to decompose** (a few words with no specifics, examples, or mention of existing behavior), use the `ask` tool to ask the human clarifying questions — what specific behavior, what area of the codebase, or what problem they're trying to solve. Do not write a placeholder `ideas/` file; the research agent's purpose is to turn vagueness into concreteness through investigation and questioning.
+6. **If the prompt is too vague to decompose** (a few words with no specifics, examples, or mention of existing behavior), follow the `requirements` skill before writing: ask one scope-changing question at a time, with options and a recommendation. Do not write a placeholder `ideas/` file; the research agent's purpose is to turn vagueness into concreteness through investigation and questioning.
 
 ### Decomposition guidelines
 

@@ -30,5 +30,6 @@ code = 0.3
 
 [skills]
 clean-code = "on-demand"
-issue-curation= "include"
+issue-curation = "include"
+requirements = "include"
 reference = "on-demand"

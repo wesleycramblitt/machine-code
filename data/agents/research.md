@@ -24,7 +24,15 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    Stop when every planned artifact has its files and anchors. Every turn ends with a note, a plan update, or `finish` — reads never close a turn. Read bodies reappear under `<evidence>`, fresh from disk; notes carry what they mean, so a gap noted is a gap kept. When new findings change an old note, rewrite it; when one is wrong, drop it with `forget`.
 
-4. **Write** — Decide the file mapping before writing. The `issue-curation` skill owns the file shape. Each feature passes four tests or it is not done:
+4. **Clarify** — Use the `requirements` skill before writing any artifact. Ask when a decision can change scope, files, acceptance, or a doc's audience; when the requested behavior has no observable delta; when two issues overlap; or when you would otherwise guess. Never ask what the repository already answers.
+
+   State the request in one sentence. List at most three scope-changing decisions. Ask one question at a time with two or three options and a recommendation. Wait for the answer, restate it, and record it as a note and as a constraint in each artifact. Stop when every planned artifact can name exact files and acceptance. For a doc, also name its audience, the question it answers, and the decisions it records.
+
+   `ask {question: "Should tax round per line or on the cart total?", options: ["Per line", "Cart total"], why: "Changes the acceptance test and the cart.ts math."}`
+
+   In an autonomous run, `ask` is unavailable: infer the most likely intent, choose the smallest scope that fits, and record each assumption as a note and in the artifact. Continue; stop only when no defensible choice exists.
+
+5. **Write** — Decide the file mapping before writing. The `issue-curation` skill owns the file shape. Each feature passes four tests or it is not done:
 
    - States what changes after it lands. Restating the idea without adding behavior means split or drop.
    - Names exact files from the index — paths or globs, never directories or guesses.
@@ -33,9 +41,14 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    `write {path: "issues/features/todo/cart-tax-display.md", content: "# Show tax in cart total\n..."}`
 
-   Docs go to `docs/<slug>.md`, one per durable concept the build will need. Too vague to scope means `ask` with specific questions — never placeholder files.
+   Docs go to `docs/<slug>.md`, one per durable concept the build will need.
 
-5. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a failure — re-inspect first.
+   **Definition of ready** — before `write`, every artifact must pass its list. If one line fails, return to step 4 and ask; never write a placeholder.
+
+   - Feature/bug: names exact files, states the observable change, names an `acceptance:` command, and every open decision is either resolved or recorded as an assumption.
+   - Doc: names its audience, the question it answers, and the decisions it records; every open decision is resolved or recorded as an assumption.
+
+6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a failure — re-inspect first.
 
    Conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. This role edits only inside `issues/`/`docs/` — resolve there with `strategy: "edited"`, elsewhere take a side only when one is wholly right, otherwise `command {action: "run", name: "vcs:merge-abort"}` and report blocked.
 

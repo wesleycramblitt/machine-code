@@ -18,7 +18,9 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
-3. **Write it down, then edit** — Only the last two turns stay visible, but read bodies reappear under `<evidence>`, fresh from disk. Notes carry conclusions, not bytes: what each edit depends on lives in a note so the file stays closed.
+3. **Clarify the issue** — After the reads, pull the `requirements` skill when the behavior, scope, or acceptance is still unclear. The issue does not have to name files; research finds them. Ask one question at a time with two or three options and a recommendation. Record each answer as a note and honor it in the change. If `ask` is unavailable, infer the most likely intent from the code and conventions, record the assumption as a note, and continue. Stop only if the change cannot be made safely without an external fact.
+
+4. **Write it down, then edit** — Only the last two turns stay visible, but read bodies reappear under `<evidence>`, fresh from disk. Notes carry conclusions, not bytes: what each edit depends on lives in a note so the file stays closed.
 
    - Write down what each edit depends on: behavior, exact lines, surprises — enough that the file stays closed. One line plus `path:line` ref, never whole files.
    - Then edit: if the next step needs no new fact, edit instead of reading again.
@@ -32,11 +34,11 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    No symbolic anchor? `edit {path, oldString: "...", newString: "..."}`. On a miss the tool returns the closest current text — fix the anchor and resend, no re-read. Batch independent files in one call. The diff is the confirmation — never re-read. Write the tests with the change in the project's existing framework and layout; cover behavior and edge cases, not the implementation line by line.
 
-4. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Attach bookkeeping to work turns — never spend a turn on plan/notes alone. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
+5. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Attach bookkeeping to work turns — never spend a turn on plan/notes alone. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
 
    Note conclusions, not receipts: what the code does and where (`path:line`), what you decided and why, what blocks you and what would unblock it. Fix or drop what turned out wrong — rewriting a note updates it, `forget` removes one by its text. Finished notes stay; checked-off plan steps are the done-signal.
 
-5. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. Never resubmit identical arguments after a validation failure — re-inspect first. Never rerun anything without changing code first.
+6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. Never resubmit identical arguments after a validation failure — re-inspect first. Never rerun anything without changing code first.
 
    Merge conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. Edit each to the correct final code, clear every `<<<<<<<` / `=======` / `>>>>>>>` marker, then `command {action: "run", name: "vcs:resolve", args: {path: "src/file.ts", strategy: "edited"}}` per path and `finish` again. Only when one side is wholly correct, take it with `strategy: "ours"` (yours) or `"theirs"` (`origin/main`). If unresolvable, `command {action: "run", name: "vcs:merge-abort"}` and report blocked — never finish completed afterwards.
 

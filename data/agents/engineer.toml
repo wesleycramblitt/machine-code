@@ -33,3 +33,6 @@ code = 0.4
 agentic = 0.2
 reasoning = 0.2
 general = 0.2
+
+[skills]
+requirements = "on-demand"

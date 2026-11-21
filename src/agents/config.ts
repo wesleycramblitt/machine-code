@@ -90,7 +90,7 @@ const AMBIGUITY_PROMPTS: Record<AmbiguityMode, string> = {
   adaptive:
     "Ambiguity policy ADAPTIVE: use context and conventions. Ask on material risk; otherwise decide.",
   autonomous:
-    "Ambiguity policy AUTONOMOUS: infer intent. Do not ask. If blocked, stop and report.",
+    "Ambiguity policy AUTONOMOUS: infer intent. Do not ask. Choose the smallest defensible scope, record each assumption, and continue. Stop only when the task cannot proceed without an external fact.",
 };
 
 const AMBIGUITY_PROMPTS_NO_ASK: Record<AmbiguityMode, string> = {
@@ -101,7 +101,7 @@ const AMBIGUITY_PROMPTS_NO_ASK: Record<AmbiguityMode, string> = {
   adaptive:
     "Ambiguity policy ADAPTIVE: use context and conventions. If a material risk remains, stop and report it.",
   autonomous:
-    "Ambiguity policy AUTONOMOUS: infer intent. Do not ask. If blocked, stop and report.",
+    "Ambiguity policy AUTONOMOUS: infer intent. Do not ask. Choose the smallest defensible scope, record each assumption, and continue. Stop only when the task cannot proceed without an external fact.",
 };
 
 export function ambiguityPrompt(mode: AmbiguityMode, askAvailable = true): string {
