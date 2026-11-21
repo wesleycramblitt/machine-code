@@ -165,7 +165,7 @@ const SPECS: CommandSpec[] = [
       const target = commandPath(ctx.root, path);
       if ("error" in target) return { text: target.error, isError: true };
       if (target.rel === ".machine_code/issues" || target.rel.startsWith(".machine_code/issues/")) {
-        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create or issue:update (issue:delete is human-only)`, isError: true };
       }
       if (existsSync(target.abs)) {
         return statSync(target.abs).isDirectory()
@@ -197,7 +197,7 @@ const SPECS: CommandSpec[] = [
       if ("error" in src) return { text: src.error, isError: true };
       if ("error" in dst) return { text: dst.error, isError: true };
       if (src.rel === ".machine_code/issues" || src.rel.startsWith(".machine_code/issues/") || dst.rel === ".machine_code/issues" || dst.rel.startsWith(".machine_code/issues/")) {
-        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create or issue:update (issue:delete is human-only)`, isError: true };
       }
       if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
       if (existsSync(dst.abs) && !asBool(args.force)) {
@@ -236,7 +236,7 @@ const SPECS: CommandSpec[] = [
       if ("error" in src) return { text: src.error, isError: true };
       if ("error" in dst) return { text: dst.error, isError: true };
       if (src.rel === ".machine_code/issues" || src.rel.startsWith(".machine_code/issues/") || dst.rel === ".machine_code/issues" || dst.rel.startsWith(".machine_code/issues/")) {
-        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create or issue:update (issue:delete is human-only)`, isError: true };
       }
       if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
       const source = statSync(src.abs);
@@ -269,7 +269,7 @@ const SPECS: CommandSpec[] = [
       const target = commandPath(ctx.root, path);
       if ("error" in target) return { text: target.error, isError: true };
       if (target.rel === ".machine_code/issues" || target.rel.startsWith(".machine_code/issues/")) {
-        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+        return { text: `raw .machine_code/issues/ mutation is forbidden; use issue:create or issue:update (issue:delete is human-only)`, isError: true };
       }
       if (!existsSync(target.abs)) return { text: `path does not exist: ${target.rel}`, isError: true };
       const stat = statSync(target.abs);

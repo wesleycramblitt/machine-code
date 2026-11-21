@@ -11,18 +11,18 @@ description: Use when creating or updating issues under .machine_code/issues/. I
 .machine_code/issues/
   ideas/<slug>.md              # needs research
   ideas/.researched/<slug>.md  # researched
-  features/{todo,blocked,done}/<slug>.md
-  bugs/{todo,blocked,done}/<slug>.md
+  features/{todo,needs-human-review,failed-gates,failed-human-review,blocked,done}/<slug>.md
+  bugs/{todo,needs-human-review,failed-gates,failed-human-review,blocked,done}/<slug>.md
 ```
 
 Status is a directory: the item's status is where it lives.
 
 ## File shape
 
-Plain markdown. Optional `key: value` header lines at the top (only non-defaults), a blank line, then the prompt body. See `.machine_code/issues/_template.md`.
+Plain markdown. Optional `key: value` header lines at the top (only non-defaults), a blank line, then the prompt body. Pass header fields as `issue:create`/`issue:update` args and the body as `prompt`.
 
 ```
-priority: medium
+priority: high
 tags: tui
 files: src/tui/screens/run-detail/run-detail.ts
 keywords: Run Details, Timeline
@@ -38,7 +38,7 @@ One paragraph of detail the prompt needs.
 - **files**: repo-relative paths or globs the issue expects to touch (e.g. `src/loop.ts, src/tools/*.ts`). The runner uses this to refuse concurrent same-file work and to require a `depends:` edge when two issues overlap.
 - **keywords**: comma-separated phrases naming the exact UI strings, page names, or commands involved (optional; the runner matches these exactly to find files).
 - **acceptance**: comma list of runner commands (`script:build`, `script:test`, ...). Every created feature/bug issue needs one.
-- **status**: the directory. Ideas leave `ideas/` for `.researched/` when research finishes; features/bugs move todo → blocked ⇄ todo → done. There is no archived status: delete an issue you no longer want.
+- **status**: the directory. Ideas leave `ideas/` for `.researched/` when research finishes; features/bugs move between `todo`, `needs-human-review`, `failed-gates`, `failed-human-review`, `blocked`, and `done` (the harness owns status moves during builds). There is no archived status: a human deletes an unwanted issue with `issue:delete`; never create filler to delete.
 
 ## Writing good issues
 
@@ -57,13 +57,13 @@ These waste turns. Do not create them.
 - **Mirroring.** If the research prompt is "add settings caching" and the issue says "add settings caching" with no delta, you added nothing. Value comes from *why* it matters, *what* changes, and *how* to verify it.
 - **Implementation instead of behavior.** "Add an AppConfig class with load/save methods" tells how, not what. "Settings persist across restarts and load lazily" tells what — the engineer chooses the how.
 - **Vague scope.** "Refactor the layout engine" — what is wrong with it? What does success look like? If you cannot name the files or acceptance, follow the `requirements` skill before writing an issue.
-- **Filler.** An issue that adds no behavior, fixes no bug, and documents nothing familiar. Delete or omit it.
+- **Filler.** An issue that adds no behavior, fixes no bug, and documents nothing familiar. Omit it — `issue:delete` is human-only.
 - **Non-issues.** "Add a comment explaining X." Docs are useful — put them in `docs/`, not in issues.
 
 ## Procedure
 
 1. Find the item with `issue:list`, then read it with `issue:show`.
-2. Create with `issue:create` and change with `issue:update`. Pass the header fields as command args and the prompt as `prompt`. Never raw-write or raw-edit `.machine_code/issues/`.
+2. Create with `issue:create` and change with `issue:update`. Pass the header fields as command args and the prompt as `prompt`. Never raw-write or raw-edit `.machine_code/issues/` with `write`/`edit` or `core:*` commands, and never call `issue:delete` (human-only).
 3. Never update the run's own issue: the harness owns its status and body. Other issues may be created or changed, including status moves.
 
 ## Research workflow: curating issues from investigation

@@ -116,9 +116,15 @@ export const researchVerifyCommand: CommandSpec = {
       const allowedIssuePrefixes = [
         ".machine_code/issues/ideas/",
         ".machine_code/issues/features/todo/",
+        ".machine_code/issues/features/needs-human-review/",
+        ".machine_code/issues/features/failed-gates/",
+        ".machine_code/issues/features/failed-human-review/",
         ".machine_code/issues/features/blocked/",
         ".machine_code/issues/features/done/",
         ".machine_code/issues/bugs/todo/",
+        ".machine_code/issues/bugs/needs-human-review/",
+        ".machine_code/issues/bugs/failed-gates/",
+        ".machine_code/issues/bugs/failed-human-review/",
         ".machine_code/issues/bugs/blocked/",
         ".machine_code/issues/bugs/done/",
       ];
@@ -127,7 +133,7 @@ export const researchVerifyCommand: CommandSpec = {
       );
       if (misplaced.length > 0) {
         return {
-          text: `research:verify failed — issues must live in todo, blocked, done, or ideas dirs: ${misplaced.join(", ")}`,
+          text: `research:verify failed — issues must live in todo, needs-human-review, failed-gates, failed-human-review, blocked, done, or ideas dirs: ${misplaced.join(", ")}`,
           isError: true,
         };
       }
