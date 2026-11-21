@@ -43,6 +43,7 @@ import {
   rangeAround,
 } from "../map/deterministic.js";
 import { describeCommand, runCommand, type CommandRunResult } from "../commands/registry.js";
+import { ISSUE_WRITE_COMMANDS } from "../agents/config.js";
 import { documentSections, sectionTitle } from "../map/sections.js";
 import { askTool, type AskContext } from "./ask.js";
 import { skillTool, type SkillToolContext } from "./skill.js";
@@ -1981,6 +1982,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         // Everything else non-readonly needs code:write.
         const knowledgeWrite = (ctx.capabilities ?? []).includes("knowledge:write");
         const codeWrite = (ctx.capabilities ?? []).includes("code:write");
+        const issueWrite = (ctx.capabilities ?? []).includes("issue:write");
         const referenceWrite = params.name.startsWith("reference:") && knowledgeWrite;
         const mergeWrite = (() => {
           if (!params.name.startsWith("vcs:") || !knowledgeWrite) return false;
@@ -1993,14 +1995,18 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
           if (!target) return false;
           return roots.some((root) => target === root || target.startsWith(root.endsWith("/") ? root : `${root}/`));
         })();
-        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite) {
-          return fail(`${params.name} mutates files; this role is read-only`);
-        }
-        if ((params.name === "issue:create" || params.name === "issue:update") && !knowledgeWrite) {
-          return fail(`${params.name} requires knowledge:write; research role may call it, engineer role must not`);
-        }
-        if (params.name === "issue:delete" && !(knowledgeWrite && codeWrite)) {
+        const issueCurate = ISSUE_WRITE_COMMANDS.includes(params.name);
+        // Issue commands are checked before the generic mutation gate: issue
+        // curation is knowledge work, not worktree mutation, so issue:write is
+        // enough even when code:write (allowMutations) is absent.
+        if (params.name === "issue:delete" && !(issueWrite && codeWrite)) {
           return fail(`issue:delete is human-only; neither research nor engineer roles may call it in normal work`);
+        }
+        if (issueCurate && !issueWrite) {
+          return fail(`${params.name} requires issue:write; research role may call it, engineer role must not`);
+        }
+        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite && !issueCurate) {
+          return fail(`${params.name} mutates files; this role is read-only`);
         }
         const result: CommandRunResult = await runCommand(
           params.name,
@@ -2009,6 +2015,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
             root: ctx.root,
             commands: ctx.commands,
             processes: ctx.processes,
+            ...(ctx.issuePath ? { issuePath: ctx.issuePath } : {}),
             changedFiles: ctx.state
               ? () => {
                   const seen = new Set<string>();

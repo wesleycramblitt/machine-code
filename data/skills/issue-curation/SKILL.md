@@ -62,9 +62,9 @@ These waste turns. Do not create them.
 
 ## Procedure
 
-1. Read `issues/` to find the item.
-2. Edit the file text directly — the text is the prompt. Optional `key: value` header lines set metadata. Keep the prompt tight; put narrative in the body.
-3. Nobody moves files by hand inside a run: status moves are the harness's job after gates pass. Outside a run, move a file with `machine_code issue move <slug> <status>` (or `git mv`) and commit `issues/`.
+1. Find the item with `issue:list`, then read it with `issue:show`.
+2. Create with `issue:create` and change with `issue:update`. Pass the header fields as command args and the prompt as `prompt`. Never raw-write or raw-edit `issues/`.
+3. Never update the run's own issue: the harness owns its status and body. Other issues may be created or changed, including status moves.
 
 ## Research workflow: curating issues from investigation
 
@@ -85,7 +85,7 @@ When the research goal is to create scoped feature/bug issues from a prompt, the
    - A body rich enough that an engineer can implement from it without ambiguity
    - **Map files to issues before writing.** List which files each issue will touch. When two issues touch the same files, they MUST be ordered with `depends:` — the narrower or foundational one first — because parallel branches editing the same files cannot auto-merge. Issues with disjoint footprints stay parallel (no `depends:`). Same rule for follow-ons: schema/record first, then the code that uses it; migration first, then callers; API first, then client. `research:verify` rejects overlapping `files:` without a `depends:` edge, so fix the header before finishing.
 4. **Name the concrete delta.** What behavior changes? What files will the engineer touch? This does not need to be a precise edit list — `"the issue screen status line needs to show the run phase"` is enough — but it must name the observable change.
-5. **Write each issue.** Follow the file shape above. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
+5. **Create each issue** with `issue:create`. Follow the file shape above. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
 6. **If the prompt is too vague to decompose** (a few words with no specifics, examples, or mention of existing behavior), follow the `requirements` skill before writing: ask one scope-changing question at a time, with options and a recommendation. Do not write a placeholder `ideas/` file; the research agent's purpose is to turn vagueness into concreteness through investigation and questioning.
 
 ### Decomposition guidelines

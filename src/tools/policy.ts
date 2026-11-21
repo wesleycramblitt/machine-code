@@ -52,7 +52,7 @@ export const TOOL_GUIDE = [
   "### 7. Commands and skills — discover, then run",
   'All commands go through the command tool: `command {action: "run", name: "...", args: {...}}`. A bare name runs it: `command {name: "issue:list"}`. `command {action: "list"}` shows every schema; `command {action: "describe", name: "..."}` shows one.',
   "",
-  '  Issues: `issue:list` (filter with `args: {kind, status}`), `issue:show` with `args: {slug}`',
+  '  Issues: `issue:list` (filter with `args: {kind, status}`), `issue:show` with `args: {slug}`; research curates with `issue:create` / `issue:update` (never its own issue); `issue:delete` is human-only',
   "  References: `reference:find` / `reference:read` — existing references only, read-only",
   "  Conflicts: `vcs:conflicts` lists unresolved files; `vcs:resolve` with `args: {path, strategy}`; `vcs:merge-abort`",
   "  History: `core:status` for the tree, `core:diff` with `args: {path}` for one file's patch (the prompt carries stat only), `core:history` / `core:show` for commits",

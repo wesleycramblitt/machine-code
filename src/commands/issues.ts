@@ -334,6 +334,9 @@ export function issueCommands(root: string): CommandSpec[] {
         }
         const issue = findIssue(l, slug);
         if (!issue) return { text: `issue not found: ${slug}`, isError: true };
+        if (ctx.issuePath && issue.rel === ctx.issuePath) {
+          return { text: `refusing to update the run's own issue (${issue.rel}); the harness owns its status`, isError: true };
+        }
         const statusRaw = asString(args.status);
         if (statusRaw && !legalStatus(issue.kind, statusRaw)) {
           return { text: `bad status ${JSON.stringify(statusRaw)} for ${issue.kind}`, isError: true };
@@ -430,6 +433,9 @@ export function issueCommands(root: string): CommandSpec[] {
         }
         const issue = findIssue(l, slug);
         if (!issue) return { text: `issue not found: ${slug}`, isError: true };
+        if (ctx.issuePath && issue.rel === ctx.issuePath) {
+          return { text: `refusing to delete the run's own issue (${issue.rel})`, isError: true };
+        }
         rmSync(issue.path, { force: true });
         return { text: `deleted ${issue.rel}`, isError: false };
       },

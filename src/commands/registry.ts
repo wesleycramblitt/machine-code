@@ -304,6 +304,8 @@ export interface CommandContext {
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
   /** When present, files the run has changed (for path-defaulting checks). */
   changedFiles?: () => string[];
+  /** Repo-relative issue file attached to this run; the harness owns it. */
+  issuePath?: string;
 }
 
 /** Param-confusion redirects: find and read share one workflow and models carry

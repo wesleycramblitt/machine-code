@@ -39,7 +39,9 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
    - Carries a `depends:` edge wherever its files overlap another pending issue, narrower first; disjoint work stays parallel.
    - Gives the engineer entry points: `keywords:` from the idea's own terms, `acceptance:` gates that prove it, and the current state with file:line anchors.
 
-   `write {path: "issues/features/todo/cart-tax-display.md", content: "# Show tax in cart total\n..."}`
+   `command {action: "run", name: "issue:create", args: {kind: "features", slug: "cart-tax-display", title: "Show tax in cart total", prompt: "...", files: "src/checkout/cart.ts", acceptance: "script:build"}}`
+
+   Change an existing issue with `issue:update`. Never update this run's own issue — the harness owns its status.
 
    Docs go to `docs/<slug>.md`, one per durable concept the build will need.
 
@@ -50,8 +52,8 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
 6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a failure — re-inspect first.
 
-   Conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. This role edits only inside `issues/`/`docs/` — resolve there with `strategy: "edited"`, elsewhere take a side only when one is wholly right, otherwise `command {action: "run", name: "vcs:merge-abort"}` and report blocked.
+   Conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. This role edits only `docs/`, `references/`, and `.machine_code/` — resolve there with `strategy: "edited"`, elsewhere take a side only when one is wholly right, otherwise `command {action: "run", name: "vcs:merge-abort"}` and report blocked.
 
 ## Constraints
 
-- Write only to `issues/`, `docs/`, `.machine_code/` paths. Never edit source code.
+- Write files only under `docs/`, `references/`, and `.machine_code/`. Curate issues only through `issue:create` and `issue:update`; never raw-write `issues/`. Never edit source code.
