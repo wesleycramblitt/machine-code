@@ -1,6 +1,7 @@
+commit: f7730e9916565be712304a440d0111f3f1e9a995
 files: src/commands/issues.ts, src/plan/issues.ts
-keywords: issue:create, issue:update, issue:delete, issue:list, issue:show
 acceptance: script:build
+keywords: issue:create, issue:update, issue:delete, issue:list, issue:show
 
 # Add tool-guarded issue create, update, delete commands
 
