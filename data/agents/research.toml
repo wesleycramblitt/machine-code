@@ -10,8 +10,8 @@ modes = []
 blurb = "Turn ideas into curated references, documents, and/or features/bugs"
 approval = ""
 ambiguity = "strict"
-capabilities = ["code:read", "context:inherit", "knowledge:write", "run:read", "web:fetch"]
-allowed_paths = ["issues/", "docs/", ".machine_code/"]
+capabilities = ["code:read", "context:inherit", "knowledge:write", "run:read", "web:fetch", "issue:write"]
+allowed_paths = ["docs/", "references/", ".machine_code/"]
 
 [selection]
 min_fit = 5.5

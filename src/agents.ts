@@ -4,6 +4,10 @@
  * Each role is one file (role metadata, weights, capabilities, and prompt).
  * Presets live in data/presets.toml. Core settings ship with machine code
  * and are not overridable. Custom agents can be added as new roles.
+ *
+ * Tool-guarded curation: research curates issues only through the `command`
+ * tool (issue:create, issue:update, issue:show); engineer has no issue
+ * write paths.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";

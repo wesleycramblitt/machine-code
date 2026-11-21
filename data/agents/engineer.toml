@@ -1,4 +1,5 @@
 # machine_code agent role: engineer
+# Issue curation uses the command tool (research role only); engineer has no issue write paths.
 # Machine override: ~/.machine_code/data/agents/engineer.toml
 # Repo prompt override: .machine_code/agents/engineer.md
 
