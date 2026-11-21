@@ -183,7 +183,9 @@ export async function runTui(): Promise<void> {
   stdin.setEncoding("utf8");
   process.stdout.write(ALT + HIDE);
 
+  let refreshTimer: ReturnType<typeof setInterval> | null = null;
   const cleanup = () => {
+    if (refreshTimer) clearInterval(refreshTimer);
     stdin.setRawMode?.(false);
     process.stdout.write(SYNC_OFF + SHOW + ALT_L);
   };
@@ -2069,6 +2071,18 @@ export async function runTui(): Promise<void> {
 
   // No automatic availability probe timer: probes are manual evidence only.
   process.stdout.on("resize", draw);
+  // Background refresh so run counts update without input. Skip while typing
+  // so periodic redraws never clobber the composer.
+  refreshTimer = setInterval(() => {
+    const textEntry =
+      s.screen === "answer" ||
+      s.screen === "correct" ||
+      s.screen === "prompt" ||
+      s.searchMode ||
+      (s.screen === "newrun" && (s.newRunInsert || s.modelPick !== null || s.itemPick !== null || s.newRunContextFiltering)) ||
+      (s.screen === "newissue" && (s.newIssueInsert || s.newIssueFieldEdit !== null));
+    if (!textEntry) draw();
+  }, 1000);
   draw();
   await new Promise(() => { /* run until exit */ });
 }
