@@ -1,5 +1,6 @@
 id: 72c2bf
 branch: mc/issue-curation-seems-to-be-broken-again-i-just-h-72c2bf
+commit: b2c4b7eba70c2973a44b43f3fa42f8b8d6211aba
 acceptance: research:verify
 
 Auto-created from run.
