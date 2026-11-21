@@ -1,6 +1,7 @@
+commit: 20d132689d7011c01d2d2a599099cecd4a791341
 files: src/agents.ts, src/agents/config.ts, src/policy/capabilities.ts, src/commands/research.ts, data/agents/research.toml, data/agents/engineer.toml, data/prompts/base.md
-keywords: issue:create, research:verify, allowed_paths, issue-curation
 acceptance: script:build
+keywords: issue:create, research:verify, allowed_paths, issue-curation
 
 # Wire roles, prompts, and verify for tool-guarded curation
 
