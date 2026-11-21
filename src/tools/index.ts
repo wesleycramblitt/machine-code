@@ -202,7 +202,7 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
         const abs = resolveWithin(ctx.root, params.path);
         const writeRel = toRelative(ctx.root, abs).replace(/\\/g, "/");
         if (writeRel === ".machine_code/issues" || writeRel.startsWith(".machine_code/issues/")) {
-          return fail(`raw write to .machine_code/issues/ is forbidden; use issue:create or issue:update`);
+          return fail(`raw write to .machine_code/issues/ is forbidden; use issue:create or issue:update (issue:delete is human-only)`);
         }
         if (isSecretPath(toRelative(ctx.root, abs))) {
           return fail(`refusing to write a secret file: ${params.path}`);
@@ -929,7 +929,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           for (const p of pathsToCheck) {
             const normalized = p.replace(/\\/g, "/").replace(/^\.\//, "");
             if (normalized === ".machine_code/issues" || normalized.startsWith(".machine_code/issues/")) {
-              return fail(`raw edit of .machine_code/issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
+              return fail(`raw edit of .machine_code/issues/ is forbidden; use issue:create or issue:update (issue:delete is human-only) (got: ${p})`);
             }
             const match = ctx.allowedPaths.some(
               (allowed) => normalized === allowed || normalized.startsWith(allowed.endsWith("/") ? allowed : allowed + "/"),
@@ -951,7 +951,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           for (const p of pathsToCheck) {
             const normalized = p.replace(/\\/g, "/").replace(/^\.\//, "");
             if (normalized === ".machine_code/issues" || normalized.startsWith(".machine_code/issues/")) {
-              return fail(`raw edit of .machine_code/issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
+              return fail(`raw edit of .machine_code/issues/ is forbidden; use issue:create or issue:update (issue:delete is human-only) (got: ${p})`);
             }
           }
         }

@@ -7,8 +7,8 @@
  *     ideas/
  *       <slug>.md              needs research
  *       .researched/<slug>.md  researched
- *     features/{todo,blocked,done}/<slug>.md
- *     bugs/{todo,blocked,done}/<slug>.md
+ *     features/{todo,needs-human-review,failed-gates,failed-human-review,blocked,done}/<slug>.md
+ *     bugs/{todo,needs-human-review,failed-gates,failed-human-review,blocked,done}/<slug>.md
  *
  * An issue file is plain markdown whose text IS the prompt — nothing else is
  * required. Optional `key: value` header lines at the very top set metadata
@@ -24,8 +24,8 @@
  *   Swap the linear scan for an index.
  *
  * Legacy `---` TOML front-matter files still read; they are rewritten in the
- * new form on the next touch. There is no "archived": delete an issue when it
- * is no longer wanted.
+ * new form on the next touch. There is no "archived": a human deletes an issue
+ * with issue:delete when it is no longer wanted.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { randomBytes, createHash } from "node:crypto";

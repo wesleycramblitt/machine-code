@@ -243,7 +243,7 @@ most inspection commands. Run `machine_code help` for the full dispatch list
 | Command | Example | What it does |
 | ------- | ------- | ------------ |
 | `run` | `machine_code run --agent research "…"` | Start an agent run from a prompt. Flags: `--agent`, `--ambiguity`, `--model`, `--provider`, `--tier`, `--max-price`. |
-| `issue run` / `issue list` / `issue create` | `machine_code issue create features <slug> "do the thing" --verify script:build` | Turn ideas into (and manage) YAML issues under `features/` or `bugs/`. |
+| `issue run` / `issue list` / `issue create` | `machine_code issue create features <slug> "do the thing" --acceptance script:build` | Turn ideas into (and manage) Markdown issues under `.machine_code/issues/` via `issue:create`/`issue:update`. |
 | `build` | `machine_code build <slug>` | Engineer one issue in an `mc/<slug>` worktree. |
 | `batch` | `machine_code batch --auto-approve` | Build todo issues by priority/dependency, then merge. |
 | `approve` | `machine_code approve <slug>` | Merge `mc/<slug>` into `main`. |

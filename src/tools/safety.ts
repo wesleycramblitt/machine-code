@@ -231,7 +231,7 @@ export function isIssuesPath(relPath: string): boolean {
 
 /** Error text for blocked .machine_code/issues/ writes; names the correct commands. */
 export function issuesWriteError(callerPath: string): string {
-  return `direct writes under .machine_code/issues/ are blocked (got: ${callerPath}); use issue:create or issue:update instead`;
+  return `direct writes under .machine_code/issues/ are blocked (got: ${callerPath}); use issue:create or issue:update instead (issue:delete is human-only)`;
 }
 
 /**

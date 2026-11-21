@@ -52,8 +52,8 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
 6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a failure — re-inspect first.
 
-   Conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. This role edits only `docs/`, `references/`, and `.machine_code/` — resolve there with `strategy: "edited"`, elsewhere take a side only when one is wholly right, otherwise `command {action: "run", name: "vcs:merge-abort"}` and report blocked.
+   Conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. This role edits only `docs/`, `references/`, and `.machine_code/` — resolve those there with `strategy: "edited"` (never resolve `.machine_code/issues/` with `vcs:resolve`; curate issues via `issue:create`/`issue:update` instead), elsewhere take a side only when one is wholly right, otherwise `command {action: "run", name: "vcs:merge-abort"}` and report blocked.
 
 ## Constraints
 
-- Write files only under `docs/`, `references/`, and `.machine_code/`. Curate issues only through `issue:create` and `issue:update`; never raw-write `.machine_code/issues/`. Never edit source code.
+- Write files only under `docs/`, `references/`, and `.machine_code/`. Curate issues only through `issue:create` and `issue:update` (never raw-write/raw-edit `.machine_code/issues/` with `write`/`edit` or `core:*`, never call `issue:delete` — it is human-only). Never edit source code.

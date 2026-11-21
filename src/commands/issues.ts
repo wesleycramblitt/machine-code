@@ -1,8 +1,8 @@
 /**
- * machine_code — issue commands: list, show, create, update, delete.
+ * machine_code — issue commands: list, show, create, update (delete is human-only).
  *
- * Agents create and change issues only through issue:create, issue:update,
- * and issue:delete. The handlers reuse the plan layer (writeIssue,
+ * Agents create and change issues only through issue:create and issue:update
+ * (issue:delete is human-only). The handlers reuse the plan layer (writeIssue,
  * updateIssueContents, updateIssueMeta, moveIssue) and accept only legal
  * directories computed by issueDir. Raw write/edit tools must not target
  * .machine_code/issues/ paths directly. Issues are local-only and never
@@ -36,9 +36,15 @@ const ISSUE_DIRS = [
   ".machine_code/issues/ideas",
   ".machine_code/issues/ideas/.researched",
   ".machine_code/issues/features/todo",
+  ".machine_code/issues/features/needs-human-review",
+  ".machine_code/issues/features/failed-gates",
+  ".machine_code/issues/features/failed-human-review",
   ".machine_code/issues/features/blocked",
   ".machine_code/issues/features/done",
   ".machine_code/issues/bugs/todo",
+  ".machine_code/issues/bugs/needs-human-review",
+  ".machine_code/issues/bugs/failed-gates",
+  ".machine_code/issues/bugs/failed-human-review",
   ".machine_code/issues/bugs/blocked",
   ".machine_code/issues/bugs/done",
 ];
@@ -138,7 +144,7 @@ export function issueCommands(root: string): CommandSpec[] {
       args: () => [],
       schema: {
         kind: { type: "string", description: "Filter: ideas | features | bugs (default all)." },
-        status: { type: "string", description: "Filter: todo | blocked | done | researched (default all)." },
+        status: { type: "string", description: "Filter: todo | needs-human-review | failed-gates | failed-human-review | blocked | done | researched (default all)." },
       },
       readonly: true,
       timeoutMs: 10_000,
@@ -151,7 +157,8 @@ export function issueCommands(root: string): CommandSpec[] {
           // Derive kind/status from directory path
           const parts = dir.replace(".machine_code/issues/", "").split("/");
           const kind = parts[0]!;
-          const status = parts.length > 1 ? parts[1]! : kind === "ideas" ? "needs-research" : "todo";
+          const rawStatus = parts.length > 1 ? parts[1]! : kind === "ideas" ? "needs-research" : "todo";
+          const status = rawStatus === ".researched" ? "researched" : rawStatus;
 
           if (kindFilter && kind !== kindFilter) continue;
           if (statusFilter && status !== statusFilter) continue;
