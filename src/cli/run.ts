@@ -4,7 +4,7 @@
  * Split from `src/cli.ts`; behavior unchanged. See `src/cli/common.ts` for
  * shared setup (flags, runtime, formatting, run lookup).
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,20 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
+
+/** Issue rels the run curated (via issue:create/update/delete), tracked in
+ * the run dir. Issues live outside git, so this — not a worktree commit —
+ * is a research run's deliverable. */
+function readTrackedIssues(runDir: string): string[] {
+  try {
+    const raw = readFileSync(join(runDir, "issues-changed.json"), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.filter((e): e is string => typeof e === "string");
+  } catch {
+    // No log means no tracked changes.
+  }
+  return [];
+}
 
 /** Update the local main branch from the remote. Non-blocking: if the remote is
  * unreachable the work continues with the local state. A divergence is
@@ -1160,9 +1174,26 @@ export async function cmdRun(argv: string[]): Promise<number> {
         };
       }
       if (!commit && result.status !== "blocked") {
-        const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
-        if (agentNameParsed === "research" && (outcome === "curated" || outcome === "done")) {
-          recorder.event("research_no_commit_expected", { outcome });
+        // Research curates issues directly in the main repo (.machine_code/
+        // is gitignored), so an issue-only run has no worktree commit. The
+        // tracked-issue log is the deliverable — not the Outcome: text.
+        if (agentNameParsed === "research") {
+          const tracked = readTrackedIssues(recorder.dir);
+          if (tracked.length > 0) {
+            recorder.event("research_issues_created", { count: tracked.length, files: tracked });
+            if (issue.kind === "ideas") {
+              moveIssue(l, issue.slug, "researched");
+              recorder.event("idea_researched", { slug: issue.slug });
+            }
+          } else {
+            const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
+            if (outcome === "curated" || outcome === "done") {
+              recorder.event("research_no_commit_expected", { outcome });
+            } else {
+              const noChange = `${agentNameParsed} produced no committable change`;
+              result = { ...result, status: "blocked", error: noChange };
+            }
+          }
         } else {
           const noChange = `${agentNameParsed} produced no committable change`;
           // A completed engineer run with nothing to commit means the model
@@ -1716,11 +1747,20 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
           }
           result = { ...result, status: "blocked", error: noChange };
         } else {
-          const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
-          if (outcome !== "curated" && outcome !== "done") {
-            result = { ...result, status: "blocked", error: "research produced no committable change" };
+          const tracked = readTrackedIssues(recorder.dir);
+          if (tracked.length > 0) {
+            recorder.event("research_issues_created", { count: tracked.length, files: tracked });
+            if (resumeIssue.kind === "ideas") {
+              moveIssue(l2, resumeIssue.slug, "researched");
+              recorder.event("idea_researched", { slug: resumeIssue.slug });
+            }
           } else {
-            recorder.event("research_no_commit_expected", { outcome });
+            const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
+            if (outcome !== "curated" && outcome !== "done") {
+              result = { ...result, status: "blocked", error: "research produced no committable change" };
+            } else {
+              recorder.event("research_no_commit_expected", { outcome });
+            }
           }
         }
       } catch (error) {
