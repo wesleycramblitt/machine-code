@@ -20,10 +20,17 @@ Provider keys come from environment variables only (e.g. `OPENROUTER_API_KEY`,
 ## Setup
 ```
 npm install && npm run build
-node dist/cli.js install   # installs any missing base CLIs (pinned static binaries)
+node dist/cli.js install   # installs missing base CLIs and links machine_code onto PATH
 node dist/cli.js init      # checks CLIs, config, and repo layout
 node dist/cli.js catalogue refresh
 ```
+
+`machine_code install` puts a `machine_code` symlink in the first user-writable
+bin dir already on `PATH` (`~/.local/bin`, else `~/bin`), falling back to
+`~/.machine_code/bin` and printing the `export PATH=...` line when that is not
+on `PATH`. Add `--no-self` to skip the self-link, or `--force` to replace a
+non-symlink already named `machine_code`. The equivalent npm form is
+`npm run install:global`.
 
 ## Usage
 ```

@@ -160,7 +160,10 @@ Usage:
                                     [--skill-modes '<json>'] per-skill include|on-demand|exclude
   machine_code init                 Check CLIs, config, and repo layout
   machine_code install [--method download|pacman|apt|dnf|zypper|apk|cargo] [cli...]
-                                    Install missing base CLIs (default: pinned static binaries)
+                                    Install missing base CLIs (default: pinned static
+                                    binaries) and link the machine_code binary onto PATH.
+                                    Add --no-self to skip the self-link, --force to
+                                    replace a non-symlink already at that name.
   machine_code providers            List providers, key sources, and model counts
   machine_code models [filter]      Inspect the catalogue (--all, --provider, --family,
                                     --coding, --tool, --min-cap, --axis, --sort, --axes, --json)
@@ -287,6 +290,7 @@ export const BOOLEAN_FLAGS = new Set([
   "yes",
   "keep-runs",
   "hints",
+  "no-self",
 ]);
 
 export function parseFlags(argv: string[]): { flags: Map<string, string>; positional: string[] } {

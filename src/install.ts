@@ -8,9 +8,9 @@
  * methods. Every installed binary is verified by running it.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export interface CliSpec {
   /** Canonical name used on the command line. */
@@ -204,6 +204,105 @@ export interface InstallOutcome {
   detail: string;
 }
 
+/** Binary name used for the machine_code self-link. */
+export const SELF_BIN = "machine_code";
+
+/** Real path of the CLI entry point currently running, or null if unknown. */
+export function selfCliPath(): string | null {
+  const entry = process.argv[1];
+  if (!entry) return null;
+  try {
+    return realpathSync(entry);
+  } catch {
+    return null;
+  }
+}
+
+function resolvedIfExists(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Link the running `machine_code` binary into a user-writable bin dir so it is
+ * on PATH. A symlink (like `npm run install:global`) stays current across
+ * rebuilds; a non-symlink target is never replaced unless `force`.
+ */
+export function installSelf(binDir: string, opts: { force?: boolean } = {}): InstallOutcome {
+  const name = SELF_BIN;
+  const source = selfCliPath();
+  if (!source) {
+    return { name, status: "failed", detail: "cannot locate the running CLI entry point" };
+  }
+  // The shebang only works if the file is executable; `npm run build` sets this,
+  // but a plain `tsc` output may not.
+  try {
+    accessSync(source, constants.X_OK);
+  } catch {
+    try {
+      chmodSync(source, 0o755);
+    } catch (error) {
+      return { name, status: "failed", detail: `cannot make ${source} executable: ${(error as Error).message}` };
+    }
+  }
+
+  const target = join(binDir, name);
+  let status: InstallOutcome["status"];
+  try {
+    let existing: ReturnType<typeof lstatSync> | null = null;
+    try {
+      existing = lstatSync(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (!existing) {
+      symlinkSync(source, target);
+      status = "installed";
+    } else if (existing.isSymbolicLink()) {
+      const link = readlinkSync(target);
+      if (resolve(dirname(target), link) === source) {
+        status = "present";
+      } else {
+        unlinkSync(target);
+        symlinkSync(source, target);
+        status = "installed";
+      }
+    } else {
+      if (!opts.force) {
+        return { name, status: "failed", detail: `${target} exists (not a symlink); use --force to replace` };
+      }
+      rmSync(target, { recursive: true, force: true });
+      symlinkSync(source, target);
+      status = "installed";
+    }
+  } catch (error) {
+    return { name, status: "failed", detail: `cannot link ${source} -> ${target}: ${(error as Error).message}` };
+  }
+
+  const version = verify(target);
+  if (version === null) {
+    try {
+      unlinkSync(target);
+    } catch {
+      // Best-effort cleanup of a link we just created.
+    }
+    return { name, status: "failed", detail: `${target} linked but does not run (exec bit or shebang missing?)` };
+  }
+
+  let detail = `${target} -> ${source}`;
+  if (status === "installed") detail += ` (${version})`;
+  // Another copy earlier on PATH would shadow the link we just made.
+  const shadow = findOnPath([name]);
+  if (shadow && resolvedIfExists(shadow) !== source) {
+    detail += ` [note: ${shadow} comes first on PATH]`;
+  }
+  return { name, status, detail };
+}
+
+
 async function installOne(spec: CliSpec, method: InstallMethod, binDir: string): Promise<InstallOutcome> {
   if (method === "cargo") {
     if (!spec.cargo) return { name: spec.name, status: "no-method", detail: "no cargo package mapping" };
@@ -267,6 +366,10 @@ export interface InstallOptions {
   method: InstallMethod;
   home: string;
   only?: string[];
+  /** Also link the running machine_code binary into the bin dir. Default true. */
+  self?: boolean;
+  /** Replace a non-symlink occupying the machine_code target name. */
+  force?: boolean;
 }
 
 export async function installClis(options: InstallOptions): Promise<number> {
@@ -281,6 +384,9 @@ export async function installClis(options: InstallOptions): Promise<number> {
 
   process.stdout.write(`machine_code install — method ${options.method}, arch ${arch}, bin dir ${binDir}\n\n`);
   const outcomes: InstallOutcome[] = [];
+  if (options.self !== false) {
+    outcomes.push(installSelf(binDir, { force: options.force }));
+  }
   for (const spec of specs) {
     const present = findOnPath(spec.binaries);
     if (present) {

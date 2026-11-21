@@ -23,16 +23,18 @@ git clone <your-source> machine_code
 cd machine_code
 npm install
 npm run build            # tsc + keep dist/cli.js executable (see scripts/build.sh)
-node dist/cli.js install # installs any missing base CLIs (pinned static binaries)
+node dist/cli.js install # installs missing base CLIs and links machine_code onto PATH
 node dist/cli.js init    # checks CLIs, config, and repo layout
 node dist/cli.js catalogue refresh
 ```
 
-Optionally install a `machine_code` binary on your PATH:
-
-```bash
-npm run install:global
-```
+`machine_code install` also links the running binary into the first
+user-writable bin dir already on `PATH` (`~/.local/bin`, else `~/bin`), so the
+`machine_code` command works. If no such dir is on `PATH` it falls back to
+`~/.machine_code/bin` and prints the `export PATH=...` line to add. Flags:
+`--no-self` skips the self-link, `--force` replaces a non-symlink already named
+`machine_code`. `npm run install:global` does the same link via npm's global
+prefix.
 
 `npm run typecheck` runs `tsc --noEmit` for a fast feedback loop without writing
 `dist/`.
@@ -257,7 +259,7 @@ most inspection commands. Run `machine_code help` for the full dispatch list
 | `policy` | `machine_code policy; machine_code policy edit` | Show or edit selection floors/weights. |
 | `providers` | `machine_code providers` | Show which key supplies each provider. |
 | `spend` | `machine_code spend --days 30` | Report cost across recent runs. |
-| `init` / `install` | `machine_code init; machine_code install` | Check/env the base CLIs and repo layout. |
+| `init` / `install` | `machine_code init; machine_code install` | Check/env the base CLIs and repo layout; install also links `machine_code` onto PATH. |
 | `lsp` | `machine_code lsp list` | List/install/status language servers. |
 | `tools` | `machine_code tools` | List artifacts/tools/scripts the agent can use. |
 | `config` / `settings` | `machine_code config paths` | Inspect configuration paths. |

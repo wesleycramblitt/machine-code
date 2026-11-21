@@ -51,7 +51,7 @@ import { buildSettings, settingsFileFor } from "../tui/settings.js";
 import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "../data.js";
 import { runTui } from "../tui.js";
 import { SEARCH_EXCLUDES } from "../tools/safety.js";
-import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "../install.js";
+import { BASE_CLIS, findOnPath, installClis, SELF_BIN, type InstallMethod } from "../install.js";
 import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serverForLanguage } from "../lsp/index.js";
 
 import { fail, parseFlags, loadRuntime, type Runtime } from "./common.js";
@@ -85,6 +85,13 @@ export function cmdInit(): number {
     process.stdout.write(`  ok       gh (GitHub CLI — available)\n`);
   } else {
     process.stdout.write(`  MISSING  gh (GitHub CLI) — install: https://cli.github.com\n`);
+  }
+
+  const self = findOnPath([SELF_BIN]);
+  if (self) {
+    process.stdout.write(`  ok       machine_code on PATH (${self})\n`);
+  } else {
+    process.stdout.write(`  MISSING  machine_code on PATH — run: machine_code install\n`);
   }
 
   mkdirSync(l.localDir, { recursive: true });
@@ -159,7 +166,13 @@ export async function cmdInstall(argv: string[]): Promise<number> {
     fail(`unknown method ${method}; choose from ${INSTALL_METHODS.join(", ")}`);
   }
   const l = layout();
-  return installClis({ method, home: l.home, only: positional.length > 0 ? positional : undefined });
+  return installClis({
+    method,
+    home: l.home,
+    only: positional.length > 0 ? positional : undefined,
+    self: !flags.has("no-self"),
+    force: flags.has("force"),
+  });
 }
 
 /* --------------------------------------------------------------- providers */
