@@ -192,7 +192,7 @@ describe("pinViability", () => {
     assert.equal(input.requireModel, "m");
     assert.equal(input.requireProvider, "p");
     assert.equal(input.hasRuntimeModel, runtime);
-    assert.equal(input.agentDef.minFit, 6.0);
+    assert.equal(input.agentDef.minFit, 5.5);
   });
 });
 

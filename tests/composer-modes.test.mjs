@@ -69,7 +69,7 @@ function render(root, { agent, item, issueMode, included = [], sorted = false })
     contextFiltering: false,
     excluded: new Set(),
     included: new Set(included),
-    sortSelected: sorted,
+    sortMode: sorted ? "selected" : "default",
     issueMode,
     skillModes: new Map(),
     skillShown: new Map(),
