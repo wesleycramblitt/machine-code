@@ -1,5 +1,6 @@
 node_modules
 dist/
+package-lock.json
 
 # machine_code runtime state (never commit generated/local state)
 .machine_code/
