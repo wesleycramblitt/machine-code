@@ -21,7 +21,8 @@ export type Capability =
   | "knowledge:write"
   | "context:inherit"
   | "run:read"
-  | "web:fetch";
+  | "web:fetch"
+  | "issue:write";
 
 export const ALL_CAPABILITIES: readonly Capability[] = [
   "code:read",
@@ -33,6 +34,7 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   "context:inherit",
   "run:read",
   "web:fetch",
+  "issue:write",
 ];
 
 export function capabilitiesFor(role: AgentName, config: AgentConfig): Capability[] {
@@ -41,6 +43,9 @@ export function capabilitiesFor(role: AgentName, config: AgentConfig): Capabilit
   const caps = new Set<Capability>(roleCapabilities(role) as Capability[]);
   caps.add("code:read");
   caps.add("context:inherit");
+  // Tool-guarded curation: research curates issues via issue:* commands;
+  // engineer never holds issue:write.
+  if (role === "research") caps.add("issue:write");
 
   return [...caps].sort();
 }
