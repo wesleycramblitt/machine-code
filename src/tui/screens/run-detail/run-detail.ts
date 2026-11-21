@@ -1239,6 +1239,21 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
           lines.push("", ` ${B}${C}Touched by tools${R}`);
           for (const path of touched.slice(0, 10)) lines.push(`  ${G}✎${R} ${W}${path}${R}`);
         }
+        // Issues live outside git (.machine_code/issues/), so the git diff
+        // above never shows them. The run's tracked-issue log is the record.
+        try {
+          const issuesLog = join(detail.dir, "issues-changed.json");
+          if (existsSync(issuesLog)) {
+            const parsed: unknown = JSON.parse(readFileSync(issuesLog, "utf8"));
+            const curated = Array.isArray(parsed) ? parsed.filter((e): e is string => typeof e === "string") : [];
+            if (curated.length > 0) {
+              lines.push("", ` ${B}${C}Issues curated${R}`);
+              for (const rel of curated.slice(0, 10)) lines.push(`  ${G}✎${R} ${W}${rel}${R}`);
+            }
+          }
+        } catch {
+          // Best-effort: a missing log means no tracked issue changes.
+        }
       } else {
         // Full per-file diff, verbatim from git: ---/+++ headers, @@ hunks,
         // +/- lines. Pass-through — only colored and width-truncated.

@@ -510,7 +510,10 @@ function committedChanges(summary: RunSummary): ChangeSummary {
   }
 }
 
-/** Paths touched by write/edit tool events, for the run timeline. */
+/** Paths touched by write/edit tool events, plus issues curated through the
+ * command tool, for the run timeline. Issue commands report `created`,
+ * `updated`, or `deleted <rel>` in their result text; the rel is exact, so
+ * no layout resolution is needed. */
 export function touchedPaths(events: readonly RunEvent[]): string[] {
   const paths = new Set<string>();
   const failed = new Set<string>();
@@ -522,12 +525,18 @@ export function touchedPaths(events: readonly RunEvent[]): string[] {
   for (const event of events) {
     if (event.type !== "tool_call" && event.type !== "tool_call_start") continue;
     const tool = String(event.tool ?? "");
-    if (tool !== "write" && tool !== "edit") continue;
     const id = typeof event.toolCallId === "string" ? event.toolCallId : "";
     if (id && failed.has(id)) continue;
-    const args = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
-    const path = typeof args?.path === "string" ? args.path : undefined;
-    if (path) paths.add(path);
+    if (tool === "write" || tool === "edit") {
+      const args = (event.args ?? (event as { call?: { args?: unknown } }).call?.args) as Record<string, unknown> | undefined;
+      const path = typeof args?.path === "string" ? args.path : undefined;
+      if (path) paths.add(path);
+    } else if (tool === "command" && event.type === "tool_call") {
+      const result = event.result as { content?: Array<{ text?: unknown }> } | undefined;
+      const text = result?.content?.find((c) => typeof c?.text === "string")?.text as string | undefined;
+      const match = typeof text === "string" ? /^(created|updated|deleted) (\S+\.md)\s*$/.exec(text.trim()) : null;
+      if (match?.[2]) paths.add(match[2]);
+    }
   }
   return [...paths];
 }
