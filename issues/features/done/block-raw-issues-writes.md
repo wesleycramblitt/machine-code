@@ -1,6 +1,7 @@
+commit: 00b98c0a515795dcd45f9b599f8f68f2e2ecf1b7
 files: src/tools/index.ts, src/tools/safety.ts
-keywords: write, edit, issues/
 acceptance: script:build
+keywords: write, edit, issues/
 
 # Block raw issues/ writes through write and edit tools
 
