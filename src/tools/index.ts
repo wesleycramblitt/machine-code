@@ -195,6 +195,10 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
           }
         }
         const abs = resolveWithin(ctx.root, params.path);
+        const writeRel = toRelative(ctx.root, abs).replace(/\\/g, "/");
+        if (writeRel === "issues" || writeRel.startsWith("issues/")) {
+          return fail(`raw write to issues/ is forbidden; use issue:create or issue:update`);
+        }
         if (isSecretPath(toRelative(ctx.root, abs))) {
           return fail(`refusing to write a secret file: ${params.path}`);
         }
@@ -913,6 +917,9 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
           }
           for (const p of pathsToCheck) {
             const normalized = p.replace(/\\/g, "/").replace(/^\.\//, "");
+            if (normalized === "issues" || normalized.startsWith("issues/")) {
+              return fail(`raw edit of issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
+            }
             const match = ctx.allowedPaths.some(
               (allowed) => normalized === allowed || normalized.startsWith(allowed.endsWith("/") ? allowed : allowed + "/"),
             );
@@ -920,6 +927,20 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
               return fail(
                 `edit is restricted to: ${ctx.allowedPaths.join(", ")} for this role; got: ${p}`,
               );
+            }
+          }
+        } else {
+          const pathsToCheck: string[] = [];
+          if (params.path) pathsToCheck.push(params.path);
+          if (params.files) {
+            for (const f of params.files) {
+              if (f.path) pathsToCheck.push(f.path);
+            }
+          }
+          for (const p of pathsToCheck) {
+            const normalized = p.replace(/\\/g, "/").replace(/^\.\//, "");
+            if (normalized === "issues" || normalized.startsWith("issues/")) {
+              return fail(`raw edit of issues/ is forbidden; use issue:create or issue:update (got: ${p})`);
             }
           }
         }
@@ -1951,6 +1972,7 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         // role from resolving conflicts in source files via take-a-side.
         // Everything else non-readonly needs code:write.
         const knowledgeWrite = (ctx.capabilities ?? []).includes("knowledge:write");
+        const codeWrite = (ctx.capabilities ?? []).includes("code:write");
         const referenceWrite = params.name.startsWith("reference:") && knowledgeWrite;
         const mergeWrite = (() => {
           if (!params.name.startsWith("vcs:") || !knowledgeWrite) return false;
@@ -1965,6 +1987,12 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         })();
         if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite) {
           return fail(`${params.name} mutates files; this role is read-only`);
+        }
+        if ((params.name === "issue:create" || params.name === "issue:update") && !knowledgeWrite) {
+          return fail(`${params.name} requires knowledge:write; research role may call it, engineer role must not`);
+        }
+        if (params.name === "issue:delete" && !(knowledgeWrite && codeWrite)) {
+          return fail(`issue:delete is human-only; neither research nor engineer roles may call it in normal work`);
         }
         const result: CommandRunResult = await runCommand(
           params.name,

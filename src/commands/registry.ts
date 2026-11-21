@@ -164,6 +164,9 @@ const SPECS: CommandSpec[] = [
       if (!path) return { text: "core:mkdir requires path", isError: true };
       const target = commandPath(ctx.root, path);
       if ("error" in target) return { text: target.error, isError: true };
+      if (target.rel === "issues" || target.rel.startsWith("issues/")) {
+        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      }
       if (existsSync(target.abs)) {
         return statSync(target.abs).isDirectory()
           ? { text: `${target.rel} already exists`, isError: false }
@@ -193,6 +196,9 @@ const SPECS: CommandSpec[] = [
       const dst = commandPath(ctx.root, to);
       if ("error" in src) return { text: src.error, isError: true };
       if ("error" in dst) return { text: dst.error, isError: true };
+      if (src.rel === "issues" || src.rel.startsWith("issues/") || dst.rel === "issues" || dst.rel.startsWith("issues/")) {
+        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      }
       if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
       if (existsSync(dst.abs) && !asBool(args.force)) {
         return { text: `destination exists: ${dst.rel} (pass force=true to replace)`, isError: true };
@@ -229,6 +235,9 @@ const SPECS: CommandSpec[] = [
       const dst = commandPath(ctx.root, to);
       if ("error" in src) return { text: src.error, isError: true };
       if ("error" in dst) return { text: dst.error, isError: true };
+      if (src.rel === "issues" || src.rel.startsWith("issues/") || dst.rel === "issues" || dst.rel.startsWith("issues/")) {
+        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      }
       if (!existsSync(src.abs)) return { text: `source does not exist: ${src.rel}`, isError: true };
       const source = statSync(src.abs);
       const recursive = asBool(args.recursive);
@@ -259,6 +268,9 @@ const SPECS: CommandSpec[] = [
       if (!path) return { text: "core:delete requires path", isError: true };
       const target = commandPath(ctx.root, path);
       if ("error" in target) return { text: target.error, isError: true };
+      if (target.rel === "issues" || target.rel.startsWith("issues/")) {
+        return { text: `raw issues/ mutation is forbidden; use issue:create, issue:update, or issue:delete`, isError: true };
+      }
       if (!existsSync(target.abs)) return { text: `path does not exist: ${target.rel}`, isError: true };
       const stat = statSync(target.abs);
       const recursive = asBool(args.recursive);
