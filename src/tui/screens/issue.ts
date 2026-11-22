@@ -59,18 +59,60 @@ function worktreeOf(runs: readonly RunSummary[], slug: string, fallbackBranch?: 
   };
 }
 
-/** The prompt body: full text wrapped to the terminal, headings bold white.
- * The leading `# Title` line is skipped — line 1 already carries the identity. */
+/** The prompt body: markdown read as prose. Two-column margins, a blank line
+ * between blocks, hanging indents on lists, headings bold, fenced code kept
+ * verbatim in a tinted gutter. The leading `# Title` line is skipped — line 1
+ * already carries the identity. */
 function promptLines(prompt: string, cols: number): string[] {
-  const lines = prompt.split("\n");
-  if (/^#\s+/.test(lines[0] ?? "")) lines.shift();
-  while ((lines[0] ?? "") === "") lines.shift();
+  const raw = prompt.split("\n");
+  if (/^#\s+/.test(raw[0] ?? "")) raw.shift();
+  while ((raw[0] ?? "").trim() === "") raw.shift();
+
+  const margin = "  ";
+  const width = Math.max(20, cols - margin.length * 2);
   const out: string[] = [];
-  for (const line of wrapText(lines.join("\n"), Math.max(20, cols))) {
-    if (line.trim() === "") { out.push(""); continue; }
-    if (/^#{1,6}\s/.test(line)) out.push(`${B}${W}${line}${R}`);
-    else out.push(`${D}${line}${R}`);
+  const blank = (): void => {
+    if (out.length > 0 && out[out.length - 1] !== "") out.push("");
+  };
+  const wrap = (text: string, hang: string): string[] =>
+    wrapText(text, Math.max(12, width - hang.length)).map(
+      (line, index) => `${margin}${index === 0 ? "" : hang}${line}`,
+    );
+
+  let fence = false;
+  for (const line of raw) {
+    const trimmed = line.trimEnd();
+    if (/^\s*```/.test(trimmed)) {
+      fence = !fence;
+      blank();
+      continue;
+    }
+    if (fence) {
+      out.push(`${margin}${D}│ ${trunc(trimmed.replace(/^\s+/, ""), width - 2)}${R}`);
+      continue;
+    }
+    if (trimmed.trim() === "") {
+      blank();
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      blank();
+      out.push(...wrap(heading[2]!, "").map((text) => `${B}${W}${text}${R}`));
+      blank();
+      continue;
+    }
+    const bullet = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(trimmed);
+    if (bullet) {
+      const hang = `${" ".repeat(bullet[1]!.length)}${" ".repeat(bullet[2]!.length + 1)}`;
+      const wrapped = wrap(bullet[3]!, hang);
+      out.push(`${margin}${bullet[1]!}${C}${bullet[2]}${R} ${wrapped[0]!.slice(margin.length + bullet[1]!.length)}`);
+      out.push(...wrapped.slice(1));
+      continue;
+    }
+    out.push(...wrap(trimmed.trim(), "  "));
   }
+  while (out.length > 0 && out[out.length - 1] === "") out.pop();
   return out;
 }
 

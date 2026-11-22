@@ -722,7 +722,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       ])
     : joinCommands([
         command("p", "Prompt", undefined, M),
-        command("E", "Editor", undefined, M),
         run.prompt.trim() || run.item ? commandBadge("Start", ":!", START_BG, WHITE) : "",
       ]);
   const agentControls = insert
