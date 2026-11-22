@@ -57,8 +57,8 @@ export function orchestratorCounters(runs: readonly RunSummary[]): OrchestratorC
   return counters;
 }
 
-/** Orchestrator dispatch order: bugs, then features, then ideas. */
-const KIND_ORDER: Record<IssueKind, number> = { bugs: 0, features: 1, ideas: 2 };
+/** Orchestrator dispatch order: bugs, then features, then ideas, then references. */
+const KIND_ORDER: Record<IssueKind, number> = { bugs: 0, features: 1, ideas: 2, references: 3 };
 
 /** Priority weights, the same ladder as the build waves (high, medium, low). */
 const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };

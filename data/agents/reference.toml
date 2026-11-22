@@ -1,0 +1,31 @@
+# machine_code agent role: reference
+# Machine override: ~/.machine_code/data/agents/reference.toml
+
+name = "reference"
+order = 0
+tools = ["context", "command", "skill", "webFetch", "ask", "runData", "finish"]
+readonly = true
+modes = []
+blurb = "Turn source material into cited store bundles"
+approval = ""
+ambiguity = "precise"
+capabilities = ["context:inherit", "run:read", "web:fetch", "reference:write"]
+allowed_paths = []
+
+[selection]
+min_fit = 5.5
+
+[selection.axes]
+reasoning = 6.0
+agentic = 5.0
+general = 5.0
+code = 3.0
+
+[weights]
+reasoning = 0.4
+general = 0.2
+agentic = 0.2
+code = 0.2
+
+[skills]
+reference = "include"

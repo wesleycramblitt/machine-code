@@ -241,14 +241,18 @@ export function resolveAgent(
   // A mode-specific prompt file owns its test contract, so the injected
   // line would only duplicate it — skip it and let the prompt speak once.
   const modeOwnsContract = role === "engineer" && mode !== undefined && hasModePrompt(role, mode);
+  // The reference agent builds store bundles, not repo code: no test
+  // contract of either flavor applies.
   const testLine =
-    modeOwnsContract
+    role === "reference"
       ? null
-      : role === "engineer"
-        ? testPromptLine(opts.verification, hasRepoScript(layout, "test"))
-        : hasRepoScript(layout, "test")
-          ? null
-          : "This repo has no test runner, so never hunt for test files or test commands.";
+      : modeOwnsContract
+        ? null
+        : role === "engineer"
+          ? testPromptLine(opts.verification, hasRepoScript(layout, "test"))
+          : hasRepoScript(layout, "test")
+            ? null
+            : "This repo has no test runner, so never hunt for test files or test commands.";
   const prompt = composePrompt(def, config, tools) + (testLine ? `\n${testLine}` : "");
   return { def: { ...def, prompt, tools }, config, capabilities, prompt };
 }

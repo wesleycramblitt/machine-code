@@ -22,6 +22,7 @@ export type Capability =
   | "context:inherit"
   | "run:read"
   | "web:fetch"
+  | "reference:write"
   | "issue:write";
 
 export const ALL_CAPABILITIES: readonly Capability[] = [

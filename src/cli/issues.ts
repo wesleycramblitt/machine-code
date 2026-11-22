@@ -194,7 +194,8 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       if (flags.has("no-review")) args.push("--no-review");
       return cmdBuild(args);
     }
-    const agent = explicitAgent ?? (issue.kind === "ideas" ? "research" : "engineer");
+    const agent =
+      explicitAgent ?? (issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer");
     const args = ["run", "--agent", agent, "--item", issue.slug];
     const model = flags.get("model");
     if (model) args.push("--model", model);

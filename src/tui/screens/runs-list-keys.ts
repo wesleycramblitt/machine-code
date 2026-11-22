@@ -89,7 +89,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "issue") {
-      const agent = row.itemKind === "ideas" ? "research" : "engineer";
+      const agent = row.itemKind === "ideas" ? "research" : row.itemKind === "references" ? "reference" : "engineer";
       if (row.effective === "done") {
         // A done issue cannot be a run's main item; open the new run page
         // with it pre-selected as a reference issue instead.
@@ -102,12 +102,14 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       return true;
     }
     if (row?.kind === "section" && row.issueKind) {
-      const agent = row.issueKind === "ideas" ? "research" : "engineer";
+      const agent = row.issueKind === "ideas" ? "research" : row.issueKind === "references" ? "reference" : "engineer";
       ctx.startNewRun(undefined, repoForRow(row), {
         agent,
         prompt: row.issueKind === "ideas"
           ? "Pick an idea under .machine_code/issues/ideas/ and turn it into features and bugs."
-          : "Pick a feature or bug under .machine_code/issues/features/ or .machine_code/issues/bugs/ and implement it.",
+          : row.issueKind === "references"
+            ? "Pick a references issue under .machine_code/issues/references/ and build its store bundle."
+            : "Pick a feature or bug under .machine_code/issues/features/ or .machine_code/issues/bugs/ and implement it.",
       });
       ctx.draw();
       return true;

@@ -9,6 +9,7 @@
  *       .researched/<slug>.md  researched
  *     features/{todo,needs-human-review,failed-gates,failed-human-review,blocked,done}/<slug>.md
  *     bugs/{todo,needs-human-review,failed-gates,failed-human-review,blocked,done}/<slug>.md
+ *     references/{todo,done}/<slug>.md
  *
  * An issue file is plain markdown whose text IS the prompt — nothing else is
  * required. Optional `key: value` header lines at the very top set metadata
@@ -35,11 +36,13 @@ import type { Layout } from "../paths.js";
 import { slugify } from "./slug.js";
 
 export const ISSUES_DIR = ".machine_code/issues";
-export const ISSUE_KINDS = ["ideas", "features", "bugs"] as const;
+export const ISSUE_KINDS = ["ideas", "features", "bugs", "references"] as const;
 export type IssueKind = (typeof ISSUE_KINDS)[number];
 
 /** Ideas live at the root (needs research) or under `.researched/`. */
 export const IDEA_STATUSES = ["needs-research", "researched"] as const;
+/** Reference bundles are either queued or built — no review/failure dirs. */
+export const REFERENCE_STATUSES = ["todo", "done"] as const;
 /** Features and bugs use explicit work and failure directories. */
 export const ENGINEER_STATUSES = [
   "todo",
@@ -50,8 +53,9 @@ export const ENGINEER_STATUSES = [
   "done",
 ] as const;
 export type IdeaStatus = (typeof IDEA_STATUSES)[number];
+export type ReferenceStatus = (typeof REFERENCE_STATUSES)[number];
 export type EngineerStatus = (typeof ENGINEER_STATUSES)[number];
-export type IssueStatus = IdeaStatus | EngineerStatus;
+export type IssueStatus = IdeaStatus | ReferenceStatus | EngineerStatus;
 /** Statuses a new engineer attempt may start from. */
 export const ENGINEER_WORK_STATUSES: readonly EngineerStatus[] = [
   "todo",
@@ -65,6 +69,7 @@ export const ISSUE_KIND_LABELS: Record<IssueKind, string> = {
   ideas: "Ideas",
   features: "Features",
   bugs: "Bugs",
+  references: "References",
 };
 
 export const ISSUE_STATUS_LABELS: Record<DisplayStatus, string> = {
@@ -154,6 +159,8 @@ const KIND_ALIASES: Record<string, IssueKind> = {
   feature: "features",
   bugs: "bugs",
   bug: "bugs",
+  references: "references",
+  reference: "references",
 };
 
 export function parseKind(value: string): IssueKind | undefined {
@@ -161,7 +168,9 @@ export function parseKind(value: string): IssueKind | undefined {
 }
 
 export function statusesForKind(kind: IssueKind): readonly IssueStatus[] {
-  return kind === "ideas" ? IDEA_STATUSES : ENGINEER_STATUSES;
+  if (kind === "ideas") return IDEA_STATUSES;
+  if (kind === "references") return REFERENCE_STATUSES;
+  return ENGINEER_STATUSES;
 }
 
 function issuesRoot(layout: Layout): string {
@@ -567,7 +576,8 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   if (verification === "verified" && !hasRepoScript(layout, "test")) verification = "direct";
   // Features and bugs carry an acceptance gate. Explicit acceptance wins;
   // otherwise use the repository's script gates. Ideas run research:verify
-  // to confirm the run produced at least one artifact.
+  // to confirm the run produced at least one artifact; references run
+  // reference:verify against the central store.
   let acceptance =
     input.acceptance && input.acceptance.length > 0
       ? input.acceptance
@@ -575,7 +585,9 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
         ? input.verify
         : input.kind === "ideas"
           ? ["research:verify"]
-          : hasRepoScript(layout, "build")
+          : input.kind === "references"
+            ? ["reference:verify"]
+            : hasRepoScript(layout, "build")
             ? ["script:build"]
             : [];
   if (verification === "verified" && hasRepoScript(layout, "test") && !acceptance.includes("script:test")) {

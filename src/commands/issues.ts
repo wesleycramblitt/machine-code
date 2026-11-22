@@ -27,6 +27,7 @@ import {
   updateIssueMeta,
   writeIssue,
   ISSUE_KINDS,
+  type IssueKind,
   type IssueStatus,
 } from "../plan/issues.js";
 import { slugify } from "../plan/slug.js";
@@ -98,7 +99,7 @@ function normalizeRel(raw: string): string {
   return raw.replace(/\\/g, "/").replace(/^\.\//, "").trim();
 }
 
-function expectedRelFor(repoRoot: string, kind: "ideas" | "features" | "bugs", status: IssueStatus, slug: string): string {
+function expectedRelFor(repoRoot: string, kind: IssueKind, status: IssueStatus, slug: string): string {
   const abs = join(issueDir(layout(repoRoot), kind, status), `${slug}.md`);
   return relative(repoRoot, abs).split(sep).join("/");
 }

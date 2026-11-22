@@ -1976,9 +1976,12 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         // it mid-run teaches verify-avoidance (observed: one early failure
         // with "nothing changed yet", then never run again). Gates call
         // runCommand directly and are unaffected by this refusal.
-        if (params.name === "research:verify" && params.action === "run") {
+        if (
+          (params.name === "research:verify" || params.name === "reference:verify") &&
+          params.action === "run"
+        ) {
           return fail(
-            `research:verify runs in gates after finish; models cannot run it. ` +
+            `${params.name} runs in gates after finish; models cannot run it. ` +
             `Finish the change and the gates run it — gate output comes back to you if it fails.`,
           );
         }
@@ -1993,9 +1996,10 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         // role from resolving conflicts in source files via take-a-side.
         // Everything else non-readonly needs code:write.
         const knowledgeWrite = (ctx.capabilities ?? []).includes("knowledge:write");
+        const referenceWriteCap = (ctx.capabilities ?? []).includes("reference:write");
         const codeWrite = (ctx.capabilities ?? []).includes("code:write");
         const issueWrite = (ctx.capabilities ?? []).includes("issue:write");
-        const referenceWrite = params.name.startsWith("reference:") && knowledgeWrite;
+        const referenceWrite = params.name.startsWith("reference:") && (knowledgeWrite || referenceWriteCap);
         const mergeWrite = (() => {
           if (!params.name.startsWith("vcs:") || !knowledgeWrite) return false;
           if (params.name !== "vcs:resolve") return true;

@@ -13,6 +13,7 @@ import { COMMAND_CAP_BYTES, capText, isSecretPath, resolveWithin, toRelative } f
 import { issueCommands } from "./issues.js";
 import { referenceCommands } from "./reference.js";
 import { researchVerifyCommand } from "./research.js";
+import { referenceVerifyCommand } from "./reference-verify.js";
 import { runCommands } from "./runs.js";
 import { scriptCommands } from "./scripts.js";
 import { vcsConflictsCommand, vcsMergeAbortCommand, vcsResolveCommand } from "./vcs.js";
@@ -286,6 +287,7 @@ const SPECS: CommandSpec[] = [
 export const CORE_COMMANDS: ReadonlyMap<string, CommandSpec> = new Map([
   ...SPECS.map((spec) => [spec.name, spec] as const),
   ["research:verify", researchVerifyCommand],
+  ["reference:verify", referenceVerifyCommand],
   ["vcs:conflicts", vcsConflictsCommand],
   ["vcs:resolve", vcsResolveCommand],
   ["vcs:merge-abort", vcsMergeAbortCommand],

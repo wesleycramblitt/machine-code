@@ -44,6 +44,22 @@ describe("gate self-run refusal", () => {
     }
   });
 
+  it("refuses reference:verify runs with a finish redirect", async () => {
+    const root = mkdtempSync(join(tmpdir(), "mc-gate-"));
+    try {
+      const tool = commandTool(researchCtx(root));
+      const out = await tool.execute(
+        "t1",
+        { action: "run", name: "reference:verify", args: {} },
+        new AbortController().signal,
+      );
+      assert.equal(out.isError, true);
+      assert.match(out.content.map((c) => c.text ?? "").join("\n"), /runs in gates after finish/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("still allows describing the gate", async () => {
     const root = mkdtempSync(join(tmpdir(), "mc-gate-"));
     try {

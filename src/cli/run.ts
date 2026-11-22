@@ -179,13 +179,22 @@ export async function cmdRun(argv: string[]): Promise<number> {
     if (!issue) fail(`no issue ${itemSlug} — create one with \`machine_code issue create features|bugs ${itemSlug} "..."\``);
     itemSlug = issue.slug;
     // An issue decides its agent unless --agent overrides it.
-    const issueAgent = normalizedAgent ?? (issue.kind === "ideas" ? "research" : "engineer");
+    const issueAgent =
+      normalizedAgent ??
+      (issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer");
     // Agent must match the issue kind.
     if (issueAgent === "research" && issue.kind !== "ideas") {
       fail(`issue ${itemSlug} is ${issue.kind}, not an idea; research only runs on ideas`);
     }
-    if (issueAgent === "engineer" && issue.kind === "ideas") {
-      fail(`issue ${itemSlug} is an idea; research it first (machine_code issue run ${itemSlug})`);
+    if (issueAgent === "reference" && issue.kind !== "references") {
+      fail(`issue ${itemSlug} is ${issue.kind}, not a references issue; reference only runs on references`);
+    }
+    if (issueAgent === "engineer" && (issue.kind === "ideas" || issue.kind === "references")) {
+      fail(`issue ${itemSlug} is ${issue.kind}; engineer only builds features/bugs`);
+    }
+    // Reference: work from todo only — bundles either build or they don't.
+    if (issueAgent === "reference" && issue.status !== "todo") {
+      fail(`issue ${itemSlug} is ${issue.status}; reference works from todo`);
     }
     // Engineer: work from todo, a failed attempt, or a legacy blocked state.
     if (issueAgent === "engineer" && !(ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)) {
@@ -222,12 +231,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // Without this, issueless runs skip the post-run commit/merge block and
   // their work is stranded in the worktree.
   let autoCreatedIssue = false;
-  if (!itemSlug && (normalizedAgent === "engineer" || normalizedAgent === "research") && request) {
+  if (!itemSlug && (normalizedAgent === "engineer" || normalizedAgent === "research" || normalizedAgent === "reference") && request) {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
       issue = writeIssue(l, {
-        kind: normalizedAgent === "research" ? "ideas" : "features",
+        kind: normalizedAgent === "research" ? "ideas" : normalizedAgent === "reference" ? "references" : "features",
         slug: autoSlug,
         prompt: request,
         body: `Auto-created from run.\n\n${request}`,

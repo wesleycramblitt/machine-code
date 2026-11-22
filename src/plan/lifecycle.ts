@@ -13,6 +13,7 @@ export { ISSUE_STATUS_LABELS };
 /** The run type an issue kind dispatches. */
 export function agentForIssue(issue: Issue): string {
   if (issue.kind === "ideas") return "research";
+  if (issue.kind === "references") return "reference";
   return "engineer";
 }
 
@@ -30,7 +31,7 @@ const ACTIVE_RUN = new Set<RunSummary["status"]>(["created", "running", "awaitin
  */
 export function effectiveStatus(issue: Issue, runs: readonly RunSummary[]): DisplayStatus {
   if (
-    issue.kind !== "ideas" &&
+    (issue.kind === "features" || issue.kind === "bugs") &&
     issue.status === "todo" &&
     runs.some((run) => runItemId(run) === issue.slug && ACTIVE_RUN.has(run.status))
   ) {

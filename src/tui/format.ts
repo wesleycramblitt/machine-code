@@ -56,6 +56,7 @@ const KIND_RGB = {
   purple: "145;133;165", // muted lavender: bold WHITE on the band and badge-dark text both stay legible, without glowing
   yellow: "196;178;110",
   red: "190;110;110",
+  sky: "110;165;190", // muted steel blue for reference bundles
 } as const;
 
 /** Kind background colors for run list headers. */
@@ -66,6 +67,8 @@ export const RED_BG = `\x1b[48;2;${KIND_RGB.red}m`;
 export const PURPLE_FG = `\x1b[38;2;${KIND_RGB.purple}m`;
 export const YELLOW_FG = `\x1b[38;2;${KIND_RGB.yellow}m`;
 export const RED_FG = `\x1b[38;2;${KIND_RGB.red}m`;
+export const SKY_BG = `\x1b[48;2;${KIND_RGB.sky}m`;
+export const SKY_FG = `\x1b[38;2;${KIND_RGB.sky}m`;
 export const WHITE = "\x1b[97m";
 /** 256-color accents for status/category encodings on dark terminals. */
 export const SKY = "\x1b[38;5;75m";

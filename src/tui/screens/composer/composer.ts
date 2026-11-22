@@ -135,12 +135,15 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   for (const issue of listIssues(newRunLayout)) {
     // Filter by agent kind.
     if (run.agent === "research" && issue.kind !== "ideas") continue;
-    if (run.agent !== "research" && issue.kind === "ideas") continue;
+    if (run.agent === "reference" && issue.kind !== "references") continue;
+    if (run.agent !== "research" && run.agent !== "reference" && issue.kind !== "features" && issue.kind !== "bugs") continue;
     if (run.agent === "research" && issue.kind !== "ideas") continue;
     const actionable =
       run.agent === "engineer"
         ? (ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)
-        : issue.status === "needs-research";
+        : run.agent === "reference"
+          ? issue.status === "todo"
+          : issue.status === "needs-research";
     const referenceOnly = issue.status === "done" || issue.status === "researched";
     // Engineer: todo, failed attempts, or a legacy blocked state — plus
     // done/researched as references. Anything else (e.g. needs-human-review)

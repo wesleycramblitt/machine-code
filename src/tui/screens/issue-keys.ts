@@ -31,7 +31,7 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
       ctx.notify(`${slug} is ${issue.status}; approve it with a`);
       return;
     }
-    const agent = issue?.kind === "ideas" ? "research" : "engineer";
+    const agent = issue?.kind === "ideas" ? "research" : issue?.kind === "references" ? "reference" : "engineer";
     ctx.startNewRun(undefined, l.repoRoot, { agent, item: slug });
   };
   if (data === "\x1b" || data === "q") { s.screen = "list"; ctx.draw(); return true; }

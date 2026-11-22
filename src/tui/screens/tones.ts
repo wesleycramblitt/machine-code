@@ -5,7 +5,7 @@
  * slugs from these one source so the two pages cannot drift. Rendering
  * helpers stay in format.ts; these tables are issue semantics.
  */
-import { AMBER, B, D, PURPLE_BG, PURPLE_FG, RED, RED_BG, RED_FG, SKY, SLATE, YELLOW_BG, YELLOW_FG, R } from "../format.js";
+import { AMBER, B, D, PURPLE_BG, PURPLE_FG, RED, RED_BG, RED_FG, SKY, SKY_BG, SKY_FG, SLATE, YELLOW_BG, YELLOW_FG, R } from "../format.js";
 import type { DisplayStatus, IssueKind } from "../../plan/issues.js";
 
 const DONE_STYLE = { tone: D, glyph: "✓" };
@@ -30,11 +30,12 @@ export const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: st
   done: DONE_STYLE,
 };
 
-/** Kind background colors: purple for ideas, yellow for features, red for bugs. */
+/** Kind background colors: purple for ideas, yellow for features, red for bugs, blue for references. */
 export const KIND_BG: Record<string, string> = {
   idea: PURPLE_BG,
   feature: YELLOW_BG,
   bug: RED_BG,
+  reference: SKY_BG,
 };
 
 /** Kind text colors for todo/needs-research slugs: the same light colors as the kind headers' backgrounds. Keys match IssueKind. */
@@ -42,6 +43,7 @@ export const KIND_FG: Record<IssueKind, string> = {
   ideas: PURPLE_FG,
   features: YELLOW_FG,
   bugs: RED_FG,
+  references: SKY_FG,
 };
 
 /** Dark foreground for kind badges on their brand background (black bold). */
@@ -51,6 +53,7 @@ const SINGULAR_KIND: Record<IssueKind, string> = {
   ideas: "idea",
   features: "feature",
   bugs: "bug",
+  references: "reference",
 };
 
 /** The runs-page kind background for an issue's kind. */

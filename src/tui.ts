@@ -378,9 +378,11 @@ export async function runTui(): Promise<void> {
     const slug = itemSlug ?? seed?.item;
     const issue = slug ? findIssue(layout(repoRoot), slug) : undefined;
     const attached = issue ? slug : undefined;
-    // An issue is the work item: ideas start research, features/bugs start
-    // engineer. A seeded run names its own agent; blank runs keep the last.
-    const preferredAgent = seed?.agent ?? (issue ? (issue.kind === "ideas" ? "research" : "engineer") : previous.agent);
+    // An issue is the work item: ideas start research, references start
+    // reference, features/bugs start engineer. A seeded run names its own
+    // agent; blank runs keep the last.
+    const preferredAgent =
+      seed?.agent ?? (issue ? (issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer") : previous.agent);
     s.newrun = {
       ...defaultNewRun(),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
@@ -1694,8 +1696,8 @@ export async function runTui(): Promise<void> {
     // as a phantom reference.
     if (previousRel && previousRel !== issue.rel) s.newRunContextIncluded.delete(`issue:${previousRel}`);
     // The main issue decides the agent: a mismatched pair is never runnable,
-    // so linking always follows the issue kind (ideas→research, else engineer).
-    const wanted = issue.kind === "ideas" ? "research" : "engineer";
+    // so linking always follows the issue kind (ideas→research, references→reference, else engineer).
+    const wanted = issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer";
     if (s.newrun.agent !== wanted) {
       s.newrun.agent = wanted;
     }

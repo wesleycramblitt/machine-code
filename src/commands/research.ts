@@ -127,6 +127,8 @@ export const researchVerifyCommand: CommandSpec = {
         ".machine_code/issues/bugs/failed-human-review/",
         ".machine_code/issues/bugs/blocked/",
         ".machine_code/issues/bugs/done/",
+        ".machine_code/issues/references/todo/",
+        ".machine_code/issues/references/done/",
       ];
       const misplaced = unique.filter(
         (f) => f.startsWith(ISSUE_PREFIX) && !allowedIssuePrefixes.some((p) => f.startsWith(p)),
@@ -162,20 +164,23 @@ export const researchVerifyCommand: CommandSpec = {
           quality.push(`${changed.rel}: slug is "untitled" — derive it from the behavior change`);
           continue;
         }
-        if (changed.kind !== "ideas") {
-          const promptLen = changed.prompt.trim().length;
-          if (promptLen < 200) {
-            quality.push(
-              `${changed.rel}: prompt is ${promptLen} chars, need at least 200 ` +
-                `(observable change, current state with file:line anchors, verification)`,
-            );
-          }
-          if (changed.files.length === 0) {
-            quality.push(`${changed.rel}: missing files: — investigate and name the exact paths or globs`);
-          }
-          if (changed.acceptance.length === 0 && changed.verify.length === 0) {
-            quality.push(`${changed.rel}: missing acceptance: — name the gate that proves it (e.g. script:build)`);
-          }
+        // Only features/bugs carry the prompt/files/acceptance bar. Ideas
+        // and references issues are verified by their own gates.
+        if (changed.kind !== "features" && changed.kind !== "bugs") {
+          continue;
+        }
+        const promptLen = changed.prompt.trim().length;
+        if (promptLen < 200) {
+          quality.push(
+            `${changed.rel}: prompt is ${promptLen} chars, need at least 200 ` +
+              `(observable change, current state with file:line anchors, verification)`,
+          );
+        }
+        if (changed.files.length === 0) {
+          quality.push(`${changed.rel}: missing files: — investigate and name the exact paths or globs`);
+        }
+        if (changed.acceptance.length === 0 && changed.verify.length === 0) {
+          quality.push(`${changed.rel}: missing acceptance: — name the gate that proves it (e.g. script:build)`);
         }
       }
       const pending = allIssues.filter((issue) => issue.kind !== "ideas" && issue.status !== "done");

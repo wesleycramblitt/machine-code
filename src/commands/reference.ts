@@ -7,10 +7,44 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { CommandSpec, CommandContext, CommandRunResult } from "./registry.js";
 import type { Layout } from "../paths.js";
-import { findReferences, readReference, referenceStore, reindexReferences, writeReference } from "../references/store.js";
+import { findReferences, readReference, referenceStore, referenceView, reindexReferences, writeReference } from "../references/store.js";
+
+/** Append a store-relative rel to the run's changed-reference log for reference:verify. */
+function recordChangedReference(
+  ctx: { runDir?: string },
+  absPath: string,
+  layout: Layout,
+  projectRoot: string,
+): void {
+  if (!ctx.runDir || !absPath) return;
+  const store = referenceStore(layout);
+  let rel: string | null = null;
+  if (absPath === store || absPath.startsWith(store + "/")) {
+    rel = relative(store, absPath);
+  } else {
+    const view = referenceView(layout, projectRoot);
+    if (absPath === view || absPath.startsWith(view + "/")) rel = relative(view, absPath);
+  }
+  if (!rel) return;
+  const file = join(ctx.runDir, "references-changed.json");
+  let list: string[] = [];
+  try {
+    const raw = readFileSync(file, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) list = parsed.filter((e): e is string => typeof e === "string");
+  } catch {
+    list = [];
+  }
+  if (!list.includes(rel)) list.push(rel);
+  try {
+    writeFileSync(file, JSON.stringify(list), "utf8");
+  } catch {
+    // Tracking is best-effort; the gate reports an empty change set clearly.
+  }
+}
 
 export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   const out = new Map<string, CommandSpec>();
@@ -209,6 +243,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const scope = args.scope === "store" ? "store" : "project";
       const result = writeReference(layout, path, content, scope, ctx.root);
       if (!result.ok) return { text: result.error, isError: true };
+      recordChangedReference(ctx, result.path, layout, ctx.root);
       const reindexed = reindexReferences(layout, false, ctx.root);
       return { text: `wrote: ${result.path}\n${reindexed}`, isError: /failed|not found|required/i.test(reindexed) };
     },

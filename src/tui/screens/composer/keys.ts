@@ -203,8 +203,11 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
         } else {
           const eligible =
             s.newrun.agent === "engineer"
-              ? issue.kind !== "ideas" && (ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)
-              : issue.kind === "ideas" && issue.status === "needs-research";
+              ? (issue.kind === "features" || issue.kind === "bugs") &&
+                (ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)
+              : s.newrun.agent === "reference"
+                ? issue.kind === "references" && issue.status === "todo"
+                : issue.kind === "ideas" && issue.status === "needs-research";
           if (!eligible) ctx.notify(`${issue.slug} cannot be the main issue for ${s.newrun.agent} (status ${issue.status})`);
           else ctx.chooseIssue(issue);
         }
