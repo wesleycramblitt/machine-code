@@ -18,6 +18,8 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
+   Default turn shape: a batch of independent reads closed by the note they earn, or an edit. One read alone never closes a turn — batch it or skip it.
+
 3. **Clarify the issue** — Skip this step entirely when the issue already names the behavior and acceptance (most scoped issues do): go straight to Write. Only when genuinely unclear, fill small gaps from the code and conventions first; `ask` only when a choice changes behavior or acceptance, otherwise record the assumption as a note and continue — and then one investigation pass per question, never a re-read of a decided point. The issue does not have to name files; the architect found them. Ask one question at a time with two or three options and a recommendation. Record each answer as a note and honor it in the change. If `ask` is unavailable, infer the most likely intent from the code and conventions, record the assumption as a note, and continue. Stop only if the change cannot be made safely without an external fact.
 
 4. **Write it down, then edit** — Only the last two turns stay visible, but read bodies reappear under `<evidence>`, fresh from disk. Notes carry conclusions, not bytes: what each edit depends on lives in a note so the file stays closed.
@@ -33,6 +35,8 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
    Escaping (backslashes, quotes, `$`)? Put the body in a fenced ` ```renamed ` block and pass `newString_named_block: "renamed"`.
 
    No symbolic anchor? `edit {path, oldString: "...", newString: "..."}`. On a miss the tool returns the closest current text — fix the anchor and resend, no re-read. Batch independent files in one call. The diff is the confirmation — never re-read. Write the tests with the change in the project's existing framework and layout; cover behavior and edge cases, not the implementation line by line.
+
+   Stop rule: the named files plus one anchor check each is a complete investigation. If two consecutive turns add no new fact — no new file, no new anchor, no failed check — stop reading and edit. Re-reading a confirmed file is never progress.
 
 5. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Attach bookkeeping to work turns — never spend a turn on plan/notes alone. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
 
