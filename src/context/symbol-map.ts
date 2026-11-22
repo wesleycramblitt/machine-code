@@ -122,7 +122,8 @@ export class SymbolMap {
       const lines: string[] = [
         "<symbols>",
         "The run's symbol map: every file it has seen, with symbols and docs.",
-        "No file bodies are included — inspect a path, symbol, or range for bytes.",
+        "Outlines only. A file whose body already rides in context is numbered",
+        "there — edit it without re-reading; inspect anything else for bytes.",
         "",
       ];
       let lastDir = "";
