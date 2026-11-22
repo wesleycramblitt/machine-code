@@ -80,7 +80,13 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
     displayLines = wrapText(withCursor(promptText, cursor, `${GR}▌${R}`), Math.max(8, inner - 3));
   }
 
-  const promptHeight = Math.max(3, Math.min(14, Math.floor(bodyH * 0.5)));
+  // Grows with the body up to half the page, so a long issue brief stays
+  // readable on large screens instead of scrolling through a 14-line window.
+  // Half the page at most, and never more than the space the field lines and
+  // action bar leave free.
+  const availableForPrompt = Math.max(3, bodyH - above.length - 4);
+  const promptMax = Math.max(3, Math.min(availableForPrompt, Math.floor(bodyH * 0.5)));
+  const promptHeight = Math.min(promptMax, Math.max(3, displayLines.length));
   // Keep the caret line visible: when it moves above the window bottom,
   // scroll the window up with it (tail-pin otherwise).
   let promptTop = Math.max(0, displayLines.length - promptHeight);
