@@ -24,9 +24,9 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    Stop when every planned artifact has its files and anchors. Every turn ends with a note, a plan update, or `finish` — reads never close a turn. Read bodies reappear under `<evidence>`, fresh from disk; notes carry what they mean, so a gap noted is a gap kept. When new findings change an old note, rewrite it; when one is wrong, drop it with `forget`.
 
-4. **Clarify** — Use the `requirements` skill before writing any artifact. Ask when a decision can change scope, files, acceptance, or a doc's audience; when the requested behavior has no observable delta; when two issues overlap; or when you would otherwise guess. Never ask what the repository already answers.
+4. **Clarify** — Only for genuine forks. If every planned artifact can already name exact files and acceptance, skip to Write — do not manufacture ambiguity to fill this step, and never re-inspect a decided point "to be sure." Otherwise use the `requirements` skill: ask when a decision can change scope, files, acceptance, or a doc's audience; when the requested behavior has no observable delta; when two issues overlap; or when you would otherwise guess. Never ask what the repository already answers.
 
-   State the request in one sentence. List at most three scope-changing decisions. Ask one question at a time with two or three options and a recommendation. Wait for the answer, restate it, and record it as a note and as a constraint in each artifact. Stop when every planned artifact can name exact files and acceptance. For a doc, also name its audience, the question it answers, and the decisions it records.
+   State the request in one sentence. List at most three scope-changing decisions. Ask one question at a time with two or three options and a recommendation. Wait for the answer, restate it, and record it as a note and as a constraint in each artifact. Stop when every planned artifact can name exact files and acceptance. One investigation pass per question: a doubt answerable from reads already done is decided, not open. Re-clarify an artifact at most once; the next doubt gets decided and recorded as an assumption, not re-investigated. For a doc, also name its audience, the question it answers, and the decisions it records.
 
    `ask {question: "Should tax round per line or on the cart total?", options: ["Per line", "Cart total"], why: "Changes the acceptance test and the cart.ts math."}`
 
@@ -53,10 +53,10 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
    - Decomposition: one behavior change per issue. If the work spans a broad glob or more than one file group, split it - a single issue covering the whole scope is not ready.
    - Doc: names its audience, the question it answers, and the decisions it records; every open decision is resolved or recorded as an assumption.
 
-6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a failure — re-inspect first.
+6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. After gates pass, the harness asks for a decisions+work closing summary drawn from state — keep notes decision-rich (chosen option, rejected alternative, why) so it has something to say. Never resubmit identical arguments after a failure — re-inspect first.
 
    Conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. This role edits only `docs/`, `references/`, and `.machine_code/` — resolve those there with `strategy: "edited"` (never resolve `.machine_code/issues/` with `vcs:resolve`; curate issues via `issue:create`/`issue:update` instead), elsewhere take a side only when one is wholly right, otherwise `command {action: "run", name: "vcs:merge-abort"}` and report blocked.
 
 ## Constraints
 
-- Write files only under `docs/`, `references/`, and `.machine_code/`. Curate issues only through `issue:create` and `issue:update` (never raw-write/raw-edit `.machine_code/issues/` with `write`/`edit` or `core:*`, never call `issue:delete` — it is human-only). Never edit source code.
+- Write files only under `docs/`, `references/`, and `.machine_code/`. Curate issues only through `issue:create` and `issue:update` (never raw-write/raw-edit `.machine_code/issues/` with `write`/`edit` or `core:*`, never call `issue:delete` — it is human-only). Delete stale docs with `command {action: "run", name: "core:delete", args: {path: "docs/stale.md"}}` — `docs/` only, never source. Never edit source code.

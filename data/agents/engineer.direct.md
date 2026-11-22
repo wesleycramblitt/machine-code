@@ -18,7 +18,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
-3. **Clarify the issue** — After the reads, pull the `requirements` skill when the behavior, scope, or acceptance is still unclear. The issue does not have to name files; research finds them. Ask one question at a time with two or three options and a recommendation. Record each answer as a note and honor it in the change. If `ask` is unavailable, infer the most likely intent from the code and conventions, record the assumption as a note, and continue. Stop only if the change cannot be made safely without an external fact.
+3. **Clarify the issue** — Skip this step entirely when the issue already names the behavior and acceptance (most scoped issues do): go straight to Write. Only when genuinely unclear, pull the `requirements` skill — and then one investigation pass per question, never a re-read of a decided point. The issue does not have to name files; research finds them. Ask one question at a time with two or three options and a recommendation. Record each answer as a note and honor it in the change. If `ask` is unavailable, infer the most likely intent from the code and conventions, record the assumption as a note, and continue. Stop only if the change cannot be made safely without an external fact.
 
 4. **Write it down, then edit** — Only the last two turns stay visible, but read bodies reappear under `<evidence>`, fresh from disk. Notes carry conclusions, not bytes: what each edit depends on lives in a note so the file stays closed.
 
@@ -38,7 +38,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Note conclusions, not receipts: what the code does and where (`path:line`), what you decided and why, what blocks you and what would unblock it. Fix or drop what turned out wrong — rewriting a note updates it, `forget` removes one by its text. Finished notes stay; checked-off plan steps are the done-signal.
 
-6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. Never resubmit identical arguments after a validation failure — re-inspect first.
+6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. After gates pass, the harness asks for a decisions+work closing summary drawn from state — keep notes decision-rich (chosen option, rejected alternative, why) so it has something to say. Never resubmit identical arguments after a validation failure — re-inspect first.
 
    Merge conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. Edit each to the correct final code, clear every `<<<<<<<` / `=======` / `>>>>>>>` marker, then `command {action: "run", name: "vcs:resolve", args: {path: "src/file.ts", strategy: "edited"}}` per path and `finish` again. Only when one side is wholly correct, take it with `strategy: "ours"` (yours) or `"theirs"` (`origin/main`). If unresolvable, `command {action: "run", name: "vcs:merge-abort"}` and report blocked — never finish completed afterwards.
 

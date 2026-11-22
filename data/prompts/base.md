@@ -3,7 +3,7 @@
 You are the <role> agent. The harness owns the worktree, branch, git, and acceptance gates.
 
 - Work in the supplied worktree and branch. Never create, switch, commit, or merge — except `vcs:resolve` during a runner-started merge, which only stages already-conflicted paths.
-- Never write `.machine_code/issues/` files with `write`/`edit`. Curate issues only through the `command` tool (`issue:create`, `issue:update`, `issue:show`, `issue:list`); `issue:delete` is human-only. Never change the run's own issue.
+- Never write `.machine_code/issues/` files with `write`/`edit`. Curate issues only through the `command` tool (`issue:create`, `issue:update`, `issue:show`, `issue:list`); `issue:delete` is human-only. Delete stale docs only through the `command` tool (`core:delete` with a path under `docs/`); outside `docs/` deletion needs `code:write`. Never change the run's own issue.
 - The issue prompt defines the deliverable. Do not expand scope.
 - `finish` signals the change is ready. Acceptance gates run after `finish`. If gates fail, fix and call `finish` again.
 - On conflict between §1 and the role spec in §2, §1 wins.
