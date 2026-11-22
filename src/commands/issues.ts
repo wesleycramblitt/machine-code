@@ -144,7 +144,7 @@ export function issueCommands(root: string): CommandSpec[] {
       binary: "fs",
       args: () => [],
       schema: {
-        kind: { type: "string", description: "Filter: ideas | features | bugs." },
+        kind: { type: "string", description: "Filter: ideas | features | bugs | references." },
         status: { type: "string", description: "Filter: a legal status dir (todo | needs-human-review | failed-gates | failed-human-review | blocked | done; ideas also needs-research | researched)." },
       },
       readonly: true,
@@ -158,7 +158,7 @@ export function issueCommands(root: string): CommandSpec[] {
         // vocabulary as issue:create.
         const kindParsed = kindFilter ? parseKind(kindFilter) : undefined;
         if (kindFilter && !kindParsed) {
-          return { text: `bad kind ${JSON.stringify(kindFilter)}; use ideas | features | bugs`, isError: true };
+          return { text: `bad kind ${JSON.stringify(kindFilter)}; use ideas | features | bugs | references`, isError: true };
         }
         if (
           statusFilter &&
@@ -256,11 +256,11 @@ export function issueCommands(root: string): CommandSpec[] {
     {
       name: "issue:create",
       description:
-        "Create one issue via the plan layer. Research role may call this; engineer role must not. Rejects bad kinds, bad statuses, and bad paths. Only legal dirs from issueDir are accepted.",
+        "Create one issue via the plan layer. Architect role may call this; engineer and reference roles must not. Rejects bad kinds, bad statuses, and bad paths. Only legal dirs from issueDir are accepted.",
       binary: "fs",
       args: () => [],
       schema: {
-        kind: { type: "string", required: true, description: "ideas | features | bugs." },
+        kind: { type: "string", required: true, description: "ideas | features | bugs | references." },
         slug: { type: "string", required: true, description: "Issue slug from the behavior change (e.g. cart-tax-display). Never untitled." },
         prompt: { type: "string", required: true, description: "Issue body (min 200 chars for features/bugs, 20 for ideas): observable change, current state with file:line anchors, verification. Never the slug." },
         status: { type: "string", description: "Status dir (default needs-research for ideas, todo otherwise)." },
@@ -281,7 +281,7 @@ export function issueCommands(root: string): CommandSpec[] {
       timeoutMs: 10_000,
       handler: async (args, ctx) => {
         const kindRaw = asString(args.kind);
-        if (!kindRaw) return { text: "issue:create requires kind (ideas | features | bugs)", isError: true };
+        if (!kindRaw) return { text: "issue:create requires kind (ideas | features | bugs | references)", isError: true };
         const kind = parseKind(kindRaw);
         if (!kind) return { text: `bad kind ${JSON.stringify(kindRaw)}; use ideas | features | bugs`, isError: true };
         const statusRaw = asString(args.status) ?? (kind === "ideas" ? "needs-research" : "todo");
@@ -379,7 +379,7 @@ export function issueCommands(root: string): CommandSpec[] {
     {
       name: "issue:update",
       description:
-        "Update one issue via the plan layer. Research role may call this; engineer role must not. Rejects bad statuses and bad paths.",
+        "Update one issue via the plan layer. Architect role may call this; engineer and reference roles must not. Rejects bad statuses and bad paths.",
       binary: "fs",
       args: () => [],
       schema: {
