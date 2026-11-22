@@ -133,7 +133,7 @@ export const VERSION = "0.0.0";
 export const HELP = `machine_code ${VERSION}
 
 Usage:
-  machine_code run --agent research [--provider <id>] [--model <key>] "<question>"
+  machine_code run --agent architect [--provider <id>] [--model <key>] "<question>"
   machine_code run --agent <role> --item <slug> ["<prompt>"]
                                     Attach the run to an issue; its prompt feeds the objective
                                     when the prompt is empty and the issue file is added to

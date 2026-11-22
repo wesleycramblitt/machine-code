@@ -5,7 +5,7 @@
  * Presets live in data/presets.toml. Core settings ship with machine code
  * and are not overridable. Custom agents can be added as new roles.
  *
- * Tool-guarded curation: research curates issues only through the `command`
+ * Tool-guarded curation: architect curates issues only through the `command`
  * tool (issue:create, issue:update, issue:show); engineer has no issue
  * write paths.
  */
@@ -270,7 +270,7 @@ function modeConfigs(role: RoleData, modes: readonly string[]): Record<string, A
 /** Map removed roles onto their current equivalents (legacy run records). */
 export function normalizeAgentName(name: string): AgentName {
   if (name === "build") return "engineer";
-  if (name === "planner") return "research";
+  if (name === "planner" || name === "architect") return "architect";
   return name;
 }
 

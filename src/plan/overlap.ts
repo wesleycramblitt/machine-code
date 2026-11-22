@@ -4,7 +4,7 @@
  * Issues can declare the repo-relative files or globs they expect to touch
  * (`files: src/loop.ts, src/tools/*.ts`). Two issues with overlapping
  * footprints are a merge conflict waiting to happen, so the runner uses this
- * to sequence them (research-time `depends:` enforcement) and to refuse to run
+ * to sequence them (architect-time `depends:` enforcement) and to refuse to run
  * them at the same time.
  */
 

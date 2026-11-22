@@ -98,7 +98,7 @@ const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
 export function unmetDepends(layout: Layout, issue: Issue): string[] {
   const issues = listIssues(layout);
   // A dependency is satisfied when its work has landed (`done`). A researched
-  // idea is also satisfied: it is a completed research artifact, not code, so
+  // idea is also satisfied: it is a completed architect artifact, not code, so
   // it must never block a build forever.
   const satisfied = new Set(
     issues

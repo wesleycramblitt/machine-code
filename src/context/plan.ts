@@ -40,8 +40,8 @@ export function dropRank(kind: ContextKind, origin: string, role?: string): numb
   if (kind === "script") return 40;
   if (kind === "parent-run") return 50;
   if (kind === "issue") return origin === "explicit" ? 8 : 22;
-  if (kind === "docs") return role === "research" ? 20 : 30;
-  if (kind === "reference") return role === "research" || role === "reference" ? 22 : 32;
+  if (kind === "docs") return role === "architect" ? 20 : 30;
+  if (kind === "reference") return role === "architect" || role === "reference" ? 22 : 32;
   if (kind === "file") return role === "engineer" || role === "review" ? 25 : 30;
   return 30;
 }

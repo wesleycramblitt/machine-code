@@ -89,7 +89,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "n") {
     const row = index.selectable[s.runsSel];
     if (row?.kind === "issue") {
-      const agent = row.itemKind === "ideas" ? "research" : row.itemKind === "references" ? "reference" : "engineer";
+      const agent = row.itemKind === "ideas" ? "architect" : row.itemKind === "references" ? "reference" : "engineer";
       if (row.effective === "done") {
         // A done issue cannot be a run's main item; open the new run page
         // with it pre-selected as a reference issue instead.
@@ -102,7 +102,7 @@ export function handleRunsListKeys(s: TuiState, ctx: KeyServices, data: string):
       return true;
     }
     if (row?.kind === "section" && row.issueKind) {
-      const agent = row.issueKind === "ideas" ? "research" : row.issueKind === "references" ? "reference" : "engineer";
+      const agent = row.issueKind === "ideas" ? "architect" : row.issueKind === "references" ? "reference" : "engineer";
       ctx.startNewRun(undefined, repoForRow(row), {
         agent,
         prompt: row.issueKind === "ideas"

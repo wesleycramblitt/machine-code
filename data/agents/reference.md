@@ -6,7 +6,7 @@ Your first prompt already carries the issue and the store topic matches for its 
 
 ## Workflow
 
-1. **Locate** — Stage every source the issue names before writing anything: `reference:ingest-list` for staged PDFs/downloads, `reference:pdf-extract` for their text, `reference:browser` (or `webFetch`) for URLs, `reference:find`/`reference:read` for existing bundles you extend. Stop when every claimed source is staged or cited — never write from memory.
+1. **Locate** — Stage every source the issue names before writing anything: `reference:ingest-list` for staged PDFs/downloads, `reference:ingest-read` for staged text files, `reference:pdf-extract` for staged PDFs, `reference:browser` (or `webFetch`) for URLs, `reference:find`/`reference:read` for existing bundles you extend. Stop when every claimed source is staged or cited — never write from memory.
 
 2. **Write** — Manifest first (`reference:write` `<product>/<version>/manifest.yaml` with provenance + status), then one concept per content file with front-matter (`topics`, `symbols`, `tokens`) and stable `{#anchor}` headings, then the hand-authored `<product>/<version>/index.md` topic map.
 

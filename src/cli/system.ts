@@ -122,7 +122,7 @@ export function cmdInit(): number {
         `# Excluded from every search, in addition to the built-in set:\n` +
         `#   ${SEARCH_EXCLUDES.join(", ")}\n` +
         `# search_exclude = ["fixtures/large"]\n` +
-        `\n[agents.research]\n` +
+        `\n[agents.architect]\n` +
         `# min_context = 32000\n` +
         `# expected_output_tokens = 2000\n` +
         `# max_output_tokens = 8000\n` +

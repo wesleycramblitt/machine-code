@@ -37,7 +37,7 @@ Built before the run starts from curated sources:
 
 | Source | Origin | Priority |
 |---|---|---|
-| Issue | explicit (composer) or inherited (research lists all) | Highest |
+| Issue | explicit (composer) or inherited (architect lists all) | Highest |
 | Files | explicit includes, often from hints/suggestions | High |
 | Knowledge | explicit includes or `config.context.knowledgeIndex` | Medium |
 | Reference citations | explicit includes from central store | Medium |

@@ -18,7 +18,6 @@ export type Capability =
   | "artifact:write"
   | "artifact:provision"
   | "review:write"
-  | "knowledge:write"
   | "context:inherit"
   | "run:read"
   | "web:fetch"
@@ -31,10 +30,10 @@ export const ALL_CAPABILITIES: readonly Capability[] = [
   "artifact:write",
   "artifact:provision",
   "review:write",
-  "knowledge:write",
   "context:inherit",
   "run:read",
   "web:fetch",
+  "reference:write",
   "issue:write",
 ];
 
@@ -44,9 +43,9 @@ export function capabilitiesFor(role: AgentName, config: AgentConfig): Capabilit
   const caps = new Set<Capability>(roleCapabilities(role) as Capability[]);
   caps.add("code:read");
   caps.add("context:inherit");
-  // Tool-guarded curation: research curates issues via issue:* commands;
+  // Tool-guarded curation: architect curates issues via issue:* commands;
   // engineer never holds issue:write.
-  if (role === "research") caps.add("issue:write");
+  if (role === "architect") caps.add("issue:write");
 
   return [...caps].sort();
 }

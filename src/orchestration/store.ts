@@ -39,8 +39,8 @@ export interface OrchestratorSettings {
   tier2: FallbackTier;
   /** Minimum model fit an engineer agent must clear to pick up work. */
   engineerMinFit: number;
-  /** Minimum model fit a research agent must clear. */
-  researchMinFit: number;
+  /** Minimum model fit an architect agent must clear. */
+  architectMinFit: number;
 }
 
 export interface OrchestratorState {
@@ -65,7 +65,7 @@ const DEFAULT_SETTINGS: OrchestratorSettings = {
   tier: "paid",
   tier2: "none",
   engineerMinFit: 6,
-  researchMinFit: 6,
+  architectMinFit: 6,
 };
 
 /** Fresh defaults for a repo without (valid) stored state. */
@@ -113,7 +113,11 @@ export function readOrchestratorState(repo: Layout): OrchestratorState {
         tier: isTier(settings.tier) ? settings.tier : defaults.settings.tier,
         tier2: isTier2(settings.tier2) ? settings.tier2 : defaults.settings.tier2,
         engineerMinFit: isMinFit(settings.engineerMinFit) ? settings.engineerMinFit : defaults.settings.engineerMinFit,
-        researchMinFit: isMinFit(settings.researchMinFit) ? settings.researchMinFit : defaults.settings.researchMinFit,
+        architectMinFit: isMinFit(settings.architectMinFit)
+          ? settings.architectMinFit
+          : isMinFit(settings.researchMinFit)
+            ? settings.researchMinFit
+            : defaults.settings.architectMinFit,
       },
       active: typeof doc.active === "boolean" ? doc.active : defaults.active,
       startedRunIds: Array.isArray(doc.startedRunIds)

@@ -323,7 +323,7 @@ export async function runTui(): Promise<void> {
   };
 
   const defaultNewRun = (): NewRunState => {
-    const agent = "research";
+    const agent = "architect";
     return {
       agent,
       approval: "human",
@@ -378,11 +378,11 @@ export async function runTui(): Promise<void> {
     const slug = itemSlug ?? seed?.item;
     const issue = slug ? findIssue(layout(repoRoot), slug) : undefined;
     const attached = issue ? slug : undefined;
-    // An issue is the work item: ideas start research, references start
+    // An issue is the work item: ideas start architect, references start
     // reference, features/bugs start engineer. A seeded run names its own
     // agent; blank runs keep the last.
     const preferredAgent =
-      seed?.agent ?? (issue ? (issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer") : previous.agent);
+      seed?.agent ?? (issue ? (issue.kind === "ideas" ? "architect" : issue.kind === "references" ? "reference" : "engineer") : previous.agent);
     s.newrun = {
       ...defaultNewRun(),
       ...(preferredAgent ? { agent: preferredAgent } : {}),
@@ -499,7 +499,7 @@ export async function runTui(): Promise<void> {
     }
     const repoLayout = layout(summary.repoRoot);
     const candidate = normalizeAgentName(summary.agent);
-    const agent = AGENT_NAMES.includes(candidate) ? candidate : "research";
+    const agent = AGENT_NAMES.includes(candidate) ? candidate : "architect";
     const policy = agentDefFor(summary.repoRoot);
     const machine = (() => {
       try { return loadMachineConfig(repoLayout); } catch { return undefined; }
@@ -1696,8 +1696,8 @@ export async function runTui(): Promise<void> {
     // as a phantom reference.
     if (previousRel && previousRel !== issue.rel) s.newRunContextIncluded.delete(`issue:${previousRel}`);
     // The main issue decides the agent: a mismatched pair is never runnable,
-    // so linking always follows the issue kind (ideas→research, references→reference, else engineer).
-    const wanted = issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer";
+    // so linking always follows the issue kind (ideas→architect, references→reference, else engineer).
+    const wanted = issue.kind === "ideas" ? "architect" : issue.kind === "references" ? "reference" : "engineer";
     if (s.newrun.agent !== wanted) {
       s.newrun.agent = wanted;
     }
@@ -1809,10 +1809,10 @@ export async function runTui(): Promise<void> {
     repoRoot: string,
     settings: OrchestratorSettings,
     configuredProviders: ReadonlySet<string>,
-  ): { engineer: string | null; research: string | null } => {
-    const key = `${repoRoot}\0${settings.tier}\0${settings.engineerMinFit}\0${settings.researchMinFit}`;
+  ): { engineer: string | null; architect: string | null } => {
+    const key = `${repoRoot}\0${settings.tier}\0${settings.engineerMinFit}\0${settings.architectMinFit}`;
     if (s.orchestratePreview && settings.tier2 === "none" && s.orchestratePreview.key === key && Date.now() - s.orchestratePreview.at < 5_000) {
-      return { engineer: s.orchestratePreview.engineer, research: s.orchestratePreview.research };
+      return { engineer: s.orchestratePreview.engineer, architect: s.orchestratePreview.architect };
     }
     const resolve = (role: string, minFit: number): string | null => {
       // The orchestrator passes --tier2 to its runs, so preview the same
@@ -1849,7 +1849,7 @@ export async function runTui(): Promise<void> {
     };
     const preview = {
       engineer: resolve("engineer", settings.engineerMinFit),
-      research: resolve("research", settings.researchMinFit),
+      architect: resolve("architect", settings.architectMinFit),
     };
     s.orchestratePreview = { key, at: Date.now(), ...preview };
     return preview;

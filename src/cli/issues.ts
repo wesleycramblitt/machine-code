@@ -42,11 +42,11 @@ const ACTIVE_RUN_STATUSES = new Set(["created", "running", "awaiting_input"]);
 
 /** One mutating issue operation at a time: merge/delete/build must not race a live run.
  * Research runs never count: deleting an issue removes only the issue file and
- * engineer/build branches, which a research run owns neither (deleteIssue in
- * tasks/issue.ts). A research run's record survives the delete. */
+ * engineer/build branches, which an architect run owns neither (deleteIssue in
+ * tasks/issue.ts). An architect run's record survives the delete. */
 function activeIssueRuns(l: ReturnType<typeof layout>, slug: string) {
   return listRuns(l)
-    .filter((run) => run.agent !== "research")
+    .filter((run) => run.agent !== "architect")
     .filter((run) => runItemId(run) === slug && ACTIVE_RUN_STATUSES.has(run.status))
     .filter((run) => ACTIVE_RUN_STATUSES.has(reconcileRun(run).status));
 }
@@ -181,12 +181,12 @@ export async function cmdIssue(argv: string[]): Promise<number> {
 
   if (sub === "run") {
     const slug = positional[1];
-    if (!slug) fail("usage: machine_code issue run <slug> [--agent research|engineer]");
+    if (!slug) fail("usage: machine_code issue run <slug> [--agent architect|engineer|reference]");
     const issue = findIssue(l, slug);
     if (!issue) fail(`no issue ${slug}`);
     const explicitAgent = flags.get("agent");
     // The default run for a feature/bug is the full build: gates, optional
-    // review, commit, and status move. Ideas default to research.
+    // review, commit, and status move. Ideas default to architect.
     if (explicitAgent === undefined && issue.kind !== "ideas") {
       const args = [issue.slug];
       const model = flags.get("model");
@@ -195,7 +195,7 @@ export async function cmdIssue(argv: string[]): Promise<number> {
       return cmdBuild(args);
     }
     const agent =
-      explicitAgent ?? (issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer");
+      explicitAgent ?? (issue.kind === "ideas" ? "architect" : issue.kind === "references" ? "reference" : "engineer");
     const args = ["run", "--agent", agent, "--item", issue.slug];
     const model = flags.get("model");
     if (model) args.push("--model", model);

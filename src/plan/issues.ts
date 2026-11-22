@@ -575,16 +575,16 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   let verification = input.verification ?? "direct";
   if (verification === "verified" && !hasRepoScript(layout, "test")) verification = "direct";
   // Features and bugs carry an acceptance gate. Explicit acceptance wins;
-  // otherwise use the repository's script gates. Ideas run research:verify
-  // to confirm the run produced at least one artifact; references run
-  // reference:verify against the central store.
+  // otherwise use the repository's script gates. Ideas run
+  // issue-curation:verify to confirm the run produced at least one
+  // artifact; references run reference:verify against the central store.
   let acceptance =
     input.acceptance && input.acceptance.length > 0
       ? input.acceptance
       : input.verify && input.verify.length > 0
         ? input.verify
         : input.kind === "ideas"
-          ? ["research:verify"]
+          ? ["issue-curation:verify"]
           : input.kind === "references"
             ? ["reference:verify"]
             : hasRepoScript(layout, "build")

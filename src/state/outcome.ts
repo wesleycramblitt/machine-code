@@ -276,8 +276,8 @@ export function summarizeRun(input: SummarizeInput): RunOutcome {
     lines.push(`Issues: ${changedIssues.map((path) => path.replace(/^issues\//, "")).join("; ")}`);
   } else if (issues.length === 0) {
     lines.push(
-      summary.agent === "research"
-        ? "Issues: none created — the research run did not create any issues."
+      summary.agent === "architect"
+        ? "Issues: none created — the architect run did not create any issues."
         : "Issues: none created",
     );
   } else {

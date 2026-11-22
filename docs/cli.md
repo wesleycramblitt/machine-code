@@ -79,7 +79,7 @@ section of the README for full details.
 ### 1. Ask a read-only question
 
 ```bash
-machine_code run --agent research "summarize README.md"
+machine_code run --agent architect "summarize README.md"
 ```
 
 ### 2. Turn an idea into issues
@@ -88,7 +88,7 @@ machine_code run --agent research "summarize README.md"
 machine_code issue run <idea-slug>
 ```
 
-This runs the Planner/research agent to break one idea into features and bug
+This runs the architect agent to break one idea into features and bugs
 issues.
 
 ### 3. Engineer one issue in an isolated worktree
@@ -244,7 +244,7 @@ most inspection commands. Run `machine_code help` for the full dispatch list
 
 | Command | Example | What it does |
 | ------- | ------- | ------------ |
-| `run` | `machine_code run --agent research "…"` | Start an agent run from a prompt. Flags: `--agent`, `--ambiguity`, `--model`, `--provider`, `--tier`, `--max-price`. |
+| `run` | `machine_code run --agent architect "…"` | Start an agent run from a prompt. Flags: `--agent`, `--ambiguity`, `--model`, `--provider`, `--tier`, `--max-price`. |
 | `issue run` / `issue list` / `issue create` | `machine_code issue create features <slug> "do the thing" --acceptance script:build` | Turn ideas into (and manage) Markdown issues under `.machine_code/issues/` via `issue:create`/`issue:update`. |
 | `build` | `machine_code build <slug>` | Engineer one issue in an `mc/<slug>` worktree. |
 | `batch` | `machine_code batch --auto-approve` | Build todo issues by priority/dependency, then merge. |

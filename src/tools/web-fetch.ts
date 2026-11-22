@@ -1,9 +1,9 @@
 /**
  * machine_code — the `webFetch` tool.
  *
- * A controlled, read-only window to the web for research agents. It fetches
+ * A controlled, read-only window to the web for architect agents. It fetches
  * one URL and returns its text, capped at 12 KiB. It is capability-gated:
- * the `web:fetch` capability must be present (on by default for research,
+ * the `web:fetch` capability must be present (on by default for architect,
  * off for engineer), so turning the tool on/off is a data-only change in the
  * role TOML.
  *

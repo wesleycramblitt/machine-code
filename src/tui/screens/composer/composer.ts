@@ -134,10 +134,10 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
   // opt-in context; the run never attaches to them.
   for (const issue of listIssues(newRunLayout)) {
     // Filter by agent kind.
-    if (run.agent === "research" && issue.kind !== "ideas") continue;
+    if (run.agent === "architect" && issue.kind !== "ideas") continue;
     if (run.agent === "reference" && issue.kind !== "references") continue;
-    if (run.agent !== "research" && run.agent !== "reference" && issue.kind !== "features" && issue.kind !== "bugs") continue;
-    if (run.agent === "research" && issue.kind !== "ideas") continue;
+    if (run.agent !== "architect" && run.agent !== "reference" && issue.kind !== "features" && issue.kind !== "bugs") continue;
+    if (run.agent === "architect" && issue.kind !== "ideas") continue;
     const actionable =
       run.agent === "engineer"
         ? (ENGINEER_WORK_STATUSES as readonly string[]).includes(issue.status)

@@ -1,0 +1,34 @@
+# machine_code agent role: architect
+# Machine override: ~/.machine_code/data/agents/architect.toml
+# Repo prompt override: .machine_code/agents/architect.md
+
+name = "architect"
+order = 1
+tools = ["context", "inspect", "glob", "command", "ask", "skill", "runData", "webFetch", "finish"]
+readonly = true
+modes = []
+blurb = "Turn ideas into scoped features and bugs"
+approval = ""
+ambiguity = "strict"
+capabilities = ["code:read", "context:inherit", "run:read", "issue:write", "web:fetch"]
+allowed_paths = [".machine_code/"]
+
+[selection]
+min_fit = 5.5
+
+[selection.axes]
+reasoning = 5.0
+code = 4.0
+agentic = 5.0
+general = 4.0
+
+[weights]
+reasoning = 0.3
+general = 0.2
+agentic = 0.2
+code = 0.3
+
+[skills]
+clean-code = "on-demand"
+issue-curation = "include"
+reference = "on-demand"

@@ -63,7 +63,7 @@ export interface RunDetail {
 
 /** Composer seed when a run is started from an issue row. */
 export interface NewRunSeed {
-  /** Role to preselect (research for idea rows, engineer for features/bugs). */
+  /** Role to preselect (architect for idea rows, engineer for features/bugs). */
   agent?: string;
   /** Default prompt; editable in the composer. */
   prompt?: string;
@@ -127,7 +127,7 @@ export interface TuiState {
   /** `r` armed: the next `b` resets the open issue's branch to origin main. */
   issueResetArm: boolean;
   /** Resolved model preview cache: names per role, keyed by repo+tier+floors. */
-  orchestratePreview: { key: string; at: number; engineer: string | null; research: string | null } | null;
+  orchestratePreview: { key: string; at: number; engineer: string | null; architect: string | null } | null;
   /** Run or issue awaiting final confirmation on the delete screen. */
   deleteTarget: DeleteTarget | undefined;
   deleteReturn: Screen;
@@ -323,7 +323,7 @@ export function createTuiState(repoRoot: string): TuiState {
     expanded: new Set<string>(),
     changesCache: null,
     newrun: {
-      agent: "research",
+      agent: "architect",
       approval: "human",
       ambiguity: "precise",
       tier: "paid",

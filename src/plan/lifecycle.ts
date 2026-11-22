@@ -12,7 +12,7 @@ export { ISSUE_STATUS_LABELS };
 
 /** The run type an issue kind dispatches. */
 export function agentForIssue(issue: Issue): string {
-  if (issue.kind === "ideas") return "research";
+  if (issue.kind === "ideas") return "architect";
   if (issue.kind === "references") return "reference";
   return "engineer";
 }

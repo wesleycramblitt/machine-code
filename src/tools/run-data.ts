@@ -1,7 +1,7 @@
 /**
  * machine_code — the `runData` tool.
  *
- * A controlled, read-only window into past runs for research and engineer
+ * A controlled, read-only window into past runs for architect and engineer
  * agents. It offers exactly two operations: `list` recent runs with their
  * summaries, and `read` one run's summary + events by id. It reuses the
  * existing run readers (`listRuns`/`readRun`) and the cross-project lookup

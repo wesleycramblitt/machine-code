@@ -128,9 +128,13 @@ export interface MachineConfig {
   git: { baseBranch?: string };
   /** Machine-level agent configuration overrides ([agents.<role>]). */
   agents: Record<string, AgentConfigOverrides>;
+  /** Staged source material for the reference agent ([ingest]). */
+  ingest: {
+    /** Directories the reference agent may list and extract. `~` and relative entries resolve under the machine home. */
+    roots: string[];
+  };
   /** Context assembly ([context]). */
-  context: {
-    maxChars: number;
+  context: {    maxChars: number;
     docsIndex?: string;
     /** Budget proportions for all context (shares sum to 1.0 of total). */
     budget: {
@@ -289,6 +293,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       ? "off"
       : "metadata";
   const mapRaw = (raw.map ?? {}) as Record<string, unknown>;
+  const ingestRaw = (raw.ingest ?? {}) as Record<string, unknown>;
   const themeRaw = (raw.theme ?? {}) as Record<string, unknown>;
   const theme: ThemeConfig = {};
   for (const key of Object.keys(DEFAULT_THEME) as Array<keyof ThemeConfig>) {
@@ -340,6 +345,9 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       enabled: mapRaw.enabled !== false,
       semantic: mapRaw.semantic !== false,
       suggestLimit: asNumber(mapRaw.suggest_limit) ?? 10,
+    },
+    ingest: {
+      roots: asStringArray(ingestRaw.roots),
     },
     theme,
   };

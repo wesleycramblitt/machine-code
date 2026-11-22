@@ -8,7 +8,7 @@
  * .machine_code/issues/ paths directly. Issues are local-only and never
  * committed.
  *
- * Roles: research may call issue:create and issue:update. Engineer must not
+ * Roles: architect may call issue:create and issue:update. Engineer and reference must not
  * call issue:create, issue:update, or issue:delete.
  */
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -115,7 +115,7 @@ function legalIssueDirs(repoRoot: string): Set<string> {
   return out;
 }
 
-/** Append an issue rel to the run's changed-issue log for research:verify. */
+/** Append an issue rel to the run's changed-issue log for issue-curation:verify. */
 function recordChangedIssue(ctx: { runDir?: string }, rel: string): void {
   if (!ctx.runDir || !rel) return;
   const file = join(ctx.runDir, "issues-changed.json");
@@ -340,7 +340,7 @@ export function issueCommands(root: string): CommandSpec[] {
         }
         // Features/bugs must name their footprint and gate explicitly. The
         // plan layer would silently default these (script:build, no files),
-        // which lets placeholders pass research:verify.
+        // which lets placeholders pass issue-curation:verify.
         if (kind !== "ideas") {
           const files = asList(args.files);
           if (!files || files.length === 0) {
@@ -499,7 +499,7 @@ export function issueCommands(root: string): CommandSpec[] {
     {
       name: "issue:delete",
       description:
-        "Delete one issue file. Neither research nor engineer roles may call this in normal work. Rejects bad paths.",
+        "Delete one issue file. Neither architect nor engineer roles may call this in normal work. Rejects bad paths.",
       binary: "fs",
       args: () => [],
       schema: {

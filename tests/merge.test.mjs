@@ -373,9 +373,9 @@ describe("fastForwardMain dirty tree", () => {
   });
 });
 
-describe("research:verify kind-precise matching", () => {
+describe("issue-curation:verify kind-precise matching", () => {
   it("tells same-slug issues in different kinds apart", async () => {
-    const { matchChangedIssue } = await import("../dist/commands/research.js");
+    const { matchChangedIssue } = await import("../dist/commands/issue-curation.js");
     const { listIssues } = await import("../dist/plan/issues.js");
     const { root } = repo();
     try {

@@ -75,11 +75,11 @@ export function handleOrchestrateKeys(s: TuiState, ctx: KeyServices, data: strin
     } else {
       // Min-fit floors cycle the shared 4–8.5 / 0.25 ladder.
       const engineer = s.orchestrateSel === 3;
-      const value = engineer ? settings.engineerMinFit : settings.researchMinFit;
+      const value = engineer ? settings.engineerMinFit : settings.architectMinFit;
       const index = ORCHESTRATOR_MIN_FITS.findIndex((fit) => fit === value);
       const next = ORCHESTRATOR_MIN_FITS[(index + dir + ORCHESTRATOR_MIN_FITS.length) % ORCHESTRATOR_MIN_FITS.length]!;
       updateOrchestratorState(repoLayout, {
-        settings: engineer ? { engineerMinFit: next } : { researchMinFit: next },
+        settings: engineer ? { engineerMinFit: next } : { architectMinFit: next },
       });
     }
     ctx.draw();

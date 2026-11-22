@@ -24,7 +24,7 @@ export interface OrchestrateProps extends Viewport {
   sel: number;
   counters: { running: number; awaiting: number; failed: number };
   /** Resolved model name per role; null when the picker found nothing eligible. */
-  preview: { engineer: string | null; research: string | null };
+  preview: { engineer: string | null; architect: string | null };
 }
 
 export function renderOrchestrate(props: OrchestrateProps): { body: string[]; actions: string; secondary: string } {
@@ -52,11 +52,11 @@ export function renderOrchestrate(props: OrchestrateProps): { body: string[]; ac
     settingRow(1, "tier", tierLabel),
     settingRow(2, "tier2", tier2Label),
     settingRow(3, "engineer minFit", settings.engineerMinFit.toFixed(2)),
-    settingRow(4, "research minFit", settings.researchMinFit.toFixed(2)),
+    settingRow(4, "architect minFit", settings.architectMinFit.toFixed(2)),
     "",
     ` ${B}Models${R}`,
     modelLine("engineer", preview.engineer),
-    modelLine("research", preview.research),
+    modelLine("architect", preview.architect),
     "",
     ` Running: ${W}${counters.running}${R}  Awaiting: ${W}${counters.awaiting}${R}  Failed: ${W}${counters.failed}${R}`,
   ];

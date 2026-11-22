@@ -6,10 +6,11 @@
  * may only touch ~/.machine_code/references/ and references/.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { CommandSpec, CommandContext, CommandRunResult } from "./registry.js";
 import type { Layout } from "../paths.js";
+import { loadMachineConfig } from "../config.js";
 import { findReferences, readReference, referenceStore, referenceView, reindexReferences, writeReference } from "../references/store.js";
 
 /** Append a store-relative rel to the run's changed-reference log for reference:verify. */
@@ -46,8 +47,124 @@ function recordChangedReference(
   }
 }
 
+/** Staged-material roots for the reference agent. Machine `[ingest] roots` win;
+ * `~`/relative entries resolve under the machine home; empty means the
+ * default `<home>/ingest/`. Never throws — a broken machine config falls
+ * back to the default instead of blocking the run. */
+export function ingestRoots(layout: Layout): string[] {
+  let configured: string[] = [];
+  try {
+    configured = loadMachineConfig(layout).ingest.roots;
+  } catch {
+    configured = [];
+  }
+  const raw = configured.length > 0 ? configured : ["ingest"];
+  const out: string[] = [];
+  for (const entry of raw) {
+    const trimmed = entry.trim();
+    if (!trimmed || trimmed.includes("\0")) continue;
+    const abs = trimmed.startsWith("~/") || trimmed === "~"
+      ? join(layout.home, trimmed.slice(2))
+      : isAbsolute(trimmed)
+        ? resolve(trimmed)
+        : join(layout.home, trimmed);
+    if (!out.includes(abs)) out.push(abs);
+  }
+  return out;
+}
+
+/** Resolve a user path strictly under one of the ingest roots. */
+export function resolveIngestPath(
+  layout: Layout,
+  value: string,
+): { ok: true; abs: string; rel: string } | { ok: false; error: string } {
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: false, error: "ingest path is empty" };
+  const roots = ingestRoots(layout);
+  for (const root of roots) {
+    const abs = resolve(root, trimmed);
+    if (abs === root || abs.startsWith(root + sep)) {
+      return { ok: true, abs, rel: relative(root, abs) };
+    }
+  }
+  return { ok: false, error: `ingest path escapes the staged roots (${roots.join(", ") || "(none)"})` };
+}
+
 export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   const out = new Map<string, CommandSpec>();
+
+  // reference:ingest-list — list staged PDFs/downloads under the ingest roots.
+  out.set("reference:ingest-list", {
+    name: "reference:ingest-list",
+    description: "List staged source material (PDFs, downloads) under the machine ingest roots. Capped listing; read a file with reference:ingest-read or extract a PDF with reference:pdf-extract.",
+    binary: "node",
+    args: () => [],
+    schema: {},
+    readonly: true,
+    timeoutMs: 30_000,
+    handler: async () => {
+      const roots = ingestRoots(layout);
+      const lines: string[] = [];
+      let truncated = false;
+      for (const root of roots) {
+        if (lines.length >= 200) {
+          truncated = true;
+          break;
+        }
+        let entries: string[];
+        try {
+          entries = readdirSync(root);
+        } catch {
+          lines.push(`${root}/ (missing — stage files here)`);
+          continue;
+        }
+        for (const name of entries.sort()) {
+          if (lines.length >= 200) {
+            truncated = true;
+            break;
+          }
+          if (name === ".git" || name === ".DS_Store") continue;
+          try {
+            const st = statSync(join(root, name));
+            lines.push(st.isDirectory() ? `${root}/${name}/ (dir)` : `${root}/${name} (${st.size} bytes)`);
+          } catch {
+            lines.push(`${root}/${name} (unreadable)`);
+          }
+        }
+      }
+      if (truncated) lines.push("…[capped at 200 entries]");
+      return { text: lines.length > 0 ? lines.join("\n") : "(no staged material)", isError: false };
+    },
+  });
+
+  // reference:ingest-read — capped text read of one staged file.
+  out.set("reference:ingest-read", {
+    name: "reference:ingest-read",
+    description: "Read a staged text file (markdown, text, HTML) under the ingest roots. Capped at 12 KiB. PDFs go through reference:pdf-extract instead.",
+    binary: "node",
+    args: () => [],
+    schema: {
+      path: { type: "string", required: true, description: "File under the ingest roots (reference:ingest-list shows them)." },
+    },
+    readonly: true,
+    timeoutMs: 30_000,
+    handler: async (args) => {
+      const path = typeof args.path === "string" ? args.path : "";
+      const resolved = resolveIngestPath(layout, path);
+      if (!resolved.ok) return { text: resolved.error, isError: true };
+      if (!existsSync(resolved.abs)) return { text: `no such staged file: ${path}`, isError: true };
+      let text: string;
+      try {
+        const buf = readFileSync(resolved.abs);
+        if (buf.includes(0)) return { text: `not a text file: ${path} (binary — PDFs go through reference:pdf-extract)`, isError: true };
+        text = buf.toString("utf8");
+      } catch {
+        return { text: `staged file is unreadable: ${path}`, isError: true };
+      }
+      const capped = text.length > 12_000 ? text.slice(0, 12_000) + "\n[truncated]" : text;
+      return { text: capped || "(empty file)", isError: false };
+    },
+  });
 
   // reference:browser — fetch a URL and return its text (capped).
   out.set("reference:browser", {
@@ -73,22 +190,27 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
   });
 
-  // reference:pdf-extract — pdftotext on a PDF.
+  // reference:pdf-extract — pdftotext on a staged PDF (ingest roots only).
   out.set("reference:pdf-extract", {
     name: "reference:pdf-extract",
-    description: "Extract text from a PDF (pdftotext). Returns capped text.",
+    description: "Extract text from a staged PDF under the ingest roots (reference:ingest-list shows them). Returns capped text.",
     binary: "pdftotext",
     args: (a) => ["-layout", String(a.path ?? ""), "-"],
     schema: {
-      path: { type: "string", required: true, description: "Path to the PDF (relative to worktree)." },
+      path: { type: "string", required: true, description: "PDF under the ingest roots." },
     },
     readonly: true,
     timeoutMs: 120_000,
     handler: async (args, ctx) => {
       const path = typeof args.path === "string" ? args.path : "";
       if (!path) return { text: "reference:pdf-extract requires path", isError: true };
-      const abs = resolve(ctx.root, path);
-      if (!existsSync(abs)) return { text: `no such file: ${path}`, isError: true };
+      const resolved = resolveIngestPath(layout, path);
+      if (!resolved.ok) return { text: resolved.error, isError: true };
+      const abs = resolved.abs;
+      if (!existsSync(abs)) return { text: `no such staged file: ${path}`, isError: true };
+      if (!abs.toLowerCase().endsWith(".pdf")) {
+        return { text: `not a PDF: ${path} (text files go through reference:ingest-read)`, isError: true };
+      }
       const result = spawnSync("pdftotext", ["-layout", abs, "-"], { encoding: "utf8", timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
       if (result.status !== 0) return { text: `pdftotext failed: ${result.stderr?.trim() || result.error?.message}`, isError: true };
       const text = (result.stdout ?? "").trim();

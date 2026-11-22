@@ -35,7 +35,7 @@ function getField(s: NewIssueSettings, field: string): string {
 
 /** Default acceptance gates for a given kind and verification state. */
 export function defaultAcceptance(kind: string, verification: string): string {
-  if (kind === "ideas") return "research:verify";
+  if (kind === "ideas") return "issue-curation:verify";
   if (kind === "references") return "reference:verify";
   return verification === "verified" ? "script:build, script:test" : "script:build";
 }

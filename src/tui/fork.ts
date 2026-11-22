@@ -101,7 +101,7 @@ export function forkSettingsFromRun(input: {
   const floors = allZero && settings?.minFit === 0 ? "off" : hasAxes ? "strict" : "role";
 
   return {
-    agent: oneOf(summary.agent, AGENT_NAMES, "research"),
+    agent: oneOf(summary.agent, AGENT_NAMES, "architect"),
     ...(model ? { model } : {}),
     approval: oneOf(summary.approval ?? cfg.approval, APPROVALS, defaults.approval),
     ambiguity: oneOf(summary.ambiguity ?? cfg.ambiguity, AMBIGUITIES, defaults.ambiguity),

@@ -2,7 +2,7 @@
  * Gate self-run refusal tests.
  *
  * Gates run after finish via runCommand directly. The model must not run
- * them mid-run: an early research:verify failure ("nothing changed yet")
+ * them mid-run: an early issue-curation:verify failure ("nothing changed yet")
  * teaches verify-avoidance, and script runs in a build loop. Both are
  * refused with a redirect to finish; describe/list stay available.
  *
@@ -23,18 +23,18 @@ function researchCtx(root) {
     commands: CORE_COMMANDS,
     tools: ["command"],
     allowMutations: false,
-    capabilities: ["code:read", "context:inherit", "knowledge:write"],
+    capabilities: ["code:read", "context:inherit", "issue:write"],
   };
 }
 
 describe("gate self-run refusal", () => {
-  it("refuses research:verify runs with a finish redirect", async () => {
+  it("refuses issue-curation:verify runs with a finish redirect", async () => {
     const root = mkdtempSync(join(tmpdir(), "mc-gate-"));
     try {
       const tool = commandTool(researchCtx(root));
       const out = await tool.execute(
         "t1",
-        { action: "run", name: "research:verify", args: {} },
+        { action: "run", name: "issue-curation:verify", args: {} },
         new AbortController().signal,
       );
       assert.equal(out.isError, true);
@@ -66,7 +66,7 @@ describe("gate self-run refusal", () => {
       const tool = commandTool(researchCtx(root));
       const out = await tool.execute(
         "t1",
-        { action: "describe", name: "research:verify" },
+        { action: "describe", name: "issue-curation:verify" },
         new AbortController().signal,
       );
       assert.ok(!out.isError);

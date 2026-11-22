@@ -1972,12 +1972,12 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
             `Finish the change and the gates run it — gate output comes back to you if it fails.`,
           );
         }
-        // research:verify is a gate, not a model tool. Letting the model run
-        // it mid-run teaches verify-avoidance (observed: one early failure
+        // issue-curation:verify is a gate, not a model tool. Letting the model
+        // run it mid-run teaches verify-avoidance (observed: one early failure
         // with "nothing changed yet", then never run again). Gates call
         // runCommand directly and are unaffected by this refusal.
         if (
-          (params.name === "research:verify" || params.name === "reference:verify") &&
+          (params.name === "issue-curation:verify" || params.name === "reference:verify") &&
           params.action === "run"
         ) {
           return fail(
@@ -1987,21 +1987,21 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         }
         const spec = ctx.commands.get(params.name);
         // Reference-store writes are curated knowledge, not worktree
-        // mutation: roles with knowledge:write may curate references even
-        // when worktree mutation is off (research curates; it never edits
-        // source). Conflict resolution is narrower: a knowledge role may
-        // only touch paths it could write anyway (its allowedPaths). The
-        // vcs commands themselves refuse to run outside an active merge and
-        // refuse paths that are not unmerged; this scoping stops a read-only
-        // role from resolving conflicts in source files via take-a-side.
-        // Everything else non-readonly needs code:write.
-        const knowledgeWrite = (ctx.capabilities ?? []).includes("knowledge:write");
+        // mutation: the reference role may curate the store even when
+        // worktree mutation is off (it never touches the worktree).
+        // Conflict resolution is narrower: an issue-writing role may only
+        // resolve paths under its allowedPaths (the architect's
+        // .machine_code/issues/). The vcs commands themselves refuse to run
+        // outside an active merge and refuse paths that are not unmerged;
+        // this scoping stops a read-only role from resolving conflicts in
+        // source files via take-a-side. Everything else non-readonly needs
+        // code:write.
         const referenceWriteCap = (ctx.capabilities ?? []).includes("reference:write");
         const codeWrite = (ctx.capabilities ?? []).includes("code:write");
         const issueWrite = (ctx.capabilities ?? []).includes("issue:write");
-        const referenceWrite = params.name.startsWith("reference:") && (knowledgeWrite || referenceWriteCap);
+        const referenceWrite = params.name.startsWith("reference:") && referenceWriteCap;
         const mergeWrite = (() => {
-          if (!params.name.startsWith("vcs:") || !knowledgeWrite) return false;
+          if (!params.name.startsWith("vcs:") || !issueWrite) return false;
           if (params.name !== "vcs:resolve") return true;
           const roots = ctx.allowedPaths;
           if (!roots || roots.length === 0) return true;
@@ -2012,32 +2012,19 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
           return roots.some((root) => target === root || target.startsWith(root.endsWith("/") ? root : `${root}/`));
         })();
         const issueCurate = ISSUE_WRITE_COMMANDS.includes(params.name);
-        // Docs deletion is knowledge work, not worktree mutation: a role
-        // with knowledge:write may delete under docs/ (e.g. research
-        // consolidating stale docs) even when code:write (allowMutations)
-        // is absent. Scoped to docs/ only — references/ curates through
-        // reference:* commands and .machine_code/ state is never deletable.
-        const docsDelete = (() => {
-          if (params.name !== "core:delete" || !knowledgeWrite) return false;
-          const target = typeof params.args?.path === "string"
-            ? params.args.path.replace(/\\/g, "/").replace(/^\.\//, "")
-            : "";
-          return target === "docs" || target.startsWith("docs/");
-        })();
         // Issue commands are checked before the generic mutation gate: issue
-        // curation is knowledge work, not worktree mutation, so issue:write is
-        // enough even when code:write (allowMutations) is absent.
+        // curation is not worktree mutation, so issue:write is enough even
+        // when code:write (allowMutations) is absent. Docs deletion is
+        // worktree mutation: only code:write holders (engineer) may do it.
         if (params.name === "issue:delete" && !(issueWrite && codeWrite)) {
-          return fail(`issue:delete is human-only; neither research nor engineer roles may call it in normal work`);
+          return fail(`issue:delete is human-only; no role may call it in normal work`);
         }
         if (issueCurate && !issueWrite) {
-          return fail(`${params.name} requires issue:write; research role may call it, engineer role must not`);
+          return fail(`${params.name} requires issue:write; architect role may call it, engineer role must not`);
         }
-        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite && !issueCurate && !docsDelete) {
+        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite && !issueCurate) {
           return fail(
-            params.name === "core:delete"
-              ? `core:delete outside docs/ needs code:write; this role may only delete under docs/`
-              : `${params.name} mutates files; this role is read-only`,
+            `${params.name} mutates files; this role is read-only`,
           );
         }
         const result: CommandRunResult = await runCommand(

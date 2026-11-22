@@ -30,10 +30,10 @@ export function issueDeleteTarget(repoRoot: string, slug: string): IssueDeleteTa
   const attached = listRuns(l).filter((run) => runItemId(run) === slug);
   // Research/reference runs never block an issue delete: deleting an issue
   // only removes the issue file and engineer/build branches (deleteIssue in
-  // tasks/issue.ts), and a research/reference run owns neither — its record
+  // tasks/issue.ts), and an architect/reference run owns neither — its record
   // survives in the run list.
   const activeRuns = attached
-    .filter((run) => run.agent !== "research" && run.agent !== "reference")
+    .filter((run) => run.agent !== "architect" && run.agent !== "reference")
     .filter((run) => ACTIVE_RUN_STATUSES.has(reconcileRun(run).status)).length;
   return { kind: "issue", issue, repoRoot: l.repoRoot, runs: attached.length, activeRuns };
 }

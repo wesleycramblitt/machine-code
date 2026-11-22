@@ -1,14 +1,14 @@
 /**
- * machine_code — research verification command.
+ * machine_code — architect verification command.
  *
- * A deterministic gate for research runs: checks that the run produced at
- * least one new, modified, or deleted file in the research output paths
+ * A deterministic gate for architect runs: checks that the run produced at
+ * least one new, modified, or deleted file in the architect output paths
  * (.machine_code/issues/, docs/, references/). Issue changes are tracked in the run dir;
  * docs/references use a hard git check.
  */
 
 /**
- * Which issue a changed research path belongs to. Exact rel first; then kind
+ * Which issue a changed architect path belongs to. Exact rel first; then kind
  * dir + exact filename — never a bare slug suffix, which collides across
  * kinds (features/todo/foo.md vs bugs/todo/foo.md).
  */
@@ -35,10 +35,10 @@ import { overlapFootprints } from "../plan/overlap.js";
 const GIT_PATHS = ["docs/", "references/"];
 const ISSUE_PREFIX = ".machine_code/issues/";
 
-export const researchVerifyCommand: CommandSpec = {
-  name: "research:verify",
+export const issueCurationVerifyCommand: CommandSpec = {
+  name: "issue-curation:verify",
   description:
-    "Verify that a research run produced at least one new, modified, or deleted file in .machine_code/issues/, docs/, or references/. " +
+    "Verify that an architect run produced at least one new, modified, or deleted file in .machine_code/issues/, docs/, or references/. " +
     "Exit 0 if changes exist, 1 if nothing was created, changed, or deleted.",
   binary: "git",
   args: () => [],
@@ -74,7 +74,7 @@ export const researchVerifyCommand: CommandSpec = {
       const untracked = gitOut(["ls-files", "--others", "--exclude-standard", ...GIT_PATHS]);
       const staged = gitOut(["diff", "--cached", "--name-only", "--diff-filter=ACMRD", "--", ...GIT_PATHS]);
       const unstaged = gitOut(["diff", "--name-only", "--diff-filter=ACMRD", "--", ...GIT_PATHS]);
-      // Files committed during the run (research commit workflow). Compare
+      // Files committed during the run (architect commit workflow). Compare
       // against the merge-base with origin/main so a sync merge commit does
       // not hide the branch's own changes; fall back to HEAD~1 offline.
       let committed: string[] = [];
@@ -135,14 +135,14 @@ export const researchVerifyCommand: CommandSpec = {
       );
       if (misplaced.length > 0) {
         return {
-          text: `research:verify failed — issues must live in todo, needs-human-review, failed-gates, failed-human-review, blocked, done, or ideas dirs: ${misplaced.join(", ")}`,
+          text: `issue-curation:verify failed — issues must live in todo, needs-human-review, failed-gates, failed-human-review, blocked, done, or ideas dirs: ${misplaced.join(", ")}`,
           isError: true,
         };
       }
 
       if (unique.length === 0) {
         return {
-          text: "research:verify failed — no new, modified, or deleted files in .machine_code/issues/, docs/, or references/",
+          text: "issue-curation:verify failed — no new, modified, or deleted files in .machine_code/issues/, docs/, or references/",
           isError: true,
         };
       }
@@ -151,13 +151,13 @@ export const researchVerifyCommand: CommandSpec = {
       // run; if a new/changed issue declares an overlapping `files:` footprint
       // with another pending issue and neither depends on the other, they
       // would race on parallel branches and conflict at merge time. Enforce
-      // the edge while the research agent can still fix it.
+      // the edge while the architect agent can still fix it.
       const allIssues = listIssues(layout(ctx.repoRoot ?? ctx.root));
       const changedIssues = [...new Set(unique.map((file) => matchChangedIssue(allIssues, file)).filter((issue) => issue !== undefined))];
       // Quality backstop: the issue:create handler rejects placeholders, but
       // issues can also arrive via other paths (CLI, self-scope). A blank,
       // untitled, file-less, or gate-less feature/bug must fail here while
-      // the research agent can still fix it — not surface as done work.
+      // the architect agent can still fix it — not surface as done work.
       const quality: string[] = [];
       for (const changed of changedIssues) {
         if (changed.slug === "untitled") {
@@ -199,21 +199,21 @@ export const researchVerifyCommand: CommandSpec = {
       }
       if (quality.length > 0) {
         return {
-          text: `research:verify failed — placeholder or under-scoped issues (fix with issue:update or rewrite, never raw-write):\n${[...new Set(quality)].join("\n")}`,
+          text: `issue-curation:verify failed — placeholder or under-scoped issues (fix with issue:update or rewrite, never raw-write):\n${[...new Set(quality)].join("\n")}`,
           isError: true,
         };
       }
       if (violations.length > 0) {
         return {
-          text: `research:verify failed — overlapping file footprints need a depends edge:\n${[...new Set(violations)].join("\n")}`,
+          text: `issue-curation:verify failed — overlapping file footprints need a depends edge:\n${[...new Set(violations)].join("\n")}`,
           isError: true,
         };
       }
 
-      return { text: `research:verify passed — ${unique.length} file(s) changed:\n${unique.join("\n")}`, isError: false };
+      return { text: `issue-curation:verify passed — ${unique.length} file(s) changed:\n${unique.join("\n")}`, isError: false };
     } catch (error) {
       return {
-        text: `research:verify error: ${(error as Error).message}`,
+        text: `issue-curation:verify error: ${(error as Error).message}`,
         isError: true,
       };
     }

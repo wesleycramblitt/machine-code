@@ -247,7 +247,7 @@ export function reusableWorktree(
   agent?: string,
 ): string | undefined {
   if (!parent || typeof parent.worktree !== "string" || !branch || parent.branch !== branch) return undefined;
-  // Roles must not inherit each other's checkouts: a research run reading an
+  // Roles must not inherit each other's checkouts: an architect run reading an
   // engineer's unmerged WIP as ground truth scopes issues against phantom
   // code (and vice versa). Same agent reuses; anyone else gets a fresh tree.
   if (agent !== undefined && parent.agent !== agent) return undefined;

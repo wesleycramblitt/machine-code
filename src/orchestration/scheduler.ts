@@ -115,8 +115,8 @@ export function runnableIssues(
       // Already being worked, or its files overlap a running orchestrator issue.
       if (activeItems.has(issue.slug)) return false;
       // A researched idea has no retry ladder: once the orchestrator has
-      // started research on it (slug in the dispatch ledger), do not relaunch
-      // a duplicate — unless that research never produced a result (it
+      // started architect work on it (slug in the dispatch ledger), do not relaunch
+      // a duplicate — unless that work never produced a result (it
       // hard-failed or was cancelled), which leaves the idea genuinely
       // unresearched and fit to try again. Features and bugs are untouched:
       // their failed-work statuses legitimately re-dispatch after a run ends.

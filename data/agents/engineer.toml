@@ -1,5 +1,5 @@
 # machine_code agent role: engineer
-# Issue curation uses the command tool (research role only); engineer has no issue write paths.
+# Issue curation uses the command tool (architect role only); engineer has no issue write paths.
 # Machine override: ~/.machine_code/data/agents/engineer.toml
 # Repo prompt override: .machine_code/agents/engineer.md
 
@@ -35,5 +35,3 @@ agentic = 0.2
 reasoning = 0.2
 general = 0.2
 
-[skills]
-requirements = "on-demand"

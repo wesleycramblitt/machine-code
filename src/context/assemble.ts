@@ -516,7 +516,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
   // response reserve) with no per-section caps. Over budget, whole sources
   // are dropped lowest-priority-first with a named omission; a kept block is
   // never sliced mid-content. Priority is role-aware: engineer/review keep
-  // the issue first and working files above docs; research keeps
+  // the issue first and working files above docs; architect keeps
   // docs/references above files. The issue is never dropped while
   // anything else remains.
   const { budget: usable } = sectionBudgets(budget);

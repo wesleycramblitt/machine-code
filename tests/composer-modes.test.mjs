@@ -144,10 +144,10 @@ describe("composer issue modes", () => {
     }
   });
 
-  it("research primary lists only needs-research ideas", () => {
+  it("architect primary lists only needs-research ideas", () => {
     const root = scratchRepo();
     try {
-      const frame = render(root, { agent: "research", issueMode: "primary" });
+      const frame = render(root, { agent: "architect", issueMode: "primary" });
       assert.deepEqual(slugs(frame), ["c-idea"]);
     } finally {
       rmSync(root, { recursive: true, force: true });

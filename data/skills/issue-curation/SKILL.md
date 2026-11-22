@@ -56,9 +56,32 @@ These waste turns. Do not create them.
 
 - **Mirroring.** If the research prompt is "add settings caching" and the issue says "add settings caching" with no delta, you added nothing. Value comes from *why* it matters, *what* changes, and *how* to verify it.
 - **Implementation instead of behavior.** "Add an AppConfig class with load/save methods" tells how, not what. "Settings persist across restarts and load lazily" tells what — the engineer chooses the how.
-- **Vague scope.** "Refactor the layout engine" — what is wrong with it? What does success look like? If you cannot name the files or acceptance, follow the `requirements` skill before writing an issue.
+- **Vague scope.** "Refactor the layout engine" — what is wrong with it? What does success look like? If you cannot name the files or acceptance, run Requirements analysis above before writing an issue.
 - **Filler.** An issue that adds no behavior, fixes no bug, and documents nothing familiar. Omit it — `issue:delete` is human-only.
 - **Non-issues.** "Add a comment explaining X." Docs are useful — put them in `docs/`, not in issues.
+
+## Requirements analysis
+
+Use this before you plan or scope work that is large or ambiguous — when an issue, request, or artifact cannot yet name scope and verification. Do not use it for a small, clear request.
+
+1. State the request in one sentence.
+2. List the decisions that can change scope, files, or acceptance. Keep the list to three.
+3. Challenge each assumption that the repository contradicts.
+4. Ask one question for the decision with the largest impact. Give two or three options and a recommendation.
+5. Wait for the answer. Restate the decision in one sentence.
+6. Repeat only while an open decision can change the work.
+7. Name two plausible options when a design choice remains. State the trade-off. Recommend one.
+8. Stop when the work can name exact files and acceptance commands. For a doc, also name its audience, the question it answers, and the decisions it records.
+
+Rules:
+
+- Ask with the `ask` tool when it is available. Do not ask a question that the repository can answer.
+- When `ask` is unavailable, decide from repository evidence and conventions, record the assumption, and continue. Stop only if no defensible choice exists.
+- Ask for missing facts, not for approval of your plan.
+- Ask one question at a time; never bundle decisions.
+- Prefer the smallest scope that meets the request.
+- Record each decision in the artifact you are writing, or as a `context` note when you are implementing.
+- Stop when no open decision changes scope, files, or acceptance, or each remaining one is recorded as an assumption.
 
 ## Procedure
 
@@ -83,15 +106,15 @@ When the research goal is to create scoped feature/bug issues from a prompt, the
    - A `keywords:` line with search terms that match the UI strings, component names, or concepts involved
    - An `acceptance:` line with verification commands
    - A body rich enough that an engineer can implement from it without ambiguity
-   - **Map files to issues before writing.** List which files each issue will touch. When two issues touch the same files, they MUST be ordered with `depends:` — the narrower or foundational one first — because parallel branches editing the same files cannot auto-merge. Issues with disjoint footprints stay parallel (no `depends:`). Same rule for follow-ons: schema/record first, then the code that uses it; migration first, then callers; API first, then client. `research:verify` rejects overlapping `files:` without a `depends:` edge, so fix the header before finishing.
+   - **Map files to issues before writing.** List which files each issue will touch. When two issues touch the same files, they MUST be ordered with `depends:` — the narrower or foundational one first — because parallel branches editing the same files cannot auto-merge. Issues with disjoint footprints stay parallel (no `depends:`). Same rule for follow-ons: schema/record first, then the code that uses it; migration first, then callers; API first, then client. `issue-curation:verify` rejects overlapping `files:` without a `depends:` edge, so fix the header before finishing.
 4. **Name the concrete delta.** What behavior changes? What files will the engineer touch? This does not need to be a precise edit list — `"the issue screen status line needs to show the run phase"` is enough — but it must name the observable change.
-5. **Create each issue** with `issue:create`. Follow the file shape above. The tool rejects placeholders: slug is required (never untitled), prompt must be 200+ chars and never repeat the slug, files: and acceptance: are required. research:verify rejects them too. If the tool rejects your call, do not retry the same thin content - investigate more or ask, then write once it is real. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
-6. **If the prompt is too vague to decompose** (a few words with no specifics, examples, or mention of existing behavior), follow the `requirements` skill before writing: ask one scope-changing question at a time, with options and a recommendation. Do not write a placeholder `ideas/` file; the research agent's purpose is to turn vagueness into concreteness through investigation and questioning.
+5. **Create each issue** with `issue:create`. Follow the file shape above. The tool rejects placeholders: slug is required (never untitled), prompt must be 200+ chars and never repeat the slug, files: and acceptance: are required. issue-curation:verify rejects them too. If the tool rejects your call, do not retry the same thin content - investigate more or ask, then write once it is real. Every feature/bug needs `acceptance:` and a body that describes the behavior change, not the implementation.
+6. **If the prompt is too vague to decompose** (a few words with no specifics, examples, or mention of existing behavior), run Requirements analysis above before writing: ask one scope-changing question at a time, with options and a recommendation. Do not write a placeholder `ideas/` file; the architect's purpose is to turn vagueness into concreteness through investigation and questioning.
 
 ### Decomposition guidelines
 
 - **One concern per issue.** Splitting into 5-6 well-scoped features from one detailed idea is expected, not unusual. The body of each should be richer than the original idea text, not a summary of it. One issue = one behavior change in one file group. A single issue spanning a broad glob (e.g. `docs/*.md`) or naming three or more file groups is not decomposed - split it until each piece names its own files and its own acceptance. Each body must let the engineer implement without re-reading the idea or re-mapping the repo: exact files, current state with file:line anchors, and the full change. If the engineer would have to investigate to start, the issue is not ready.
 - **Name the dependency chain** with `depends:` when features build on each other. Features with no interdependencies can be built in parallel — mark them without `depends:`.
-- **Same files means sequence, not parallel.** Declare each issue's footprint with `files:` and treat overlap as a hard sequencing signal: parallel branches touching the same files is the #1 merge-failure pattern, because two agents independently create or edit the same path and neither merge can reconcile them. When footprints overlap, `depends:` is mandatory, not optional — `research:verify` rejects the run otherwise, and the build/run harness refuses a dependent issue until its deps are done.
+- **Same files means sequence, not parallel.** Declare each issue's footprint with `files:` and treat overlap as a hard sequencing signal: parallel branches touching the same files is the #1 merge-failure pattern, because two agents independently create or edit the same path and neither merge can reconcile them. When footprints overlap, `depends:` is mandatory, not optional — `issue-curation:verify` rejects the run otherwise, and the build/run harness refuses a dependent issue until its deps are done.
 - **Copy the full context from the original prompt** into each feature body where it applies. Don't make the engineer cross-reference the idea file.
 - **Each feature issue should be independently verifiable.** If you cannot describe how to verify it in one sentence, the scope is too large — split further.

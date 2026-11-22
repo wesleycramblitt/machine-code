@@ -66,7 +66,7 @@ import { parseAxisOverrides } from "./models.js";
 
 /** Issue rels the run curated (via issue:create/update/delete), tracked in
  * the run dir. Issues live outside git, so this — not a worktree commit —
- * is a research run's deliverable. */
+ * is an architect run's deliverable. */
 function readTrackedIssues(runDir: string): string[] {
   try {
     const raw = readFileSync(join(runDir, "issues-changed.json"), "utf8");
@@ -181,10 +181,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
     // An issue decides its agent unless --agent overrides it.
     const issueAgent =
       normalizedAgent ??
-      (issue.kind === "ideas" ? "research" : issue.kind === "references" ? "reference" : "engineer");
+      (issue.kind === "ideas" ? "architect" : issue.kind === "references" ? "reference" : "engineer");
     // Agent must match the issue kind.
-    if (issueAgent === "research" && issue.kind !== "ideas") {
-      fail(`issue ${itemSlug} is ${issue.kind}, not an idea; research only runs on ideas`);
+    if (issueAgent === "architect" && issue.kind !== "ideas") {
+      fail(`issue ${itemSlug} is ${issue.kind}, not an idea; architect only runs on ideas`);
     }
     if (issueAgent === "reference" && issue.kind !== "references") {
       fail(`issue ${itemSlug} is ${issue.kind}, not a references issue; reference only runs on references`);
@@ -231,12 +231,12 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // Without this, issueless runs skip the post-run commit/merge block and
   // their work is stranded in the worktree.
   let autoCreatedIssue = false;
-  if (!itemSlug && (normalizedAgent === "engineer" || normalizedAgent === "research" || normalizedAgent === "reference") && request) {
+  if (!itemSlug && (normalizedAgent === "engineer" || normalizedAgent === "architect" || normalizedAgent === "reference") && request) {
     const autoSlug = slugify(request);
     let issue = findIssue(l, autoSlug);
     if (!issue) {
       issue = writeIssue(l, {
-        kind: normalizedAgent === "research" ? "ideas" : normalizedAgent === "reference" ? "references" : "features",
+        kind: normalizedAgent === "architect" ? "ideas" : normalizedAgent === "reference" ? "references" : "features",
         slug: autoSlug,
         prompt: request,
         body: `Auto-created from run.\n\n${request}`,
@@ -456,8 +456,8 @@ export async function cmdRun(argv: string[]): Promise<number> {
     fail("--mode was removed; runs execute directly per their agent role");
   }
   // An item-attached run defaults to the agent its issue kind needs; a bare
-  // run defaults to research (the historical behavior).
-  const agentNameParsed = normalizedAgent ?? (attachedIssue?.kind === "ideas" ? "research" : attachedIssue ? "engineer" : "research");
+  // run defaults to architect (the historical behavior).
+  const agentNameParsed = normalizedAgent ?? (attachedIssue?.kind === "ideas" ? "architect" : attachedIssue ? "engineer" : "architect");
 
   if (request.length === 0) {
     fail(`run needs a question, e.g. machine_code run "fix the parser panic"`);
@@ -653,7 +653,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const worktreeOn = worktreeFlag !== "false";
   const forceWorktree = worktreeOn && flags.has("worktree");
   const mutating =
-    agentNameParsed === "research" || agentNameParsed === "engineer"
+    agentNameParsed === "architect" || agentNameParsed === "engineer"
       ? true
       : forceWorktree;
   let toolRoot = l.repoRoot;
@@ -1056,7 +1056,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ? resolveGates(issueToTaskPacket(findIssue(l, itemSlug)!), allCommands(l, { scriptsRoot: toolRoot }))
       : undefined;
   const issueGates: GateSpec[] | undefined =
-    resolvedGates && toolRoot !== l.repoRoot && (agentNameParsed === "engineer" || agentNameParsed === "research")
+    resolvedGates && toolRoot !== l.repoRoot && (agentNameParsed === "engineer" || agentNameParsed === "architect")
       ? withSyncGate(resolvedGates, recorder.current.baseBranch)
       : resolvedGates;
   if (directExec) {
@@ -1111,7 +1111,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
     });
   } else {
     // Non-direct-exec: resolve the agent and run the loop directly.
-    const role = (agentNameParsed ?? "research") as AgentName;
+    const role = (agentNameParsed ?? "architect") as AgentName;
     const resolved = resolveAgent(l, role, {
       machineOverrides: machine.agents[role],
       runOverrides: agentOverrides,
@@ -1163,7 +1163,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (
     result.status === "completed" &&
     itemSlug &&
-    (agentNameParsed === "engineer" || agentNameParsed === "research") &&
+    (agentNameParsed === "engineer" || agentNameParsed === "architect") &&
     toolRoot !== l.repoRoot
   ) {
     const issue = findIssue(l, itemSlug);
@@ -1186,10 +1186,10 @@ export async function cmdRun(argv: string[]): Promise<number> {
         // Research curates issues directly in the main repo (.machine_code/
         // is gitignored), so an issue-only run has no worktree commit. The
         // tracked-issue log is the deliverable — not the Outcome: text.
-        if (agentNameParsed === "research") {
+        if (agentNameParsed === "architect") {
           const tracked = readTrackedIssues(recorder.dir);
           if (tracked.length > 0) {
-            recorder.event("research_issues_created", { count: tracked.length, files: tracked });
+            recorder.event("architect_issues_created", { count: tracked.length, files: tracked });
             if (issue.kind === "ideas") {
               moveIssue(l, issue.slug, "researched");
               recorder.event("idea_researched", { slug: issue.slug });
@@ -1197,7 +1197,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
           } else {
             const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
             if (outcome === "curated" || outcome === "done") {
-              recorder.event("research_no_commit_expected", { outcome });
+              recorder.event("architect_no_commit_expected", { outcome });
             } else {
               const noChange = `${agentNameParsed} produced no committable change`;
               result = { ...result, status: "blocked", error: noChange };
@@ -1289,7 +1289,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
   // worktree is reusable; the branch keeps every committed commit.
   if (result.status !== "completed") await abortMergeIfInProgress(toolRoot);
   recorder.finalize(result.status, result.error, result.finalText);
-  if (agentNameParsed === "research") {
+  if (agentNameParsed === "architect") {
   }
   printRunOutcome(result, recorder);
   if (machine.notify.webhookUrl || machine.notify.command) {
@@ -1299,7 +1299,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       status: result.status,
       runId: recorder.id,
       repoRoot: l.repoRoot,
-      agent: agentNameParsed ?? "research",
+      agent: agentNameParsed ?? "architect",
       request,
       tokens: recorder.current.usage.totalTokens,
       cost: recorder.current.cost.actual,
@@ -1465,8 +1465,8 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     // it would edit main directly, pass gates there, and strand
     // uncommitted changes with no commit/merge/move. Retry creation (the
     // tree may be clean now); refuse if it still fails.
-    const resumeAgentName = normalizeAgentName(s.agent ?? "research");
-    if (resumeAgentName === "research" || resumeAgentName === "engineer") {
+    const resumeAgentName = normalizeAgentName(s.agent ?? "architect");
+    if (resumeAgentName === "architect" || resumeAgentName === "engineer") {
       const slug = s.itemId ?? s.packetId ?? undefined;
       const attached = slug ? findIssue(l2, slug) : null;
       try {
@@ -1523,13 +1523,13 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   const inbox = readInbox(runDir);
   let startMode: "prompt" | "continue" = "prompt";
   let initialMessages: import("@earendil-works/pi-agent-core").AgentMessage[] | undefined;
-  let resumeAgent: AgentName = normalizeAgentName(s.agent ?? "research");
-  if (!AGENT_NAMES.includes(resumeAgent)) resumeAgent = "research";
+  let resumeAgent: AgentName = normalizeAgentName(s.agent ?? "architect");
+  if (!AGENT_NAMES.includes(resumeAgent)) resumeAgent = "architect";
   let resumeRequest = s.request;
 
   if (transcript && transcript.messages.length > 0) {
     resumeAgent = transcript.agent ? normalizeAgentName(transcript.agent) : resumeAgent;
-    if (!AGENT_NAMES.includes(resumeAgent)) resumeAgent = "research";
+    if (!AGENT_NAMES.includes(resumeAgent)) resumeAgent = "architect";
     resumeRequest = transcript.request || resumeRequest;
     const answerForQuestion = (questionText: string): string | null => {
       // Match the recorded answer to the pending ask by question text.
@@ -1634,7 +1634,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
   const resumeGatesRaw: GateSpec[] | undefined =
     resumeIssue ? resolveGates(issueToTaskPacket(resumeIssue), gateCommands) : undefined;
   const resumeGates: GateSpec[] | undefined =
-    resumeGatesRaw && toolRoot !== l2.repoRoot && (resumeAgent === "engineer" || resumeAgent === "research")
+    resumeGatesRaw && toolRoot !== l2.repoRoot && (resumeAgent === "engineer" || resumeAgent === "architect")
       ? withSyncGate(resumeGatesRaw, recorder.current.baseBranch)
       : resumeGatesRaw;
 
@@ -1698,7 +1698,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
 
   // A resumed Engineer phase still owes the runner its gates, commit, and move.
   // Gates now run inside the loop. Handle completion or block from exhaustion.
-  if (result.status === "completed" && (resumeAgent === "engineer" || resumeAgent === "research") && resumeIssue) {
+  if (result.status === "completed" && (resumeAgent === "engineer" || resumeAgent === "architect") && resumeIssue) {
     if (toolRoot !== l2.repoRoot) {
       try {
         const commit = await ensureCommitted(
@@ -1718,7 +1718,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
           }
           const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
           if (resumeIssue.kind === "ideas" && (outcome === "curated" || outcome === "done")) {
-            recorder.event("research_no_commit_expected", { outcome });
+            recorder.event("architect_no_commit_expected", { outcome });
           } else if (resumeIssue.review === "none" || flags.has("no-review") || resumeIssue.kind === "ideas") {
             const branch = recorder.current.branch;
             if (branch) {
@@ -1758,7 +1758,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
         } else {
           const tracked = readTrackedIssues(recorder.dir);
           if (tracked.length > 0) {
-            recorder.event("research_issues_created", { count: tracked.length, files: tracked });
+            recorder.event("architect_issues_created", { count: tracked.length, files: tracked });
             if (resumeIssue.kind === "ideas") {
               moveIssue(l2, resumeIssue.slug, "researched");
               recorder.event("idea_researched", { slug: resumeIssue.slug });
@@ -1766,9 +1766,9 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
           } else {
             const outcome = /(?:^|\n)\s*Outcome:\s*(researched|curated|done|completed)\b/i.exec(result.finalText ?? "")?.[1]?.toLowerCase();
             if (outcome !== "curated" && outcome !== "done") {
-              result = { ...result, status: "blocked", error: "research produced no committable change" };
+              result = { ...result, status: "blocked", error: "architect produced no committable change" };
             } else {
-              recorder.event("research_no_commit_expected", { outcome });
+              recorder.event("architect_no_commit_expected", { outcome });
             }
           }
         }

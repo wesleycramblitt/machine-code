@@ -1,7 +1,7 @@
 /**
  * machine_code — issue detail keys.
  *
- * `n` starts the run the issue needs (research for ideas, engineer for
+ * `n` starts the run the issue needs (architect for ideas, engineer for features/bugs, reference for references,
  * features/bugs), `e` edits the issue file, `a` approves and merges,
  * `d` opens the delete confirmation page.
  */
@@ -31,7 +31,7 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
       ctx.notify(`${slug} is ${issue.status}; approve it with a`);
       return;
     }
-    const agent = issue?.kind === "ideas" ? "research" : issue?.kind === "references" ? "reference" : "engineer";
+    const agent = issue?.kind === "ideas" ? "architect" : issue?.kind === "references" ? "reference" : "engineer";
     ctx.startNewRun(undefined, l.repoRoot, { agent, item: slug });
   };
   if (data === "\x1b" || data === "q") { s.screen = "list"; ctx.draw(); return true; }

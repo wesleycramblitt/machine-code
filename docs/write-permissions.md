@@ -45,22 +45,29 @@ target).
 The agent TOML file from a higher-priority source replaces the lower one
 wholesale (same as other agent fields).
 
-### Example: research agent
+### Example: architect agent (no file writes)
 
 ```toml
-# data/agents/research.toml
-name = "research"
-tools = ["context", "inspect", "map", "glob", "command", "ask", "skill", "write", "finish"]
-capabilities = ["code:read", "context:inherit", "knowledge:write"]
-allowed_paths = ["docs/", "references/", ".machine_code/"]
+# data/agents/architect.toml
+name = "architect"
+tools = ["context", "inspect", "glob", "command", "ask", "skill", "runData", "webFetch", "finish"]
+capabilities = ["code:read", "context:inherit", "run:read", "issue:write", "web:fetch"]
+allowed_paths = [".machine_code/"]
 ```
 
-The research agent can only write or edit files under `docs/`, `references/`, and `.machine_code/` (issues via issue commands only). Trying to write to `src/main.ts` or the worktree root will
-fail with:
+The architect agent holds no file-write capability: it curates issues only through `issue:create` / `issue:update` (and may `vcs:resolve` under `.machine_code/` during a runner-started merge). Any `write` or `edit` attempt fails.
 
+### Example: reference agent (store-only writes)
+
+```toml
+# data/agents/reference.toml
+name = "reference"
+tools = ["context", "command", "skill", "webFetch", "ask", "runData", "finish"]
+capabilities = ["context:inherit", "run:read", "web:fetch", "reference:write"]
+allowed_paths = []
 ```
-write is restricted to: docs/, references/, .machine_code/ for this role; got: src/main.ts
-```
+
+The reference agent writes only through `reference:write`, which is scoped to the central store. Worktree writes of any kind fail.
 
 ### Example: engineer agent (no restrictions)
 

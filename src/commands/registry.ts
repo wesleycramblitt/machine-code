@@ -12,7 +12,7 @@ import { runProc } from "../proc.js";
 import { COMMAND_CAP_BYTES, capText, isSecretPath, resolveWithin, toRelative } from "../tools/safety.js";
 import { issueCommands } from "./issues.js";
 import { referenceCommands } from "./reference.js";
-import { researchVerifyCommand } from "./research.js";
+import { issueCurationVerifyCommand } from "./issue-curation.js";
 import { referenceVerifyCommand } from "./reference-verify.js";
 import { runCommands } from "./runs.js";
 import { scriptCommands } from "./scripts.js";
@@ -286,7 +286,7 @@ const SPECS: CommandSpec[] = [
 
 export const CORE_COMMANDS: ReadonlyMap<string, CommandSpec> = new Map([
   ...SPECS.map((spec) => [spec.name, spec] as const),
-  ["research:verify", researchVerifyCommand],
+  ["issue-curation:verify", issueCurationVerifyCommand],
   ["reference:verify", referenceVerifyCommand],
   ["vcs:conflicts", vcsConflictsCommand],
   ["vcs:resolve", vcsResolveCommand],

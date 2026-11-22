@@ -435,7 +435,7 @@ export function tierTone(tier: "paid" | "free" | "local" | "none"): string {
 
 export function agentTone(agent: string): string {
   switch (agent) {
-    case "research": return PURPLE_FG;
+    case "architect": return PURPLE_FG;
     case "engineer": return BL;
     case "review": return RED;
     // Legacy run records keep their old colors.
