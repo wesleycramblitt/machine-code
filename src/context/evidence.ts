@@ -28,9 +28,6 @@ export interface RetainedCall {
   params: Record<string, unknown>;
   /** Turn the model asked it; null when rebuilt from a resumed transcript. */
   turn: number | null;
-  /** True for the run's own files (issue `files:`), seeded at turn 0. Seeds
-   *  lead the evidence order and are never evicted from the ledger. */
-  seeded?: boolean;
 }
 
 /** Most distinct calls worth re-serving in one prompt. */

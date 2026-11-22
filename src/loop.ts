@@ -1042,7 +1042,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const evictOldest = (ledger: Map<string, RetainedCall>): void => {
       if (ledger.size < MAX_RETAINED_CALLS) return;
       for (const [key, call] of ledger) {
-        if (call.seeded) continue;
+        if (call.id.startsWith("seed-")) continue;
         ledger.delete(key);
         return;
       }
@@ -1174,7 +1174,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       tool: "inspect" as const,
       params: { query: path },
       turn: 0,
-      seeded: true,
     }));
     for (const call of seeded) {
       const rawInspect = rawTools.find((t) => t.name === "inspect");
@@ -1211,10 +1210,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
           if (!tool || !prepared) continue;
           const key = `${tool}:${stableKey(prepared)}`;
-          const prior = retained.get(key);
           retained.delete(key);
           evictOldest(retained);
-          retained.set(key, { id: b.id, tool, params: prepared, turn: null, ...(prior?.seeded ? { seeded: true } : {}) });
+          retained.set(key, { id: b.id, tool, params: prepared, turn: null });
         } catch {
           // Unparseable history never blocks the run.
         }
@@ -1557,8 +1555,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // else stays most-recent-first.
           const allRetained = [...retained.values()];
           const ordered = [
-            ...allRetained.filter((call) => call.seeded),
-            ...allRetained.filter((call) => !call.seeded).reverse(),
+            ...allRetained.filter((call) => call.id.startsWith("seed-")),
+            ...allRetained.filter((call) => !call.id.startsWith("seed-")).reverse(),
           ];
           const rawInspect = rawTools.find((t) => t.name === "inspect");
           const rawCommand = rawTools.find((t) => t.name === "command");
