@@ -1998,6 +1998,18 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
           return roots.some((root) => target === root || target.startsWith(root.endsWith("/") ? root : `${root}/`));
         })();
         const issueCurate = ISSUE_WRITE_COMMANDS.includes(params.name);
+        // Docs deletion is knowledge work, not worktree mutation: a role
+        // with knowledge:write may delete under docs/ (e.g. research
+        // consolidating stale docs) even when code:write (allowMutations)
+        // is absent. Scoped to docs/ only — references/ curates through
+        // reference:* commands and .machine_code/ state is never deletable.
+        const docsDelete = (() => {
+          if (params.name !== "core:delete" || !knowledgeWrite) return false;
+          const target = typeof params.args?.path === "string"
+            ? params.args.path.replace(/\\/g, "/").replace(/^\.\//, "")
+            : "";
+          return target === "docs" || target.startsWith("docs/");
+        })();
         // Issue commands are checked before the generic mutation gate: issue
         // curation is knowledge work, not worktree mutation, so issue:write is
         // enough even when code:write (allowMutations) is absent.
@@ -2007,8 +2019,12 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
         if (issueCurate && !issueWrite) {
           return fail(`${params.name} requires issue:write; research role may call it, engineer role must not`);
         }
-        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite && !issueCurate) {
-          return fail(`${params.name} mutates files; this role is read-only`);
+        if (spec && !spec.readonly && ctx.allowMutations === false && !referenceWrite && !mergeWrite && !issueCurate && !docsDelete) {
+          return fail(
+            params.name === "core:delete"
+              ? `core:delete outside docs/ needs code:write; this role may only delete under docs/`
+              : `${params.name} mutates files; this role is read-only`,
+          );
         }
         const result: CommandRunResult = await runCommand(
           params.name,

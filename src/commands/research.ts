@@ -2,8 +2,8 @@
  * machine_code — research verification command.
  *
  * A deterministic gate for research runs: checks that the run produced at
- * least one new file in the research output paths (.machine_code/issues/,
- * docs/, references/). Issue changes are tracked in the run dir;
+ * least one new, modified, or deleted file in the research output paths
+ * (.machine_code/issues/, docs/, references/). Issue changes are tracked in the run dir;
  * docs/references use a hard git check.
  */
 
@@ -38,8 +38,8 @@ const ISSUE_PREFIX = ".machine_code/issues/";
 export const researchVerifyCommand: CommandSpec = {
   name: "research:verify",
   description:
-    "Verify that a research run produced at least one new file in .machine_code/issues/, docs/, or references/. " +
-    "Exit 0 if new files exist, 1 if nothing was created.",
+    "Verify that a research run produced at least one new, modified, or deleted file in .machine_code/issues/, docs/, or references/. " +
+    "Exit 0 if changes exist, 1 if nothing was created, changed, or deleted.",
   binary: "git",
   args: () => [],
   schema: {},
@@ -72,8 +72,8 @@ export const researchVerifyCommand: CommandSpec = {
         }
       };
       const untracked = gitOut(["ls-files", "--others", "--exclude-standard", ...GIT_PATHS]);
-      const staged = gitOut(["diff", "--cached", "--name-only", "--diff-filter=ACMR", "--", ...GIT_PATHS]);
-      const unstaged = gitOut(["diff", "--name-only", "--diff-filter=M", "--", ...GIT_PATHS]);
+      const staged = gitOut(["diff", "--cached", "--name-only", "--diff-filter=ACMRD", "--", ...GIT_PATHS]);
+      const unstaged = gitOut(["diff", "--name-only", "--diff-filter=ACMRD", "--", ...GIT_PATHS]);
       // Files committed during the run (research commit workflow). Compare
       // against the merge-base with origin/main so a sync merge commit does
       // not hide the branch's own changes; fall back to HEAD~1 offline.
@@ -92,7 +92,7 @@ export const researchVerifyCommand: CommandSpec = {
         }
         committed = execFileSync("git", [
           "-C", gitRoot,
-          "diff", committedRange, "--name-only", "--diff-filter=ACMR", "--", ...GIT_PATHS,
+          "diff", committedRange, "--name-only", "--diff-filter=ACMRD", "--", ...GIT_PATHS,
         ], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "ignore"] }).trim()
           .split("\n")
           .filter(Boolean)
@@ -140,7 +140,7 @@ export const researchVerifyCommand: CommandSpec = {
 
       if (unique.length === 0) {
         return {
-          text: "research:verify failed — no new or modified files in .machine_code/issues/, docs/, or references/",
+          text: "research:verify failed — no new, modified, or deleted files in .machine_code/issues/, docs/, or references/",
           isError: true,
         };
       }
