@@ -4,7 +4,7 @@
  * Split from `src/cli.ts`; behavior unchanged. See `src/cli/common.ts` for
  * shared setup (flags, runtime, formatting, run lookup).
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,12 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
+
+/** Bound on files seeded into evidence: the run's own files arrive as native
+ * inspect results from turn 0, so no orientation pass is needed to fetch them.
+ * Short files arrive whole; longer ones arrive as an outline (see loop.ts). */
+const SEED_FILE_LIMIT = 8;
+const SEED_FILE_BYTES = 256 * 1024;
 
 /** Issue rels the run curated (via issue:create/update/delete), tracked in
  * the run dir. Issues live outside git, so this — not a worktree commit —
@@ -992,6 +998,23 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const seedRanges = hintRanges
     .filter((entry) => !seedFiles.includes(entry.path))
     .map((entry) => ({ path: entry.path, range: [entry.start, entry.end] as [number, number] }));
+  // The run's own files (issue `files:` first) seed evidence as inspect pairs.
+  // Bounded by count and size; the symbol map still indexes everything else.
+  const evidenceSeeds = (() => {
+    const picked: string[] = [];
+    for (const path of seedFiles) {
+      if (picked.length >= SEED_FILE_LIMIT) break;
+      if (/[*?[\]]/.test(path) || path.startsWith("/") || path.split("/").includes("..")) continue;
+      try {
+        const stat = statSync(join(l.repoRoot, path));
+        if (!stat.isFile() || stat.size > SEED_FILE_BYTES) continue;
+      } catch {
+        continue;
+      }
+      picked.push(path);
+    }
+    return picked;
+  })();
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -1101,6 +1124,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ...(tier2 ? { tier2 } : {}),
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
+      ...(evidenceSeeds.length > 0 ? { seedEvidence: evidenceSeeds } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
       ...(symbolsMaxChars !== undefined ? { symbolsMaxChars } : {}),
       skipMap,

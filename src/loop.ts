@@ -161,6 +161,10 @@ export interface RunLoopInput {
   startMode?: "prompt" | "continue";
   /** Assembled context block prepended to the first prompt. */
   contextText?: string;
+  /** Repo-relative files the run is about, seeded into evidence as native
+   * inspect pairs from turn 0. Short files arrive whole (< 200 lines);
+   * longer ones arrive as an outline, which is what the model reads anyway. */
+  seedEvidence?: string[];
   /** Skip the deterministic repo map index in the model's up-front context. */
   skipMap?: boolean;
   /** Per-turn symbol-map cap override (default: machine context.symbols_max_chars,
@@ -658,7 +662,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let textOnlyStreak = 0;
   let continuePromptArmed = false;
   const MAX_TEXT_ONLY_CONTINUES = 2;
-  /** Absolute ceiling for re-served evidence per prompt. The share below is
+  /** Files shorter than this seed their whole body into evidence; longer files
+ * seed an outline (signatures), which is what a model reads anyway. */
+const SEED_BODY_LINES = 200;
+/** Absolute ceiling for re-served evidence per prompt. The share below is
    * unbounded on large windows; without this, old reads crowd out the
    * instructions. Most-recent-first with oldest-drop still applies. */
   const EVIDENCE_MAX_CHARS = 96_000;
@@ -679,9 +686,20 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const symbols = Math.max(2_048, Math.floor(variablePool * ctxBudget.symbols));
     const map = Math.max(1_024, Math.floor(variablePool * ctxBudget.map));
     const state = Math.max(4_096, Math.floor(variablePool * ctxBudget.state));
+    // Seeded files ride in evidence, so their bytes move out of the context
+    // block instead of doubling the pool. Long files seed an outline, so this
+    // stays small in practice.
+    const seedChars = (input.seedEvidence ?? []).reduce((sum, path) => {
+      try {
+        const text = readFileSync(join(input.root, path), "utf8");
+        return sum + (text.split("\n").length < SEED_BODY_LINES ? text.length : 4_096);
+      } catch {
+        return sum;
+      }
+    }, 0);
     const evidence = Math.min(
       EVIDENCE_MAX_CHARS,
-      Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence)),
+      Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence)) + seedChars,
     );
     const wholeFile = Math.max(2_048, Math.floor(variablePool * ctxBudget.wholeFile));
     const contextBlock = Math.max(4_096, variablePool - symbols - map - state - evidence);
@@ -1023,6 +1041,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
     /** Distinct successful inspect calls, for re-served evidence. Insertion
      * order is oldest first; re-asking refreshes recency. */
+    // Seeds are the files this run edits: they stay in evidence for the whole
+    // run even when the ledger is full, so the model never loses what it is
+    // working on. Oldest non-seed entries go first.
+    const evictOldest = (ledger: Map<string, RetainedCall>): void => {
+      if (ledger.size < MAX_RETAINED_CALLS) return;
+      for (const [key, call] of ledger) {
+        if (call.seeded) continue;
+        ledger.delete(key);
+        return;
+      }
+    };
     const retained = new Map<string, RetainedCall>();
     let changeEpoch = 0;
     /** Verbatim-retry escalation state (same tool+args+error across turns). */
@@ -1141,6 +1170,33 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       allowedPaths: input.agent.allowedPaths,
     };
     const rawTools = coreTools(toolCtx, input.agent.tools);
+    // Files the run is about ride in as native inspect pairs from turn 0: the
+    // same shape as a live read, re-executed from disk each turn, so the model
+    // sees current state instead of static context it may distrust. Long files
+    // seed an outline — models read a wall of body as noise and search anyway.
+    const seedCall = (path: string, index: number): RetainedCall => {
+      let lines = 0;
+      try {
+        lines = readFileSync(join(input.root, path), "utf8").split("\n").length;
+      } catch {
+        lines = 0;
+      }
+      const short = lines > 0 && lines < SEED_BODY_LINES;
+      return {
+        id: `seed-${index + 1}`,
+        tool: "inspect" as const,
+        params: short ? { query: path } : { query: path, detail: "outline" },
+        turn: 0,
+        seeded: true,
+      };
+    };
+    const seeded: RetainedCall[] = (input.seedEvidence ?? []).map(seedCall);
+    for (const call of seeded) {
+      const rawInspect = rawTools.find((t) => t.name === "inspect");
+      const prepared = (rawInspect?.prepareArguments?.(call.params) ?? call.params) as Record<string, unknown>;
+      call.params = prepared;
+      retained.set(`inspect:${stableKey(prepared)}`, call);
+    }
     // Rebuild the retained-call ledger from a resumed transcript so
     // re-served evidence covers pre-resume reads (turn unknown). Inspect
     // bodies and issue:show reads both re-serve; anything else is live
@@ -1170,12 +1226,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
           if (!tool || !prepared) continue;
           const key = `${tool}:${stableKey(prepared)}`;
+          const prior = retained.get(key);
           retained.delete(key);
-          if (retained.size >= MAX_RETAINED_CALLS) {
-            const oldest = retained.keys().next();
-            if (!oldest.done) retained.delete(oldest.value);
-          }
-          retained.set(key, { id: b.id, tool, params: prepared, turn: null });
+          evictOldest(retained);
+          retained.set(key, { id: b.id, tool, params: prepared, turn: null, ...(prior?.seeded ? { seeded: true } : {}) });
         } catch {
           // Unparseable history never blocks the run.
         }
@@ -1271,16 +1325,15 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             });
           }
           if (!result.isError && tool.name === "inspect") {
+            const prior = retained.get(key);
             retained.delete(key);
-            if (retained.size >= MAX_RETAINED_CALLS) {
-              const oldest = retained.keys().next();
-              if (!oldest.done) retained.delete(oldest.value);
-            }
+            evictOldest(retained);
             retained.set(key, {
               id,
               tool: "inspect",
               params: params as Record<string, unknown>,
               turn: memory.currentTurn(),
+              ...(prior?.seeded ? { seeded: true } : {}),
             });
           }
           // issue:show is the command-side equivalent of an inspect read:
@@ -1519,7 +1572,13 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // The last two steps replay in full; the symbol map plus notes
           // carry everything older worth keeping.
           const keptIds = keptToolCallIds(context.messages);
-          const ordered = [...retained.values()].reverse();
+          // Seeds lead: they are the files this run edits, so budget
+          // pressure drops incidental reads before them.
+          const allRetained = [...retained.values()];
+          const ordered = [
+            ...allRetained.filter((call) => call.seeded),
+            ...allRetained.filter((call) => !call.seeded).reverse(),
+          ];
           const rawInspect = rawTools.find((t) => t.name === "inspect");
           const rawCommand = rawTools.find((t) => t.name === "command");
           const freshDiff = async (): Promise<string> => {

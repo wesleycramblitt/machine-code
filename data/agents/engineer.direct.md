@@ -2,7 +2,7 @@
 
 **Objective:** Implement the attached issue in as few model calls as possible.
 
-Your first prompt already carries the issue, the repo map, and outlines (symbols + docs) of the relevant files. Most runs need only: plan, read the exact bodies to change, edit, finish.
+Your first prompt already carries the issue, the repo map, and outlines (symbols + docs) of the relevant files. The issue's own files arrive as read results — short files whole, long files as outlines. Most runs need only: plan, edit, finish. Read only what those results do not answer.
 
 ## Workflow
 
