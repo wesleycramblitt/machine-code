@@ -29,7 +29,7 @@ import { coreTools } from "./tools/index.js";
 import { toolDefinitionChars, toolSchemaChars } from "./tools/schema.js";
 import type { AgentConfig } from "./agents/config.js";
 import { addCurationVeto } from "./catalogue/overlay.js";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Layout } from "./paths.js";
 import { layout as layoutFor } from "./paths.js";
@@ -161,10 +161,6 @@ export interface RunLoopInput {
   startMode?: "prompt" | "continue";
   /** Assembled context block prepended to the first prompt. */
   contextText?: string;
-  /** Repo-relative files the run is about, seeded into evidence as native
-   * inspect pairs from turn 0. The model treats them as current reads (they
-   * are re-read from disk every turn), so no orientation pass is needed. */
-  seedEvidence?: string[];
   /** Skip the deterministic repo map index in the model's up-front context. */
   skipMap?: boolean;
   /** Per-turn symbol-map cap override (default: machine context.symbols_max_chars,
@@ -683,18 +679,9 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const symbols = Math.max(2_048, Math.floor(variablePool * ctxBudget.symbols));
     const map = Math.max(1_024, Math.floor(variablePool * ctxBudget.map));
     const state = Math.max(4_096, Math.floor(variablePool * ctxBudget.state));
-    // Seeded file bodies ride in evidence, so their bytes move out of the
-    // context block rather than doubling: the pool total is unchanged.
-    const seedChars = (input.seedEvidence ?? []).reduce((sum, path) => {
-      try {
-        return sum + statSync(join(input.root, path)).size;
-      } catch {
-        return sum;
-      }
-    }, 0);
     const evidence = Math.min(
       EVIDENCE_MAX_CHARS,
-      Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence)) + seedChars,
+      Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence)),
     );
     const wholeFile = Math.max(2_048, Math.floor(variablePool * ctxBudget.wholeFile));
     const contextBlock = Math.max(4_096, variablePool - symbols - map - state - evidence);
@@ -1036,17 +1023,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
     /** Distinct successful inspect calls, for re-served evidence. Insertion
      * order is oldest first; re-asking refreshes recency. */
-    // Seeds are the files this run edits: they stay in evidence for the whole
-    // run even when the ledger is full, so the model never loses the text it
-    // is working on. Oldest non-seed entries go first.
-    const evictOldest = (ledger: Map<string, RetainedCall>): void => {
-      if (ledger.size < MAX_RETAINED_CALLS) return;
-      for (const [key, call] of ledger) {
-        if (call.id.startsWith("seed-")) continue;
-        ledger.delete(key);
-        return;
-      }
-    };
     const retained = new Map<string, RetainedCall>();
     let changeEpoch = 0;
     /** Verbatim-retry escalation state (same tool+args+error across turns). */
@@ -1165,22 +1141,6 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
       allowedPaths: input.agent.allowedPaths,
     };
     const rawTools = coreTools(toolCtx, input.agent.tools);
-    // Files the run is about ride in as native inspect pairs from turn 0:
-    // the same shape as a live read, re-executed from disk each turn, so the
-    // model sees them as current state (not as static context it may treat
-    // as stale) and never spends an orientation pass fetching them.
-    const seeded: RetainedCall[] = (input.seedEvidence ?? []).map((path, index) => ({
-      id: `seed-${index + 1}`,
-      tool: "inspect" as const,
-      params: { query: path },
-      turn: 0,
-    }));
-    for (const call of seeded) {
-      const rawInspect = rawTools.find((t) => t.name === "inspect");
-      const prepared = (rawInspect?.prepareArguments?.(call.params) ?? call.params) as Record<string, unknown>;
-      call.params = prepared;
-      retained.set(`inspect:${stableKey(prepared)}`, call);
-    }
     // Rebuild the retained-call ledger from a resumed transcript so
     // re-served evidence covers pre-resume reads (turn unknown). Inspect
     // bodies and issue:show reads both re-serve; anything else is live
@@ -1211,7 +1171,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           if (!tool || !prepared) continue;
           const key = `${tool}:${stableKey(prepared)}`;
           retained.delete(key);
-          evictOldest(retained);
+          if (retained.size >= MAX_RETAINED_CALLS) {
+            const oldest = retained.keys().next();
+            if (!oldest.done) retained.delete(oldest.value);
+          }
           retained.set(key, { id: b.id, tool, params: prepared, turn: null });
         } catch {
           // Unparseable history never blocks the run.
@@ -1309,7 +1272,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           }
           if (!result.isError && tool.name === "inspect") {
             retained.delete(key);
-            evictOldest(retained);
+            if (retained.size >= MAX_RETAINED_CALLS) {
+              const oldest = retained.keys().next();
+              if (!oldest.done) retained.delete(oldest.value);
+            }
             retained.set(key, {
               id,
               tool: "inspect",
@@ -1328,7 +1294,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             commandName === "issue:show"
           ) {
             retained.delete(key);
-            evictOldest(retained);
+            if (retained.size >= MAX_RETAINED_CALLS) {
+              const oldest = retained.keys().next();
+              if (!oldest.done) retained.delete(oldest.value);
+            }
             retained.set(key, {
               id,
               tool: "command",
@@ -1550,14 +1519,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           // The last two steps replay in full; the symbol map plus notes
           // carry everything older worth keeping.
           const keptIds = keptToolCallIds(context.messages);
-          // Seeds lead: they are the files this run edits, so budget
-          // pressure drops older incidental reads before them. Everything
-          // else stays most-recent-first.
-          const allRetained = [...retained.values()];
-          const ordered = [
-            ...allRetained.filter((call) => call.id.startsWith("seed-")),
-            ...allRetained.filter((call) => !call.id.startsWith("seed-")).reverse(),
-          ];
+          const ordered = [...retained.values()].reverse();
           const rawInspect = rawTools.find((t) => t.name === "inspect");
           const rawCommand = rawTools.find((t) => t.name === "command");
           const freshDiff = async (): Promise<string> => {

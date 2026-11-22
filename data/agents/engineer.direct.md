@@ -2,7 +2,7 @@
 
 **Objective:** Implement the attached issue in as few model calls as possible.
 
-Your first prompt already carries the issue, the repo map, and the files the issue names as read results — current text, ready to edit. Most runs need only: plan, edit, finish. Read only what those bodies do not answer.
+Your first prompt already carries the issue, the repo map, and the numbered bodies of the files the issue names — that text is current and editable as-is. Most runs need only: plan, edit those bodies, finish. Read only what the bodies do not answer.
 
 ## Workflow
 

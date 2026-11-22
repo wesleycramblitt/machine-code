@@ -33,7 +33,7 @@ export interface RetainedCall {
 /** Most distinct calls worth re-serving in one prompt. */
 export const MAX_RETAINED_CALLS = 30;
 /** Per-envelope cap; the share bounds the total. */
-const ENVELOPE_CAP_CHARS = 48 * 1024;
+const ENVELOPE_CAP_CHARS = 16_384;
 const DIFF_CAP_CHARS = 8_192;
 
 function textOf(result: { content: Array<{ type?: unknown; text?: unknown }> }): string {
