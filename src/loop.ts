@@ -1310,6 +1310,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             });
           }
           if (!result.isError && tool.name === "inspect") {
+            const prior = retained.get(key);
             retained.delete(key);
             evictOldest(retained);
             retained.set(key, {
@@ -1317,6 +1318,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
               tool: "inspect",
               params: params as Record<string, unknown>,
               turn: memory.currentTurn(),
+              ...(prior?.seeded ? { seeded: true } : {}),
             });
           }
           // issue:show is the command-side equivalent of an inspect read:
