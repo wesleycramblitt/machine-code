@@ -195,7 +195,7 @@ export function previewContext(
   }
 
   for (const citation of options.references ?? []) {
-    const size = referenceFileSize(layout, citation, layout.repoRoot);
+    const size = referenceFileSize(layout, citation);
     const exists = size > 0;
     sources.push({ kind: "reference", ref: citation, origin: "explicit", depth: 0, chars: size, exists });
     if (!exists) {

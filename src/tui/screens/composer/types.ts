@@ -78,8 +78,6 @@ export interface ComposerProps extends Viewport {
   included: ReadonlySet<string>;
   /** Context-tab sort mode: build order, selected-first, or recent-first. */
   sortMode: ComposerSortMode;
-  /** References-tab scope: false filters to the repo view (references/) only. */
-  referencesAll: boolean;
   /** Issues-tab select mode: exactly one primary vs N references. */
   issueMode: "primary" | "reference";
   skillModes: ReadonlyMap<string, SkillMode>;

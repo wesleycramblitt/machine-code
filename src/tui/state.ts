@@ -198,8 +198,6 @@ export interface TuiState {
   newRunIssueMode: "primary" | "reference";
   /** Sort mode for the active context tab: default build order, selected-first, or recent-first. */
   newRunSortMode: ComposerSortMode;
-  /** References-tab scope: false filters to the repo view (references/) only. */
-  newRunReferencesAll: boolean;
   /** Explicit per-skill mode choices (include | on-demand | exclude). */
   newRunSkillModes: Map<string, SkillMode>;
   /** Modes as rendered this frame (single source for space-cycling). */
@@ -361,7 +359,6 @@ export function createTuiState(repoRoot: string): TuiState {
     newRunContextIncluded: new Set<string>(),
     newRunIssueMode: "primary",
     newRunSortMode: "default",
-    newRunReferencesAll: true,
     newRunSkillModes: new Map<string, SkillMode>(),
     newRunSkillShown: new Map<string, SkillMode>(),
     newRunRequiredSkills: [],

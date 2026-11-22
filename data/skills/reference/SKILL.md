@@ -64,8 +64,7 @@ references/
 
 ## Rules
 
-- Never write to project code paths. Reference writes are scoped to the store
-  or the project reference view.
+- Never write to project code paths. Reference writes go only to the central store.
 - Prefer primary sources. Attribute every claim to its source URL.
 - Keep one concept per content file; split when larger.
 - Read only the exact cited file and anchor. Never load a whole bundle.

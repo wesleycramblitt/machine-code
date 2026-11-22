@@ -254,7 +254,6 @@ function stubState(root, overrides = {}) {
     newRunContextSectionKey: "section:issues",
     newRunIssueMode: "primary",
     newRunSortMode: "default",
-    newRunReferencesAll: true,
     newRunContextIncluded: new Set(),
     newRunContextExcluded: new Set(),
     newrun: baseRun("engineer"),

@@ -117,12 +117,12 @@ describe("bundle-relative citations", () => {
 describe("readReference paging and outline", () => {
   const path = "acme-widgets/2.0/content/guide.md";
   it("pages by lines", () => {
-    const r = readReference(layout, path, 12 * 1024, layout.repoRoot, { offset: 3, lines: 2 });
+    const r = readReference(layout, path, 12 * 1024, { offset: 3, lines: 2 });
     assert.ok(r.ok);
     assert.match(r.text, /<lines 3-4 of \d+>/);
   });
   it("outlines headings with anchors", () => {
-    const r = readReference(layout, path, 12 * 1024, layout.repoRoot, { outline: true });
+    const r = readReference(layout, path, 12 * 1024, { outline: true });
     assert.ok(r.ok);
     assert.match(r.text, /Widget -> #widget/);
   });
@@ -140,24 +140,24 @@ describe("readReference paging and outline", () => {
 
 describe("tiered find", () => {
   it("scopes the index tier to one bundle", () => {
-    const scoped = findReferences(layout, "guide", 20, layout.repoRoot, { bundle: "acme-widgets" });
+    const scoped = findReferences(layout, "guide", 20, { bundle: "acme-widgets" });
     assert.match(scoped, /acme-widgets/);
     assert.doesNotMatch(scoped, /other-lib/);
   });
   it("requires bundle: for content/code tiers", () => {
     assert.match(
-      findReferences(layout, "sprocket", 20, layout.repoRoot, { content: true }),
+      findReferences(layout, "sprocket", 20, { content: true }),
       /needs bundle:/,
     );
   });
   it("content tier searches bodies, code tier searches the repo", { skip: !rgAvailable }, () => {
-    const content = findReferences(layout, "sprocket", 20, layout.repoRoot, {
+    const content = findReferences(layout, "sprocket", 20, {
       bundle: "acme-widgets",
       content: true,
       index: false,
     });
     assert.match(content, /acme-widgets\/2\.0\/content\/guide\.md:\d+:/);
-    const code = findReferences(layout, "Sprocket", 20, layout.repoRoot, {
+    const code = findReferences(layout, "Sprocket", 20, {
       bundle: "acme-widgets/2.0",
       code: true,
       index: false,

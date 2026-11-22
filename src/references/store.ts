@@ -21,7 +21,8 @@
  *
  * Agents resolve a topic or symbol through the indexes, then read exactly one
  * `content/file.md#anchor`. The store is outside the worktree, so reference
- * commands are the only path that can read or write it.
+ * commands are the only path that can read or write it. There is exactly
+ * one store: no repo-level view, no per-project copies.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -46,10 +47,6 @@ export function referenceStore(layout: Layout): string {
   return join(layout.home, "references");
 }
 
-export function referenceView(layout: Layout, projectRoot = layout.repoRoot): string {
-  return join(projectRoot, "references");
-}
-
 function stripKnownRoots(value: string): string {
   return value
     .replace(/^machine:/, "")
@@ -63,7 +60,6 @@ function stripKnownRoots(value: string): string {
 export function resolveReferencePath(
   layout: Layout,
   value: string,
-  projectRoot = layout.repoRoot,
 ): ReferencePath | null {
   let raw = value.trim();
   if (!raw || /^[a-z]+:\/\//i.test(raw)) return null;
@@ -152,14 +148,6 @@ export function resolveReferencePath(
       if (existsSync(candidateAbs)) {
         return { abs: candidateAbs, rel: relative(storeRoot, candidateAbs), ...(anchor ? { anchor } : {}) };
       }
-    }
-  }
-  // Not in the machine-level store, or the file doesn't exist there —
-  // try the repo-level view (`references/`).
-  for (const root of [referenceView(layout, projectRoot)]) {
-    const candidate = resolve(root, rel);
-    if ((candidate === root || candidate.startsWith(root + sep)) && existsSync(candidate)) {
-      return { abs: candidate, rel: relative(root, candidate), ...(anchor ? { anchor } : {}) };
     }
   }
   // Bundle-relative citations (`content/...` as printed in older api-index
@@ -369,10 +357,9 @@ export function readReference(
   layout: Layout,
   value: string,
   cap = READ_CAP,
-  projectRoot = layout.repoRoot,
   opts: ReferenceReadOptions = {},
 ): ReferenceReadResult {
-  const target = resolveReferencePath(layout, value, projectRoot);
+  const target = resolveReferencePath(layout, value);
   if (!target) return { ok: false, error: `reference is outside the store: ${value}` };
   if (target.rel.split("/").includes("raw")) {
     return { ok: false, error: "raw/ is archival; read the indexed content file instead" };
@@ -541,13 +528,11 @@ export function findReferences(
   layout: Layout,
   query: string,
   limit = 20,
-  projectRoot = layout.repoRoot,
   opts: ReferenceFindOptions = {},
 ): string {
   const q = query.trim().toLowerCase();
   if (!q) return "reference:find requires query";
   const store = referenceStore(layout);
-  const view = referenceView(layout, projectRoot);
   let bundleRel: string | undefined;
   if (opts.bundle?.trim()) {
     const resolved = resolveReferenceBundle(store, opts.bundle);
@@ -557,7 +542,7 @@ export function findReferences(
   const out: string[] = [];
 
   if (opts.index !== false) {
-    out.push(findIndexMatches(layout, query, limit, projectRoot, bundleRel));
+    out.push(findIndexMatches(layout, query, limit, bundleRel));
   }
   if (opts.content === true || opts.code === true) {
     out.push(
@@ -578,13 +563,11 @@ function findIndexMatches(
   layout: Layout,
   query: string,
   limit: number,
-  projectRoot: string,
   bundleRel: string | undefined,
 ): string {
   const q = query.trim().toLowerCase();
   const files: string[] = [];
   const store = referenceStore(layout);
-  const view = referenceView(layout, projectRoot);
 
   // Exact symbol/API matches are the most useful result, so scan api-index
   // files before the broader topic map and catalog.
@@ -619,10 +602,9 @@ function findIndexMatches(
       }
     }
   }
-  for (const root of [store, view]) {
-    if (!existsSync(root)) continue;
+  if (existsSync(store)) {
     for (const name of ["topics.yaml", "index.md"]) {
-      const file = join(root, name);
+      const file = join(store, name);
       if (existsSync(file)) files.push(file);
     }
   }
@@ -657,31 +639,23 @@ function findIndexMatches(
   return `reference store: ${store}\n${hits.join("\n")}`;
 }
 
-/** Write one file under the store or a project view. */
+/** Write one file under the central store. */
 export function writeReference(
   layout: Layout,
   path: string,
   content: string,
-  scope: "store" | "project" = "project",
-  projectRoot = layout.repoRoot,
 ): { ok: true; path: string } | { ok: false; error: string } {
-  let rel = stripKnownRoots(path.trim());
+  const rel = stripKnownRoots(path.trim());
   if (!rel || rel.split("/").includes("..") || isAbsolute(rel)) {
     return { ok: false, error: `reference path escapes the store: ${path}` };
   }
-  const root = scope === "project" ? referenceView(layout, projectRoot) : referenceStore(layout);
+  const root = referenceStore(layout);
   const abs = resolve(root, rel);
   if (abs !== root && !abs.startsWith(root + sep)) {
     return { ok: false, error: `reference path escapes the store: ${path}` };
   }
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, content, "utf8");
-  if (scope === "project" && rel !== "links.yaml") {
-    const links = join(root, "links.yaml");
-    if (!existsSync(links)) {
-      writeFileSync(links, `store: ${referenceStore(layout)}\nlinks: []\n`, "utf8");
-    }
-  }
   return { ok: true, path: abs };
 }
 
@@ -699,8 +673,8 @@ function indexScript(layout: Layout): string | undefined {
   return candidates.find((candidate) => existsSync(candidate));
 }
 
-/** Regenerate the store catalog/topics/api-index and an optional project view. */
-export function reindexReferences(layout: Layout, check = false, projectRoot = layout.repoRoot): string {
+/** Regenerate the store catalog/topics/api-index. */
+export function reindexReferences(layout: Layout, check = false): string {
   const script = indexScript(layout);
   if (!script) return "reference:reindex: reference-index.py not found";
   const store = referenceStore(layout);
@@ -710,23 +684,11 @@ export function reindexReferences(layout: Layout, check = false, projectRoot = l
   });
   const parts = [run.stdout?.trim(), run.stderr?.trim()].filter(Boolean);
   if (run.status !== 0) return `reference:reindex failed: ${parts.join("\n") || `exit ${run.status}`}`;
-  const view = referenceView(layout, projectRoot);
-  if (existsSync(join(view, "links.yaml"))) {
-    const viewRun = spawnSync("python3", [script, "view", view, ...(check ? ["--check"] : [])], {
-      encoding: "utf8",
-      timeout: 120_000,
-    });
-    const viewParts = [viewRun.stdout?.trim(), viewRun.stderr?.trim()].filter(Boolean);
-    if (viewRun.status !== 0) {
-      return `${parts.join("\n")}\nreference:reindex view failed: ${viewParts.join("\n") || `exit ${viewRun.status}`}`;
-    }
-    parts.push(viewParts.join("\n"));
-  }
   return parts.filter(Boolean).join("\n") || "reference indexes up to date";
 }
 
-export function referenceFileSize(layout: Layout, value: string, projectRoot = layout.repoRoot): number {
-  const target = resolveReferencePath(layout, value, projectRoot);
+export function referenceFileSize(layout: Layout, value: string): number {
+  const target = resolveReferencePath(layout, value);
   if (!target || !existsSync(target.abs)) return 0;
   try {
     return statSync(target.abs).size;
@@ -744,8 +706,6 @@ export interface ReferenceEntry {
   /** File mtime (ms since epoch) driving the recent sort. */
   mtime: number;
   exists: boolean;
-  /** True when the bundle lives under the repo view (references/), not the machine store. */
-  repo: boolean;
 }
 
 const LIST_CAP = 500;
@@ -755,11 +715,7 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
   const store = referenceStore(layout);
   const out: ReferenceEntry[] = [];
   const seen = new Set<string>();
-  // The machine-level store only writes under ~/.machine_code/references/,
-  // so a citation from the machine store cannot come from the repo view.
-  // The repo view (references/) is inside the worktree; the same bundle
-  // layout applies to both, so scan each root separately.
-  const push = (citation: string, abs: string, root: string): void => {
+  const push = (citation: string, abs: string): void => {
     if (seen.has(citation) || out.length >= LIST_CAP) return;
     seen.add(citation);
     let bytes = 0;
@@ -773,53 +729,54 @@ export function listReferenceEntries(layout: Layout): ReferenceEntry[] {
     }
     out.push({
       citation,
-      path: relative(root, abs),
+      path: relative(store, abs),
       bytes,
       mtime,
       exists: existsSync(abs),
-      repo: root === referenceView(layout),
     });
   };
-  for (const root of [store, referenceView(layout)]) {
-    if (!existsSync(root)) continue;
-    let products: string[] = [];
-    try {
-      products = readdirSync(root, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-        .sort();
-    } catch {
-      products = [];
-    }
-    for (const product of products) {
-      // Flat bundle with no version dir (e.g. mc-26-3-ui-ux).
-      const flatIndex = join(root, product, "index.md");
-      if (existsSync(flatIndex)) push(product, flatIndex, root);
-      else {
-        const flatManifest = join(root, product, "manifest.yaml");
-        if (existsSync(flatManifest)) push(product, flatManifest, root);
-      }
-      let versions: string[] = [];
+  const root = store;
+  {
+    if (existsSync(root)) {
+      let products: string[] = [];
       try {
-        versions = readdirSync(join(root, product), { withFileTypes: true })
+        products = readdirSync(root, { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
           .map((entry) => entry.name)
           .sort();
       } catch {
-        versions = [];
+        products = [];
       }
-      for (const version of versions) {
-        const index = join(root, product, version, "index.md");
-        if (existsSync(index)) push(`${product}/${version}`, index, root);
+      for (const product of products) {
+        // Flat bundle with no version dir (e.g. mc-26-3-ui-ux).
+        const flatIndex = join(root, product, "index.md");
+        if (existsSync(flatIndex)) push(product, flatIndex);
         else {
-          const manifest = join(root, product, version, "manifest.yaml");
-          if (existsSync(manifest)) push(`${product}/${version}`, manifest, root);
+          const flatManifest = join(root, product, "manifest.yaml");
+          if (existsSync(flatManifest)) push(product, flatManifest);
+        }
+        let versions: string[] = [];
+        try {
+          versions = readdirSync(join(root, product), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name)
+            .sort();
+        } catch {
+          versions = [];
+        }
+        for (const version of versions) {
+          const index = join(root, product, version, "index.md");
+          if (existsSync(index)) push(`${product}/${version}`, index);
+          else {
+            const manifest = join(root, product, version, "manifest.yaml");
+            if (existsSync(manifest)) push(`${product}/${version}`, manifest);
+          }
         }
       }
-    }
-    for (const name of ["index.md", "topics.yaml"]) {
-      const file = join(root, name);
-      if (existsSync(file)) push(name, file, root);
+      for (const name of ["index.md", "topics.yaml"]) {
+        const file = join(root, name);
+        if (existsSync(file)) push(name, file);
+      }
     }
   }
   return out.sort((a, b) => (a.citation < b.citation ? -1 : 1));

@@ -1,9 +1,10 @@
 /**
- * machine_code — reference commands (M5).
+ * machine_code — reference commands.
  *
- * Typed, path-scoped commands for the reference skill: web fetch, PDF
- * extraction, bundle indexing, and (best-effort) web search. The index writer
- * may only touch ~/.machine_code/references/ and references/.
+ * Typed, path-scoped commands for the reference skill: staged-material
+ * ingest, web fetch, PDF extraction, and bundle read/write/index. All
+ * writes land in the central store (~/.machine_code/references/); the
+ * worktree is never touched.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -11,24 +12,14 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { CommandSpec, CommandContext, CommandRunResult } from "./registry.js";
 import type { Layout } from "../paths.js";
 import { loadMachineConfig } from "../config.js";
-import { findReferences, readReference, referenceStore, referenceView, reindexReferences, writeReference } from "../references/store.js";
+import { findReferences, readReference, referenceStore, reindexReferences, writeReference } from "../references/store.js";
 
 /** Append a store-relative rel to the run's changed-reference log for reference:verify. */
-function recordChangedReference(
-  ctx: { runDir?: string },
-  absPath: string,
-  layout: Layout,
-  projectRoot: string,
-): void {
+function recordChangedReference(ctx: { runDir?: string }, absPath: string, layout: Layout): void {
   if (!ctx.runDir || !absPath) return;
   const store = referenceStore(layout);
-  let rel: string | null = null;
-  if (absPath === store || absPath.startsWith(store + "/")) {
-    rel = relative(store, absPath);
-  } else {
-    const view = referenceView(layout, projectRoot);
-    if (absPath === view || absPath.startsWith(view + "/")) rel = relative(view, absPath);
-  }
+  if (absPath !== store && !absPath.startsWith(store + "/")) return;
+  const rel = relative(store, absPath);
   if (!rel) return;
   const file = join(ctx.runDir, "references-changed.json");
   let list: string[] = [];
@@ -219,53 +210,6 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
   });
 
-  // reference:index — write a bundle to the scoped reference dir.
-  out.set("reference:index", {
-    name: "reference:index",
-    description: "Write a reference bundle (markdown with front-matter) to the scoped reference directory. Only writes under ~/.machine_code/references/ or references/.",
-    binary: "node",
-    args: () => [],
-    schema: {
-      path: { type: "string", required: true, description: "Destination path under the reference dir (e.g. 'topic/bundle.md')." },
-      content: { type: "string", required: true, description: "Bundle markdown content." },
-    },
-    readonly: false,
-    timeoutMs: 30_000,
-    handler: async (args, ctx) => {
-      const rel = typeof args.path === "string" ? args.path : "";
-      const content = typeof args.content === "string" ? args.content : "";
-      if (!rel || !content) return { text: "reference:index requires path and content", isError: true };
-      // Determine the reference root: machine-wide or repo.
-      const repoRef = join(ctx.root, "references");
-      const machineRef = referenceStore(layout);
-      // Allow writes only under these two roots.
-      const roots = [repoRef, machineRef];
-      // Pick the root based on the path prefix.
-      let root = repoRef;
-      let sub = rel;
-      if (rel.startsWith("~") || rel.startsWith("machine:")) {
-        root = machineRef;
-        sub = rel.replace(/^~\//, "").replace(/^machine:/, "").replace(/^\//, "");
-      }
-      const target = resolve(root, sub);
-      if (!roots.some((r) => target === r || target.startsWith(r + "/"))) {
-        return { text: "reference:index: path escapes the reference directory", isError: true };
-      }
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, content, "utf8");
-      // Update links.yaml if writing to repo refs.
-      if (root === repoRef) {
-        const linksFile = join(ctx.root, "references", "links.yaml");
-        if (!existsSync(linksFile)) {
-          mkdirSync(dirname(linksFile), { recursive: true });
-          writeFileSync(linksFile, `store: ${referenceStore(layout)}\nlinks: []\n`, "utf8");
-        }
-      }
-      const reindexed = reindexReferences(layout, false, ctx.root);
-      return { text: `indexed: ${target}\n${reindexed}`, isError: /failed|not found|required/i.test(reindexed) };
-    },
-  });
-
   // reference:find — search the index layer, and on demand bundle content/code.
   out.set("reference:find", {
     name: "reference:find",
@@ -283,7 +227,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
     readonly: true,
     timeoutMs: 60_000,
-    handler: async (args, ctx) => {
+    handler: async (args) => {
       const query = typeof args.query === "string" ? args.query : "";
       if (!query.trim()) return { text: "reference:find requires query", isError: true };
       const limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit ?? 20))));
@@ -295,7 +239,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const content = args.content === true || tier === "content" || tier === "all" || tier === "both";
       const code = args.code === true || tier === "code" || tier === "all" || tier === "both";
       return {
-        text: findReferences(layout, query, limit, ctx.root, {
+        text: findReferences(layout, query, limit, {
           ...(bundle ? { bundle } : {}),
           ...(content ? { content: true } : {}),
           ...(code ? { code: true } : {}),
@@ -322,7 +266,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
     readonly: true,
     timeoutMs: 30_000,
-    handler: async (args, ctx) => {
+    handler: async (args) => {
       const path = typeof args.query === "string" ? args.query : typeof args.path === "string" ? args.path : "";
       if (!path.trim()) return { text: "reference:read requires path", isError: true };
       const cap = Math.max(1_024, Math.min(64 * 1_024, Math.floor(Number(args.limit ?? 12 * 1_024))));
@@ -338,23 +282,22 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
         readOpts.lines = lines;
       }
       if (args.outline === true) readOpts.outline = true;
-      const result = readReference(layout, path, cap, ctx.root, readOpts);
+      const result = readReference(layout, path, cap, readOpts);
       if (!result.ok) return { text: result.error, isError: true };
       const citation = `${result.path}${result.anchor ? `#${result.anchor}` : ""}`;
       return { text: `${citation}\n\n${result.text}`, isError: false };
     },
   });
 
-  // reference:write — create one bundle file under the store or project view.
+  // reference:write — create one bundle file under the central store.
   out.set("reference:write", {
     name: "reference:write",
-    description: "Write one file under the project view (default, local references/) or the machine reference store. Use for manifest.yaml, content/*.md, index.md, and links.yaml. Regenerates the index afterwards.",
+    description: "Write one file under the central reference store. Use for manifest.yaml, content/*.md, and index.md. Regenerates the index afterwards.",
     binary: "node",
     args: () => [],
     schema: {
-      path: { type: "string", required: true, description: "Path relative to the store or project view." },
+      path: { type: "string", required: true, description: "Store-relative path." },
       content: { type: "string", required: true, description: "File content." },
-      scope: { type: "string", description: "project (default) or store." },
     },
     readonly: false,
     timeoutMs: 30_000,
@@ -362,11 +305,10 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
       const path = typeof args.path === "string" ? args.path : "";
       const content = typeof args.content === "string" ? args.content : "";
       if (!path.trim() || !content) return { text: "reference:write requires path and content", isError: true };
-      const scope = args.scope === "store" ? "store" : "project";
-      const result = writeReference(layout, path, content, scope, ctx.root);
+      const result = writeReference(layout, path, content);
       if (!result.ok) return { text: result.error, isError: true };
-      recordChangedReference(ctx, result.path, layout, ctx.root);
-      const reindexed = reindexReferences(layout, false, ctx.root);
+      recordChangedReference(ctx, result.path, layout);
+      const reindexed = reindexReferences(layout, false);
       return { text: `wrote: ${result.path}\n${reindexed}`, isError: /failed|not found|required/i.test(reindexed) };
     },
   });
@@ -374,7 +316,7 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
   // reference:reindex — regenerate catalog, topics, and api-index files.
   out.set("reference:reindex", {
     name: "reference:reindex",
-    description: "Regenerate the store catalog/topics/api-index and any project view from links.yaml. Requires python3 + PyYAML and reference-index.py.",
+    description: "Regenerate the store catalog/topics/api-index. Requires python3 + PyYAML and reference-index.py.",
     binary: "node",
     args: () => [],
     schema: {
@@ -382,8 +324,8 @@ export function referenceCommands(layout: Layout): Map<string, CommandSpec> {
     },
     readonly: false,
     timeoutMs: 120_000,
-    handler: async (args, ctx) => {
-      const result = reindexReferences(layout, args.check === true, ctx.root);
+    handler: async (args) => {
+      const result = reindexReferences(layout, args.check === true);
       return { text: result, isError: /failed|not found|required/i.test(result) };
     },
   });

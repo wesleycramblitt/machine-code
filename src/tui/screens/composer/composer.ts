@@ -257,10 +257,8 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     if (attachedCitations.has(entry.citation)) continue;
     const rel = entry.path.split("#")[0];
     if (attachedPaths.has(rel) || attachedPaths.has(entry.citation)) continue;
-    // Repo-only scope hides machine-store bundles, so `references/` reads
-    // like the project's own knowledge base. Attached references keep their
-    // row either way: once opted in they stay visible.
-    if (!props.referencesAll && !entry.repo && !included.has(`reference:${entry.citation}`)) continue;
+    // Attached references keep their row either way: once opted in they
+    // stay visible. Every store bundle lists as an available row.
     referenceItems.push({
       text: `${entry.citation} · available`,
       chars: Math.min(entry.bytes, 8 * 1024),
@@ -686,9 +684,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     ? command("r", "Mode", issueMode === "primary" ? "primary" : "reference", C)
     : "";
   const sortCommand = command("s", "Sort", props.sortMode, C);
-  const refFilterCommand = sectionKey === "section:references"
-    ? command("R", "Refs", props.referencesAll ? "all" : "repo", props.referencesAll ? G : C)
-    : "";
   const contextCommands = panelLine(
     joinCommands([
       compact("h/l", "tabs", Y),
@@ -697,7 +692,6 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
       spaceCommand,
       modeCommand,
       sortCommand,
-      refFilterCommand,
     ]),
     false,
     true,

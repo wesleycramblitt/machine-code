@@ -149,14 +149,6 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
     ctx.draw();
     return true;
   }
-  // `R` toggles the references-tab scope: repo view only vs all (machine included).
-  if (data === "R" && s.newRunContextSectionKey === "section:references") {
-    s.newRunReferencesAll = !s.newRunReferencesAll;
-    s.newRunContextItem = 0;
-    s.newRunContextItemKey = null;
-    ctx.draw();
-    return true;
-  }
   if (data === "\x1b") {
     if (s.newrun.prompt.trim()) {
       s.newRunConfirm = true;
