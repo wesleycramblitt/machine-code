@@ -36,13 +36,15 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    No symbolic anchor? `edit {path, oldString: "...", newString: "..."}`. On a miss the tool returns the closest current text — fix the anchor and resend, no re-read. Batch independent files in one call. The diff is the confirmation — never re-read. Do not create tests. Do not search for test files.
 
+   Failure handling: if a write/edit fails on format (missing named block, bad fences), fix the fences and resend — same content, next turn, no re-read; the file didn't change. If it fails on a stale anchor, fix the anchor from the returned text and resend, no re-read. Only re-inspect when the error shows your picture of the code is wrong.
+
    Stop rule: the named files plus one anchor check each is a complete investigation. If two consecutive turns add no new fact — no new file, no new anchor, no failed check — stop reading and edit. Re-reading a confirmed file is never progress.
 
 5. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Attach bookkeeping to work turns — never spend a turn on plan/notes alone. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
 
    Note conclusions, not receipts: what the code does and where (`path:line`), what you decided and why, what blocks you and what would unblock it. Fix or drop what turned out wrong — rewriting a note updates it, `forget` removes one by its text. Finished notes stay; checked-off plan steps are the done-signal.
 
-6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. After gates pass, the harness asks for a decisions+work closing summary drawn from state — keep notes decision-rich (chosen option, rejected alternative, why) so it has something to say. Never resubmit identical arguments after a validation failure — re-inspect first.
+6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. After gates pass, the harness asks for a decisions+work closing summary drawn from state — keep notes decision-rich (chosen option, rejected alternative, why) so it has something to say. Never resubmit byte-identical arguments after a failure — change the fix and resend. Re-inspect only when the error shows your picture of the code is stale.
 
    Merge conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. Edit each to the correct final code, clear every `<<<<<<<` / `=======` / `>>>>>>>` marker, then `command {action: "run", name: "vcs:resolve", args: {path: "src/file.ts", strategy: "edited"}}` per path and `finish` again. Only when one side is wholly correct, take it with `strategy: "ours"` (yours) or `"theirs"` (`origin/main`). If unresolvable, `command {action: "run", name: "vcs:merge-abort"}` and report blocked — never finish completed afterwards.
 
