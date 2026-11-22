@@ -23,6 +23,10 @@ export interface IngestHost {
     summary: string,
     change?: { agent?: string; model?: string; tool?: string; detail?: string },
   ): void;
+  /** Asked-and-answered user decisions (ask tool): the durable record that
+   * keeps answered scope questions answered after the 2-turn transcript
+   * window drops them. */
+  addDecisionFact(text: string, turn: number): void;
   setPhase(phase: "orient" | "target" | "act" | "verify" | "done"): void;
   appendTurn(turn: number): void;
   activeFacts(): number;
@@ -173,6 +177,17 @@ export function ingestTurn(
         commandName = str(args.name) ?? "command";
         host.addCommandFact(commandName, message.isError !== true, turn, excerpt(resultText));
         verified = true;
+      } else if (toolName === "ask") {
+        // Asked-and-answered scope decisions must survive the 2-turn
+        // transcript window even when the model never writes the note the
+        // skill asks for (observed: 6 answers, 0 notes, same question asked
+        // 3 times). Auto-ingest keeps every later state block aware.
+        if (message.isError === true) continue;
+        const question = str(args.question);
+        const answer = textOf(message).trim();
+        if (!question || !answer) continue;
+        const clipped = answer.length > 500 ? `${answer.slice(0, 497)}…` : answer;
+        host.addDecisionFact(`Q: ${question} → A: ${clipped}`, turn);
       } else if ((toolName === "edit" || toolName === "write") && path) {
         if (message.isError === true) continue;
         const oldText = str(args.oldString) ?? "";

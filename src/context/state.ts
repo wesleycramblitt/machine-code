@@ -418,6 +418,12 @@ export class RunStateStore {
     });
   }
 
+  /** Asked-and-answered user decisions (ask tool). Same store path as manual
+   * decision notes, so auto-ingested answers render identically. */
+  addDecisionFact(text: string, turn: number): void {
+    this.note("decision", text, [], turn);
+  }
+
   addSearchFact(query: string, refs: Ref[], turn: number, hits = ""): void {
     const key = `search:${sha1(query)}`;
     const normalized = refs.slice(0, 10).map((ref): Ref =>
