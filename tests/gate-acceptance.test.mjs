@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { writeIssue, updateIssueContents, gateErrors } from "../dist/plan/issues.js";
+import { writeIssue, updateIssueContents, gateErrors, normalizeGate } from "../dist/plan/issues.js";
 import { layout } from "../dist/paths.js";
 
 function repo() {
@@ -36,6 +36,11 @@ describe("gateErrors", () => {
     assert.deepEqual(gateErrors("features", ["script:build", "script:test"]), []);
     assert.deepEqual(gateErrors("ideas", ["issue-curation:verify"]), []);
     assert.deepEqual(gateErrors("references", ["reference:verify"]), []);
+  });
+
+  it("retires research:verify by mapping it to issue-curation:verify", () => {
+    assert.equal(normalizeGate("research:verify"), "issue-curation:verify");
+    assert.equal(normalizeGate("script:build"), "script:build");
   });
 });
 

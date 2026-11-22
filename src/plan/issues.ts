@@ -77,9 +77,18 @@ export const ISSUE_KIND_LABELS: Record<IssueKind, string> = {
  * architect's own gate, misfiled onto work for the engineer. */
 export const CURATION_GATES: readonly string[] = [
   "issue-curation:verify",
-  "research:verify",
   "reference:verify",
 ];
+
+/** Gates that no longer exist. `research:verify` became `issue-curation:verify`
+ * when the role was renamed; stored issues keep working without a migration. */
+const LEGACY_GATES: Record<string, string> = {
+  "research:verify": "issue-curation:verify",
+};
+
+export function normalizeGate(gate: string): string {
+  return LEGACY_GATES[gate] ?? gate;
+}
 
 /** Acceptance entries that are illegal for a kind. Empty means the list is fine. */
 export function gateErrors(kind: IssueKind, acceptance: readonly string[]): string[] {
@@ -293,7 +302,7 @@ function toFiles(value: unknown): string[] {
         ? value.filter((entry): entry is string => typeof entry === "string")
         : [];
   return raw
-    .map((entry) => entry.trim())
+    .map((entry) => normalizeGate(entry.trim()))
     .filter((entry) => entry.length > 0 && !/^(undefined|null)$/i.test(entry));
 }
 
