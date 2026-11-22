@@ -38,7 +38,7 @@ One paragraph of detail the prompt needs.
 - **tags** / **depends** / **files**: comma lists (optional).
 - **files**: repo-relative paths or globs the issue expects to touch (e.g. `src/loop.ts, src/tools/*.ts`). The runner uses this to refuse concurrent same-file work and to require a `depends:` edge when two issues overlap.
 - **keywords**: comma-separated phrases naming the exact UI strings, page names, or commands involved (optional; the runner matches these exactly to find files).
-- **acceptance**: comma list of runner commands (`script:build`, `script:test`, ...). Every created feature/bug issue needs one.
+- **acceptance**: comma list of runner commands (`script:build`, `script:test`, ...). Every created feature/bug issue needs one. It must prove the code exists — `script:build` and friends. Never a curation gate (`issue-curation:verify`, `reference:verify`): those prove this run, not the engineer's work, and are rejected.
 - **status**: the directory. Ideas leave `ideas/` for `.researched/` when research finishes; features/bugs move between `todo`, `needs-human-review`, `failed-gates`, `failed-human-review`, `blocked`, and `done` (the harness owns status moves during builds). There is no archived status: a human deletes an unwanted issue with `issue:delete`; never create filler to delete.
 
 ## Writing good issues

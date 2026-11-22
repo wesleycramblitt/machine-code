@@ -29,7 +29,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CommandSpec } from "./registry.js";
 import { layout } from "../paths.js";
-import { listIssues, type Issue } from "../plan/issues.js";
+import { gateErrors, listIssues, type Issue } from "../plan/issues.js";
 import { overlapFootprints } from "../plan/overlap.js";
 
 const GIT_PATHS = ["docs/", "references/"];
@@ -176,6 +176,8 @@ export const issueCurationVerifyCommand: CommandSpec = {
               `(observable change, current state with file:line anchors, verification)`,
           );
         }
+        const badGates = gateErrors(changed.kind, [...changed.acceptance, ...changed.verify]);
+        for (const why of badGates) quality.push(`${changed.rel}: ${why}`);
         if (changed.files.length === 0) {
           quality.push(`${changed.rel}: missing files: — investigate and name the exact paths or globs`);
         }

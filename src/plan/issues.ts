@@ -72,6 +72,26 @@ export const ISSUE_KIND_LABELS: Record<IssueKind, string> = {
   references: "References",
 };
 
+/** Gates that prove a curation or reference run, never a build. A feature or
+ * bug carrying one of these would "pass" without the code existing — the
+ * architect's own gate, misfiled onto work for the engineer. */
+export const CURATION_GATES: readonly string[] = [
+  "issue-curation:verify",
+  "research:verify",
+  "reference:verify",
+];
+
+/** Acceptance entries that are illegal for a kind. Empty means the list is fine. */
+export function gateErrors(kind: IssueKind, acceptance: readonly string[]): string[] {
+  if (kind === "ideas" || kind === "references") return [];
+  return acceptance
+    .filter((gate) => CURATION_GATES.includes(gate))
+    .map(
+      (gate) =>
+        `${gate} proves a curation run, not a build — features/bugs need an acceptance gate that proves the code (e.g. script:build)`,
+    );
+}
+
 export const ISSUE_STATUS_LABELS: Record<DisplayStatus, string> = {
   "needs-research": "Needs Research",
   researched: "Researched",
@@ -579,6 +599,14 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   // otherwise use the repository's script gates. Ideas run
   // issue-curation:verify to confirm the run produced at least one
   // artifact; references run reference:verify against the central store.
+  const requested =
+    input.acceptance && input.acceptance.length > 0
+      ? input.acceptance
+      : input.verify && input.verify.length > 0
+        ? input.verify
+        : [];
+  const badGates = gateErrors(input.kind, requested);
+  if (badGates.length > 0) throw new Error(badGates[0]!);
   let acceptance =
     input.acceptance && input.acceptance.length > 0
       ? input.acceptance
@@ -679,6 +707,8 @@ export function updateIssueContents(
     else delete front.files;
   }
   if (patch.acceptance !== undefined) {
+    const badGates = gateErrors(issue.kind, patch.acceptance);
+    if (badGates.length > 0) throw new Error(badGates[0]!);
     if (patch.acceptance.length > 0) front.acceptance = patch.acceptance;
     else delete front.acceptance;
     delete front.verify;
