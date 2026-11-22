@@ -143,14 +143,31 @@ export function issueCommands(root: string): CommandSpec[] {
       binary: "fs",
       args: () => [],
       schema: {
-        kind: { type: "string", description: "Filter: ideas | features | bugs (default all)." },
-        status: { type: "string", description: "Filter: todo | needs-human-review | failed-gates | failed-human-review | blocked | done | researched (default all)." },
+        kind: { type: "string", description: "Filter: ideas | features | bugs." },
+        status: { type: "string", description: "Filter: a legal status dir (todo | needs-human-review | failed-gates | failed-human-review | blocked | done; ideas also needs-research | researched)." },
       },
       readonly: true,
       timeoutMs: 10_000,
       handler: async (args, ctx) => {
         const kindFilter = (args.kind as string | undefined)?.trim();
         const statusFilter = (args.status as string | undefined)?.trim();
+        // Fail fast on bad filters: an unknown kind/status silently matches
+        // nothing, and the model reads "no issues found" as "no issues exist"
+        // (observed: 65-turn list/show loop over kind:"todo"). Same
+        // vocabulary as issue:create.
+        const kindParsed = kindFilter ? parseKind(kindFilter) : undefined;
+        if (kindFilter && !kindParsed) {
+          return { text: `bad kind ${JSON.stringify(kindFilter)}; use ideas | features | bugs`, isError: true };
+        }
+        if (
+          statusFilter &&
+          !(kindParsed ? legalStatus(kindParsed, statusFilter) : legalStatus("ideas", statusFilter) || legalStatus("features", statusFilter))
+        ) {
+          return {
+            text: `bad status ${JSON.stringify(statusFilter)}; use ${[...new Set([...statusesForKind("ideas"), ...statusesForKind("features")])].join(" | ")}`,
+            isError: true,
+          };
+        }
         const lines: string[] = [];
 
         for (const dir of ISSUE_DIRS) {
@@ -160,7 +177,7 @@ export function issueCommands(root: string): CommandSpec[] {
           const rawStatus = parts.length > 1 ? parts[1]! : kind === "ideas" ? "needs-research" : "todo";
           const status = rawStatus === ".researched" ? "researched" : rawStatus;
 
-          if (kindFilter && kind !== kindFilter) continue;
+          if (kindParsed && kind !== kindParsed) continue;
           if (statusFilter && status !== statusFilter) continue;
 
           const fullDir = join((ctx.repoRoot ?? ctx.root), dir);
@@ -187,7 +204,12 @@ export function issueCommands(root: string): CommandSpec[] {
           }
         }
 
-        if (lines.length === 0) return { text: "no issues found", isError: false };
+        if (lines.length === 0) {
+          const scope = [kindFilter && `kind: ${kindFilter}`, statusFilter && `status: ${statusFilter}`]
+            .filter(Boolean)
+            .join(", ");
+          return { text: scope ? `no issues found (${scope})` : "no issues found", isError: false };
+        }
         return { text: lines.join("\n"), isError: false };
       },
     },

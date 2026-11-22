@@ -45,11 +45,12 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    `issue:create` rejects placeholders: `slug` is required (never `untitled`), `prompt` must be at least 200 chars for features/bugs and never repeat the slug, and `files:` + `acceptance:` are required for features/bugs. If you cannot supply all three — behavior delta, exact files, acceptance — you are not ready to write: return to step 3 (investigate) or step 4 (ask). Never emit a thin issue to "make progress".
 
-   Docs go to `docs/<slug>.md`, one per durable concept the build will need.
+   Docs go to `docs/<slug>.md`, one per durable concept the build will need. If the deliverable is purely docs and you have already mapped the content, write the docs directly instead of filing an issue to write docs - you hold the write path for exactly this.
 
    **Definition of ready** — before `write`, every artifact must pass its list. If one line fails, return to step 4 and ask; never write a placeholder.
 
    - Feature/bug: names exact files, states the observable change, names an `acceptance:` command, and every open decision is either resolved or recorded as an assumption.
+   - Decomposition: one behavior change per issue. If the work spans a broad glob or more than one file group, split it - a single issue covering the whole scope is not ready.
    - Doc: names its audience, the question it answers, and the decisions it records; every open decision is resolved or recorded as an assumption.
 
 6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; fix and call `finish` again if they fail. Never resubmit identical arguments after a failure — re-inspect first.
