@@ -27,7 +27,7 @@ import { summarizeRun, readStateView } from "../state/outcome.js";
 import { isTimelineEvent } from "../tui/timeline.js";
 import { loadTranscript, repairResumeTail } from "../state/transcript.js";
 import { ENGINEER_WORK_STATUSES, appendIssueGateFailure, ensureIssueVerification, findIssue, gateFailureAttempts, kindTag, moveIssue, writeIssue } from "../plan/issues.js";
-import { suggestHints, suggestTaskFilesFromMap, suggestionText, withKeywordTerms } from "../map/suggest.js";
+import { suggestHints, suggestionText, withKeywordTerms } from "../map/suggest.js";
 import { defaultSkillsFor, skillMetas } from "../context/references.js";
 import { issueToTaskPacket, unmetDepends, unknownDepends, activeFileConflicts } from "../tasks/issue.js";
 import { abortMergeIfInProgress, ensureCommitted, mergeBranchIntoMain } from "../tasks/merge.js";
@@ -388,30 +388,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
           }
         }
       }
-      const smallFiles = hints.filter((hint) => hint.small).map((hint) => hint.path);
-      // Small high-rank files just below the outline cut still inline whole:
-      // a keys/types sibling (often <4KB) rides along instead of costing a
-      // discovery pass. Ranked once, capped, exclusion-aware.
-      try {
-        const { statSync } = await import("node:fs");
-        const ranked = suggestTaskFilesFromMap(builtMap.map, suggestionRequest, 10);
-        for (const entry of ranked) {
-          if (smallFiles.includes(entry.path) || suggestedFiles.includes(entry.path)) continue;
-          if (attachedIssue?.rel && entry.path === attachedIssue.rel) continue;
-          try {
-            if (statSync(join(l.repoRoot, entry.path)).size < 4 * 1024) smallFiles.push(entry.path);
-          } catch {
-            // missing — skip
-          }
-          if (smallFiles.length >= 5) break;
-        }
-      } catch {
-        // Best effort; the inlined small files above still apply.
-      }
-      if (smallFiles.length > 0) {
-        contextInclude = contextInclude ?? {};
-        contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...smallFiles])];
-      }
+      // Code files never ride in the assembled context: models treat static
+      // code blocks as untrusted and re-read them anyway. The files this run
+      // edits arrive as inspect results in evidence (whole under 200 lines,
+      // outline above), which is the shape they already trust. The issue,
+      // docs, skills, and references stay in context.
     } catch {
       // Suggestions are best effort; the run still has the issue.
     }
