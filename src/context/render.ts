@@ -157,7 +157,8 @@ export function renderPromptMessages(
   commandIndex?: string,
   symbolsMaxChars = 48_000,
   stateMaxChars = 30_000,
-  evidence?: string,
+  evidence?: string | null,
+  evidenceMessages?: AgentMessage[],
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
@@ -185,6 +186,9 @@ export function renderPromptMessages(
     ...(symbols ? [{ role: "user", content: symbols, timestamp: Date.now() } as MessageLike] : []),
     ...transcriptMessages(source),
     ...(volatile ? [{ role: "user", content: volatile, timestamp: Date.now() } as MessageLike] : []),
+    // Re-served inspect answers as native toolCall/toolResult pairs — the
+    // same structure as live results, so the model treats them as current.
+    ...(evidenceMessages ?? []),
   ] as unknown as AgentMessage[];
   return { messages: out, chars: JSON.stringify(out).length };
 }

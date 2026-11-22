@@ -642,6 +642,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let textOnlyStreak = 0;
   let continuePromptArmed = false;
   const MAX_TEXT_ONLY_CONTINUES = 2;
+  /** Absolute ceiling for re-served evidence per prompt. The share below is
+   * unbounded on large windows; without this, old reads crowd out the
+   * instructions. Most-recent-first with oldest-drop still applies. */
+  const EVIDENCE_MAX_CHARS = 96_000;
   const ctxBudget = input.machine.context.budget;
 
   /**
@@ -659,7 +663,10 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     const symbols = Math.max(2_048, Math.floor(variablePool * ctxBudget.symbols));
     const map = Math.max(1_024, Math.floor(variablePool * ctxBudget.map));
     const state = Math.max(4_096, Math.floor(variablePool * ctxBudget.state));
-    const evidence = Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence));
+    const evidence = Math.min(
+      EVIDENCE_MAX_CHARS,
+      Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence)),
+    );
     const wholeFile = Math.max(2_048, Math.floor(variablePool * ctxBudget.wholeFile));
     const contextBlock = Math.max(4_096, variablePool - symbols - map - state - evidence);
     if (hardCap !== undefined) {
@@ -727,7 +734,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   /** Rendered prompt for the request being prepared, consumed by transformContext. */
   let pendingMessages: AgentMessage[] | null = null;
   /** Re-served evidence for the prompt being prepared. */
-  let pendingEvidence: string | undefined;
+  let pendingEvidence: import("./context/evidence.js").BuiltEvidence | undefined;
 
   /** Does this run owe the user a code change? Read-only roles and pure
    * questions are exempt; a writable role answering anything else — an
@@ -1338,7 +1345,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           commandIndex,
           sBudget,
           stBudget,
-          pendingEvidence,
+          pendingEvidence?.text ?? undefined,
+          pendingEvidence?.messages,
         ).messages);
       },
       prepareRequest: async ({ context }) => {
@@ -1401,7 +1409,8 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             commandIndex,
             budgets.symbols,
             budgets.state,
-            pendingEvidence,
+            pendingEvidence?.text ?? undefined,
+            pendingEvidence?.messages,
           );
           return { ..._rendered, messages: withRecordNudge(_rendered.messages) };
         };
