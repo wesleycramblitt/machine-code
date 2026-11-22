@@ -740,12 +740,12 @@ export function renderComposer(props: ComposerProps): ComposerFrame {
     !agentControls && !runControls
       ? ""
       : ` ${agentControls}${" ".repeat(Math.max(1, boxWidth - visible(agentControls) - visible(runControls) - 1))}${runControls}`;
-  // The prompt box grows with its content up to half the page: a long brief
-  // stays readable on large screens instead of scrolling through a 16-line
-  // window, while the summary panel keeps its space.
+  // The prompt box holds half the page on large screens — a fixed share, not
+  // a content-driven one, so a long brief is readable and an empty box still
+  // invites typing. The summary panel keeps its space; the box scrolls when
+  // the text outgrows it.
   const availableForPrompt = Math.max(3, bodyH - summary.length - (promptHint ? 7 : 6));
-  const promptMax = Math.max(3, Math.min(availableForPrompt, Math.floor(bodyH * 0.5)));
-  const promptHeight = Math.min(promptMax, Math.max(3, promptLines.length));
+  const promptHeight = Math.max(3, Math.min(availableForPrompt, Math.floor(bodyH * 0.5)));
   // Keep the caret line visible: when it moves above the window bottom,
   // scroll the window up with it (tail-pin otherwise).
   let promptTop = Math.max(0, promptLines.length - promptHeight);
