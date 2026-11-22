@@ -3,8 +3,9 @@
  *
  * The prompt keeps the transcript head plus the last two steps; everything
  * older vanishes, so models re-ask for bodies they already fetched (observed:
- * 23 byte-identical repeats in one 38-turn run). This module re-presents the
- * run's distinct inspect answers every turn — most recent first, verbatim
+ * 23 byte-identical repeats in one 38-turn run, and 27 re-shows of the same
+ * 5 issues in 99 turns). This module re-presents the run's distinct inspect
+ * answers and issue reads every turn — most recent first, verbatim
  * envelopes, bodies re-retrieved from disk on the fly — plus a fresh
  * core:diff. Nothing is stored except the call ledger (tool + prepared
  * params + turn); staleness is unrepresentable because no bytes are kept.
@@ -15,10 +16,14 @@
  * makes the model treat them as current data rather than quoted text.
  */
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export interface RetainedCall {
   /** Original toolCallId, for in-window exclusion. */
   id: string;
+  /** Which tool to re-execute: inspect bodies or read-only issue reads. */
+  tool: "inspect" | "command";
   /** Prepared params, ready to re-execute. */
   params: Record<string, unknown>;
   /** Turn the model asked it; null when rebuilt from a resumed transcript. */
@@ -60,6 +65,8 @@ export interface EvidenceInput {
   retained: RetainedCall[];
   /** Unwrapped inspect tool for silent re-execution. */
   inspect: AgentTool | undefined;
+  /** Unwrapped command tool for silent re-execution of read-only commands. */
+  command?: AgentTool;
   /** Fresh worktree diff provider. */
   diff: () => Promise<string>;
   /** ToolCallIds whose results are already in the kept transcript window. */
@@ -104,7 +111,7 @@ function toMessages(taken: TakenCall[]): AgentMessage[] {
       content: entries.map((entry, i) => ({
         type: "toolCall",
         id: ids[i],
-        name: "inspect",
+        name: entry.call.tool,
         arguments: entry.call.params,
       })),
       stopReason: "toolUse",
@@ -114,7 +121,7 @@ function toMessages(taken: TakenCall[]): AgentMessage[] {
       messages.push({
         role: "toolResult",
         toolCallId: ids[i],
-        toolName: "inspect",
+        toolName: entries[i]!.call.tool,
         content: [{ type: "text", text: entries[i]!.text }],
         isError: false,
         timestamp: Date.now(),
@@ -122,6 +129,34 @@ function toMessages(taken: TakenCall[]): AgentMessage[] {
     }
   }
   return messages;
+}
+
+/** Issue files live outside git history (gitignored), so no git diff ever
+ * shows them — yet the agent curates them every turn. Render this run's
+ * changed issue files (or their absence note) so the diff the agent sees
+ * covers its actual work. Best-effort: never throws. */
+export function changedIssuesText(repoRoot: string, runDir: string): string | null {
+  try {
+    const logFile = join(runDir, "issues-changed.json");
+    if (!existsSync(logFile)) return null;
+    const parsed: unknown = JSON.parse(readFileSync(logFile, "utf8"));
+    if (!Array.isArray(parsed)) return null;
+    const rels = [...new Set(parsed.filter((e): e is string => typeof e === "string"))];
+    const blocks: string[] = [];
+    for (const rel of rels) {
+      const abs = join(repoRoot, rel);
+      if (!existsSync(abs)) {
+        blocks.push(`### ${rel}\n(no longer at this path)`);
+        continue;
+      }
+      const body = readFileSync(abs, "utf8");
+      blocks.push(`### ${rel}\n${body.length > 4096 ? `${body.slice(0, 4096)}…[trimmed]` : body}`);
+    }
+    if (blocks.length === 0) return null;
+    return `issues changed this run (not in git):\n${blocks.join("\n\n")}`;
+  } catch {
+    return null;
+  }
 }
 
 export async function buildEvidence(input: EvidenceInput): Promise<BuiltEvidence> {
@@ -138,25 +173,25 @@ export async function buildEvidence(input: EvidenceInput): Promise<BuiltEvidence
     return true;
   };
 
-  if (input.inspect) {
-    let n = 0;
-    for (const call of input.retained) {
-      if (input.keptIds.has(call.id)) continue;
-      let result: { content: Array<{ type?: unknown; text?: unknown }>; isError?: boolean };
-      try {
-        result = (await input.inspect.execute(
-          `evidence-${n += 1}`,
-          call.params as never,
-          new AbortController().signal,
-        )) as unknown as typeof result;
-      } catch {
-        continue;
-      }
-      if (!result || result.isError) continue;
-      const text = textOf(result).trim();
-      if (!text) continue;
-      take(call, withProvenance(text));
+  let n = 0;
+  for (const call of input.retained) {
+    if (input.keptIds.has(call.id)) continue;
+    const tool = call.tool === "command" ? input.command : input.inspect;
+    if (!tool) continue;
+    let result: { content: Array<{ type?: unknown; text?: unknown }>; isError?: boolean };
+    try {
+      result = (await tool.execute(
+        `evidence-${n += 1}`,
+        call.params as never,
+        new AbortController().signal,
+      )) as unknown as typeof result;
+    } catch {
+      continue;
     }
+    if (!result || result.isError) continue;
+    const text = textOf(result).trim();
+    if (!text) continue;
+    take(call, withProvenance(text));
   }
 
   const diff = (await input.diff().catch(() => "")).trim();

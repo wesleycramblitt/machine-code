@@ -1972,6 +1972,16 @@ export function commandTool(ctx: ToolContext): AgentTool<typeof CommandParams> {
             `Finish the change and the gates run it — gate output comes back to you if it fails.`,
           );
         }
+        // research:verify is a gate, not a model tool. Letting the model run
+        // it mid-run teaches verify-avoidance (observed: one early failure
+        // with "nothing changed yet", then never run again). Gates call
+        // runCommand directly and are unaffected by this refusal.
+        if (params.name === "research:verify" && params.action === "run") {
+          return fail(
+            `research:verify runs in gates after finish; models cannot run it. ` +
+            `Finish the change and the gates run it — gate output comes back to you if it fails.`,
+          );
+        }
         const spec = ctx.commands.get(params.name);
         // Reference-store writes are curated knowledge, not worktree
         // mutation: roles with knowledge:write may curate references even

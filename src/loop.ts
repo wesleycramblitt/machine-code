@@ -44,7 +44,7 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages, keptToolCallIds } from "./context/render.js";
 import { toolIndexBody } from "./context/references.js";
 import { findIssue } from "./plan/issues.js";
-import { buildEvidence, MAX_RETAINED_CALLS, type RetainedCall } from "./context/evidence.js";
+import { buildEvidence, changedIssuesText, MAX_RETAINED_CALLS, type RetainedCall } from "./context/evidence.js";
 import { runCommand } from "./commands/registry.js";
 import type { FinishRequest } from "./tools/finish.js";
 import { gateFailureText, runGates, type GateResult, type GateSpec } from "./verify.js";
@@ -1142,25 +1142,40 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     };
     const rawTools = coreTools(toolCtx, input.agent.tools);
     // Rebuild the retained-call ledger from a resumed transcript so
-    // re-served evidence covers pre-resume reads (turn unknown).
+    // re-served evidence covers pre-resume reads (turn unknown). Inspect
+    // bodies and issue:show reads both re-serve; anything else is live
+    // work, not reference.
     for (const message of input.initialMessages ?? []) {
       const content = (message as { content?: unknown }).content;
       if (!Array.isArray(content)) continue;
       for (const block of content) {
         if (!block || typeof block !== "object") continue;
         const b = block as { type?: unknown; id?: unknown; name?: unknown; arguments?: unknown };
-        if (b.type !== "toolCall" || b.name !== "inspect" || typeof b.id !== "string") continue;
+        if (b.type !== "toolCall" || typeof b.id !== "string") continue;
         if (!b.arguments || typeof b.arguments !== "object") continue;
         try {
-          const rawInspect = rawTools.find((t) => t.name === "inspect");
-          const prepared = (rawInspect?.prepareArguments?.(b.arguments) ?? b.arguments) as Record<string, unknown>;
-          const key = `inspect:${stableKey(prepared)}`;
+          let tool: "inspect" | "command" | null = null;
+          let prepared: Record<string, unknown> | null = null;
+          if (b.name === "inspect") {
+            const rawInspect = rawTools.find((t) => t.name === "inspect");
+            prepared = (rawInspect?.prepareArguments?.(b.arguments) ?? b.arguments) as Record<string, unknown>;
+            tool = "inspect";
+          } else if (b.name === "command") {
+            const rawCommand = rawTools.find((t) => t.name === "command");
+            const cleaned = (rawCommand?.prepareArguments?.(b.arguments) ?? b.arguments) as Record<string, unknown>;
+            if (String(cleaned.action ?? "run") === "run" && String(cleaned.name ?? "") === "issue:show") {
+              prepared = cleaned;
+              tool = "command";
+            }
+          }
+          if (!tool || !prepared) continue;
+          const key = `${tool}:${stableKey(prepared)}`;
           retained.delete(key);
           if (retained.size >= MAX_RETAINED_CALLS) {
             const oldest = retained.keys().next();
             if (!oldest.done) retained.delete(oldest.value);
           }
-          retained.set(key, { id: b.id, params: prepared, turn: null });
+          retained.set(key, { id: b.id, tool, params: prepared, turn: null });
         } catch {
           // Unparseable history never blocks the run.
         }
@@ -1263,6 +1278,29 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
             }
             retained.set(key, {
               id,
+              tool: "inspect",
+              params: params as Record<string, unknown>,
+              turn: memory.currentTurn(),
+            });
+          }
+          // issue:show is the command-side equivalent of an inspect read:
+          // read-only, deterministic, and re-shown constantly (observed: 27
+          // re-shows of 5 issues in 99 turns). Retain it for re-serving;
+          // every other command is live work, not reference.
+          if (
+            !result.isError &&
+            tool.name === "command" &&
+            commandAction === "run" &&
+            commandName === "issue:show"
+          ) {
+            retained.delete(key);
+            if (retained.size >= MAX_RETAINED_CALLS) {
+              const oldest = retained.keys().next();
+              if (!oldest.done) retained.delete(oldest.value);
+            }
+            retained.set(key, {
+              id,
+              tool: "command",
               params: params as Record<string, unknown>,
               turn: memory.currentTurn(),
             });
@@ -1483,22 +1521,29 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
           const keptIds = keptToolCallIds(context.messages);
           const ordered = [...retained.values()].reverse();
           const rawInspect = rawTools.find((t) => t.name === "inspect");
+          const rawCommand = rawTools.find((t) => t.name === "command");
           const freshDiff = async (): Promise<string> => {
+            const parts: string[] = [];
             try {
               const result = await runCommand("core:diff", {}, {
                 root: input.toolRoot ?? input.root,
                 commands: input.commands,
                 processes,
               });
-              if (result.isError) return "";
-              return result.text.trim();
+              if (!result.isError && result.text.trim()) parts.push(result.text.trim());
             } catch {
-              return "";
+              // A failed worktree diff never blocks the issue list.
             }
+            // Issue files live outside git history (gitignored) — append this
+            // run's changed issues so the diff the agent sees covers its work.
+            const issues = changedIssuesText(input.root, recorder.dir);
+            if (issues) parts.push(issues);
+            return parts.join("\n\n");
           };
           pendingEvidence = await buildEvidence({
             retained: ordered,
             inspect: rawInspect,
+            command: rawCommand,
             diff: freshDiff,
             keptIds,
             maxChars: budgets.evidence,

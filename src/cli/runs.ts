@@ -67,6 +67,9 @@ export function cmdLog(id: string | undefined): number {
   );
   if (s.error) process.stdout.write(`  error: ${s.error}\n`);
   if (s.summary) process.stdout.write(`summary:\n${indentEventLines(s.summary)}\n`);
+  if (s.status === "completed" && s.finalText && s.finalText.trim()) {
+    process.stdout.write(`final:\n${indentEventLines(s.finalText.trim())}\n`);
+  }
   process.stdout.write("events:\n");
   for (const event of run.events) {
     const line = fmtEvent(event);
@@ -370,6 +373,9 @@ export function cmdShow(argv: string[]): number {
   if (s.error) process.stdout.write(`  error    ${s.error}\n`);
   if (pending) process.stdout.write(`  \x1b[33m? AWAITING INPUT\x1b[0m ${pending.text ?? ""}\n`);
   process.stdout.write(`\nsummary\n${outcome.split("\n").map((line) => `  ${line}`).join("\n")}\n`);
+  if (s.status === "completed" && s.finalText && s.finalText.trim()) {
+    process.stdout.write(`\nfinal\n${s.finalText.trim().split("\n").map((line) => `  ${line}`).join("\n")}\n`);
+  }
 
   if (context) {
     process.stdout.write(`\ncontext ${context.chars.toLocaleString()} chars, ${context.sources.length} source(s)\n`);

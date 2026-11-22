@@ -859,6 +859,14 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
       if (pending?.text) lines.push(` ${Y}? ASK${R} ${W}${trunc(pending.text, cols - 8)}${R}`);
       lines.push(` ${B}${BL}Request${R}`);
       for (const line of wrapText(s.request, cols - 4).slice(0, 10)) lines.push(`  ${D}${line}${R}`);
+      // The post-gate closing summary (decisions + work). Burying it in the
+      // timeline would hide the one record that explains the run, so it gets
+      // its own section. Shown for completed runs; failures already surface
+      // the error in Status above.
+      if (s.status === "completed" && s.finalText && s.finalText.trim()) {
+        lines.push("", ` ${B}${W}Summary${R} ${D}decisions + work${R}`);
+        for (const line of wrapText(s.finalText.trim(), cols - 4)) lines.push(`  ${line}${R}`);
+      }
       const lastThinking = thinking.length > 0 ? thinking[thinking.length - 1] : undefined;
       if (lastThinking) {
         lines.push("", ` ${B}${Y}Thinking snippet${R} ${D}latest · full text in Timeline${R}`);
