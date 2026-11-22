@@ -74,7 +74,7 @@ Triage the idea in one pass, then run the matching path. Thoroughness lives in d
 **Triage.** Read the idea and run `issue:list` once for duplicates. Then decide:
 
 - **Fast path** — the idea names the behavior and the affected area, with no open scope decisions. Go: read, anchor, write, finish. No questions. Most ideas run here.
-- **Deep path** — vague (a few words, no specifics), compound (several behaviors), or multi-system (several file groups). Go: one investigation pass, decompose into fast-path-sized pieces, scope-check each piece, write.
+- **Deep path** — vague (a few words, no specifics), compound (several behaviors), or multi-system (several file groups). Go: investigate until the pieces are nameable, decompose into fast-path-sized pieces, settle requirements per piece, write.
 - **Massive scope** — the idea is a project, not a task ("rebuild the TUI", "multi-account support"). Do not emit dozens of premature features from a shallow read. Go: split into sub-ideas below, one per slice, and finish. Other architect runs take it from there.
 
 Zero features is a valid result on any path: if the answer already exists or nothing should change, finish with the finding. Thoroughness lives in decomposition, never in repeated investigation.
@@ -87,17 +87,19 @@ Zero features is a valid result on any path: if the answer already exists or not
    - Then target specific symbols, patterns, and imports to understand the current behavior.
    - Check docs and references when the prompt names external APIs or patterns.
    - Batch independent queries in one message. One concern per query.
-3. **Stop rule.** One investigation pass answers one round of doubt. A doubt answerable from reads already done is decided, not open — never re-read a decided point "to be sure." When every planned piece can name files + anchors, investigation is over.
+3. **Stop rule.** A doubt answerable from reads already done is decided, not open. Never re-read a decided point "to be sure." When every planned piece can name files + anchors, investigation is over.
 
-### Scope check (per piece, the requirements core)
+### Requirements (per piece, over findings you already have)
 
-For each candidate piece, name the decisions that can change its scope, files, or acceptance — a short list. Then:
+Answer these from the notes you already hold — no new reads to confirm what the repository already shows:
 
-- Never ask what the repository already answers: read first, ask only what reads cannot settle (a decision that changes scope/files/acceptance, no observable delta, overlapping pieces, or a guess you would otherwise have to make).
-- Ask one question at a time, a few options, with a recommendation. Restate each answer in one sentence and record it as a note and as a constraint in the piece.
-- Re-clarify a piece at most once. The next doubt gets decided and recorded as an assumption, not re-investigated. When `ask` is unavailable, decide from evidence and conventions the same way.
-- Prefer the smallest scope that meets the request.
-- **Ready means ready.** Run the ready list twice: if the second pass finds nothing new, write. "Exact files" means the engineer can *start* without searching — paths or globs plus entry points — not line-perfect precision.
+- What behavior changes, and what proves it (`acceptance:`)?
+- Which exact files or globs carry it?
+- What is still genuinely unknown?
+
+Ask only for a fact the repository cannot answer and that changes scope, files, or acceptance: one question, a few options, a recommendation. Record the answer as a constraint in the piece. Everything else is decided and recorded as an assumption. Prefer the smallest scope that meets the request. When `ask` is unavailable, decide from evidence and conventions the same way.
+
+**Ready means ready.** Run the ready list twice: if the second pass finds nothing new, write. "Exact files" means the engineer can *start* without searching — paths or globs plus entry points — not line-perfect precision.
 
 ### Splitting massive scope (sub-ideas)
 
