@@ -258,7 +258,6 @@ export function handleComposerKeys(s: TuiState, ctx: KeyServices, data: string):
   if (data === "t") { ctx.cycleTier(); ctx.draw(); return true; }
   if (data === "T") { ctx.cycleTier2(); ctx.draw(); return true; }
   if (data === "m") { ctx.startModelPicker(); ctx.draw(); return true; }
-  if (data === "E") { const next = ctx.editPromptExternally(s.newrun.prompt, "machine_code-prompt-"); s.newrun.prompt = next.slice(0, 12000); s.newRunCursor = s.newrun.prompt.length; ctx.draw(); return true; }
   if (data === "e" || data === "p") { s.newRunInsert = true; ctx.draw(); return true; }
   if (data === "X" && s.newrun.item) { s.newrun.item = undefined; ctx.draw(); return true; }
   ctx.draw();

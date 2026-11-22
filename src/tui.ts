@@ -10,7 +10,7 @@
  * catalog, the catalogue, config, and the spend ledger on each refresh.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -225,33 +225,6 @@ export async function runTui(): Promise<void> {
     stdin.setRawMode?.(true);
     stdin.resume();
     if (status !== null) notify(status === 0 ? `edited ${basename(file)}` : `editor exited ${status}`);
-  };
-
-  const editPromptExternally = (prompt: string, prefix: string): string => {
-    const editor = process.env.EDITOR || process.env.VISUAL;
-    if (!editor) { notify("set EDITOR or VISUAL to edit in external editor"); return prompt; }
-    let dir: string;
-    try { dir = mkdtempSync(join(tmpdir(), prefix)); } catch { notify("could not create temp dir"); return prompt; }
-    const file = join(dir, "prompt.txt");
-    try { writeFileSync(file, prompt); } catch { notify("could not write temp prompt"); return prompt; }
-    stdin.setRawMode?.(false);
-    process.stdout.write(SYNC_OFF + SHOW + ALT_L);
-    let status: number | null = null;
-    try {
-      const result = spawnSync(editor, [file], { stdio: "inherit", shell: false });
-      status = result.status;
-    } catch {
-      notify("could not launch editor: " + editor);
-    }
-    process.stdout.write(ALT + HIDE);
-    stdin.setRawMode?.(true);
-    stdin.resume();
-    if (status !== null && status !== 0) { notify("editor exited " + String(status)); return prompt; }
-    try {
-      const next = readFileSync(file, "utf8");
-      try { unlinkSync(file); } catch { /* ignore */ }
-      return next;
-    } catch { notify("could not read back prompt"); return prompt; }
   };
 
   const launch = (args: string[], repoRoot = l.repoRoot, trackJump = true) => {
@@ -1875,7 +1848,7 @@ export async function runTui(): Promise<void> {
   /* ------------------------------------------------------------- input */
 
   const keyCtx: KeyServices = {
-    draw, notify, launch, openEditor, editPromptExternally, startNewRun, forkRun, resumeRun, answerRun,
+    draw, notify, launch, openEditor, startNewRun, forkRun, resumeRun, answerRun,
     interrupt, startCorrect, submitCorrection, startPrompt, submitPrompt, runDetailData, pendingForRun,
     cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier, cycleTier2,
     startIssuePicker, pickerIssues, chooseIssue,
