@@ -132,10 +132,12 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     if (!["none", "human"].includes(reviewFlag)) fail("--review must be none|human");
     const verificationFlag = flags.get("verification") ?? "direct";
     if (!["direct", "verified"].includes(verificationFlag)) fail("--verification must be direct|verified");
+    const promptText = positional.slice(3).join(" ").trim();
+    if (!promptText) fail('issue create requires a prompt body: machine_code issue create <ideas|features|bugs> <slug> "<prompt>"');
     const issue = writeIssue(l, {
       kind,
       slug,
-      prompt: positional.slice(3).join(" ").trim() || slug,
+      prompt: promptText,
       verification: verificationFlag as "direct" | "verified",
       ...(statusFlag ? { status: statusFlag as IssueStatus } : {}),
       ...(flags.get("priority") ? { priority: flags.get("priority") } : {}),

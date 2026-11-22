@@ -238,15 +238,15 @@ export function issueCommands(root: string): CommandSpec[] {
       args: () => [],
       schema: {
         kind: { type: "string", required: true, description: "ideas | features | bugs." },
-        slug: { type: "string", description: "Issue slug (filename without .md). Defaults from path or to untitled." },
-        prompt: { type: "string", description: "Issue prompt (the body). Defaults to the slug." },
+        slug: { type: "string", required: true, description: "Issue slug from the behavior change (e.g. cart-tax-display). Never untitled." },
+        prompt: { type: "string", required: true, description: "Issue body (min 200 chars for features/bugs, 20 for ideas): observable change, current state with file:line anchors, verification. Never the slug." },
         status: { type: "string", description: "Status dir (default needs-research for ideas, todo otherwise)." },
         title: { type: "string", description: "Optional heading above the prompt." },
         priority: { type: "string", description: "low | medium | high." },
         depends: { type: "string", description: "Comma-separated dependency slugs." },
-        files: { type: "string", description: "Comma-separated repo paths or globs." },
+        files: { type: "string", required: true, description: "REQUIRED for features/bugs: comma-separated repo paths or globs the issue touches." },
         tags: { type: "string", description: "Comma-separated tags." },
-        acceptance: { type: "string", description: "Comma-separated gate commands." },
+        acceptance: { type: "string", required: true, description: "REQUIRED for features/bugs: comma-separated gate commands (e.g. script:build)." },
         verify: { type: "string", description: "Legacy alias for acceptance." },
         verification: { type: "string", description: "direct | verified." },
         review: { type: "string", description: "none | human." },
@@ -267,8 +267,15 @@ export function issueCommands(root: string): CommandSpec[] {
         }
         const status = statusRaw as IssueStatus;
         const pathRaw = asString(args.path);
-        const slug = slugify(asString(args.slug) ?? (pathRaw ? basename(normalizeRel(pathRaw), ".md") : "untitled")) || "untitled";
+        const slugRaw = asString(args.slug) ?? (pathRaw ? basename(normalizeRel(pathRaw), ".md") : undefined);
+        if (!slugRaw) {
+          return { text: "issue:create requires slug (e.g. slug: \"cart-tax-display\"); refusing to create untitled", isError: true };
+        }
+        const slug = slugify(slugRaw);
         if (!slug) return { text: "bad slug: slug becomes empty", isError: true };
+        if (slug === "untitled") {
+          return { text: "bad slug \"untitled\": derive the slug from the behavior change (e.g. slug: \"cart-tax-display\")", isError: true };
+        }
         const l = layout((ctx.repoRoot ?? ctx.root));
         if (findIssue(l, slug)) return { text: `issue ${slug} already exists`, isError: true };
         if (pathRaw) {
@@ -282,12 +289,44 @@ export function issueCommands(root: string): CommandSpec[] {
             return { text: `bad path ${JSON.stringify(pathRaw)}: expected ${expected} (legal dirs come from issueDir)`, isError: true };
           }
         }
-        const prompt = asString(args.prompt) ?? slug;
+        const promptRaw = asString(args.prompt);
+        if (!promptRaw) {
+          return { text: "issue:create requires prompt (the issue body); refusing to create an empty issue", isError: true };
+        }
+        if (promptRaw === slug || promptRaw === slugRaw) {
+          return { text: "bad prompt: prompt must describe the behavior change, not repeat the slug", isError: true };
+        }
+        // Placeholders waste engineer turns. Features/bugs need a real body;
+        // ideas may stay short but never a word or two.
+        const minPrompt = kind === "ideas" ? 20 : 200;
+        if (promptRaw.length < minPrompt) {
+          return {
+            text: `bad prompt: ${kind} prompt is ${promptRaw.length} chars, need at least ${minPrompt}. ` +
+              (kind === "ideas"
+                ? "State the direction in a sentence or two."
+                : "Describe the observable behavior change, current state with file:line anchors, and how to verify it — or keep investigating/ask first."),
+            isError: true,
+          };
+        }
+        const prompt = promptRaw;
         const reviewRaw = asString(args.review) ?? "none";
         if (reviewRaw !== "none" && reviewRaw !== "human") return { text: "--review must be none|human", isError: true };
         const verificationRaw = asString(args.verification) ?? "direct";
         if (verificationRaw !== "direct" && verificationRaw !== "verified") {
           return { text: "--verification must be direct|verified", isError: true };
+        }
+        // Features/bugs must name their footprint and gate explicitly. The
+        // plan layer would silently default these (script:build, no files),
+        // which lets placeholders pass research:verify.
+        if (kind !== "ideas") {
+          const files = asList(args.files);
+          if (!files || files.length === 0) {
+            return { text: `issue:create requires files for ${kind} (e.g. files: "src/checkout/cart.ts"); investigate first, never guess`, isError: true };
+          }
+          const acceptance = asList(args.acceptance) ?? asList(args.verify);
+          if (!acceptance || acceptance.length === 0) {
+            return { text: `issue:create requires acceptance for ${kind} (e.g. acceptance: "script:build"); name the gate that proves it`, isError: true };
+          }
         }
         try {
           const created = writeIssue(l, {
@@ -380,6 +419,13 @@ export function issueCommands(root: string): CommandSpec[] {
         }
         try {
           let current = issue.slug;
+          const promptUpdate = asString(args.prompt);
+          if (promptUpdate !== undefined) {
+            const minPrompt = issue.kind === "ideas" ? 20 : 200;
+            if (promptUpdate.length < minPrompt) {
+              return { text: `bad prompt: ${issue.kind} prompt is ${promptUpdate.length} chars, need at least ${minPrompt}`, isError: true };
+            }
+          }
           const hasContents =
             args.prompt !== undefined ||
             args.priority !== undefined ||

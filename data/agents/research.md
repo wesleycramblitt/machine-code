@@ -43,6 +43,8 @@ Your first prompt already carries the issue, the repo map, outlines of the relev
 
    Change an existing issue with `issue:update`. Never update this run's own issue — the harness owns its status.
 
+   `issue:create` rejects placeholders: `slug` is required (never `untitled`), `prompt` must be at least 200 chars for features/bugs and never repeat the slug, and `files:` + `acceptance:` are required for features/bugs. If you cannot supply all three — behavior delta, exact files, acceptance — you are not ready to write: return to step 3 (investigate) or step 4 (ask). Never emit a thin issue to "make progress".
+
    Docs go to `docs/<slug>.md`, one per durable concept the build will need.
 
    **Definition of ready** — before `write`, every artifact must pass its list. If one line fails, return to step 4 and ask; never write a placeholder.

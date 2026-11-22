@@ -152,6 +152,32 @@ export const researchVerifyCommand: CommandSpec = {
       // the edge while the research agent can still fix it.
       const allIssues = listIssues(layout(ctx.repoRoot ?? ctx.root));
       const changedIssues = [...new Set(unique.map((file) => matchChangedIssue(allIssues, file)).filter((issue) => issue !== undefined))];
+      // Quality backstop: the issue:create handler rejects placeholders, but
+      // issues can also arrive via other paths (CLI, self-scope). A blank,
+      // untitled, file-less, or gate-less feature/bug must fail here while
+      // the research agent can still fix it — not surface as done work.
+      const quality: string[] = [];
+      for (const changed of changedIssues) {
+        if (changed.slug === "untitled") {
+          quality.push(`${changed.rel}: slug is "untitled" — derive it from the behavior change`);
+          continue;
+        }
+        if (changed.kind !== "ideas") {
+          const promptLen = changed.prompt.trim().length;
+          if (promptLen < 200) {
+            quality.push(
+              `${changed.rel}: prompt is ${promptLen} chars, need at least 200 ` +
+                `(observable change, current state with file:line anchors, verification)`,
+            );
+          }
+          if (changed.files.length === 0) {
+            quality.push(`${changed.rel}: missing files: — investigate and name the exact paths or globs`);
+          }
+          if (changed.acceptance.length === 0 && changed.verify.length === 0) {
+            quality.push(`${changed.rel}: missing acceptance: — name the gate that proves it (e.g. script:build)`);
+          }
+        }
+      }
       const pending = allIssues.filter((issue) => issue.kind !== "ideas" && issue.status !== "done");
       const violations: string[] = [];
       for (const left of changedIssues) {
@@ -165,6 +191,12 @@ export const researchVerifyCommand: CommandSpec = {
               `add depends: ${right.slug} to ${left.slug} (or the reverse)`,
           );
         }
+      }
+      if (quality.length > 0) {
+        return {
+          text: `research:verify failed — placeholder or under-scoped issues (fix with issue:update or rewrite, never raw-write):\n${[...new Set(quality)].join("\n")}`,
+          isError: true,
+        };
       }
       if (violations.length > 0) {
         return {
