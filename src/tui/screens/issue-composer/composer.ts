@@ -80,11 +80,10 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
     displayLines = wrapText(withCursor(promptText, cursor, `${GR}▌${R}`), Math.max(8, inner - 3));
   }
 
-  // Half the page on large screens (fixed share, not content-driven), never
-  // more than the field lines and action bar leave free. The box scrolls when
-  // the text outgrows it.
-  const availableForPrompt = Math.max(3, bodyH - above.length - 4);
-  const promptHeight = Math.max(3, Math.min(availableForPrompt, Math.floor(bodyH * 0.5)));
+  // Half the window body, sized from the window itself and never from the
+  // text. Field lines above yield when the window is short (the screen clips
+  // them); the box scrolls past half.
+  const promptHeight = Math.max(3, Math.floor(bodyH * 0.5));
   // Keep the caret line visible: when it moves above the window bottom,
   // scroll the window up with it (tail-pin otherwise).
   let promptTop = Math.max(0, displayLines.length - promptHeight);
