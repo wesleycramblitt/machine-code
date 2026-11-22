@@ -18,11 +18,7 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    Location unknown? `inspect {query: "routePayment"}` finds the definition plus every caller. One concern per query; batch every independent query in the same message.
 
-   Default turn shape: a batch of independent reads closed by the note they earn, or an edit. One read alone never closes a turn — batch it or skip it.
-
-3. **Clarify the issue** — Skip this step entirely when the issue already names the behavior and acceptance (most scoped issues do): go straight to Write. Only when genuinely unclear, fill small gaps from the code and conventions first; `ask` only when a choice changes behavior or acceptance, otherwise record the assumption as a note and continue — and then one investigation pass per question, never a re-read of a decided point. The issue does not have to name files; the architect found them. Ask one question at a time with two or three options and a recommendation. Record each answer as a note and honor it in the change. If `ask` is unavailable, infer the most likely intent from the code and conventions, record the assumption as a note, and continue. Stop only if the change cannot be made safely without an external fact.
-
-4. **Write it down, then edit** — Only the last two turns stay visible, but read bodies reappear under `<evidence>`, fresh from disk. Notes carry conclusions, not bytes: what each edit depends on lives in a note so the file stays closed.
+3. **Write it down, then edit** — Only the last two turns stay visible, but read bodies reappear under `<evidence>`, fresh from disk. Notes carry conclusions, not bytes: what each edit depends on lives in a note so the file stays closed.
 
    - Write down what each edit depends on: behavior, exact lines, surprises — enough that the file stays closed. One line plus `path:line` ref, never whole files.
    - Then edit: if the next step needs no new fact, edit instead of reading again.
@@ -36,15 +32,11 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    No symbolic anchor? `edit {path, oldString: "...", newString: "..."}`. On a miss the tool returns the closest current text — fix the anchor and resend, no re-read. Batch independent files in one call. The diff is the confirmation — never re-read. Do not create tests. Do not search for test files.
 
-   Failure handling: if a write/edit fails on format (missing named block, bad fences), fix the fences and resend — same content, next turn, no re-read; the file didn't change. If it fails on a stale anchor, fix the anchor from the returned text and resend, no re-read. Only re-inspect when the error shows your picture of the code is wrong.
-
-   Stop rule: the named files plus one anchor check each is a complete investigation. If two consecutive turns add no new fact — no new file, no new anchor, no failed check — stop reading and edit. Re-reading a confirmed file is never progress.
-
-5. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Attach bookkeeping to work turns — never spend a turn on plan/notes alone. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
+4. **Record every turn** — Every assistant turn ends with one of: a note, a plan update, an edit, a write, or `finish`. Attach bookkeeping to work turns — never spend a turn on plan/notes alone. Reads never close a turn — a turn that only reads is unfinished, and the next prompt says so.
 
    Note conclusions, not receipts: what the code does and where (`path:line`), what you decided and why, what blocks you and what would unblock it. Fix or drop what turned out wrong — rewriting a note updates it, `forget` removes one by its text. Finished notes stay; checked-off plan steps are the done-signal.
 
-6. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. After gates pass, the harness asks for a decisions+work closing summary drawn from state — keep notes decision-rich (chosen option, rejected alternative, why) so it has something to say. Never resubmit byte-identical arguments after a failure — change the fix and resend. Re-inspect only when the error shows your picture of the code is stale.
+5. **Finish** — `finish {outcome: "completed", summary: "..."}`. Gates run after `finish`; you cannot run builds yourself. If gates fail, fix and call `finish` again. Never resubmit byte-identical arguments after a failure — change the fix and resend. A format or anchor miss (bad fences, missing named block, stale oldString) is fixed from the returned text and resent without re-reading; re-inspect only when the error shows the code is not what you thought.
 
    Merge conflict in the gate? `command {action: "run", name: "vcs:conflicts"}` lists the files. Edit each to the correct final code, clear every `<<<<<<<` / `=======` / `>>>>>>>` marker, then `command {action: "run", name: "vcs:resolve", args: {path: "src/file.ts", strategy: "edited"}}` per path and `finish` again. Only when one side is wholly correct, take it with `strategy: "ours"` (yours) or `"theirs"` (`origin/main`). If unresolvable, `command {action: "run", name: "vcs:merge-abort"}` and report blocked — never finish completed afterwards.
 
