@@ -1,9 +1,9 @@
 /**
  * machine_code — issue detail keys.
  *
- * `n` starts the run the issue needs (architect for ideas, engineer for features/bugs, reference for references,
- * features/bugs), `e` edits the issue file, `a` approves and merges,
- * `d` opens the delete confirmation page.
+ * `n` starts the run the issue needs (architect for ideas, engineer for
+ * features/bugs, reference for references), `e` edits the issue file,
+ * `a` approves and merges, `d` opens the delete confirmation page.
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -66,10 +66,10 @@ export function handleIssueKeys(s: TuiState, ctx: KeyServices, data: string): bo
     return true;
   }
   if (data === "b" && slug) {
-    // `b` toggles block/unblock for features and bugs. Ideas have no blocked
-    // status, so the key does nothing for them.
+    // `b` toggles block/unblock for features and bugs. Ideas and references
+    // have no blocked status, so the key does nothing for them.
     const issue = findIssue(l, slug);
-    if (issue && issue.kind !== "ideas") {
+    if (issue && (issue.kind === "features" || issue.kind === "bugs")) {
       spawnCli(["issue", issue.status === "blocked" ? "unblock" : "block", slug],
         issue.status === "blocked" ? `unblock ${slug} queued` : `block ${slug} queued`);
     }

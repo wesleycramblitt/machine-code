@@ -68,7 +68,7 @@ export interface OrchestratorLoop {
 
 /** Min-fit floor for the agent role an issue dispatches. */
 function minFitForRole(settings: OrchestratorSettings, issue: Issue): number {
-  return issue.kind === "ideas" ? settings.architectMinFit : settings.engineerMinFit;
+  return issue.kind === "ideas" || issue.kind === "references" ? settings.architectMinFit : settings.engineerMinFit;
 }
 
 function startedMs(run: { startedAt: string }): number {

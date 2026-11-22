@@ -46,7 +46,7 @@ export function parseRunGroup(value: string | undefined): RunGroup | undefined {
   return (["all", "category", "deps"] as const).find((group) => group === value);
 }
 
-export type SectionTone = "feature" | "bug" | "idea" | "other" | "category" | "status" | "untracked";
+export type SectionTone = "feature" | "bug" | "idea" | "reference" | "other" | "category" | "status" | "untracked";
 
 export type RunRow =
   | {
@@ -341,7 +341,7 @@ export function buildRunIndex(options: RunOptions): RunIndex {
       pushRuns(sortRuns(related, "activity"), issueDepth + 1, id);
     };
     const toneFor = (kind: IssueKind): SectionTone =>
-      kind === "features" ? "feature" : kind === "bugs" ? "bug" : kind === "ideas" ? "idea" : "other";
+      kind === "features" ? "feature" : kind === "bugs" ? "bug" : kind === "ideas" ? "idea" : kind === "references" ? "reference" : "other";
 
     if (group === "all") {
       // All: kind → status → issue (no category).

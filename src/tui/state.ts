@@ -31,12 +31,12 @@ export type RunsRepoScope = "all" | "cwd";
 
 export type NewRunState = ForkedRunSettings;
 
-export const ISSUE_KIND_CYCLE = ["ideas", "features", "bugs"] as const;
+export const ISSUE_KIND_CYCLE = ["ideas", "features", "bugs", "references"] as const;
 export const ISSUE_PRIORITY_CYCLE = ["low", "medium", "high"] as const;
 export const ISSUE_VERIFICATION_CYCLE = ["direct", "verified"] as const;
 
 export interface NewIssueSettings {
-  kind: "ideas" | "features" | "bugs";
+  kind: "ideas" | "features" | "bugs" | "references";
   priority: "low" | "medium" | "high";
   /** Comma-separated acceptance gates — only for features/bugs. */
   acceptance: string;

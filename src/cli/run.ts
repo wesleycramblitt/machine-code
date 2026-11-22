@@ -1163,11 +1163,18 @@ export async function cmdRun(argv: string[]): Promise<number> {
   if (
     result.status === "completed" &&
     itemSlug &&
-    (agentNameParsed === "engineer" || agentNameParsed === "architect") &&
+    (agentNameParsed === "engineer" || agentNameParsed === "architect" || agentNameParsed === "reference") &&
     toolRoot !== l.repoRoot
   ) {
     const issue = findIssue(l, itemSlug);
-    if (issue) {
+    if (issue && agentNameParsed === "reference") {
+      // Store writes live outside the repo: no commit, no merge. Gates
+      // already passed inside the loop, so the bundle is done.
+      if (issue.kind === "references" && issue.status === "todo") {
+        moveIssue(l, issue.slug, "done");
+        recorder.event("reference_done", { slug: issue.slug });
+      }
+    } else if (issue) {
       let commit: string | null = null;
       try {
         commit = await ensureCommitted(
@@ -1271,7 +1278,9 @@ export async function cmdRun(argv: string[]): Promise<number> {
       const issue = findIssue(l, itemSlug);
       if (issue) {
         appendIssueGateFailure(issue.path, gateFail, gateFailureAttempts(issue.body) + 1);
-        moveIssue(l, issue.slug, "failed-gates");
+        if (issue.kind === "features" || issue.kind === "bugs") {
+          moveIssue(l, issue.slug, "failed-gates");
+        }
       }
     } else {
       // A hard-blocked run (no gate failure to retry) is terminal until a
@@ -1280,7 +1289,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       // this run already rerouted it to a retryable directory such as
       // failed-gates.
       const issue = findIssue(l, itemSlug);
-      if (issue && issue.kind !== "ideas" && issue.status !== "failed-gates") {
+      if (issue && (issue.kind === "features" || issue.kind === "bugs") && issue.status !== "failed-gates") {
         moveIssue(l, issue.slug, "blocked");
       }
     }
@@ -1698,8 +1707,16 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
 
   // A resumed Engineer phase still owes the runner its gates, commit, and move.
   // Gates now run inside the loop. Handle completion or block from exhaustion.
-  if (result.status === "completed" && (resumeAgent === "engineer" || resumeAgent === "architect") && resumeIssue) {
-    if (toolRoot !== l2.repoRoot) {
+  if (result.status === "completed" && (resumeAgent === "engineer" || resumeAgent === "architect" || resumeAgent === "reference") && resumeIssue) {
+    if (resumeAgent === "reference") {
+      // Store writes live outside the repo: no commit, no merge. Gates
+      // already passed inside the loop, so the bundle is done.
+      if (resumeIssue.kind === "references" && resumeIssue.status === "todo") {
+        const { moveIssue } = await import("../plan/issues.js");
+        moveIssue(l2, resumeIssue.slug, "done");
+        recorder.event("reference_done", { slug: resumeIssue.slug });
+      }
+    } else if (toolRoot !== l2.repoRoot) {
       try {
         const commit = await ensureCommitted(
           toolRoot,
@@ -1783,8 +1800,10 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     const gateFail = (result as RunLoopResult).lastGateFailure;
     if (gateFail) {
       appendIssueGateFailure(resumeIssue.path, gateFail, gateFailureAttempts(resumeIssue.body) + 1);
-      moveIssue(l2, resumeIssue.slug, "failed-gates");
-    } else if (resumeIssue.kind !== "ideas") {
+      if (resumeIssue.kind === "features" || resumeIssue.kind === "bugs") {
+        moveIssue(l2, resumeIssue.slug, "failed-gates");
+      }
+    } else if (resumeIssue.kind === "features" || resumeIssue.kind === "bugs") {
       // A hard-blocked run (no gate failure to retry) is terminal until a
       // human unblocks it: move the issue to blocked/ so the orchestrator
       // stops re-dispatching it. Skip when the status transitions earlier in

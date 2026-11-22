@@ -30,7 +30,7 @@ export const ISSUE_STATUS_STYLE: Record<DisplayStatus, { tone: string; glyph: st
   done: DONE_STYLE,
 };
 
-/** Kind background colors: purple for ideas, yellow for features, red for bugs, blue for references. */
+/** Kind background colors: purple for ideas, yellow for features, red for bugs, steel blue for references. */
 export const KIND_BG: Record<string, string> = {
   idea: PURPLE_BG,
   feature: YELLOW_BG,

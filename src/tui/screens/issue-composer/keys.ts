@@ -8,7 +8,7 @@ import { editLine } from "../../edit.js";
 import type { TuiState, NewIssueSettings } from "../../state.js";
 import type { KeyServices } from "../keys.js";
 
-const KIND_CYCLE = ["ideas", "features", "bugs"] as const;
+const KIND_CYCLE = ["ideas", "features", "bugs", "references"] as const;
 const PRIORITY_CYCLE = ["low", "medium", "high"] as const;
 /** Set a string field on NewIssueSettings by name. */
 function setField(s: NewIssueSettings, field: string, value: string): void {
@@ -185,7 +185,7 @@ export function handleIssueComposerKeys(s: TuiState, ctx: KeyServices, data: str
     ctx.draw();
     return true;
   }
-  if (data === "v" && s.newIssue.kind !== "ideas") {
+  if (data === "v" && s.newIssue.kind !== "ideas" && s.newIssue.kind !== "references") {
     const cycle = ["direct", "verified"] as const;
     const idx = cycle.indexOf(s.newIssue.verification);
     s.newIssue.verification = cycle[(idx + 1) % cycle.length]!;

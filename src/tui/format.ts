@@ -437,6 +437,7 @@ export function agentTone(agent: string): string {
   switch (agent) {
     case "architect": return PURPLE_FG;
     case "engineer": return BL;
+    case "reference": return SKY_FG;
     case "review": return RED;
     // Legacy run records keep their old colors.
     case "planner": return BL;

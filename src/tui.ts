@@ -432,9 +432,9 @@ export async function runTui(): Promise<void> {
     if (seedSlug) {
       const seed = findIssue(layout(repoRoot), seedSlug);
       if (seed) {
-        const kind = (seed.kind === "ideas" || seed.kind === "features" || seed.kind === "bugs" ? seed.kind : "features") as "ideas" | "features" | "bugs";
+        const kind = (seed.kind === "ideas" || seed.kind === "features" || seed.kind === "bugs" || seed.kind === "references" ? seed.kind : "features") as "ideas" | "features" | "bugs" | "references";
         const priority = (seed.priority === "low" || seed.priority === "medium" || seed.priority === "high" ? seed.priority : "medium") as "low" | "medium" | "high";
-        const verification = (kind === "ideas" ? "direct" : seed.verification === "verified" ? "verified" : "direct") as "direct" | "verified";
+        const verification = (kind === "ideas" || kind === "references" ? "direct" : seed.verification === "verified" ? "verified" : "direct") as "direct" | "verified";
         s.newIssue = {
           kind,
           priority,

@@ -573,6 +573,7 @@ export function writeIssue(layout: Layout, input: NewIssueInput): Issue {
   const id = input.id ?? newIssueId();
   const branch = input.branch ?? issueBranchName(slug, id);
   let verification = input.verification ?? "direct";
+  if (input.kind === "references") verification = "direct";
   if (verification === "verified" && !hasRepoScript(layout, "test")) verification = "direct";
   // Features and bugs carry an acceptance gate. Explicit acceptance wins;
   // otherwise use the repository's script gates. Ideas run

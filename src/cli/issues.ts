@@ -120,9 +120,9 @@ export async function cmdIssue(argv: string[]): Promise<number> {
   if (sub === "create" || sub === "new") {
     const kindArg = positional[1];
     const slugArg = positional[2];
-    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs> <slug> "<prompt>" [--priority low|medium|high] [--review none|human] [--verification direct|verified] [--depends a,b] [--files path,glob] [--tags a,b] [--acceptance a,b] [--status <dir>]');
+    if (!kindArg || !slugArg) fail('usage: machine_code issue create <ideas|features|bugs|references> <slug> "<prompt>" [--priority low|medium|high] [--review none|human] [--verification direct|verified] [--depends a,b] [--files path,glob] [--tags a,b] [--acceptance a,b] [--status <dir>]');
     const kind = parseKind(kindArg);
-    if (!kind) fail(`unknown kind ${JSON.stringify(kindArg)}; use ideas|features|bugs`);
+    if (!kind) fail(`unknown kind ${JSON.stringify(kindArg)}; use ideas|features|bugs|references`);
     const slug = slugify(slugArg);
     if (!slug) fail("issue slug becomes empty");
     if (findIssue(l, slug)) fail(`issue ${slug} already exists`);
@@ -186,8 +186,9 @@ export async function cmdIssue(argv: string[]): Promise<number> {
     if (!issue) fail(`no issue ${slug}`);
     const explicitAgent = flags.get("agent");
     // The default run for a feature/bug is the full build: gates, optional
-    // review, commit, and status move. Ideas default to architect.
-    if (explicitAgent === undefined && issue.kind !== "ideas") {
+    // review, commit, and status move. Ideas default to architect, references
+    // issues to reference.
+    if (explicitAgent === undefined && (issue.kind === "features" || issue.kind === "bugs")) {
       const args = [issue.slug];
       const model = flags.get("model");
       if (model) args.push("--model", model);
@@ -423,7 +424,7 @@ export async function runIssueBuild(
         // route it through failed-gates so the orchestrator re-dispatches it
         // with context instead of leaving it silently parked in todo/.
         const noChange = "engineer produced no committable change";
-        if (issue.kind !== "ideas") {
+        if (issue.kind === "features" || issue.kind === "bugs") {
           appendIssueGateFailure(issue.path, noChange, gateFailureAttempts(issue.body) + 1);
           moveIssue(l, slug, "failed-gates");
         }
@@ -491,6 +492,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
     const issue = findIssue(l, slug);
     if (!issue) fail(`no issue ${slug} — create one with \`machine_code issue create features|bugs ${slug} "..."\``);
     if (issue.kind === "ideas") fail(`ideas are researched first: machine_code issue run ${slug}`);
+    if (issue.kind === "references") fail(`references issues run on reference: machine_code issue run ${slug}`);
     if (issue.status === "done") fail(`issue ${slug} is already done`);
     return runIssueBuild(l, issue, flags);
   }
@@ -502,6 +504,7 @@ export async function cmdBuild(argv: string[]): Promise<number> {
     process.stderr.write(`self-scoped as ${slug} → .machine_code/issues/features/todo/${slug}.md\n`);
   } else {
     if (issue.kind === "ideas") fail(`ideas are researched first: machine_code issue run ${slug}`);
+    if (issue.kind === "references") fail(`references issues run on reference: machine_code issue run ${slug}`);
     if (issue.status === "done") fail(`issue ${slug} is already done`);
   }
   return runIssueBuild(l, issue, flags);

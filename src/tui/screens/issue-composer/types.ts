@@ -9,7 +9,7 @@ import type { Viewport } from "../types.js";
 
 export interface IssueComposerProps extends Viewport {
   settings: {
-    kind: "ideas" | "features" | "bugs";
+    kind: "ideas" | "features" | "bugs" | "references";
     priority: "low" | "medium" | "high";
     acceptance: string;
     tags: string;

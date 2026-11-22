@@ -17,7 +17,7 @@
  */
 import {
   B, C, D, G, GR, M, R, RED, W, Y, START_BG, UPDATE_BG, WHITE,
-  PURPLE_FG, YELLOW_FG, RED_FG,
+  PURPLE_FG, YELLOW_FG, RED_FG, SKY_FG,
   command, commandBadge, fit, joinCommands, trunc, visible, wrapText,
 } from "../../format.js";
 import { withCursor } from "../../edit.js";
@@ -60,7 +60,7 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   above.push(fieldLine("d", "Depends", settings.depends, fieldEdit === "depends" ? fieldCursor : null, cols));
   above.push(fieldLine("f", "Files", settings.files, fieldEdit === "files" ? fieldCursor : null, cols));
   above.push(fieldLine("a", "Acceptance Gates", settings.acceptance, fieldEdit === "acceptance" ? fieldCursor : null, cols));
-  if (settings.kind !== "ideas") {
+  if (settings.kind !== "ideas" && settings.kind !== "references") {
     const verLabel = settings.verification.charAt(0).toUpperCase() + settings.verification.slice(1);
     above.push(fieldLine("v", "Verification", verLabel, fieldEdit === "verification" ? fieldCursor : null, cols));
   }
@@ -96,7 +96,11 @@ export function renderIssueComposer(props: IssueComposerProps): IssueComposerFra
   );
 
   // Bottom bar: Kind + Priority (left) · Create[:!] (right)
-  const kindColor = settings.kind === "ideas" ? PURPLE_FG : settings.kind === "features" ? YELLOW_FG : RED_FG;
+  const kindColor =
+    settings.kind === "ideas" ? PURPLE_FG
+    : settings.kind === "features" ? YELLOW_FG
+    : settings.kind === "references" ? SKY_FG
+    : RED_FG;
   const kindLabel = settings.kind.charAt(0).toUpperCase() + settings.kind.slice(1);
   const kindToken = command("k", "Kind", kindLabel, kindColor);
 

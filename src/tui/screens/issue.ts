@@ -94,7 +94,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
   } else {
     // Line 1: kind badge, slug, [Status] — runs-page tones.
     const tone = issue ? issueTone(issue.status, issue.kind) : D;
-    const badge = issue ? kindBadge(issue.kind, issue.kind === "ideas" ? "Idea" : issue.kind === "features" ? "Feature" : "Bug") : "";
+    const badge = issue ? kindBadge(issue.kind, issue.kind === "ideas" ? "Idea" : issue.kind === "features" ? "Feature" : issue.kind === "references" ? "Reference" : "Bug") : "";
     const statusText = issue ? ISSUE_STATUS_LABELS[issue.status] : "unknown";
     lines.push(` ${badge}  ${tone}${slug}${R}  ${tone}[${statusText}]${R}`);
     if (issue) {
@@ -143,7 +143,7 @@ export function renderIssue(props: IssueProps): IssueFrame {
         ? [command("rb", "Reset Branch", undefined, Y)]
         : []),
       // Block/unblock: only features and bugs have a blocked status.
-      ...(issue && issue.kind !== "ideas"
+      ...(issue && (issue.kind === "features" || issue.kind === "bugs")
         ? [command("b", issue.status === "blocked" ? "Unblock" : "Block", undefined, issue.status === "blocked" ? G : Y)]
         : []),
       command("d", "Delete", undefined, RED),
