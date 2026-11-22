@@ -51,6 +51,22 @@ import { gateFailureText, runGates, type GateResult, type GateSpec } from "./ver
 import { vcsSyncCommand } from "./commands/vcs.js";
 
 
+/** Prompt for the post-gate closing summary: decisions + work, grounded in
+ * run state. Pure so the contract (three sections, grounded, short, no
+ * tools) is unit-testable without a model. */
+export function buildClosingSummaryPrompt(request: string, stateText: string): string {
+  return [
+    stateText,
+    "All acceptance gates passed. Write the final summary a human needs in order to understand WHY this run did what it did — not just what changed.",
+    "Three sections, grounded strictly in the state above (notes, changes, gates). Do not invent rationale that is not recorded; say 'not recorded' instead.",
+    "## Decisions — one line each: the scope/behavior call made, the option chosen, the alternative rejected and why.",
+    "## Work — one line per file created, changed, or deleted: path, what changed, why.",
+    "## Verification — the gates that passed.",
+    "Keep it under 30 lines. Do not call tools.",
+    `Request: ${request}`,
+  ].join("\n\n");
+}
+
 /** Default turn cap. 0 means no cap; set max_turns per role or run. */
 export const MAX_TURNS = 0;
 
@@ -843,6 +859,93 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     } catch (error) {
       recorder.event("final_answer", {
         reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return "";
+    }
+  };
+
+  /**
+   * After gates pass, ask the run's model for the closing summary a human
+   * needs to understand WHY: decisions taken (with rejected alternatives)
+   * plus work done (per file). Same tool-free mechanics as finalAnswer: one
+   * bounded call, usage recorded, empty string on any failure (the caller
+   * keeps the finish-tool receipt as fallback).
+   */
+  const closingSummary = async (model: Model<Api>): Promise<string> => {
+    const prompt = buildClosingSummaryPrompt(input.request, memory.renderBlock());
+    try {
+      const source = input.models.streamSimple(
+        model,
+        {
+          systemPrompt: "You close out a coding run. Be concise, factual, and decision-focused. Do not call tools.",
+          messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+        },
+        {
+          maxTokens: 1_500,
+          reasoning: "minimal",
+          sessionId: recorder.id,
+          signal: input.signal,
+          identity: {
+            userAgent: { custom: "machine_code/0.0.0" },
+            attribution: { name: "machine_code", url: "https://github.com/extropian/machine-code" },
+          },
+        },
+      );
+      let text = "";
+      for await (const event of source) {
+        if (event.type === "text_delta") text += event.delta;
+      }
+      const result = await source.result();
+      const usage = result.usage;
+      if (usage) {
+        const actual = usage.cost?.total;
+        const actualCost = typeof actual === "number" && Number.isFinite(actual) ? actual : null;
+        recorder.recordCall(
+          {
+            input: usage.input,
+            output: usage.output,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+            totalTokens: usage.totalTokens,
+          },
+          actualCost,
+          0,
+        );
+        try {
+          const { appendSpendRecord } = await import("./spend.js");
+          appendSpendRecord(input.home, {
+            id: crypto.randomUUID(),
+            t: new Date().toISOString(),
+            repoRoot: input.root,
+            runId: recorder.id,
+            agent: input.agent.name,
+            provider: result.provider,
+            model: result.model,
+            usage: {
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheWrite: usage.cacheWrite,
+              totalTokens: usage.totalTokens,
+            },
+            cost: { actual: actualCost, estimated: 0 },
+            stopReason: result.stopReason,
+          });
+        } catch {
+          // ledger write failure must not break the closing summary
+        }
+      }
+      const final = text.trim() || assistantText(result).trim();
+      recorder.event("closing_summary", {
+        chars: final.length,
+        stopReason: result.stopReason,
+        ...(result.errorMessage ? { error: result.errorMessage } : {}),
+        ...(final ? { text: final.slice(0, 2_000) } : {}),
+      });
+      return final;
+    } catch (error) {
+      recorder.event("closing_summary", {
         error: error instanceof Error ? error.message : String(error),
       });
       return "";
@@ -2152,6 +2255,17 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
 
     clearInterval(heartbeatTimer); clearInterval(controlTimer); unregisterInstance(input.home);
+    // Gates passed (or none ran) and the run completed: ask the run's model
+    // for the decisions+work closing summary. One bounded tool-free call; on
+    // any failure the finish-tool receipt stands.
+    if (status === "completed" && currentModel) {
+      try {
+        const closing = await closingSummary(currentModel);
+        if (closing.trim()) finalText = closing;
+      } catch {
+        // closing summary must never fail a completed run
+      }
+    }
     return { status, finalText, error, ...(lastGateFailure ? { lastGateFailure } : {}) };
   }
 }
