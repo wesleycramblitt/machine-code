@@ -64,11 +64,11 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
 
-/** Bound on inline bodies for an issue's declared `files:`. The issue already
- * names what the run edits; these ride in the first prompt so work can start
- * without a read per file. Past these limits the symbol map + inspect carry it. */
-const DECLARED_INLINE_FILES = 6;
-const DECLARED_INLINE_BYTES = 48 * 1024;
+/** Bound on seeded evidence files for an issue's declared `files:`. The issue
+ * names what the run edits; those bodies ride in the first prompt as native
+ * inspect results so work can start without a read per file. */
+const SEED_FILE_LIMIT = 6;
+const SEED_FILE_BYTES = 48 * 1024;
 
 /** Issue rels the run curated (via issue:create/update/delete), tracked in
  * the run dir. Issues live outside git, so this — not a worktree commit —
@@ -349,29 +349,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     // citations into this run's context.
     if (attachedIssue.references.length > 0) {
       contextInclude.references = [...new Set([...(contextInclude.references ?? []), ...attachedIssue.references])];
-    }
-    // The issue's `files:` are the code this run edits. Inline their bodies
-    // (numbered, same shape inspect returns) so the first prompt already
-    // holds the text the edit needs. Outlines alone force one inspect per
-    // file before work can start, and every prompt in between re-sends the
-    // whole context — the single largest source of long engineer runs.
-    const declared: string[] = [];
-    for (const entry of attachedIssue.files) {
-      const path = entry.trim();
-      if (!path || /[*?[\]]/.test(path)) continue;
-      if (path.startsWith("/") || path.split("/").includes("..")) continue;
-      try {
-        const stat = statSync(join(l.repoRoot, path));
-        if (!stat.isFile() || stat.size > DECLARED_INLINE_BYTES) continue;
-      } catch {
-        // Missing or unreadable: the symbol map and inspect still reach it.
-        continue;
-      }
-      declared.push(path);
-      if (declared.length >= DECLARED_INLINE_FILES) break;
-    }
-    if (declared.length > 0) {
-      contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...declared])];
     }
   }
   // Suggestions are context files. Small ones inline whole into the run's
@@ -1021,6 +998,29 @@ export async function cmdRun(argv: string[]): Promise<number> {
   const seedRanges = hintRanges
     .filter((entry) => !seedFiles.includes(entry.path))
     .map((entry) => ({ path: entry.path, range: [entry.start, entry.end] as [number, number] }));
+  // The files this run is about ride in evidence as native inspect results
+  // from turn 0: the model treats them as current reads (they are re-read
+  // from disk every turn, so an edit cannot leave a stale body), and no
+  // orientation pass is needed to fetch them. Bounded by count and bytes;
+  // everything else stays in the symbol map.
+  const evidenceSeeds = (() => {
+    const picked: string[] = [];
+    let bytes = 0;
+    for (const path of seedFiles) {
+      if (picked.length >= SEED_FILE_LIMIT) break;
+      if (/[*?[\]]/.test(path) || path.startsWith("/") || path.split("/").includes("..")) continue;
+      try {
+        const stat = statSync(join(l.repoRoot, path));
+        if (!stat.isFile() || stat.size > SEED_FILE_BYTES) continue;
+        bytes += stat.size;
+      } catch {
+        continue;
+      }
+      picked.push(path);
+      if (bytes >= SEED_FILE_LIMIT * SEED_FILE_BYTES) break;
+    }
+    return picked;
+  })();
   const abort = new AbortController();
   let sigints = 0;
   process.on("SIGINT", () => {
@@ -1130,6 +1130,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ...(tier2 ? { tier2 } : {}),
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
+      ...(evidenceSeeds.length > 0 ? { seedEvidence: evidenceSeeds } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
       ...(symbolsMaxChars !== undefined ? { symbolsMaxChars } : {}),
       skipMap,
@@ -1175,6 +1176,7 @@ export async function cmdRun(argv: string[]): Promise<number> {
       ...(tier2 ? { tier2 } : {}),
       contextText,
       ...(seedFiles.length > 0 ? { seedFiles } : {}),
+      ...(evidenceSeeds.length > 0 ? { seedEvidence: evidenceSeeds } : {}),
       ...(seedRanges.length > 0 ? { seedRanges } : {}),
       ...(symbolsMaxChars !== undefined ? { symbolsMaxChars } : {}),
       skipMap,
