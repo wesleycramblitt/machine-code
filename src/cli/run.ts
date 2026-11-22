@@ -4,7 +4,7 @@
  * Split from `src/cli.ts`; behavior unchanged. See `src/cli/common.ts` for
  * shared setup (flags, runtime, formatting, run lookup).
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,12 +63,6 @@ import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serve
 
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
-
-/** Bound on inline bodies for an issue's declared `files:`. The issue already
- * names what the run edits; these ride in the first prompt so work can start
- * without a read per file. Past these limits the symbol map + inspect carry it. */
-const DECLARED_INLINE_FILES = 6;
-const DECLARED_INLINE_BYTES = 48 * 1024;
 
 /** Issue rels the run curated (via issue:create/update/delete), tracked in
  * the run dir. Issues live outside git, so this — not a worktree commit —
@@ -349,29 +343,6 @@ export async function cmdRun(argv: string[]): Promise<number> {
     // citations into this run's context.
     if (attachedIssue.references.length > 0) {
       contextInclude.references = [...new Set([...(contextInclude.references ?? []), ...attachedIssue.references])];
-    }
-    // The issue's `files:` are the code this run edits. Inline their bodies
-    // (numbered, same shape inspect returns) so the first prompt already
-    // holds the text the edit needs. Outlines alone force one inspect per
-    // file before work can start, and every prompt in between re-sends the
-    // whole context — the single largest source of long engineer runs.
-    const declared: string[] = [];
-    for (const entry of attachedIssue.files) {
-      const path = entry.trim();
-      if (!path || /[*?[\]]/.test(path)) continue;
-      if (path.startsWith("/") || path.split("/").includes("..")) continue;
-      try {
-        const stat = statSync(join(l.repoRoot, path));
-        if (!stat.isFile() || stat.size > DECLARED_INLINE_BYTES) continue;
-      } catch {
-        // Missing or unreadable: the symbol map and inspect still reach it.
-        continue;
-      }
-      declared.push(path);
-      if (declared.length >= DECLARED_INLINE_FILES) break;
-    }
-    if (declared.length > 0) {
-      contextInclude.files = [...new Set([...(contextInclude.files ?? []), ...declared])];
     }
   }
   // Suggestions are context files. Small ones inline whole into the run's

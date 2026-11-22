@@ -630,12 +630,23 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       `origin="${item.origin}"`,
       ...(item.depth !== undefined ? [`depth="${item.depth}"`] : []),
     ];
-    // File bodies render numbered, exactly as `inspect` returns them, so the
-    // text an edit needs is in the first prompt. The symbol map stays the
-    // index for everything else. Dropping these bodies (the Nov 14 "no byte
-    // payloads" change) forced one inspect per file before work could start
-    // and re-sent the whole context in between — the dominant cause of long
-    // engineer runs.
+    // Seed files are indexed in the symbol map; omit the body here to avoid
+    // duplicating bytes in the prompt.
+    if (item.kind === "file") {
+      sources.push({
+        kind: item.kind,
+        origin: item.origin,
+        ref: item.ref,
+        depth: item.depth,
+        bytes: item.len,
+        hash: sha1(item.body),
+        truncated: item.trimmed === true,
+        ...(item.trimmed === true
+          ? { warning: `trimmed to ${item.len.toLocaleString()} chars to fit the ${usable.toLocaleString()} char input budget — file is indexed in the symbol map` }
+          : {}),
+      });
+      continue;
+    }
     blocks.push(`<context-block ${attrs.join(" ")}>\n${item.body}\n</context-block>`);
     sources.push({
       kind: item.kind,

@@ -2,11 +2,11 @@
 
 **Objective:** Implement the attached issue, with tests expressing the behavior, in as few model calls as possible.
 
-Your first prompt already carries the issue, the repo map, and the numbered bodies of the files the issue names — that text is current and editable as-is. Most runs need only: plan, edit those bodies with tests, finish. Read only what the bodies do not answer.
+Your first prompt already carries the issue, the repo map, and outlines (symbols + docs) of the relevant files. Most runs need only: plan, read the exact bodies to change, edit with tests, finish.
 
 ## Workflow
 
-1. **Plan from context** — Decide the file list and order from the issue, the numbered bodies, and the outlines already in this prompt. Searching is the fallback, not the default.
+1. **Plan from context** — Decide the file list and order from the issue plus the outlines already in this prompt. Searching is the fallback, not the default.
 
    `context {action: "plan", steps: [{text: "rename routePayment in router.ts and callers", done: false}, {text: "cover with tests", done: false}]}`
 
