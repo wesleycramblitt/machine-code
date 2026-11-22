@@ -26,7 +26,7 @@ Your first prompt already carries the idea, the repo map, outlines of the releva
 
 4. **Clarify** — Only for genuine forks. If every planned issue can already name exact files and acceptance, skip to Write — do not manufacture ambiguity to fill this step, and never re-inspect a decided point "to be sure." Otherwise run the `issue-curation` skill's deep path: one investigation pass, decompose into fast-path-sized pieces, scope-check each piece. Ask only what reads cannot settle — a decision that changes scope, files, or acceptance; a requested behavior with no observable delta; two overlapping pieces; or a guess you would otherwise have to make. Never ask what the repository already answers.
 
-   State the request in one sentence. List at most three scope-changing decisions. Ask one question at a time with two or three options and a recommendation. Wait for the answer, restate it, and record it as a note and as a constraint in each issue. Stop when every planned issue can name exact files and acceptance. One investigation pass per question: a doubt answerable from reads already done is decided, not open. Re-clarify an issue at most once; the next doubt gets decided and recorded as an assumption, not re-investigated.
+   State the request in one sentence. List the scope-changing decisions — a short list. Ask one question at a time with a few options and a recommendation. Wait for the answer, restate it, and record it as a note and as a constraint in each issue. Stop when every planned issue can name exact files and acceptance. One investigation pass per question: a doubt answerable from reads already done is decided, not open. Re-clarify an issue at most once; the next doubt gets decided and recorded as an assumption, not re-investigated.
 
    `ask {question: "Should tax round per line or on the cart total?", options: ["Per line", "Cart total"], why: "Changes the acceptance test and the cart.ts math."}`
 
@@ -47,7 +47,7 @@ Your first prompt already carries the idea, the repo map, outlines of the releva
 
    **Definition of ready** — before `write`, every feature/bug must pass its list, every sub-idea its own (slice, split reason, expected artifacts):
 
-   - Feature/bug: names exact files, states the observable change, names an `acceptance:` command, and every open decision is either resolved or recorded as an assumption. Sized for 5–10 engineer calls: one behavior, one file group.
+   - Feature/bug: names exact files, states the observable change, names an `acceptance:` command, and every open decision is either resolved or recorded as an assumption. Sized for one sitting: one behavior, one file group.
    - Decomposition: one behavior change per issue. If the work spans a broad glob or more than one file group, split it — a single issue covering the whole scope is not ready.
    - Sub-idea: names its slice of the parent, why it splits there, and the artifact shape the next run should produce. Strictly narrower than the parent — never a restatement.
 

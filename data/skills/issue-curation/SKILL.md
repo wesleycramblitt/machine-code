@@ -74,7 +74,7 @@ Triage the idea in one pass, then run the matching path. Thoroughness lives in d
 **Triage.** Read the idea and run `issue:list` once for duplicates. Then decide:
 
 - **Fast path** — the idea names the behavior and the affected area, with no open scope decisions. Go: read, anchor, write, finish. No questions. Most ideas run here.
-- **Deep path** — vague (a few words, no specifics), compound (several behaviors), or multi-system (three or more file groups). Go: one investigation pass, decompose into fast-path-sized pieces, scope-check each piece, write.
+- **Deep path** — vague (a few words, no specifics), compound (several behaviors), or multi-system (several file groups). Go: one investigation pass, decompose into fast-path-sized pieces, scope-check each piece, write.
 - **Massive scope** — the idea is a project, not a task ("rebuild the TUI", "multi-account support"). Do not emit dozens of premature features from a shallow read. Go: split into sub-ideas below, one per slice, and finish. Other architect runs take it from there.
 
 Zero features is a valid result on any path: if the answer already exists or nothing should change, finish with the finding. Thoroughness lives in decomposition, never in repeated investigation.
@@ -91,10 +91,10 @@ Zero features is a valid result on any path: if the answer already exists or not
 
 ### Scope check (per piece, the requirements core)
 
-For each candidate piece, name the decisions that can change its scope, files, or acceptance — at most three. Then:
+For each candidate piece, name the decisions that can change its scope, files, or acceptance — a short list. Then:
 
 - Never ask what the repository already answers: read first, ask only what reads cannot settle (a decision that changes scope/files/acceptance, no observable delta, overlapping pieces, or a guess you would otherwise have to make).
-- Ask one question at a time, two or three options, with a recommendation. Restate each answer in one sentence and record it as a note and as a constraint in the piece.
+- Ask one question at a time, a few options, with a recommendation. Restate each answer in one sentence and record it as a note and as a constraint in the piece.
 - Re-clarify a piece at most once. The next doubt gets decided and recorded as an assumption, not re-investigated. When `ask` is unavailable, decide from evidence and conventions the same way.
 - Prefer the smallest scope that meets the request.
 - **Ready means ready.** Run the ready list twice: if the second pass finds nothing new, write. "Exact files" means the engineer can *start* without searching — paths or globs plus entry points — not line-perfect precision.
@@ -107,7 +107,7 @@ When the idea is a project, not a task, write sub-ideas — one per slice, each 
 - State the artifact shape the next run should produce (features, bugs, or further splits).
 - Carry the same anti-pattern bar: no mirroring the parent, no vague scope passed downstream.
 
-Recursion guard: a sub-idea must be strictly narrower than its parent — never restate it. If your own issue was itself a split-off, prefer features over further splits. Two levels max: idea → sub-ideas → features. Sub-ideas carry no `files:`/`acceptance:` — those belong to the features the next run writes.
+Recursion guard: a sub-idea must be strictly narrower than its parent — never restate it. If your own issue was itself a split-off, prefer features over further splits. idea → sub-ideas → features, and it stops there. Sub-ideas carry no `files:`/`acceptance:` — those belong to the features the next run writes.
 
 ### Write (per piece)
 
@@ -118,9 +118,9 @@ Recursion guard: a sub-idea must be strictly narrower than its parent — never 
 
 ### Decomposition guidelines
 
-- **One concern per issue.** The count follows the scope — one issue or twenty. Decompose until each piece is one behavior change in one file group, then stop. The body of each should be richer than the original idea text, not a summary of it. A single issue spanning a broad glob (e.g. `src/tools/*.ts` plus two more groups) or naming three or more file groups is not decomposed — split it until each piece names its own files and its own acceptance.
+- **One concern per issue.** The count follows the scope — decompose until each piece is one behavior change in one file group, then stop. The body of each should be richer than the original idea text, not a summary of it. A single issue spanning a broad glob (e.g. `src/tools/*.ts` plus other groups) or spanning several file groups is not decomposed — split it until each piece names its own files and its own acceptance.
 - **Name the dependency chain** with `depends:` when features build on each other. Features with no interdependencies can be built in parallel — mark them without `depends:`.
 - **Same files means sequence, not parallel.** `issue-curation:verify` rejects the run on overlapping footprints without an edge, and the build/run harness refuses a dependent issue until its deps are done.
 - **Copy the full context from the original prompt** into each feature body where it applies. Don't make the engineer cross-reference the idea file.
 - **Each feature issue should be independently verifiable.** If you cannot describe how to verify it in one sentence, the scope is too large — split further.
-- **Size for 5–10 engineer calls.** One issue = what an engineer finishes in a handful of calls: read the bodies, edit, finish. Two or more behaviors, three or more file groups, or a change you cannot anchor to exact files means split, not a bigger issue.
+- **Size for one sitting.** One issue = what an engineer finishes without re-scoping: read the bodies, edit, finish. More than one behavior, more than one file group, or a change you cannot anchor to exact files means split, not a bigger issue.
