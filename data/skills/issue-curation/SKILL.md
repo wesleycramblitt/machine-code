@@ -118,7 +118,7 @@ Recursion guard: a sub-idea must be strictly narrower than its parent — never 
 
 ### Decomposition guidelines
 
-- **One concern per issue.** Dozens of well-scoped features from one broad idea is expected, not unusual. The body of each should be richer than the original idea text, not a summary of it. One issue = one behavior change in one file group. A single issue spanning a broad glob (e.g. `src/tools/*.ts` plus two more groups) or naming three or more file groups is not decomposed — split it until each piece names its own files and its own acceptance.
+- **One concern per issue.** The count follows the scope — one issue or twenty. Decompose until each piece is one behavior change in one file group, then stop. The body of each should be richer than the original idea text, not a summary of it. A single issue spanning a broad glob (e.g. `src/tools/*.ts` plus two more groups) or naming three or more file groups is not decomposed — split it until each piece names its own files and its own acceptance.
 - **Name the dependency chain** with `depends:` when features build on each other. Features with no interdependencies can be built in parallel — mark them without `depends:`.
 - **Same files means sequence, not parallel.** `issue-curation:verify` rejects the run on overlapping footprints without an edge, and the build/run harness refuses a dependent issue until its deps are done.
 - **Copy the full context from the original prompt** into each feature body where it applies. Don't make the engineer cross-reference the idea file.
