@@ -489,6 +489,68 @@ export interface RefreshResult {
   curatedVetoKeys: string[];
 }
 
+
+/** A catalogue row for an OpenRouter offer that pi-ai's generated catalog does
+ * not list. The live /models payload carries everything selection needs
+ * (pricing, context, tool support, modalities); scores fall back to the same
+ * metadata priors a generated row uses, marked estimated. */
+function openRouterRow(meta: OpenRouterModelMeta): CatalogueRow | null {
+  const free = meta.pricing.input === 0 && meta.pricing.output === 0;
+  const outputText = meta.outputModalities.length === 0 || meta.outputModalities.includes("text");
+  if (!outputText) return null;
+  const axes = scoresFromMetadata({
+    id: meta.id,
+    name: meta.name,
+    family: meta.family,
+    releaseDate: meta.releaseDate,
+    knowledge: "",
+    context: meta.context,
+    capabilities: meta.capabilities,
+  });
+  const modes = new Set<string>();
+  if (meta.capabilities.toolCall) modes.add("tools");
+  if (meta.capabilities.reasoning) modes.add("reasoning");
+  if (meta.supportedParameters.includes("structured_outputs")) modes.add("structured-output");
+  return {
+    key: `openrouter/${meta.id}`,
+    providerID: "openrouter",
+    id: meta.id,
+    name: meta.name,
+    family: meta.family,
+    releaseDate: meta.releaseDate,
+    context: meta.context,
+    maxOutput: meta.maxOutput,
+    reasoning: meta.capabilities.reasoning,
+    toolCall: meta.capabilities.toolCall,
+    image: meta.capabilities.image,
+    capabilities: {
+      reasoning: meta.capabilities.reasoning,
+      toolCall: meta.capabilities.toolCall,
+      image: meta.capabilities.image,
+      input: meta.inputModalities,
+      output: meta.outputModalities,
+      contextWindow: meta.context,
+      maxOutputTokens: meta.maxOutput,
+    },
+    kind: "chat",
+    coding: true,
+    modes: [...modes],
+    supportedParameters: meta.supportedParameters,
+    ...(free ? { free: true } : {}),
+    canonicalID: meta.canonicalID || null,
+    pricing: meta.pricing,
+    benchmarks: null,
+    scores: { ...axes, capability: capabilityFrom(axes, meta.context) },
+    provenance: {
+      metadata: "generated",
+      benchmark: null,
+      estimated: true,
+      estimatedFields: ["reasoning", "code", "agentic", "general"],
+      curated: [],
+    },
+  };
+}
+
 export async function refreshCatalogue(
   layout: Layout,
   models: ReadonlyArray<Model<Api>>,
@@ -574,6 +636,24 @@ export async function refreshCatalogue(
       continue;
     }
     rows.push(row);
+  }
+  // OpenRouter's own catalog is the authority on its offers: pi-ai's generated
+  // list carries a subset, which silently hid most of its free models. Add the
+  // rows the generated list missed, so free-tier selection can see them.
+  if (orModels.size > 0) {
+    const listed = new Set(rows.filter((row) => row.providerID === "openrouter").map((row) => row.id));
+    const added: string[] = [];
+    for (const meta of orModels.values()) {
+      if (listed.has(meta.id) || isMetaModel("openrouter", meta.id)) continue;
+      if (curation.models.get(`openrouter/${meta.id}`)?.veto === true) continue;
+      const row = openRouterRow(meta);
+      if (!row) continue;
+      rows.push(row);
+      added.push(meta.id);
+    }
+    if (added.length > 0) {
+      warnings.push(`${added.length} openrouter model(s) added from the live catalog (pi-ai list incomplete): ${added.slice(0, 6).join(", ")}${added.length > 6 ? ", …" : ""}`);
+    }
   }
   await applyLiveListings(rows, layout, warnings, options.liveListings);
   const assumedFree = applyAssumedFree(rows, loadProviderDefinitions());

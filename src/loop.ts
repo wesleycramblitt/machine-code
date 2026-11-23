@@ -350,18 +350,28 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
     }
     return false;
   };
+  /** A free row this run could actually call: its provider is configured and
+   * not disabled. Catalogue rows for providers that can never run (e.g. nvidia,
+   * disabled and keyless) are not free capacity and must not be named as such
+   * when the run reports exhaustion. */
+  const usableFreeRow = (row: { providerID: string }): boolean => {
+    if (!configuredProviders.has(row.providerID)) return false;
+    const state = availability.providers[row.providerID];
+    if (state?.disabled === true || state?.needsAuth === true) return false;
+    return true;
+  };
   const freeProviderIDs = (): string[] => {
     const ids = new Set<string>();
     for (const row of input.catalogue) {
-      if (isFreeRow(row)) ids.add(row.providerID);
+      if (isFreeRow(row) && usableFreeRow(row)) ids.add(row.providerID);
     }
     return [...ids].sort();
   };
   const freeRowsExhausted = (): boolean => {
     if (!isFreeMode()) return false;
-    const freeRows = input.catalogue.filter((row) => isFreeRow(row));
+    const freeRows = input.catalogue.filter((row) => isFreeRow(row) && usableFreeRow(row));
     if (freeRows.length === 0) return false;
-    return freeRows.every((row) => triedModels.has(row.key) || availability.providers[row.providerID]?.needsAuth === true || availability.providers[row.providerID]?.disabled === true);
+    return freeRows.every((row) => triedModels.has(row.key));
   };
   const freeExhaustionError = (): string => {
     const providers = freeProviderIDs();
