@@ -251,6 +251,7 @@ most inspection commands. Run `machine_code help` for the full dispatch list
 | `approve` | `machine_code approve <slug>` | Merge `mc/<slug>` into `main`. |
 | `show` | `machine_code show <run-id> --changes` | Inspect a run's summary/context/changes/events. |
 | `runs` | `machine_code runs; machine_code runs delete <id> --yes` | List, filter, and delete runs. |
+| `regates` | `machine_code regates <run-id> [--dry-run]` | Re-run a blocked/failed run's gates in its worktree, then commit, push, and merge — no model call. Useful after resolving a blocked merge by hand. `--dry-run` lists the gates only. TUI: `g` on a blocked run. |
 | `processes` | `machine_code processes <run-id>` | List spawned processes; `kill`/`logs` subcommands. |
 | `map` | `machine_code map --status` | Build/render the repo map and module index. |
 | `models` | `machine_code models --agent build` | Show which model selection picks, per role or axis. |

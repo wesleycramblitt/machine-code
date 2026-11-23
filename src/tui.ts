@@ -529,6 +529,24 @@ export async function runTui(): Promise<void> {
     }
   };
 
+  /** Re-run a blocked run's gates and retry the merge, with no model call.
+   * The typical case: the worktree's merge was resolved by hand, and the work
+   * only needs verifying and landing again. */
+  const regatesRun = (detail: RunDetail) => {
+    const summary = detail.summary;
+    if (summary.status === "completed" || summary.status === "cancelled") {
+      notify(`run ${summary.id.slice(-8)} is already ${summary.status}; nothing to re-gate`);
+      return;
+    }
+    if (summary.status === "running" && isPidAlive(summary.pid)) {
+      notify(`run ${summary.id.slice(-8)} is still running; interrupt it first`);
+      return;
+    }
+    if (launch(["regates", summary.id], summary.repoRoot)) {
+      notify(`re-running gates for ${summary.id.slice(-8)} (${summary.status})`);
+    }
+  };
+
   const cycleAgent = () => {
     const previousAgent = s.newrun.agent;
     const index = NEW_RUN_AGENTS.indexOf(previousAgent);
@@ -1848,7 +1866,7 @@ export async function runTui(): Promise<void> {
   /* ------------------------------------------------------------- input */
 
   const keyCtx: KeyServices = {
-    draw, notify, launch, openEditor, startNewRun, forkRun, resumeRun, answerRun,
+    draw, notify, launch, openEditor, startNewRun, forkRun, resumeRun, regatesRun, answerRun,
     interrupt, startCorrect, submitCorrection, startPrompt, submitPrompt, runDetailData, pendingForRun,
     cycleAgent, cycleAmbiguity, cycleMinFit, cycleFloors, cycleTier, cycleTier2,
     startIssuePicker, pickerIssues, chooseIssue,

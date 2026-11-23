@@ -780,7 +780,7 @@ export function renderRunDetail(props: RunDetailProps): RunDetailFrame {
     runHints = joinCommands([
       command("f", "fork", undefined, Y),
       ...(["blocked", "failed", "interrupted", "paused"].includes(s.status)
-        ? [command("r", "resume", undefined, G)]
+        ? [command("r", "resume", undefined, G), command("g", "re-gate", undefined, C)]
         : []),
       hint("D", "delete", RED),
       ...(pending ? [hint("a", "answer", Y)] : []),

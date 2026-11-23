@@ -12,6 +12,7 @@ import { fail, HELP, VERSION } from "./cli/common.js";
 import { cmdInit, cmdInstall, cmdProviders, cmdPolicy, cmdConfig, cmdTools, cmdLsp, cmdMap } from "./cli/system.js";
 import { cmdModels, cmdCatalogueSnapshot, cmdCatalogueRefresh, cmdProvider, cmdAvailability, cmdModel } from "./cli/models.js";
 import { cmdRun, controlCommand, cmdRespond, cmdFork, cmdResume, cmdPrune, cmdWorktree, cmdCorrect } from "./cli/run.js";
+import { cmdRegates } from "./cli/regates.js";
 import { cmdLog, cmdStatus, cmdRuns, cmdProcesses, cmdShow, cmdEval, cmdPack, cmdContext, cmdSpend, cmdPrompts } from "./cli/runs.js";
 import { cmdApprove, cmdPlan, cmdBuild, cmdDelete, cmdIssue } from "./cli/issues.js";
 
@@ -95,6 +96,9 @@ async function main(): Promise<void> {
       break;
     case "resume":
       code = await cmdResume(rest[0], rest.slice(1));
+      break;
+    case "regates":
+      code = await cmdRegates(rest[0], rest.slice(1));
       break;
     case "respond":
       code = cmdRespond(rest);

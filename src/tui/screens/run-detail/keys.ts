@@ -76,6 +76,7 @@ export function handleRunKeys(s: TuiState, ctx: KeyServices, data: string): bool
   if (data === " ") { toggleEvent(); ctx.draw(); return true; }
   if (data === "f") { ctx.forkRun(detail); ctx.draw(); return true; }
   if (data === "r") { ctx.resumeRun(detail); ctx.draw(); return true; }
+  if (data === "g") { ctx.regatesRun(detail); ctx.draw(); return true; }
   if (s.runSection === "timeline" && data === "F") {
     s.timelineFollow = !s.timelineFollow;
     if (s.timelineFollow) { s.eventSel = -1; }

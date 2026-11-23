@@ -51,6 +51,7 @@ export interface KeyServices {
   submitNewIssue: () => void;
   /** Resume a stalled run in place (same id, branch, worktree, transcript). */
   resumeRun: (detail: RunDetail) => void;
+  regatesRun: (detail: RunDetail) => void;
   /** Persist the page settings and turn the orchestrator on for a repo. */
   startOrchestrator: (repoRoot: string) => void;
   /** Turn the orchestrator off for a repo (settings stay persisted). */
