@@ -722,8 +722,23 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksD
       ) ?? [...missing][0]!;
     return { error: missingBlockError(namedBlocksDir, name) };
   }
-  if (edits.length === 0 && wholeScope === undefined)
-    return { error: "edit needs oldString/newString, edits[], or symbol/section + newString/newString_named_block for whole-block replacement" };
+  if (edits.length === 0 && wholeScope === undefined) {
+    const scopeHint =
+      spec.symbol || spec.section
+        ? ` You passed ${spec.symbol ? `symbol "${spec.symbol}"` : `section "${spec.section}"`} but no newString to replace it with; add newString (use "" to delete the block) or drop the scope and send an exact-text hunk.`
+        : " You supplied neither oldString/newString nor edits[] hunks; a symbol/section alone is not enough without newString.";
+    const dataFile = /\.(json|jsonc|jsonl|yaml|yml|toml|csv|tsv|xml|ini|env)$/i.test(spec.path);
+    return {
+      error:
+        `edit has no content to apply in ${spec.path}.${scopeHint}` +
+        " Send one of: (1) {oldString: '<exact text>', newString: '<replacement>'}, " +
+        "(2) edits: [{oldString, newString}, ...], or (3) {symbol|section, newString} for code/Markdown only. " +
+        (dataFile
+          ? "This is a data file with no symbol index — copy the exact text from a read; do not retry with symbol/section. "
+          : "Copy oldString verbatim from a read, including indentation. ") +
+        "Do not resend this call unchanged.",
+    };
+  }
 
   const abs = resolveWithin(root, spec.path);
   assertRegularFile(abs);
@@ -760,7 +775,16 @@ async function planSingleFileEdit(root: string, spec: FileEditSpec, namedBlocksD
       const { suggestCommand } = await import("../commands/registry.js");
       const hint = suggestCommand(spec.symbol, names);
       const available = names.length > 0 ? ` Available: ${names.slice(0, 12).join(", ")}${names.length > 12 ? ", …" : ""}` : "";
-      return { error: `no symbol "${spec.symbol}" in ${spec.path}.${hint ? ` Did you mean ${hint}?` : ""}${available}` };
+      const dataFile = /\.(json|jsonc|jsonl|yaml|yml|toml|csv|tsv|xml|ini|env)$/i.test(spec.path);
+      return {
+        error:
+          `no symbol "${spec.symbol}" in ${spec.path}.` +
+          (hint ? ` Did you mean ${hint}?` : "") +
+          available +
+          (dataFile
+            ? " This is a data file with no symbol index — use oldString/newString with exact text copied from a read, or edits[] hunks. Do not retry with another symbol."
+            : " If the name is not indexed, use an exact-text hunk or read the file to pick a real symbol name. Do not resend this call unchanged."),
+      };
     }
     startChar = lineOffsets[range.start - 1] ?? 0;
     endChar = Math.min(raw.length, lineOffsets[range.end] ?? raw.length);
@@ -910,6 +934,7 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
     label: "edit",
     description:
       "Replace text in files. Two forms per file: exact hunks (oldString/newString, batched in edits, scoped with symbol/section) or whole-block replacement (symbol/section + newString with no oldString rewrites the entire block — prefer this for function-scale changes: no anchor, no drift). " +
+      "JSON and other data files have no symbol index: use exact-text hunks there, never symbol/section. Copy oldString verbatim from a read; an empty newString deletes the match. " +
       "Put edits to several files in files[]: one entry per file, with multiple hunks in that entry's edits[]; every file validates first, then all write atomically. " +
       "Results show the change as a -/+ diff (or the whole numbered file when small), so never re-read to confirm. " +
       "Without replaceAll each hunk must be unique in scope.",
@@ -972,7 +997,10 @@ export function editTool(ctx: ToolContext): AgentTool<typeof EditParams> {
             else plans.push(planned);
           }
           if (errors.length > 0) {
-            return fail(`nothing applied — ${errors.length} file(s) failed validation:\n${errors.join("\n")}`);
+            return fail(
+              `nothing applied — ${errors.length} file(s) failed validation:\n${errors.join("\n")}\n` +
+                "Fix the arguments or re-read the target and change the call shape; do not resend the same call unchanged.",
+            );
           }
           for (const plan of plans) writeFileSync(plan.abs, plan.next, "utf8");
           const hunks = plans.reduce((sum, plan) => sum + plan.changes.length, 0);
