@@ -186,7 +186,7 @@ export function ingestTurn(
         const question = str(args.question);
         const answer = textOf(message).trim();
         if (!question || !answer) continue;
-        const clipped = answer.length > 500 ? `${answer.slice(0, 497)}…` : answer;
+        const clipped = answer.length > 2_000 ? `${answer.slice(0, 1_997)}…` : answer;
         host.addDecisionFact(`Q: ${question} → A: ${clipped}`, turn);
       } else if ((toolName === "edit" || toolName === "write") && path) {
         if (message.isError === true) continue;

@@ -26,6 +26,8 @@ import { ingestTurn as ingestTurnInto } from "./ingest.js";
  * callers without one (file output, estimates). Overflow evicts oldest
  * findings first. */
 const MAX_STATE_CHARS = 30_000;
+/** One note is one conclusion; past this it is a summary and should be split. */
+const NOTE_MAX_CHARS = 2_000;
 
 export type FactKind = "finding" | "decision" | "change";
 
@@ -348,16 +350,19 @@ export class RunStateStore {
       return;
     }
     const refsParsed = refs.map(parseRef);
+    // One note is one conclusion. A cap keeps a single note from eating the
+    // block; the cap is generous enough for a real conclusion and announced
+    // when it bites, so the model splits into batch notes instead of trimming.
+    const capped = clean.length > NOTE_MAX_CHARS
+      ? `${clean.slice(0, NOTE_MAX_CHARS)}…[truncated at ${NOTE_MAX_CHARS}; split into several notes]`
+      : clean;
     const key = `${kind}:${sha1(`${clean}\0${refsParsed.map((ref) => ref.path).join("\0")}`)}`;
-    // No per-note cap: the model decides how much a note needs. The block
-    // budget below is the only bound, evicting oldest findings first when
-    // the state outgrows the model's share of the context pool.
     this.append({
       type: "fact",
       fact: {
         id: this.id(),
         kind,
-        text: clean,
+        text: capped,
         refs: refsParsed,
         turn: at,
         status: "active",
@@ -539,50 +544,59 @@ export class RunStateStore {
     }
   }
 
-    /** Compact model-facing state block: decisions, findings, and open questions. */
+  /** Compact model-facing state block: decisions, findings, and open questions.
+   *
+   * The block is bounded by the model's state share, and the model owns the
+   * pruning: over budget it renders ids beside every note and names the notes
+   * it withheld, so one `context {action:"forget", ids:[…]}` call fixes it.
+   * Nothing is rewritten or summarised; withholding is a view limit only.
+   */
   renderBlock(maxChars = MAX_STATE_CHARS): string {
-    let active = this.state.facts.filter((fact) => fact.status === "active");
-    // Sections are grouped by kind (decisions decide, findings inform) and
-    // newest-first within each section, so current thinking sits on top.
-    // Eviction below still drops oldest findings first.
+    const active = this.state.facts.filter((fact) => fact.status === "active");
     const newestFirst = <T>(list: readonly T[]): T[] => [...list].reverse();
-    const build = (): string => {
-      const decisions = newestFirst(active.filter((fact) => fact.kind === "decision"));
-      const findings = newestFirst(active.filter((fact) => fact.kind === "finding" && !fact.key.startsWith("read:") && !fact.key.startsWith("search:") && !fact.key.startsWith("command:")));
-      const changes = active.filter((fact) => fact.kind === "change");
+    const isReceipt = (fact: (typeof active)[number]): boolean =>
+      fact.key.startsWith("read:") || fact.key.startsWith("search:") || fact.key.startsWith("command:");
+    let decisions = newestFirst(active.filter((fact) => fact.kind === "decision"));
+    let findings = newestFirst(active.filter((fact) => fact.kind === "finding" && !isReceipt(fact)));
+    const changes = active.filter((fact) => fact.kind === "change");
+    const open = this.state.open.filter((question) => question.status === "open");
+
+    const build = (showIds: boolean, withheld: number, hiddenIds: string[]): string => {
       const runChanges = changes.filter((fact) => !fact.key.startsWith("change:git:"));
       const next = this.state.phase === "done"
         ? "finished"
         : this.state.phase === "verify"
           ? "fix any gate output, then call finish again"
           : "make the smallest change that satisfies the issue, then call finish";
-      const lines: string[] = ["<run-state>", `Phase: ${this.state.phase} · next: ${next}`];
-      // Compact summary line — lets the agent see at a glance how much it has established.
-      const summaryParts: string[] = [];
       const plan = this.state.plan;
+      const lines: string[] = ["<run-state>", `Phase: ${this.state.phase} · next: ${next}`];
+      const summaryParts: string[] = [];
       if (plan && plan.status === "active" && plan.steps.length > 0) {
-        const done = plan.steps.filter((s) => s.done).length;
-        summaryParts.push(`${done}/${plan.steps.length} plan steps done`);
+        summaryParts.push(`${plan.steps.filter((step) => step.done).length}/${plan.steps.length} plan steps done`);
       }
       if (findings.length > 0) summaryParts.push(`${findings.length} findings`);
       if (decisions.length > 0) summaryParts.push(`${decisions.length} decisions`);
-      const open = this.state.open.filter((question) => question.status === "open");
       if (open.length > 0) summaryParts.push(`${open.length} open`);
       if (summaryParts.length > 0) lines.push(`Summary: ${summaryParts.join(" · ")}`);
-      // Plan checklist renders right after the summary.
-      if (plan && plan.status === "active" && plan.steps.length > 0) {
-        lines.push(`Plan (${plan.steps.filter((s) => s.done).length}/${plan.steps.length} steps):`);
-        for (const step of plan.steps) {
-          lines.push(step.done ? `  [x] ${step.text}` : `  [ ] ${step.text}`);
-        }
+      if (withheld > 0) {
+        lines.push(
+          `⚠ ${withheld} note(s) withheld for the state budget — prune what you no longer need: ` +
+            `context {action:"forget", ids:[${hiddenIds.slice(0, 6).join(", ")}${hiddenIds.length > 6 ? ", …" : ""}]}`,
+        );
       }
+      if (plan && plan.status === "active" && plan.steps.length > 0) {
+        lines.push(`Plan (${plan.steps.filter((step) => step.done).length}/${plan.steps.length} steps):`);
+        for (const step of plan.steps) lines.push(step.done ? `  [x] ${step.text}` : `  [ ] ${step.text}`);
+      }
+      const line = (fact: (typeof active)[number]): string =>
+        showIds ? `- [${fact.id}] ${fact.text}` : `- ${fact.text}`;
       if (decisions.length > 0) {
         lines.push("Decisions:");
-        for (const fact of decisions) lines.push(`- ${fact.text}`);
+        for (const fact of decisions) lines.push(line(fact));
       }
       if (findings.length > 0) {
         lines.push("Findings:");
-        for (const fact of findings) lines.push(`- ${fact.text}`);
+        for (const fact of findings) lines.push(line(fact));
       }
       if (runChanges.length > 0) {
         lines.push("Changes:");
@@ -601,13 +615,27 @@ export class RunStateStore {
       return lines.join("\n");
     };
 
-    let block = build();
-    if (block.length > maxChars) {
-      for (const fact of active.filter((item) => item.kind === "finding")) {
-        active = active.filter((item) => item !== fact);
-        block = build();
-        if (block.length <= maxChars) break;
-      }
+    const plain = build(false, 0, []);
+    if (plain.length <= maxChars) return plain;
+
+    // Over budget: switch to id-bearing lines so the model can name what to
+    // forget, then withhold oldest findings, then oldest decisions. The plan
+    // and open questions always stay.
+    let withheld = 0;
+    const hidden: string[] = [];
+    const render = (): string => build(true, withheld, hidden);
+    let block = render();
+    while (block.length > maxChars && findings.length > 0) {
+      const dropped = findings.pop();
+      if (dropped) hidden.push(dropped.id);
+      withheld += 1;
+      block = render();
+    }
+    while (block.length > maxChars && decisions.length > 0) {
+      const dropped = decisions.pop();
+      if (dropped) hidden.push(dropped.id);
+      withheld += 1;
+      block = render();
     }
     return block;
   }

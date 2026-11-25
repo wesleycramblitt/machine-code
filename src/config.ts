@@ -334,10 +334,10 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
       budget: {
         total: asNumber(budgetRaw.total) ?? 0.95,
         overhead: asNumber(budgetRaw.overhead) ?? 0.03,
-        symbols: asNumber(budgetRaw.symbols) ?? 0.35,
+        symbols: asNumber(budgetRaw.symbols) ?? 0.30,
         map: asNumber(budgetRaw.map) ?? 0.05,
         state: asNumber(budgetRaw.state) ?? 0.15,
-        evidence: asNumber(budgetRaw.evidence) ?? 0.10,
+        evidence: asNumber(budgetRaw.evidence) ?? 0.15,
         wholeFile: asNumber(budgetRaw.whole_file) ?? 0.05,
       },
     },

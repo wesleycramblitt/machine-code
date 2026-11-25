@@ -77,6 +77,8 @@ export interface ToolContext {
   skills?: SkillToolContext;
   /** Run state for the `context` tool. */
   state?: RunStateStore;
+  /** Drop retained evidence by handle; returns how many were removed. */
+  forgetEvidence?: (handles: readonly string[]) => number;
   /** When present, spawned commands/processes are recorded by the supervisor. */
   processes?: import("../processes/supervisor.js").ProcessSupervisor;
   /** False for read-only roles; blocks non-readonly typed commands. */

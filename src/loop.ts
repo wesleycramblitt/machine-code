@@ -44,7 +44,7 @@ import { ProcessSupervisor } from "./processes/supervisor.js";
 import { renderPromptMessages, keptToolCallIds } from "./context/render.js";
 import { toolIndexBody } from "./context/references.js";
 import { findIssue } from "./plan/issues.js";
-import { buildEvidence, changedIssuesText, MAX_RETAINED_CALLS, type RetainedCall } from "./context/evidence.js";
+import { buildEvidence, changedIssuesText, evidenceHandle, MAX_LEDGER_ENTRIES, type RetainedCall } from "./context/evidence.js";
 import { runCommand } from "./commands/registry.js";
 import type { FinishRequest } from "./tools/finish.js";
 import { gateFailureText, runGates, type GateResult, type GateSpec } from "./verify.js";
@@ -1055,7 +1055,7 @@ const SEED_BODY_LINES = 200;
     // run even when the ledger is full, so the model never loses what it is
     // working on. Oldest non-seed entries go first.
     const evictOldest = (ledger: Map<string, RetainedCall>): void => {
-      if (ledger.size < MAX_RETAINED_CALLS) return;
+      if (ledger.size < MAX_LEDGER_ENTRIES) return;
       for (const [key, call] of ledger) {
         if (call.seeded) continue;
         ledger.delete(key);
@@ -1063,6 +1063,21 @@ const SEED_BODY_LINES = 200;
       }
     };
     const retained = new Map<string, RetainedCall>();
+    /** Handles the model pruned: never re-served again this run. */
+    const prunedEvidence = new Set<string>();
+    const forgetEvidence = (handles: readonly string[]): number => {
+      let removed = 0;
+      for (const handle of handles) {
+        for (const [key, call] of retained) {
+          if (evidenceHandle(call) !== handle) continue;
+          retained.delete(key);
+          prunedEvidence.add(handle);
+          removed += 1;
+          break;
+        }
+      }
+      return removed;
+    };
     let changeEpoch = 0;
     /** Verbatim-retry escalation state (same tool+args+error across turns). */
     let lastFailSig = "";
@@ -1170,6 +1185,7 @@ const SEED_BODY_LINES = 200;
       namedBlocksDir,
       runDir: recorder.dir,
       ...(issuePath ? { issuePath } : {}),
+      forgetEvidence,
       finish: (result) => {
         finishRequested = result;
         recorder.event("finish", { outcome: result.outcome, summary: result.summary });
@@ -1357,10 +1373,7 @@ const SEED_BODY_LINES = 200;
             commandName === "issue:show"
           ) {
             retained.delete(key);
-            if (retained.size >= MAX_RETAINED_CALLS) {
-              const oldest = retained.keys().next();
-              if (!oldest.done) retained.delete(oldest.value);
-            }
+            evictOldest(retained);
             retained.set(key, {
               id,
               tool: "command",
@@ -1616,6 +1629,7 @@ const SEED_BODY_LINES = 200;
             diff: freshDiff,
             keptIds,
             maxChars: budgets.evidence,
+            dropped: prunedEvidence,
           });
           const _rendered = renderPromptMessages(
             context.messages,

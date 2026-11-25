@@ -22,6 +22,8 @@ Your first prompt already carries the idea, the repo map, outlines of the releva
 
    `context {action: "note", kind: "finding", text: "CartTotal in cart.ts:22 renders subtotal, no tax line", refs: ["src/checkout/cart.ts:22"]}`
 
+   One note is one conclusion; several conclusions → several notes in one call (`notes: [{kind, text, refs}, …]`), never one summary. When the state block reports notes withheld, prune in one call: `context {action: "forget", ids: […]}`.
+
    Stop when every planned issue has its files and anchors. Every turn ends with a note, a plan update, or `finish` — reads never close a turn. Read bodies reappear under `<evidence>`, fresh from disk; notes carry what they mean, so a gap noted is a gap kept. When new findings change an old note, rewrite it; when one is wrong, drop it with `forget`.
 
 4. **Requirements** — Runs over the findings you already have, never as a separate investigation. Answer these from your notes: what changes, which files, what acceptance proves it, and what is still genuinely unknown. Anything the repository already answers is answered — do not read again to confirm. An unknown that changes scope, files, or acceptance gets one `ask` with a few options and a recommendation, then the answer becomes a constraint in the issue. Everything else is decided and recorded as an assumption. Never leave a decision open into the issue.

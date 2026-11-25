@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildEvidence, changedIssuesText, MAX_RETAINED_CALLS } from "../dist/context/evidence.js";
+import { buildEvidence, changedIssuesText, evidenceHandle } from "../dist/context/evidence.js";
 import { inspectTool } from "../dist/tools/inspect.js";
 
 function makeRepo() {
@@ -172,14 +172,58 @@ describe("buildEvidence", () => {
         maxChars: 300,
       });
       assert.ok(tight.messages.length < kept.messages.length);
-      assert.match(tight.text, /omitted for budget/);
+      assert.match(tight.text, /withheld for the evidence budget/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("retains at most 30 distinct calls", () => {
-    assert.equal(MAX_RETAINED_CALLS, 30);
+  it("names every call with a stable handle", () => {
+    const call = { tool: "inspect", params: { query: "a.ts" } };
+    assert.match(evidenceHandle(call), /^ev[0-9a-f]{4}$/);
+    assert.equal(evidenceHandle(call), evidenceHandle({ tool: "inspect", params: { query: "a.ts" } }));
+  });
+
+  it("withholds over budget instead of dropping silently, and lists handles", async () => {
+    const root = makeRepo();
+    try {
+      const inspect = inspectTool({ root, processes: undefined });
+      const retained = [
+        { id: "c3", tool: "inspect", params: { query: "b.ts" }, turn: 2 },
+        { id: "c2", tool: "inspect", params: { query: "a.ts" }, turn: 1 },
+      ];
+      const out = await buildEvidence({
+        retained,
+        inspect,
+        diff: async () => "",
+        keptIds: new Set(),
+        maxChars: 120,
+      });
+      assert.match(out.text, /withheld for the evidence budget/);
+      assert.match(out.text, /ev[0-9a-f]{4}/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("honours pruned handles", async () => {
+    const root = makeRepo();
+    try {
+      const inspect = inspectTool({ root, processes: undefined });
+      const call = { id: "c1", tool: "inspect", params: { query: "a.ts" }, turn: 1 };
+      const out = await buildEvidence({
+        retained: [call],
+        inspect,
+        diff: async () => "",
+        keptIds: new Set(),
+        maxChars: 100_000,
+        dropped: new Set([evidenceHandle(call)]),
+      });
+      assert.equal(out.messages.length, 0);
+      assert.equal(out.text, null);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

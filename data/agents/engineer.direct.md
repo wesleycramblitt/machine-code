@@ -25,6 +25,8 @@ Your first prompt already carries the issue, the repo map, and outlines (symbols
 
    `context {action: "note", kind: "finding", text: "routePayment defined in router.ts:14, called from pay.ts:35", refs: ["router.ts:14"]}`
 
+   One note is one conclusion. Several conclusions → several notes in one call (`notes: [{kind, text, refs}, …]`), never one summary. A note over 2,000 chars is truncated and says so. When the state block reports notes withheld, prune in one call: `context {action: "forget", ids: […]}`.
+
    Edit with a named block — fenced block with a name instead of a language ID, referenced by name so nothing is JSON-escaped:
 
    `edit {path: "router.ts", symbol: "routePayment", newString: "..."}` — local definitions too. Inline when escapes aren't needed, named blocks otherwise.

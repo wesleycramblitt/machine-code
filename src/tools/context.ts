@@ -39,11 +39,33 @@ const ContextParams = Type.Object({
       description: "Note kind: finding | decision | open (default finding).",
     }),
   ),
-  text: Type.Optional(Type.String({ description: "Note text (one short sentence)." })),
+  text: Type.Optional(Type.String({ description: "Note text (one conclusion, not a summary)." })),
   refs: Type.Optional(
     Type.Array(Type.String(), { description: "References: path, path:line, or path:start-end." }),
   ),
+  notes: Type.Optional(
+    Type.Array(
+      Type.Object({
+        kind: Type.Optional(Type.String({ enum: ["finding", "decision", "open"] })),
+        text: Type.String({ description: "One conclusion." }),
+        refs: Type.Optional(Type.Array(Type.String())),
+      }),
+      {
+        description:
+          "Several conclusions in one call: [{kind, text, refs}, …]. Prefer this to one long note — " +
+          "each entry is one conclusion; never merge conclusions to save space.",
+      },
+    ),
+  ),
   id: Type.Optional(Type.String({ description: "Fact/question id for forget, or run id for parent." })),
+  ids: Type.Optional(
+    Type.Array(Type.String(), { description: "Fact/question ids to forget, in one call." }),
+  ),
+  evidence: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Evidence handles to prune (shown in <evidence> with each re-served read).",
+    }),
+  ),
   steps: Type.Optional(
     Type.Array(PlanEntrySchema, {
       description:
@@ -89,8 +111,8 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
     description:
       "Run state, memory, and plan. " +
       "plan (steps: [{text, done}]) sets a durable checklist — there is always exactly one plan; " +
-      "calling it again replaces the old one. note (kind finding|decision|open) records conclusions; " +
-      "forget resolves facts; state dumps everything; " +
+      "calling it again replaces the old one. note (kind finding|decision|open, or notes:[…] for several) records conclusions; " +
+      "forget resolves facts and prunes evidence by handle; state dumps everything; " +
       "parent loads a parent run's record. " +
       "For codebase queries (definitions, references, file outlines) use inspect instead.",
     parameters: ContextParams,
@@ -121,21 +143,44 @@ export function contextTool(ctx: ToolContext): AgentTool<typeof ContextParams> {
       try {
         switch (params.action) {
           case "note": {
-            if (!params.text || params.text.trim().length === 0) return fail("note requires text");
+            const batch = params.notes ?? [];
+            if (batch.length > 0) {
+              let noted = 0;
+              for (const entry of batch) {
+                const kind = (entry.kind ?? params.kind ?? "finding") as "finding" | "decision" | "open";
+                if (!CONTEXT_KINDS.has(kind)) return fail(`unknown note kind "${kind}".`);
+                if (!entry.text || entry.text.trim().length === 0) continue;
+                memory.note(kind, entry.text, entry.refs ?? params.refs ?? []);
+                noted += 1;
+              }
+              if (noted === 0) return fail("notes entries need text");
+              return ok(`noted ${noted} ${noted === 1 ? "entry" : "entries"}`);
+            }
+            if (!params.text || params.text.trim().length === 0) return fail("note requires text or notes");
             const kind = (params.kind ?? "finding") as "finding" | "decision" | "open";
             memory.note(kind, params.text, params.refs ?? []);
             return ok(`noted ${kind}`);
           }
           case "forget": {
-            let id = params.id;
-            if (!id && params.text) {
-              const needle = params.text.trim();
-              const state = memory.getState();
-              id = state.facts.find((fact) => fact.status === "active" && fact.text.includes(needle))?.id;
-              id ??= state.open.find((question) => question.status === "open" && question.text.includes(needle))?.id;
+            const wanted = params.ids ?? (params.id ? [params.id] : []);
+            const pruned: string[] = [];
+            for (let id of wanted) {
+              if (!id && params.text) {
+                const needle = params.text.trim();
+                const state = memory.getState();
+                id = state.facts.find((fact) => fact.status === "active" && fact.text.includes(needle))?.id ?? "";
+                id ||= state.open.find((question) => question.status === "open" && question.text.includes(needle))?.id ?? "";
+              }
+              if (id && memory.forget(id)) pruned.push(id);
             }
-            if (!id) return fail("forget requires id or matching text");
-            return memory.forget(id) ? ok(`resolved ${id}`) : fail(`no fact or question ${id}`);
+            if (pruned.length === 0 && !params.text) return fail("forget requires id, ids, or matching text");
+            const evidenceHandles = params.evidence ?? [];
+            const dropped = evidenceHandles.length > 0 ? (ctx.forgetEvidence?.(evidenceHandles) ?? 0) : 0;
+            const parts: string[] = [];
+            if (pruned.length > 0) parts.push(`forgot ${pruned.length} note(s)`);
+            if (dropped > 0) parts.push(`pruned ${dropped} evidence item(s)`);
+            if (parts.length === 0) return fail(`nothing matched${params.text ? ` "${params.text}"` : ""}`);
+            return ok(parts.join("; "));
           }
           case "state":
             return ok(memory.renderMarkdown());
