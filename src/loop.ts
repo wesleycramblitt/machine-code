@@ -689,7 +689,7 @@ const SEED_BODY_LINES = 200;
    * of the pool. The remaining variable pool (symbols, map, state, evidence,
    * context block) is split by share. The context block gets what's left.
    */
-  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; evidence: number; wholeFile: number; contextBlock: number } => {
+  const computeBudgets = (inputChars: number | undefined, hardCap?: number): { symbols: number; map: number; state: number; evidence: number; transcript: number; wholeFile: number; contextBlock: number } => {
     const pool = inputChars ? Math.floor(inputChars * ctxBudget.total) : 256_000;
     const variableShare = 1.0 - ctxBudget.overhead;
     const variablePool = Math.floor(pool * variableShare);
@@ -712,11 +712,13 @@ const SEED_BODY_LINES = 200;
       Math.max(2_048, Math.floor(variablePool * ctxBudget.evidence)) + seedChars,
     );
     const wholeFile = Math.max(2_048, Math.floor(variablePool * ctxBudget.wholeFile));
-    const contextBlock = Math.max(4_096, variablePool - symbols - map - state - evidence);
+    // Retained prose turns: the conversation, not the old tool traffic.
+    const transcript = Math.min(48_000, Math.max(4_096, Math.floor(variablePool * ctxBudget.transcript)));
+    const contextBlock = Math.max(4_096, variablePool - symbols - map - state - evidence - transcript);
     if (hardCap !== undefined) {
-      return { symbols: Math.min(symbols, hardCap), map, state, evidence, wholeFile, contextBlock };
+      return { symbols: Math.min(symbols, hardCap), map, state, evidence, transcript, wholeFile, contextBlock };
     }
-    return { symbols, map, state, evidence, wholeFile, contextBlock };
+    return { symbols, map, state, evidence, transcript, wholeFile, contextBlock };
   };
 
   /** Reminder appended to the next prompt after a read-only turn.
@@ -1553,6 +1555,7 @@ const SEED_BODY_LINES = 200;
           return rendered;
         }
         const { symbols: sBudget, state: stBudget } = computeBudgets(undefined, input.symbolsMaxChars);
+        const tb = computeBudgets(lastBudget?.inputChars).transcript;
         return withRecordNudge(renderPromptMessages(
           messages,
           memory,
@@ -1564,6 +1567,7 @@ const SEED_BODY_LINES = 200;
           stBudget,
           pendingEvidence?.text ?? undefined,
           pendingEvidence?.messages,
+          tb,
         ).messages);
       },
       prepareRequest: async ({ context }) => {
@@ -1594,7 +1598,7 @@ const SEED_BODY_LINES = 200;
 
           // The last two steps replay in full; the symbol map plus notes
           // carry everything older worth keeping.
-          const keptIds = keptToolCallIds(context.messages);
+          const keptIds = keptToolCallIds(context.messages, budgets.transcript);
           // Seeds lead: they are the files this run edits, so budget
           // pressure drops incidental reads before them.
           const allRetained = [...retained.values()];
@@ -1642,6 +1646,7 @@ const SEED_BODY_LINES = 200;
             budgets.state,
             pendingEvidence?.text ?? undefined,
             pendingEvidence?.messages,
+            budgets.transcript,
           );
           return { ..._rendered, messages: withRecordNudge(_rendered.messages) };
         };

@@ -152,6 +152,8 @@ export interface MachineConfig {
       wholeFile: number;
       /** Share of the variable pool (after overhead) allocated to re-served tool evidence (0.0-1.0). */
       evidence: number;
+      /** Share of the variable pool (after overhead) allocated to retained prose turns (0.0-1.0). */
+      transcript: number;
     };
   };
   /** Repository map ([map]). */
@@ -338,6 +340,7 @@ export function loadMachineConfig(layout: Layout): MachineConfig {
         map: asNumber(budgetRaw.map) ?? 0.05,
         state: asNumber(budgetRaw.state) ?? 0.15,
         evidence: asNumber(budgetRaw.evidence) ?? 0.15,
+        transcript: asNumber(budgetRaw.transcript) ?? 0.06,
         wholeFile: asNumber(budgetRaw.whole_file) ?? 0.05,
       },
     },

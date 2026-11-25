@@ -113,7 +113,7 @@ function textOfMessage(message: MessageLike): string {
 }
 
 /** Keep the task head and the last two full steps. */
-function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
+function transcriptMessages(source: readonly MessageLike[], proseMaxChars = 0): MessageLike[] {
   const steps = transcriptSteps(source);
   const firstAssistant = steps.findIndex((message) => message.role === "assistant");
   if (firstAssistant < 0) return steps;
@@ -122,15 +122,33 @@ function transcriptMessages(source: readonly MessageLike[]): MessageLike[] {
     if (message.role === "assistant") groups.push([message]);
     else if (groups.length > 0) groups[groups.length - 1]!.push(message);
   }
-  const recent = groups.slice(-KEEP_FULL_STEPS).flat();
-  return [...steps.slice(0, firstAssistant), ...recent];
+  // The last steps stay whole: the immediate tool exchange is the current
+  // state of the work. Older *prose* (narration, questions, answers) is kept
+  // while it fits its share — the conversation survives, the old tool traffic
+  // does not (evidence re-serves reads, fresher than a transcript copy).
+  const recent = groups.slice(-KEEP_FULL_STEPS);
+  let used = recent.flat().reduce((sum, message) => sum + JSON.stringify(message).length, 0);
+  const prose: MessageLike[][] = [];
+  for (let index = groups.length - KEEP_FULL_STEPS - 1; index >= 0; index -= 1) {
+    const group = groups[index]!;
+    const hasCalls = group.some((message) => toolCalls(message).length > 0);
+    if (hasCalls) break;
+    const size = group.reduce((sum, message) => sum + JSON.stringify(message).length, 0);
+    if (used + size > proseMaxChars) break;
+    used += size;
+    prose.unshift(group);
+  }
+  return [...steps.slice(0, firstAssistant), ...prose.flat(), ...recent.flat()];
 }
 
 /** ToolCallIds whose results survive in the kept transcript window. The
  * evidence section skips these so nothing is shown twice. */
-export function keptToolCallIds(source: readonly AgentMessage[]): Set<string> {
+export function keptToolCallIds(source: readonly AgentMessage[], proseMaxChars = 0): Set<string> {
   const ids = new Set<string>();
-  for (const message of transcriptMessages(source as unknown as MessageLike[])) {
+  for (const message of transcriptMessages(source as unknown as MessageLike[], proseMaxChars)) {
+    // Real transcripts carry the id on the message itself; some providers wrap
+    // it in a content block. Both count, or evidence serves the same read twice.
+    if (message.role === "toolResult" && typeof message.toolCallId === "string") ids.add(message.toolCallId);
     const content = (message as MessageLike).content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
@@ -159,6 +177,7 @@ export function renderPromptMessages(
   stateMaxChars = 30_000,
   evidence?: string | null,
   evidenceMessages?: AgentMessage[],
+  transcriptMaxChars = 0,
 ): RenderedPrompt {
   const source = messages as unknown as MessageLike[];
   const system = source.find((message) => message.role === "system");
@@ -184,7 +203,7 @@ export function renderPromptMessages(
     ...(system ? [system] : []),
     ...(stable ? [{ role: "user", content: stable, timestamp: Date.now() } as MessageLike] : []),
     ...(symbols ? [{ role: "user", content: symbols, timestamp: Date.now() } as MessageLike] : []),
-    ...transcriptMessages(source),
+    ...transcriptMessages(source, transcriptMaxChars),
     ...(volatile ? [{ role: "user", content: volatile, timestamp: Date.now() } as MessageLike] : []),
     // Re-served inspect answers as native toolCall/toolResult pairs — the
     // same structure as live results, so the model treats them as current.
