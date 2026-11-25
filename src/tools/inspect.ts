@@ -533,10 +533,15 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
             }
           }
           if (file && (file.imports?.length || map.files.some((f) => (f.imports ?? []).includes(entry.path)))) {
-            const importedBy = map.files.filter((f) => (f.imports ?? []).includes(entry.path)).slice(0, 16).map((f) => f.path);
+            const importers = map.files.filter((f) => (f.imports ?? []).includes(entry.path)).map((f) => f.path);
+            const second = map.files.filter((f) => (f.imports ?? []).some((imported) => importers.includes(imported))).length;
             const relations = [
-              ...(file.imports?.length ? [`imports: ${file.imports.slice(0, 16).join(", ")}`] : []),
-              ...(importedBy.length ? [`imported by: ${importedBy.join(", ")}`] : []),
+              ...(file.imports?.length
+                ? [`imports ${file.imports.length}: ${file.imports.slice(0, 12).join(", ")}${file.imports.length > 12 ? ", …" : ""}`]
+                : []),
+              ...(importers.length
+                ? [`used by ${importers.length}${second > 0 ? ` (+${second} transitive)` : ""}: ${importers.slice(0, 12).join(", ")}${importers.length > 12 ? ", …" : ""}`]
+                : []),
             ].join(" · ");
             if (relations) parts.push(`  ${relations}`);
           }

@@ -91,12 +91,13 @@ const SPECS: CommandSpec[] = [
   {
     name: "core:map",
     description:
-      "Deterministic repository map: status, render a path slice with symbols, or refresh the cache.",
+      "Deterministic repository map: status, render a path slice with symbols, refresh the cache, or query the import graph (imports, dependents) and symbol references (refs).",
     binary: "git",
     args: () => [],
     schema: {
-      action: { type: "string", description: "status | render | refresh (default render)." },
-      path: { type: "string", description: "Directory or file prefix for render." },
+      action: { type: "string", description: "status | render | refresh | imports | dependents | refs (default render). imports/dependents need path; refs needs query." },
+      path: { type: "string", description: "Directory or file prefix for render; repo-relative file for imports/dependents." },
+      query: { type: "string", description: "Symbol or identifier for refs." },
       symbols: { type: "boolean", description: "Include symbols in render (default true)." },
       refresh: { type: "boolean", description: "Rebuild the cache before returning." },
     },
