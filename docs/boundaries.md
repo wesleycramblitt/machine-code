@@ -1,0 +1,3 @@
+# Boundaries
+
+- Tooling/runtime only.
