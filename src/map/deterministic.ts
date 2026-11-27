@@ -17,8 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, posix } from "node:path";
-import { runProc, type ProcOptions, type ProcResult } from "../proc.js";
-import type { ProcessSupervisor } from "../processes/supervisor.js";
+import { runProc, type ProcResult } from "../proc.js";
 import {
   SEARCH_EXCLUDES,
   excludeGlobs,
@@ -90,7 +89,6 @@ interface CacheEnvelope {
 interface GitInfo {
   head: string;
   statusRaw: string;
-  dirty: string[];
 }
 
 function sha256(text: string): string {
@@ -101,19 +99,14 @@ function relative(path: string): string {
   return path.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
-async function mapProc(
-  binary: string,
-  args: string[],
-  options: ProcOptions,
-  processes: ProcessSupervisor | undefined,
-): Promise<ProcResult> {
-  if (!processes) return runProc(binary, args, options);
-  const run = await processes.run(binary, args, {
-    ...options,
-    origin: "tool",
-    name: `map:${binary}`,
-  });
-  return run.result;
+/**
+ * Map probes are internal freshness checks, not user work. They never go
+ * through the process supervisor: journaling every probe turned one inspect
+ * into three durable process records plus two log files, and the registry grew
+ * until each spawn re-parsed the whole log.
+ */
+async function mapProc(binary: string, args: string[], options: { cwd: string; timeoutMs: number }): Promise<ProcResult> {
+  return runProc(binary, args, options);
 }
 
 export function mapCachePath(root: string): string {
@@ -161,46 +154,49 @@ function excludedPath(path: string): boolean {
   );
 }
 
-async function gitInfo(root: string, processes?: ProcessSupervisor): Promise<GitInfo | null> {
-  const head = await mapProc("git", ["-C", root, "rev-parse", "HEAD"], { cwd: root, timeoutMs: 10_000 }, processes);
-  if (head.outcome !== "exit" || head.code !== 0) return null;
-  const status = await mapProc("git", ["-C", root, "status", "--porcelain"], { cwd: root, timeoutMs: 15_000 }, processes);
+/**
+ * One `git status --porcelain=v2 --branch` answers both cache questions:
+ * the HEAD it was built from and every dirty/untracked path. The previous
+ * rev-parse + status + two ls-files calls re-listed the whole tree on every
+ * freshness check.
+ */
+async function gitInfo(root: string): Promise<GitInfo | null> {
+  const status = await mapProc(
+    "git",
+    [
+      "-C", root, "status", "--porcelain=v2", "--branch", "--untracked-files=all",
+      "--", ".", ":(exclude).machine_code", ":(exclude).opencode",
+    ],
+    { cwd: root, timeoutMs: 15_000 },
+  );
   if (status.outcome !== "exit" || status.code !== 0) return null;
-  const dirty: string[] = [];
-  for (const line of status.stdout.split("\n")) {
-    if (line.length < 4) continue;
-    const path = line.slice(3).replace(/^.* -> /, "");
-    if (path && !excludedPath(relative(path))) dirty.push(relative(path));
-  }
-  return { head: head.stdout.trim(), statusRaw: status.stdout, dirty };
+  const head = status.stdout
+    .split("\n")
+    .find((line) => line.startsWith("# branch.oid "))
+    ?.slice("# branch.oid ".length)
+    .trim();
+  if (!head || head === "(initial)") return null;
+  return { head, statusRaw: status.stdout };
 }
 
-async function listFiles(
-  root: string,
-  processes?: ProcessSupervisor,
-  git?: GitInfo | null,
-): Promise<string[]> {
-  // The caller (buildRepoMap) passes its own gitInfo result so one map build
-  // shells out to git once for HEAD+status instead of twice. Undefined keeps
-  // the old behavior for any future caller: compute it here.
-  const info = git !== undefined ? git : await gitInfo(root, processes);
+async function listFiles(root: string): Promise<string[]> {
   const out = new Set<string>();
-  if (info) {
-    const tracked = await mapProc("git", ["-C", root, "ls-files", "-z"], { cwd: root, timeoutMs: 20_000 }, processes);
-    const untracked = await mapProc(
-      "git",
-      ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"],
-      { cwd: root, timeoutMs: 20_000 },
-      processes,
-    );
-    for (const result of [tracked, untracked]) {
-      if (result.outcome !== "exit" || result.code !== 0) continue;
-      for (const path of result.stdout.split("\0")) {
-        if (path) out.add(relative(path));
-      }
+  const tracked = await mapProc("git", ["-C", root, "ls-files", "-z"], { cwd: root, timeoutMs: 20_000 });
+  const untracked = await mapProc(
+    "git",
+    ["-C", root, "ls-files", "--others", "--exclude-standard", "-z"],
+    { cwd: root, timeoutMs: 20_000 },
+  );
+  let listed = false;
+  for (const result of [tracked, untracked]) {
+    if (result.outcome !== "exit" || result.code !== 0) continue;
+    listed = true;
+    for (const path of result.stdout.split("\0")) {
+      if (path) out.add(relative(path));
     }
-  } else {
-    const result = await mapProc("rg", ["--files", ...excludeGlobs()], { cwd: root, timeoutMs: 30_000 }, processes);
+  }
+  if (!listed) {
+    const result = await mapProc("rg", ["--files", ...excludeGlobs()], { cwd: root, timeoutMs: 30_000 });
     if (result.outcome === "exit" && result.code === 0) {
       for (const path of result.stdout.split("\n")) {
         if (path) out.add(relative(path));
@@ -703,8 +699,6 @@ function readMap(file: string): CacheEnvelope | null {
 
 export interface BuildMapOptions {
   refresh?: boolean;
-  /** When present, map helper processes are recorded by the run supervisor. */
-  processes?: ProcessSupervisor;
 }
 
 export interface BuiltMap {
@@ -714,8 +708,18 @@ export interface BuiltMap {
 }
 
 export async function buildRepoMap(root: string, options: BuildMapOptions = {}): Promise<BuiltMap> {
-  const git = await gitInfo(root, options.processes);
-  const paths = await listFiles(root, options.processes, git);
+  const git = await gitInfo(root);
+  const cachePath = mapCachePath(root);
+  // In a git tree HEAD + porcelain status is the freshness key: it covers
+  // edits, additions, deletions, renames, and untracked files in one process.
+  // Only a changed key pays for listing and scanning the tree.
+  const gitKey = git ? sha256(`${git.head}\0${git.statusRaw}`) : undefined;
+  if (gitKey !== undefined && !options.refresh) {
+    const cached = readMap(cachePath);
+    if (cached && cached.sourceKey === gitKey) return { map: cached.map, cachePath, cached: true };
+  }
+
+  const paths = await listFiles(root);
   const stats: Array<{ path: string; bytes: number; mtimeMs: number }> = [];
   for (const path of paths) {
     try {
@@ -725,12 +729,11 @@ export async function buildRepoMap(root: string, options: BuildMapOptions = {}):
       // deleted between listing and stat
     }
   }
-  const sourceKey = sha256(
-    `${git?.head ?? ""}\0${git?.statusRaw ?? ""}\0` +
-      stats.map((stat) => `${stat.path}:${stat.bytes}:${stat.mtimeMs}`).join("\n"),
+  // Non-git trees have no HEAD/status to key on; the stat pass is the key there.
+  const sourceKey = gitKey ?? sha256(
+    stats.map((stat) => `${stat.path}:${stat.bytes}:${stat.mtimeMs}`).join("\n"),
   );
-  const cachePath = mapCachePath(root);
-  if (!options.refresh) {
+  if (gitKey === undefined && !options.refresh) {
     const cached = readMap(cachePath);
     if (cached && cached.sourceKey === sourceKey) return { map: cached.map, cachePath, cached: true };
   }

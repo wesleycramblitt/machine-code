@@ -10,7 +10,7 @@ import { Type, type Static } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { runDataTool } from "./run-data.js";
 import { webFetchTool } from "./web-fetch.js";
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { runProc } from "../proc.js";
 import {
@@ -163,8 +163,9 @@ function resolveContent(
 
 const WriteParams = Type.Object({
   path: Type.String({ description: "File path, relative to the worktree root." }),
-  content: Type.Optional(Type.String({ description: "Full file content to write. Omit when using content_named_block." })),
+  content: Type.Optional(Type.String({ description: "Content to write (or append). Omit when using content_named_block. Keep each call under ~24KB; use append for the rest of a large file." })),
   content_named_block: Type.Optional(Type.String({ description: "Name of a fenced code block in the assistant response. The harness extracts it and reads from a scratch file. Use when the content needs escaping (backslashes, quotes, $). Overrides content." })),
+  append: Type.Optional(Type.Boolean({ description: "Append to the file instead of replacing it. Use after a first write to finish a file too large for one response." })),
 });
 
 /** A path literally named "null" is a serialization artifact, never a real
@@ -184,7 +185,10 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
   return {
     name: "write",
     label: "write",
-    description: "Write a file inside the worktree, creating parent directories.",
+    description:
+      "Write or append a file inside the worktree, creating parent directories. " +
+      "For a large file, write the first chunk, then call write again with append=true for each remaining chunk; " +
+      "keep every call well inside the response budget so a long file never truncates the turn.",
     parameters: WriteParams,
     prepareArguments: (args) => cleanWritePath(args) as Static<typeof WriteParams>,
     async execute(_id, params: Static<typeof WriteParams>) {
@@ -222,6 +226,10 @@ export function writeTool(ctx: ToolContext): AgentTool<typeof WriteParams> {
           );
         }
         const content = resolved.text;
+        if (params.append === true) {
+          appendFileSync(abs, content, "utf8");
+          return ok(`appended ${params.path} (${Buffer.byteLength(content, "utf8")} bytes)`);
+        }
         writeFileSync(abs, content, "utf8");
         return ok(`wrote ${params.path} (${Buffer.byteLength(content, "utf8")} bytes)`);
       } catch (error) {
@@ -1418,7 +1426,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             // the read call that resolves each file. No follow-up needed.
             if (!params.pattern) return fail("locate mode requires an identifier pattern");
             const query = params.pattern.trim();
-            const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+            const built = await buildRepoMap(ctx.root);
             const defs: string[] = [];
             if (scope && params.path) {
               try {
@@ -1504,7 +1512,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             );
           }
           case "map": {
-            const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+            const built = await buildRepoMap(ctx.root);
             return ok(
               renderRepoMap(built.map, {
                 path: params.path,
@@ -1513,7 +1521,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
             );
           }
           case "graph": {
-            const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+            const built = await buildRepoMap(ctx.root);
             return ok(
               renderModuleGraph(built.map, params.pattern ?? params.path ?? "", 16 * 1024),
             );
@@ -1630,7 +1638,7 @@ export function searchTool(ctx: ToolContext): AgentTool<typeof SearchParams> {
                   }
                 }
               }
-              const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+              const built = await buildRepoMap(ctx.root);
               let scopedMap = built.map;
               if (params.path) {
                 const scopedPath = toRelative(ctx.root, resolveWithin(ctx.root, params.path));

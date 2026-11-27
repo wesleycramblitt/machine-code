@@ -16,6 +16,40 @@ export const CHARS_PER_TOKEN = 4;
 const MIN_OUTPUT_RESERVE = 8_000;
 const PROVIDER_RESERVE = 4_000;
 
+/**
+ * Default share of the context window a single response may use. The request
+ * budget scales with the model instead of a flat constant: a 1M window gets
+ * ~100k, a 32k window gets the 8k floor. `max_output_tokens` still overrides.
+ */
+const OUTPUT_SHARE = 0.1;
+const MIN_OUTPUT_TOKENS = 8_000;
+
+export interface OutputBudgetInput {
+  contextWindowTokens: number;
+  /** Tokens the rendered request will spend (system + messages). */
+  inputTokens: number;
+  /** The model's own per-response ceiling; 0/undefined means "window". */
+  modelMaxTokens: number;
+  /** Explicit agent/machine `max_output_tokens`; wins over the share. */
+  ceiling?: number;
+}
+
+/**
+ * Tokens to request for one response. Two physical limits apply: the model's
+ * own maximum and the window left after the request is sent. The default is a
+ * share of the window, not a fixed cap; an explicit ceiling may raise or lower
+ * it but cannot exceed either limit.
+ */
+export function requestedOutputTokens(input: OutputBudgetInput): number {
+  const window = Math.max(8_000, Math.floor(input.contextWindowTokens));
+  const modelMax = input.modelMaxTokens > 0 ? Math.floor(input.modelMaxTokens) : window;
+  const inputTokens = Math.max(0, Math.floor(input.inputTokens));
+  const headroom = Math.max(1, window - inputTokens - PROVIDER_RESERVE);
+  const share = Math.max(MIN_OUTPUT_TOKENS, Math.floor(window * OUTPUT_SHARE));
+  const wanted = input.ceiling === undefined ? share : Math.max(1, Math.floor(input.ceiling));
+  return Math.max(1, Math.min(wanted, modelMax, headroom));
+}
+
 export interface ContextBudget {
   contextWindowTokens: number;
   outputReserveTokens: number;

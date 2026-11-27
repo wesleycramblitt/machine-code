@@ -267,7 +267,7 @@ export function inspectTool(ctx: ToolContext): AgentTool<typeof InspectParams> {
       }
 
       try {
-        const built = await buildRepoMap(ctx.root, { processes: ctx.processes });
+        const built = await buildRepoMap(ctx.root);
         const map = built.map;
         const byPath = new Map(map.files.map((file) => [file.path, file]));
 

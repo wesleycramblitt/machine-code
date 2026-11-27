@@ -144,7 +144,7 @@ export async function runMapCommand(
   const path = str(args.path);
   const symbols = args.symbols !== false;
   try {
-    const built = await buildRepoMap(root, { refresh, processes });
+    const built = await buildRepoMap(root, { refresh });
     if (action === "status") {
       return {
         text: [
@@ -195,7 +195,7 @@ export async function runStatusCommand(root: string, processes?: ProcessSupervis
       ? git.stdout.trimEnd()
       : `git status unavailable: ${git.spawnError ?? `exit ${git.code ?? "?"}`}`;
   try {
-    const built = await buildRepoMap(root, { processes });
+    const built = await buildRepoMap(root);
     const mapLine =
       `map ${built.cached ? "fresh" : "rebuilt"} · ${built.map.files.length} files · ` +
       `${symbolCount(built.map)} symbols · ${mapBytes(built.map)} bytes`;

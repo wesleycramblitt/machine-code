@@ -8,10 +8,10 @@ import { appendFileSync, closeSync, mkdirSync, openSync, writeFileSync } from "n
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { minimalEnv, runProc, type ProcOptions, type ProcResult } from "../proc.js";
 import {
+  allocateProcessId,
   appendProcessRecord,
   latestProcessRecords,
   liveProcessRecords,
-  nextProcessId,
   processLogPaths,
   processesDir,
   readProcessRecords,
@@ -84,7 +84,7 @@ export class ProcessSupervisor {
 
   async run(binary: string, args: string[], options: SupervisedRunOptions): Promise<SupervisedRunResult> {
     const { origin, name, toolCallId, ...procOptions } = options;
-    const id = nextProcessId(readProcessRecords(this.options.runDir));
+    const id = allocateProcessId(this.options.runDir);
     const logs = processLogPaths(this.options.runDir, id);
     mkdirSync(processesDir(this.options.runDir), { recursive: true });
     writeFileSync(logs.stdout, "", "utf8");
@@ -157,7 +157,7 @@ export class ProcessSupervisor {
    */
   runSync(binary: string, args: string[], options: SupervisedRunOptions): SupervisedSyncResult {
     const { origin, name, toolCallId, ...procOptions } = options;
-    const id = nextProcessId(readProcessRecords(this.options.runDir));
+    const id = allocateProcessId(this.options.runDir);
     const logs = processLogPaths(this.options.runDir, id);
     mkdirSync(processesDir(this.options.runDir), { recursive: true });
     const startedAt = new Date().toISOString();
@@ -221,7 +221,7 @@ export class ProcessSupervisor {
    */
   async start(binary: string, args: string[], options: SupervisedStartOptions): Promise<SupervisedStartResult> {
     const { origin, name, toolCallId, cwd, env } = options;
-    const id = nextProcessId(readProcessRecords(this.options.runDir));
+    const id = allocateProcessId(this.options.runDir);
     const logs = processLogPaths(this.options.runDir, id);
     mkdirSync(processesDir(this.options.runDir), { recursive: true });
     const startedAt = new Date().toISOString();
@@ -286,7 +286,7 @@ export class ProcessSupervisor {
    * Its stdio remains owned by the caller; only lifecycle metadata is recorded.
    */
   attach(child: ChildProcess, options: SupervisedAttachOptions): string {
-    const id = nextProcessId(readProcessRecords(this.options.runDir));
+    const id = allocateProcessId(this.options.runDir);
     const logs = processLogPaths(this.options.runDir, id);
     mkdirSync(processesDir(this.options.runDir), { recursive: true });
     let record: ProcessRecord = {

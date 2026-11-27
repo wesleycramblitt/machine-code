@@ -36,7 +36,7 @@ import { layout as layoutFor } from "./paths.js";
 import type { RunRecorder } from "./state/runs.js";
 import { buildRepoMap, mapBytes, renderMapIndex, symbolCount, type RepoMap } from "./map/deterministic.js";
 import { RunStateStore } from "./context/state.js";
-import { contextBudget, type ContextBudget } from "./context/budget.js";
+import { contextBudget, requestedOutputTokens, charsToTokens, type ContextBudget } from "./context/budget.js";
 import { hasToolCallMarkup } from "./state/tool-call-text.js";
 import { looksLikeSerializedArgs, repairToolArguments } from "./tools/args.js";
 import { extractNamedBlocks, writeNamedBlocks } from "./tools/named-blocks.js";
@@ -200,10 +200,6 @@ function convertToLlm(messages: AgentMessage[]): Message[] {
 }
 
 
-/** Never ask a provider for the model's full (possibly 384k) output ceiling.
- * 16k is far more than an edit needs and keeps a request inside a credit
- * balance that rejects 32k. */
-const MAX_REQUESTED_OUTPUT_TOKENS = 16_000;
 /** Cap on the input/output text recorded per call in the event log. */
 const MODEL_IO_CAP = 24_000;
 
@@ -316,6 +312,11 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   const maxTurns =
     input.agent.maxTurns === undefined ? MAX_TURNS : Math.max(0, Math.floor(input.agent.maxTurns));
   const ceiling = effectiveOutputCeiling(input.agent, input.machine);
+  /** Lowered on an account funds/quota error so the next request fits the balance. */
+  let outputDownshift: number | undefined;
+  let outputDownshifts = 0;
+  let lastRequestedMaxTokens: number | undefined;
+  let fundsRetryArmed = false;
   const configuredProviders = input.configuredProviders;
   const fundedProviders = fundedProviderIds(input.machine.providers);
   // Callers normally load this, but a direct run must still respect persisted
@@ -574,7 +575,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
         ].join("\n")
       : "";
   if (wantMap) try {
-    const built = await buildRepoMap(mapRoot, { processes });
+    const built = await buildRepoMap(mapRoot);
     repoMap = built.map;
     // Render with a reasonable budget initially. The model-specific budget
     // is applied in prepareRequest after the model is selected.
@@ -621,7 +622,7 @@ export async function runLoop(input: RunLoopInput): Promise<RunLoopResult> {
   let mapRefreshQueued = false;
   const refreshMapIndex = async (turn: number): Promise<void> => {
     if (!wantMap) return;
-    const built = await buildRepoMap(mapRoot, { processes });
+    const built = await buildRepoMap(mapRoot);
     repoMap = built.map;
     const { map: mapBudget } = computeBudgets(lastBudget?.inputChars);
     mapIndex = renderMapIndex(repoMap, mapBudget);
@@ -722,15 +723,13 @@ const SEED_BODY_LINES = 200;
   };
 
   /** Reminder appended to the next prompt after a read-only turn.
-   * The mandate lives in the role prompts; this is the backstop that makes
-   * it real — prompt text alone did not hold (a run took 23 of these and
-   * still recorded 9 times in 39 turns). The streak count names the lapse
-   * so the fifth identical reminder reads differently from the first. */
+   * Progress means an edit, a write, a finish, or a completed plan step — not
+   * another note. Prompt text alone did not hold, so the streak count names
+   * the lapse; the asks are all actions that advance the tree or the plan. */
   const recordNudge = (streak: number): string =>
-    `${streak} turn${streak === 1 ? "" : "s"} since your last note, plan update, edit, or write ` +
-    `(workflow step 4: every turn ends with one). Stop reading and record: one context note ` +
-    `with what these reads established (behavior plus path:line), or update the plan, or edit — ` +
-    `if the next step needs no new fact, edit instead of reading again.`;
+    `${streak} turn${streak === 1 ? "" : "s"} since the last edit, write, finish, or completed plan step. ` +
+    `Advance the work now: edit the file you are working on, or mark the current plan step done and start the next one. ` +
+    `A note does not move the run forward; if the next step needs no new fact, edit instead of reading again.`;
   const withRecordNudge = (
     messages: import("@earendil-works/pi-agent-core").AgentMessage[],
   ): import("@earendil-works/pi-agent-core").AgentMessage[] => {
@@ -1038,6 +1037,7 @@ const SEED_BODY_LINES = 200;
     // provider attempt: a rate-limit rotation must not refill them.
     lastAssistant = undefined;
     budgetExhausted = false;
+    fundsRetryArmed = false;
     let appliedError: { key: string; message: string } | undefined;
     let turnCapHit = false;
     let modelCallCapHit = false;
@@ -1049,6 +1049,14 @@ const SEED_BODY_LINES = 200;
     const serializedArgCalls = new Set<string>();
     /** Successful tool call ids, to distinguish repaired args from a dead end. */
     const successfulToolCalls = new Set<string>();
+    /** Set when the response hit the output limit; the next turn recovers with
+     * a chunked-write instruction instead of stranding the model on a generic
+     * "re-issue" error. */
+    let truncationRecovery = false;
+    /** Salvaged args of this turn's tool calls, so a cut write can be persisted. */
+    const pendingToolArgs = new Map<string, unknown>();
+    /** Fewest open plan steps seen so far; a decrease is real progress. */
+    let openPlanSteps = Number.POSITIVE_INFINITY;
     /** Successful read-only command results for the current file state. */
     const commandCache = new Map<string, { epoch: number; turn: number; text: string; preview: string }>();
     /** Distinct successful inspect calls, for re-served evidence. Insertion
@@ -1426,11 +1434,23 @@ const SEED_BODY_LINES = 200;
             inputFile = undefined;
           }
         }
+        const computedMaxTokens = requestedOutputTokens({
+          contextWindowTokens: model.contextWindow,
+          inputTokens: charsToTokens(requestText.length),
+          modelMaxTokens: model.maxTokens,
+          ...(ceiling !== undefined ? { ceiling } : {}),
+        });
+        const maxTokens =
+          outputDownshift === undefined
+            ? computedMaxTokens
+            : Math.min(computedMaxTokens, outputDownshift);
+        lastRequestedMaxTokens = maxTokens;
         recorder.event("model_request", {
           call,
           provider: model.provider,
           model: model.id,
           firstTokenTimeoutMs,
+          maxTokens,
           messages: (context as Context).messages.length,
           chars: requestText.length,
           input:
@@ -1450,11 +1470,6 @@ const SEED_BODY_LINES = 200;
           if (outerSignal.aborted) abort.abort();
           else outerSignal.addEventListener("abort", onOuterAbort, { once: true });
         }
-
-        const maxTokens =
-          ceiling === undefined
-            ? Math.min(model.maxTokens > 0 ? model.maxTokens : MAX_REQUESTED_OUTPUT_TOKENS, MAX_REQUESTED_OUTPUT_TOKENS)
-            : Math.min(ceiling, model.maxTokens > 0 ? model.maxTokens : ceiling);
 
         const source = input.models.stream(model, context as Context, {
           ...options,
@@ -1715,6 +1730,25 @@ const SEED_BODY_LINES = 200;
         return { model };
       },
       prepareNextTurn: async () => {
+        // A truncated response is a checkpoint, not a dead end. The tool calls
+        // in it did not run (pi-agent-core fails them all), so the only useful
+        // next move is the remaining work, in chunks that fit the budget.
+        if (truncationRecovery) {
+          truncationRecovery = false;
+          continuePromptArmed = false;
+          return {
+            messages: [
+              {
+                role: "user",
+                content:
+                  "Your last response hit the output-token limit, so none of its tool calls ran and nothing was written. " +
+                  "Continue the work now. For a large file, call write with the first chunk, then call write again with append=true for each remaining chunk; " +
+                  "keep each call comfortably under the response budget. Do not re-emit a whole large file in one call.",
+                timestamp: Date.now(),
+              } as unknown as import("@earendil-works/pi-agent-core").AgentMessage,
+            ],
+          };
+        }
         // Consume the reprompt armed by a text-only turn (see finishTurn):
         // the model stopped without a tool call or finish, so hand it the
         // rule in plain words and let the next provider request continue.
@@ -1767,12 +1801,21 @@ const SEED_BODY_LINES = 200;
             return { action: "end" as const };
           }
         }
+        const hasCalls = message.content.some((block) => block.type === "toolCall");
+        // A truncated response never ends the run on a dead-end error: the
+        // recovery message in prepareNextTurn asks for the remainder in
+        // chunks. This is a continuation, not a repetition guard.
+        if (message.stopReason === "length" && !finishRequested) {
+          truncationRecovery = true;
+          textOnlyStreak = 0;
+          recorder.event("output_truncation_continue", { turn: turns });
+          if (!hasCalls) return { action: "continue" as const };
+        }
         // A text-only turn on a run that owes a change is not an ending —
         // the model stopped mid-thought (observed: a 5-turn run that died
         // mid-plan with prose and no call). Reprompt boundedly and continue;
         // past the cap the run ends and the blocked handling below applies.
         // Pure-question runs are exempt: prose is their deliverable.
-        const hasCalls = message.content.some((block) => block.type === "toolCall");
         if (!hasCalls && !finishRequested && wantsChange) {
           textOnlyStreak += 1;
           if (textOnlyStreak <= MAX_TEXT_ONLY_CONTINUES) {
@@ -1796,16 +1839,26 @@ const SEED_BODY_LINES = 200;
           const message = event.message as AssistantMessage;
           if (message.role === "assistant") {
             lastAssistant = message;
-            // Recording streak: a turn counts as recorded when it notes,
-            // plans, edits, writes, or finishes. Anything else with tool
-            // calls is a read-only turn; three in a row arm the reminder.
+            // A turn counts as progress when it edits, writes, finishes, or
+            // closes a plan step. A note is not progress: rewarding repeated
+            // notes is what let one run re-read the same files for hours.
             const turnCalls = message.content.filter((block) => block.type === "toolCall");
             const recorded = turnCalls.some((block) => {
               if (block.type !== "toolCall") return false;
               if (block.name === "edit" || block.name === "write" || block.name === "finish") return true;
               if (block.name !== "context") return false;
-              const action = (block.arguments as { action?: unknown } | undefined)?.action;
-              return action === "note" || action === "plan";
+              const args = block.arguments as { action?: unknown; steps?: unknown } | undefined;
+              if (args?.action !== "plan" || !Array.isArray(args.steps)) return false;
+              const open = args.steps.filter((step) => {
+                if (!step || typeof step !== "object") return true;
+                return (step as { done?: unknown }).done !== true;
+              }).length;
+              if (open < openPlanSteps) {
+                openPlanSteps = open;
+                return true;
+              }
+              openPlanSteps = open;
+              return false;
             });
             if (recorded) readOnlyStreak = 0;
             else if (turnCalls.length > 0) readOnlyStreak += 1;
@@ -1916,9 +1969,30 @@ const SEED_BODY_LINES = 200;
                 const classified = classifyError(new Error(message.errorMessage));
                 const provider = message.provider;
                 const key = currentRow?.key ?? `${provider}/${message.model}`;
-                applyErrorState(provider, key, classified);
-                appliedError = { key, message: message.errorMessage };
-                lastErrorKind = classified.kind;
+                // A funds error is an account condition, not a bad model or a
+                // bad request. Before excluding the provider, shrink the
+                // response budget and retry the same route: the flat output cap
+                // existed only because a large `max_tokens` can fail the
+                // provider's balance check.
+                if (classified.kind === "funds" && outputDownshifts < 2) {
+                  outputDownshifts += 1;
+                  // The observed threshold is that 32k fails and 16k fits, so
+                  // step straight to the affordable band before halving again.
+                  const base = outputDownshift ?? lastRequestedMaxTokens ?? 32_000;
+                  outputDownshift = Math.max(2_000, Math.floor(Math.min(base, 32_000) / 2));
+                  fundsRetryArmed = true;
+                  appliedError = { key, message: message.errorMessage };
+                  lastErrorKind = classified.kind;
+                  recorder.event("output_downshift", {
+                    reason: classified.kind,
+                    maxTokens: outputDownshift,
+                    attempt: outputDownshifts,
+                  });
+                } else {
+                  applyErrorState(provider, key, classified);
+                  appliedError = { key, message: message.errorMessage };
+                  lastErrorKind = classified.kind;
+                }
                 recorder.event("error_classified", {
                   kind: classified.kind,
                   target: classified.target,
@@ -1942,11 +2016,37 @@ const SEED_BODY_LINES = 200;
                 // availability update failure must not break the run
               }
             }
+            if (message.stopReason === "length") {
+              // The response was cut by the output budget. The library will
+              // fail every tool call in it; keep the salvaged arguments so the
+              // recovery turn can point at them, and record the event.
+              const saved: string[] = [];
+              try {
+                const dir = join(recorder.dir, "pending");
+                mkdirSync(dir, { recursive: true });
+                for (const [id, args] of pendingToolArgs) {
+                  const name = `${id.replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 80)}.json`;
+                  writeFileSync(join(dir, name), JSON.stringify(args, null, 2), "utf8");
+                  saved.push(name);
+                }
+              } catch {
+                // Persisting a cut call must never break the run.
+              }
+              recorder.event("output_truncated", {
+                outputTokens: usage.output,
+                calls: pendingToolArgs.size,
+                saved,
+              });
+            }
+            pendingToolArgs.clear();
           }
           break;
         }
         case "tool_execution_start": {
           if (looksLikeSerializedArgs(event.args)) serializedArgCalls.add(event.toolCallId);
+          // Keep the salvaged arguments in memory; only a truncated turn
+          // persists them, but the event arrives before we know that.
+          if (event.args !== undefined) pendingToolArgs.set(event.toolCallId, event.args);
           recorder.event("tool_call_start", {
             toolCallId: event.toolCallId,
             tool: event.toolName,
@@ -2324,6 +2424,22 @@ const SEED_BODY_LINES = 200;
         classified = classifyError(new Error(la.errorMessage));
       } catch {
         // classification failure falls through to the ordinary failure path
+      }
+      if (fundsRetryArmed) {
+        fundsRetryArmed = false;
+        // Keep the same model eligible: the request shrank, so the account
+        // check may now pass. Do not add it to `triedModels`.
+        carriedMessages = agent?.state.messages ?? carriedMessages;
+        lastFailure = la.errorMessage;
+        lastErrorKind = "funds";
+        recorder.event("retry", {
+          failedModel: currentRow?.key ?? `${la.provider}/${la.model}`,
+          kind: "funds-downshift",
+          attempt: outputDownshifts,
+          maxTokens: outputDownshift,
+          carriedMessages: carriedMessages?.length ?? 0,
+        });
+        continue;
       }
       if (classified?.retryable) {
         const failedKey = currentRow?.key ?? `${la.provider}/${la.model}`;
