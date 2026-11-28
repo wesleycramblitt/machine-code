@@ -711,18 +711,31 @@ function mergeLockDir(mainRoot: string): string {
  * is never evicted no matter how long it runs. Waiters give up after
  * 3 minutes and fail loudly instead of merging blind.
  */
-export async function withMergeLock<T>(mainRoot: string, fn: () => Promise<T>): Promise<T> {
+export async function withMergeLock<T>(
+  mainRoot: string,
+  fn: () => Promise<T>,
+  onWait?: () => void,
+): Promise<T> {
   const dir = mergeLockDir(mainRoot);
   mkdirSync(join(mainRoot, ".machine_code", "local"), { recursive: true });
   const ownerFile = join(dir, "owner.json");
   const me = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
   const deadline = Date.now() + MERGE_LOCK_WAIT_MS;
+  let announcedWait = false;
   for (;;) {
     try {
       mkdirSync(dir);
       break;
     } catch {
       // Held by another run — check whether it is still alive below.
+    }
+    if (!announcedWait) {
+      announcedWait = true;
+      try {
+        onWait?.();
+      } catch {
+        // Observation must never break the merge.
+      }
     }
     let stale = false;
     try {

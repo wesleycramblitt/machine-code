@@ -151,6 +151,7 @@ export class LspClient {
   }
 
   async shutdown(): Promise<void> {
+    const child = this.process;
     if (this.connection) {
       try {
         await withTimeout(this.connection.sendRequest("shutdown"), 5_000);
@@ -164,6 +165,25 @@ export class LspClient {
       }
     }
     this.dispose();
+    // A detached language server that ignores SIGTERM would otherwise hold
+    // the run process open (and show as "still running" after finalize).
+    if (child?.pid !== undefined && child.exitCode === null) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          try {
+            process.kill(-child.pid!, "SIGKILL");
+          } catch {
+            // already gone
+          }
+          resolve();
+        }, 1_500);
+        timer.unref();
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
   }
 
   // ---- text document sync ----

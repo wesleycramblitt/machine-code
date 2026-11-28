@@ -10,11 +10,12 @@ import { scriptCommands } from "./scripts.js";
 
 export async function runMainBuild(
   topRoot: string,
+  processes?: import("../processes/supervisor.js").ProcessSupervisor,
 ): Promise<{ ok: boolean; skipped?: boolean; text: string }> {
   const commands = scriptCommands(topRoot);
   if (!commands.has("script:build")) {
     return { ok: true, skipped: true, text: "no scripts/build script; main build skipped" };
   }
-  const result = await runCommand("script:build", {}, { root: topRoot, commands });
+  const result = await runCommand("script:build", {}, { root: topRoot, commands, ...(processes ? { processes } : {}) });
   return { ok: !result.isError, text: result.text };
 }

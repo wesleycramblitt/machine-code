@@ -12,6 +12,7 @@ import { RunRecorder, listRuns, reconcileRun, registerProject } from "../state/r
 import { createWorktree, reusableWorktreeOwner, refreshReusedWorktree, WorktreeError } from "../worktree.js";
 import { loadAvailability } from "../availability.js";
 import { ProcessSupervisor } from "../processes/supervisor.js";
+import { shutdownAll } from "../lsp/index.js";
 import { runLoop, type RunLoopResult } from "../loop.js";
 import { resolveAgent } from "../agents/config.js";
 import { resolveGates, withSyncGate } from "../verify.js";
@@ -395,6 +396,7 @@ export async function runIssueBuild(
     gates,
     ...(packet.context.length > 0 ? { seedFiles: packet.context } : {}),
   });
+  await shutdownAll().catch(() => {});
 
   // Gates passed: commit the worktree, then merge only after every gate. A
   // human-review issue stops at needs-human-review; approval performs the
@@ -438,7 +440,15 @@ export async function runIssueBuild(
         if (issue.review === "human") {
           moveIssue(l, slug, "needs-human-review");
         } else {
-          const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch);
+          const mergeProcesses = new ProcessSupervisor({
+            runId: recorder.id,
+            runDir: recorder.dir,
+            onEvent: (type, data) => recorder.event(type, data),
+          });
+          const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch, {
+            event: (type, data) => recorder.event(type, data),
+            processes: mergeProcesses,
+          });
           if (merged.ok) {
             recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
             const { updateIssueMeta } = await import("../plan/issues.js");

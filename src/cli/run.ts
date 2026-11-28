@@ -59,7 +59,7 @@ import { fundedProviderIds, loadProviderDefinitions, packageDataDir } from "../d
 import { runTui } from "../tui.js";
 import { SEARCH_EXCLUDES } from "../tools/safety.js";
 import { BASE_CLIS, findOnPath, installClis, type InstallMethod } from "../install.js";
-import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serverForLanguage } from "../lsp/index.js";
+import { allServers, formatServerList, lspStatusForPaths, serverAvailable, serverForLanguage, shutdownAll } from "../lsp/index.js";
 
 import { fail, parseFlags, loadRuntime, findRunAnywhere, indentEventLines, printRunOutcome, toolResultText, EXIT, type Runtime } from "./common.js";
 import { parseAxisOverrides } from "./models.js";
@@ -1161,6 +1161,11 @@ export async function cmdRun(argv: string[]): Promise<number> {
     });
   }
 
+  // The model loop owns the language servers; nothing after it (gates ran
+  // inside the loop, then commit/merge) speaks LSP. Shut them down now so a
+  // rust-analyzer cannot outlive the run and hold the process open.
+  await shutdownAll().catch(() => {});
+
   // Gates ran inside the loop (or inside executeIssue for the orchestrate
   // path). If the result is "completed" the gates passed. Commit, merge, and
   // move the issue through its lifecycle. If the direct-exec loop returned
@@ -1239,7 +1244,15 @@ export async function cmdRun(argv: string[]): Promise<number> {
         if (issue.kind === "ideas" || issue.review === "none" || flags.has("no-review")) {
           const branch = recorder.current.branch;
           if (branch) {
-            const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch);
+            const mergeProcesses = new ProcessSupervisor({
+              runId: recorder.id,
+              runDir: recorder.dir,
+              onEvent: (type, data) => recorder.event(type, data),
+            });
+            const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch, {
+              event: (type, data) => recorder.event(type, data),
+              processes: mergeProcesses,
+            });
             if (merged.ok) {
               recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
               const { updateIssueMeta } = await import("../plan/issues.js");
@@ -1709,6 +1722,7 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
     startMode,
     ...(resumeGates && resumeGates.length > 0 ? { gates: resumeGates } : {}),
   });
+  await shutdownAll().catch(() => {});
 
   // A resumed Engineer phase still owes the runner its gates, commit, and move.
   // Gates now run inside the loop. Handle completion or block from exhaustion.
@@ -1744,7 +1758,15 @@ export async function cmdResume(id: string | undefined, argv: string[]): Promise
           } else if (resumeIssue.review === "none" || flags.has("no-review") || resumeIssue.kind === "ideas") {
             const branch = recorder.current.branch;
             if (branch) {
-              const merged = await mergeBranchIntoMain(l2.repoRoot, toolRoot, branch);
+              const mergeProcesses = new ProcessSupervisor({
+                runId: recorder.id,
+                runDir: recorder.dir,
+                onEvent: (type, data) => recorder.event(type, data),
+              });
+              const merged = await mergeBranchIntoMain(l2.repoRoot, toolRoot, branch, {
+                event: (type, data) => recorder.event(type, data),
+                processes: mergeProcesses,
+              });
               if (merged.ok) {
                 recorder.event("branch_merged", { branch, mergeCommit: merged.mergeCommit });
                 const { updateIssueMeta } = await import("../plan/issues.js");

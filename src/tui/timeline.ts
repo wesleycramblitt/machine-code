@@ -299,6 +299,28 @@ export function describeTimelineEvent(event: TimelineEventLike): string {
       return `${text(event.tool)} ${event.isError ? "ERROR" : "ok"}`;
     case "gates":
       return `gates ${event.passed ? "PASS" : "FAIL"}`;
+    case "commit_created":
+      return `commit ${text(event.sha).slice(0, 8)}`;
+    case "branch_pushed":
+      return `push ${text(event.branch)}${event.pushed === false ? " (failed)" : ""}`;
+    case "merge_started":
+      return `merging ${text(event.branch)}`;
+    case "merge_lock_wait":
+      return "waiting for merge lock";
+    case "merge_locked":
+      return `merge lock held ${num(event.waitMs)}ms`;
+    case "merge_step":
+      return `${text(event.what)} ${event.ok ? "ok" : "FAIL"} · ${num(event.durationMs)}ms`;
+    case "main_build_started":
+      return "rebuilding main";
+    case "main_build_finished":
+      return `main build ${event.ok ? "ok" : "FAIL"} · ${num(event.durationMs)}ms`;
+    case "merge_completed":
+      return `merged ${text(event.branch)}`;
+    case "merge_failed":
+      return `merge failed${event.detail ? ` — ${text(event.detail)}` : ""}`;
+    case "branch_merged":
+      return `branch merged ${text(event.branch)}`;
     case "error_classified":
       return `error ${text(event.kind)}${event.message ? ` — ${text(event.message)}` : ""}`;
     case "malformed_tool_call":

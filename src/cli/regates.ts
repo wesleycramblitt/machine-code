@@ -129,7 +129,9 @@ export async function cmdRegates(id: string | undefined, argv: string[]): Promis
 
   const branch = recorder.current.branch;
   if (!branch) fail(`run ${id} has no branch to merge`);
-  const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch);
+  const merged = await mergeBranchIntoMain(l.repoRoot, toolRoot, branch, {
+    event: (type, data) => recorder.event(type, data),
+  });
   if (!merged.ok) {
     const msg = `merge failed: ${branch} into main${merged.detail ? ` (${merged.detail})` : ""}`;
     if (issue && (issue.kind === "features" || issue.kind === "bugs")) {
